@@ -4,11 +4,12 @@
 import fs from "node:fs";
 import module from "node:module";
 import path from "node:path";
-import { Parser, type Node as AcornNode, type Program } from "acorn";
+import { Parser, type Node as AcornNode } from "acorn";
 import { WORKER_BUNDLE_ARTIFACT_PATHS } from "../src/shared/worker-bundle-hash.js";
 import { reportLimitViolations, type LimitViolation } from "./lib/check-limits.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { readGatewayRunChunks } from "./lib/gateway-run-chunk-metadata.mts";
+import { visitJavaScriptStatements } from "./lib/javascript-statements.mjs";
 import { isUnstagedWorkerDeployRuntimeArtifact } from "./lib/worker-deploy-build-plugin.mts";
 
 const DEFAULT_ENTRYPOINTS = ["dist/entry.js", "dist/cli/run-main.js"];
@@ -181,69 +182,55 @@ function isRequireLikeCallee(value: unknown): boolean {
 
 function listRuntimeImportSpecifiers(source: string): string[] {
   const specifiers: string[] = [];
-  const program: Program = {
-    type: "Program",
-    start: 0,
-    end: 0,
-    sourceType: "module",
-    body: [],
-  };
-  const collectCompletedStatements = () => {
-    if (program.body.length === 0) {
-      return;
-    }
-    const stack: unknown[] = program.body.splice(0);
-    while (stack.length > 0) {
-      const value = stack.pop();
-      if (!value || typeof value !== "object") {
-        continue;
-      }
-      if (Array.isArray(value)) {
-        stack.push(...value);
-        continue;
-      }
-      const node = value as AcornNode & Record<string, unknown>;
-      if (
-        node.type === "ImportDeclaration" ||
-        node.type === "ExportNamedDeclaration" ||
-        node.type === "ExportAllDeclaration" ||
-        node.type === "ImportExpression"
-      ) {
-        const specifier = literalString(node.source);
-        if (specifier) {
-          specifiers.push(specifier);
+  visitJavaScriptStatements(
+    source,
+    { sourceType: "module", allowHashBang: true },
+    (statements) => {
+      const stack: unknown[] = statements;
+      while (stack.length > 0) {
+        const value = stack.pop();
+        if (!value || typeof value !== "object") {
+          continue;
         }
-      } else if (node.type === "CallExpression") {
-        const callee = node.callee;
-        const args = node.arguments;
-        if (isRequireLikeCallee(callee) && Array.isArray(args)) {
-          const specifier = literalString(args[0]);
+        if (Array.isArray(value)) {
+          stack.push(...value);
+          continue;
+        }
+        const node = value as AcornNode & Record<string, unknown>;
+        if (
+          node.type === "ImportDeclaration" ||
+          node.type === "ExportNamedDeclaration" ||
+          node.type === "ExportAllDeclaration" ||
+          node.type === "ImportExpression"
+        ) {
+          const specifier = literalString(node.source);
           if (specifier) {
             specifiers.push(specifier);
           }
+        } else if (node.type === "CallExpression") {
+          const callee = node.callee;
+          const args = node.arguments;
+          if (isRequireLikeCallee(callee) && Array.isArray(args)) {
+            const specifier = literalString(args[0]);
+            if (specifier) {
+              specifiers.push(specifier);
+            }
+          }
+        }
+        // Large worker bundles contain millions of nodes; avoid a pair allocation per property.
+        for (const key of Object.keys(node)) {
+          const child = node[key];
+          if (key === "start" || key === "end" || key === "loc" || key === "range") {
+            continue;
+          }
+          if (child && typeof child === "object") {
+            stack.push(child);
+          }
         }
       }
-      // Large worker bundles contain millions of nodes; avoid a pair allocation per property.
-      for (const key of Object.keys(node)) {
-        const child = node[key];
-        if (key === "start" || key === "end" || key === "loc" || key === "range") {
-          continue;
-        }
-        if (child && typeof child === "object") {
-          stack.push(child);
-        }
-      }
-    }
-  };
-  // Acorn appends completed statements while keeping module binding checks in parser scope.
-  WorkerArtifactParser.parse(source, {
-    ecmaVersion: "latest",
-    sourceType: "module",
-    allowHashBang: true,
-    program,
-    onToken: collectCompletedStatements,
-  });
-  collectCompletedStatements();
+    },
+    WorkerArtifactParser,
+  );
   return [...new Set(specifiers)].toSorted((left, right) => left.localeCompare(right));
 }
 

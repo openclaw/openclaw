@@ -1,6 +1,7 @@
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
+import { repairDoctorSqliteIndexCorruption } from "../infra/sqlite-index-recovery.js";
 import {
   repairCanonicalSqliteIndexes,
   verifyAndRepairCanonicalSqliteIndexes,
@@ -11,9 +12,15 @@ import { assertSqliteSchemaTablesPresent } from "../infra/sqlite-schema-contract
 import { migrateSqliteSchemaToStrictInTransaction } from "../infra/sqlite-strict.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { migrateLegacyCronRunLogsToTaskRuns } from "../infra/state-migrations.cron-run-logs.js";
-import { clearOpenClawDatabaseQuarantine } from "./openclaw-quarantine-store.js";
+import {
+  clearOpenClawDatabaseQuarantine,
+  readOpenClawDatabaseQuarantineFailure,
+} from "./openclaw-quarantine-store.js";
 import { repairAuditEventsSchema } from "./openclaw-state-db-audit-migration.js";
-import { clearOpenClawStateDatabaseOpenFailure } from "./openclaw-state-db-cache.js";
+import {
+  clearOpenClawStateDatabaseOpenFailure,
+  openClawStateDatabaseCache,
+} from "./openclaw-state-db-cache.js";
 import {
   LAZY_ADDITIVE_STATE_TABLES,
   DOCTOR_OWNED_STATE_TABLES,
@@ -21,6 +28,7 @@ import {
   OPENCLAW_STATE_SCHEMA_VERSION,
   OPENCLAW_STATE_STRICT_SCHEMA_VERSION,
 } from "./openclaw-state-db-contract.js";
+import { hasDanglingSkillWorkshopCollectionReviewIndex } from "./openclaw-state-db-doctor-schema.js";
 import { assertCurrentStateRuntimeSchema } from "./openclaw-state-db-fast-path.js";
 import {
   assertOpenClawStateDatabaseOwner,
@@ -57,7 +65,10 @@ import * as sessionWatchMigration from "./openclaw-state-db-session-watch-migrat
 import * as retirements from "./openclaw-state-db-table-retirements.js";
 import { recoverOrphanTaskDeliveryRows } from "./openclaw-state-db-task-delivery-recovery.js";
 import { describeAgentPathMigration } from "./openclaw-state-db.paths.js";
-import { OpenClawStateOwnershipError } from "./openclaw-state-ownership.js";
+import {
+  assertOpenClawStateWriteAllowed,
+  OpenClawStateOwnershipError,
+} from "./openclaw-state-ownership.js";
 import { getOpenClawStateRuntimeSchema } from "./openclaw-state-schema-compatibility.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import { UpdateSchemaRefusalError } from "./openclaw-update-schema-refusal.js";
@@ -65,7 +76,7 @@ import { UpdateSchemaRefusalError } from "./openclaw-update-schema-refusal.js";
 export function repairStateSchema(
   pathname: string,
   env: NodeJS.ProcessEnv,
-  scope: "automatic" | "doctor" | "readability",
+  scope: "automatic" | "doctor" | "readability" | "indexes",
 ): {
   changes: string[];
   warnings: string[];
@@ -75,6 +86,7 @@ export function repairStateSchema(
   // This private handle rebuilds referenced tables and is closed after repair.
   const db = openNodeSqliteDatabase(pathname, { enableForeignKeyConstraints: false });
   const rebuiltIndexNames = new Set<string>();
+  let indexChanges: string[] = [];
   let ownershipRefused = false;
   try {
     setSqliteBusyTimeout(db, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
@@ -87,6 +99,41 @@ export function repairStateSchema(
       };
     }
     const repairAdmittedSchema = prepareStateDatabaseSchemaRepair(db, pathname, env);
+    const canInspectIndexes =
+      scope !== "readability" && !hasDanglingSkillWorkshopCollectionReviewIndex(db);
+    const assertIndexRepairCurrent = () => {
+      assertOpenClawStateDatabaseOwner(db, { pathname });
+      assertOpenClawStateWriteAllowed({ database: db, databasePath: pathname, env });
+    };
+    indexChanges = canInspectIndexes
+      ? repairDoctorSqliteIndexCorruption(db, pathname, {
+          label: "shared-state",
+          assertCurrent: assertIndexRepairCurrent,
+        })
+      : [];
+    if (scope === "indexes") {
+      if (
+        canInspectIndexes &&
+        (indexChanges.length > 0 ||
+          openClawStateDatabaseCache.getOpenClawStateDatabaseRecordedFailure(pathname) ||
+          readOpenClawDatabaseQuarantineFailure("state", pathname, { env }))
+      ) {
+        runSqliteImmediateTransactionSync(db, () => {
+          // A previous REINDEX can commit before quarantine cleanup succeeds.
+          if (indexChanges.length === 0) {
+            assertSqliteIntegrity(db, pathname);
+          }
+          assertIndexRepairCurrent();
+          if (!clearOpenClawDatabaseQuarantine(pathname, { env })) {
+            throw new Error(
+              `Repaired ${pathname}, but its quarantine record could not be cleared.`,
+            );
+          }
+          clearOpenClawStateDatabaseOpenFailure(pathname);
+        });
+      }
+      return { changes: indexChanges, warnings: [] };
+    }
     if (scope === "readability") {
       return {
         changes: runSqliteImmediateTransactionSync(
@@ -108,7 +155,7 @@ export function repairStateSchema(
         warnings: [],
       };
     }
-    const applied: string[] = [];
+    const applied: string[] = [...indexChanges];
     const changes = runStateSchemaMigrationTransaction(
       db,
       pathname,
@@ -251,7 +298,7 @@ export function repairStateSchema(
             "has a legacy $1 schema; automatic repair refused the unrecognized schema shape.",
           );
     return {
-      changes: [],
+      changes: indexChanges,
       warnings: [`Failed migrating shared state database schema at ${pathname}: ${reason}`],
     };
   } finally {

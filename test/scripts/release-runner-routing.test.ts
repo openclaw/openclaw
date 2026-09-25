@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { evaluateWorkflowRunner } from "./ci-workflow.test-support.js";
+import { evaluateWorkflowExpression, evaluateWorkflowRunner } from "./ci-workflow.test-support.js";
 
 const dedicated = [
   "full-release-validation",
@@ -13,6 +13,11 @@ const dedicated = [
   "openclaw-npm-preflight",
   "docker-release-prepare",
   "openclaw-cross-os-release-checks-reusable",
+  "openclaw-release-publish",
+  "openclaw-npm-release",
+  "plugin-clawhub-release",
+  "plugin-clawhub-new",
+  "plugin-clawhub-postpublish",
 ];
 const shared = [
   "install-smoke-reusable",
@@ -23,9 +28,31 @@ const shared = [
   "qa-profile-evidence",
   "qa-live-transports-convex",
   "npm-telegram-beta-e2e",
+  "docker-release",
+  "vercel-container-registry-publish",
 ];
-const mixed = ["ci", "openclaw-performance"];
-type Job = { "runs-on"?: string; uses?: string; with?: Record<string, string> };
+// Route only for a release dispatch; ordinary events keep their labels.
+const mixed = ["ci", "openclaw-performance", "plugin-npm-release"];
+// Publication paths: approval and credentialed publish jobs stay on default
+// GitHub-hosted labels (npm trusted publishing rejects self-hosted runners).
+const publishing = new Set([
+  "openclaw-release-publish",
+  "openclaw-npm-release",
+  "plugin-npm-release",
+  "plugin-clawhub-release",
+  "plugin-clawhub-new",
+  "plugin-clawhub-postpublish",
+  "docker-release",
+  "vercel-container-registry-publish",
+]);
+type Job = {
+  if?: string;
+  "runs-on"?: string;
+  uses?: string;
+  with?: Record<string, string>;
+  environment?: unknown;
+  permissions?: Record<string, string>;
+};
 type Workflow = {
   on: { workflow_call?: { inputs?: Record<string, { default?: unknown }> } };
   jobs: Record<string, Job>;
@@ -42,6 +69,21 @@ const context = {
   runnerBackend: "github" as const,
   preflightOutputs: { node_runner_backend: "github" },
 };
+const releaseDispatch = {
+  ...context,
+  releaseRunnerGroup: group,
+  dispatchId: "full-release-validation-123-1",
+  releasePublishRunId: "123",
+};
+
+function credentialed(name: string, job: Job) {
+  return (
+    publishing.has(name) &&
+    (job.environment !== undefined ||
+      job.permissions?.["id-token"] === "write" ||
+      /\$\{\{\s*secrets\.(?!GITHUB_TOKEN\b)/u.test(JSON.stringify(job)))
+  );
+}
 
 describe("release runner reservation", () => {
   it.each([...workflows])(
@@ -51,30 +93,60 @@ describe("release runner reservation", () => {
         if (!job["runs-on"]) {
           continue;
         }
+        if (name === "ci" && jobName === "pr-fail-fast") {
+          expect(
+            evaluateWorkflowExpression(job.if!, {
+              ...context,
+              eventName: "workflow_dispatch",
+              repository: "openclaw/openclaw",
+              runAttempt: 1,
+              preflightOutputs: { run_checks_node_core_nondist: "true" },
+            }),
+          ).toBe(false);
+          continue;
+        }
         const baseline = evaluateWorkflowRunner(job["runs-on"], context);
         expect(baseline, `${name}/${jobName}`).toBeTypeOf("string");
         expect(baseline).not.toBe("");
-        expect(
-          evaluateWorkflowRunner(job["runs-on"], {
-            ...context,
-            releaseRunnerGroup: group,
-            runnerGroup: shared.includes(name) ? group : "",
-            dispatchId: "full-release-validation-123-1",
-          }),
-          `${name}/${jobName}`,
-        ).toEqual({ group, labels: baseline });
+        const routed = evaluateWorkflowRunner(job["runs-on"], {
+          ...releaseDispatch,
+          runnerGroup: shared.includes(name) ? group : "",
+        });
+        expect(routed, `${name}/${jobName}`).toEqual(
+          credentialed(name, job) ? baseline : { group, labels: baseline },
+        );
       }
     },
   );
 
+  it.each([
+    ["openclaw-npm-release", "publish_openclaw_npm"],
+    ["plugin-npm-release", "publish_plugins_npm"],
+    ["plugin-clawhub-release", "approve_plugins_clawhub_release"],
+    ["docker-release", "publish"],
+  ])("classifies %s/%s as credentialed", (name, jobName) => {
+    expect(credentialed(name, workflows.get(name)!.jobs[jobName]!)).toBe(true);
+  });
+
   it.each([...shared, ...mixed])("keeps unrelated %s callers outside the release group", (name) => {
     const workflow = workflows.get(name)!;
-    for (const job of Object.values(workflow.jobs)) {
+    for (const [jobName, job] of Object.entries(workflow.jobs)) {
       if (!job["runs-on"]) {
         continue;
       }
       for (const eventName of ["pull_request", "push", "schedule", "workflow_dispatch"] as const) {
         const ordinary = { ...context, eventName, releaseGate: true };
+        if (name === "ci" && jobName === "pr-fail-fast" && eventName !== "pull_request") {
+          expect(
+            evaluateWorkflowExpression(job.if!, {
+              ...ordinary,
+              repository: "openclaw/openclaw",
+              runAttempt: 1,
+              preflightOutputs: { run_checks_node_core_nondist: "true" },
+            }),
+          ).toBe(false);
+          continue;
+        }
         expect(
           evaluateWorkflowRunner(job["runs-on"], { ...ordinary, releaseRunnerGroup: group }),
         ).toEqual(evaluateWorkflowRunner(job["runs-on"], ordinary));
@@ -94,10 +166,8 @@ describe("release runner reservation", () => {
         }
         expect(
           evaluateWorkflowRunner(job.with?.runner_group, {
-            ...context,
+            ...releaseDispatch,
             runnerGroup: group,
-            releaseRunnerGroup: group,
-            dispatchId: "full-release-validation-123-1",
           }),
           `${name}/${jobName} -> ${child}`,
         ).toBe(group);
@@ -106,6 +176,12 @@ describe("release runner reservation", () => {
   });
 
   it("retains the public Linux and native default labels", () => {
+    expect(
+      evaluateWorkflowRunner(
+        Object.values(workflows.get("openclaw-release-publish")!.jobs)[0]?.["runs-on"],
+        context,
+      ),
+    ).toBe("ubuntu-latest");
     expect(
       evaluateWorkflowRunner(
         workflows.get("full-release-validation")?.jobs.resolve_target?.["runs-on"],

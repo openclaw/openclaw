@@ -112,20 +112,6 @@ function restoreGatewayConfigSelectionEnvironment(
   }
 }
 
-function resolveGatewayRunDotEnvPaths(params: {
-  env: NodeJS.ProcessEnv;
-  join: (...paths: string[]) => string;
-  resolve: (path: string) => string;
-  resolveConfigDir: (env: NodeJS.ProcessEnv) => string;
-  resolveStateDir: (env: NodeJS.ProcessEnv) => string;
-}): { additionalEnvPaths?: string[]; stateEnvPath: string } {
-  const stateEnvPath = params.join(params.resolveStateDir(params.env), ".env");
-  const configEnvPath = params.join(params.resolveConfigDir(params.env), ".env");
-  return params.resolve(stateEnvPath) === params.resolve(configEnvPath)
-    ? { stateEnvPath }
-    : { additionalEnvPaths: [configEnvPath], stateEnvPath };
-}
-
 function resolveInvocationDestructiveOverride(): string | undefined {
   if (process.env.OPENCLAW_SERVICE_MARKER?.trim()) {
     delete process.env[ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV];
@@ -256,21 +242,17 @@ async function guardGatewayRunSelectedConfig(
 ): Promise<boolean> {
   lastGuardedGatewayRunSnapshot = undefined;
   const [
-    path,
-    { applyConfigEnvVars, isConfigRuntimeEnvVarAllowed },
-    { loadGlobalRuntimeDotEnvFiles },
+    applyTrustedGatewayEnv,
+    { applyConfigEnvVars },
     { normalizeEnv },
-    { normalizeStateDirEnv, resolveStateDir },
-    { resolveConfigDir },
+    { normalizeStateDirEnv },
     { collectEnvSecretRefIds },
     { clearMissingManagedServiceEnvKeys, readManagedSystemdServiceEnvKeysFromEnvironment },
   ] = await Promise.all([
-    import("node:path"),
+    createTrustedGatewayEnvLoader(),
     import("../../config/config-env-vars.js"),
-    import("../../infra/dotenv-global.js"),
     import("../../infra/env.js"),
     import("../../config/paths.js"),
-    import("../../utils.js"),
     import("../../config/resolution-facts.js"),
     import("../../daemon/service-managed-env.js"),
   ]);
@@ -283,25 +265,6 @@ async function guardGatewayRunSelectedConfig(
       preservedKeys: GATEWAY_CONFIG_SELECTION_ENV_KEYS,
     });
   }
-  const applyTrustedGatewayEnv = () => {
-    normalizeStateDirEnv(process.env);
-    const loaded = loadGlobalRuntimeDotEnvFiles({
-      ...(gatewayRunTargetSelectedByConfig ? { entryFilter: isConfigRuntimeEnvVarAllowed } : {}),
-      overrideKeys: readManagedSystemdServiceEnvKeysFromEnvironment(process.env),
-      quiet: true,
-      ...resolveGatewayRunDotEnvPaths({
-        env: process.env,
-        join: path.join,
-        resolve: path.resolve,
-        resolveConfigDir,
-        resolveStateDir,
-      }),
-    });
-    normalizeStateDirEnv(process.env);
-    normalizeEnv();
-    applyInvocationDestructiveOverride(invocationDestructiveOverride);
-    return loaded;
-  };
   const applySelectedConfigEnv = (snapshot: ConfigFileSnapshot) => {
     restoreAppliedGatewayRunConfigEnvironment(params.opts.reset !== true);
     if (snapshot.valid && params.opts.reset !== true) {
@@ -319,7 +282,7 @@ async function guardGatewayRunSelectedConfig(
   for (;;) {
     const envBeforeTrustedApply = { ...process.env };
     const trustedSelectionSignature = resolveGatewayConfigSelectionSignature(process.env);
-    const trustedEnvLoad = applyTrustedGatewayEnv();
+    const trustedEnvLoad = applyTrustedGatewayEnv(invocationDestructiveOverride);
     if (resolveGatewayConfigSelectionSignature(process.env) !== trustedSelectionSignature) {
       const stateEnvSelectedTarget = trustedEnvLoad.stateEnvAppliedKeys.some((key) =>
         GATEWAY_CONFIG_SELECTION_ENV_KEYS.has(key.toUpperCase()),
@@ -548,9 +511,7 @@ export function clearGatewayRunConfigEnvironment(): void {
   resetPublishedConfigRuntimeEnv();
 }
 
-export async function reloadTrustedGatewayRunEnvironment(params: {
-  runtime: RuntimeEnv;
-}): Promise<boolean> {
+async function createTrustedGatewayEnvLoader() {
   const [
     path,
     { isConfigRuntimeEnvVarAllowed },
@@ -561,32 +522,41 @@ export async function reloadTrustedGatewayRunEnvironment(params: {
     { readManagedSystemdServiceEnvKeysFromEnvironment },
   ] = await Promise.all([
     import("node:path"),
-    import("../../config/env-vars.js"),
+    import("../../config/config-env-vars.js"),
     import("../../infra/dotenv-global.js"),
     import("../../infra/env.js"),
     import("../../config/paths.js"),
     import("../../utils.js"),
     import("../../daemon/service-managed-env.js"),
   ]);
+  return (invocationDestructiveOverride: string | undefined) => {
+    normalizeStateDirEnv(process.env);
+    const stateEnvPath = path.join(resolveStateDir(process.env), ".env");
+    const configEnvPath = path.join(resolveConfigDir(process.env), ".env");
+    const loaded = loadGlobalRuntimeDotEnvFiles({
+      ...(gatewayRunTargetSelectedByConfig ? { entryFilter: isConfigRuntimeEnvVarAllowed } : {}),
+      overrideKeys: readManagedSystemdServiceEnvKeysFromEnvironment(process.env),
+      quiet: true,
+      stateEnvPath,
+      ...(path.resolve(stateEnvPath) === path.resolve(configEnvPath)
+        ? {}
+        : { additionalEnvPaths: [configEnvPath] }),
+    });
+    normalizeStateDirEnv(process.env);
+    normalizeEnv();
+    applyInvocationDestructiveOverride(invocationDestructiveOverride);
+    return loaded;
+  };
+}
+
+export async function reloadTrustedGatewayRunEnvironment(params: {
+  runtime: RuntimeEnv;
+}): Promise<boolean> {
+  const applyTrustedGatewayEnv = await createTrustedGatewayEnvLoader();
   const envBeforeReload = { ...process.env };
   const selectionSignature = resolveGatewayConfigSelectionSignature(process.env);
   const invocationDestructiveOverride = resolveInvocationDestructiveOverride();
-  normalizeStateDirEnv(process.env);
-  loadGlobalRuntimeDotEnvFiles({
-    ...(gatewayRunTargetSelectedByConfig ? { entryFilter: isConfigRuntimeEnvVarAllowed } : {}),
-    overrideKeys: readManagedSystemdServiceEnvKeysFromEnvironment(process.env),
-    quiet: true,
-    ...resolveGatewayRunDotEnvPaths({
-      env: process.env,
-      join: path.join,
-      resolve: path.resolve,
-      resolveConfigDir,
-      resolveStateDir,
-    }),
-  });
-  normalizeStateDirEnv(process.env);
-  normalizeEnv();
-  applyInvocationDestructiveOverride(invocationDestructiveOverride);
+  applyTrustedGatewayEnv(invocationDestructiveOverride);
   if (resolveGatewayConfigSelectionSignature(process.env) !== selectionSignature) {
     // Runtime modules already derived process-stable paths before startup mutations. A replacement
     // dotenv cannot select another target without splitting the running gateway across state dirs.

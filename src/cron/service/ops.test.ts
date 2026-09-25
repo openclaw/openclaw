@@ -1,7 +1,7 @@
 // Cron service ops tests cover high-level service operations and state transitions.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { createCronRegressionState } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { AgentDeletionCommitUncertainError } from "../../agents/agent-lifecycle-registry.js";
@@ -1923,33 +1923,31 @@ describe("cron service ops seam coverage", () => {
 
     await withStateDirForStorePath(storePath, async () => {
       await writeDueIsolatedJobSnapshot(storePath, now);
-      let resolveRun: ((value: { status: "ok"; summary: string }) => void) | undefined;
+      const started = createDeferred();
+      const completion = createDeferred<{ status: "ok"; summary: string }>();
       const state = createCronServiceState({
         storePath,
         nowMs: () => now,
-        runIsolatedAgentJob: vi.fn(
-          () =>
-            new Promise<{ status: "ok"; summary: string }>((resolve) => {
-              resolveRun = resolve;
-            }),
-        ),
+        runIsolatedAgentJob: vi.fn(() => {
+          started.resolve();
+          return completion.promise;
+        }),
       });
 
       const manualRun = run(state, "isolated-timeout");
-      await vi.waitFor(() => {
+      try {
+        await Promise.race([started.promise, manualRun]);
         expect(state.deps.runIsolatedAgentJob).toHaveBeenCalledTimes(1);
-      });
 
-      const task = findCronTaskByBaseRunId(`cron:isolated-timeout:${now}`);
-      if (!task) {
-        throw new Error("expected active manual cron task ledger record");
+        const task = findCronTaskByBaseRunId(`cron:isolated-timeout:${now}`);
+        assert.isDefined(task, "expected active manual cron task ledger record");
+        expect(task.status).toBe("running");
+        expect(task.progressSummary).toBe("Running automation.");
+        expect(formatTaskStatusDetail(task)).toBe("Running automation.");
+      } finally {
+        completion.resolve({ status: "ok", summary: "done" });
+        await manualRun;
       }
-      expect(task.status).toBe("running");
-      expect(task.progressSummary).toBe("Running automation.");
-      expect(formatTaskStatusDetail(task)).toBe("Running automation.");
-
-      resolveRun?.({ status: "ok", summary: "done" });
-      await manualRun;
     });
   });
 

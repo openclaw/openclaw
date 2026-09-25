@@ -19,7 +19,6 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resolveIngressRetryDelayMs } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildDiscordInboundJob } from "./inbound-job.js";
 import { createDiscordIngressMonitor, type DiscordIngressLifecycle } from "./ingress.js";
 import { createDiscordMessageHandler } from "./message-handler.js";
 import type { DiscordMessagePreflightParams } from "./message-handler.preflight.types.js";
@@ -896,11 +895,10 @@ describe("Discord durable ingress settlement", () => {
         queue,
         dispatch: async (_event, lifecycle) => {
           const ingress = fanInChannelIngressLifecycles([lifecycle]);
-          messageRunQueue.enqueue(
-            buildDiscordInboundJob(await createBaseDiscordMessageContext(), {
-              ingressSettlement: ingress,
-            }),
-          );
+          messageRunQueue.enqueue({
+            context: await createBaseDiscordMessageContext(),
+            ingressSettlement: ingress,
+          });
           await messageRunQueue.deactivate();
           skipped.resolve();
           return { kind: "deferred" };

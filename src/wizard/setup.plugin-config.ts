@@ -14,9 +14,7 @@ import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { t } from "./i18n/index.js";
 import type { WizardPrompter } from "./prompts.js";
 
-/**
- * A discovered plugin that has configurable fields via uiHints.
- */
+/** A discovered plugin with promptable uiHints. */
 export type ConfigurablePlugin = {
   id: string;
   name: string;
@@ -135,7 +133,6 @@ export function discoverConfigurablePlugins(params: {
     if (!plugin.configUiHints) {
       continue;
     }
-    // Only include non-advanced fields
     const promptableHints: Record<string, PluginConfigUiHint> = {};
     for (const [key, hint] of Object.entries(plugin.configUiHints)) {
       if (!hint.advanced) {
@@ -159,16 +156,9 @@ export function discoverConfigurablePlugins(params: {
  * Discover plugins with unconfigured non-advanced fields (for onboard flow).
  * Returns only plugins where at least one promptable field has no value yet.
  */
-export function discoverUnconfiguredPlugins(params: {
-  manifestPlugins: ReadonlyArray<{
-    id: string;
-    name?: string;
-    configUiHints?: Record<string, PluginConfigUiHint>;
-    configSchema?: Record<string, unknown>;
-    enabled?: boolean;
-  }>;
-  config: OpenClawConfig;
-}): ConfigurablePlugin[] {
+export function discoverUnconfiguredPlugins(
+  params: Parameters<typeof discoverConfigurablePlugins>[0] & { config: OpenClawConfig },
+): ConfigurablePlugin[] {
   const all = discoverConfigurablePlugins(params);
   return all.filter((plugin) => {
     const existing = getExistingPluginConfig(params.config, plugin.id);
@@ -216,7 +206,6 @@ async function promptPluginFields(params: {
     const currentValue = getPath(existing, pathSegments.map(String));
     const hasValue = currentValue !== undefined && currentValue !== null && currentValue !== "";
 
-    // In onboard mode, skip already-configured fields
     if (hasValue && !params.showConfigured) {
       continue;
     }
@@ -225,8 +214,7 @@ async function promptPluginFields(params: {
     const label = hint.label ?? key;
     const helpSuffix = hint.help ? ` — ${hint.help}` : "";
 
-    // Skip sensitive fields — WizardPrompter has no masked input;
-    // direct users to openclaw config set or the Web UI instead.
+    // Plugin secrets stay with config set and the Web UI's secret-storage flow.
     if (hint.sensitive) {
       await prompter.note(
         t("wizard.plugins.sensitiveField", {
@@ -239,7 +227,6 @@ async function promptPluginFields(params: {
       continue;
     }
 
-    // Handle enum fields with select
     if (schemaProp?.enum && Array.isArray(schemaProp.enum)) {
       const options = schemaProp.enum.map((configValue, index) => ({
         value: String(index),
@@ -264,7 +251,6 @@ async function promptPluginFields(params: {
       continue;
     }
 
-    // Handle boolean fields with confirm
     if (schemaProp?.type === "boolean") {
       const confirmed = await prompter.confirm({
         message: `${label}${helpSuffix}`,
@@ -277,9 +263,8 @@ async function promptPluginFields(params: {
       continue;
     }
 
-    // Handle array fields — prompt as comma-separated string
     if (schemaProp?.type === "array") {
-      const currentStr = Array.isArray(currentValue) ? (currentValue as unknown[]).join(", ") : "";
+      const currentStr = Array.isArray(currentValue) ? currentValue.join(", ") : "";
       const input = await prompter.text({
         message: `${label}${t("wizard.plugins.arrayPromptSuffix")}${helpSuffix}`,
         initialValue: currentStr,
@@ -287,18 +272,16 @@ async function promptPluginFields(params: {
       });
       const trimmed = input.trim();
       if (trimmed !== currentStr) {
-        if (trimmed) {
-          const values = normalizeStringEntries(trimmed.split(","));
-          setPathCreateStrict(updatedConfig, pathSegments, values);
-        } else {
-          setPathCreateStrict(updatedConfig, pathSegments, undefined);
-        }
+        setPathCreateStrict(
+          updatedConfig,
+          pathSegments,
+          trimmed ? normalizeStringEntries(trimmed.split(",")) : undefined,
+        );
         changed = true;
       }
       continue;
     }
 
-    // Default: text input (string, number, etc.)
     const currentStr = formatCurrentValue(currentValue);
     const input = await prompter.text({
       message: `${label}${helpSuffix}`,
@@ -330,7 +313,6 @@ async function promptPluginFields(params: {
     return config;
   }
 
-  // Merge updated plugin config back into the full config
   return {
     ...config,
     plugins: {
@@ -355,10 +337,7 @@ export async function setupPluginConfig(params: {
   prompter: WizardPrompter;
   workspaceDir?: string;
 }): Promise<OpenClawConfig> {
-  const manifestPlugins = await listEnabledConfigurableManifestPlugins({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-  });
+  const manifestPlugins = await listEnabledConfigurableManifestPlugins(params);
 
   const unconfigured = discoverUnconfiguredPlugins({
     manifestPlugins,
@@ -417,10 +396,7 @@ export async function configurePluginConfig(params: {
   prompter: WizardPrompter;
   workspaceDir?: string;
 }): Promise<OpenClawConfig> {
-  const manifestPlugins = await listEnabledConfigurableManifestPlugins({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-  });
+  const manifestPlugins = await listEnabledConfigurableManifestPlugins(params);
 
   const configurable = discoverConfigurablePlugins({
     manifestPlugins,

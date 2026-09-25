@@ -77,9 +77,6 @@ export async function setSelfLearningEnabled(
     return runtimeConfig.state.lastError ?? t("skillWorkshop.selfLearning.updateError");
   }
   await runtimeConfig.refresh();
-  if (!isCurrent()) {
-    return null;
-  }
   return null;
 }
 

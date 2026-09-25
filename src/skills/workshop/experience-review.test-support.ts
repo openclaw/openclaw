@@ -265,6 +265,8 @@ export async function createExperienceReviewCandidate(
       },
     },
     config: {
+      // This fixture exercises deferred-tool receipts, independently of model Code Mode defaults.
+      tools: { codeMode: false },
       models: {
         providers: {
           openai: {

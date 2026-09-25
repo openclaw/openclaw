@@ -11,6 +11,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
+import { runCronRuntimeMutation } from "./service/runtime-mutation.js";
 import { cronStoreKey } from "./store/key.js";
 import { restoreCronLoadError } from "./store/load-error.js";
 import { loadCronStoreFromDatabase } from "./store/load.kernel.js";
@@ -19,11 +20,7 @@ import {
   deleteCronQuarantinedJobsFromDatabase,
   saveCronQuarantinedJobs,
 } from "./store/quarantine.js";
-import {
-  assertCronStoreCanPersist,
-  deleteStaleCronJobFamilyRows,
-  readCronJobsFingerprint,
-} from "./store/row-codec.js";
+import { assertCronStoreCanPersist, readCronJobsFingerprint } from "./store/row-codec.js";
 import type { CronJobFamilyIdentity } from "./store/row-codec.js";
 import { CronJobsStoreChangedError, restoreCronSaveError } from "./store/save-error.js";
 import type {
@@ -124,16 +121,25 @@ export function assertCronJobsStoreUnchanged(
 }
 
 /** Removes an owned declarative job family left under obsolete absolute store keys. */
-export function removeStaleCronJobFamilyRows(
+export async function removeStaleCronJobFamilyRows(
   storePath: string,
   family: CronJobFamilyIdentity,
-): number {
-  const activeStoreKey = cronStoreKey(path.resolve(storePath));
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => deleteStaleCronJobFamilyRows(db, activeStoreKey, family),
-    {},
-    { operationLabel: "cron.job-family-adoption" },
-  );
+  opts?: { commitGuard?: () => void },
+): Promise<number> {
+  const storeKey = cronStoreKey(path.resolve(storePath));
+  const context = captureOpenClawStateWorkerContext();
+  let removed = 0;
+  await runCronRuntimeMutation({
+    context,
+    type: "cron.removeStaleFamily",
+    input: { storeKey, family: { ...family } },
+    assertCurrent: () => opts?.commitGuard?.(),
+    prepare: () => ({ value: {}, assertCurrent() {} }),
+    publish: (outcome) => {
+      removed = outcome.removed;
+    },
+  });
+  return removed;
 }
 
 /** Loads only the persisted cron job store payload. */

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { matchesVersionManagerPath } from "../shared/version-manager-path.js";
 
 // Service PATH policy keeps managed services away from user shell package-manager paths.
@@ -53,24 +54,6 @@ export function mergeServicePath(
     candidate === parent || candidate.startsWith(`${parent}${path.sep}`);
   const isUnsafeProcPath = (candidate: string) =>
     candidate === `${path.sep}proc` || candidate.startsWith(`${path.sep}proc${path.sep}`);
-  const realpathExistingPath = (candidate: string): string | undefined => {
-    const parts: string[] = [];
-    let current = candidate;
-    while (current && current !== path.dirname(current)) {
-      try {
-        const realCurrent = path.normalize(fs.realpathSync.native(current));
-        return path.normalize(path.join(realCurrent, ...parts.toReversed()));
-      } catch {
-        parts.push(path.basename(current));
-        current = path.dirname(current);
-      }
-    }
-    try {
-      return path.normalize(path.join(fs.realpathSync.native(current), ...parts.toReversed()));
-    } catch {
-      return undefined;
-    }
-  };
   const normalizePreservedPathSegment = (segment: string): string | undefined => {
     if (!path.isAbsolute(segment)) {
       return undefined;
@@ -84,7 +67,7 @@ export function mergeServicePath(
       return undefined;
     }
     try {
-      const realSegment = realpathExistingPath(normalized);
+      const realSegment = resolveIdentityPathViaExistingAncestorSync(normalized);
       const realCwd = path.normalize(fs.realpathSync.native(cwd));
       if (realSegment && isSameOrChildPath(realSegment, realCwd)) {
         return undefined;
@@ -99,7 +82,7 @@ export function mergeServicePath(
       return false;
     }
     const resolved = path.resolve(segment);
-    const realResolved = realpathExistingPath(resolved) ?? resolved;
+    const realResolved = resolveIdentityPathViaExistingAncestorSync(resolved);
     return ![...normalizedTmpDirs, ...realTmpDirs].some(
       (tmpRoot) => isSameOrChildPath(resolved, tmpRoot) || isSameOrChildPath(realResolved, tmpRoot),
     );
