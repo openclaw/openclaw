@@ -53,6 +53,8 @@ openclaw gateway health --port 18789
 
 `/healthz` is a liveness probe: it returns as soon as the server can answer HTTP. `/readyz` is stricter and stays red while startup plugin sidecars, channels, or configured hooks are still settling. Local or authenticated detailed `/readyz` responses include an `eventLoop` diagnostic block (delay, utilization, CPU-core ratio, `degraded` flag).
 
+<a id="param-port"></a>
+
 <ParamField path="--port <port>" type="number">
   Target a local loopback Gateway on this port. Overrides `OPENCLAW_GATEWAY_URL` and `OPENCLAW_GATEWAY_PORT` for this call.
 </ParamField>
@@ -74,12 +76,18 @@ refreshing, partial, or stale. The command returns the available snapshot from
 one request; run it again later to check for refreshed totals. JSON output preserves
 the `cacheStatus` object so scripts can inspect the same state.
 
+<a id="param-days"></a>
+
 <ParamField path="--days <days>" type="number" default="30">
   Number of days to include.
 </ParamField>
+<a id="param-agent"></a>
+
 <ParamField path="--agent <id>" type="string">
   Scope the summary to one configured agent id.
 </ParamField>
+<a id="param-all-agents"></a>
+
 <ParamField path="--all-agents" type="boolean">
   Aggregate across all configured agents. Cannot combine with `--agent`.
 </ParamField>
@@ -96,18 +104,28 @@ openclaw gateway stability --bundle latest --export
 openclaw gateway stability --json
 ```
 
+<a id="param-limit"></a>
+
 <ParamField path="--limit <limit>" type="number" default="25">
   Maximum recent events to include (max `1000`).
 </ParamField>
+<a id="param-type"></a>
+
 <ParamField path="--type <type>" type="string">
   Filter by diagnostic event type, e.g. `payload.large` or `diagnostic.memory.pressure`.
 </ParamField>
+<a id="param-since-seq"></a>
+
 <ParamField path="--since-seq <seq>" type="number">
   Include only events after a diagnostic sequence number.
 </ParamField>
+<a id="param-bundle-path"></a>
+
 <ParamField path="--bundle [path]" type="string">
   Read a persisted stability bundle instead of calling the running Gateway. `--bundle latest` (or bare `--bundle`) picks the newest bundle under the state directory; you can also pass a bundle JSON path directly.
 </ParamField>
+<a id="param-export"></a>
+
 <ParamField path="--export" type="boolean">
   Write a shareable support diagnostics zip instead of printing stability details.
 </ParamField>
@@ -137,27 +155,43 @@ openclaw gateway diagnostics export --json
 <ParamField path="--output <path>" type="string">
   Output zip path. Defaults to a support export under the state directory.
 </ParamField>
+<a id="param-log-lines"></a>
+
 <ParamField path="--log-lines <count>" type="number" default="5000">
   Maximum sanitized log lines to include.
 </ParamField>
+<a id="param-log-bytes"></a>
+
 <ParamField path="--log-bytes <bytes>" type="number" default="1000000">
   Maximum log bytes to inspect.
 </ParamField>
+<a id="param-url"></a>
+
 <ParamField path="--url <url>" type="string">
   Gateway WebSocket URL for the health snapshot.
 </ParamField>
+<a id="param-token"></a>
+
 <ParamField path="--token <token>" type="string">
   Gateway token for the health snapshot.
 </ParamField>
+<a id="param-password"></a>
+
 <ParamField path="--password <password>" type="string">
   Gateway password for the health snapshot.
 </ParamField>
+<a id="param-timeout"></a>
+
 <ParamField path="--timeout <ms>" type="number" default="3000">
   Status/health snapshot timeout.
 </ParamField>
+<a id="param-no-stability-bundle"></a>
+
 <ParamField path="--no-stability-bundle" type="boolean">
   Skip persisted stability bundle lookup.
 </ParamField>
+<a id="param-json"></a>
+
 <ParamField path="--json" type="boolean">
   Print the written path, size, and manifest as JSON.
 </ParamField>
@@ -177,27 +211,43 @@ openclaw gateway status --require-rpc
 openclaw gateway status --port 19001
 ```
 
+<a id="param-url-1"></a>
+
 <ParamField path="--url <url>" type="string">
   Probe this explicit WebSocket URL instead of the service-derived target. Cannot combine with `--port`.
 </ParamField>
+<a id="param-port-1"></a>
+
 <ParamField path="--port <port>" type="number">
   Select a local Gateway port using the invoking CLI config for auth and TLS. Accepts `gateway --port 19001 status` and `gateway status --port 19001`; an explicit status port wins. Native service details remain visible as diagnostics but do not select the probe target.
 </ParamField>
+<a id="param-token-1"></a>
+
 <ParamField path="--token <token>" type="string">
   Token auth for the probe.
 </ParamField>
+<a id="param-password-1"></a>
+
 <ParamField path="--password <password>" type="string">
   Password auth for the probe.
 </ParamField>
+<a id="param-timeout-1"></a>
+
 <ParamField path="--timeout <ms>" type="number" default="10000">
   Probe timeout.
 </ParamField>
+<a id="param-no-probe"></a>
+
 <ParamField path="--no-probe" type="boolean">
   Skip the connectivity probe (service-only view).
 </ParamField>
+<a id="param-deep"></a>
+
 <ParamField path="--deep" type="boolean">
   Scan system-level services too.
 </ParamField>
+<a id="param-require-rpc"></a>
+
 <ParamField path="--require-rpc" type="boolean">
   Upgrade the connectivity probe to a read probe and exit non-zero if it fails. Cannot combine with `--no-probe`.
 </ParamField>
@@ -247,6 +297,8 @@ openclaw gateway probe
 openclaw gateway probe --json
 openclaw gateway probe --port 18789
 ```
+
+<a id="param-port-2"></a>
 
 <ParamField path="--port <port>" type="number">
   Use this port for the local loopback probe target and SSH tunnel remote port. Without `--url`, this selects only the local loopback target instead of configured gateway environment URL, environment port, or remote targets.
@@ -299,6 +351,8 @@ CLI equivalent:
 openclaw gateway probe --ssh user@gateway-host
 ```
 
+<a id="param-ssh"></a>
+
 <ParamField path="--ssh <target>" type="string">
   `user@host` or `user@host:port` (port defaults to `22`).
 </ParamField>
@@ -310,6 +364,8 @@ install the **OpenSSH Client** optional feature; Windows places it under
 <ParamField path="--ssh-identity <path>" type="string">
   Identity file.
 </ParamField>
+<a id="param-ssh-auto"></a>
+
 <ParamField path="--ssh-auto" type="boolean">
   Pick the first discovered gateway host as SSH target from the resolved discovery endpoint (`local.` plus the configured wide-area domain, if any). TXT-only hints are ignored.
 </ParamField>
@@ -354,27 +410,43 @@ In an agent's `exec` subprocess (`OPENCLAW_SHELL=exec`), message RPCs are
 refused before connecting so worker reports cannot appear as fresh human input.
 Ordinary operator terminals and non-message Gateway diagnostics are unchanged.
 
+<a id="param-params"></a>
+
 <ParamField path="--params <json>" type="string" default="{}">
   JSON object string for params.
 </ParamField>
+<a id="param-url-2"></a>
+
 <ParamField path="--url <url>" type="string">
   Gateway WebSocket URL.
 </ParamField>
+<a id="param-port-3"></a>
+
 <ParamField path="--port <port>" type="number">
   Target a local loopback Gateway on this port. Overrides `OPENCLAW_GATEWAY_URL` and `OPENCLAW_GATEWAY_PORT` for this call. Cannot combine with `--url`.
 </ParamField>
+<a id="param-token-2"></a>
+
 <ParamField path="--token <token>" type="string">
   Gateway token.
 </ParamField>
+<a id="param-password-2"></a>
+
 <ParamField path="--password <password>" type="string">
   Gateway password.
 </ParamField>
+<a id="param-timeout-2"></a>
+
 <ParamField path="--timeout <ms>" type="number" default="10000">
   Timeout budget.
 </ParamField>
+<a id="param-expect-final"></a>
+
 <ParamField path="--expect-final" type="boolean">
   Mainly for agent-style RPCs that stream intermediate events before a final payload.
 </ParamField>
+<a id="param-json-1"></a>
+
 <ParamField path="--json" type="boolean">
   Machine-readable JSON output.
 </ParamField>
