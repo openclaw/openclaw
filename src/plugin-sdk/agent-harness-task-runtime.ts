@@ -55,7 +55,10 @@ import {
 } from "../tasks/detached-task-runtime.js";
 import { listTaskRecords, type TaskRecord } from "../tasks/runtime-internal.js";
 import { captureTaskExecutionOwner } from "../tasks/task-execution-owner.js";
-import { prepareTaskRegistryRead } from "../tasks/task-registry-read.js";
+import {
+  captureResidentTaskRegistryRunCandidates,
+  prepareTaskRegistryRead,
+} from "../tasks/task-registry-read.js";
 import {
   captureTaskPersistenceReceipt,
   matchesTaskPersistenceReceipt,
@@ -427,9 +430,16 @@ export async function deliverAgentHarnessTaskCompletion(params: {
   const announceType = params.announceType?.trim() || "Agent harness task";
   const statusLabel = params.statusLabel?.trim() || params.status;
   const eventStatus = mapHarnessCompletionStatus(params.status);
-  // Capture completion ownership before origin resolution can yield to a new task.
+  // Pin known legacy ownership before read preparation can yield to a replacement.
   const runtimeOwner = captureDetachedTaskRuntimeOwner({ settlement: true });
   runtimeOwner.assertCurrent();
+  const matchesCompletionScope = (task: Readonly<TaskRecord>) =>
+    task.runtime === "subagent" &&
+    Boolean(task.taskKind) &&
+    task.requesterSessionKey === requesterSessionKey;
+  const residentTasks = params.expectedTask
+    ? undefined
+    : captureResidentTaskRegistryRunCandidates(childSessionKey)?.filter(matchesCompletionScope);
   const taskRead = await prepareTaskRegistryRead();
   runtimeOwner.assertCurrent();
   assertAgentHarnessTaskRuntimeScope(scope);
@@ -439,16 +449,9 @@ export async function deliverAgentHarnessTaskCompletion(params: {
   const readOwnedTasks = () => {
     runtimeOwner.assertCurrent();
     assertAgentHarnessTaskRuntimeScope(scope);
-    return taskRead
-      .getTasksByRunId(childSessionKey)
-      .filter(
-        (task) =>
-          task.runtime === "subagent" &&
-          Boolean(task.taskKind) &&
-          task.requesterSessionKey === requesterSessionKey,
-      );
+    return taskRead.getTasksByRunId(childSessionKey).filter(matchesCompletionScope);
   };
-  const ownedTasks = readOwnedTasks();
+  const ownedTasks = residentTasks ?? readOwnedTasks();
   const sourceTask = ownedTasks.length === 1 ? ownedTasks[0] : undefined;
   const taskReceipt =
     params.expectedTask ?? (sourceTask && captureTaskPersistenceReceipt(sourceTask));
