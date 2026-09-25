@@ -326,10 +326,24 @@ describeControlUiE2e("Plugin overview", () => {
       await page.setViewportSize({ width: 393, height: 852 });
       const modalBounds = await page.locator(".plugin-tool-preview").boundingBox();
       expect(modalBounds!.height).toBeLessThanOrEqual(804);
-      await page.locator(".plugin-tool-preview p").evaluate((element) => {
+      await captureScreenshot(page, "overview-tool-mobile.png", "viewport");
+      await page.locator(".plugin-tool-preview__body").evaluate((element) => {
         element.scrollTop = element.scrollHeight;
       });
-      await captureScreenshot(page, "overview-tool-mobile.png", "viewport");
+      expect(
+        await page.locator(".plugin-tool-preview__body").evaluate((element) => {
+          const paragraph = element.querySelector("p");
+          if (!paragraph) {
+            return false;
+          }
+          return (
+            element.scrollTop > 0 &&
+            paragraph.textContent?.endsWith("TOOL_DESCRIPTION_TAIL") &&
+            paragraph.getBoundingClientRect().bottom <= element.getBoundingClientRect().bottom + 1
+          );
+        }),
+      ).toBe(true);
+      await captureScreenshot(page, "overview-tool-mobile-tail.png", "viewport");
       await page.getByRole("button", { name: "Close", exact: true }).click();
       for (const width of [1440, 900, 393]) {
         await page.setViewportSize({ width, height: 1000 });
