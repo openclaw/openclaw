@@ -71,7 +71,6 @@ const {
   buildGatewaySnapshotMock,
   getHealthCacheMock,
   getHealthVersionMock,
-  incrementPresenceVersionMock,
   loadConfigMock,
   createAuthenticatedGitHubIdentitySyncMock,
   adoptTailscaleProfileAvatarMock,
@@ -95,7 +94,6 @@ const {
   })),
   getHealthCacheMock: vi.fn(() => null),
   getHealthVersionMock: vi.fn(() => 1),
-  incrementPresenceVersionMock: vi.fn(() => 2),
   loadConfigMock: vi.fn(() => ({
     gateway: {
       auth: { mode: "none" },
@@ -431,8 +429,7 @@ function attachGatewayHarness(options: {
       ({
         refreshConnectedUserProfile,
         broadcast: vi.fn(),
-        incrementPresenceVersion: incrementPresenceVersionMock,
-        getHealthVersion: getHealthVersionMock,
+        publishPresence: vi.fn(),
       }) as never,
     nodeLifecycleDispatch: new GatewayNodeLifecycleDispatchTracker(),
     refreshHealthSnapshot:

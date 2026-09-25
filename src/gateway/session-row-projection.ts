@@ -637,17 +637,6 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       return findSessionRowById(query, { disposed, lookup, matching });
     },
     describe,
-    readMembership(query: records.Lookup) {
-      if (disposed) {
-        return undefined;
-      }
-      const row = lookup(query);
-      if (row && isIncognitoSessionKey(row.key)) {
-        return describe(query)?.membership;
-      }
-      const members = row && membership.membership(row.storeTarget.storePath, row.key);
-      return members ? new Set(members) : undefined;
-    },
     ...createSessionRowAncestorReads({
       state: () => ({ cfg, context: metadata.current }),
       referenced,
@@ -690,6 +679,9 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       return needsMaterialization();
     },
     getPolicyConfig,
+    get sharingRevision() {
+      return disposed || topologyDirty ? undefined : (revisionToken ??= {});
+    },
     get state() {
       if (!disposed && !prepareRead()) {
         throw new Error("Session row topology changed; prepare current facts before reading");

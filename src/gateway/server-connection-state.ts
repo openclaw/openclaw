@@ -43,7 +43,11 @@ export function createGatewayConnectionState(params: {
   const gatewayBroadcaster = createGatewayBroadcaster({
     clients,
     preparePresenceProjection: (presence) =>
-      createPresenceRecipientProjection({ cfg: loadRuntimeConfig(), presence }),
+      createPresenceRecipientProjection({
+        cfg: loadRuntimeConfig(),
+        presence,
+        projection: sessionRowProjection,
+      }),
     sessionMessageSubscribers,
     canReceiveSessionEvent: (client, sessionKeys, agentId, event, payload) => {
       try {
