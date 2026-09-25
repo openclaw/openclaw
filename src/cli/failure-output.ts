@@ -1,6 +1,7 @@
 // Shared root CLI failure formatting with debug stack gating and recovery hints.
 import { isGatewayTransportError } from "../gateway/transport-error.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
 import {
   UpdateSchemaRefusalError,
@@ -230,7 +231,13 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
     lines.push("[openclaw] Debug: set OPENCLAW_DEBUG=1 to include the stack trace.");
   }
 
-  if (options.includeDoctorHint !== false) {
+  // Doctor needs the same coordinators; inspect wrappers without loading the SQLite runtime.
+  if (
+    options.includeDoctorHint !== false &&
+    !collectNestedErrorCandidates(options.error).some(
+      (error) => error instanceof Error && error.name === "StateDatabaseCoordinatorContentionError",
+    )
+  ) {
     lines.push(`[openclaw] Try: ${formatCliCommand("openclaw doctor", env)}`);
   }
   lines.push(`[openclaw] Help: ${formatCliCommand("openclaw --help", env)}`);

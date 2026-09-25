@@ -1,6 +1,5 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import {
@@ -12,7 +11,6 @@ import {
   getAgentEventLifecycleGeneration,
   rotateAgentEventLifecycleGeneration,
 } from "../../infra/agent-events.js";
-import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import * as recoveryOwnerRelease from "./main-session-recovery-owner-release.js";
 import {
   claimMainSessionRecoveryOwner,
@@ -21,6 +19,7 @@ import {
   refreshMainSessionRecoveryOwner,
   releaseMainSessionRecoveryOwner,
 } from "./main-session-recovery-store.js";
+import { createMainSessionRecoveryStoreFixture } from "./main-session-recovery-store.test-support.js";
 import { retryRestartAbortedMainSessionRecovery } from "./main-session-restart-recovery-runtime.js";
 
 const sessionKey = "agent:main:main";
@@ -35,22 +34,24 @@ const enabledExecutionIdentity = (runId: string) => ({
   state: "enabled" as const,
   token: executionIdentity(runId),
 });
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
 describe("main session recovery store", () => {
-  let dir: string;
   let lifecycleGeneration: string;
   let storePath: string;
+  const { fixtureStore, createMovedSessionStore, resetCase } =
+    createMainSessionRecoveryStoreFixture();
+
+  function useIsolatedMovedSessionStore(): void {
+    storePath = createMovedSessionStore();
+  }
 
   beforeEach(() => {
-    dir = tempDirs.make("openclaw-main-recovery-store-");
+    storePath = fixtureStore();
     lifecycleGeneration = getAgentEventLifecycleGeneration();
-    storePath = path.join(dir, "sessions.json");
   });
 
   afterEach(async () => {
     vi.restoreAllMocks();
-    await cleanupSessionStateForTest({ stateDir: dir });
+    await resetCase();
   });
 
   async function write(entry: SessionEntry): Promise<void> {
@@ -406,6 +407,7 @@ describe("main session recovery store", () => {
     ["claim", true],
     ["inspect", true],
   ] as const)("%s follows a moved session with lifecycle rotation=%s", async (kind, rotate) => {
+    useIsolatedMovedSessionStore();
     const movedKey = "agent:main:moved";
     const replacement = { sessionId: "replacement", updatedAt: 200 };
     await seedExact({ [movedKey]: interruptedEntry(), [sessionKey]: replacement });
@@ -498,6 +500,7 @@ describe("main session recovery store", () => {
   });
 
   it("refreshes a moved foreground owner and releases it after its session id rotates", async () => {
+    useIsolatedMovedSessionStore();
     await write(interruptedEntry());
     const claim = await claimRecovery();
     if (claim.kind !== "claimed") {
@@ -531,6 +534,7 @@ describe("main session recovery store", () => {
   it.each(["admit_recovery", "cancel_reservation", "abandon_reservation"] as const)(
     "%s finds a moved reservation without changing its replacement",
     async (kind) => {
+      useIsolatedMovedSessionStore();
       await write(interruptedEntry());
       const reservation = await reserve();
       const movedKey = "agent:main:moved";
@@ -564,6 +568,7 @@ describe("main session recovery store", () => {
   );
 
   it("rechecks lifecycle authority after an exact lookup misses a moved owner", async () => {
+    useIsolatedMovedSessionStore();
     await write(interruptedEntry());
     const claim = await claimRecovery();
     if (claim.kind !== "claimed") {
@@ -822,7 +827,8 @@ describe("main session recovery store", () => {
   });
 
   it("retains the shared-store agent owner through claim, refresh, and release", async () => {
-    const target = { agentId: "ops", sessionKey: "global", storePath };
+    const opsStorePath = fixtureStore("ops");
+    const target = { agentId: "ops", sessionKey: "global", storePath: opsStorePath };
     await sessionAccessor.replaceSessionEntry(target, interruptedEntry());
 
     await expect(
@@ -859,7 +865,9 @@ describe("main session recovery store", () => {
   });
 
   it("settles an owned shared-store recovery receipt without redispatching", async () => {
-    const target = { agentId: "ops", sessionKey: "global", storePath };
+    const opsStorePath = fixtureStore("ops");
+    const dir = path.dirname(opsStorePath);
+    const target = { agentId: "ops", sessionKey: "global", storePath: opsStorePath };
     await sessionAccessor.replaceSessionEntry(
       target,
       interruptedEntry({
@@ -887,7 +895,7 @@ describe("main session recovery store", () => {
             defaults: { sessionStore: { agentId: "ops" } },
             entries: { ops: {} },
           },
-          session: { scope: "global", store: storePath },
+          session: { scope: "global", store: opsStorePath },
         },
         gatewayRuntime: {
           dispatchSessionMethod: dispatch,

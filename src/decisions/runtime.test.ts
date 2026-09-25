@@ -821,6 +821,38 @@ it("leaves a timed-out rollback fenced after late physical settlement", async ()
   }
 });
 
+it.each([false, true])(
+  "settles a provider callback before disposal cleanup waits on its host (sibling: %s)",
+  async (withSibling) => {
+    const started = createDeferredCore();
+    const release = createDeferredCore();
+    const siblingRelease = createDeferredCore();
+    const host = registered(async () => {
+      started.resolve();
+      await release.promise;
+      return answer;
+    });
+    const instance = getPluginInstance(host.record)!;
+    const sibling = withSibling ? instance.run(() => siblingRelease.promise) : undefined;
+    const pending = host.run();
+    await started.promise;
+
+    const disposal = instance.dispose();
+    release.resolve();
+    try {
+      // Another admitted call can postpone host.stop(), but cannot keep this
+      // retiring instance's completed provider result current.
+      await expect(pending).resolves.toEqual({ status: "unavailable", reason: "retiring" });
+    } finally {
+      siblingRelease.resolve();
+      await sibling;
+      await disposal;
+    }
+    await expect(disposal).resolves.toEqual({ errors: [] });
+    expect(host.registry.decisionProviders[0]!.host.inspect(config).activeRequests).toBe(0);
+  },
+);
+
 it.each(["stop", "superseded", "canceled"] as const)(
   "does not reopen rollback after %s",
   async (boundary) => {

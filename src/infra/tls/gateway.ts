@@ -4,6 +4,7 @@ import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import tls from "node:tls";
+import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeTlsFingerprint } from "../../../packages/gateway-client/src/client-address-utils.js";
 import type { GatewayTlsConfig } from "../../config/types.gateway.js";
@@ -11,7 +12,6 @@ import { runExec } from "../../process/exec.js";
 import { CONFIG_DIR, resolveUserPath, shortenHomeInString } from "../../utils.js";
 import { readFileDescriptorBounded } from "../boundary-file-read.js";
 import { ensureDurableDirectory, publishFileNoClobber } from "../directory-durability.js";
-import { sameFileIdentity } from "../fs-safe-advanced.js";
 import { canonicalPathFromExistingAncestor, pathExists } from "../fs-safe.js";
 import { resolveSystemBin } from "../resolve-system-bin.js";
 

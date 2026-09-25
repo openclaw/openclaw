@@ -215,6 +215,7 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
         { agentId: "alpha", shortId: "12345678", slugHint: "saved" },
       ]) {
         const savedPublications: ModelsSnapshotEvent[] = [];
+        const savedPublication = createDeferred();
         const saved = await connectGatewayClient({
           url: `ws://127.0.0.1:${port}`,
           token,
@@ -227,38 +228,40 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
           onEvent(event) {
             if (event.event === "models.snapshot") {
               savedPublications.push(event.payload as ModelsSnapshotEvent);
+              savedPublication.resolve();
             }
           },
         });
         try {
-          await expect
-            .poll(() => savedPublications)
-            .toMatchObject([
-              {
-                scope: { agentId: "alpha", sessionKey },
-                catalog: {
-                  models: [
-                    {
-                      id: "first",
-                      provider: "fixture",
-                      available: true,
-                      manualSelectionAllowed: true,
-                    },
-                    {
-                      id: "second",
-                      provider: "fixture",
-                      available: true,
-                      manualSelectionAllowed: false,
-                    },
-                  ],
-                  accountSelection: {
-                    kind: "shared",
-                    authProfileId: "fixture:saved-account",
-                    source: "user",
+          // hello-ok precedes worker-backed catalog publication; join that event
+          // instead of assuming preparation fits the polling matcher's deadline.
+          await savedPublication.promise;
+          expect(savedPublications).toMatchObject([
+            {
+              scope: { agentId: "alpha", sessionKey },
+              catalog: {
+                models: [
+                  {
+                    id: "first",
+                    provider: "fixture",
+                    available: true,
+                    manualSelectionAllowed: true,
                   },
+                  {
+                    id: "second",
+                    provider: "fixture",
+                    available: true,
+                    manualSelectionAllowed: false,
+                  },
+                ],
+                accountSelection: {
+                  kind: "shared",
+                  authProfileId: "fixture:saved-account",
+                  source: "user",
                 },
               },
-            ]);
+            },
+          ]);
           expect(publications).toHaveLength(1);
           expect(loadSessionEntry({ agentId: "alpha", sessionKey })?.modelOverride).toBe("second");
         } finally {

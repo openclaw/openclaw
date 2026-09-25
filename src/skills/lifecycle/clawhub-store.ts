@@ -1,6 +1,7 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import { normalizeOptionalString as normalizeOptionalStringValue } from "@openclaw/normalization-core/string-coerce";
 import {
   getAgentWorkspaceAccess,
@@ -21,7 +22,6 @@ import {
   tryReadJson,
   writeJson,
 } from "../../infra/json-files.js";
-import { replaceFileAtomicSync } from "../../infra/replace-file.js";
 import {
   normalizeTrackedSkillSlug,
   resolveWorkspaceSkillInstallDir,

@@ -89,6 +89,7 @@ export type CodexStartOrResumeThreadParams = {
   agentWorkspaceDeveloperInstructions?: string;
   config?: JsonObject;
   shellEnvironment?: Readonly<Record<string, string>>;
+  shellPathPrepend?: readonly string[];
   disableLoginShell?: boolean;
   finalConfigPatch?: JsonObject;
   buildFinalConfigPatch?: (

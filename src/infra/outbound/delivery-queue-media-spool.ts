@@ -2,6 +2,7 @@
 // whose producer-owned source may disappear before retry.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileStore } from "@openclaw/fs-safe/store";
 import { isPassThroughRemoteMediaSource } from "@openclaw/media-core/media-source-url";
 import { hasNonEmptyString as isNonEmptyMediaSource } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyPayload } from "../../auto-reply/types.js";
@@ -15,7 +16,6 @@ import {
   captureDeliveryQueueStateContext,
   type DeliveryQueueStateContext,
 } from "../delivery-queue-sqlite.js";
-import { fileStore } from "../file-store.js";
 import { generateSecureUuid } from "../secure-random.js";
 import {
   ARTIFACT_NAME_RE,

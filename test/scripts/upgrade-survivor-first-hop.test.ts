@@ -108,6 +108,7 @@ async function publishSuccess(summary: unknown) {
   writeFileSync(join(artifacts, "summary.json"), JSON.stringify(summary));
   const { publishDiagnostics } = await import(observer);
   return {
+    artifacts,
     published,
     publish: () => publishDiagnostics(artifacts, published, (text: string) => text, "passed"),
   };
@@ -295,6 +296,35 @@ function seedSessionMigration(root: string, issueCount = 1) {
 }
 
 describe("upgrade survivor first-hop process evidence", () => {
+  it("retains CLI receipt and transport witnesses in the opt-in report recovery proof", async () => {
+    const { artifacts, publish, published } = await publishSuccess({
+      status: "passed",
+      baseline: { spec: "openclaw@2026.9.6", version: "2026.9.6" },
+      candidate: { kind: "tarball", version: "2026.9.5" },
+      scenario: "update-report-recovery",
+      installedVersion: "2026.9.5",
+      candidateInstallMode: "updater",
+      updateRestartMode: "manual",
+      updateOutcome: "success",
+      phases: [],
+    });
+    const witnesses = {
+      "update-report-recovery.json": JSON.stringify({ postCounts: [2, 1] }),
+      "update-report-baseline.json": JSON.stringify({ version: "2026.9.6" }),
+      "update-report-retry-status.log": JSON.stringify({ runId: "retry-run" }),
+      "update-report-pending-status.log": JSON.stringify({ runId: "pending-run" }),
+      "update-report-retry.gh.jsonl": JSON.stringify({ kind: "create", status: 422 }),
+      "update-report-pending.gh.jsonl": JSON.stringify({ kind: "lookup", matches: [] }),
+    };
+    for (const [name, contents] of Object.entries(witnesses)) {
+      writeFileSync(join(artifacts, name), contents);
+    }
+    publish();
+    expect(JSON.parse(readFileSync(join(published, "summary.json"), "utf8")).logs).toMatchObject(
+      witnesses,
+    );
+  });
+
   it.each([0, 1])("retains first-hop identities and Doctor IPC on exit %i", async (code) => {
     const root = realpathSync(tempDirs.make("survivor-first-hop-"));
     const artifacts = join(root, "artifacts");
