@@ -55,16 +55,8 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => ({
   setActiveEmbeddedRun: vi.fn(),
 }));
 vi.mock("openclaw/plugin-sdk/agent-sessions", () => ({
-  AuthStorage: class {
-    static inMemory() {
-      return new this();
-    }
-  },
-  ModelRegistry: class {
-    static inMemory() {
-      return new this();
-    }
-  },
+  AuthStorage: { inMemory: () => ({}) },
+  ModelRegistry: { inMemory: () => ({}) },
   SessionManager: { open: () => ({ buildSessionContext: () => ({ messages: [] }) }) },
 }));
 vi.mock("openclaw/plugin-sdk/llm", () => ({
@@ -277,7 +269,19 @@ async function attempt(
     config: {
       plugins: { entries: { agentsapi: { config: { environment: "invalid-run-override" } } } },
     },
-    hostCapabilities: { reportOutputTokens: vi.fn() },
+    hostCapabilities: {
+      kind: "agent-harness-host-capability",
+      version: 1,
+      assertActive: vi.fn(),
+      reportOutputTokens: vi.fn(),
+      bindToolSurface: (tools) => tools,
+      runBeforeToolCall: async ({ params: toolParams }) => ({
+        blocked: false,
+        params: toolParams,
+      }),
+      requestApproval: async () => undefined,
+      waitForApproval: async () => undefined,
+    },
   };
   const bind = vi.fn<(next: AgentsApiBinding) => Promise<void>>(async () => {});
   const result = await runAgentsApiAttempt(
