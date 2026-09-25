@@ -51,6 +51,7 @@ import {
   throwIfCodexThreadLifecycleAborted,
   tryReuseCodexLiveThread,
 } from "./thread-lifecycle-warm.js";
+import * as restrictedResume from "./thread-restricted-resume.js";
 import { materializePendingSupervisionBranch } from "./thread-supervision.js";
 
 export async function startOrResumeThread(
@@ -108,6 +109,13 @@ export async function startOrResumeThread(
     let replacementPredecessor: CodexAppServerThreadBinding | undefined;
     const initialBoundThreadId = binding?.threadId;
     const initialBoundClientId = binding?.clientId;
+    const strictRestrictedContinuation = restrictedResume.resolveStrictRestrictedContinuation({
+      binding,
+      nativeCodeModeEnabled: params.nativeCodeModeEnabled,
+      webSearchAllowed: params.webSearchAllowed,
+      persistentWebSearchAllowed: params.persistentWebSearchAllowed,
+      ringZeroActive,
+    });
     const throwIfAborted = () => throwIfCodexThreadLifecycleAborted(params.signal);
     const prepareRequestContext = async () => {
       const context = await prepareCodexThreadRequestContext(params, {
@@ -251,6 +259,7 @@ export async function startOrResumeThread(
       if (!current?.threadId) {
         return;
       }
+      restrictedResume.assertRestrictedBindingMayBeCleared(strictRestrictedContinuation, incognito);
       assertCodexBindingMayBeReplaced(current, operation, expectedOwnership);
       const cleared = await params.bindingStore.mutate(
         bindingIdentity,
@@ -363,6 +372,7 @@ export async function startOrResumeThread(
         params.nativeProviderWebSearchSupport === "unknown" &&
         !binding?.threadId);
     let rotatedContextEngineBinding = false;
+    let restrictedResumeCandidate = false;
     let prebuiltPluginThreadConfig: CodexPluginThreadConfig | undefined;
     // Scoped inventory requires a loaded native thread. The warm/resume owner
     // calls this only after acquiring that exact subscription, before admission.
@@ -502,14 +512,24 @@ export async function startOrResumeThread(
         "starting a native-tool-restricted turn",
         expectedOwnership,
       );
-      embeddedAgentLog.debug(
-        "codex app-server native tool surface disabled for turn; starting transient thread",
-        {
-          threadId: binding.threadId,
-        },
-      );
-      preserveExistingBinding = true;
-      binding = undefined;
+      const restrictedTurn = restrictedResume.classifyRestrictedBoundTurn({
+        binding,
+        restrictedToolSurface,
+        transientDelegationRestriction,
+      });
+      if (restrictedTurn === "transient") {
+        // Preserve upstream transient behavior for unrestricted and legacy
+        // restricted bindings. Legacy bindings cannot prove their creation
+        // policy, so they must not be upgraded into same-thread reuse.
+        embeddedAgentLog.debug(
+          "codex app-server native tool surface disabled for turn; starting transient thread",
+          { threadId: binding.threadId },
+        );
+        preserveExistingBinding = true;
+        binding = undefined;
+      } else {
+        restrictedResumeCandidate = true;
+      }
     }
     if (binding?.threadId && transientDelegationRestriction) {
       assertCodexBindingMayBeReplaced(
@@ -656,6 +676,7 @@ export async function startOrResumeThread(
           params,
           binding,
           clientId,
+          requireRestrictedThreadConfigFingerprint: restrictedResumeCandidate,
           buildLoadedPluginThreadConfig,
         });
         if (warmReuse.kind === "ready") {
@@ -676,6 +697,7 @@ export async function startOrResumeThread(
             clearCurrentBinding,
             prebuiltFinalConfigPatch: warmReuse.prebuiltFinalConfigPatch,
             prebuiltPluginThreadConfig,
+            requireRestrictedThreadConfigFingerprint: restrictedResumeCandidate,
             buildLoadedPluginThreadConfig,
             prepareResume: () => prepareCodexThreadResume(params, resumeBinding, requestContext),
             releaseRetainedThread: async (assertCurrent) => {
@@ -694,6 +716,7 @@ export async function startOrResumeThread(
     }
 
     assertCodexBindingMayBeReplaced(binding, "starting a fresh native thread", expectedOwnership);
+    restrictedResume.assertRestrictedThreadCanStartFresh(strictRestrictedContinuation);
     const requestContext = await prepareRequestContext();
     if (initialBoundThreadId && !preserveExistingBinding && !replacementPredecessor) {
       await releaseRetainedThread(initialBoundThreadId);

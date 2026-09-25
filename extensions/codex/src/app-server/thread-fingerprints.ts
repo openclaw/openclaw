@@ -117,6 +117,56 @@ export function fingerprintCodexThreadConfig(
   );
 }
 
+/** Exact creation-time identity for a restricted native thread. Persist only its hash. */
+export function fingerprintRestrictedThreadConfig(
+  request: JsonObject,
+  authProfileId: string | undefined,
+  dynamicToolsFingerprint: string,
+  attempt: {
+    sessionId?: string;
+    sessionKey?: string;
+    toolsAllow?: readonly string[];
+    disableTools?: boolean;
+    delegationCapability?: string;
+    pluginHarnessToolPolicyRestricted?: boolean;
+    pluginHarnessToolPolicySafeDeniedTools?: readonly string[];
+  },
+  hostSystemAgentActive: boolean,
+  environmentSelectionFingerprint?: string,
+): string {
+  return hashCodexAppServerBindingFingerprint(
+    fingerprintJsonObject({
+      authProfileId: authProfileId ?? null,
+      sessionId: attempt.sessionId ?? null,
+      sessionKey: attempt.sessionKey ?? null,
+      dynamicToolsFingerprint,
+      hostSystemAgentActive,
+      environmentSelectionFingerprint: environmentSelectionFingerprint ?? null,
+      model: request.model ?? null,
+      modelProvider: request.modelProvider ?? null,
+      cwd: request.cwd ?? null,
+      runtimeWorkspaceRoots: request.runtimeWorkspaceRoots ?? null,
+      approvalPolicy: request.approvalPolicy ?? null,
+      approvalsReviewer: request.approvalsReviewer ?? null,
+      sandbox: request.sandbox ?? null,
+      permissions: request.permissions ?? null,
+      serviceTier: request.serviceTier ?? null,
+      // thread/start can set baseInstructions while thread/resume cannot send it.
+      // Its only conditional input is covered by toolsAllow and hostSystemAgentActive.
+      developerInstructions: request.developerInstructions ?? null,
+      personality: request.personality ?? null,
+      config: request.config ?? {},
+      toolsAllow: attempt.toolsAllow ? [...attempt.toolsAllow] : null,
+      disableTools: attempt.disableTools === true,
+      delegationCapability: attempt.delegationCapability ?? null,
+      pluginHarnessToolPolicyRestricted: attempt.pluginHarnessToolPolicyRestricted === true,
+      pluginHarnessToolPolicySafeDeniedTools: [
+        ...(attempt.pluginHarnessToolPolicySafeDeniedTools ?? []),
+      ].toSorted(),
+    }),
+  );
+}
+
 export function fingerprintEnvironmentSelection(
   environments: CodexTurnEnvironmentParams[] | undefined,
 ): string | undefined {

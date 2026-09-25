@@ -52,7 +52,12 @@ import type {
 import { resolveCodexAppServerModelProvider } from "./thread-model-selection.js";
 import { CodexThreadPolicyHandoffError, refreshCodexThreadPolicy } from "./thread-policy.js";
 import { buildThreadResumeParams, buildThreadStartParams } from "./thread-requests.js";
+import {
+  assertRestrictedThreadConfigFingerprint,
+  buildRestrictedThreadConfigFingerprint,
+} from "./thread-restricted-resume.js";
 import { resumeCodexAppServerThread } from "./thread-resume.js";
+import { resolveCodexThreadRolloutPath } from "./thread-rollout-path.js";
 import { hasCodexAppServerSiblingRouteWork } from "./turn-router.js";
 
 export async function resumeExistingCodexThread(
@@ -96,8 +101,6 @@ export async function resumeExistingCodexThread(
     const configuration = await context.prepareResume();
     const assertHandoffCurrent = configuration.assertConfigured;
     disposeConfiguration = configuration.dispose;
-    await context.releaseRetainedThread(configuration.assertCurrent);
-    configuration.assertCurrent();
     const clientBoundThread =
       ringZeroClientInstanceId !== undefined ||
       resumeBinding.ringZeroClientInstanceId !== undefined ||
@@ -176,6 +179,9 @@ export async function resumeExistingCodexThread(
         disableLoginShell: params.disableLoginShell,
       }),
     );
+    assertRestrictedThreadConfigFingerprint(params, context, resumeParams, authProfileId);
+    await context.releaseRetainedThread(configuration.assertCurrent);
+    configuration.assertCurrent();
     const requestModelProvider =
       typeof resumeParams.modelProvider === "string" && resumeParams.modelProvider.trim()
         ? resumeParams.modelProvider
@@ -283,6 +289,9 @@ export async function resumeExistingCodexThread(
       ringZeroConfigFingerprint,
       ringZeroClientInstanceId,
       nativeToolPolicyRestricted: restrictedToolSurface ? true : undefined,
+      restrictedThreadConfigFingerprint: context.requireRestrictedThreadConfigFingerprint
+        ? resumeBinding.restrictedThreadConfigFingerprint
+        : undefined,
       networkProxyProfileName: params.appServer.networkProxy?.profileName,
       networkProxyConfigFingerprint,
       nativeHookRelayGeneration:
@@ -598,6 +607,12 @@ export async function startFreshCodexThread(
     params.params.authProfileId,
     response.modelProvider ?? requestModelProvider ?? startModelProvider ?? modelProvider,
   );
+  const restrictedThreadConfigFingerprint = buildRestrictedThreadConfigFingerprint(
+    params,
+    context,
+    startParams,
+    bindingModelProvider,
+  );
   const nextMcpServersFingerprint =
     params.mcpServersFingerprintEvaluated === true ? params.mcpServersFingerprint : undefined;
   const startedBinding: CodexAppServerThreadBinding = {
@@ -612,6 +627,7 @@ export async function startFreshCodexThread(
     dynamicToolsFingerprint,
     dynamicToolsContainDeferred,
     nativeSkillIsolationFingerprint,
+    restrictedThreadConfigFingerprint,
     userMcpServersFingerprint,
     mcpServersFingerprint: nextMcpServersFingerprint,
     configuredMcpOwnershipVersion: params.configuredMcpOwnershipVersion,
