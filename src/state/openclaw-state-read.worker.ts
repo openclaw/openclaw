@@ -8,12 +8,6 @@ import {
   readMcpOAuthStatusesInDatabase,
 } from "../agents/mcp-oauth-store.kernel.js";
 import {
-  readSandboxBrowserRegistryInDatabase,
-  readSandboxRegistryEntryInDatabase,
-  readSandboxRegistryInDatabase,
-  readSandboxRuntimeIdsInDatabase,
-} from "../agents/sandbox/registry.kernel.js";
-import {
   loadSubagentRunsByRunIdsFromSqlite,
   loadSubagentRunsForChildSessionFromSqlite,
   loadSubagentRunsForSessionFromSqlite,
@@ -615,38 +609,6 @@ serveOwnedWorkerTasks(
                         return workspace ? [workspace] : [];
                       }),
                     ),
-                  };
-                }
-                if (command.type === "sandboxRegistry.list") {
-                  return {
-                    ok: true,
-                    type: command.type,
-                    sourceAdmitted,
-                    entries: readSandboxRegistryInDatabase(db),
-                  };
-                }
-                if (command.type === "sandboxRegistry.get") {
-                  return {
-                    ok: true,
-                    type: command.type,
-                    sourceAdmitted,
-                    entry: readSandboxRegistryEntryInDatabase(db, command.containerName),
-                  };
-                }
-                if (command.type === "sandboxRegistry.runtimeIds") {
-                  return {
-                    ok: true,
-                    type: command.type,
-                    sourceAdmitted,
-                    runtimeIds: readSandboxRuntimeIdsInDatabase(db, command),
-                  };
-                }
-                if (command.type === "sandboxRegistry.browsers") {
-                  return {
-                    ok: true,
-                    type: command.type,
-                    sourceAdmitted,
-                    entries: readSandboxBrowserRegistryInDatabase(db),
                   };
                 }
                 if (command.type === "workerPlacements.changeSnapshot") {
