@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   readBrowserRegistry,
@@ -89,12 +90,13 @@ it.each([
       ["docker", new Set(["old-browser", "new-browser"])],
     ]);
     const calls: string[][] = [];
-    spawnCommand.mockImplementation(async ([command, ...originalArgs]: string[]) => {
+    spawnCommand.mockImplementation(async ([rawCommand, ...originalArgs]: string[]) => {
+      const command = expectDefined(rawCommand, "container engine command");
       calls.push([command, ...originalArgs]);
       const args = [...originalArgs];
       let target = command === "docker" ? "docker" : process.env.CONTAINER_HOST!;
       if (args[0] === "--url") {
-        target = args[1];
+        target = expectDefined(args[1], "Podman --url value");
         args.splice(0, 2);
       }
       let stdout = "";
