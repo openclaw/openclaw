@@ -351,7 +351,7 @@ export function meetStatusScript(params: {
   let lastCaptionSpeaker;
   let lastCaptionText;
   let recentTranscript = [];
-  const captionSelector = '[role="region"][aria-label*="aption" i], [aria-live="polite"][role="region"], div[aria-live="polite"]';
+  const captionSelector = '[role="region"][aria-label*="aption" i], [aria-live="polite"][aria-label*="aption" i]';
   const captionState = (() => {
     if (!captureCaptions) return undefined;
     const w = window;
@@ -385,14 +385,13 @@ export function meetStatusScript(params: {
     const cleanSpeaker = String(speaker || "").replace(/\\s+/g, " ").trim();
     if (!clean || clean.length < 2) return undefined;
     if (/^(turn on captions|turn off captions|captions)$/i.test(clean)) return undefined;
+    if (!cleanSpeaker && /^((?:live )?captions are (?:on|off)[.]?|your (?:camera|microphone|mic) is (?:on|off|muted).*|.*has (?:joined|left)(?: the meeting)?[.]?|(?:arrow_downward\\s*)?jump to (?:bottom|most recent captions)[.]?)$/i.test(clean)) {
+      return undefined;
+    }
     return { speaker: cleanSpeaker || undefined, text: clean };
   };
   const commitLines = (state, entries) => {
-    state.lines.push(...entries.map((entry) => ({
-      at: entry.at,
-      speaker: entry.speaker,
-      text: entry.text
-    })));
+    state.lines.push(...entries.map(({ at, speaker, text }) => ({ at, speaker, text })));
     const excess = state.lines.length - ${GOOGLE_MEET_TRANSCRIPT_MAX_LINES};
     if (excess > 0) {
       state.lines.splice(0, excess);
@@ -401,16 +400,55 @@ export function meetStatusScript(params: {
   };
   const scrapeCaptions = () => {
     if (!captionState) return;
+    const controlSelector = 'button, [role="button"], i.material-icons, i.material-icons-extended, [aria-hidden="true"]';
+    // Element boundaries split speaker/speech; childNodes keeps direct text
+    // beside nested elements in DOM order (detached innerText collapses).
+    const cleanPiece = (value) => String(value ?? "").replace(/\\s+/g, " ").trim();
+    const sameText = (a, b) => a === b || a.startsWith(b) || b.startsWith(a);
+    const pieceText = (child) => {
+      let scope = child;
+      if (child?.querySelector?.(controlSelector)) {
+        scope = child.cloneNode(true);
+        scope.querySelectorAll?.(controlSelector).forEach((el) => el.remove());
+      }
+      return (scope?.childNodes?.length ? [...scope.childNodes] : [scope])
+        .filter((n) => n.nodeType !== 1 || !n.matches?.(controlSelector))
+        .map((n) => cleanPiece(n.textContent ?? n.text))
+        .filter(Boolean)
+        .join(" ");
+    };
+    const regionPieces = (region) => {
+      const nodes = region?.childNodes?.length ? [...region.childNodes] : [];
+      if (!nodes.length) {
+        const fb = text(region);
+        return fb ? fb.split(/\\n+/).map((part) => part.trim()).filter(Boolean) : [];
+      }
+      return nodes
+        .filter((kid) => kid.nodeType !== 1 || !kid.matches?.(controlSelector))
+        .map(pieceText)
+        .filter(Boolean);
+    };
+    // Same-node reuse with divergent text starts a new utterance: coalesce
+    // prefix growth and tight same-length corrections, else commit first.
+    const sameNodeCoalesce = (prevText, nextText, ageMs) => {
+      if (sameText(prevText, nextText)) return true;
+      if (ageMs > ${GOOGLE_MEET_CAPTION_SETTLE_MS}) return false;
+      const [wa, wb] = [prevText, nextText].map((t) => String(t || "").toLowerCase().split(/\\s+/).filter(Boolean));
+      if (!wa.length || !wb.length || Math.abs(wa.length - wb.length) > 1) return false;
+      const setB = new Set(wb);
+      return wa.filter((w) => setB.has(w)).length / Math.max(wa.length, wb.length) >= 2 / 3;
+    };
     const regions = [...document.querySelectorAll(captionSelector)];
     const rows = [];
     for (const region of regions) {
-      const raw = text(region);
-      if (!raw) continue;
-      const pieces = raw.split(/\\n+/).map((part) => part.trim()).filter(Boolean);
+      const pieces = regionPieces(region);
+      if (pieces.length === 0) continue;
       const row = pieces.length >= 2
         ? normalizeCaption(pieces[0], pieces.slice(1).join(" "))
-        : normalizeCaption("", pieces[0] || raw);
-      if (row) rows.push({ ...row, node: region });
+        : normalizeCaption("", pieces[0]);
+      const twin = row && rows.find((r) => r.speaker === row.speaker && sameText(r.text, row.text));
+      if (row && !twin) rows.push({ ...row, node: region });
+      else if (twin && row.text.length > twin.text.length) Object.assign(twin, { text: row.text, node: region });
     }
     if (rows.length === 0) {
       // Meet briefly removes caption rows while rerendering. Keep them mutable
@@ -436,44 +474,33 @@ export function meetStatusScript(params: {
     const now = Date.now();
     for (let index = 0; index < rows.length; index += 1) {
       const row = rows[index];
-      const priorIndex = unmatchedPrevious.findIndex((candidate) => {
-        const sameTextLifecycle =
-          candidate.text === row.text ||
-          row.text.startsWith(candidate.text) ||
-          candidate.text.startsWith(row.text);
-        const sameDomLifecycle =
-          candidate.node === row.node || now - candidate.seenAt <= ${GOOGLE_MEET_CAPTION_SETTLE_MS};
-        return candidate.speaker === row.speaker && sameTextLifecycle && sameDomLifecycle;
-      });
-      const prior = priorIndex >= 0 ? unmatchedPrevious.splice(priorIndex, 1)[0] : undefined;
-      const sameSpeaker = Boolean(prior) && prior.speaker === row.speaker;
-      if (sameSpeaker && prior.text === row.text) {
+      const priorIndex = unmatchedPrevious.findIndex(
+        (candidate) =>
+          candidate.speaker === row.speaker &&
+          (candidate.node === row.node ||
+            (sameText(candidate.text, row.text) &&
+              now - candidate.seenAt <= ${GOOGLE_MEET_CAPTION_SETTLE_MS})),
+      );
+      let prior = priorIndex >= 0 ? unmatchedPrevious.splice(priorIndex, 1)[0] : undefined;
+      if (prior?.node === row.node && !sameNodeCoalesce(prior.text, row.text, now - prior.seenAt)) {
+        commitLines(captionState, [prior]);
+        prior = undefined;
+      }
+      if (prior) {
+        prior.speaker = row.speaker || prior.speaker;
+        prior.text = prior.text.startsWith(row.text) ? prior.text : row.text;
         prior.node = row.node;
         prior.seenAt = now;
         nextVisible.push(prior);
         continue;
       }
-      if (sameSpeaker && row.text.startsWith(prior.text)) {
-        prior.text = row.text;
-        prior.node = row.node;
-        prior.seenAt = now;
-        nextVisible.push(prior);
-        continue;
-      }
-      if (sameSpeaker && prior.text.startsWith(row.text)) {
-        prior.node = row.node;
-        prior.seenAt = now;
-        nextVisible.push(prior);
-        continue;
-      }
-      const entry = {
+      nextVisible.push({
         at: new Date().toISOString(),
         node: row.node,
         seenAt: now,
         speaker: row.speaker,
-        text: row.text
-      };
-      nextVisible.push(entry);
+        text: row.text,
+      });
     }
     commitLines(captionState, unmatchedPrevious);
     captionState.visible = nextVisible;
@@ -515,7 +542,7 @@ export function meetStatusScript(params: {
     lastCaptionAt = last?.at;
     lastCaptionSpeaker = last?.speaker;
     lastCaptionText = last?.text;
-    recentTranscript = lines.slice(-5);
+    recentTranscript = lines.slice(-5).map(({ at, speaker, text }) => ({ at, speaker, text }));
   }
   const lobbyWaiting = !inCall && /asking to be let in|you.?ll join when someone lets you in|waiting to be let in|ask to join/i.test(pageText);
   const leaveReason = !inCall && /you left the meeting|you.?ve left the meeting|removed from the meeting|you were removed|call ended|meeting ended/i.test(pageText)
