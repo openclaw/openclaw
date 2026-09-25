@@ -161,27 +161,15 @@ export async function collectOutputs(
     if (!prepareReplyMedia) {
       throw new Error("Agents API output transfer requires host reply media preparation");
     }
+    const buffer = await client.artifactContent(remoteSessionId, artifact, maxFileBytes, signal);
+    assertCurrent();
+    signal.throwIfAborted();
     const prepared = await prepareReplyMedia({
-      kind: "payload",
-      payload: { mediaUrls: [artifact.path] },
-      workspaceRoot: "/workspace",
+      kind: "artifact",
+      buffer,
+      fileName: path.posix.basename(artifact.path),
       signal,
       assertCurrent,
-      readWorkspaceFile: async (relativePath, options) => {
-        assertCurrent();
-        const expected = path.join(...path.posix.relative("/workspace", artifact.path).split("/"));
-        if (relativePath !== expected) {
-          throw new Error("Agents API output read does not match the admitted artifact");
-        }
-        const buffer = await client.artifactContent(
-          remoteSessionId,
-          artifact,
-          Math.min(maxFileBytes, options.maxBytes),
-          options.signal,
-        );
-        assertCurrent();
-        return buffer;
-      },
     });
     assertCurrent();
     signal.throwIfAborted();

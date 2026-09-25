@@ -342,7 +342,7 @@ describe("Agents API output attachment publication", () => {
       const detectMime = mediaMime.detectMime;
       vi.spyOn(mediaMime, "detectMime").mockImplementation(async (params) => {
         const mime = await detectMime(params);
-        // The loader sniffs first; revoke inside saveMediaBuffer's own awaited preparation.
+        // Revoke inside saveMediaBuffer's awaited MIME preparation, before its final write.
         if (params.filePath === "result.pdf") {
           reachedSave = true;
           if (revocation === "host") {
@@ -364,7 +364,7 @@ describe("Agents API output attachment publication", () => {
           controller.signal,
           host.hostCapabilities.prepareReplyMedia,
         ),
-      ).rejects.toThrow(/no longer active|binding lease revoked|transfer aborted/);
+      ).rejects.toThrow(/no longer active|binding lease revoked|transfer aborted|This operation was aborted/);
       expect(reachedSave).toBe(true);
       expect(await outboundFiles()).toEqual([]);
     },
