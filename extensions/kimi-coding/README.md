@@ -11,6 +11,18 @@ openclaw gateway restart
 
 See <https://docs.openclaw.ai/providers/moonshot> for setup and configuration.
 
+## Sign in
+
+Choose **Kimi Code sign-in** in Models, or run:
+
+```bash
+openclaw models auth login --provider kimi --method device-code
+```
+
+Open the sign-in page on any computer and enter the displayed code. The Gateway
+waits for approval and stores refreshable credentials in its auth-profile store.
+Your selected model stays unchanged. API-key setup is also available.
+
 ## Quota errors
 
 Kimi can return HTTP 403 when a weekly usage limit is exhausted. OpenClaw treats
