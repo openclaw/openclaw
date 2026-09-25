@@ -85,6 +85,11 @@ type ApprovalStrategy<TRequest, TResolved> = {
     params: ApprovalRenderContext & { request: TRequest; nowMs: number },
   ) => ReplyPayload;
   buildResolvedPayload: (params: ApprovalRenderContext & { resolved: TResolved }) => ReplyPayload;
+  /**
+   * Answer only the live messaging chat that made the request: no saved session
+   * route, and no terminal notice without this forwarder's own pending entry.
+   */
+  liveOriginOnly?: boolean;
 };
 
 export type ExecApprovalForwarder = {
@@ -373,6 +378,16 @@ function createApprovalHandlers<
     if (!shouldForwardRoute(paramsForRoute)) {
       return [];
     }
+    if (params.strategy.liveOriginOnly) {
+      const origin = normalizeMessageChannel(paramsForRoute.routeRequest.turnSourceChannel ?? "");
+      if (
+        !origin ||
+        !isDeliverableMessageChannel(origin) ||
+        !normalizeOptionalString(paramsForRoute.routeRequest.turnSourceTo)
+      ) {
+        return [];
+      }
+    }
     const targets = await resolveForwardTargets({
       ...paramsForRoute,
       approvalKind: params.strategy.kind,
@@ -501,7 +516,11 @@ function createApprovalHandlers<
       await settled.terminal(settled.entry);
       return;
     }
-    await deliverResolved(resolved);
+    // Only this forwarder's own entry proves the chat was asked; its expiry timer
+    // already reported a lapse, so a later durable terminal must not repeat it.
+    if (!params.strategy.liveOriginOnly) {
+      await deliverResolved(resolved);
+    }
   };
 
   return {
@@ -538,8 +557,8 @@ const pluginApprovalStrategy = {
 } satisfies ApprovalStrategy<PluginApprovalRequest, PluginApprovalResolved>;
 
 // A delegated OpenClaw change blocks the requesting tool until someone decides,
-// so the requesting chat always gets a reply path. A native card for the same
-// target suppresses this text through the shared fallback check.
+// so the requesting messaging chat always gets a reply path. A native card for
+// the same target suppresses this text through the shared fallback check.
 const SYSTEM_AGENT_FORWARDING: ExecApprovalForwardingConfig = { enabled: true, mode: "session" };
 
 const systemAgentApprovalStrategy = {
@@ -548,6 +567,7 @@ const systemAgentApprovalStrategy = {
   buildExpiredText: () => SYSTEM_AGENT_APPROVAL_EXPIRED_TEXT,
   buildPendingPayload: buildForwardedSystemAgentPendingPayload,
   buildResolvedPayload: buildForwardedSystemAgentResolvedPayload,
+  liveOriginOnly: true,
 } satisfies ApprovalStrategy<SystemAgentApprovalRequest, SystemAgentApprovalResolved>;
 
 export function createExecApprovalForwarder(

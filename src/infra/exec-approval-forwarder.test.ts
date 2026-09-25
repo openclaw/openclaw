@@ -581,6 +581,52 @@ describe("exec approval forwarder", () => {
         ).resolves.toBe(false);
         expect(deliver).not.toHaveBeenCalled();
       });
+
+      it.each([
+        { origin: "terminal", turnSourceChannel: undefined },
+        { origin: "webchat", turnSourceChannel: "webchat" },
+      ])(
+        "never sends a $origin request to the session's saved chat",
+        async ({ turnSourceChannel }) => {
+          vi.useFakeTimers();
+          const { deliver, forwarder } = createForwarder({
+            cfg: unconfigured,
+            resolveSessionTarget,
+          });
+
+          await expect(
+            forwarder.handleSystemAgentApprovalRequested?.({
+              ...systemAgentRequest,
+              request: {
+                ...systemAgentRequest.request,
+                turnSourceChannel,
+                turnSourceTo: undefined,
+              },
+            }),
+          ).resolves.toBe(false);
+          expect(deliver).not.toHaveBeenCalled();
+        },
+      );
+
+      it("reports an expiry once when the durable terminal arrives after the timer", async () => {
+        vi.useFakeTimers();
+        const { deliver, forwarder } = createForwarder({ cfg: unconfigured, resolveSessionTarget });
+        await forwarder.handleSystemAgentApprovalRequested?.(systemAgentRequest);
+        await vi.advanceTimersByTimeAsync(systemAgentRequest.expiresAtMs);
+
+        await forwarder.handleSystemAgentApprovalResolved?.({
+          id: systemAgentRequest.id,
+          decision: "deny",
+          ts: systemAgentRequest.expiresAtMs,
+          request: systemAgentRequest.request,
+          terminalStatus: "expired",
+        });
+
+        const texts = deliver.mock.calls.map(
+          ([call]) => (call as { payloads: Array<{ text?: string }> }).payloads[0]?.text ?? "",
+        );
+        expect(texts.filter((text) => /expired/i.test(text))).toHaveLength(1);
+      });
     });
   });
 
