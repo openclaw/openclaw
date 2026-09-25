@@ -51,13 +51,13 @@ const normalDeliveryResult = {
 const deliverRepliesMock = vi.fn(
   async (_params: DeliveryParams): Promise<SlackSendResult | undefined> => normalDeliveryResult,
 );
-const sendMessageSlackMock = vi.fn<typeof import("../send.runtime.js").sendMessageSlack>();
+const sendMessageSlackMock = vi.fn<typeof import("../../send.js").sendMessageSlack>();
 const finalizeSlackPreviewEditMock = vi.fn(async (_input: { blocks?: unknown }) => {});
 const normalizeSlackOutboundTextMock = vi.fn((value: string) => value.trim());
 const postMessageMock = vi.fn(async () => ({ ok: true, ts: "171234.999" }));
 const chatUpdateMock = vi.fn(async () => ({ ok: true, ts: "171234.999" }));
 const recordSlackThreadParticipationMock = vi.fn();
-const updateLastRouteMock = vi.fn(async () => {});
+const updateLastRouteMock = vi.hoisted(() => vi.fn(async () => {}));
 const appendSlackStreamMock = vi.fn(async (_input?: unknown) => {});
 const startSlackStreamMock = vi.fn(async (_input?: unknown) => ({
   channel: "C123",
@@ -235,26 +235,19 @@ function contentTaskId(prefix: string) {
 }
 
 function collectNativeTaskUpdates() {
-  const chunks: unknown[] = [];
-  const collectChunks = (call: unknown[]) => {
-    const arg = requireRecord(call[0], "native progress call");
-    if (Array.isArray(arg.chunks)) {
-      chunks.push(...arg.chunks);
-    }
-  };
-  for (const call of startSlackStreamMock.mock.calls) {
-    collectChunks(call);
-  }
-  for (const call of appendSlackStreamMock.mock.calls) {
-    collectChunks(call);
-  }
-  for (const call of stopSlackStreamMock.mock.calls) {
-    collectChunks(call);
-  }
-  return chunks.flatMap((chunk) => {
-    const record = requireRecord(chunk, "native progress chunk");
-    return record.type === "task_update" ? [record] : [];
-  });
+  return [
+    ...startSlackStreamMock.mock.calls,
+    ...appendSlackStreamMock.mock.calls,
+    ...stopSlackStreamMock.mock.calls,
+  ]
+    .flatMap(([value]) => {
+      const arg = requireRecord(value, "native progress call");
+      return Array.isArray(arg.chunks) ? arg.chunks : [];
+    })
+    .flatMap((chunk) => {
+      const record = requireRecord(chunk, "native progress chunk");
+      return record.type === "task_update" ? [record] : [];
+    });
 }
 
 function expectDeliverReplyCall(index: number, text: string, fields?: Record<string, unknown>) {
@@ -953,9 +946,15 @@ vi.mock("../allow-list.js", () => ({
   normalizeSlackAllowOwnerEntry: (value: string) => value,
 }));
 
-vi.mock("../config.runtime.js", () => ({
+vi.mock("openclaw/plugin-sdk/session-store-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/session-store-runtime")>()),
   resolveStorePath: () => "/tmp/openclaw-store.json",
   updateLastRoute: updateLastRouteMock,
+}));
+
+vi.mock("../../reply-blocks.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../reply-blocks.js")>()),
+  resolveSlackReplyBlocks: () => mockedSlackReplyBlocks,
 }));
 
 vi.mock("../replies.js", async (importOriginal) => ({
@@ -969,11 +968,10 @@ vi.mock("../replies.js", async (importOriginal) => ({
   }),
   deliverReplies: (params: Parameters<typeof import("../replies.js").deliverReplies>[0]) =>
     deliverRepliesMock({ ...params, replies: params.replies.map((prepared) => prepared.payload) }),
-  readSlackReplyBlocks: () => mockedSlackReplyBlocks,
   resolveSlackThreadTs: () => mockedReplyThreadTs,
 }));
 
-vi.mock("../send.runtime.js", () => ({ sendMessageSlack: sendMessageSlackMock }));
+vi.mock("../../send.js", () => ({ sendMessageSlack: sendMessageSlackMock }));
 
 vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();

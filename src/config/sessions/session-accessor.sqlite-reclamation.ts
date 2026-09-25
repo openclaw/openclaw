@@ -256,8 +256,10 @@ export function* prepareHistoricalGenerationDeletions(params: {
   }
 }
 
-function expectedEntryMismatchResult(): DeleteSessionEntryLifecycleResult {
-  return { archivedTranscripts: [], deleted: false, expectedEntryMismatch: true };
+export function expectedEntryMismatchResult(
+  archivedTranscripts: DeleteSessionEntryLifecycleResult["archivedTranscripts"] = [],
+): DeleteSessionEntryLifecycleResult {
+  return { archivedTranscripts, deleted: false, expectedEntryMismatch: true };
 }
 
 export function reclaimSqliteSessionInTransaction(
@@ -429,7 +431,10 @@ export async function runSqliteSessionReclamation(params: {
   assertCommitAllowed?: () => void;
   forceInProcess: boolean;
   onInProcessCommit?: (database: OpenClawAgentDatabase) => void;
-  onWorkerResult?: (result: SqliteSessionReclamationResult) => void;
+  onWorkerResult?: (
+    result: SqliteSessionReclamationResult,
+    databaseIdentity: string | symbol,
+  ) => void;
   plan: SqliteSessionReclamationPlan;
 }): Promise<SqliteSessionReclamationResult> {
   if (params.diagnostics) {
@@ -453,7 +458,11 @@ export async function runSqliteSessionReclamation(params: {
             return reclaimSqliteSessionInTransaction(params.plan, {
               beforeMutation: params.assertCommitAllowed,
               onCommit: (database, result) => {
-                const publish = prepareReclamationPublication(params.plan, result);
+                const publish = prepareReclamationPublication(
+                  params.plan,
+                  readOpenClawAgentDatabaseIdentity(database).identity,
+                  result,
+                );
                 if (publish) {
                   deferOpenClawAgentPostCommitPublication(database, publish);
                 }

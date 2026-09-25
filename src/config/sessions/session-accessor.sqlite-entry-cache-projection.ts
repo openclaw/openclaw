@@ -5,8 +5,10 @@ import {
 } from "../../infra/kysely-sync.js";
 import { readSqliteDataVersion } from "../../infra/node-sqlite.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
-import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import type { SessionEntryCacheSnapshot } from "./session-accessor.sqlite-entry-cache.types.js";
+import type {
+  SessionEntryCacheDatabase,
+  SessionEntryCacheSnapshot,
+} from "./session-accessor.sqlite-entry-cache.types.js";
 import {
   hasSqliteSessionOwnerColumns,
   readSqliteSessionOwner,
@@ -20,8 +22,6 @@ import type { ValidatedSessionMetadata } from "./session-canonical-key.js";
 import type { SessionEntry } from "./types.js";
 
 type SessionEntryCacheTables = Pick<OpenClawAgentKyselyDatabase, "session_nodes">;
-
-export type SessionEntryCacheDatabase = Pick<OpenClawAgentDatabase, "agentId" | "db">;
 
 export function loadSessionEntrySnapshot(
   database: SessionEntryCacheDatabase,
@@ -78,6 +78,7 @@ export type SessionEntrySideMetadata = Pick<
 export function readSessionEntrySideMetadata(
   database: SessionEntryCacheDatabase,
   sessionKey: string,
+  participants?: Pick<SessionEntry, "participants" | "participantCount">,
 ): SessionEntrySideMetadata {
   const ownerRow = hasSqliteSessionOwnerColumns(database.db)
     ? executeSqliteQuerySync(
@@ -98,7 +99,7 @@ export function readSessionEntrySideMetadata(
   const owner = ownerRow ? readSqliteSessionOwner(ownerRow) : undefined;
   return {
     ...(owner ? { owner } : {}),
-    ...readSqliteSessionParticipantProjection(database.db, sessionKey),
+    ...(participants ?? readSqliteSessionParticipantProjection(database.db, sessionKey)),
   };
 }
 

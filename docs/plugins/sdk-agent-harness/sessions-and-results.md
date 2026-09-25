@@ -98,6 +98,33 @@ store, identity, binding, and live authority, removes only the exact upstream
 link, then invokes backend cleanup. Queue selection, native protocol/policy,
 and resource cleanup remain with the backend; core owns host session lifecycle.
 
+## Background command tasks
+
+Official harnesses can use `createAgentHarnessCommandTask` from the existing
+private `openclaw/plugin-sdk/agent-harness-task-runtime` entrypoint to expose a
+native command in Tasks after its foreground turn ends. Pass the host-issued
+task scope and retain the original native connection and source authority. The
+helper creates a worker-persisted CLI task and binds cancellation to that exact
+task run; it does not take custody of the native process.
+
+The cancellation callback receives `assertTaskCurrent`; call it after awaited
+preparation and immediately before stopping work, alongside the retained source
+and concrete command checks. Publish the native terminal outcome with `finish`.
+It returns `"published"` after terminal publication or `"retired"` when the original
+task was replaced. Retirement releases the old binding without changing its
+successor; both results let the harness release its native observation leases.
+A successful stop requires the original task to settle as cancelled; natural
+completion racing Stop remains success. Failed publication retains the run owner;
+the harness must either own a subsequent settlement attempt or release the binding
+so normal task recovery can reconcile the row. A one-shot terminal notification
+must not leave a finished command holding live ownership indefinitely. Release
+the binding when the native owner closes and cannot publish an outcome. Restored
+rows do not recreate native process authority.
+
+Command previews use the shared redacted exec formatter, and Incognito content
+stays private. These tasks are silent: recording completion does not schedule a
+new model turn.
+
 ## Subagent task history
 
 Native subagents can expose the shared task transcript view through the optional

@@ -644,8 +644,6 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
             const value = parseJsonEnv(env, VITEST_EXTRA_ARGS_ENV_KEY, []);
             return isStringArray(value) ? value : [];
           });
-          const args =
-            vitestExtraArgs.length > 0 ? [...targetArgs, "--", ...vitestExtraArgs] : targetArgs;
           const selections = runtimeOwner?.resolveCiTestRuntimeSelections(
             {
               ...(entry.kind === "target" ? { targets: [entry.target] } : entry.plan),
@@ -699,9 +697,22 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
               continue;
             }
             const selectedEntry =
-              entry.kind === "group" && selection.includePatterns
-                ? { ...entry, plan: { ...entry.plan, includePatterns: selection.includePatterns } }
+              entry.kind === "group" && (selection.configs || selection.includePatterns)
+                ? {
+                    ...entry,
+                    plan: {
+                      ...entry.plan,
+                      configs: selection.configs ?? entry.plan.configs,
+                      includePatterns: selection.includePatterns ?? entry.plan.includePatterns,
+                    },
+                  }
                 : entry;
+            const selectedArgs =
+              selectedEntry.kind === "target" ? [selectedEntry.target] : selectedEntry.plan.configs;
+            const args =
+              vitestExtraArgs.length > 0
+                ? [...selectedArgs, "--", ...vitestExtraArgs]
+                : selectedArgs;
             const childEnv = buildChildEnv(selectedEntry, baseEnv, scratchDir, index, {
               serial: concurrency === 1,
               cacheSlot,
@@ -732,7 +743,11 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
             }
             const timingKey = entry.kind === "group" ? (entry.timingKey ?? entry.name) : entry.name;
             const timingPrefix =
-              runtime === "bun" ? "bun:" : selection.includePatterns ? "node-subset:" : "";
+              runtime === "bun"
+                ? "bun:"
+                : selection.configs || selection.includePatterns
+                  ? "node-subset:"
+                  : "";
             const code = await runner(
               args,
               childEnv,

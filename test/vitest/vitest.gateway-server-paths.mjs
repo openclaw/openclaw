@@ -188,10 +188,12 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-utils.subagent-payloads.test.ts",
   "src/gateway/session-utils.subagent.test.ts",
   "src/gateway/session-utils.test.ts",
+  "src/gateway/sessions-history-http.model-policy.test.ts",
   "src/gateway/sessions-history-http.physical-source.test.ts",
   "src/gateway/sessions-resolve-store.test.ts",
   "src/gateway/setup-inference.first-signin.integration.test.ts",
   "src/gateway/startup-local-cli-pairing.test.ts",
+  "src/gateway/talk/client-authority.test.ts",
   "src/gateway/talk/handlers/client-native-actions.test.ts",
   "src/gateway/talk/relay/index.test.ts",
   "src/gateway/test-helpers.acquisition.test.ts",
@@ -306,6 +308,7 @@ export const gatewayDatabaseWorkerTestFiles = [
 
 export const gatewayCoreTestInclude = ["src/gateway/**/*.test.ts"];
 export const gatewayCoreTestExclude = [
+  ...databaseWorkerCoreTestFiles,
   ...gatewayDatabaseWorkerTestFiles,
   "src/gateway/server-methods/**/*.test.ts",
   "packages/gateway-protocol/src/**/*.test.ts",

@@ -446,20 +446,6 @@ export function createAcpVisibleTextAccumulator() {
     return `${base}${chunk}`;
   };
 
-  const mergeVisibleChunk = (base: string, chunk: string): { rawText: string; delta: string } => {
-    if (!base) {
-      return { rawText: chunk, delta: chunk };
-    }
-    if (chunk.startsWith(base) && chunk.length > base.length) {
-      const delta = chunk.slice(base.length);
-      return { rawText: chunk, delta };
-    }
-    return {
-      rawText: `${base}${chunk}`,
-      delta: chunk,
-    };
-  };
-
   return {
     consume(chunk: string): { text: string; delta: string } | null {
       if (!chunk) {
@@ -498,13 +484,13 @@ export function createAcpVisibleTextAccumulator() {
         }
       }
 
-      const nextVisible = mergeVisibleChunk(rawVisibleText, chunk);
-      rawVisibleText = nextVisible.rawText;
-      if (!nextVisible.delta) {
-        return null;
-      }
-      visibleText = `${visibleText}${nextVisible.delta}`;
-      return { text: visibleText, delta: nextVisible.delta };
+      const delta =
+        chunk.startsWith(rawVisibleText) && chunk.length > rawVisibleText.length
+          ? chunk.slice(rawVisibleText.length)
+          : chunk;
+      rawVisibleText += delta;
+      visibleText += delta;
+      return { text: visibleText, delta };
     },
     finalize(): string {
       return visibleText.trim();

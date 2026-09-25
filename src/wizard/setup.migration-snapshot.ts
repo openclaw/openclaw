@@ -57,24 +57,6 @@ async function hasDirectoryEntries(candidate: string): Promise<boolean> {
   }
 }
 
-function hasMeaningfulWizardConfig(value: unknown): boolean {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return true;
-  }
-  return Object.keys(value as Record<string, unknown>).some(
-    (key) => !MEANINGFUL_WIZARD_CONFIG_IGNORED_KEYS.has(key),
-  );
-}
-
-function hasMeaningfulConfig(config: OpenClawConfig): boolean {
-  return Object.entries(config as Record<string, unknown>).some(([key, value]) => {
-    if (MEANINGFUL_CONFIG_IGNORED_KEYS.has(key)) {
-      return false;
-    }
-    return key === "wizard" ? hasMeaningfulWizardConfig(value) : true;
-  });
-}
-
 function buildSetupMigrationSnapshotConfig(config: OpenClawConfig): Record<string, unknown> {
   const snapshot: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(config as Record<string, unknown>)) {
@@ -104,7 +86,7 @@ export async function inspectSetupMigrationFreshness(params: {
   workspaceDir: string;
 }): Promise<{ fresh: boolean; reasons: string[] }> {
   const reasons: string[] = [];
-  if (hasMeaningfulConfig(params.baseConfig)) {
+  if (Object.keys(buildSetupMigrationSnapshotConfig(params.baseConfig)).length > 0) {
     reasons.push("existing config values are loaded");
   }
   for (const entry of MEANINGFUL_WORKSPACE_ENTRIES) {
@@ -248,20 +230,15 @@ export async function buildSetupMigrationPlanSourceSnapshot(plan: MigrationPlan)
   return hash.digest("hex");
 }
 
-/** Verifies planning inputs and builds the exact provider-side-effect retry boundary. */
+/** Rechecks planning inputs immediately before the provider-side-effect boundary. */
 export async function prepareSetupMigrationAttemptBoundary(params: {
   currentConfig: OpenClawConfig;
-  targetConfig: OpenClawConfig;
   stateDir: string;
   workspaceDir: string;
   plan: MigrationPlan;
   expectedTargetSnapshotHash: string;
   expectedSourceSnapshotHash: string;
-}): Promise<{
-  sourceSnapshotHash: string;
-  preparedTargetSnapshotHash: string;
-  targetSnapshotHash: string;
-}> {
+}): Promise<void> {
   const currentTargetSnapshotHash = await buildSetupMigrationTargetSnapshot({
     config: params.currentConfig,
     stateDir: params.stateDir,
@@ -276,15 +253,6 @@ export async function prepareSetupMigrationAttemptBoundary(params: {
   if (sourceSnapshotHash !== params.expectedSourceSnapshotHash) {
     throw new Error("Migration source changed while preparing the import. Review it and retry.");
   }
-  return {
-    sourceSnapshotHash,
-    preparedTargetSnapshotHash: currentTargetSnapshotHash,
-    targetSnapshotHash: await buildSetupMigrationTargetSnapshot({
-      config: params.targetConfig,
-      stateDir: params.stateDir,
-      workspaceDir: params.workspaceDir,
-    }),
-  };
 }
 
 /** Serializes onboarding writes that share one OpenClaw state target. */

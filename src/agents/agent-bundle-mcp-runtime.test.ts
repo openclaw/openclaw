@@ -1429,6 +1429,27 @@ describe("session MCP runtime", () => {
     }
   });
 
+  it("keeps tools from a server without timeout config when tools/list takes over 1.5s", async () => {
+    const tempDir = tempDirTracker.make("bundle-mcp-default-listtools-");
+    const serverPath = path.join(tempDir, "slow-list-tools.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({ filePath: serverPath, logPath, delayMs: 2_000 });
+
+    const runtime = await makeStdioRuntime(
+      "session-default-listtools-timeout",
+      "slowListTools",
+      serverPath,
+    );
+
+    try {
+      const catalog = await runtime.getCatalog();
+      expect(catalog.tools.map((tool) => tool.toolName)).toEqual(["slow_tool"]);
+      await expect(fs.readFile(logPath, "utf8")).resolves.toContain("delay tools/list 2000");
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
   it("uses the configured request timeout instead of the connection timeout for delayed MCP tools/list", async () => {
     const tempDir = tempDirTracker.make("bundle-mcp-configured-listtools-");
     const serverPath = path.join(tempDir, "configured-list-tools.mjs");

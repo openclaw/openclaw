@@ -9,6 +9,7 @@
   "type": "module",
   "dependencies": {
     "@larksuiteoapi/node-sdk": "1.74.0",
+    "@openclaw/fs-safe": "0.18.2",
     "mdast-util-from-markdown": "2.0.3",
     "mdast-util-gfm-table": "2.0.0",
     "micromark-extension-gfm-table": "2.1.2",

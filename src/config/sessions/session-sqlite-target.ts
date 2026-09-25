@@ -2,7 +2,10 @@ import { lstatSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
 import type { OpenClawRegisteredAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
-import { prepareOpenClawAgentDatabaseRegistrySnapshotRead } from "../../state/openclaw-agent-db-registry-listing.js";
+import {
+  AgentDatabaseRegistryChangedError,
+  prepareOpenClawAgentDatabaseRegistrySnapshotRead,
+} from "../../state/openclaw-agent-db-registry-listing.js";
 import { listOpenClawRegisteredAgentDatabases } from "../../state/openclaw-agent-db-registry.js";
 import {
   inspectOpenClawAgentDatabaseOwner,
@@ -88,22 +91,42 @@ export async function prepareSqliteTargetFromSessionStorePath(
     defaultAgentId: options.defaultAgentId,
     env,
   };
-  signal?.throwIfAborted();
-  const registry = await registryRead.read();
-  try {
-    registry.assertCurrent();
+  const { resolveSessionSqliteTargetInWorker } =
+    await import("./session-transcript-read-worker-runtime.js");
+  let refreshed = false;
+  for (;;) {
     signal?.throwIfAborted();
+    let registry: Awaited<ReturnType<typeof registryRead.read>>;
+    try {
+      registry = await registryRead.read();
+      registry.assertCurrent();
+    } catch (error) {
+      if (!refreshed && error instanceof AgentDatabaseRegistryChangedError) {
+        refreshed = true;
+        continue;
+      }
+      throw error;
+    }
     const registeredDatabases = readSessionStoreRegistryRows(
       registry.result.status === "available" ? registry.result.entries : registry.result,
     );
-    const { resolveSessionSqliteTargetInWorker } =
-      await import("./session-transcript-read-worker-runtime.js");
-    registry.assertCurrent();
     signal?.throwIfAborted();
-    return await resolveSessionSqliteTargetInWorker({ ...input, registeredDatabases }, signal);
-  } finally {
-    registry.assertCurrent();
+    const target = await resolveSessionSqliteTargetInWorker(
+      { ...input, registeredDatabases },
+      signal,
+    );
     signal?.throwIfAborted();
+    try {
+      registry.assertCurrent();
+    } catch (error) {
+      if (!refreshed && error instanceof AgentDatabaseRegistryChangedError) {
+        // Repeat only pure discovery, retaining the preparer's original source admission.
+        refreshed = true;
+        continue;
+      }
+      throw error;
+    }
+    return target;
   }
 }
 

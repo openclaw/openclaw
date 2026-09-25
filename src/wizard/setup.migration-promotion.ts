@@ -1,7 +1,11 @@
 // Setup migration promotion owns durable journals, rollback, and path validation.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { probePathCaseInsensitiveSync } from "@openclaw/fs-safe/advanced";
+import {
+  probePathCaseInsensitiveSync,
+  probePathSuffixAliasesSync,
+  resolvePathPrefixSync,
+} from "@openclaw/fs-safe/advanced";
 import { isNotFoundPathError, isPathInside } from "@openclaw/fs-safe/path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readDurableJsonFile, writeJsonAtomic } from "../infra/json-files.js";
@@ -385,59 +389,32 @@ export async function moveRecordedEmptyTarget(component: PromotionComponent): Pr
   }
 }
 
-async function usesNormalizationInsensitivePaths(directory: string): Promise<boolean> {
-  const probe = await fs.mkdtemp(path.join(directory, ".openclaw-normalization-é-"));
-  try {
-    const alias = path.join(path.dirname(probe), path.basename(probe).normalize("NFD"));
-    if (alias === probe) {
-      return false;
-    }
-    await fs.access(alias);
-    return true;
-  } catch (error) {
-    if (isNotFoundPathError(error)) {
-      return false;
-    }
-    throw error;
-  } finally {
-    await fs.rm(probe, { recursive: true, force: true });
-  }
-}
-
 async function canonicalizePromotionPath(
   candidate: string,
 ): Promise<{ path: string; caseInsensitive: boolean; normalizationInsensitive: boolean }> {
-  const suffix: string[] = [];
-  let current = path.resolve(candidate);
-  while (true) {
-    try {
-      const ancestor = await fs.realpath(current);
-      const probeDirectory = (await fs.stat(ancestor)).isDirectory()
-        ? ancestor
-        : path.dirname(ancestor);
-      const caseInsensitive = probePathCaseInsensitiveSync(
-        path.join(probeDirectory, ".openclaw-migration-target"),
-      );
-      if (caseInsensitive === undefined) {
-        throw new Error(`Could not determine filesystem case behavior for ${candidate}.`);
-      }
-      return {
-        path: path.join(ancestor, ...suffix.toReversed()),
-        caseInsensitive,
-        normalizationInsensitive: await usesNormalizationInsensitivePaths(probeDirectory),
-      };
-    } catch (error) {
-      if (!isNotFoundPathError(error)) {
-        throw error;
-      }
-      const parent = path.dirname(current);
-      if (parent === current) {
-        throw new Error(`Could not resolve a promotion target for ${candidate}.`, { cause: error });
-      }
-      suffix.push(path.basename(current));
-      current = parent;
-    }
+  const { existingPath, unresolvedSegments } = resolvePathPrefixSync(path.resolve(candidate));
+  const probeDirectory = (await fs.stat(existingPath)).isDirectory()
+    ? existingPath
+    : path.dirname(existingPath);
+  const caseInsensitive = probePathCaseInsensitiveSync(
+    path.join(probeDirectory, ".openclaw-migration-target"),
+  );
+  if (caseInsensitive === undefined) {
+    throw new Error(`Could not determine filesystem case behavior for ${candidate}.`);
   }
+  const normalizationInsensitive = probePathSuffixAliasesSync({
+    directory: probeDirectory,
+    left: ".openclaw-normalization-é",
+    right: ".openclaw-normalization-e\u0301",
+  });
+  if (normalizationInsensitive === undefined) {
+    throw new Error(`Could not determine filesystem normalization behavior for ${candidate}.`);
+  }
+  return {
+    path: path.join(existingPath, ...unresolvedSegments),
+    caseInsensitive,
+    normalizationInsensitive,
+  };
 }
 
 export async function assertSupportedStagedStateTree(params: {

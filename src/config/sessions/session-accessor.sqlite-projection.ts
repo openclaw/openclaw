@@ -5,6 +5,7 @@ import {
   resolveAgentHarnessSessionStoreError,
   resolveAgentHarnessSessionStoreTransitionError,
 } from "../../sessions/agent-harness-session-key.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
   deferOpenClawAgentPostCommitPublication,
   openOpenClawAgentDatabase,
@@ -691,6 +692,7 @@ export async function purgeDeletedAgentSessionEntries(
             deletePlannedLifecycleArtifactEntries(transactionDb, prepared.entryRemovals);
             const publish = prepareCommittedSessionEntryRemovals(
               resolved.agentId,
+              readOpenClawAgentDatabaseIdentity(transactionDb).identity,
               prepared.entryRemovals,
             );
             maintenancePlans.push(

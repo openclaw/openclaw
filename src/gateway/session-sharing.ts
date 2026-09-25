@@ -384,7 +384,6 @@ export function resolveSessionMutationAuthorization(params: {
       method: params.method,
       requestParams: params.requestParams,
       context: params.context,
-      getCfg,
     }) ??
     // Creation may not have a row yet, but it must retain its original person until commit.
     (bindsOwnProfile && !isRequiredSessionTargetMethod(params.method) ? [] : undefined);

@@ -31,10 +31,10 @@ import type {
   RespondFn,
 } from "../../server-methods/types.js";
 import { bindSessionRowProjection } from "../../session-row-projection-access.js";
-import type { SessionRowProjection } from "../../session-row-projection.js";
 import { resolveSessionMutationAuthorization } from "../../session-sharing.js";
 import { prepareTalkAgentConsultTranscript } from "../agent-consult-transcript.js";
 import { buildTalkRealtimeConfig } from "../session-config.js";
+import { preparedTalkSessionProjection as projection } from "../test-helpers.js";
 import { forgetLegacyVoiceBinding } from "./client-legacy-voice-bindings.js";
 import { talkConfigAccentCases } from "./config-accent.test-support.js";
 import {
@@ -2756,7 +2756,7 @@ describe("talk.session unified handlers", () => {
       respond: createRespond,
       context: {
         getRuntimeConfig: () => config,
-        ...bindSessionRowProjection({}, () => ({}) as SessionRowProjection),
+        ...bindSessionRowProjection({}, () => projection),
       },
     });
 
@@ -2765,7 +2765,7 @@ describe("talk.session unified handlers", () => {
       brain: "agent-consult",
     });
     expect(mocks.resolveSessionKeyFromResolveParams).toHaveBeenCalledWith({
-      projection: {},
+      projection,
       client: { connId: "conn-1", connect: { scopes: ["operator.write"] } },
       p: {
         key: "agent:worker:subagent:child",
@@ -2797,7 +2797,7 @@ describe("talk.session unified handlers", () => {
       respond: createRespond,
       context: {
         getRuntimeConfig: () => config,
-        ...bindSessionRowProjection({}, () => ({}) as SessionRowProjection),
+        ...bindSessionRowProjection({}, () => projection),
       },
     });
 
@@ -2865,7 +2865,7 @@ describe("talk.session unified handlers", () => {
       respond: createRespond,
       context: {
         getRuntimeConfig: () => ({}) as OpenClawConfig,
-        ...bindSessionRowProjection({}, () => ({}) as SessionRowProjection),
+        ...bindSessionRowProjection({}, () => projection),
       },
     });
 

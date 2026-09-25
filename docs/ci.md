@@ -19,6 +19,11 @@ job. Open the page that matches your task.
 no-op events before runner allocation and concurrency, keeping automation on
 GitHub-hosted runners.
 
+PR Node matrices stop sibling rows on failure. Same-repository PRs also cancel
+other job families through a scoped monitor, preserving a failed aggregate that
+names the originating job. Main and manual runs retain complete matrices. See
+[failure cancellation](/ci/pipeline#fail-fast-order).
+
 For the published-upgrade regression gate, see [selection and routing](/ci/scope-and-routing#scope-and-routing), [runner budgets](/ci/capacity#runner-registration-budget), and [Package Acceptance baselines](/ci/release-validation#suite-profiles). Weekly validation is listed under [Update Migration](/ci/scheduled-workflows#update-migration).
 
 Full `main` CI and cache warming are [hourly by default](/ci/scheduled-workflows#hourly-main-ci); `OPENCLAW_CI_ON_PUSH=true` restores their existing per-push admission. CodeQL, Workflow Sanity, and CI's `security-fast` keep their existing main-push scopes. Docs-only `main` pushes still skip the CI workflow and push-triggered cache warming. The cache warmer publishes dependencies independently of long builds and maintains a bounded hosted seed in hybrid mode. Every admitted canonical `main` run exercises one published-driver × candidate Docker upgrade; ordinary manual/release validation adds the other five Docker seed lanes. QA Smoke, real-Gateway browser checks, and named process proofs retain their selected `main` coverage and manual/release validation. Pull requests and exact-head PR fallback dispatches retain unit, boundary, build, and mocked-Gateway coverage. Windows retains its complete inventory across five measured file shards. Hourly iOS retains `ios-build (tests)`; screenshot capture runs for its own changed inputs and full manual/release validation. See [scope selection](/ci/scope-and-routing/selection) and [capacity](/ci/capacity#owner-path-and-release-coverage) for the coverage trade-off.
@@ -131,14 +136,22 @@ unsharded package command; see [UI job budgets](/ci/scope-and-routing/job-budget
 
 Set the repository variable `OPENCLAW_RELEASE_RUNNER_GROUP` to reserve a runner
 group for Full Release Validation and its artifact, validation, and reusable
-worker jobs. Provision eligible runners in that group with the existing Linux,
-Windows, and macOS labels, grant this repository access, and reserve capacity
-outside ordinary PR/main pools. The variable selects the group; it does not
-provision runners or increase concurrency limits. Missing group capacity queues
-jobs. Leaving the variable unset preserves current labels and routing. Shared
-workflows receive an optional `runner_group` from their release caller; ordinary
-CI, scheduled performance, and unrelated reusable callers retain their routing.
+worker jobs. The Release Publish parent and its dispatched publish children read
+the same variable. It selects the group; it does not provision runners or increase
+concurrency limits. Missing group capacity queues jobs. Shared workflows receive
+an optional `runner_group` from their release caller, including `docker-release.yml`
+and `vercel-container-registry-publish.yml` from Release Publish; `docker-image-refresh.yml`,
+ordinary CI, scheduled performance, and unrelated reusable callers retain their routing.
+Approval and credentialed publish jobs (npm trusted publishing, ClawHub, Docker)
+keep their default GitHub-hosted labels, and the hourly plugin npm preview routes
+only when Release Publish dispatches it.
 The runner count, matrix caps, and default labels do not change.
+
+To reserve capacity outside ordinary PR/main pools:
+
+1. Create an org runner group with Linux runners labelled `ubuntu-latest`/`ubuntu-24.04`, plus the Windows/macOS labels used by validation.
+2. Grant `openclaw/openclaw` access to the group.
+3. Set `OPENCLAW_RELEASE_RUNNER_GROUP` to the group name; unset it to release the reservation and restore ordinary routing.
 
 Full Release Validation starts source-only children alongside artifact producers
 after admission and reuse selection. Candidate consumers start as soon as the

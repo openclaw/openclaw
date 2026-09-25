@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { readFileWindowFullySync } from "@openclaw/fs-safe/advanced";
+import { safeRealpathSync, safeStatSync } from "@openclaw/fs-safe/path";
 
 function pathComponentsFromRootSync(targetPath: string): string[] {
   const parts: string[] = [];
@@ -20,11 +21,8 @@ function isOwnedByCurrentProcessSync(candidate: string): boolean {
   if (process.platform === "win32" || typeof process.getuid !== "function") {
     return false;
   }
-  try {
-    return fs.statSync(candidate).uid === process.getuid();
-  } catch {
-    return false;
-  }
+  const stat = safeStatSync(candidate);
+  return stat !== null && stat.uid === process.getuid();
 }
 
 function isMutableByCurrentProcessSync(candidate: string): boolean {
@@ -60,10 +58,8 @@ export function pathLooksMutableForShellPayloadSync(targetPath: string): boolean
   ) {
     return true;
   }
-  let realPath: string;
-  try {
-    realPath = fs.realpathSync(targetPath);
-  } catch {
+  const realPath = safeRealpathSync(targetPath);
+  if (!realPath) {
     return true;
   }
   return (
@@ -123,13 +119,7 @@ function isKnownBinaryExecutableHeader(buffer: Buffer): boolean {
 }
 
 export function isLikelyScriptLikePathSync(targetPath: string): boolean {
-  let stat: fs.Stats;
-  try {
-    stat = fs.statSync(targetPath);
-  } catch {
-    return true;
-  }
-  if (!stat.isFile()) {
+  if (!safeStatSync(targetPath)?.isFile()) {
     return true;
   }
   let header: Buffer;

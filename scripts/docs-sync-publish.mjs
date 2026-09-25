@@ -15,6 +15,7 @@ const SOURCE_DOCS_DIR = path.join(ROOT, "docs");
 const SOURCE_CONFIG_PATH = path.join(SOURCE_DOCS_DIR, "docs.json");
 const SLUGIFY_PACKAGE = "@sindresorhus/slugify";
 const INTERNAL_DOCS_DIRS = ["internal"];
+const AUTHORING_INSTRUCTION_FILES = ["AGENTS.md", "CLAUDE.md"];
 const DEFAULT_CLAWHUB_SOURCE_REPO = "openclaw/clawhub";
 const CLAWHUB_DOCS_TARGET_DIR = "clawhub";
 export const CLAWHUB_REPO_ENV = "OPENCLAW_DOCS_SYNC_CLAWHUB_REPO";
@@ -583,6 +584,14 @@ function pruneInternalDocs(targetDocsDir) {
   }
 }
 
+function pruneAuthoringInstructions(targetDocsDir) {
+  // Root repository instructions are not public pages. Locale orphans remain
+  // translation-finalizer owned so their inbound links are repaired together.
+  for (const file of AUTHORING_INSTRUCTION_FILES) {
+    fs.rmSync(path.join(targetDocsDir, file), { force: true });
+  }
+}
+
 function shouldExcludeClawHubDocsPath(relativePath) {
   const normalized = normalizeSlashes(relativePath);
   return (
@@ -771,11 +780,13 @@ function syncDocsTree(targetRoot, options = {}) {
     "--exclude",
     ".i18n/README.md",
     ...INTERNAL_DOCS_DIRS.flatMap((dir) => ["--exclude", `${dir}/`]),
+    ...AUTHORING_INSTRUCTION_FILES.flatMap((file) => ["--exclude", `/${file}`]),
     ...localeFilters,
     `${SOURCE_DOCS_DIR}/`,
     `${targetDocsDir}/`,
   ]);
   pruneInternalDocs(targetDocsDir);
+  pruneAuthoringInstructions(targetDocsDir);
   writePublishedDocsMap(targetDocsDir);
 
   for (const locale of GENERATED_LOCALES) {

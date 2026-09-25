@@ -1,4 +1,3 @@
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { BrowserTabOwnership } from "./client.types.js";
 import { clearVolatileTabAliases } from "./session-tab-ephemeral-aliases.js";
 import { browserSessionTabRouteKey, type BrowserSessionTabRoute } from "./session-tab-route.js";
@@ -18,10 +17,6 @@ export type VolatileSessionTab = SessionTabInteractionIdentity & {
   trackedAt: number;
   lastUsedAt: number;
 };
-
-export function normalizeBrowserSessionKey(value: string | undefined): string | undefined {
-  return normalizeOptionalLowercaseString(value);
-}
 
 export function volatileSessionTabTargetKey(
   identity: Pick<SessionTabInteractionIdentity, "targetId" | "route" | "profile">,

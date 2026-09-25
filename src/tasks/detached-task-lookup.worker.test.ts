@@ -7,10 +7,20 @@ import type {
   SubagentRunRecord,
 } from "../agents/subagents/registry/subagent-registry.types.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { markPluginRegistryRetired } from "../plugins/registry-lifecycle.js";
+import {
+  createPluginRegistryOwner,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { holdStateDatabaseCoordinator } from "../test-utils/state-database-contention.js";
+import { DetachedTaskRuntimeOwnerRetiredError } from "./detached-task-runtime-contract.js";
+import { finalizeTaskRunByRunIdAsync } from "./detached-task-runtime.async.js";
 import { findDetachedTaskRunAsync } from "./detached-task-runtime.js";
 import { createAcpTaskBackingDetail } from "./task-backing-records.js";
 import { createFlowRecord } from "./task-flow-registry.test-support.js";
@@ -29,6 +39,85 @@ afterEach(() => {
   resetTaskFlowRegistryForTests({ persist: false });
   resetAgentEventsForTest({ preserveListeners: true });
 });
+
+it.each([
+  { gatewayA: "open", operation: "lookup" },
+  { gatewayA: "closing", operation: "lookup" },
+  { gatewayA: "open", operation: "settlement" },
+  { gatewayA: "closing", operation: "settlement" },
+] as const)(
+  "reaches a child's stored task from a replaced plugin generation only through its $gatewayA admitting Gateway ($operation)",
+  async ({ gatewayA, operation }) => {
+    await withOpenClawTestState({ layout: "split" }, async () => {
+      const runId = "reload-owner-run";
+      const sessionKey = "agent:main:subagent:reload-owner";
+      const task = createTaskFixture("subagent", {
+        runId,
+        childSessionKey: sessionKey,
+        task: "Reload owner proof",
+        notifyPolicy: "silent",
+      });
+      const spawning = createEmptyPluginRegistry();
+      setActivePluginRegistry(spawning);
+      const gateway = createPluginRegistryOwner(spawning);
+      const allowed = gatewayA === "open";
+      try {
+        // Gateway A reloads; Gateway B is live and process-active but never succeeds A.
+        const successor = createEmptyPluginRegistry();
+        setActivePluginRegistry(successor);
+        gateway.publish(successor);
+        markPluginRegistryRetired(spawning);
+        const other = createEmptyPluginRegistry();
+        setActivePluginRegistry(other);
+        createPluginRegistryOwner(other);
+        if (!allowed) {
+          await gateway.close();
+        }
+
+        if (operation === "lookup") {
+          const result = await withPluginRuntimeRegistryScope(spawning, () =>
+            findDetachedTaskRunAsync({
+              runId,
+              runtime: "subagent",
+              sessionKey,
+              createdAtOrAfter: task.createdAt,
+            }),
+          );
+          expect(result).toEqual(
+            allowed
+              ? { lookup: "available", task: expect.objectContaining({ taskId: task.taskId }) }
+              : { lookup: "unavailable" },
+          );
+        } else {
+          const settlement = withPluginRuntimeRegistryScope(spawning, () =>
+            finalizeTaskRunByRunIdAsync({
+              runId,
+              runtime: "subagent",
+              sessionKey,
+              status: "succeeded",
+              endedAt: task.createdAt + 1,
+            }),
+          );
+          if (allowed) {
+            await expect(settlement).resolves.toEqual([
+              expect.objectContaining({ taskId: task.taskId, status: "succeeded" }),
+            ]);
+          } else {
+            await expect(settlement).rejects.toBeInstanceOf(DetachedTaskRuntimeOwnerRetiredError);
+          }
+        }
+        // The stored row is the final effect: written only through the admitting Gateway.
+        const stored = await findTaskByRunIdAsync(runId, await prepareTaskRegistryRead());
+        expect(stored?.status).toBe(
+          operation === "settlement" && allowed ? "succeeded" : "running",
+        );
+      } finally {
+        resetPluginRuntimeStateForTest();
+        await closeOpenClawStateDatabaseAsync();
+      }
+    });
+  },
+);
 
 it.each([
   "detached lookup",

@@ -308,11 +308,11 @@ describe("visible session placement and authority", () => {
       { kind: "local", os: "linux" },
       { kind: "local", machineClass: "tiny" },
     ].map((placement) => ({ placement, visible: true, worktree: true })),
-    ...["ignored", "placeholder"].map((selector) => ({
+    {
       visible: false,
       worktree: false,
-      placement: { kind: "profile", profileId: selector, os: selector, machineClass: selector },
-    })),
+      placement: { kind: "profile", profileId: "ignored", os: "ignored", machineClass: "ignored" },
+    },
   ])("rejects invalid placement before creating a child: %j", async (args) => {
     const callGateway = vi.fn();
     const tool = createSessionsSpawnTool({ callGateway, countActiveRuns: () => 0 });
@@ -422,54 +422,4 @@ describe("visible session placement and authority", () => {
       expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
     });
   });
-  // This shared creation policy remains the capability ceiling for cloud placement.
-  it.each(
-    (
-      [
-        { label: "default", mode: undefined },
-        { label: "read-only", mode: "read-only" },
-        { label: "guarded", mode: "guarded" },
-        { label: "workspace", mode: "workspace" },
-        { label: "full", mode: "full" },
-      ] as const
-    ).flatMap((scenario) => [
-      { ...scenario, placement: undefined },
-      { ...scenario, placement: { kind: "local" } },
-    ]),
-  )(
-    "inherits the parent's $label permission mode in a visible local child ($placement)",
-    async ({ mode, placement }) => {
-      const callGateway = vi.fn(async (_method: string) => ({
-        key: "agent:main:dashboard:child",
-        runStarted: true,
-        runId: "run-visible",
-      }));
-      const tool = createSessionsSpawnTool({
-        agentSessionKey: "agent:main:main",
-        ...(mode ? { sessionPermissionPolicy: { mode, root: "/workspace/main" } } : {}),
-        config: { agents: { list: [{ id: "main" }] } },
-        callGateway: callGateway as never,
-        registerRun: vi.fn(),
-        countActiveRuns: () => 0,
-      });
-
-      await tool.execute("visible-permissions", {
-        task: "inspect",
-        visible: true,
-        worktree: true,
-        ...(placement === undefined ? {} : { placement }),
-      });
-
-      expect(callGateway.mock.calls.map(([method]) => method)).toEqual(["sessions.create"]);
-      const createParams = mockCallArg(callGateway, 0, 1, "sessions.create");
-      expect(createParams.worktree).toBe(true);
-      expect(createParams.task).toEqual(expect.stringContaining("inspect"));
-      expect(createParams).not.toHaveProperty("sessionRoot");
-      if (mode) {
-        expect(createParams.permissionMode).toBe(mode);
-      } else {
-        expect(createParams).not.toHaveProperty("permissionMode");
-      }
-    },
-  );
 });

@@ -14,10 +14,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../../state/openclaw-agent-db.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../../../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { retainSessionListForegroundWork } from "../../session-projection-work.js";
 import { rpcReq, writeSessionStore } from "../../test-helpers.js";
 import {
@@ -119,7 +116,6 @@ afterEach(async () => {
   reclamation.exits = [];
   reclamation.exitCodes = [];
   closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
 });
 
 function holdReclamationValidation() {

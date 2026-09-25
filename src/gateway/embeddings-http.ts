@@ -65,19 +65,6 @@ type MemorySearchEmbeddingConfig = Pick<
   "local" | "remote" | "inputType" | "queryInputType" | "documentInputType"
 >;
 
-function resolveInputTexts(input: unknown): string[] | null {
-  if (typeof input === "string") {
-    return [input];
-  }
-  if (!Array.isArray(input)) {
-    return null;
-  }
-  if (input.every((entry) => typeof entry === "string")) {
-    return input;
-  }
-  return null;
-}
-
 function encodeEmbeddingBase64(embedding: number[]): string {
   // OpenAI-compatible base64 embeddings are raw float32 bytes, not JSON.
   const float32 = Float32Array.from(embedding);
@@ -233,7 +220,7 @@ export async function handleOpenAiEmbeddingsHttpRequest(
     return true;
   }
 
-  const texts = resolveInputTexts(payload.input);
+  const texts = typeof payload.input === "string" ? [payload.input] : payload.input;
   if (!texts) {
     sendInvalidRequest(res, "`input` must be a string or an array of strings.");
     return true;

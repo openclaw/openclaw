@@ -6,6 +6,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { releaseDisplacedChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import type { ChatComposerMemoryFallback, ChatPageHost } from "./chat-state-host.ts";
+import { isIncognitoComposerScope } from "./composer-persistence-state.ts";
 import {
   loadChatComposerCommittedDraftRevision,
   loadChatComposerDraftRevision,
@@ -115,6 +116,7 @@ export function storeChatComposerMemoryFallback(
     ...state.chatComposerFallbackByScope,
     [storedChatOutboxScopeKey(scope)]: {
       ...(!hasUiSessionDefaults(state) ? { awaitingDefaults: true as const } : {}),
+      ...(isIncognitoComposerScope(state, scope) ? { incognito: true } : {}),
       message: composer.message,
       ...(composer.mentions?.length
         ? { mentions: composer.mentions.map((mention) => ({ ...mention })) }
