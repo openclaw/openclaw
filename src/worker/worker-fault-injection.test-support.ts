@@ -561,7 +561,7 @@ export class ComposedGatewayHarness {
       },
       liveEvents: this.liveEventsValue,
       executeInference,
-      inferenceStore: createWorkerInferenceStore({ database: this.database }),
+      inferenceStore: createWorkerInferenceStore({ path: this.database.path }),
       ...(this.placementGateValue ? { placementStore: this.placementGateValue } : {}),
     });
   }

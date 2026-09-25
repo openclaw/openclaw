@@ -384,7 +384,10 @@ The planner now uses elapsed whole-file segments from that run, including
 imports and hooks, instead of summed concurrent case times. Canonical Vitest
 metadata groups compatible project files together; an oversized project splits
 only at file boundaries. The canonical runtime prerequisite owner places its
-two consumers together, so preparation happens once. Current project
+consumers together, so preparation happens once before Vitest workers start.
+This includes the ordinary Claude CLI executable-launch integration test: its
+native, Node-leading, and npm-shim variants reuse prepared dist instead of
+building TypeScript inside the 240-second CLI-preparation budget. Current project
 invocations fall from 72 to 35, without changing process isolation or coverage.
 The model reserves 104 seconds per row for observed setup, shared worker
 compilation, and wrapper transitions, plus 68 seconds for the one runtime

@@ -21,6 +21,7 @@ const suite = createControlUiE2eSuite({
 
 const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/chat-background-tasks");
 const baseTime = Date.now();
+const PROOF_VIDEO_DWELL_MS = 250;
 const chatSessionKey = "agent:main:main";
 const taskTranscriptMarkdown = `## Task transcript layout proof
 
@@ -208,7 +209,7 @@ suite.define(() => {
       await panel.getByRole("button", { name: "Finished (2)" }).click();
       await expect.poll(finishedOrder).toEqual(expectedFinished);
       await page.screenshot({ path: path.join(proofDir, "01-session-panel-order.png") });
-      await page.waitForTimeout(500);
+      await page.waitForTimeout(PROOF_VIDEO_DWELL_MS);
 
       const updatedTask = {
         ...activeTasks[4],
@@ -221,7 +222,7 @@ suite.define(() => {
       expect(await runningOrder()).toEqual(expectedRunning);
       expect(await finishedOrder()).toEqual(expectedFinished);
       await page.screenshot({ path: path.join(proofDir, "02-activity-stable.png") });
-      await page.waitForTimeout(500);
+      await page.waitForTimeout(PROOF_VIDEO_DWELL_MS);
 
       const refresh = panel.getByRole("button", { name: "Refresh background tasks" });
       const beforeTransient = (await gateway.getRequests("tasks.list")).length;
@@ -245,7 +246,7 @@ suite.define(() => {
       expect(await panel.getByRole("alert").count()).toBe(0);
       expect(await runningOrder()).toEqual(expectedRunning);
       await page.screenshot({ path: path.join(proofDir, "04-transient-retry-hidden.png") });
-      await page.waitForTimeout(500);
+      await page.waitForTimeout(PROOF_VIDEO_DWELL_MS);
 
       let listRequestCount = (await gateway.getRequests("tasks.list")).length;
       for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -269,7 +270,7 @@ suite.define(() => {
         "Task activity did not stabilize. Wait a moment, then refresh Tasks.",
       );
       await page.screenshot({ path: path.join(proofDir, "05-retries-exhausted.png") });
-      await page.waitForTimeout(500);
+      await page.waitForTimeout(PROOF_VIDEO_DWELL_MS);
 
       await refresh.click();
       await expect.poll(() => refresh.isEnabled()).toBe(true);
@@ -277,7 +278,7 @@ suite.define(() => {
       expect(await runningOrder()).toEqual(expectedRunning);
       expect(await finishedOrder()).toEqual(expectedFinished);
       await page.screenshot({ path: path.join(proofDir, "06-recovered.png") });
-      await page.waitForTimeout(500);
+      await page.waitForTimeout(PROOF_VIDEO_DWELL_MS);
     } finally {
       await context.close();
       if (video) {
