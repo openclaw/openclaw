@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { AuthStorage, ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runAgentsApiAttempt } from "./agentsapi-attempt.js";
 import type { AgentsApiBinding } from "./agentsapi-bindings.js";
@@ -54,6 +55,16 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => ({
   setActiveEmbeddedRun: vi.fn(),
 }));
 vi.mock("openclaw/plugin-sdk/agent-sessions", () => ({
+  AuthStorage: class {
+    static inMemory() {
+      return new this();
+    }
+  },
+  ModelRegistry: class {
+    static inMemory() {
+      return new this();
+    }
+  },
   SessionManager: { open: () => ({ buildSessionContext: () => ({ messages: [] }) }) },
 }));
 vi.mock("openclaw/plugin-sdk/llm", () => ({
@@ -115,7 +126,7 @@ describe("Agents API attempt environment selection", () => {
       const workspaceDir = "fixture-workspace/../fixture-project";
       const { result, bind } = await attempt(environment, undefined, workspaceDir);
 
-      expect(result.terminal).toEqual({ kind: "ok" });
+      expect(result).toMatchObject({ terminal: { kind: "ok" } });
       expect(mocks.fetch.mock.calls[0]?.[0].init?.method).toBe("POST");
       const createRequest = await requestBody(0);
       expect(createRequest).toMatchObject({
@@ -144,7 +155,7 @@ describe("Agents API attempt environment selection", () => {
         environment === "self_hosted" ? "/fixture/sibling/../project" : undefined,
       );
 
-      expect(result.terminal).toEqual({ kind: "ok" });
+      expect(result).toMatchObject({ terminal: { kind: "ok" } });
       expect(
         mocks.fetch.mock.calls.map(([request]) => ({
           method: new Request(request.url, request.init).method,
@@ -186,11 +197,13 @@ describe("Agents API attempt environment selection", () => {
         workspaceDir,
       );
 
-      expect(result.terminal).toMatchObject({
-        kind: "failed",
-        error: expect.objectContaining({
-          message: expect.stringContaining("reset the OpenClaw session"),
-        }),
+      expect(result).toMatchObject({
+        terminal: {
+          kind: "failed",
+          error: expect.objectContaining({
+            message: expect.stringContaining("reset the OpenClaw session"),
+          }),
+        },
       });
       expect(mocks.fetch).not.toHaveBeenCalled();
       expect(bind).not.toHaveBeenCalled();
@@ -201,7 +214,7 @@ describe("Agents API attempt environment selection", () => {
     const binding = savedBinding(undefined, []);
     const { result, bind } = await attempt("openai_hosted", binding);
 
-    expect(result.terminal).toEqual({ kind: "ok" });
+    expect(result).toMatchObject({ terminal: { kind: "ok" } });
     expect(bind).toHaveBeenCalledWith(savedBinding(undefined));
     expect(
       new Request(mocks.fetch.mock.calls[0]![0].url, mocks.fetch.mock.calls[0]![0].init).method,
@@ -214,9 +227,11 @@ describe("Agents API attempt environment selection", () => {
   it("rejects an invalid runtime environment setting before native writes", async () => {
     const { result, bind } = await attempt("hosted");
 
-    expect(result.terminal).toMatchObject({
-      kind: "failed",
-      error: expect.objectContaining({ message: expect.stringContaining("environment") }),
+    expect(result).toMatchObject({
+      terminal: {
+        kind: "failed",
+        error: expect.objectContaining({ message: expect.stringContaining("environment") }),
+      },
     });
     expect(mocks.fetch).not.toHaveBeenCalled();
     expect(bind).not.toHaveBeenCalled();
@@ -229,7 +244,8 @@ async function attempt(
   workspaceDir = "/fixture/project",
 ) {
   // Authentication/tool construction are host-prepared and mocked at their boundaries.
-  const params = {
+  const authStorage = AuthStorage.inMemory();
+  const params: AgentHarnessAttemptParamsV2 = {
     sessionId: "local-fixture",
     sessionKey: "agent:main:fixture",
     sessionFile: "/fixture/session.jsonl",
@@ -239,7 +255,22 @@ async function attempt(
     timeoutMs: 1_000,
     prompt: "Fixture prompt",
     provider: "openai",
-    model: { id: "fixture-model", reasoning: false },
+    modelId: "fixture-model",
+    model: {
+      id: "fixture-model",
+      name: "Fixture Model",
+      api: "openai-responses",
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1024,
+      maxTokens: 512,
+    },
+    authStorage,
+    authProfileStore: { version: 1, profiles: {} },
+    modelRegistry: ModelRegistry.inMemory(authStorage),
     thinkLevel: "off",
     resolvedApiKey: "fixture-not-a-real-api-key",
     // Per-run plugin overrides do not own live plugin settings.
@@ -247,7 +278,7 @@ async function attempt(
       plugins: { entries: { agentsapi: { config: { environment: "invalid-run-override" } } } },
     },
     hostCapabilities: { reportOutputTokens: vi.fn() },
-  } as AgentHarnessAttemptParamsV2;
+  };
   const bind = vi.fn<(next: AgentsApiBinding) => Promise<void>>(async () => {});
   const result = await runAgentsApiAttempt(
     params,
