@@ -190,7 +190,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +11: ten service-lifetime type exports and the owner-bound scheduler resolver.
       // +1: owner-approved async watched-session preparation with retained sync compatibility.
       // +1: captureToolAuthoredSourceReply lets the Codex harness deliver canDeliverSourceReply tool replies.
-      3645,
+      // +1: process-keyed auth-profile store fingerprint for Codex pre-write identity checks.
+      3646,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -200,7 +201,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: resolvePluginServiceScheduler borrows an existing service/account/CLI owner.
       // +1: owner-approved async watched-session preparation with retained sync compatibility.
       // +1: captureToolAuthoredSourceReply lets the Codex harness deliver canDeliverSourceReply tool replies.
-      2110,
+      // +1: process-keyed auth-profile store fingerprint for Codex pre-write identity checks.
+      2111,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
