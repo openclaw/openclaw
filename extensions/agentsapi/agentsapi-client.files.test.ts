@@ -127,9 +127,7 @@ describe("Agents API immutable artifact metadata", () => {
     if (kind === "repeated") {
       queueResponse(Response.json({ data: [artifact()], has_more: true }));
     }
-    queueResponse(
-      Response.json({ data: kind === "empty" ? [] : [artifact()], has_more: true }),
-    );
+    queueResponse(Response.json({ data: kind === "empty" ? [] : [artifact()], has_more: true }));
 
     await expect(
       createClient().artifacts("session-fixture", "turn-fixture", new AbortController().signal),
