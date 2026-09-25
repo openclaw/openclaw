@@ -56,7 +56,7 @@ export async function prepareAgentWorkspaceContext(
               !file.missing &&
               (file.content ?? "").trim().length > 0,
           )
-          .map((file) => ({ ...toContextFile(file), bootstrapFile: file })),
+          .map((file) => Object.assign(toContextFile(file), { bootstrapFile: file })),
         { order: params.contextFileOrder, caseInsensitivePathOrder: true, trimBasename: false },
       ).map(({ file }) => file.bootstrapFile)
     : [];
