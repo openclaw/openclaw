@@ -10,6 +10,7 @@ export type InternalReplyResolverOptions = {
   mediaNormalizationOwner?: InternalGetReplyOptions["mediaNormalizationOwner"];
   onDeliberateSilentTerminalReply?: () => void;
   onPendingContinuation?: (settlement?: PendingContinuationSettlement) => void;
+  onPendingExecSteering?: InternalGetReplyOptions["onPendingExecSteering"];
   onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
   onSessionPrepared?: (binding: ReplySessionBinding) => void;
   onRunVerbosityResolved?: InternalGetReplyOptions["onRunVerbosityResolved"];

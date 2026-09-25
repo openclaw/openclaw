@@ -201,6 +201,7 @@ export async function runEmbeddedFallbackCandidate(
         onCompactionRequestBudget: (budget) => {
           compactionRequestBudget = budget;
         },
+        onPendingExecSteering: turn.opts?.onPendingExecSteering,
         onDeferredLifecycleOwner: params.deferredLifecycle.adopt,
         onDeferredLifecycleAbort: params.deferredLifecycle.abort,
         onRetryWait: params.deferredLifecycle.beginRetryWait,

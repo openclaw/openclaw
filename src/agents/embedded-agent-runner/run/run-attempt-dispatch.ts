@@ -644,6 +644,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     compactionCountOwner: "caller",
     onContextAccountingEvent: params.onContextAccountingEvent,
     onCompactionRequestBudget: params.onCompactionRequestBudget,
+    onPendingExecSteering: params.onPendingExecSteering,
     ...(params.systemAgentTool ? { systemAgentTool: params.systemAgentTool } : {}),
     cleanupBundleMcpOnRunEnd: params.cleanupBundleMcpOnRunEnd,
     oneShotCliRun: params.oneShotCliRun,

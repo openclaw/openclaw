@@ -85,6 +85,7 @@ describe("tool-result projection persistence at dispatch", () => {
       modelPrompt: "read files",
       onFinalPromptText: () => {},
       onSteeringAcknowledged: () => {},
+      onExecSteeringAcknowledged: () => {},
       runtimeOnly: false,
       sessionPromptState,
       systemPrompt: "test prompt",

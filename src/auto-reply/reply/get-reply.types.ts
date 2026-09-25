@@ -4,6 +4,7 @@ import {
   type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
 import type { CronCreatorAuthorityCapability } from "../../agents/cron-creator-authority-context.js";
+import type { ExecSteeringDeliverySettlement } from "../../agents/exec-steering-queue.js";
 import type { ReplyDeliveryObserver } from "../../agents/reply-completion.js";
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
 import type { SessionEntry, SessionToolOverrides } from "../../config/sessions/types.js";
@@ -72,6 +73,8 @@ type InternalReplySessionOptions = {
   cleanupBundleMcpOnRunEnd?: boolean;
   /** Defers the child-completion wake until the visible waiting status is delivered. */
   onPendingContinuation?: (settlement?: PendingContinuationSettlement) => void;
+  /** Holds each dispatched exec-steering receipt until final reply delivery settles. */
+  onPendingExecSteering?: (settlement: ExecSteeringDeliverySettlement) => void;
   onSessionPrepared?: (binding: ReplySessionBinding) => void;
   onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
   /** Publishes each executing turn's preferences without persisting them to its session. */

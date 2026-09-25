@@ -20,6 +20,10 @@ import { buildInterSessionPromptContext } from "../../../sessions/input-provenan
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import {
+  leasePendingExecSteeringItems,
+  prependExecSteeringPrompt,
+} from "../../exec-steering-queue.js";
+import {
   buildAgentInternalEventContext,
   resolveInternalEventPromptBody,
 } from "../../internal-events.js";
@@ -84,6 +88,11 @@ type EmbeddedAttemptSteeringLease = {
   runIds: string[];
   isCurrent: () => boolean;
 };
+type EmbeddedAttemptExecSteeringLease = {
+  leaseId: string;
+  itemIds: string[];
+  isCurrent: () => boolean;
+};
 
 type EmbeddedAttemptPromptAssembly = {
   assertHostActive?: () => void;
@@ -96,6 +105,7 @@ type EmbeddedAttemptPromptAssembly = {
   transcriptLeafId: string | null;
   heartbeatSummary?: ReturnType<typeof resolveHeartbeatSummaryForAgent>;
   leasedSteering?: EmbeddedAttemptSteeringLease;
+  leasedExecSteering?: EmbeddedAttemptExecSteeringLease;
 };
 
 export async function prepareEmbeddedAttemptPromptAssembly(input: {
@@ -114,6 +124,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   prepareSystemPrompt?: (currentSystemPrompt: string) => Promise<string>;
   setActiveSessionSystemPrompt: (systemPrompt: string) => void;
   setLeasedSteering: (lease: EmbeddedAttemptSteeringLease) => void;
+  setLeasedExecSteering: (lease: EmbeddedAttemptExecSteeringLease) => void;
 }): Promise<EmbeddedAttemptPromptAssembly> {
   const { attempt } = input;
   const isSettledTurnFinalization = attempt.operation === "settled-tool-finalization";
@@ -321,6 +332,55 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     }
   }
 
+  let leasedExecSteering: EmbeddedAttemptExecSteeringLease | undefined;
+  // A heartbeat turn owns exec completions through the durable system-event
+  // path, and `heartbeat-dispatch` settles them only once channel delivery is
+  // known (`sent && !failed`). Leasing the steering copy here would duplicate
+  // that content in the same turn and acknowledge the canonical event as soon as
+  // the model turn returned, losing the completion when the send failed or was
+  // skipped. Those occurrences stay with heartbeat delivery settlement, and a
+  // heartbeat that never settles them leaves them for the next busy turn.
+  if (attempt.sessionKey && !preserveExactPrompt && attempt.trigger !== "heartbeat") {
+    const execLeaseId = `${attempt.runId}:exec-steering`;
+    const leasedExec = leasePendingExecSteeringItems({
+      requesterSessionKey: attempt.sessionKey,
+      // Qualify the lease with the run's agent owner so a foreign agent sharing
+      // a literal session key (e.g. `global`) resolves a distinct queue key and
+      // cannot lease this agent's completions.
+      ownerAgentId: input.sessionAgentId,
+      leaseId: execLeaseId,
+    });
+    if (leasedExec) {
+      leasedExecSteering = {
+        leaseId: execLeaseId,
+        itemIds: leasedExec.itemIds,
+        isCurrent: leasedExec.isCurrent,
+      };
+      // Transfer cleanup ownership before any prompt mutation can throw.
+      input.setLeasedExecSteering(leasedExecSteering);
+      if (!leasedExec.isCurrent()) {
+        // A concurrent heartbeat or terminal poll acknowledged this occurrence
+        // between lease and injection; refuse the stale copy before it can reach
+        // a provider request.
+        throw new Error(
+          "The queued exec completion lost authority before requester prompt injection.",
+        );
+      }
+      effectivePrompt = prependExecSteeringPrompt({
+        steeringPrompt: leasedExec.prompt,
+        prompt: effectivePrompt,
+      });
+      effectiveTranscriptPrompt = prependExecSteeringPrompt({
+        steeringPrompt: leasedExec.prompt,
+        prompt: effectiveTranscriptPrompt,
+      });
+      log.debug(
+        `exec steering: injected ${leasedExec.itemIds.length} queued completion(s) into turn ` +
+          `runId=${attempt.runId} sessionKey=${attempt.sessionKey}`,
+      );
+    }
+  }
+
   const currentUserAdmission =
     !preserveExactPrompt && !attempt.skipPreparedUserTurnMessage
       ? attempt.userTurnTranscriptRecorder?.getAdmissionReceipt()
@@ -346,6 +406,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     transcriptLeafId,
     heartbeatSummary,
     leasedSteering,
+    leasedExecSteering,
   };
 }
 

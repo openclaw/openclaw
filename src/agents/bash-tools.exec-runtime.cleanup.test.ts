@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { resetSystemEventsForTest } from "../infra/system-events.js";
 import type { ManagedRun, RunExit, SpawnInput } from "../process/supervisor/types.js";
 import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import {
@@ -11,6 +12,7 @@ import {
 } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createRunExit, runtimeManagedRun } from "./bash-tools.exec-runtime.test-support.js";
+import { resetExecSteeringQueueForTest } from "./exec-steering-queue.js";
 import { createAgentCleanupScope } from "./run-cleanup-timeout.js";
 import type { SandboxBackendHandle } from "./sandbox/backend-handle.types.js";
 import {
@@ -19,14 +21,20 @@ import {
 } from "./tools/gateway-caller-context.js";
 
 const requestHeartbeatMock = vi.hoisted(() => vi.fn());
-const enqueueSystemEventWithReceiptMock = vi.hoisted(() => vi.fn());
+const enqueueSystemEventReceiptMock = vi.hoisted(() => vi.fn());
 const supervisorMock = vi.hoisted(() => ({ spawn: vi.fn() }));
 vi.mock("../infra/heartbeat-wake.js", () => ({
   requestHeartbeat: requestHeartbeatMock,
 }));
-vi.mock("../infra/system-events.js", () => ({
-  enqueueSystemEventWithReceipt: enqueueSystemEventWithReceiptMock,
-}));
+// Spy only on enqueueSystemEventReceipt and keep every other export real, so the
+// process-wide exec-steering queue never binds to stubbed system-event helpers.
+vi.mock("../infra/system-events.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/system-events.js")>();
+  return {
+    ...actual,
+    enqueueSystemEventReceipt: enqueueSystemEventReceiptMock,
+  };
+});
 vi.mock("../process/supervisor/index.js", () => ({
   getProcessSupervisor: () => supervisorMock,
 }));
@@ -38,12 +46,16 @@ beforeAll(async () => {
 beforeEach(() => {
   resetProcessRegistryForTests();
   requestHeartbeatMock.mockReset();
-  enqueueSystemEventWithReceiptMock.mockReset();
-  enqueueSystemEventWithReceiptMock.mockReturnValue(vi.fn(() => true));
+  enqueueSystemEventReceiptMock.mockReset();
+  enqueueSystemEventReceiptMock.mockReturnValue({ eventId: "evt-test", remove: vi.fn(() => true) });
   supervisorMock.spawn.mockReset();
 });
 afterEach(() => {
   resetProcessRegistryForTests();
+  // Clear the exec-steering queue and the consumption observer runExecProcess
+  // registers lazily, so neither leaks into a later file in this worker.
+  resetExecSteeringQueueForTest();
+  resetSystemEventsForTest();
 });
 
 it.each([
@@ -356,13 +368,13 @@ describe("terminal execution-context release", () => {
       const removal = vi.fn(() => true);
       const deliveryContext = { channel: "telegram", to: "synthetic-chat" };
       const failure = new Error("notification boundary failed");
-      enqueueSystemEventWithReceiptMock.mockImplementation((_text, options) => {
+      enqueueSystemEventReceiptMock.mockImplementation((_text, options) => {
         observed.push("enqueue");
         expect(options.deliveryContext).toEqual(deliveryContext);
         if (path === "enqueue failure") {
           throw failure;
         }
-        return removal;
+        return { eventId: "evt-test", remove: removal };
       });
       requestHeartbeatMock.mockImplementation(() => {
         observed.push("wake");
@@ -447,12 +459,12 @@ describe("exec settlement recovery", () => {
       const identities: Array<ReturnType<typeof getGatewayToolCallerIdentity>> = [];
       const scopeKey = `settlement-recovery:${boundary}:${asynchronous}`;
       const failure = new Error("process settlement failed");
-      enqueueSystemEventWithReceiptMock.mockImplementation(() => {
+      enqueueSystemEventReceiptMock.mockImplementation(() => {
         observed.push("enqueue");
         if (boundary === "enqueue") {
           throw failure;
         }
-        return vi.fn(() => true);
+        return { eventId: "evt-test", remove: vi.fn(() => true) };
       });
       requestHeartbeatMock.mockImplementation(() => {
         observed.push("wake");

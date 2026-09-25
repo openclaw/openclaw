@@ -3,7 +3,12 @@
  * Covers output caps, finished-session retention, cleanup, and PTY cursor mode
  * state for background exec sessions.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  enqueueSystemEventReceipt,
+  peekSystemEventEntries,
+  resetSystemEventsForTest,
+} from "../infra/system-events.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 import {
   acknowledgeNotifyOnExit,
@@ -24,6 +29,11 @@ import {
 } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
+import {
+  enqueueExecSteeringCompletion,
+  hasPendingExecSteeringItems,
+  resetExecSteeringQueueForTest,
+} from "./exec-steering-queue.js";
 import { createSessionSlug } from "./session-slug.js";
 
 const drainSession = (session: ProcessSession) => prepareSessionPoll(session, undefined);
@@ -32,7 +42,8 @@ const randomMocks = vi.hoisted(() => ({
   generateSecureInt: vi.fn(() => 0),
 }));
 
-vi.mock("../infra/secure-random.js", () => ({
+vi.mock("../infra/secure-random.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/secure-random.js")>()),
   generateSecureInt: randomMocks.generateSecureInt,
 }));
 
@@ -56,6 +67,11 @@ describe("bash process registry", () => {
     randomMocks.generateSecureInt.mockReset();
     randomMocks.generateSecureInt.mockReturnValue(0);
     resetProcessRegistryForTests();
+    resetExecSteeringQueueForTest();
+  });
+
+  afterEach(() => {
+    resetSystemEventsForTest();
   });
 
   it("suppresses a notify-on-exit event when terminal poll acknowledgement wins the race", () => {
@@ -76,6 +92,80 @@ describe("bash process registry", () => {
     expect(getFinishedSession("poll-first")?.terminalPollObserved).toBe(true);
     acknowledgeNotifyOnExit(getFinishedSession("poll-first") ?? {});
     expect(remove).toHaveBeenCalledOnce();
+  });
+
+  const steeringSessionKey = "agent:main:main";
+
+  function enqueueSteeringCompletion(params: {
+    execId: string;
+    durableEventId: string;
+    text: string;
+  }): void {
+    enqueueExecSteeringCompletion({
+      requesterSessionKey: steeringSessionKey,
+      occurrenceKey: `exec:${params.execId}`,
+      durableEventId: params.durableEventId,
+      execId: params.execId,
+      status: "completed",
+      exitLabel: "exit 0",
+      text: params.text,
+    });
+  }
+
+  it("does not retire a reused process slug's steering item from poll acknowledgment", () => {
+    // The original process record was removed and a later process reused the
+    // slug, so this newer occurrence's steering item must survive an ack that
+    // only knows the reusable `exec:<processId>`.
+    enqueueSteeringCompletion({
+      execId: "slugreuse",
+      durableEventId: "durable-newer-slug",
+      text: "newer output",
+    });
+    acknowledgeNotifyOnExit({ id: "slugreuse" });
+    expect(hasPendingExecSteeringItems({ requesterSessionKey: steeringSessionKey })).toBe(true);
+  });
+
+  it("does not retire a reused process slug's steering item when a receipt arrives after a poll", () => {
+    enqueueSteeringCompletion({
+      execId: "slugreuse2",
+      durableEventId: "durable-newer-slug2",
+      text: "newer output",
+    });
+    const session = createRegistrySession({
+      id: "slugreuse2",
+      maxOutputChars: 10_000,
+      pendingMaxOutputChars: 30_000,
+      backgrounded: true,
+    });
+    session.terminalPollObserved = true;
+    const remove = vi.fn(() => false);
+    recordNotifyOnExitRemoval(session, remove);
+    expect(remove).toHaveBeenCalledOnce();
+    expect(hasPendingExecSteeringItems({ requesterSessionKey: steeringSessionKey })).toBe(true);
+  });
+
+  it("settles exactly the acknowledged occurrence through its receipt", () => {
+    const receipt = enqueueSystemEventReceipt(
+      "Exec completed (owned001, exit 0) :: BUILD OK",
+      { sessionKey: steeringSessionKey, contextKey: "exec:owned001" },
+      { allowDuplicate: true },
+    );
+    if (!receipt) {
+      throw new Error("expected a durable system event receipt");
+    }
+    enqueueSteeringCompletion({
+      execId: "owned001",
+      durableEventId: receipt.eventId,
+      text: "BUILD OK",
+    });
+    expect(hasPendingExecSteeringItems({ requesterSessionKey: steeringSessionKey })).toBe(true);
+
+    // The precise receipt consumes the durable event by its id, and the shared
+    // settlement observer retires the steering copy that shares that id.
+    acknowledgeNotifyOnExit({ id: "owned001", notifyOnExitRemoval: receipt.remove });
+
+    expect(hasPendingExecSteeringItems({ requesterSessionKey: steeringSessionKey })).toBe(false);
+    expect(peekSystemEventEntries(steeringSessionKey)).toEqual([]);
   });
 
   it("captures output and truncates", () => {

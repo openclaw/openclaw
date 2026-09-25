@@ -1,6 +1,7 @@
 import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import type { Model } from "../../../llm/types.js";
+import type { ExecSteeringDeliverySettlement } from "../../exec-steering-queue.js";
 import type { AgentExecutionAuthBinding } from "../../execution-auth-binding.js";
 import type { ModelFallbackRouteResolution } from "../../model-fallback.types.js";
 import type { PreparedModelRuntimePluginGeneration } from "../../prepared-model-runtime.types.js";
@@ -47,6 +48,8 @@ export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
   requestedRouteResolution?: ModelFallbackRouteResolution;
   onCompactionRequestBudget?: (budget: CompactionRequestBudget | undefined) => void;
   onCompactionAccounting?: (fact: CompactionAccountingFact | undefined) => void;
+  /** Reply delivery owner for exec completions steered into a dispatched prompt. */
+  onPendingExecSteering?: (settlement: ExecSteeringDeliverySettlement) => void;
   /** Attempt-local context observer, installed by the host loop before dispatch. */
   onContextAccountingEvent?: (event: EmbeddedContextAccountingEvent) => void;
   onSuccessfulAuthBinding?: (binding: AgentExecutionAuthBinding) => void;
@@ -76,7 +79,10 @@ export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
 };
 
 export type EmbeddedRunAttemptInternalParams = EmbeddedRunAttemptParams &
-  Pick<RunEmbeddedAgentInternalParams, "onContextAccountingEvent" | "onCompactionRequestBudget"> & {
+  Pick<
+    RunEmbeddedAgentInternalParams,
+    "onContextAccountingEvent" | "onCompactionRequestBudget" | "onPendingExecSteering"
+  > & {
     compactionCountOwner?: "subscription" | "caller";
   };
 

@@ -330,6 +330,7 @@ describe("context advancement through embedded attempt guards", () => {
           modelPrompt: promptContext.promptForModel,
           onFinalPromptText: () => {},
           onSteeringAcknowledged: () => {},
+          onExecSteeringAcknowledged: () => {},
           persistToolResultProjections: async () => {},
           promptActiveSession: (text, options) => session.prompt(text, options),
           runtimeOnly: false,

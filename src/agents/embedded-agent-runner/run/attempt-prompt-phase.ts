@@ -6,6 +6,7 @@ import {
   setAgentRunAttemptTerminalFailure,
   type AgentRunAttemptFailureSource,
 } from "../../agent-run-terminal-outcome.js";
+import { releaseLeasedExecSteeringItems } from "../../exec-steering-queue.js";
 import { resolvePendingRuntimeContextReplay } from "../../internal-runtime-context.js";
 import {
   createCompactionRequestBudget,
@@ -104,6 +105,7 @@ export async function runEmbeddedAttemptPromptPhase(
   const toolSearchCompacted = prepared.toolCatalog.toolSearch.compacted;
   let skipPromptSubmission = false;
   let leasedSteering: PromptAssemblyResult["leasedSteering"];
+  let leasedExecSteering: PromptAssemblyResult["leasedExecSteering"];
 
   const setFailure = (error: unknown, source: AgentRunAttemptFailureSource | null) => {
     input.state.terminal = setAgentRunAttemptTerminalFailure(
@@ -127,6 +129,16 @@ export async function runEmbeddedAttemptPromptPhase(
       error: error ? formatErrorMessage(error) : undefined,
     });
     leasedSteering = undefined;
+  };
+  const releaseLeasedExecSteering = (_error?: unknown) => {
+    if (!leasedExecSteering) {
+      return;
+    }
+    releaseLeasedExecSteeringItems({
+      itemIds: leasedExecSteering.itemIds,
+      leaseId: leasedExecSteering.leaseId,
+    });
+    leasedExecSteering = undefined;
   };
   const handleMidTurnPrecheckRequest = async (request: MidTurnPrecheckRequest) => {
     const outcome = await handleEmbeddedAttemptMidTurnPrecheck({
@@ -176,6 +188,9 @@ export async function runEmbeddedAttemptPromptPhase(
       setLeasedSteering: (lease) => {
         leasedSteering = lease;
       },
+      setLeasedExecSteering: (lease) => {
+        leasedExecSteering = lease;
+      },
     });
     systemPromptText = sessionRuntimeState.systemPromptText;
     if (prepared.toolCatalog.emptyExplicitToolAllowlistError) {
@@ -186,6 +201,7 @@ export async function runEmbeddedAttemptPromptPhase(
     const { hookCtx, promptBuildPrependContext, promptBuildAppendContext } = promptAssembly;
     transcriptLeafId = promptAssembly.transcriptLeafId;
     leasedSteering = promptAssembly.leasedSteering ?? leasedSteering;
+    leasedExecSteering = promptAssembly.leasedExecSteering ?? leasedExecSteering;
 
     const promptContext = await prepareEmbeddedAttemptPromptContext({
       sessionVersion: sessionManager.getHeader()?.version,
@@ -412,6 +428,7 @@ export async function runEmbeddedAttemptPromptPhase(
         compactionRequestBudget,
         images: imageResult.images,
         ...(leasedSteering ? { leasedSteering } : {}),
+        ...(leasedExecSteering ? { leasedExecSteering } : {}),
         modelPrompt: promptContext.promptForModel,
         onFinalPromptText: (prompt) => {
           promptState.finalPromptText = prompt;
@@ -419,6 +436,12 @@ export async function runEmbeddedAttemptPromptPhase(
         onSteeringAcknowledged: () => {
           leasedSteering = undefined;
         },
+        onExecSteeringAcknowledged: () => {
+          leasedExecSteering = undefined;
+        },
+        ...(attempt.onPendingExecSteering
+          ? { onExecSteeringDispatched: attempt.onPendingExecSteering }
+          : {}),
         persistToolResultProjections: async () => {
           if (!isRawModelRun && toolResultPromptProjectionState.frozen.size > 0) {
             await withOwnedTranscriptWrite(() =>
@@ -449,6 +472,7 @@ export async function runEmbeddedAttemptPromptPhase(
       });
     } else {
       releaseLeasedSteering(state.promptError ?? "prompt submission skipped");
+      releaseLeasedExecSteering(state.promptError ?? "prompt submission skipped");
     }
     publishDispatchState(state);
   } catch (error) {
@@ -465,6 +489,7 @@ export async function runEmbeddedAttemptPromptPhase(
         });
       },
       releaseLeasedSteering,
+      releaseLeasedExecSteering,
       withOwnedTranscriptWrite,
       ...input.lifecycle.readYieldState(),
     });

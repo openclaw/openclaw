@@ -4,6 +4,12 @@ import {
   clearEmbeddedSessionPromptStates,
   getEmbeddedSessionPromptState,
 } from "../../agents/embedded-agent-runner/session-prompt-state.js";
+import {
+  enqueueExecSteeringCompletion,
+  hasPendingExecSteeringItems,
+  leasePendingExecSteeringItems,
+  resetExecSteeringQueueForTest,
+} from "../../agents/exec-steering-queue.js";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import {
   enqueueSystemEvent,
@@ -19,6 +25,7 @@ afterEach(() => {
   clearEmbeddedSessionPromptStates(["old-session"]);
   replyRunTesting.resetReplyRunRegistry();
   resetDiagnosticRunActivityForTest();
+  resetExecSteeringQueueForTest();
   resetSystemEventsForTest();
 });
 
@@ -61,6 +68,40 @@ describe("clearSessionResetRuntimeState", () => {
     expect(peekSystemEvents("agent:alpha:global")).toEqual([]);
     expect(peekSystemEvents("agent:main:global")).toEqual(["main"]);
     expect(peekSystemEvents("agent:beta:global")).toEqual(["beta"]);
+  });
+
+  it("retires pending and leased exec completions for the reset conversation", () => {
+    enqueueExecSteeringCompletion({
+      requesterSessionKey: "alpha",
+      ownerAgentId: "main",
+      occurrenceKey: "exec:stale001",
+      execId: "stale001",
+      status: "completed",
+      exitLabel: "exit 0",
+      text: "stale after reset",
+    });
+    // Leased by the conversation that is about to be reset.
+    expect(
+      leasePendingExecSteeringItems({
+        requesterSessionKey: "alpha",
+        ownerAgentId: "main",
+        leaseId: "run-1:exec-steering",
+      }),
+    ).toBeDefined();
+
+    clearSessionResetRuntimeState(["alpha"], { agentId: "main" });
+
+    // The reset conversation's next turn leases nothing stale.
+    expect(
+      hasPendingExecSteeringItems({ requesterSessionKey: "alpha", ownerAgentId: "main" }),
+    ).toBe(false);
+    expect(
+      leasePendingExecSteeringItems({
+        requesterSessionKey: "alpha",
+        ownerAgentId: "main",
+        leaseId: "run-2:exec-steering",
+      }),
+    ).toBeUndefined();
   });
 
   it("releases active reply work owned by the archived reset session id", () => {

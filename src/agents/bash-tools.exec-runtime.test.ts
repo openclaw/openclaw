@@ -14,18 +14,20 @@ import {
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import type { GatewayActiveWorkInspectors } from "../infra/gateway-active-work.js";
+import { resetSystemEventsForTest } from "../infra/system-events.js";
 import type { RunExit, SpawnInput } from "../process/supervisor/types.js";
 import { createAgentToolExecutionBudget } from "./agent-tool-source-execution-guard.js";
 import { getFinishedSession } from "./bash-process-registry.js";
 import { createRunExit, runtimeManagedRun } from "./bash-tools.exec-runtime.test-support.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
+import { resetExecSteeringQueueForTest } from "./exec-steering-queue.js";
 import {
   getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "./tools/gateway-caller-context.js";
 
 const requestHeartbeatMock = vi.hoisted(() => vi.fn());
-const enqueueSystemEventWithReceiptMock = vi.hoisted(() => vi.fn());
+const enqueueSystemEventReceiptMock = vi.hoisted(() => vi.fn());
 const supervisorMock = vi.hoisted(() => ({
   spawn: vi.fn(),
 }));
@@ -34,9 +36,20 @@ vi.mock("../infra/heartbeat-wake.js", () => ({
   requestHeartbeat: requestHeartbeatMock,
 }));
 
-vi.mock("../infra/system-events.js", () => ({
-  enqueueSystemEventWithReceipt: enqueueSystemEventWithReceiptMock,
-}));
+// Spy only on enqueueSystemEventReceipt; keep every other export real. The
+// exec-steering queue singleton is a process-wide globalThis object that
+// persists across test files in a worker, and its observer/context-key removal
+// bind to whatever system-events module it first imported. Replacing the whole
+// module with stubs would leak no-op bindings into a later suite that uses the
+// real queue; importActual keeps those real so no cross-file contamination
+// occurs regardless of file execution order.
+vi.mock("../infra/system-events.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/system-events.js")>();
+  return {
+    ...actual,
+    enqueueSystemEventReceipt: enqueueSystemEventReceiptMock,
+  };
+});
 
 vi.mock("../process/supervisor/index.js", () => ({
   getProcessSupervisor: () => ({
@@ -69,13 +82,19 @@ beforeEach(() => {
   resetGatewaySuspendCoordinatorForLifecycleRestart();
   resetProcessRegistryForTests();
   requestHeartbeatMock.mockReset();
-  enqueueSystemEventWithReceiptMock.mockReset();
-  enqueueSystemEventWithReceiptMock.mockReturnValue(vi.fn(() => true));
+  enqueueSystemEventReceiptMock.mockReset();
+  enqueueSystemEventReceiptMock.mockReturnValue({ eventId: "evt-test", remove: vi.fn(() => true) });
   supervisorMock.spawn.mockReset();
 });
 
 afterEach(() => {
   resetProcessRegistryForTests();
+  // Clear the exec-steering queue and its process-wide consumption observer so
+  // the observer lazily registered by runExecProcess cannot leak into a later
+  // file in this non-isolated worker. resetSystemEventsForTest is invoked
+  // through the mocked-but-importOriginal system-events module below.
+  resetExecSteeringQueueForTest();
+  resetSystemEventsForTest();
 });
 
 async function runExecWithExit(params: {
@@ -143,7 +162,7 @@ function prepareSuspension(requestId: string) {
 }
 
 function requireSystemEventCall(): [string, Record<string, unknown>] {
-  const call = enqueueSystemEventWithReceiptMock.mock.calls[0];
+  const call = enqueueSystemEventReceiptMock.mock.calls[0];
   if (!call) {
     throw new Error("expected system event call");
   }
@@ -635,7 +654,7 @@ describe("sandbox exec finalization suspension", () => {
       expect(finalizeExec).toHaveBeenCalledOnce();
       expect(getActiveBackgroundExecSessionCount()).toBe(0);
       expect(run.session.finalizing).toBe(false);
-      expect(enqueueSystemEventWithReceiptMock).toHaveBeenCalledTimes(1);
+      expect(enqueueSystemEventReceiptMock).toHaveBeenCalledTimes(1);
       expect(requireSystemEventCall()[0]).toContain(
         expectedStatus === "failed" ? "Exec failed" : "Exec completed",
       );

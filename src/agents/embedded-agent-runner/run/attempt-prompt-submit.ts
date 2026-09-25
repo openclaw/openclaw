@@ -5,6 +5,12 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { ImageContent } from "../../../llm/types.js";
 import type { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
+import {
+  ackLeasedExecSteeringItems,
+  type ExecSteeringDeliverySettlement,
+  holdExecSteeringForDelivery,
+  releaseLeasedExecSteeringItems,
+} from "../../exec-steering-queue.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { agentSessionQueuePromptContext } from "../../sessions/agent-session-prompting.js";
 import {
@@ -63,6 +69,11 @@ type SteeringLease = {
   runIds: readonly string[];
   isCurrent: () => boolean;
 };
+type ExecSteeringLease = {
+  leaseId: string;
+  itemIds: readonly string[];
+  isCurrent: () => boolean;
+};
 
 type TrajectoryRecorder = ReturnType<typeof createTrajectoryRuntimeRecorder>;
 
@@ -82,9 +93,17 @@ export async function submitEmbeddedAttemptPrompt(input: {
   compactionRequestBudget?: CompactionRequestBudget;
   images: ImageContent[];
   leasedSteering?: SteeringLease;
+  leasedExecSteering?: ExecSteeringLease;
   modelPrompt: string;
   onFinalPromptText: (prompt: string) => void;
   onSteeringAcknowledged: () => void;
+  onExecSteeringAcknowledged: () => void;
+  /**
+   * Delivery owner for a dispatched exec-steering lease. When present, the
+   * lease is held until that owner settles the reply's final delivery instead
+   * of being acknowledged as soon as the prompt returns.
+   */
+  onExecSteeringDispatched?: (settlement: ExecSteeringDeliverySettlement) => void;
   persistToolResultProjections: () => Promise<void>;
   prependContext?: string;
   promptActiveSession: PromptActiveSession;
@@ -101,10 +120,23 @@ export async function submitEmbeddedAttemptPrompt(input: {
 }): Promise<void> {
   const { activeSession, attempt } = input;
   let pendingSteering = input.leasedSteering;
+  let pendingExecSteering = input.leasedExecSteering;
+  // Set only when this prompt's provider request was actually dispatched. An
+  // input extension or extension command can handle AgentSession.prompt and
+  // return normally without any provider I/O, and acknowledging then would
+  // retire the completion (and its shared durable event) unseen.
+  let execSteeringDispatched = false;
   const assertSteeringCurrent = () => {
     if (pendingSteering && !pendingSteering.isCurrent()) {
       throw new Error(
         "The queued child results lost authority before requester prompt submission.",
+      );
+    }
+    if (pendingExecSteering && !pendingExecSteering.isCurrent()) {
+      // A concurrent heartbeat or terminal poll acknowledged this occurrence;
+      // reject the stale exec completion before it reaches a provider request.
+      throw new Error(
+        "The queued exec completion lost authority before requester prompt submission.",
       );
     }
   };
@@ -125,6 +157,10 @@ export async function submitEmbeddedAttemptPrompt(input: {
       // Pre-prompt compaction has not consumed the deferred answer.
       if (captureCurrentPromptForModel) {
         pendingSteering = undefined;
+        if (pendingExecSteering) {
+          execSteeringDispatched = true;
+        }
+        pendingExecSteering = undefined;
       }
       return stream;
     };
@@ -217,6 +253,27 @@ export async function submitEmbeddedAttemptPrompt(input: {
       ackPendingAgentSteeringItems(input.leasedSteering);
       input.onSteeringAcknowledged();
     }
+    if (input.leasedExecSteering) {
+      if (execSteeringDispatched && input.onExecSteeringDispatched) {
+        // The model has the completion, but the user has not seen the reply yet.
+        // Hand the exact receipt to the delivery owner, which acks it only once
+        // the final reply is delivered and releases it on a failed or
+        // suppressed send.
+        const settlement = holdExecSteeringForDelivery(input.leasedExecSteering);
+        if (settlement) {
+          input.onExecSteeringDispatched(settlement);
+        }
+      } else if (execSteeringDispatched) {
+        // No delivery owner (cron, subagent, direct agent command): the run's
+        // own output is the delivery, so the prompt returning settles it.
+        ackLeasedExecSteeringItems(input.leasedExecSteering);
+      } else {
+        // The prompt was handled before provider dispatch: return the lease so
+        // the completion stays queued for the next turn or the heartbeat.
+        releaseLeasedExecSteeringItems(input.leasedExecSteering);
+      }
+      input.onExecSteeringAcknowledged();
+    }
   } finally {
     cleanupProviderPromptHistoryTransform();
     cleanupModelPromptTransform();
@@ -283,12 +340,14 @@ export async function handleEmbeddedAttemptPromptError(input: {
   handleMidTurnPrecheckRequest: (request: MidTurnPrecheckRequest) => Promise<void>;
   markYieldAborted: () => void;
   releaseLeasedSteering: (error?: unknown) => void;
+  releaseLeasedExecSteering: (error?: unknown) => void;
   withOwnedTranscriptWrite: WithOwnedTranscriptWrite;
   yieldAbortSettled: Promise<void> | null;
   yieldDetected: boolean;
   yieldMessage: string | null;
 }): Promise<EmbeddedAttemptPromptErrorOutcome> {
   input.releaseLeasedSteering(input.error);
+  input.releaseLeasedExecSteering(input.error);
   const yieldAborted = input.yieldDetected && isSessionsYieldAbortError(input.error);
   if (yieldAborted) {
     // Publish terminal state before fallible recovery so outer cleanup still recognizes the yield.
