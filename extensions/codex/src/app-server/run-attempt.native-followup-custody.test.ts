@@ -122,8 +122,9 @@ describe("native follow-up custody through the registered attempt", () => {
       this: CodexNativeSubagentCompletionDelivery,
       state,
       child,
+      trigger,
     ) {
-      const attempt = originalDelivery.call(this, state, child);
+      const attempt = originalDelivery.call(this, state, child, trigger);
       attempts.add(attempt);
       return attempt;
     });

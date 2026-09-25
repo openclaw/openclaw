@@ -36,11 +36,17 @@ const DEFAULT_COMPLETION_DELIVERY_RETRY_DELAYS_MS = [
   5_000, 15_000, 30_000, 60_000, 120_000, 300_000,
 ];
 const completionDeliveryOwners = new Map<string, ChildState>();
+type CompletionAttemptTrigger = "delivery" | "receipt";
+type CompletionAttemptRequest = { deliver: boolean };
 
 export class CodexNativeSubagentCompletionDelivery {
   private readonly retryDelaysMs: readonly number[];
   private readonly maxRetries: number;
-  private readonly attempts = new Map<ChildState, Promise<void>>();
+  private readonly attempts = new Map<
+    ChildState,
+    { promise: Promise<void>; request: CompletionAttemptRequest }
+  >();
+  private readonly receiptRetryTimers = new Set<ChildState>();
   private readonly pendingReceipts = new Map<ChildState, Set<ParentState["historyOwner"]>>();
   private readonly exhausted = new Map<ChildState, string>();
 
@@ -49,23 +55,40 @@ export class CodexNativeSubagentCompletionDelivery {
     this.maxRetries = dependencies.maxRetries ?? this.retryDelaysMs.length;
   }
 
-  deliverPending(state: ParentState, childState: ChildState): Promise<void> {
+  deliverPending(
+    state: ParentState,
+    childState: ChildState,
+    trigger: CompletionAttemptTrigger = "delivery",
+  ): Promise<void> {
+    if (trigger === "delivery" && this.receiptRetryTimers.delete(childState)) {
+      clearTimeout(childState.completionDeliveryTimer);
+      childState.completionDeliveryTimer = undefined;
+    }
     const existing = this.attempts.get(childState);
     if (existing) {
-      return existing;
+      if (trigger === "delivery" && !childState.completionDeliveryTimer) {
+        existing.request.deliver = true;
+      }
+      return existing.promise;
     }
-    const attempt = this.deliverAttempt(state, childState);
+    const request = { deliver: trigger === "delivery" };
+    const promise = this.deliverAttempt(state, childState, request);
+    const attempt = { promise, request };
     this.attempts.set(childState, attempt);
     const release = () => {
       if (this.attempts.get(childState) === attempt) {
         this.attempts.delete(childState);
       }
     };
-    void attempt.then(release, release);
-    return attempt;
+    void promise.then(release, release);
+    return promise;
   }
 
-  private async deliverAttempt(state: ParentState, childState: ChildState): Promise<void> {
+  private async deliverAttempt(
+    state: ParentState,
+    childState: ChildState,
+    request: CompletionAttemptRequest,
+  ): Promise<void> {
     const completion = childState.pendingCompletion;
     if (
       !completion ||
@@ -75,7 +98,10 @@ export class CodexNativeSubagentCompletionDelivery {
     ) {
       return;
     }
-    if (childState.deliveringCompletion || childState.completionDeliveryTimer) {
+    if (
+      childState.deliveringCompletion ||
+      (childState.completionDeliveryTimer && request.deliver)
+    ) {
       return;
     }
     childState.deliveringCompletion = true;
@@ -91,6 +117,16 @@ export class CodexNativeSubagentCompletionDelivery {
         return;
       }
       this.applyPendingReceipts(state, childState, read);
+      // An observer receipt grants no delivery authority until its saved owner matches.
+      // A real retry that arrives during the read promotes this same owned attempt.
+      if (!request.deliver && !childState.nativeCompletionDelivered) {
+        return;
+      }
+      if (childState.nativeCompletionDelivered && childState.completionDeliveryTimer) {
+        clearTimeout(childState.completionDeliveryTimer);
+        childState.completionDeliveryTimer = undefined;
+        this.receiptRetryTimers.delete(childState);
+      }
       if (!(await this.persistPending(state, childState, read))) {
         return;
       }
@@ -233,14 +269,19 @@ export class CodexNativeSubagentCompletionDelivery {
       // Storage may be the failed dependency. Keep custody and schedule using
       // resident state only; the next attempt revalidates the exact assignment.
       const message = formatErrorMessage(error);
-      this.scheduleRetry(childState, message);
+      const receiptOnly = !request.deliver && !childState.nativeCompletionDelivered;
+      this.scheduleRetry(childState, message, !receiptOnly, receiptOnly ? "receipt" : "delivery");
       embeddedAgentLog.warn("Failed to deliver Codex native subagent completion", {
         parentThreadId: state.parentThreadId,
         childThreadId: completion.childThreadId,
         error: message,
       });
     } finally {
-      if (!childState.completionTaskPhase && !deferredToForeground) {
+      if (
+        (request.deliver || childState.nativeCompletionDelivered) &&
+        !childState.completionTaskPhase &&
+        !deferredToForeground
+      ) {
         // Keep the root through the first handoff, including a foreground parent's
         // pending unregister. Once attempted, sleeping retries retain only delivery authority.
         childState.completionCustody?.settleExecution();
@@ -254,6 +295,7 @@ export class CodexNativeSubagentCompletionDelivery {
     if (child.completionDeliveryTimer) {
       clearTimeout(child.completionDeliveryTimer);
       child.completionDeliveryTimer = undefined;
+      this.receiptRetryTimers.delete(child);
     }
     void this.deliverPending(state, child);
   }
@@ -287,6 +329,10 @@ export class CodexNativeSubagentCompletionDelivery {
         const receipts = this.pendingReceipts.get(child) ?? new Set<ParentState["historyOwner"]>();
         receipts.add(state.historyOwner);
         this.pendingReceipts.set(child, receipts);
+        if (child.pendingCompletion && !child.deliveringCompletion) {
+          void this.deliverPending(deliveryParent, child, "receipt");
+        }
+        continue;
       } else {
         child.nativeCompletionDelivered = true;
       }
@@ -308,6 +354,7 @@ export class CodexNativeSubagentCompletionDelivery {
   }
 
   release(childState: ChildState): void {
+    this.receiptRetryTimers.delete(childState);
     this.pendingReceipts.delete(childState);
     this.exhausted.delete(childState);
     childState.completionCustody?.release();
@@ -478,7 +525,12 @@ export class CodexNativeSubagentCompletionDelivery {
     return true;
   }
 
-  private scheduleRetry(childState: ChildState, error: string, chargeAttempt = true): void {
+  private scheduleRetry(
+    childState: ChildState,
+    error: string,
+    chargeAttempt = true,
+    trigger: CompletionAttemptTrigger = "delivery",
+  ): void {
     if (
       !childState.pendingCompletion ||
       childState.completionDeliveryTimer ||
@@ -501,14 +553,18 @@ export class CodexNativeSubagentCompletionDelivery {
       this.retryDelaysMs,
       chargeAttempt ? childState.completionDeliveryAttempt++ : childState.completionDeliveryAttempt,
     );
+    if (trigger === "receipt") {
+      this.receiptRetryTimers.add(childState);
+    }
     childState.completionDeliveryTimer = setTimeout(() => {
+      this.receiptRetryTimers.delete(childState);
       childState.completionDeliveryTimer = undefined;
       if (!this.dependencies.isCurrentChild(childState)) {
         return;
       }
       const state = this.dependencies.getParent(childState.parentThreadId);
       if (state) {
-        void this.deliverPending(state, childState);
+        void this.deliverPending(state, childState, trigger);
       }
     }, delayMs);
     childState.completionDeliveryTimer.unref();

@@ -7,11 +7,15 @@ import {
   CodexNativeSubagentMonitor,
   childTurnCompletedNotification,
   createClient,
+  createRecordedRuntime,
   createRuntime,
   notifyChildStarted,
   registerParent,
   registerDetachedChild,
   nativeCompletionNotification,
+  nativeHistoryOwner,
+  threadRead,
+  turnStartedNotification,
 } from "./native-subagent-monitor.test-support.js";
 
 describe("native completion database contention", () => {
@@ -24,9 +28,7 @@ describe("native completion database contention", () => {
     const monitor = new CodexNativeSubagentMonitor(client as never, runtime, {
       completionDeliveryRetryDelaysMs: [1],
     });
-    const owner = await registerParent(monitor);
-    owner.bindTurn("parent-turn");
-    await notifyChildStarted(client);
+    let owner: Awaited<ReturnType<typeof registerParent>> | undefined;
     const list = runtime.listTaskRecords.getMockImplementation()!;
     let unavailable = true;
     const pending: Promise<void>[] = [];
@@ -34,19 +36,27 @@ describe("native completion database contention", () => {
     const deliver = CodexNativeSubagentCompletionDelivery.prototype.deliverPending;
     const observed = vi
       .spyOn(CodexNativeSubagentCompletionDelivery.prototype, "deliverPending")
-      .mockImplementation(function (this: CodexNativeSubagentCompletionDelivery, state, child) {
+      .mockImplementation(function (
+        this: CodexNativeSubagentCompletionDelivery,
+        state,
+        child,
+        trigger,
+      ) {
         runtime.listTaskRecords.mockImplementation(() => {
           if (unavailable) {
             throw new Error("task lookup unavailable");
           }
           return list();
         });
-        const promise = deliver.call(this, state, child);
+        const promise = deliver.call(this, state, child, trigger);
         pending.push(promise);
         void promise.catch(() => {});
         return promise;
       });
     try {
+      owner = await registerParent(monitor);
+      owner.bindTurn("parent-turn");
+      await notifyChildStarted(client);
       await client.notify(
         childTurnCompletedNotification({
           status: "completed",
@@ -72,7 +82,7 @@ describe("native completion database contention", () => {
     } finally {
       runtime.listTaskRecords.mockImplementation(list);
       monitor.dispose();
-      await owner.unregister();
+      await owner?.unregister();
       await Promise.allSettled(pending);
       observed.mockRestore();
       client.close();
@@ -192,9 +202,14 @@ describe("native completion database contention", () => {
       const original = CodexNativeSubagentCompletionDelivery.prototype.deliverPending;
       const observed = vi
         .spyOn(CodexNativeSubagentCompletionDelivery.prototype, "deliverPending")
-        .mockImplementation(function (this: CodexNativeSubagentCompletionDelivery, state, child) {
+        .mockImplementation(function (
+          this: CodexNativeSubagentCompletionDelivery,
+          state,
+          child,
+          trigger,
+        ) {
           captured = { delivery: this, state, child };
-          const attempt = original.call(this, state, child);
+          const attempt = original.call(this, state, child, trigger);
           pending.push(attempt);
           return attempt;
         });
@@ -276,4 +291,159 @@ describe("native completion database contention", () => {
       client.close();
     }
   });
+
+  it.each([
+    "ordinary-retry-during-read",
+    "receipt-read-failure",
+    "foreground-receipt-retry",
+  ] as const)(
+    "preserves an ordinary retry while rejecting a foreign receipt (%s)",
+    async (scenario) => {
+      vi.useFakeTimers();
+      const client = createClient();
+      const runtime = createRecordedRuntime(new Map());
+      const tasks: AgentHarnessTaskRuntime =
+        runtime.createAgentHarnessTaskRuntime.getMockImplementation()!();
+      const monitor = new CodexNativeSubagentMonitor(client as never, runtime, {
+        recoveryPollDelaysMs: [],
+        completionDeliveryRetryDelaysMs: [10],
+      });
+      const pending = new Set<Promise<void>>();
+      // oxlint-disable-next-line typescript/unbound-method -- Invoked below with .call(this, ...) to preserve the observed instance.
+      const original = CodexNativeSubagentCompletionDelivery.prototype.deliverPending;
+      const observed = vi
+        .spyOn(CodexNativeSubagentCompletionDelivery.prototype, "deliverPending")
+        .mockImplementation(function (this: CodexNativeSubagentCompletionDelivery, ...args) {
+          const attempt = original.call(this, ...args);
+          pending.add(attempt);
+          return attempt;
+        });
+      const settle = async () => {
+        while (pending.size > 0) {
+          const batch = [...pending];
+          pending.clear();
+          await Promise.all(batch);
+        }
+      };
+      const readStarted = createDeferred<void>();
+      const releaseRead = createDeferred<void>();
+      let parent: Awaited<ReturnType<typeof registerParent>> | undefined;
+      const observerHistory = nativeHistoryOwner("rotated-parent");
+      let observer: Awaited<ReturnType<typeof registerParent>> | undefined;
+      let receiptNotification: Promise<void> | undefined;
+      const foreground = scenario === "foreground-receipt-retry";
+      let unavailable = scenario !== "ordinary-retry-during-read";
+      let holdRead = false;
+      tasks.prepareTaskRunRead = async (runId) => {
+        if (holdRead) {
+          readStarted.resolve();
+          await releaseRead.promise;
+          if (unavailable) {
+            throw new Error("receipt lookup unavailable");
+          }
+        }
+        return () => runtime.listTaskRecords().filter((task) => task.runId === runId);
+      };
+      const collab = (tool: string) =>
+        client.notify({
+          method: "item/completed",
+          params: {
+            threadId: "rotated-parent",
+            turnId: "observer-turn",
+            item: {
+              id: `${tool}-receipt`,
+              type: "collabAgentToolCall",
+              tool,
+              status: "completed",
+              senderThreadId: "rotated-parent",
+              receiverThreadIds: ["child-thread"],
+              agentsStates: {
+                "child-thread": { status: "completed", message: "Retained result." },
+              },
+            },
+          },
+        });
+      try {
+        parent = await registerParent(monitor, "parent-thread", undefined, nativeHistoryOwner());
+        client.setThreadRead(
+          "child-thread",
+          threadRead({ turnId: "turn-a", result: "Retained result." }),
+        );
+        runtime.deliverAgentHarnessTaskCompletion.mockResolvedValue({
+          delivered: false,
+          path: "direct",
+          recoveryPending: true,
+        });
+        parent.bindTurn("parent-turn");
+        await notifyChildStarted(client);
+        await client.notify(turnStartedNotification("turn-a"));
+        await client.notify(
+          childTurnCompletedNotification({
+            turnId: "turn-a",
+            status: "completed",
+            items: [{ type: "agentMessage", id: "final", text: "Retained result." }],
+          }),
+        );
+        await settle();
+        if (!foreground) {
+          await parent.unregister();
+        }
+        await settle();
+        expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(foreground ? 0 : 1);
+        observer = await registerParent(monitor, "rotated-parent", undefined, observerHistory);
+        observer.bindTurn("observer-turn");
+        await collab("resumeAgent");
+        await settle();
+        const stored = structuredClone(runtime.listTaskRecords());
+        expect(stored).toEqual([
+          expect.objectContaining({
+            requesterSessionKey: "agent:main:discord:channel:C123",
+            status: "succeeded",
+            deliveryStatus: "pending",
+            detail: expect.objectContaining({ nativeTurnId: "turn-a" }),
+          }),
+        ]);
+        observerHistory.sessionId = "different-physical-session";
+        holdRead = true;
+        receiptNotification = collab("wait");
+        await readStarted.promise;
+        expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(foreground ? 0 : 1);
+        if (scenario === "ordinary-retry-during-read") {
+          await vi.advanceTimersByTimeAsync(10);
+        }
+        releaseRead.resolve();
+        await receiptNotification;
+        await settle();
+        if (scenario !== "ordinary-retry-during-read") {
+          expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(
+            foreground ? 0 : 1,
+          );
+          expect(runtime.listTaskRecords()).toEqual(stored);
+          unavailable = false;
+          if (foreground) {
+            await parent.unregister();
+          } else {
+            await vi.advanceTimersByTimeAsync(10);
+          }
+          await settle();
+        }
+        expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(foreground ? 1 : 2);
+        expect(runtime.listTaskRecords()).toEqual(stored);
+      } finally {
+        unavailable = false;
+        releaseRead.resolve();
+        await receiptNotification?.catch(() => undefined);
+        await settle();
+        monitor.retireParent("parent-thread");
+        monitor.retireParent("rotated-parent");
+        monitor.dispose();
+        await observer?.unregister();
+        await parent?.unregister();
+        await settle();
+        observed.mockRestore();
+        client.close();
+        vi.useRealTimers();
+      }
+    },
+  );
 });

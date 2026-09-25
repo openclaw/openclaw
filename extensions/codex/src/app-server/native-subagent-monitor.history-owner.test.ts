@@ -166,8 +166,13 @@ describe("automatic native task history ownership", () => {
       const originalDelivery = CodexNativeSubagentCompletionDelivery.prototype.deliverPending;
       const observeAttempt = vi
         .spyOn(CodexNativeSubagentCompletionDelivery.prototype, "deliverPending")
-        .mockImplementation(function (this: CodexNativeSubagentCompletionDelivery, state, child) {
-          const attempt = originalDelivery.call(this, state, child);
+        .mockImplementation(function (
+          this: CodexNativeSubagentCompletionDelivery,
+          state,
+          child,
+          trigger,
+        ) {
+          const attempt = originalDelivery.call(this, state, child, trigger);
           attempts.push(attempt);
           attemptStarted.resolve();
           return attempt;

@@ -50,8 +50,13 @@ function observeCompletionAttempts() {
   const original = CodexNativeSubagentCompletionDelivery.prototype.deliverPending;
   const observer = vi
     .spyOn(CodexNativeSubagentCompletionDelivery.prototype, "deliverPending")
-    .mockImplementation(function (this: CodexNativeSubagentCompletionDelivery, state, child) {
-      const attempt = original.call(this, state, child);
+    .mockImplementation(function (
+      this: CodexNativeSubagentCompletionDelivery,
+      state,
+      child,
+      trigger,
+    ) {
+      const attempt = original.call(this, state, child, trigger);
       attempts.set(attempt, child.runId);
       return attempt;
     });
