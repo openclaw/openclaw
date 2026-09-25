@@ -228,21 +228,36 @@ describe("check-assertion-safety-ratchet", () => {
     git(root, ["branch", "upstream"]);
     git(root, ["branch", "-m", "release"]);
 
-    fs.writeFileSync(path.join(root, "config/assertion-safety-baseline.txt"), "src/example.ts\t1\n");
+    fs.writeFileSync(
+      path.join(root, "config/assertion-safety-baseline.txt"),
+      "src/example.ts\t1\n",
+    );
     fs.writeFileSync(path.join(root, "src/example.ts"), "export const value = value as string;\n");
     git(root, ["add", "."]);
     git(root, ["commit", "-m", "grow release baseline"]);
-    fs.writeFileSync(path.join(root, "src/branch-change.ts"), "export const branchChange = true;\n");
+    fs.writeFileSync(
+      path.join(root, "src/branch-change.ts"),
+      "export const branchChange = true;\n",
+    );
     git(root, ["add", "."]);
     git(root, ["commit", "-m", "later release commit"]);
 
     git(root, ["checkout", "upstream"]);
-    fs.writeFileSync(path.join(root, "src/upstream-change.ts"), "export const upstreamChange = true;\n");
+    fs.writeFileSync(
+      path.join(root, "src/upstream-change.ts"),
+      "export const upstreamChange = true;\n",
+    );
     git(root, ["add", "."]);
     git(root, ["commit", "-m", "upstream update"]);
 
     git(root, ["checkout", "release"]);
-    git(root, ["merge", "--no-ff", "upstream", "-m", "Merge branch 'main' into main"]);
+    git(root, [
+      "merge",
+      "--no-ff",
+      "upstream",
+      "-m",
+      "Merge branch 'main' into main",
+    ]);
     git(root, ["checkout", "--orphan", "unrelated"]);
     fs.rmSync(path.join(root, "src"), { recursive: true, force: true });
     fs.rmSync(path.join(root, "config"), { recursive: true, force: true });
