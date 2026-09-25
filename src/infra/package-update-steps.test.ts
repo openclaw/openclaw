@@ -259,9 +259,34 @@ describe("runGlobalPackageUpdateSteps", () => {
     },
   );
 
-  it.each([false, true])(
-    "packs npm GitHub specs before install (output limited: %s)",
-    async (outputLimitExceeded) => {
+  it.each([
+    {
+      policy: "unbounded",
+      workTimeoutMs: null,
+      expectedTimeoutMs: undefined,
+      outputLimitExceeded: false,
+    },
+    {
+      policy: "explicit",
+      workTimeoutMs: 2000,
+      expectedTimeoutMs: 2000,
+      outputLimitExceeded: false,
+    },
+    {
+      policy: "legacy",
+      workTimeoutMs: undefined,
+      expectedTimeoutMs: 1000,
+      outputLimitExceeded: false,
+    },
+    {
+      policy: "output limited",
+      workTimeoutMs: null,
+      expectedTimeoutMs: undefined,
+      outputLimitExceeded: true,
+    },
+  ])(
+    "packs and installs npm GitHub specs with the $policy work policy",
+    async ({ workTimeoutMs, expectedTimeoutMs, outputLimitExceeded }) => {
       await withTestDir({ prefix: "openclaw-package-update-npm-pack-" }, async (base) => {
         const prefix = path.join(base, "prefix");
         const globalRoot = path.join(prefix, "lib", "node_modules");
@@ -344,6 +369,7 @@ describe("runGlobalPackageUpdateSteps", () => {
           runCommand: createRootRunner(globalRoot),
           runStep,
           timeoutMs: 1000,
+          workTimeoutMs,
         });
 
         if (outputLimitExceeded) {
@@ -364,6 +390,9 @@ describe("runGlobalPackageUpdateSteps", () => {
             "package-install",
             "package-swap",
           ]);
+        }
+        for (const [step] of runStep.mock.calls) {
+          expect(step).toMatchObject({ timeoutMs: expectedTimeoutMs });
         }
         if (!packDir) {
           throw new Error("expected npm pack directory");

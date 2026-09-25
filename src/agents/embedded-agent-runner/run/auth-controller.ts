@@ -24,6 +24,7 @@ import { FailoverError, resolveFailoverStatus } from "../../failover-error.js";
 import { shouldUseTransientCooldownProbeSlot } from "../../failover-policy.js";
 import { getFailoverErrorCode } from "../../failover/error.js";
 import { renderAuthProfileFailoverCopy } from "../../failover/user-copy.js";
+import { resolveProviderModelAuthPolicy } from "../../model-auth-policy.js";
 import {
   getApiKeyForModelCore,
   MissingProviderAuthError,
@@ -539,6 +540,13 @@ export function createEmbeddedRunAuthController(params: {
       !providerModelRouteAcceptsAuthMode({
         requirement: preparedModel.authRequirement,
         mode: apiKeyInfo.mode ?? (apiKeyInfo.apiKey ? "api-key" : undefined),
+        authRequirement: resolveProviderModelAuthPolicy({
+          provider: preparedModel.runtimeModel.provider,
+          mode: apiKeyInfo.mode,
+          authFlow: apiKeyInfo.authFlow,
+          api: preparedModel.runtimeModel.api,
+          baseUrl: preparedModel.runtimeModel.baseUrl,
+        }).authRequirement,
       })
     ) {
       throw new Error(

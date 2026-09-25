@@ -30,15 +30,9 @@ import type {
   PluginMarketplaceRefreshOptions,
   PluginRegistryOptions,
 } from "./plugins-cli.js";
+import type { RunPluginInstallCommandParams } from "./plugins-install-preflight.js";
 
-type PluginInstallActionOptions = {
-  acceptCapabilities?: boolean;
-  dangerouslyForceUnsafeInstall?: boolean;
-  force?: boolean;
-  link?: boolean;
-  pin?: boolean;
-  marketplace?: string;
-};
+type PluginInstallActionOptions = RunPluginInstallCommandParams["opts"];
 
 const loadPluginsStatus = createLazyRuntimeModule(() => import("../plugins/status.js"));
 

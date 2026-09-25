@@ -1885,6 +1885,7 @@ def capture_release_ios_screenshot!(
   output_directory:,
   result_bundle_path:,
   result_bundle_archive_directory:,
+  log_directory:,
   capture_attempts:,
   capture_attempts_path:,
   derived_data_path:,
@@ -1923,7 +1924,7 @@ def capture_release_ios_screenshot!(
         *Shellwords.split(IOS_SCREENSHOT_XCARGS),
         "FASTLANE_SNAPSHOT=YES", "FASTLANE_LANGUAGE=en-US", "test-without-building"
       ],
-      log_path: File.join(result_bundle_archive_directory, "#{device}-#{screenshot_name}.log")
+      log_path: File.join(log_directory, "#{device}-#{screenshot_name}.log")
     )
     verify_snapshot_test_result!(result_bundle_path, "#{device} #{screenshot_name} attempt #{attempt}")
     FileUtils.cp(captured_screenshot_path, expected_screenshot_path)
@@ -2485,10 +2486,13 @@ platform :ios do
     output_directory = File.join(ios_root, "fastlane", "screenshots")
     result_bundle_path = File.join(output_directory, "test_output", "en-US", "OpenClawUITests.xcresult")
     result_bundle_archive_directory = File.join(ios_root, "build", "SnapshotTestResults")
+    log_directory = File.join(ios_root, "build", "SnapshotLogs")
     capture_attempts_path = File.join(result_bundle_archive_directory, "capture-attempts.json")
     derived_data_path = File.join(ios_root, "build", "SnapshotDerivedData")
     FileUtils.rm_rf(result_bundle_archive_directory)
     FileUtils.mkdir_p(result_bundle_archive_directory)
+    FileUtils.rm_rf(log_directory)
+    FileUtils.mkdir_p(log_directory)
     capture_attempts = []
     write_release_ios_screenshot_attempts!(
       attempts: capture_attempts,
@@ -2510,7 +2514,7 @@ platform :ios do
         "-destination", "platform=iOS Simulator,id=#{selected_devices.first.fetch("udid")}",
         "-allowProvisioningUpdates", "build-for-testing"
       ],
-      log_path: File.join(result_bundle_archive_directory, "build.log")
+      log_path: File.join(log_directory, "build.log")
     )
 
     # SnapshotHelper.swift consumes these files from SIMULATOR_HOST_HOME.
@@ -2535,6 +2539,7 @@ platform :ios do
             output_directory: output_directory,
             result_bundle_path: result_bundle_path,
             result_bundle_archive_directory: result_bundle_archive_directory,
+            log_directory: log_directory,
             capture_attempts: capture_attempts,
             capture_attempts_path: capture_attempts_path,
             derived_data_path: derived_data_path,

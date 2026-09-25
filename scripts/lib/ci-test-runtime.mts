@@ -31,6 +31,8 @@ export type CiTestRuntimeSelection = {
 export const BUN_UI_TEST_ENV = {
   BUN_JSC_thresholdForFTLOptimizeAfterWarmUp: "512000",
   BUN_JSC_thresholdForFTLOptimizeSoon: "8000",
+  // Avoid sweeping parked allocator threads between short UI update cycles.
+  MIMALLOC_PURGE_HOLES_MIN_INTERVAL: "1000",
 } as const;
 
 const bunCompatibleConfigs = new Set(["test/vitest/vitest.unit-fast-fake-timers.config.ts"]);
@@ -66,6 +68,8 @@ const runtimePartitions = new Map<
       nodeRequired: new Set([
         ...nativeCompilerTestFiles,
         "packages/markdown-core/src/render-aware-chunking.test.ts",
+        // Bun skips a sibling diagnostics subscriber when warm-worker cleanup unsubscribes.
+        "src/agents/code-mode-node.test.ts",
         "src/agents/sandbox/docker.execDockerRaw.enoent.test.ts",
         "src/cli/cli-process-diagnostics.test.ts",
         // Native heap accounting, GC, and Worker limits require V8.

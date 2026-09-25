@@ -125,7 +125,7 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
     if (mode === "fallback") {
       vi.mocked(backend.cloneTemplate).mockRejectedValueOnce(new Error("clone unavailable"));
     }
-    const available = 16 * 1024 ** 3 + (mode === "small" ? 1 : 24) * 1024 ** 2;
+    const available = 4 * 1024 ** 3 + (mode === "small" ? 1 : 24) * 1024 ** 2;
     const stats = fsSync.statfsSync(repo);
     vi.spyOn(fsSync, "statfsSync").mockReturnValue({
       type: stats.type,
@@ -189,7 +189,7 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
       }
       const before = await service.listRegistryRecords();
       const stats = fsSync.statfsSync(repo);
-      let available = 16 * 1024 ** 3 + 24 * 1024 ** 2;
+      let available = 4 * 1024 ** 3 + 24 * 1024 ** 2;
       vi.spyOn(fsSync, "statfsSync").mockImplementation(() => ({
         type: stats.type,
         files: stats.files,
@@ -226,7 +226,7 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
         });
       }
 
-      available = 16 * 1024 ** 3 + 96 * 1024 ** 2;
+      available = 4 * 1024 ** 3 + 96 * 1024 ** 2;
       vi.mocked(backend.cloneTemplate).mockImplementationOnce(async () => {
         await git(repo, "update-ref", sourceRef, initial, larger);
         throw new Error("clone unavailable after the source ref moved");

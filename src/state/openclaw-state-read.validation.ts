@@ -137,6 +137,7 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
             typeof input.command.input.cursor.changedAtMs === "number" &&
             typeof input.command.input.cursor.environmentId === "string"))) ||
       input.command.type === "userProfiles.catalog" ||
+      input.command.type === "config.snapshot.read" ||
       (input.command.type === "githubPublication.lifecycle" &&
         (input.command.publicationKind === "shared" ||
           input.command.publicationKind === "personal") &&
@@ -156,6 +157,9 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
       (input.command.type === "userProfiles.githubIdentity.cached" &&
         typeof input.command.accountId === "number" &&
         typeof input.command.email === "string") ||
+      (input.command.type === "userProfiles.githubAttribution.resolve" &&
+        Array.isArray(input.command.profileIds) &&
+        input.command.profileIds.every((profileId) => typeof profileId === "string")) ||
       (input.command.type === "userProfiles.channelIdentity.resolve" &&
         Check(UserChannelIdentitySchema, input.command.identity)) ||
       (input.command.type === "userProfiles.email.resolve" &&

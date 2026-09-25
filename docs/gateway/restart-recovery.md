@@ -485,6 +485,11 @@ state before admission, so a rejected send cannot trap the conversation in a
 transcript. A live run or cloud worker still prevents this repair. Tombstoned
 sessions retain their separate recovery path into a new session.
 
+If recovery fails during preparation before the agent starts, the Gateway restores
+the interrupted state and releases that attempt's delivery claim. The next recovery
+attempt uses a fresh run ID while retaining the original interrupted turn and retry
+budget, so a rejected pending input cannot leave the conversation permanently busy.
+
 ## Automatic resume
 
 A few seconds after startup, the gateway re-dispatches each marked session

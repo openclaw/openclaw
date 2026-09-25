@@ -159,6 +159,68 @@ test("rejects only the selected matching request before forwarding and then resu
   );
 });
 
+test("injects repeated flood waits with retry_after before forwarding", async (t) => {
+  const forwarded = [];
+  const proxy = await startTelegramTestApiProxy({
+    fetchImpl: async (_url, init) => {
+      forwarded.push(JSON.parse(await new Response(init.body).text()).text);
+      return new Response('{"ok":true}', { headers: { "content-type": "application/json" } });
+    },
+  });
+  t.after(() => proxy.close());
+  proxy.rejectNextRequest({
+    method: "sendMessage",
+    bodyIncludes: "FINAL",
+    times: 2,
+    retryAfter: 3,
+  });
+  const statuses = [];
+  for (const text of ["preview", "FINAL", "FINAL", "FINAL"]) {
+    const response = await fetch(`${proxy.apiRoot}/bot123:ABC/sendMessage`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    const body = await response.json();
+    statuses.push([response.status, body.parameters?.retry_after]);
+  }
+  assert.deepEqual(statuses, [
+    [200, undefined],
+    [429, 3],
+    [429, 3],
+    [200, undefined],
+  ]);
+  assert.deepEqual(forwarded, ["preview", "FINAL"]);
+  proxy.rejectNextRequest({ method: "sendMessage", retryAfter: 0 });
+  const bare = await fetch(`${proxy.apiRoot}/bot123:ABC/sendMessage`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text: "bare" }),
+  });
+  const bareBody = await bare.json();
+  assert.equal(bare.status, 429);
+  assert.equal(bareBody.parameters, undefined);
+  assert.deepEqual(
+    proxy.getRequestLog().map(({ method }) => method),
+    Array(5).fill("sendMessage"),
+  );
+  await fetch(`${proxy.apiRoot}/bot123:ABC/sendMessage`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ chat_id: -1001, text: "group" }),
+  });
+  assert.equal(proxy.getRequestLog().at(-1).chat, "group");
+  assert.equal(JSON.stringify(proxy.getRequestLog()).includes("1001"), false);
+  assert.deepEqual(
+    proxy.getRequestRejectionEvents().map(({ errorCode, retryAfter }) => [errorCode, retryAfter]),
+    [
+      [429, 3],
+      [429, 3],
+      [429, 0],
+    ],
+  );
+});
+
 test("forwards file downloads before, during, and after a one-shot rejection", async (t) => {
   const upstreamPaths = [];
   const proxy = await startTelegramTestApiProxy({

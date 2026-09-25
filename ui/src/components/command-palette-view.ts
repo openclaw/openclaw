@@ -1,6 +1,6 @@
 import { html, noChange, nothing } from "lit";
 import type { GatewayAgentRow } from "../api/types.ts";
-import { pathForAgentPanel, type RouteId } from "../app-route-paths.ts";
+import { pathForAgentPanel, pathForPluginSettings, type RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
 import { registerCommandPaletteEnglish } from "../i18n/locales/en-command-palette.ts";
@@ -108,6 +108,10 @@ function selectItem(item: PaletteItem, props: CommandPaletteProps) {
     if (item.agentId) {
       props.onNavigate?.(routeId, {
         pathname: pathForAgentPanel(item.agentId, null, props.basePath),
+      });
+    } else if (item.pluginId) {
+      props.onNavigate?.(routeId, {
+        pathname: pathForPluginSettings(item.pluginId, props.basePath),
       });
     } else if (item.search || item.hash) {
       props.onNavigate?.(routeId, { search: item.search, hash: item.hash });

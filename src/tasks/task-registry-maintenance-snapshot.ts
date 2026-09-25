@@ -27,10 +27,8 @@ export function getTaskRegistryMaintenanceSnapshot(read: TaskRegistryMaintenance
   cronHistoryOverflowTaskIds: ReadonlySet<string>;
 } {
   read.assertCurrent();
-  const ordered = [...tasks.values()]
-    .map((task, insertionIndex) => ({ task, createdAt: task.createdAt, insertionIndex }))
-    .toSorted(compareTasksNewestFirst)
-    .map(({ task }) => task);
+  // Stable sorting keeps later insertions first when creation timestamps match.
+  const ordered = [...tasks.values()].toReversed().toSorted(compareTasksNewestFirst);
   return {
     taskIds: ordered.map((task) => task.taskId),
     cronHistoryOverflowTaskIds: collectCronHistoryOverflowTaskIds(ordered),

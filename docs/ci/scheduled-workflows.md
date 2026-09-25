@@ -19,10 +19,10 @@ Node tests use the existing compact main inventory and runtime policy.
 
 Full Release Validation and ordinary manual CI retain `validation_tier=full`
 by default. They additionally run the release-only tooling/runtime/UI tests,
-minimum-Node compatibility, iOS simulator tests and screenshots, native Release
-builds, Android packaging, and all six Docker seed scenarios. Hourly iOS keeps
-its build/lint smoke; Android keeps phone/Wear tests and lint. The hourly Docker
-survivor uses the existing main smoke package, retaining runtime, assets, public
+minimum-Node compatibility, iOS screenshots, native Release builds, Android
+packaging, and all six Docker seed scenarios. Hourly iOS keeps its full
+`ios-build (tests)` simulator phase and Swift lint; Android keeps phone/Wear
+tests and lint. The hourly Docker survivor uses the existing main smoke package, retaining runtime, assets, public
 SDK declarations, and tarball integrity checks without the release-only
 declaration build. Runner routing, timeouts, and concurrency limits are unchanged.
 

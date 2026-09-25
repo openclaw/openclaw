@@ -11,6 +11,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { flushPendingSessionsChangedEvents } from "../server-methods/session-change-event.js";
 import {
@@ -129,14 +130,8 @@ it("coalesces machine metadata bursts off thread and selects only correlated pro
       getSessionChangeContext: () => context,
       warn,
     });
-    const { DatabaseSync, StatementSync } = requireNodeSqlite();
-    const calls = [
-      vi.spyOn(DatabaseSync.prototype, "prepare"),
-      vi.spyOn(DatabaseSync.prototype, "exec"),
-      ...(["get", "all", "run", "iterate"] as const).map((method) =>
-        vi.spyOn(StatementSync.prototype, method),
-      ),
-    ];
+    requireNodeSqlite();
+    const calls = observeMainThreadSql();
     try {
       for (let i = 0; i < 3; i++) {
         changed("development");
@@ -145,7 +140,7 @@ it("coalesces machine metadata bursts off thread and selects only correlated pro
       await stop();
       changed("development");
       expect(received).toEqual(expected.map((id) => `agent:main:${id}`));
-      expect(calls.reduce((count, call) => count + call.mock.calls.length, 0)).toBe(0);
+      calls.expectIdle();
       expect(warn).not.toHaveBeenCalled();
     } finally {
       await stop();
@@ -199,22 +194,15 @@ it.each(["cached", "fresh"] as const)(
       if (mode === "fresh") {
         await closeOpenClawStateDatabaseAsync();
       }
-      const { DatabaseSync, StatementSync } = requireNodeSqlite();
-      const watchSql = () => [
-        vi.spyOn(DatabaseSync.prototype, "prepare"),
-        vi.spyOn(DatabaseSync.prototype, "exec"),
-        ...(["get", "all", "run", "iterate"] as const).map((method) =>
-          vi.spyOn(StatementSync.prototype, method),
-        ),
-      ];
-      const calls = watchSql();
+      requireNodeSqlite();
+      const calls = observeMainThreadSql();
       let before: WorkerSessionPlacementChangeSnapshot[];
       try {
         before = await store.readChangeSnapshot();
         expect(before).toEqual(expected);
         await expect(publishChanges(async () => "reconciled")).resolves.toBe("reconciled");
         expect(warn).not.toHaveBeenCalled();
-        expect(calls.reduce((count, call) => count + call.mock.calls.length, 0)).toBe(0);
+        calls.expectIdle();
         expect(database.db.isOpen).toBe(mode === "cached");
       } finally {
         vi.restoreAllMocks();
@@ -225,7 +213,7 @@ it.each(["cached", "fresh"] as const)(
         expectedGeneration: failed.generation,
       });
       let after: unknown;
-      const laterCalls = watchSql();
+      const laterCalls = observeMainThreadSql();
       try {
         await withDisposableOpenClawStateReads(database.path, async () => {
           void store.readChangeSnapshot().then(
@@ -239,7 +227,7 @@ it.each(["cached", "fresh"] as const)(
         });
         expect(after).toEqual([expected[1]]);
         expect(before).toEqual(expected);
-        expect(laterCalls.reduce((count, call) => count + call.mock.calls.length, 0)).toBe(0);
+        laterCalls.expectIdle();
       } finally {
         vi.restoreAllMocks();
       }

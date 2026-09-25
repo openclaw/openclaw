@@ -6,6 +6,7 @@ import { registerAgentRunContext } from "../infra/agent-run-registry.js";
 import * as devicePairingNode from "../infra/device-pairing-node.js";
 import { approveNodePairing, requestNodePairing } from "../infra/device-pairing-node.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { observeGatewayRunExecution } from "./agent-command.test-helpers.js";
 import { pairDeviceIdentity } from "./device-authz.test-helpers.js";
 import { describeWithGatewayServer } from "./server.node-pairing.test-support.js";
 import { connectGatewayClient } from "./test-helpers.e2e.js";
@@ -146,10 +147,16 @@ describe("gateway node chat subscriptions", () => {
         );
       } finally {
         disconnectHistoryPending.resolve();
-        await disconnectHistory.mock.results[0]?.value;
-        disconnectHistory.mockRestore();
-        await first?.stopAndWait();
-        await reconnected?.stopAndWait();
+        try {
+          await disconnectHistory.mock.results[0]?.value;
+        } finally {
+          disconnectHistory.mockRestore();
+          try {
+            await first?.stopAndWait();
+          } finally {
+            await reconnected?.stopAndWait();
+          }
+        }
       }
     });
 
@@ -174,6 +181,7 @@ describe("gateway node chat subscriptions", () => {
       const events: ReceivedNodeEvent[] = [];
       let node: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
       let operator: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
+      const requestExecution = await observeGatewayRunExecution();
       const terminalPayloads = (runId: string) =>
         events
           .filter(
@@ -236,6 +244,8 @@ describe("gateway node chat subscriptions", () => {
           },
         );
         expect(finalStarted).toMatchObject({ runId: finalRunId, status: "started" });
+        // The RPC acknowledges admission before detached dispatch and terminal effects settle.
+        await requestExecution.waitForCompletion(finalRunId);
         await vi.waitFor(() => expect(terminalPayloads(finalRunId)).toHaveLength(1));
         expect(terminalPayloads(finalRunId)[0]).toMatchObject({
           runId: finalRunId,
@@ -258,6 +268,7 @@ describe("gateway node chat subscriptions", () => {
           },
         );
         expect(errorStarted).toMatchObject({ runId: errorRunId, status: "started" });
+        await requestExecution.waitForCompletion(errorRunId);
         await vi.waitFor(() => expect(terminalPayloads(errorRunId)).toHaveLength(1));
         await node.request("node.event", {
           event: "chat.subscribe",
@@ -278,9 +289,16 @@ describe("gateway node chat subscriptions", () => {
         expect(errorPayload.errorMessage).toContain("node dispatch rejected");
         expect(errorPayload).not.toHaveProperty("message");
       } finally {
-        dispatchInboundMessageMock.mockReset();
-        await operator?.stopAndWait();
-        await node?.stopAndWait();
+        try {
+          await requestExecution.restore();
+        } finally {
+          dispatchInboundMessageMock.mockReset();
+          try {
+            await operator?.stopAndWait();
+          } finally {
+            await node?.stopAndWait();
+          }
+        }
       }
     });
   });

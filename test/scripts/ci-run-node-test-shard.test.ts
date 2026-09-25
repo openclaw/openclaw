@@ -197,6 +197,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
   it.each(["bun-compatible", "dual"] as const)(
     "preserves selected UI discovery before runtime partitioning under %s",
     async (policy) => {
+      vi.spyOn(groupOwner, "shouldUseDetachedVitestProcessGroup").mockReturnValue(true);
       const bunFile = "ui/src/pages/skills/view.test.ts";
       const nodeFile = "ui/src/pages/chat/chat-pane-retained-presentation.test.ts";
       const includePatterns = [bunFile, nodeFile];
@@ -231,10 +232,11 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
           },
         ),
       ).resolves.toBe(0);
-      expect(seen).toEqual([
+      const expected = [
         { runtime: "node", membership: policy === "dual" ? undefined : [nodeFile] },
         { runtime: "bun", membership: [bunFile] },
-      ]);
+      ];
+      expect(seen).toEqual(policy === "dual" ? expected : expected.toReversed());
     },
   );
 
@@ -374,6 +376,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       const nodeFiles = [
         skippedOnBun,
         v8HeapTest,
+        "src/agents/code-mode-node.test.ts",
         nodeHistoryBenchmark,
         nativeCompilerTest,
         compilerGraphTest,
@@ -537,28 +540,136 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
   });
 
   it.each(["bun-compatible", "dual"] as const)(
-    "applies the measured UI JIT policy only to the Bun child under %s",
+    "applies the UI runtime policy only to the Bun child under %s",
     async (policy) => {
+      vi.spyOn(groupOwner, "shouldUseDetachedVitestProcessGroup").mockReturnValue(true);
       const seen: Array<Record<string, string | undefined>> = [];
       await expect(
         runShardPlans([{ kind: "group", name: "ui", plan: { configs: ["ui/vitest.config.ts"] } }], {
           env: { OPENCLAW_CI_TEST_RUNTIME_POLICY: policy },
           scratchDir: makeScratchDir(),
           runChild: async (_args, env) => {
+            if (policy === "dual") {
+              expect(env.OPENCLAW_VITEST_NATIVE_SHARD_RECEIPT).toBeUndefined();
+              if (env.OPENCLAW_VITEST_RUNTIME === "node") {
+                expect(env.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE).toBeUndefined();
+              }
+            }
             seen.push({
               runtime: env.OPENCLAW_VITEST_RUNTIME,
               warmup: env.BUN_JSC_thresholdForFTLOptimizeAfterWarmUp,
               soon: env.BUN_JSC_thresholdForFTLOptimizeSoon,
               ftlEnabled: env.BUN_JSC_useFTLJIT,
+              allocatorInterval: env.MIMALLOC_PURGE_HOLES_MIN_INTERVAL,
             });
             return 0;
           },
         }),
       ).resolves.toBe(0);
-      expect(seen).toEqual([
-        { runtime: "node", warmup: undefined, soon: undefined, ftlEnabled: undefined },
-        { runtime: "bun", warmup: "512000", soon: "8000", ftlEnabled: undefined },
-      ]);
+      const expected = [
+        {
+          runtime: "node",
+          warmup: undefined,
+          soon: undefined,
+          ftlEnabled: undefined,
+          allocatorInterval: undefined,
+        },
+        {
+          runtime: "bun",
+          warmup: "512000",
+          soon: "8000",
+          ftlEnabled: undefined,
+          allocatorInterval: "1000",
+        },
+      ];
+      expect(seen).toEqual(policy === "dual" ? expected : expected.toReversed());
+    },
+  );
+
+  it("retains Node-first UI execution without joined process ownership", async () => {
+    vi.spyOn(groupOwner, "shouldUseDetachedVitestProcessGroup").mockReturnValue(false);
+    const seen: string[] = [];
+    await expect(
+      runShardPlans([{ kind: "group", name: "ui", plan: { configs: ["ui/vitest.config.ts"] } }], {
+        env: { OPENCLAW_CI_TEST_RUNTIME_POLICY: "bun-compatible" },
+        scratchDir: makeScratchDir(),
+        runChild: async (_args, env) => {
+          seen.push(env.OPENCLAW_VITEST_RUNTIME!);
+          expect(env.OPENCLAW_VITEST_NATIVE_SHARD_RECEIPT).toBeUndefined();
+          return 0;
+        },
+      }),
+    ).resolves.toBe(0);
+    expect(seen).toEqual(["node", "bun"]);
+  });
+
+  it.each([
+    { receipt: "empty", bunCode: 0, expectedRuntimes: ["bun"] },
+    { receipt: "node-member", bunCode: 0, expectedRuntimes: ["bun", "node"] },
+    { receipt: "missing", bunCode: 0, expectedRuntimes: ["bun", "node"] },
+    { receipt: "malformed", bunCode: 0, expectedRuntimes: ["bun", "node"] },
+    { receipt: "stale", bunCode: 0, expectedRuntimes: ["bun", "node"] },
+    { receipt: "wrong-config", bunCode: 0, expectedRuntimes: ["bun", "node"] },
+    { receipt: "no-discovery", bunCode: 0, expectedRuntimes: ["bun", "node"] },
+    { receipt: "unknown-file", bunCode: 0, expectedRuntimes: ["bun", "node"] },
+    { receipt: "unsupported-version", bunCode: 0, expectedRuntimes: ["bun", "node"] },
+    { receipt: "empty", bunCode: 17, expectedRuntimes: ["bun", "node"] },
+  ])(
+    "uses completed native UI membership ($receipt, Bun exit $bunCode) to admit Node",
+    async ({ receipt, bunCode, expectedRuntimes }) => {
+      vi.spyOn(groupOwner, "shouldUseDetachedVitestProcessGroup").mockReturnValue(true);
+      const seen: string[] = [];
+      let receiptFile: string | undefined;
+      const nodeFile = "ui/src/pages/chat/chat-pane-retained-presentation.test.ts";
+      const bunFile = "ui/src/pages/skills/view.test.ts";
+      await expect(
+        runShardPlans([{ kind: "group", name: "ui", plan: { configs: ["ui/vitest.config.ts"] } }], {
+          env: { OPENCLAW_CI_TEST_RUNTIME_POLICY: "bun-compatible" },
+          scratchDir: makeScratchDir(),
+          runChild: async (_args, env) => {
+            seen.push(env.OPENCLAW_VITEST_RUNTIME!);
+            if (env.OPENCLAW_VITEST_RUNTIME === "node") {
+              const included = JSON.parse(
+                readFileSync(env.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE!, "utf8"),
+              );
+              expect(included).toEqual([nodeFile, "ui/src/pages/usage/usage-page-details.test.ts"]);
+              return 0;
+            }
+            receiptFile = env.OPENCLAW_VITEST_NATIVE_SHARD_RECEIPT;
+            expect(receiptFile).toBeTruthy();
+            if (receipt !== "missing") {
+              // Native producer equality is covered by the registered sequencer fixture;
+              // this boundary exercises child-result transport and failed admission.
+              const value = {
+                version: receipt === "unsupported-version" ? 2 : 1,
+                requestId:
+                  receipt === "stale"
+                    ? "previous-invocation"
+                    : env.OPENCLAW_VITEST_NATIVE_SHARD_REQUEST_ID,
+                config: path
+                  .join(
+                    process.cwd(),
+                    receipt === "wrong-config" ? "vitest.config.ts" : "ui/vitest.config.ts",
+                  )
+                  .replaceAll("\\", "/"),
+                root: path.join(process.cwd(), "ui").replaceAll("\\", "/"),
+                files:
+                  receipt === "no-discovery"
+                    ? []
+                    : receipt === "node-member"
+                      ? [nodeFile, bunFile]
+                      : receipt === "unknown-file"
+                        ? ["ui/src/not-discovered.test.ts"]
+                        : [bunFile],
+              };
+              writeFileSync(receiptFile!, receipt === "malformed" ? "{" : JSON.stringify(value));
+            }
+            return bunCode;
+          },
+        }),
+      ).resolves.toBe(bunCode);
+      expect(seen).toEqual(expectedRuntimes);
+      expect(existsSync(receiptFile!)).toBe(false);
     },
   );
 

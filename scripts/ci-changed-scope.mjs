@@ -71,6 +71,8 @@ const EMPTY_SCOPE = {
   runUiTests: false,
 };
 
+// Skills native subscriptions need real filesystem proof on both desktop OSes.
+const SKILLS_WATCH_SCOPE_RE = /^src\/skills\/runtime\/refresh(?:[.-][^/]+)?\.ts$/;
 const SKILLS_PYTHON_SCOPE_RE = /^(skills\/|skills\/pyproject\.toml$)/;
 const INSTALL_SMOKE_WORKFLOW_SCOPE_RE = /^\.github\/workflows\/install-smoke\.yml$/;
 const NATIVE_PROTOCOL_GEN_RE = /^apps\/shared\/OpenClawKit\/Sources\/OpenClawProtocol\//;
@@ -227,6 +229,7 @@ export function detectChangedScope(changedPaths) {
   let runNode = false;
   let runMacos = false;
   let hasGitOwnerChanges = false;
+  let hasSkillsWatchChanges = false;
   let hasMacosNodeTestSupportChanges = false;
   let runIosBuild = false;
   let runAndroid = false;
@@ -253,6 +256,7 @@ export function detectChangedScope(changedPaths) {
 
     hasNonDocs = true;
     hasGitOwnerChanges ||= GIT_OWNER_SCOPE_RE.test(path);
+    hasSkillsWatchChanges ||= SKILLS_WATCH_SCOPE_RE.test(path);
     // Native shell fixture support needs Darwin proof, not Swift or Windows builds.
     hasMacosNodeTestSupportChanges ||= path === "test/scripts/mac-script-fixture.test-support.ts";
 
@@ -349,10 +353,11 @@ export function detectChangedScope(changedPaths) {
   return {
     runNode,
     runMacos,
-    runMacosNode: runMacos || hasGitOwnerChanges || hasMacosNodeTestSupportChanges,
+    runMacosNode:
+      runMacos || hasGitOwnerChanges || hasMacosNodeTestSupportChanges || hasSkillsWatchChanges,
     runIosBuild,
     runAndroid,
-    runWindows: runWindows || hasGitOwnerChanges,
+    runWindows: runWindows || hasGitOwnerChanges || hasSkillsWatchChanges,
     runSkillsPython,
     runChangedSmoke,
     runControlUiI18n,

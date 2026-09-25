@@ -407,7 +407,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +3: approved shared preview lifecycle factory and delivery/lifecycle types.
       // +1: approved canonical resolveConfigPath export for pre-config native browser admission.
       // +1: supported read-only admitted operator scopes for tool presentation.
-      4570,
+      // +2: canonical OAuth refresh fence and generation checks for managed runtimes.
+      4572,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -567,7 +568,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: approved shared preview lifecycle factory.
       // +1: approved canonical resolveConfigPath callable for pre-config native browser admission.
       // +1: supported read-only readGatewayToolOperatorScopes callable.
-      2682,
+      // +2: canonical OAuth refresh fence and generation checks for managed runtimes.
+      2684,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

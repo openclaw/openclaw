@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { existsSync } from "node:fs";
 import { performance } from "node:perf_hooks";
@@ -8,7 +9,7 @@ import {
   collectNestedErrorCandidates,
   extractErrorCode,
 } from "@openclaw/normalization-core/error-coercion";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
@@ -34,79 +35,34 @@ import {
 } from "../tasks/task-flow-runtime-internal.js";
 import { getTaskById } from "../tasks/task-registry.js";
 import { upsertTaskWithDeliveryStateToSqlite } from "../tasks/task-registry.store.sqlite.js";
-import type { TaskRecord } from "../tasks/task-registry.types.js";
 import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
+  forbidMainThreadSql,
+  observeMainThreadSql,
+} from "../test-utils/main-thread-sql-spies.test-support.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { SqliteSchemaVersionError } from "./sqlite-user-version.js";
-import type {
-  SqliteWorkerOperations,
-  SqliteWorkerStore,
-  SqliteWorkerRequest,
-} from "./sqlite-worker-contract.js";
-import * as workerStore from "./sqlite-worker-store.js";
+import type { SqliteWorkerRequest } from "./sqlite-worker-contract.js";
+import {
+  interceptTaskWorkerCommands,
+  taskWorkerFlow as flow,
+  taskWorkerOwnerKey as ownerKey,
+  taskWorkerRecord as task,
+  useTaskWorkerState,
+} from "./sqlite-worker-task.test-support.js";
 import type { SqliteWorkerTransferFrame } from "./sqlite-worker-transfer.js";
 
-const ownerKey = "agent:main:async-reader";
-let state: OpenClawTestState;
-
-function task(taskId: string, overrides: Partial<TaskRecord> = {}): TaskRecord {
-  return {
-    taskId,
-    runtime: "acp",
-    requesterSessionKey: ownerKey,
-    ownerKey,
-    scopeKind: "session",
-    task: "Synthetic task",
-    status: "running",
-    deliveryStatus: "not_applicable",
-    notifyPolicy: "silent",
-    createdAt: 100,
-    parentFlowId: "flow-a",
-    runId: "run-a",
-    requesterAgentId: "main",
-    ...overrides,
-  };
-}
-
-function flow(flowId: string, overrides: Partial<TaskFlowRecord> = {}): TaskFlowRecord {
-  return {
-    flowId,
-    syncMode: "managed",
-    controllerId: "tests/async-reads",
-    ownerKey,
-    revision: 1,
-    status: "running",
-    notifyPolicy: "silent",
-    goal: "Synthetic flow",
-    createdAt: 100,
-    updatedAt: 100,
-    ...overrides,
-  };
-}
-
-beforeEach(async () => {
-  state = await createOpenClawTestState({ prefix: "openclaw-task-async-", applyEnv: true });
-});
-
-afterEach(async () => {
-  vi.restoreAllMocks();
-  await closeOpenClawStateDatabaseAsync();
-  await resetRuntimeTaskTestState();
-  await state.cleanup();
-});
+const fixture = useTaskWorkerState("openclaw-task-async-", resetRuntimeTaskTestState);
 
 describe("registered tasks.async runtime", () => {
   it.each(["valid", "invalid"] as const)(
     "prepares a cold bare-owner SDK read with %s config without main-thread SQLite",
     async (shape) => {
-      await state.writeConfig(
+      await fixture.state.writeConfig(
         shape === "valid"
           ? { gateway: { mode: "local" }, agents: { entries: { ops: {} } } }
           : { gateway: { port: "invalid" } },
       );
-      vi.spyOn(process, "cwd").mockReturnValue(state.workspaceDir);
+      vi.spyOn(process, "cwd").mockReturnValue(fixture.state.workspaceDir);
       upsertTaskWithDeliveryStateToSqlite({
         task: task("bare", {
           ownerKey: "global",
@@ -118,14 +74,8 @@ describe("registered tasks.async runtime", () => {
       });
       closeOpenClawStateDatabase();
       expect(getRuntimeConfigSnapshot()).toBeNull();
-      const native = requireNodeSqlite();
-      const counters = [
-        vi.spyOn(native.DatabaseSync.prototype, "prepare"),
-        vi.spyOn(native.DatabaseSync.prototype, "exec"),
-        ...(["iterate", "get", "all", "run"] as const).map((method) =>
-          vi.spyOn(native.StatementSync.prototype, method),
-        ),
-      ];
+      requireNodeSqlite();
+      const sql = observeMainThreadSql();
       await withPluginCache(createPluginCache(), async () => {
         const runs = createPluginRuntime().tasks.async.runs.bindSession({
           sessionKey: "global",
@@ -145,7 +95,7 @@ describe("registered tasks.async runtime", () => {
           expect(getRuntimeConfigSnapshot()).toBeNull();
         }
       });
-      expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+      sql.expectIdle();
     },
   );
 
@@ -155,28 +105,11 @@ describe("registered tasks.async runtime", () => {
     });
     await managed.list();
     const commands = new Map<string, number>();
-    const original = workerStore.runSqliteWorkerStoreOperation;
-    vi.spyOn(workerStore, "runSqliteWorkerStoreOperation").mockImplementation(
-      <Operations extends SqliteWorkerOperations, T>(
-        store: SqliteWorkerStore<Operations>,
-        operation: (scope: Pick<SqliteWorkerStore<Operations>, "execute">) => T | Promise<T>,
-        stateContext?: Parameters<typeof workerStore.runSqliteWorkerStoreOperation>[2],
-        assertCurrent?: Parameters<typeof workerStore.runSqliteWorkerStoreOperation>[3],
-      ) =>
-        original(
-          store,
-          (scope) =>
-            operation({
-              execute: (command, options) => {
-                const kind = String(command.type);
-                commands.set(kind, (commands.get(kind) ?? 0) + 1);
-                return scope.execute(command, options);
-              },
-            }),
-          stateContext,
-          assertCurrent,
-        ),
-    );
+    interceptTaskWorkerCommands((type, execute) => {
+      const kind = String(type);
+      commands.set(kind, (commands.get(kind) ?? 0) + 1);
+      return execute();
+    });
     const created = await Promise.all(
       Array.from({ length: count }, (_, index) =>
         managed.createManaged({
@@ -249,17 +182,7 @@ describe("registered tasks.async runtime", () => {
     const managed = runtime.tasks.async.managedFlows.bindSession({ sessionKey: ownerKey });
     const legacy = runtime.tasks.managedFlows.bindSession({ sessionKey: ownerKey });
     await managed.list();
-    const native = requireNodeSqlite();
-    for (const method of ["prepare", "exec"] as const) {
-      vi.spyOn(native.DatabaseSync.prototype, method).mockImplementation(() => {
-        throw new Error("Unexpected warmed main-thread SQLite");
-      });
-    }
-    for (const method of ["iterate", "get", "all", "run"] as const) {
-      vi.spyOn(native.StatementSync.prototype, method).mockImplementation(() => {
-        throw new Error("Unexpected warmed main-thread SQLite");
-      });
-    }
+    forbidMainThreadSql("Unexpected warmed main-thread SQLite");
     const created = await managed.createManaged({
       controllerId: "tests/worker-write",
       goal: "Worker-owned flow",
@@ -362,9 +285,7 @@ describe("registered tasks.async runtime", () => {
     const context = captureOpenClawStateWorkerContext();
     const database = openOpenClawStateDatabase();
     const version = database.db.prepare("PRAGMA user_version").get()?.user_version;
-    if (typeof version !== "number") {
-      throw new Error("Expected the synthetic database schema version");
-    }
+    assert(typeof version === "number", "Expected the synthetic database schema version");
     const input = {
       controllerId: "tests/staged-schema",
       goal: "Reject before the managed write",
@@ -543,9 +464,7 @@ describe("registered tasks.async runtime", () => {
     await reloadTaskFlowRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
     {
       const reopened = await managed.get(flowId);
-      if (!reopened) {
-        throw new Error("Expected the complete managed flow after reopening its database");
-      }
+      assert(reopened, "Expected the complete managed flow after reopening its database");
       assertPayload(reopened);
     }
 
@@ -664,20 +583,9 @@ describe("registered tasks.async runtime", () => {
     const expectedManaged = legacyManaged.get("flow-a");
     const summary = legacyFlows.getTaskSummary("flow-a");
     await runs.get("task-a");
-    const native = requireNodeSqlite();
     // A Promise wrapper around synchronous SQL fails here. The independent
     // worker uses its own native prototype and reads the real fixture database.
-    vi.spyOn(native.DatabaseSync.prototype, "prepare").mockImplementation(() => {
-      throw new Error("Unexpected warmed main-thread SQLite prepare");
-    });
-    vi.spyOn(native.DatabaseSync.prototype, "exec").mockImplementation(() => {
-      throw new Error("Unexpected warmed main-thread SQLite exec");
-    });
-    for (const method of ["iterate", "get", "all", "run"] as const) {
-      vi.spyOn(native.StatementSync.prototype, method).mockImplementation(() => {
-        throw new Error("Unexpected warmed main-thread SQLite statement execution");
-      });
-    }
+    forbidMainThreadSql("Unexpected warmed main-thread SQLite");
     const results = await Promise.all([
       runs.get("task-a"),
       runs.list(),

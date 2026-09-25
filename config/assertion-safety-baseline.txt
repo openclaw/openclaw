@@ -555,7 +555,6 @@ extensions/line/src/send.ts	1
 extensions/line/src/setup-core.ts	1
 extensions/line/src/webhook-spool.ts	2
 extensions/line/src/webhook-utils.ts	1
-extensions/line/src/webhook.ts	1
 extensions/litellm/onboard.ts	1
 extensions/llama-cpp/src/embedding-provider.ts	1
 extensions/llm-task/doctor-contract-api.ts	1
@@ -675,7 +674,6 @@ extensions/memory-core/src/cli.ts	1
 extensions/memory-core/src/concept-vocabulary.ts	1
 extensions/memory-core/src/dreaming-phases.ts	1
 extensions/memory-core/src/dreaming.ts	1
-extensions/memory-core/src/memory/embeddings.ts	2
 extensions/memory-core/src/memory/hybrid.ts	1
 extensions/memory-core/src/memory/manager-db.ts	2
 extensions/memory-core/src/memory/manager-embedding-errors.ts	2
@@ -875,7 +873,7 @@ extensions/qa-lab/src/auth-profile.fixture.ts	3
 extensions/qa-lab/src/browser-runtime.ts	2
 extensions/qa-lab/src/bundled-plugin-staging.ts	4
 extensions/qa-lab/src/bus-server.ts	3
-extensions/qa-lab/src/bus-state.ts	2
+extensions/qa-lab/src/bus-state.ts	1
 extensions/qa-lab/src/character-eval.ts	2
 extensions/qa-lab/src/ci-smoke-plan.ts	1
 extensions/qa-lab/src/cli.runtime.ts	9
@@ -947,13 +945,13 @@ extensions/qa-lab/src/posix-process-group.ts	3
 extensions/qa-lab/src/providers/aimock/server.ts	6
 extensions/qa-lab/src/providers/index.ts	1
 extensions/qa-lab/src/providers/live-config.ts	1
-extensions/qa-lab/src/providers/mock-openai/mock-anthropic-wire.ts	3
+extensions/qa-lab/src/providers/mock-openai/mock-anthropic-wire.ts	1
 extensions/qa-lab/src/providers/mock-openai/mock-openai-assistant-text.ts	3
 extensions/qa-lab/src/providers/mock-openai/mock-openai-contracts.ts	2
 extensions/qa-lab/src/providers/mock-openai/mock-openai-directives.ts	4
-extensions/qa-lab/src/providers/mock-openai/mock-openai-events.ts	4
+extensions/qa-lab/src/providers/mock-openai/mock-openai-events.ts	1
 extensions/qa-lab/src/providers/mock-openai/mock-openai-input.ts	6
-extensions/qa-lab/src/providers/mock-openai/mock-openai-responses-websocket.ts	2
+extensions/qa-lab/src/providers/mock-openai/mock-openai-responses-websocket.ts	1
 extensions/qa-lab/src/providers/mock-openai/server.ts	6
 extensions/qa-lab/src/providers/shared/auth-store.ts	1
 extensions/qa-lab/src/qa-transport.ts	1
@@ -977,7 +975,7 @@ extensions/qa-lab/src/test-file-scenario-script-evidence.ts	2
 extensions/qa-lab/src/test-file-scenario-vitest-report.ts	1
 extensions/qa-lab/src/tool-search-gateway.fixture.ts	13
 extensions/qa-lab/src/web-runtime.ts	1
-extensions/qa-lab/web/src/app.ts	42
+extensions/qa-lab/web/src/app.ts	40
 extensions/qa-lab/web/src/capture-saved-view.ts	7
 extensions/qa-lab/web/src/http.ts	1
 extensions/qa-lab/web/src/ui-render-capture-controls.ts	1
@@ -1393,7 +1391,7 @@ packages/ai/src/transports/openai-transport-shared.ts	2
 packages/ai/src/transports/provider-compaction-replay.ts	1
 packages/ai/src/transports/provider-transport-stream.ts	2
 packages/ai/src/transports/simple-completion-transport.ts	1
-packages/ai/src/transports/transport-stream-shared.ts	2
+packages/ai/src/transports/transport-stream-shared.ts	1
 packages/ai/src/transports/transport-utils.ts	2
 packages/ai/src/utils/assistant-text-phase.ts	1
 packages/ai/src/utils/credential-redaction.ts	1
@@ -1439,7 +1437,7 @@ packages/memory-host-sdk/src/host/memory-schema.ts	7
 packages/memory-host-sdk/src/host/multimodal.ts	1
 packages/memory-host-sdk/src/host/read-file.ts	1
 packages/memory-host-sdk/src/host/read-retry.ts	4
-packages/memory-host-sdk/src/host/session-files.ts	9
+packages/memory-host-sdk/src/host/session-files.ts	8
 packages/memory-host-sdk/src/host/session-reset-recall.ts	3
 packages/memory-host-sdk/src/host/sqlite-vec.ts	3
 packages/memory-host-sdk/src/host/sqlite.ts	1
@@ -1872,7 +1870,7 @@ src/agents/tools/goal-tools.ts	2
 src/agents/tools/heartbeat-response-tool.ts	1
 src/agents/tools/image-generate-tool.ts	2
 src/agents/tools/image-tool.helpers.ts	2
-src/agents/tools/image-tool.ts	2
+src/agents/tools/image-tool.ts	1
 src/agents/tools/in-process-gateway.ts	1
 src/agents/tools/media-generate-tool-actions-shared.ts	1
 src/agents/tools/message-tool-discovery.ts	3
@@ -1883,7 +1881,7 @@ src/agents/tools/music-generate-tool.ts	2
 src/agents/tools/nodes-tool.ts	2
 src/agents/tools/openclaw-delegate-tool.ts	1
 src/agents/tools/pdf-native-providers.ts	2
-src/agents/tools/pdf-tool.ts	3
+src/agents/tools/pdf-tool.ts	2
 src/agents/tools/portal-tool.ts	1
 src/agents/tools/screen-tool.ts	1
 src/agents/tools/session-status-tool.ts	5
@@ -2021,7 +2019,7 @@ src/channels/message/ingress-claim-owner.ts	1
 src/channels/message/ingress-drain.ts	1
 src/channels/message/ingress-monitor.ts	4
 src/channels/message/ingress-queue.ts	6
-src/channels/message/outbound-bridge.ts	2
+src/channels/message/outbound-bridge.ts	1
 src/channels/message/outbound-echo-state.ts	2
 src/channels/model-overrides.ts	1
 src/channels/plugins/account-config-mutation.ts	1
@@ -2046,7 +2044,7 @@ src/channels/plugins/message-action-dispatch.ts	3
 src/channels/plugins/meta-normalization.ts	1
 src/channels/plugins/package-state-probes.ts	2
 src/channels/plugins/read-only-command-defaults.ts	2
-src/channels/plugins/read-only.ts	4
+src/channels/plugins/read-only.ts	2
 src/channels/plugins/registry.ts	1
 src/channels/plugins/setup-contract.ts	3
 src/channels/plugins/setup-helpers.ts	3
@@ -2055,14 +2053,14 @@ src/channels/plugins/setup-promotion-keys.ts	1
 src/channels/plugins/setup-registry.ts	2
 src/channels/plugins/setup-wizard-helpers.ts	12
 src/channels/plugins/setup-wizard-proxy.ts	1
-src/channels/plugins/setup-wizard.ts	5
+src/channels/plugins/setup-wizard.ts	3
 src/channels/plugins/threading-helpers.ts	1
 src/channels/read-only-account-inspect.ts	1
 src/channels/registry-lookup.ts	1
 src/channels/registry.ts	1
 src/channels/status/read-model.ts	1
 src/channels/streaming-config-readers.ts	1
-src/channels/streaming.ts	6
+src/channels/streaming.ts	5
 src/channels/thread-bindings-policy.ts	2
 src/channels/turn/agent-run-terminal-outcome.ts	1
 src/channels/turn/execution.ts	2
@@ -2082,7 +2080,7 @@ src/claws/packages.ts	1
 src/claws/project-build.ts	4
 src/claws/project.ts	4
 src/claws/provenance.ts	6
-src/claws/reader.ts	7
+src/claws/reader.ts	5
 src/claws/schema.ts	3
 src/claws/update-capability-changes.ts	11
 src/claws/workspace.ts	2
@@ -2247,7 +2245,7 @@ src/commands/doctor-session-transcript-headers.ts	5
 src/commands/doctor-session-transcript-labels.ts	4
 src/commands/doctor-session-transcripts.ts	1
 src/commands/doctor-skills.ts	1
-src/commands/doctor-sqlite-compact.ts	3
+src/commands/doctor-sqlite-compact.ts	1
 src/commands/doctor-sqlite-maintenance-lock.ts	2
 src/commands/doctor-state-integrity.ts	1
 src/commands/doctor-state-sqlite-compact.ts	1
@@ -2359,7 +2357,7 @@ src/config/io.write-safety.ts	3
 src/config/io.write.ts	2
 src/config/issue-location.ts	2
 src/config/legacy.default-agent-roles.ts	1
-src/config/legacy.roster.ts	13
+src/config/legacy.roster.ts	8
 src/config/legacy.ts	3
 src/config/markdown-tables.ts	3
 src/config/materialize.ts	2
@@ -2385,7 +2383,6 @@ src/config/sessions/cleanup-service.ts	3
 src/config/sessions/conversation-delivery-store.ts	2
 src/config/sessions/group.ts	1
 src/config/sessions/legacy-main-session-migration.ts	5
-src/config/sessions/lifecycle.ts	1
 src/config/sessions/metadata.ts	1
 src/config/sessions/restart-recovery-state.ts	5
 src/config/sessions/session-accessor.entry-mutation.ts	2
@@ -2398,7 +2395,7 @@ src/config/sessions/session-accessor.sqlite-entry-availability.ts	1
 src/config/sessions/session-accessor.sqlite-entry.ts	1
 src/config/sessions/session-accessor.sqlite-message-cut.ts	1
 src/config/sessions/session-accessor.sqlite-parent-fork.ts	1
-src/config/sessions/session-accessor.sqlite-read.ts	11
+src/config/sessions/session-accessor.sqlite-read.ts	9
 src/config/sessions/session-accessor.sqlite-recovery.ts	1
 src/config/sessions/session-accessor.sqlite-reset-window.ts	2
 src/config/sessions/session-accessor.sqlite-transcript-message-append.ts	1
@@ -2478,7 +2475,7 @@ src/daemon/launchd-service-files.ts	1
 src/daemon/launchd-stop.ts	2
 src/daemon/schtasks-control.ts	5
 src/daemon/schtasks-install.ts	2
-src/daemon/schtasks-process.ts	2
+src/daemon/schtasks-process.ts	1
 src/daemon/schtasks-runtime.ts	4
 src/daemon/service.ts	1
 src/daemon/systemd-exec.ts	2
@@ -2711,7 +2708,6 @@ src/hooks/bundled/session-memory/transcript.ts	2
 src/hooks/frontmatter.ts	1
 src/hooks/gmail-setup-utils.ts	4
 src/hooks/internal-hook-types.ts	2
-src/hooks/internal-hooks.ts	1
 src/hooks/loader.ts	1
 src/hooks/message-hook-mappers.ts	2
 src/hooks/module-loader.ts	3
@@ -2881,7 +2877,7 @@ src/infra/system-run-approval-binding.ts	1
 src/infra/system-run-approval-context.ts	6
 src/infra/tailscale.ts	7
 src/infra/tmp-openclaw-dir.ts	3
-src/infra/unhandled-rejections.ts	6
+src/infra/unhandled-rejections.ts	5
 src/infra/update-check-package-target.ts	2
 src/infra/update-global.ts	3
 src/infra/update-package-manager.ts	1
@@ -2958,7 +2954,6 @@ src/meeting-bot/session-runtime.ts	4
 src/meeting-bot/session-speech-readiness.ts	1
 src/meeting-bot/session-transcript-store.ts	1
 src/meeting-bot/voice-call-gateway.ts	1
-src/memory-host-sdk/dreaming.ts	3
 src/memory-host-sdk/event-store.ts	2
 src/memory-host-sdk/events.ts	1
 src/model-catalog/bundled-catalog-stamp.ts	1
@@ -3057,7 +3052,6 @@ src/plugins/channel-validation.ts	1
 src/plugins/clawhub.ts	4
 src/plugins/cli-gateway-nodes-runtime.ts	2
 src/plugins/command-registration.ts	3
-src/plugins/computer-use-contract.ts	3
 src/plugins/config-normalization-shared.ts	1
 src/plugins/config-schema.ts	5
 src/plugins/contracts/inventory/bundled-capability-metadata.ts	3
@@ -3196,15 +3190,14 @@ src/secrets/channel-contract-api.ts	1
 src/secrets/configure.ts	2
 src/secrets/egress-proxy/stream-substitution.ts	2
 src/secrets/legacy-secretref-env-marker.ts	1
-src/secrets/plan.ts	4
+src/secrets/plan.ts	2
 src/secrets/private-plan-file.ts	1
-src/secrets/provider-env-vars.ts	1
 src/secrets/resolve.ts	1
 src/secrets/runtime-command-secrets.ts	4
 src/secrets/runtime-config-collectors-core.ts	7
 src/secrets/runtime-config-collectors-memory.ts	1
 src/secrets/runtime-config-collectors-sandbox.ts	2
-src/secrets/runtime-fast-path.ts	7
+src/secrets/runtime-fast-path.ts	2
 src/secrets/runtime-gateway-auth-surfaces.ts	1
 src/secrets/runtime-openai-file-fixture.test-helper.ts	1
 src/secrets/runtime-owner-assignments.ts	1
@@ -3357,7 +3350,7 @@ src/tui/gateway-chat.ts	2
 src/tui/tui-autocomplete.ts	1
 src/tui/tui-command-handlers.ts	5
 src/tui/tui-event-handlers.ts	5
-src/tui/tui-formatters.ts	4
+src/tui/tui-formatters.ts	3
 src/tui/tui-session-actions.ts	3
 src/tui/tui-session-events.ts	1
 src/tui/tui-session-projection.ts	2

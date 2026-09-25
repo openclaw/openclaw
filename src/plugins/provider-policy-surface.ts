@@ -21,6 +21,7 @@ export type {
 export const PROVIDER_POLICY_ARTIFACT = "provider-policy-api.js";
 
 const PROVIDER_POLICY_HOOK_KEYS = [
+  "resolveModelAuthPolicy",
   "resolveFastModeSupport",
   "normalizeConfig",
   "applyConfigDefaults",
