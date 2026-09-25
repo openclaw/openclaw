@@ -7,6 +7,7 @@ import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import { oidcIdentity } from "./credential-fixtures.test-support.js";
 import { inlineAuthProfileCredentialSchema } from "./credential-schema.js";
 import { testing as externalAuthTesting } from "./external-auth.test-support.js";
 import { createOAuthManager } from "./oauth-manager.js";
@@ -498,14 +499,44 @@ describe("OAuth refresh generation fence", () => {
     },
   );
 
-  it("rejects a different-account login while an owner and observer settle account A", async () => {
+  it.each([
+    {
+      kind: "account mismatch",
+      identity: { accountId: "acct-a" },
+      replacementIdentity: { accountId: "acct-b" },
+      sameIdentity: false,
+      coldObserver: false,
+    },
+    {
+      kind: "OIDC match",
+      identity: oidcIdentity(),
+      replacementIdentity: oidcIdentity(),
+      sameIdentity: true,
+      coldObserver: false,
+    },
+    {
+      kind: "OIDC cold mismatch",
+      identity: oidcIdentity(),
+      replacementIdentity: oidcIdentity({ sub: "subject-b" }),
+      sameIdentity: false,
+      coldObserver: true,
+    },
+    {
+      kind: "OIDC cold observer",
+      identity: oidcIdentity(),
+      replacementIdentity: oidcIdentity(),
+      sameIdentity: true,
+      coldObserver: true,
+    },
+  ])("settles owner and observer for $kind", async (row) => {
+    const { identity, replacementIdentity, sameIdentity, coldObserver } = row;
     await withOAuthTempRoot("openclaw-oauth-account-replacement-", async () => {
       const profileId = "openai:default";
       const original = createCredential({
         access: "account-a-access",
         refresh: "account-a-refresh",
         expires: 1,
-        accountId: "acct-a",
+        ...identity,
       });
       saveAuthProfileStore({ version: 1, profiles: { [profileId]: original } }, undefined);
 
@@ -523,7 +554,7 @@ describe("OAuth refresh generation fence", () => {
           access: "rotated-a-access",
           refresh: "rotated-a-refresh",
           expires: Date.now() + 600_000,
-          accountId: "acct-a",
+          ...identity,
         });
       });
       const createManager = (onBootstrap?: () => void) =>
@@ -568,10 +599,19 @@ describe("OAuth refresh generation fence", () => {
         markObserverEntered = resolve;
       });
       watchObserverReads = true;
+      const observerStore = ensureAuthProfileStoreWithoutExternalProfiles(undefined);
+      const observerCredential = coldObserver ? observerStore.profiles[profileId] : original;
+      if (observerCredential?.type !== "oauth") {
+        throw new Error("Expected observer OAuth credential");
+      }
+      if (coldObserver) {
+        expect(isPendingOAuthRefreshFence(observerCredential)).toBe(true);
+        expect(observerCredential.idToken).toBeUndefined();
+      }
       const observer = createManager(markObserverEntered).resolveOAuthAccess({
-        store: ensureAuthProfileStoreWithoutExternalProfiles(undefined),
+        store: observerStore,
         profileId,
-        credential: original,
+        credential: observerCredential,
       });
       await observerEntered;
       await observerReadFence;
@@ -584,7 +624,7 @@ describe("OAuth refresh generation fence", () => {
               access: "account-b-access",
               refresh: "account-b-refresh",
               expires: Date.now() + 600_000,
-              accountId: "acct-b",
+              ...replacementIdentity,
             }),
           },
         ],
@@ -593,14 +633,22 @@ describe("OAuth refresh generation fence", () => {
       });
       await relogin;
 
-      await expect(observer).resolves.toBeNull();
+      if (sameIdentity) {
+        await expect(observer).resolves.toMatchObject({ apiKey: "account-b-access" });
+      } else {
+        await expect(observer).resolves.toBeNull();
+      }
       finishRefresh?.();
-      await expect(owner).rejects.toThrow("OAuth token refresh failed");
+      if (sameIdentity) {
+        await expect(owner).resolves.toMatchObject({ apiKey: "account-b-access" });
+      } else {
+        await expect(owner).rejects.toThrow("OAuth token refresh failed");
+      }
       expect(refreshCredential).toHaveBeenCalledOnce();
       expect(loadPersistedAuthProfileStore(undefined)?.profiles[profileId]).toMatchObject({
         access: "account-b-access",
         refresh: "account-b-refresh",
-        accountId: "acct-b",
+        ...replacementIdentity,
       });
       loadSpy.mockRestore();
     });

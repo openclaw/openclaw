@@ -81,11 +81,12 @@ import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context
 import type { OpenClawStateWorkerErrorPayload } from "./openclaw-state-worker-error.js";
 import type { SessionRepositoryWorkspaceRecord } from "./session-repository-workspaces.types.js";
 import type {
-  UserChannelIdentity,
+  UserChannelIdentitySelector,
   UserChannelIdentityLink,
   UserChannelIdentityAuthorityFacts,
   UserChannelIdentityResult,
   CachedGitHubIdentity,
+  UserProfileGitHubAttributionRead,
   UserProfileDisplay,
   ProfileDisplayRow,
   UserProfileEmailBinding,
@@ -147,9 +148,10 @@ export type OpenClawStateReadCommand =
   | { type: "onboardingRecommendations.read"; configKey: string }
   | { type: "userProfiles.reconcile"; profileId: string }
   | { type: "userProfiles.channelIdentity.list"; profileId: string }
-  | { type: "userProfiles.channelIdentity.resolve"; identity: UserChannelIdentity }
+  | { type: "userProfiles.channelIdentity.resolve"; identity: UserChannelIdentitySelector }
   | { type: "userProfiles.authority.resolve"; profileId: string }
   | { type: "userProfiles.githubIdentity.cached"; accountId: number; email: string }
+  | { type: "userProfiles.githubAttribution.resolve"; profileIds: readonly string[] }
   | { type: "userProfiles.email.resolve"; email: string }
   | { type: "userProfiles.catalog" }
   | {
@@ -388,6 +390,11 @@ export type OpenClawStateReadReply = (
       sourceAdmitted: true;
       identity: CachedGitHubIdentity | undefined;
     }
+  | ({
+      ok: true;
+      type: "userProfiles.githubAttribution.resolve";
+      sourceAdmitted: true;
+    } & UserProfileGitHubAttributionRead)
   | {
       ok: true;
       type: "audit.run.inspect";

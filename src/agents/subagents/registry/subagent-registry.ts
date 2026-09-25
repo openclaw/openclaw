@@ -554,15 +554,6 @@ export const replaceSubagentRunAfterSteerCore = subagentRunManager.replaceSubage
 export const claimSubagentRunKill = subagentRunManager.claimSubagentRunKill;
 export const releaseSubagentRunKillClaim = subagentRunManager.releaseSubagentRunKillClaim;
 export function registerSubagentRun(
-  params: RegisterSubagentRunParams &
-    ({ queued?: false } | { taskRowOwnership?: "gateway_best_effort" }),
-  options?: RegisterSubagentRunOptions,
-): void;
-export function registerSubagentRun(
-  params: RegisterSubagentRunParams,
-  options?: RegisterSubagentRunOptions,
-): void | Promise<void>;
-export function registerSubagentRun(
   params: RegisterSubagentRunParams,
   options?: RegisterSubagentRunOptions,
 ): void | Promise<void> {

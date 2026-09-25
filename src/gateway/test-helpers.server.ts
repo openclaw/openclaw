@@ -468,11 +468,12 @@ async function cleanupGatewayTestHome(options: { restoreEnv: boolean }) {
   await disposeSessionReadContexts();
   await resetGatewayLifecycleTestState({ preserveRuntimeBindings: false });
   resetLogger();
-  resetTaskRegistryForTests({ persist: false });
-  resetTaskFlowRegistryForTests({ persist: false });
   if (tempHome) {
+    // Join native borrowers before registry reset attempts its synchronous close.
     await closeGatewayTestHomeDatabases(tempHome, options);
   }
+  resetTaskRegistryForTests({ persist: false });
+  resetTaskFlowRegistryForTests({ persist: false });
   if (options.restoreEnv) {
     gatewayEnvSnapshot?.restore();
     gatewayEnvSnapshot = undefined;

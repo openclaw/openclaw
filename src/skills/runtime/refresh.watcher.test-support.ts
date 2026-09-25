@@ -55,6 +55,7 @@ function createMockWatcher() {
   const events = new EventEmitter();
   const watcher = {
     closed: false,
+    add: vi.fn((_paths: string | readonly string[]) => watcher),
     getWatched: vi.fn((): Record<string, string[]> => ({})),
     on: vi.fn((event: WatchEvent, callback: WatchCallback) => {
       events.on(event, callback);

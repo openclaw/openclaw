@@ -346,6 +346,8 @@ export async function createWorkerEnvironmentStore(
       read(() => owner.hasPendingNodeEnrollmentSetup(setup, device)),
     preparedCapacity: (input: Parameters<typeof preparedCapacityFromReservations>[1]) =>
       read(() => preparedCapacityFromReservations(prepared(), input)),
+    preparedReservationEnvironmentIds: () =>
+      read(() => prepared().map((record) => record.environmentId)),
     isPreparedIntentWithinCapacity: (
       input: Parameters<typeof isPreparedReservationWithinCapacity>[1],
     ) =>

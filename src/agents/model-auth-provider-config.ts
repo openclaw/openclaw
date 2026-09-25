@@ -57,6 +57,7 @@ export function projectResolvedProfileAuth(params: {
   provider: string;
   store: AuthProfileStore;
   mode: ResolvedProviderAuth["mode"];
+  authFlow?: string;
 }): ResolvedProviderAuth {
   const credential = params.store.profiles[params.profileId];
   const ref =
@@ -73,6 +74,7 @@ export function projectResolvedProfileAuth(params: {
     profileId: params.profileId,
     source: `profile:${params.profileId}`,
     mode: params.mode,
+    ...(params.authFlow ? { authFlow: params.authFlow } : {}),
   };
 }
 
@@ -501,6 +503,7 @@ export async function resolveProviderEntryApiKeyBinding(params: {
       return { kind: "profile-unresolved", profileId: reference.profileId };
     }
     const resolvedProfileId = resolved.profileId ?? reference.profileId;
+    const credential = resolved.credential ?? reference.credential;
     return {
       kind: "profile-resolved",
       auth: projectResolvedProfileAuth({
@@ -510,6 +513,7 @@ export async function resolveProviderEntryApiKeyBinding(params: {
         provider: params.provider,
         store: params.store,
         mode: resolved.profileType ? profileTypeToAuthMode(resolved.profileType) : reference.mode,
+        authFlow: credential.type === "oauth" ? credential.authFlow : undefined,
       }),
     };
   } catch (err) {

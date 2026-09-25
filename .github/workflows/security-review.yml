@@ -49,6 +49,7 @@ jobs:
         timeout-minutes: 5
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          path: security-review-primary
           persist-credentials: false
           sparse-checkout: |
             /scripts/github/guard-shared.mjs
@@ -66,12 +67,21 @@ jobs:
         timeout-minutes: 5
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          path: security-review-retry
           persist-credentials: false
           sparse-checkout: |
             /scripts/github/guard-shared.mjs
             /scripts/github/security-review-event.mjs
             /scripts/lib/bounded-response.mjs
           sparse-checkout-cone-mode: false
+
+      # A timed-out checkout can leave Git writers or locks behind. Keep its
+      # directory isolated and copy only the successful attempt's runtime files.
+      - name: Stage trusted workflow scripts
+        id: sources
+        env:
+          SOURCE_DIRECTORY: ${{ steps.checkout.outcome == 'success' && 'security-review-primary' || 'security-review-retry' }}
+        run: cp -R "$SOURCE_DIRECTORY/scripts" scripts
 
       - name: Setup supported Node runtime
         timeout-minutes: 3
@@ -113,6 +123,7 @@ jobs:
         timeout-minutes: 5
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          path: security-review-primary
           persist-credentials: false
           sparse-checkout: |
             /scripts/github/dependency-guard.mjs
@@ -139,6 +150,7 @@ jobs:
         timeout-minutes: 5
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          path: security-review-retry
           persist-credentials: false
           sparse-checkout: |
             /scripts/github/dependency-guard.mjs
@@ -154,6 +166,14 @@ jobs:
             /.github/actions/setup-security-review/package.json
             /.github/actions/setup-security-review/package-lock.json
           sparse-checkout-cone-mode: false
+
+      - name: Stage trusted workflow scripts
+        id: sources
+        env:
+          SOURCE_DIRECTORY: ${{ steps.checkout.outcome == 'success' && 'security-review-primary' || 'security-review-retry' }}
+        run: |
+          cp -R "$SOURCE_DIRECTORY/scripts" scripts
+          cp -R "$SOURCE_DIRECTORY/.github" .github
 
       - name: Setup trusted policy runtime
         id: runtime

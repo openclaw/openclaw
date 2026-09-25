@@ -517,6 +517,14 @@ on_exit() {
     status=1
     FAILURE_MESSAGE="upgrade survivor exited before all phases completed"
   fi
+  if [ "$SCENARIO" = "custom-plugin-siblings" ] &&
+    ! node scripts/e2e/lib/upgrade-survivor/custom-plugin-siblings.mjs cleanup-refusal; then
+    if [ "$status" -eq 0 ]; then
+      status=1
+      FAILURE_PHASE="sibling-refusal-cleanup"
+      FAILURE_MESSAGE="sibling refusal cleanup incomplete; inspect retained process identities"
+    fi
+  fi
   # Capture before stop/cleanup can replace the first failing service evidence.
   if [ "$status" -ne 0 ]; then
     node scripts/e2e/lib/upgrade-survivor/diagnostics.mjs capture \
@@ -1518,6 +1526,9 @@ update_candidate() {
     update_env+=(OPENCLAW_ALLOW_ROOT=1)
   fi
   local update_node_options="${NODE_OPTIONS:+$NODE_OPTIONS }--import=$PWD/scripts/e2e/lib/upgrade-survivor/diagnostics.mjs"
+  if [ "$SCENARIO" = "custom-plugin-siblings" ]; then
+    update_node_options+=" --import=$ARTIFACT_ROOT/sibling-refusal-preload.mjs"
+  fi
   if [ "$SCENARIO" = "workshop-doctor-recovery" ]; then
     update_node_options+=" --import=$PWD/scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs"
     update_env+=("OPENCLAW_UPGRADE_SURVIVOR_WORKSHOP_STATE_DIR=$OPENCLAW_STATE_DIR")
@@ -1587,11 +1598,26 @@ update_candidate() {
   fi
 }
 
+assert_sibling_published_refusal() {
+  local refusal_exit=0
+  node scripts/e2e/lib/upgrade-survivor/custom-plugin-siblings.mjs arm-refusal "$(package_root)" || return "$?"
+  update_candidate || refusal_exit=$?
+  cp "$UPDATE_JSON" "$ARTIFACT_ROOT/sibling-refusal-update.json"
+  cp "$UPDATE_ERR" "$ARTIFACT_ROOT/sibling-refusal-update.err"
+  node scripts/e2e/lib/upgrade-survivor/custom-plugin-siblings.mjs assert-refusal \
+    "$(package_root)" "$refusal_exit"
+}
+
 assert_workshop_published_refusal() {
+  local damage_kind="${1:-catalog}"
   local refusal_exit=0
   update_candidate || refusal_exit=$?
   node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs refusal \
-    "$initial_update_observation_root" "$(package_root)" "$refusal_exit" || return "$?"
+    "$initial_update_observation_root" "$(package_root)" "$refusal_exit" "$damage_kind" || return "$?"
+  if [ "$damage_kind" = "physical" ]; then
+    cp "$UPDATE_JSON" "$ARTIFACT_ROOT/physical-baseline-update.json"
+    cp "$UPDATE_ERR" "$ARTIFACT_ROOT/physical-baseline-update.err"
+  fi
   update_outcome="refused-before-candidate"
 }
 
@@ -2232,6 +2258,28 @@ if [ "$WORKER_CELL" = "1" ]; then
   echo "Upgrade survivor Docker E2E passed baseline=${baseline_spec} scenario=${SCENARIO} candidate=${candidate_version}."
   exit 0
 fi
+if [ "$SCENARIO" = "update-report-recovery" ]; then
+  if [ "$baseline_spec" != "openclaw@2026.9.6" ] || [ "$CANDIDATE_KIND" != "tarball" ] ||
+    [ "$UPDATE_RESTART_MODE" != "manual" ] || [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_ENABLED" != "0" ]; then
+    echo "update-report-recovery requires published openclaw@2026.9.6, a candidate tarball, isolated manual restart, and no live provider" >&2
+    exit 2
+  fi
+  export OPENCLAW_E2E_COMMAND_TIMEOUT="$COMMAND_TIMEOUT"
+  phase setup-report-baseline node scripts/e2e/lib/upgrade-survivor/update-report-recovery.mjs setup "$(package_root)"
+  phase validate-report-baseline validate_baseline_config
+  phase resolve-report-candidate resolve_candidate_version
+  phase capture-report-candidate node scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs candidate "$(package_root)" "${CANDIDATE_SPEC#file:}"
+  phase update-report-candidate update_candidate
+  if [ "$update_outcome" != "success" ] || [ "$update_repair_required" != "0" ]; then
+    echo "update-report-recovery requires successful original-driver replacement without follow-up repair" >&2
+    exit 1
+  fi
+  phase assert-report-installed-package node scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs installed "$(package_root)" "${CANDIDATE_SPEC#file:}"
+  phase prove-report-recovery node scripts/e2e/lib/upgrade-survivor/update-report-recovery.mjs run "$(package_root)"
+  run_completed="1"
+  echo "Update report recovery passed: published updater installed the candidate; rejected uploads retry and uncertain uploads only reconcile."
+  exit 0
+fi
 if [ "$SCENARIO" = "workshop-doctor-recovery" ]; then
   if [ "$baseline_spec" != "openclaw@2026.9.4" ]; then
     echo "workshop-doctor-recovery requires the exact published openclaw@2026.9.4 baseline" >&2
@@ -2244,6 +2292,9 @@ if [ "$SCENARIO" = "workshop-doctor-recovery" ]; then
   phase capture-workshop-published-package node scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs baseline "$(package_root)"
   phase capture-workshop-candidate node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs candidate "$CANDIDATE_SPEC" "$candidate_version"
   phase capture-workshop-candidate-package node scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs candidate "$(package_root)" "$CANDIDATE_SPEC"
+  phase seed-physical-baseline-index node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs physical-seed baseline
+  phase assert-physical-baseline-refusal assert_workshop_published_refusal physical
+  phase restore-physical-baseline-fixture node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs physical-restore
   phase seed-workshop-baseline-index node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs seed baseline
   phase assert-workshop-published-refusal assert_workshop_published_refusal
   phase repair-workshop-baseline run_workshop_doctor baseline "$ARTIFACT_ROOT/baseline-doctor.log"
@@ -2252,6 +2303,9 @@ if [ "$SCENARIO" = "workshop-doctor-recovery" ]; then
   phase update-workshop-recovered-state update_candidate 1
   phase assert-workshop-installed-package node scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs installed "$(package_root)" "$CANDIDATE_SPEC"
   phase assert-workshop-recovered-upgrade node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs upgrade "$last_update_observation_root" "$(package_root)"
+  phase seed-physical-candidate-index node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs physical-seed candidate
+  phase repair-physical-candidate run_workshop_doctor candidate-physical "$ARTIFACT_ROOT/physical-candidate-doctor.log"
+  phase assert-physical-candidate-repair node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs physical-doctor "$workshop_doctor_observation_root" "$ARTIFACT_ROOT/physical-candidate-doctor.log"
   phase seed-workshop-candidate-index node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs seed candidate
   phase repair-workshop-candidate run_workshop_doctor candidate "$DOCTOR_LOG"
   phase assert-workshop-candidate-repair node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs doctor "$workshop_doctor_observation_root" candidate
@@ -2265,6 +2319,9 @@ if [ "$SCENARIO" = "custom-plugin-siblings" ]; then
   phase validate-baseline-config validate_baseline_config
   phase baseline-sibling-runtime node scripts/e2e/lib/upgrade-survivor/custom-plugin-siblings.mjs baseline
   phase resolve-sibling-candidate resolve_candidate_version
+  if [ "$baseline_version" = "2026.9.6" ]; then
+    phase refuse-sibling-candidate assert_sibling_published_refusal
+  fi
   phase update-sibling-candidate update_candidate
   phase canary-sibling-runtime node scripts/e2e/lib/upgrade-survivor/custom-plugin-siblings.mjs assert-canary
   phase candidate-sibling-runtime node scripts/e2e/lib/upgrade-survivor/custom-plugin-siblings.mjs candidate

@@ -352,7 +352,10 @@ export async function noteSessionTranscriptHealth(options?: {
             }
           : {}),
         ...(params.postSessionPluginMigration
-          ? { plannedActions: params.postSessionPluginMigration.plannedActions }
+          ? {
+              plannedActions: params.postSessionPluginMigration.plannedActions,
+              inventory: params.postSessionPluginMigration.inventory,
+            }
           : {}),
       });
     } catch (error) {

@@ -1868,6 +1868,9 @@ importers:
 
   extensions/openai:
     dependencies:
+      jose:
+        specifier: 6.2.12
+        version: 6.2.12
       libopus-wasm:
         specifier: 0.4.0
         version: 0.4.0

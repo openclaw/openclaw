@@ -157,8 +157,14 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
       (input.command.type === "userProfiles.githubIdentity.cached" &&
         typeof input.command.accountId === "number" &&
         typeof input.command.email === "string") ||
+      (input.command.type === "userProfiles.githubAttribution.resolve" &&
+        Array.isArray(input.command.profileIds) &&
+        input.command.profileIds.every((profileId) => typeof profileId === "string")) ||
       (input.command.type === "userProfiles.channelIdentity.resolve" &&
-        Check(UserChannelIdentitySchema, input.command.identity)) ||
+        (Check(UserChannelIdentitySchema, input.command.identity) ||
+          (isRecord(input.command.identity) &&
+            typeof input.command.identity.authorizationId === "string" &&
+            isRecord(input.command.identity.policy)))) ||
       (input.command.type === "userProfiles.email.resolve" &&
         typeof input.command.email === "string") ||
       (input.command.type === "audit.run.inspect" &&

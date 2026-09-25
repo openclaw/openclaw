@@ -56,10 +56,7 @@ import * as deviceAuth from "../infra/device-auth-store.kernel.js";
 import { executeDevicePairingMutationInWorker } from "../infra/device-pairing-dispatch.worker.js";
 import { isDevicePairingMutationCommand } from "../infra/device-pairing-worker-contract.js";
 import { commitExecAuthorizationsInWorker } from "../infra/exec-approvals-authorization.worker.js";
-import {
-  executeCurrentConversationBindingCommand,
-  readCurrentConversationBindingSelectionInWorker,
-} from "../infra/outbound/current-conversation-bindings.worker.js";
+import * as conversationBindings from "../infra/outbound/current-conversation-bindings.worker.js";
 import { executePromotionCommand } from "../infra/promotions-feed.worker.js";
 import { isApnsRegistrationWorkerCommand } from "../infra/push-apns-store.worker-contract.js";
 import { executeApnsRegistrationCommand } from "../infra/push-apns-store.worker.js";
@@ -183,7 +180,7 @@ export function executeSharedStateCommand(
     return listAuditEventsInDatabase(open().db, command.input);
   }
   if (command.type === "conversationBindings.readSelection") {
-    return readCurrentConversationBindingSelectionInWorker(command.input, context.databasePath);
+    return conversationBindings.readSelection(command.input, context.databasePath);
   }
   if (command.type === "audit.writer.process" || command.type === "audit.writer.prune") {
     return executeAuditWriterCommand(
@@ -499,11 +496,8 @@ export function executeSharedStateCommand(
   if (command.type === "secrets.purge") {
     return purgeExpiredSecretStoreEntriesInDatabase(command.input, writeOptions);
   }
-  if (
-    command.type === "conversationBindings.resolve" ||
-    command.type === "conversationBindings.touch"
-  ) {
-    return executeCurrentConversationBindingCommand(command, writeOptions);
+  if (conversationBindings.isWriteCommand(command)) {
+    return conversationBindings.executeCommand(command, writeOptions);
   }
   if (command.type === "sessionGroups.mutate") {
     return mutateSessionGroupCatalogInDatabase(database, command.input, writeOptions.env);

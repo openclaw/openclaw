@@ -53,6 +53,14 @@ behavior.
 
 ## Carry facts, publish after commit
 
+Memory session preparation retains only export text, provenance, timestamps, and
+classification/reset facts from each decoded SQLite event. Full-message observers
+retain their original snapshot, and callbacks run after its read transaction closes.
+Conversation-recall reset checks use the existing reset navigation projection in
+the same background reader pool, without hydrating message bodies. Both paths
+retain the transcript read fence and raw line ordinals. Full indexing still scans
+the transcript; stored data, exported content, hashes, and update behavior are unchanged.
+
 Before yielding, capture the physical store target, source/admission scope,
 request identity, and the owning projection revision. The lifecycle owner retains
 that source until reader cleanup or write settlement completes. Workers return
@@ -116,10 +124,25 @@ stores, already executing workers, Doctor maintenance,
 and prepared native deletion rollback closures retain their synchronous kernels.
 Schemas, retained bytes, configuration, and update behavior are unchanged.
 
+Durable trajectory flushes use the same agent database executor for sequence
+allocation, event insertion, and retention. The recorder captures its pending
+prefix inside the physical store's writer FIFO and retains the host metadata
+handle while its live source authority is checked at transaction admission and
+commit. It joins native settlement before releasing that FIFO turn: a retained
+commit receipt retires the prefix even if the reply is lost, a proven rollback
+leaves it retryable, and an unknown outcome fences replay. Events recorded during
+the write remain queued for the next flush. Incognito and maintenance scopes and
+already executing workers keep their native kernel. Event bytes, ordering,
+retention limits, schemas, and update behavior are unchanged.
+
 Disk-budget historical discovery reads reference, recent-history, and admitted-key
 protection in the existing maintenance read worker. It returns candidate IDs;
-the host captures live admission identities and rechecks protection before each
-archive and deletion. A deferred WAL checkpoint still blocks another discovery
+the host captures live admission identities and rechecks their protection before
+archive preparation and deletion. Node references are rechecked in the reclamation
+worker transaction before archive persistence or deletion, without a redundant
+host reference scan per candidate. A newly referenced candidate may undergo archive
+preparation, but the transaction preserves its history and publishes no archive.
+A deferred WAL checkpoint still blocks another discovery
 pass until a newer completed checkpoint. Exact lifecycle removal and logical
 maintenance planning limit reference results to the generations they might
 delete. No new cache, index, schema, retention policy, or update step is required.
@@ -282,6 +305,15 @@ the next Gateway prepares facts from the resulting store.
 Grant resumption reads the current assigned role and email aliases from that
 retained owner on each assertion. The requester resolves its role ceiling from
 those supplied facts through the shared role-policy owner.
+
+Internal operator run admission retains the same prepared profile owner before
+accepting work. Current authority reads the exact profile and assigned role from
+committed resident facts, without scanning aliases or querying SQLite on the
+Gateway thread. Role, source, device, and Gateway revocation remain live through
+retained continuations; benign aliases added to the target profile do not revoke
+it. Callers revalidate after preparation, and assertions reread profile facts
+after source callbacks. External plugin authority callbacks retain their existing
+synchronous contract and may have their own storage dependencies.
 
 Session metadata and membership facts are prepared through the existing session
 worker. Their canonical writers publish committed changes before observers, and

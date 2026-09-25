@@ -41,6 +41,8 @@ import {
 const optedOutNotificationMethods = new Set<string>(CODEX_APP_SERVER_OPT_OUT_NOTIFICATION_METHODS);
 
 export class CodexAppServerEventProjector extends CodexTurnProjection {
+  private readonly compactionProgress = new Map<string, "open" | "closed">();
+
   getCompletedTurnStatus(): CodexTurn["status"] | undefined {
     return this.completedTurn?.status;
   }
@@ -62,6 +64,7 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
       return false;
     }
     // Retire accepted writes before the enriched final enters the same mirror owner.
+    this.closeCompactionProgress();
     this.projectionController.abort();
     this.transcriptCheckpoint.abandon();
     this.completedTurn = completed.turn;
@@ -106,6 +109,7 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
 
   /** Fence delayed projections before the turn's final snapshot leaves its owner. */
   closeProjection(): Promise<void> {
+    this.closeCompactionProgress();
     this.projectionController.abort();
     return this.settlement.project("transcript/checkpoint", () =>
       this.transcriptCheckpoint.flush(true),
@@ -361,6 +365,26 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
     return this.activeCompactionItemIds.size > 0;
   }
 
+  private finishCompactionProgress(itemId: string, completed: boolean): void {
+    if (this.compactionProgress.get(itemId) === "closed") {
+      return;
+    }
+    this.compactionProgress.set(itemId, "closed");
+    this.eventProjection.emitCompactionEnd(itemId, completed);
+  }
+
+  private closeCompactionProgress(): void {
+    for (const itemId of this.activeCompactionItemIds) {
+      this.activeItemIds.delete(itemId);
+    }
+    this.activeCompactionItemIds.clear();
+    for (const [itemId, progress] of this.compactionProgress) {
+      if (progress === "open") {
+        this.finishCompactionProgress(itemId, this.completedItemIds.has(itemId));
+      }
+    }
+  }
+
   private isCompactionProjectionActive(): boolean {
     // History reads and hooks can settle after their projector closes or aborts.
     return !this.projectionClosed && !this.aborted && !this.options.runAbortSignal?.aborted;
@@ -372,20 +396,39 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
       this.eventProjection.markSafetyBufferingAssistantStarted();
     }
     const itemId = item?.id ?? readString(params, "itemId");
+    if (itemId) {
+      this.observedItemIds.add(itemId);
+    }
+    if (item?.type === "contextCompaction" && itemId) {
+      if (
+        this.completedTurn ||
+        this.activeCompactionItemIds.has(itemId) ||
+        this.completedItemIds.has(itemId) ||
+        this.compactionProgress.has(itemId)
+      ) {
+        return;
+      }
+      this.activeCompactionItemIds.add(itemId);
+    }
     await this.assistantProjection.recordItemStarted(item, itemId);
+    if (
+      this.projectionClosed ||
+      (item?.type === "contextCompaction" && itemId && !this.activeCompactionItemIds.has(itemId))
+    ) {
+      return;
+    }
     if (itemId) {
       this.activeItemIds.add(itemId);
     }
     this.recordNativeToolOutcome(item);
     if (item?.type === "contextCompaction" && itemId) {
-      if (!this.isCompactionProjectionActive()) {
+      if (!this.isCompactionProjectionActive() || !this.activeCompactionItemIds.has(itemId)) {
         return;
       }
-      this.activeCompactionItemIds.add(itemId);
       const messages = await this.toolTranscriptProjection.readMirroredSessionMessages(
         this.options.runAbortSignal,
       );
-      if (!this.isCompactionProjectionActive()) {
+      if (!this.isCompactionProjectionActive() || !this.activeCompactionItemIds.has(itemId)) {
         return;
       }
       await runAgentHarnessBeforeCompactionHook({
@@ -393,9 +436,10 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
         messages,
         ctx: this.options.agentHookContext ?? {},
       });
-      if (!this.isCompactionProjectionActive()) {
+      if (!this.isCompactionProjectionActive() || !this.activeCompactionItemIds.has(itemId)) {
         return;
       }
+      this.compactionProgress.set(itemId, "open");
       this.emitAgentEvent({
         stream: "compaction",
         data: {
@@ -434,8 +478,14 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
     this.recordNativeToolOutcome(item);
     this.nativeToolLifecycleProjector.clearTerminalPresentationForNativeItem(item);
     if (itemId) {
+      this.observedItemIds.add(itemId);
       this.activeItemIds.delete(itemId);
       this.completedItemIds.add(itemId);
+    }
+    if (item?.type === "contextCompaction" && itemId) {
+      // Native history is already installed; pending observers cannot undo completion.
+      this.activeCompactionItemIds.delete(itemId);
+      this.completedCompactionCount += 1;
     }
     if (!this.asyncDeliveryProjection.allows(item, true)) {
       return;
@@ -462,8 +512,6 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
       if (!this.isCompactionProjectionActive()) {
         return;
       }
-      this.activeCompactionItemIds.delete(itemId);
-      this.completedCompactionCount += 1;
       await this.options.onContextCompacted?.();
       if (!this.isCompactionProjectionActive()) {
         return;
@@ -496,7 +544,7 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
       if (!this.isCompactionProjectionActive()) {
         return;
       }
-      this.eventProjection.emitCompactionEnd(itemId, true);
+      this.finishCompactionProgress(itemId, true);
     }
     this.toolProgressProjection.recordToolMeta(item);
     this.toolProgressProjection.rememberCommandAggregateOutputEcho(item);
@@ -550,16 +598,7 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
         promptErrorSource: compactionFailure ? "compaction" : "prompt",
       });
     }
-    if (compactionFailure) {
-      // Codex omits item/completed on failure, so the terminal turn must close
-      // every active structural compaction for state and stream consumers.
-      const failedCompactionItemIds = [...this.activeCompactionItemIds];
-      for (const itemId of failedCompactionItemIds) {
-        this.activeItemIds.delete(itemId);
-        this.activeCompactionItemIds.delete(itemId);
-        this.eventProjection.emitCompactionEnd(itemId, false);
-      }
-    }
+    this.closeCompactionProgress();
     const turnItems = turn.items;
     // Upstream terminal summaries contain only the last assistant item. Keep
     // earlier unsettled deliveries at their producer instead of inferring them.
@@ -625,7 +664,6 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
       return;
     }
     this.assistantProjection.finalizeAnswerCandidate(turn);
-    this.activeCompactionItemIds.clear();
     await this.reasoningProjection.maybeEndReasoning();
   }
 

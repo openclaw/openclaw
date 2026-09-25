@@ -17,10 +17,7 @@ import {
   selectModelCatalogRuntimeEntry,
 } from "./model-catalog-view.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
-import {
-  setPreparedModelRuntimeAuthLabels,
-  setPreparedModelRuntimeAuthStore,
-} from "./prepared-model-runtime-auth.js";
+import { bindPreparedModelRuntimeAuth } from "./prepared-model-runtime-auth.js";
 
 const mocks = vi.hoisted(() => ({ loadSnapshot: vi.fn(), loadOwner: vi.fn(), metadata: vi.fn() }));
 vi.mock("./prepared-model-catalog.js", () => ({
@@ -161,11 +158,10 @@ describe("prepared model catalog view", () => {
       source: "auth profile store",
       apiKeyOnly: false,
     };
-    setPreparedModelRuntimeAuthLabels(
-      owner,
-      new Map([["openai", { all: missing, apiKey: missing }]]),
-    );
-    setPreparedModelRuntimeAuthStore(owner, { version: 1, profiles: {} });
+    bindPreparedModelRuntimeAuth(owner, {
+      labels: new Map([["openai", { all: missing, apiKey: missing }]]),
+      store: { version: 1, profiles: {} },
+    });
     mocks.loadOwner.mockResolvedValue(owner);
     const view = await loadPreparedModelCatalogView({
       kind: "status",

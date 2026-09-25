@@ -117,21 +117,13 @@ export function resolveChannelAccountState(input: ChannelAccountStateInput): Cha
   if (input.linked === false) {
     return { kind: "unlinked", reason: input.unlinkedReason ?? "not linked", failure };
   }
-  if (input.runtime?.running === true) {
-    return {
-      kind: "running",
-      linked: input.linked,
-      // Connectivity is tri-state: absent means the transport publishes none at
-      // all (imessage, signal, sms, ...), which is not a reported disconnect.
-      // Defaulting to false makes `evaluateChannelHealth` return "disconnected"
-      // and the health monitor restart every socketless channel per cooldown.
-      connected: input.runtime.connected,
-      failure,
-    };
-  }
   return {
-    kind: "stopped",
+    kind: input.runtime?.running === true ? "running" : "stopped",
     linked: input.linked,
+    // Connectivity is tri-state: absent means the transport publishes none at
+    // all (imessage, signal, sms, ...), which is not a reported disconnect.
+    // Defaulting to false makes `evaluateChannelHealth` return "disconnected"
+    // and the health monitor restart every socketless channel per cooldown.
     connected: input.runtime?.connected,
     failure,
   };

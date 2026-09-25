@@ -87,7 +87,7 @@ import {
   resolveUserChannelIdentityInDatabase,
 } from "./user-channel-identities.js";
 import { readUserChannelIdentityResult } from "./user-channel-identities.worker.js";
-import { resolveCachedGitHubIdentityInDatabase } from "./user-profile-github-identity.js";
+import { readUserProfileGitHubCommand } from "./user-profile-github-identity.js";
 import {
   readUserProfileEmailBindings,
   readUserProfileIdForEmail,
@@ -534,15 +534,11 @@ serveOwnedWorkerTasks(
                     profile,
                   };
                 }
-                if (command.type === "userProfiles.githubIdentity.cached") {
-                  return {
-                    ok: true,
-                    type: command.type,
-                    sourceAdmitted,
-                    identity: runSqliteDeferredTransactionSync(db, () =>
-                      resolveCachedGitHubIdentityInDatabase(db, command),
-                    ),
-                  };
+                if (
+                  command.type === "userProfiles.githubIdentity.cached" ||
+                  command.type === "userProfiles.githubAttribution.resolve"
+                ) {
+                  return { ok: true, ...readUserProfileGitHubCommand(db, command), sourceAdmitted };
                 }
                 if (command.type === "userProfiles.channelIdentity.list") {
                   return {

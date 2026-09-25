@@ -27,7 +27,7 @@ import type { GatewayRequestHandlers, RespondFn } from "../../server-methods/typ
 import { assertValidParams } from "../../server-methods/validation.js";
 import { getSessionRowProjection } from "../../session-row-projection-access.js";
 import { SessionMutationAuthorizationChangedError } from "../../session-sharing.js";
-import { resolveSessionKeyFromResolveParams } from "../../sessions-resolve.js";
+import { withPreparedSessionResolve } from "../../sessions-resolve.js";
 import { formatForLog } from "../../ws-log.js";
 import { resolveTalkAgentConsultAuthority } from "../client-gateway-control.js";
 import { createTalkHandoff, getTalkHandoff, revokeTalkHandoff } from "../handoff.js";
@@ -196,57 +196,62 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           respondInvalidRequest(respond, "Session rows are initializing; try again");
           return;
         }
-        const resolvedSession = resolveSessionKeyFromResolveParams({
-          projection,
-          client,
-          p: {
-            key: target?.canonicalKey,
-            ...(target ? { agentId: target.agentId } : {}),
-            ...(spawnedBy ? { spawnedBy } : {}),
-            includeGlobal: true,
-            includeUnknown: true,
+        return await withPreparedSessionResolve(
+          {
+            projection,
+            client,
+            isCurrent: () => getSessionRowProjection(context) === projection,
+            p: {
+              key: target?.canonicalKey,
+              ...(target ? { agentId: target.agentId } : {}),
+              ...(spawnedBy ? { spawnedBy } : {}),
+              includeGlobal: true,
+              includeUnknown: true,
+            },
           },
-        });
-        if (!resolvedSession.ok) {
-          respond(false, undefined, resolvedSession.error);
-          return;
-        }
-        if ("missing" in resolvedSession || "ambiguous" in resolvedSession) {
-          respondInvalidRequest(respond, `No session found: ${params.sessionKey}`);
-          return;
-        }
-        sessionMutationCommitGuard?.();
-        sessionMutationAuthorization?.assertCurrent();
-        const handoff = createTalkHandoff({
-          sessionKey: resolvedSession.key,
-          provider: normalizeOptionalString(params.provider),
-          model: normalizeOptionalString(params.model),
-          voice: normalizeOptionalString(params.voice),
-          mode,
-          transport,
-          brain,
-          ttlMs: params.ttlMs,
-        });
-        rememberUnifiedTalkSession(handoff.id, {
-          kind: "managed-room",
-          handoffId: handoff.id,
-          token: handoff.token,
-          roomId: handoff.roomId,
-        });
-        return respondOk(respond, {
-          sessionId: handoff.id,
-          provider: handoff.provider,
-          mode: handoff.mode,
-          transport: handoff.transport,
-          brain: handoff.brain,
-          handoffId: handoff.id,
-          roomId: handoff.roomId,
-          roomUrl: handoff.roomUrl,
-          token: handoff.token,
-          model: handoff.model,
-          voice: handoff.voice,
-          expiresAt: handoff.expiresAt,
-        });
+          (resolvedSession) => {
+            if (!resolvedSession.ok) {
+              respond(false, undefined, resolvedSession.error);
+              return;
+            }
+            if ("missing" in resolvedSession || "ambiguous" in resolvedSession) {
+              respondInvalidRequest(respond, `No session found: ${params.sessionKey}`);
+              return;
+            }
+            sessionMutationCommitGuard?.();
+            sessionMutationAuthorization?.assertCurrent();
+            const handoff = createTalkHandoff({
+              sessionKey: resolvedSession.key,
+              provider: normalizeOptionalString(params.provider),
+              model: normalizeOptionalString(params.model),
+              voice: normalizeOptionalString(params.voice),
+              mode,
+              transport,
+              brain,
+              ttlMs: params.ttlMs,
+            });
+            rememberUnifiedTalkSession(handoff.id, {
+              kind: "managed-room",
+              handoffId: handoff.id,
+              token: handoff.token,
+              roomId: handoff.roomId,
+            });
+            return respondOk(respond, {
+              sessionId: handoff.id,
+              provider: handoff.provider,
+              mode: handoff.mode,
+              transport: handoff.transport,
+              brain: handoff.brain,
+              handoffId: handoff.id,
+              roomId: handoff.roomId,
+              roomUrl: handoff.roomUrl,
+              token: handoff.token,
+              model: handoff.model,
+              voice: handoff.voice,
+              expiresAt: handoff.expiresAt,
+            });
+          },
+        );
       }
 
       const connId = client?.connId;

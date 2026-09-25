@@ -9385,7 +9385,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       frozenTarget: false,
       compatibilityTarget: false,
       policy: "bun-compatible",
-      runtimes: ["node", "bun"],
+      runtimes: ["bun", "node"],
       shards: [1, 2, 3],
     },
     {

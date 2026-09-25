@@ -289,6 +289,18 @@ jobs:
           install-bun: "true"
           build-all-cache-scope: full
 
+      - name: Materialize trusted package preparation runtime
+        run: |
+          git -C .release-harness sparse-checkout add \
+            .github/actions/setup-release-harness \
+            .github/actions/setup-pnpm-store-cache \
+            packages patches
+
+      - name: Provision trusted package preparation runtime
+        uses: ./.release-harness/.github/actions/setup-release-harness
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
       - name: Validate npm release request
         env:
           BYPASS_EXTENDED_STABLE_GUARD: ${{ inputs.bypass_extended_stable_guard }}

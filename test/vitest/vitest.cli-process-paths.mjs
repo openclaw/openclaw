@@ -9,6 +9,7 @@ export const cliProcessTestFiles = [
   "src/cli/update-cli/update-command-fresh-preview.test.ts",
   "src/cli/update-cli/update-command-runtime-preview.test.ts",
   "src/cli/update-cli/update-command-plugins.persistence.test.ts",
+  "src/cli/plugins-cli.install-policy.test.ts",
   "src/cli/plugins-cli.install.test.ts",
   "src/cli/acp-cli-exit.process.test.ts",
   "src/cli/agent-session-affinity.process.test.ts",

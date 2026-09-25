@@ -1392,15 +1392,7 @@ describe("ci workflow guards", () => {
       includeReleaseOnlyTests: false,
       uiRealGatewayShards: false,
     },
-    {
-      name: "frozen full release dispatches",
-      eventName: "workflow_dispatch" as const,
-      changedPaths: ["ui/src/components/app-sidebar.ts"],
-      includeReleaseOnlyTests: true,
-      frozenTarget: true,
-    },
   ])("forwards the UI release-tier selection for $name to all three test jobs", (scenario) => {
-    const frozenTarget = "frozenTarget" in scenario && scenario.frozenTarget;
     const uiRealGatewayShards =
       !("uiRealGatewayShards" in scenario) || scenario.uiRealGatewayShards;
     const manifest = runCiManifestFixture({
@@ -1412,7 +1404,7 @@ describe("ci workflow guards", () => {
       changedPaths: scenario.changedPaths,
       scopeEnv: {
         OPENCLAW_CI_RUN_UI_TESTS: "true",
-        OPENCLAW_CI_WORKFLOW_REVISION: (frozenTarget ? "b" : "a").repeat(40),
+        OPENCLAW_CI_WORKFLOW_REVISION: "a".repeat(40),
       },
     });
     expect(manifest.status, manifest.output).toBe(0);
@@ -1472,7 +1464,7 @@ describe("ci workflow guards", () => {
         test_groups_gzip_base64: string;
       }>;
     } = JSON.parse(packedMatrix);
-    const sharded = !frozenTarget && uiRealGatewayShards;
+    const sharded = uiRealGatewayShards;
     expect(matrix.include.map(({ test_groups_gzip_base64: _groups, ...row }) => row)).toEqual(
       sharded
         ? [
@@ -1653,7 +1645,7 @@ describe("ci workflow guards", () => {
       }
       expect(
         evaluateWorkflowExpression(workflow.jobs["ios-build"].strategy.matrix.phase, context),
-      ).toEqual(release ? ["release", "tests"] : ["smoke"]);
+      ).toEqual(release ? ["release", "tests"] : ["tests"]);
       const packageStep = workflow.jobs["docker-seed-e2e"].steps.find(
         (step: WorkflowStep) => step.name === "Prepare main Docker smoke package",
       );
@@ -2350,24 +2342,25 @@ describe("ci workflow guards", () => {
       const manifest = manifestWithHostedNodeRows(0, {
         eventName,
         runnerProfile,
-        changedPaths: [".github/workflows/ci.yml"],
+        changedPaths: ["apps/ios/Sources/Foo.swift"],
         scopeEnv: {
           OPENCLAW_CI_HEAD_REPOSITORY: headRepository,
           OPENCLAW_CI_RUN_MACOS_NODE: "true",
+          OPENCLAW_CI_RUN_IOS_SCREENSHOTS: "true",
         },
       });
       expect(manifest.status, manifest.output).toBe(0);
       expect(manifest.outputs.hybrid_hosted_offload).toBe("true");
       const context = { eventName, runnerProfile, headRepository };
-      const base = emittedHostedRows(
-        { ...manifest.outputs, hybrid_hosted_offload: "false" },
-        context,
-      );
+      const outputs = { ...manifest.outputs, run_ios_screenshots: "true" };
+      const base = emittedHostedRows({ ...outputs, hybrid_hosted_offload: "false" }, context);
       expect(Number(manifest.outputs.hybrid_hosted_base_rows)).toBe(base.length);
       expect(Number(manifest.outputs.hybrid_hosted_total_rows)).toBe(
-        emittedHostedRows(manifest.outputs, context).length,
+        emittedHostedRows(outputs, context).length,
       );
       expect(base.filter((name) => name === "macos-node")).toHaveLength(3);
+      expect(base.filter((name) => name === "ios-screenshot-shard")).toHaveLength(2);
+      expect(base.filter((name) => name === "ios-screenshot-evidence")).toHaveLength(1);
       expect(base.filter((name) => name === "check-lint-hosted-extension-shard")).toHaveLength(
         runnerProfile === "hybrid" ? 6 : 0,
       );
@@ -6234,6 +6227,7 @@ describe("ci workflow guards", () => {
     releaseGate?: boolean;
     legacyOutput?: boolean;
     selectedJobs: string[];
+    screenshots?: boolean;
   }>([
     {
       label: "Git-owner action",
@@ -6282,17 +6276,20 @@ describe("ci workflow guards", () => {
     },
     {
       label: "iOS app pull request",
+      screenshots: true,
       changedPath: "apps/ios/Sources/Foo.swift",
       selectedJobs: ["ios-build"],
     },
     {
       label: "iOS app main push",
+      screenshots: true,
       changedPath: "apps/ios/Sources/Foo.swift",
       eventName: "push",
       selectedJobs: ["ios-build"],
     },
     {
       label: "iOS app exact-head release gate",
+      screenshots: true,
       changedPath: "apps/ios/Sources/Foo.swift",
       eventName: "workflow_dispatch",
       releaseGate: true,
@@ -6300,8 +6297,22 @@ describe("ci workflow guards", () => {
     },
     {
       label: "shared native",
+      screenshots: true,
       changedPath: "apps/shared/OpenClawKit/Sources/Foo.swift",
       selectedJobs: ["macos-node", "macos-swift", "ios-build", "android"],
+    },
+    ...["apps/ios/UITests/SnapshotTests.swift", "apps/ios/fastlane/Fastfile"].map(
+      (changedPath) => ({
+        label: `Screenshot input ${changedPath}`,
+        changedPath,
+        screenshots: true,
+        selectedJobs: ["ios-build"],
+      }),
+    ),
+    {
+      label: "iOS unit tests do not select screenshot capture",
+      changedPath: "apps/ios/Tests/SettingsTests.swift",
+      selectedJobs: ["ios-build"],
     },
     { label: "docs", changedPath: "docs/ci.md", selectedJobs: [] },
     {
@@ -6311,6 +6322,7 @@ describe("ci workflow guards", () => {
     },
     {
       label: "ordinary manual",
+      screenshots: true,
       changedPath: ".github/actions/git-owner/owner.py",
       eventName: "workflow_dispatch",
       selectedJobs: ["macos-node", "macos-swift", "checks-windows", "ios-build"],
@@ -6339,6 +6351,7 @@ describe("ci workflow guards", () => {
       releaseGate = false,
       legacyOutput,
       selectedJobs,
+      screenshots = false,
     }) => {
       const workflow = readCiWorkflow();
       const manifestStep = workflow.jobs.preflight.steps.find(
@@ -6366,6 +6379,7 @@ describe("ci workflow guards", () => {
       );
       const manifest = runCiManifestFixture({
         bundledPlanner: !legacyOutput,
+        historicalCompatibility: Boolean(legacyOutput),
         changedPaths,
         eventName,
         releaseGate,
@@ -6398,6 +6412,21 @@ describe("ci workflow guards", () => {
           evaluateWorkflowExpression(expression, { ...context, preflightOutputs }),
           jobName,
         ).toBe(selectedJobs.includes(jobName));
+      }
+      for (const jobName of ["ios-screenshot-shard", "ios-screenshot-evidence"]) {
+        expect(
+          evaluateWorkflowExpression(workflow.jobs[jobName].if, {
+            ...context,
+            preflightOutputs: {
+              ...preflightOutputs,
+              run_ios_screenshots: expectDefined(
+                scopeOutputs.run_ios_screenshots,
+                "screenshot scope output",
+              ),
+            },
+          }),
+          jobName,
+        ).toBe(screenshots);
       }
       expect(
         JSON.parse(expectDefined(manifest.outputs.macos_node_matrix, "Mac Node matrix")).include,
@@ -7251,6 +7280,20 @@ describe("ci workflow guards", () => {
     expect(frozenMissingCurrentCapabilities.outputs.run_qa_smoke_ci).toBe("false");
     expect(frozenMissingCurrentCapabilities.outputs.run_protocol_event_coverage).toBe("false");
     expect(frozenMissingCurrentCapabilities.outputs.run_format_check).toBe("false");
+
+    const frozenUiPlannerWithoutGroupsCodec = runCiManifestFixture({
+      bundledPlanner: true,
+      historicalCompatibility: false,
+      nodeTestGroupsCodec: false,
+      uiReleaseTier: true,
+      scopeEnv: { OPENCLAW_CI_RUN_UI_TESTS: "true" },
+    });
+    expect(frozenUiPlannerWithoutGroupsCodec.status, frozenUiPlannerWithoutGroupsCodec.output).toBe(
+      0,
+    );
+    expect(frozenUiPlannerWithoutGroupsCodec.outputs.frozen_target).toBe("true");
+    expect(frozenUiPlannerWithoutGroupsCodec.outputs.ui_test_groups_gzip_base64).toBe("");
+    expect(frozenUiPlannerWithoutGroupsCodec.outputs.ui_e2e_test_groups_gzip_base64).toBe("");
 
     const releaseCandidateMissingSwiftWrappers = runCiManifestFixture({
       bundledPlanner: true,
@@ -8915,23 +8958,6 @@ describe("ci workflow guards", () => {
     ]);
   });
 
-  it("fails a release-deferred CI gate by naming the release run", () => {
-    const deferred = runCiGateFixture(renderCiGateEnvironment({}, { preflight: "skipped" }), {
-      PREFLIGHT_RESULT: "skipped",
-      RELEASE_PRIORITY_RUN: "77",
-    });
-    expect(deferred.status).toBe(1);
-    expect(deferred.stdout).toContain("::error title=Deferred for release 77::");
-    expect(deferred.stdout).toContain("pnpm frv prioritize --restore");
-    // Without an active release, a skipped preflight is an ordinary gate failure.
-    const plain = runCiGateFixture(renderCiGateEnvironment({}, { preflight: "skipped" }), {
-      PREFLIGHT_RESULT: "skipped",
-      RELEASE_PRIORITY_RUN: "",
-    });
-    expect(plain.status).toBe(1);
-    expect(plain.stdout).not.toContain("Deferred for release");
-  });
-
   it("emits one final CI gate after every selected lane", () => {
     const workflow = readCiWorkflow();
     const gate = workflow.jobs["ci-gate"];
@@ -8983,11 +9009,6 @@ describe("ci workflow guards", () => {
     const verifyStep = gate.steps.find(
       (step: WorkflowStep) => step.name === "Verify selected CI lanes",
     );
-    expect(Object.keys(verifyStep.env)).toEqual([
-      "PREFLIGHT_RESULT",
-      "RELEASE_PRIORITY_RUN",
-      "JOB_RESULTS",
-    ]);
     const resultRows: string[] = verifyStep.env.JOB_RESULTS.trim().split("\n");
     expect(resultRows.slice(0, requiredJobs.length)).toEqual(
       requiredJobs.map((job) => `${job}=\${{ needs.${job}.result }}|true`),
@@ -9057,21 +9078,21 @@ describe("ci workflow guards", () => {
     expected: Record<string, boolean>;
   }>([
     {
-      label: "same-repo Blacksmith PR",
+      label: "same-repo Blacksmith PR with screenshot inputs",
       context: { eventName: "pull_request" },
       expected: {
         "checks-node-compat": false,
         "ios-build": true,
-        "ios-screenshot-shard": false,
+        "ios-screenshot-shard": true,
       },
     },
     {
-      label: "canonical Blacksmith push",
+      label: "canonical Blacksmith push with screenshot inputs",
       context: { eventName: "push" },
       expected: {
         "checks-node-compat": false,
         "ios-build": true,
-        "ios-screenshot-shard": false,
+        "ios-screenshot-shard": true,
       },
     },
     {
@@ -9225,6 +9246,11 @@ describe("ci workflow guards", () => {
       expected: { "control-ui-performance": false },
     },
     {
+      label: "hourly main excludes screenshots even with screenshot scope",
+      context: { preflightOutputs: { validation_tier: "main" } },
+      expected: { "ios-build": true, "ios-screenshot-shard": false },
+    },
+    {
       label: "ordinary manual screenshot override",
       context: { preflightOutputs: { run_ios_screenshots: "false" } },
       expected: { "ios-screenshot-shard": true },
@@ -9235,9 +9261,9 @@ describe("ci workflow guards", () => {
       expected: { "ios-screenshot-shard": false },
     },
     {
-      label: "release gate keeps smoke without screenshots",
+      label: "release gate retains changed-input screenshots",
       context: { releaseGate: true },
-      expected: { "ios-build": true, "ios-screenshot-shard": false },
+      expected: { "ios-build": true, "ios-screenshot-shard": true },
     },
     {
       label: "npm-beta excludes manual screenshots",

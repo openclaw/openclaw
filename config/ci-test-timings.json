@@ -332,7 +332,6 @@
     "src/cron/cron-execution-diagnostics.e2e.test.ts": 5,
     "src/cron/cron-state-contracts.e2e.test.ts": 1,
     "src/daemon/schtasks.integration.e2e.test.ts": 1,
-    "src/docker-setup.e2e.test.ts": 6,
     "src/flows/doctor-core-checks.e2e.test.ts": 1,
     "src/gateway/control-ui-assistant-media.e2e.test.ts": 1,
     "src/gateway/gateway-agent-skill-refresh.e2e.test.ts": 48,
