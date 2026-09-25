@@ -280,7 +280,6 @@ extensions/discord/src/internal/api.messages.ts	9
 extensions/discord/src/internal/api.reactions.ts	1
 extensions/discord/src/internal/api.users.ts	3
 extensions/discord/src/internal/api.webhooks.ts	1
-extensions/discord/src/internal/client.ts	1
 extensions/discord/src/internal/command-comparison.ts	1
 extensions/discord/src/internal/command-deploy.ts	3
 extensions/discord/src/internal/commands.ts	6
@@ -330,7 +329,7 @@ extensions/discord/src/monitor/provider.deploy-errors.ts	11
 extensions/discord/src/monitor/provider.deploy.ts	4
 extensions/discord/src/monitor/provider.lifecycle.ts	2
 extensions/discord/src/monitor/provider.startup-log.ts	1
-extensions/discord/src/monitor/provider.startup.ts	2
+extensions/discord/src/monitor/provider.startup.ts	1
 extensions/discord/src/monitor/reply-context.ts	1
 extensions/discord/src/monitor/reply-safety.ts	1
 extensions/discord/src/monitor/rest-fetch.ts	3
