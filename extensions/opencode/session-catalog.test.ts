@@ -311,6 +311,7 @@ async function installFakeOpenCode(
   sessionTitle = "Catalog session",
   toolInput: unknown = { command: "pwd" },
   version = 1,
+  archivedFirst = false,
 ): Promise<string> {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-opencode-catalog-"));
   temporaryDirectories.push(directory);
@@ -362,6 +363,15 @@ if (${version} === 2) {
   if (args.includes("--pure") || !args.includes("--standalone")) process.exit(2);
   if (process.env.OPENCODE_CONFIG_PROJECT_DISABLE !== "1" || !process.env.OPENCODE_CONFIG_DIR) process.exit(3);
   if (args[0] === "api" && args[2] === "session.list") {
+    if (${archivedFirst} && !args.some((arg) => arg.startsWith("cursor="))) {
+      process.stdout.write(JSON.stringify({
+        data: [1, 2].map((id) => ({
+          id: "ses_archived" + id, time: { archived: 1 }, location: { directory: "/workspace" },
+        })),
+        cursor: { next: "live-page" },
+      }));
+      process.exit(0);
+    }
     process.stdout.write(${JSON.stringify(
       JSON.stringify({
         data: [
@@ -570,6 +580,13 @@ describe("OpenCode session catalog", () => {
       ]);
     },
   );
+
+  itWithCli("finds live v2 sessions behind an archived API page", async () => {
+    await installFakeOpenCode("hi", "Catalog session", {}, 2, true);
+    const { provider } = captureOpenCodeSessionRegistrations();
+    const hosts = await provider!.list({ limitPerHost: 1 });
+    expect(hosts[0]?.sessions.map((session) => session.threadId)).toEqual(["ses_test"]);
+  });
 
   itWithCli("allows a relative OPENCODE_DB as an explicit isolated-state root", async () => {
     await installFakeOpenCode();

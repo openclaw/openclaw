@@ -1,5 +1,4 @@
 import { mkdtemp, rm } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
@@ -14,6 +13,7 @@ import {
   isRecord,
   normalizeBoundedOptionalString as optionalOpenCodeString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   materializeWindowsSpawnProgram,
@@ -122,7 +122,7 @@ const OPENCODE_PARAMETER_MESSAGES = {
 
 async function runOpenCode(args: string[]): Promise<string> {
   const configDirectory = args.includes("--standalone")
-    ? await mkdtemp(path.join(os.tmpdir(), "openclaw-opencode-config-"))
+    ? await mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "opencode-config-"))
     : undefined;
   try {
     return await executeOpenCode(args, configDirectory);
@@ -207,28 +207,44 @@ async function queryOpenCodeSessions(query: string, count: number): Promise<unkn
   if (!(await isOpenCodeV2())) {
     return queryOpenCodeDatabase(query);
   }
-  const parsed: unknown = JSON.parse(
-    await runOpenCodeApi("session.list", [`limit=${count}`, "order=desc", "parentID=null"]),
-  );
-  if (!isRecord(parsed) || !Array.isArray(parsed.data)) {
-    throw new Error("OpenCode returned an invalid session list");
-  }
-  return parsed.data.flatMap((session) => {
-    if (!isRecord(session) || !isRecord(session.time) || !isRecord(session.location)) {
-      throw new Error("OpenCode returned an invalid session");
+  const sessions: unknown[] = [];
+  let cursor: string | undefined;
+  while (sessions.length < count) {
+    const limit = count - sessions.length;
+    const parsed: unknown = JSON.parse(
+      await runOpenCodeApi("session.list", [
+        `limit=${limit}`,
+        ...(cursor ? [`cursor=${cursor}`] : ["order=desc", "parentID=null"]),
+      ]),
+    );
+    if (!isRecord(parsed) || !Array.isArray(parsed.data) || parsed.data.length > limit) {
+      throw new Error("OpenCode returned an invalid session list");
     }
-    return session.time.archived === undefined
-      ? [
-          {
-            id: session.id,
-            title: session.title,
-            directory: session.location.directory,
-            created: session.time.created,
-            updated: session.time.updated,
-          },
-        ]
-      : [];
-  });
+    for (const session of parsed.data) {
+      if (!isRecord(session) || !isRecord(session.time) || !isRecord(session.location)) {
+        throw new Error("OpenCode returned an invalid session");
+      }
+      if (session.time.archived === undefined) {
+        sessions.push({
+          id: session.id,
+          title: session.title,
+          directory: session.location.directory,
+          created: session.time.created,
+          updated: session.time.updated,
+        });
+      }
+    }
+    // The API applies its limit before archived rows are removed.
+    if (parsed.data.length < limit || sessions.length >= count) {
+      break;
+    }
+    const next = isRecord(parsed.cursor) ? parsed.cursor.next : undefined;
+    if (typeof next !== "string" || !next || next === cursor) {
+      throw new Error("OpenCode returned an invalid session cursor");
+    }
+    cursor = next;
+  }
+  return sessions;
 }
 
 async function queryCachedOpenCodeSessions(
