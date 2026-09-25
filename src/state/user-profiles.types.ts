@@ -61,6 +61,7 @@ export type UserProfileAccessFacts = Readonly<{
 }>;
 
 export type PreparedUserProfileIdentity = {
+  readCurrentProfile(this: void): Pick<UserProfileAccessFacts, "profileId" | "assignedRole">;
   readonly emailBindingIds: readonly string[];
   readCurrentFacts(
     this: void,

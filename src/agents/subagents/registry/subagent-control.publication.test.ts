@@ -51,7 +51,7 @@ it.each(["replacement", "retirement"] as const)(
       defaultSessionId: "prepared-publication-session",
     };
     await writeSubagentSessionEntry(target);
-    registerSubagentRun({
+    await registerSubagentRun({
       runId: "prepared-publication",
       childSessionKey: rootKey,
       requesterSessionKey: "agent:main:main",
@@ -112,7 +112,7 @@ it.each(["canonical", "managed"] as const)(
       sessionKey: rootKey,
       defaultSessionId: "publication-same-owner-session",
     });
-    registerSubagentRun({
+    await registerSubagentRun({
       runId: "publication-same-owner",
       childSessionKey: rootKey,
       requesterSessionKey: "agent:main:main",
@@ -272,7 +272,7 @@ it.each([
       defaultSessionId: "publication-root-session",
       lifecycleRevision: "publication-root-revision",
     });
-    registerSubagentRun({
+    await registerSubagentRun({
       runId: "publication-b0",
       childSessionKey: rootKey,
       requesterSessionKey: "agent:main:main",
@@ -372,7 +372,7 @@ it.each([
         sessionKey,
         defaultSessionId: `${runId}-session`,
       });
-      registerSubagentRun({
+      await registerSubagentRun({
         runId,
         childSessionKey: sessionKey,
         requesterSessionKey: rootKey,

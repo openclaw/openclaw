@@ -139,7 +139,10 @@ import {
   type QueuedSessionRun,
 } from "./embedded-local-run.js";
 import { EmbeddedPreparedModelRuntimeHost } from "./embedded-prepared-runtime.js";
-import { createEmbeddedSessionReader } from "./embedded-session-reader.js";
+import {
+  createEmbeddedSessionReader,
+  readEmbeddedHistorySessionInfo,
+} from "./embedded-session-reader.js";
 import type {
   ChatSendOptions,
   TuiAgentsList,
@@ -573,17 +576,11 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
     const defaults = getSessionDefaults(cfg, undefined, { allowPluginNormalization: false });
     const projection = await this.sessionProjection;
-    if (projection) {
-      do {
-        await projection.ensureMaterialized();
-      } while (projection.needsMaterialization);
-    }
     const target = {
       key: canonicalKey,
       agentId: sessionAgentId,
       storePath: readSource?.path ?? storePath,
     };
-    const current = projection?.describe(target);
     const sessionInfo =
       entry && (entry.incognito || isIncognitoSessionKey(canonicalKey))
         ? buildGatewaySessionRow({
@@ -597,11 +594,11 @@ export class EmbeddedTuiBackend implements TuiBackend {
             lightweightListRow: true,
             skipTranscriptUsageFallback: true,
           })
-        : entry &&
-            current &&
-            current.entry.sessionId === sessionId &&
-            current.entry.lifecycleRevision === entry.lifecycleRevision
-          ? (projection?.snapshot(target).row ?? undefined)
+        : entry && projection
+          ? await readEmbeddedHistorySessionInfo(projection, target, {
+              sessionId,
+              lifecycleRevision: entry.lifecycleRevision,
+            })
           : undefined;
     const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
     if (sessionInfo) {

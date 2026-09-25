@@ -440,11 +440,12 @@ old decision. This recovery applies only to commit-status publication; other
 uncertain writes, cancellation, and write request timeouts remain errors.
 
 Separately, read-only `GET` and `HEAD` requests retry HTTP `500`, `502`, `503`,
-and `504` responses and recognized transient connection failures before a
-response arrives. They share one retry budget of one, two, and four seconds,
-within the original 30-second request timeout. These retries exclude writes,
-caller cancellation, certificate errors, and unrecognized errors. HTTP and
-connection errors identify the request method and endpoint.
+and `504` responses and recognized transient connection failures before headers
+arrive or while reading a successful response body. They share one retry budget
+of one, two, and four seconds, within the original 30-second request timeout.
+These retries exclude writes, caller cancellation, certificate errors, invalid
+JSON, oversized responses, and unrecognized errors. HTTP, connection, and
+response-body errors identify the request method and endpoint.
 
 If a read-only request reaches its 30-second deadline, including while reading
 its response body, the script restarts the complete evaluation with fresh PR,
