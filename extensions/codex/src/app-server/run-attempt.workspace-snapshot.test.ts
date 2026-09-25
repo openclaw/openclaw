@@ -115,7 +115,7 @@ describe("Codex workspace instruction snapshots", () => {
       const updatedGuidance = "Updated instructions require a new captured snapshot.";
       await fs.mkdir(agentWorkspaceDir, { recursive: true });
       await fs.writeFile(path.join(agentWorkspaceDir, "AGENTS.md"), initialGuidance);
-      const bootstrap = vi.spyOn(agentHarnessRuntime, "resolveBootstrapFilesForRun");
+      const bootstrap = vi.spyOn(agentHarnessRuntime, "prepareAgentWorkspaceContext");
       if (failureAt === "initial") {
         bootstrap.mockRejectedValueOnce(new Error("workspace bootstrap unavailable"));
       }

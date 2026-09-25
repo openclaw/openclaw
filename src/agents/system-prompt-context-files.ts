@@ -1,5 +1,8 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
+import type { EmbeddedContextFile } from "./embedded-agent-helpers/context-file.js";
+
+export const PERSONAL_USER_CONTEXT_INSTRUCTIONS =
+  "The personal users/<profile-id>/USER.md belongs to this session's selected person (assigned human owner, otherwise human creator). It supplements shared USER.md and overrides conflicting shared preferences, not higher-priority rules. Other participants do not change this personal context.";
 
 const CONTEXT_FILE_ORDER = new Map<string, number>([
   ["agents.md", 10],
@@ -27,7 +30,13 @@ function sanitizeContextFileContentForPrompt(content: string): string {
   return content.replaceAll(DEFAULT_HEARTBEAT_PROMPT_CONTEXT_BLOCK, "").replace(/\n{3,}/g, "\n\n");
 }
 
-export function prepareContextFilesForPrompt(contextFiles: EmbeddedContextFile[]) {
+export function prepareContextFilesForPrompt<T extends EmbeddedContextFile>(
+  contextFiles: readonly T[],
+  options: {
+    order?: ReadonlyMap<string, number>;
+    caseInsensitivePathOrder?: boolean;
+  } = {},
+) {
   return contextFiles
     .map((file) => {
       const path = normalizeContextFilePath(file.path);
@@ -36,7 +45,7 @@ export function prepareContextFilesForPrompt(contextFiles: EmbeddedContextFile[]
         file,
         path,
         basename,
-        order: CONTEXT_FILE_ORDER.get(basename) ?? Number.MAX_SAFE_INTEGER,
+        order: (options.order ?? CONTEXT_FILE_ORDER).get(basename) ?? Number.MAX_SAFE_INTEGER,
       };
     })
     .toSorted((a, b) => {
@@ -47,7 +56,12 @@ export function prepareContextFilesForPrompt(contextFiles: EmbeddedContextFile[]
         return a.basename.localeCompare(b.basename);
       }
       // Preserve loader precedence for shared USER defaults and the personal overlay.
-      return a.basename === "user.md" ? 0 : a.path.localeCompare(b.path);
+      if (a.basename === "user.md") {
+        return 0;
+      }
+      return options.caseInsensitivePathOrder
+        ? a.path.toLowerCase().localeCompare(b.path.toLowerCase())
+        : a.path.localeCompare(b.path);
     });
 }
 
@@ -74,9 +88,7 @@ export function buildProjectContextSection(files: ReturnType<typeof prepareConte
     );
   }
   if (files.some(({ file }) => file.personalUser)) {
-    lines.push(
-      "The personal users/<profile-id>/USER.md belongs to this session's selected person (assigned human owner, otherwise human creator). It supplements shared USER.md and overrides conflicting shared preferences, not higher-priority rules. Other participants do not change this personal context.",
-    );
+    lines.push(PERSONAL_USER_CONTEXT_INSTRUCTIONS);
   }
   lines.push("");
   for (const { file } of files) {
