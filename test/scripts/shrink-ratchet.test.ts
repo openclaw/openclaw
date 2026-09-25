@@ -92,6 +92,7 @@ describe("shrink-ratchet", () => {
   it("prefers an exact prepared merge parent over merge-base recovery", () => {
     const root = tempDirs.make("openclaw-shrink-ratchet-prepared-");
     execFileSync("git", ["init"], { cwd: root, stdio: "ignore" });
+    execFileSync("git", ["branch", "-m", "main"], { cwd: root, stdio: "ignore" });
     fs.writeFileSync(path.join(root, "base.txt"), "base\n");
     execFileSync("git", ["add", "."], { cwd: root, stdio: "ignore" });
     execFileSync(
