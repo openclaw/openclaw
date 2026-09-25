@@ -113,16 +113,18 @@ describe("webHandlers", () => {
     );
   });
 
-  it("routes a preflight QR through the normal login lifecycle", async () => {
+  it("rejects a QR-bearing preflight without starting login again", async () => {
     const events: string[] = [];
     const stopChannel = vi.fn(async () => {
       events.push("stop");
+    });
+    const startChannel = vi.fn(async () => {
+      events.push("start-channel");
     });
     const respond = vi.fn(() => {
       events.push("respond");
     });
     const loginWithQrStart = vi.fn(async () => {
-      events.push("start");
       return {
         qrDataUrl: "data:image/png;base64,active-qr",
         message: "QR already active. Scan it in WhatsApp -> Linked Devices.",
@@ -132,35 +134,44 @@ describe("webHandlers", () => {
       events.push("preflight");
       return {
         qrDataUrl: "data:image/png;base64,preflight-qr",
-        message: "Unexpected QR from preflight.",
+        message: "QR already active. Scan it in WhatsApp -> Linked Devices.",
       };
     });
-    hoisted.listChannelPlugins.mockReturnValue([
-      createWebLoginPlugin({
-        loginWithQrStart,
-        loginWithQrStartPreflight,
-      }),
-    ]);
+    const plugin = createWebLoginPlugin({
+      loginWithQrStart,
+      loginWithQrStartPreflight: async () => null,
+    });
+    const gateway = plugin.gateway;
+    if (!gateway) {
+      throw new Error("web login test plugin is missing its gateway adapter");
+    }
+    // Simulate a JavaScript plugin that bypasses the TypeScript contract.
+    Object.defineProperty(gateway, "loginWithQrStartPreflight", {
+      value: loginWithQrStartPreflight,
+    });
+    hoisted.listChannelPlugins.mockReturnValue([plugin]);
 
     await startWebLogin(
       createHandlerOptions({
         respond,
         stopChannel,
+        startChannel,
         running: true,
       }),
     );
 
     expect(loginWithQrStartPreflight).toHaveBeenCalledOnce();
-    expect(loginWithQrStart).toHaveBeenCalledOnce();
-    expect(stopChannel).toHaveBeenCalledWith("whatsapp", undefined);
-    expect(events).toEqual(["preflight", "start", "stop", "respond"]);
+    expect(loginWithQrStart).not.toHaveBeenCalled();
+    expect(stopChannel).not.toHaveBeenCalled();
+    expect(startChannel).not.toHaveBeenCalled();
+    expect(events).toEqual(["preflight", "respond"]);
     expect(respond).toHaveBeenCalledWith(
-      true,
-      {
-        qrDataUrl: "data:image/png;base64,active-qr",
-        message: "QR already active. Scan it in WhatsApp -> Linked Devices.",
-      },
+      false,
       undefined,
+      expect.objectContaining({
+        code: "UNAVAILABLE",
+        message: expect.stringContaining("login preflight must not return QR data"),
+      }),
     );
   });
 

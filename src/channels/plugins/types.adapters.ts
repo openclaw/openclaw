@@ -276,7 +276,12 @@ type ChannelLoginWithQrStartResult = {
   qrDataUrl?: string;
   message: string;
   connected?: boolean;
+  code?: string;
   sessionKey?: string;
+};
+
+type ChannelLoginWithQrStartPreflightResult = Omit<ChannelLoginWithQrStartResult, "qrDataUrl"> & {
+  qrDataUrl?: never;
 };
 
 type ChannelLoginWithQrWaitResult = {
@@ -298,12 +303,13 @@ export type ChannelGatewayAdapter<ResolvedAccount = unknown> = {
   stopAccount?: (ctx: ChannelGatewayContext<ResolvedAccount>) => Promise<void>;
   /** Keep gateway auth bypass resolution mirrored through a lightweight top-level `gateway-auth-api.ts` artifact. */
   resolveGatewayAuthBypassPaths?: (params: { cfg: OpenClawConfig }) => string[];
+  /** Returns a short-circuit result before login starts; it must not start login or return QR data. */
   loginWithQrStartPreflight?: (params: {
     accountId?: string;
     force?: boolean;
     timeoutMs?: number;
     verbose?: boolean;
-  }) => Promise<ChannelLoginWithQrStartResult | null>;
+  }) => Promise<ChannelLoginWithQrStartPreflightResult | null>;
   loginWithQrStart?: (params: {
     accountId?: string;
     force?: boolean;

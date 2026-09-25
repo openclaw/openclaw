@@ -35,6 +35,9 @@ type StartWebLoginWithQrResult = {
   connected?: boolean;
   code?: typeof WHATSAPP_AUTH_UNSTABLE_CODE;
 };
+type PreflightWebLoginWithQrStartResult = Omit<StartWebLoginWithQrResult, "qrDataUrl"> & {
+  qrDataUrl?: never;
+};
 
 type ActiveLogin = {
   accountId: string;
@@ -514,7 +517,7 @@ export async function startWebLoginWithQr(
 
 export async function preflightWebLoginWithQrStart(
   opts: WebLoginStartParams = {},
-): Promise<StartWebLoginWithQrResult | null> {
+): Promise<PreflightWebLoginWithQrStartResult | null> {
   const cfg = getRuntimeConfig();
   const account = resolveWhatsAppAccount({ cfg, accountId: opts.accountId });
   const authState = await readWebAuthExistsForDecision(account.authDir);
