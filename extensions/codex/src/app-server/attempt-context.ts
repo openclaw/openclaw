@@ -432,13 +432,36 @@ export function buildCodexWatchedSessionsContext(params: {
 export function renderCodexSkillsInstructions(params: {
   attempt: EmbeddedRunAttemptParams;
   skillsPrompt?: string;
+  dynamicTools?: readonly CodexDynamicToolSpec[];
 }): string | undefined {
   if (!shouldInjectCodexOpenClawPromptContext(params.attempt)) {
     return undefined;
   }
-  return params.skillsPrompt?.trim()
-    ? ["## OpenClaw Skills", "", params.skillsPrompt.trim()].join("\n")
-    : undefined;
+  const names = new Set(
+    flattenCodexDynamicToolFunctions(params.dynamicTools ?? []).map((tool) =>
+      normalizeCodexDynamicToolName(tool.name),
+    ),
+  );
+  const prompt = params.skillsPrompt?.trim();
+  const search = names.has("skills_search");
+  const read = names.has("skills_read");
+  if (!prompt && !search) {
+    return undefined;
+  }
+  return [
+    "## OpenClaw Skills",
+    ...(search
+      ? [
+          "The directory is bounded. Use OpenClaw's skills_search tool to find relevant installed skills omitted from it. Search does not install skills.",
+        ]
+      : []),
+    ...(read
+      ? [
+          "Use OpenClaw's skills_read tool with an exact name for complete instructions; a known name does not require search first.",
+        ]
+      : []),
+    ...(prompt ? [prompt] : []),
+  ].join("\n");
 }
 
 /**

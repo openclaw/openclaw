@@ -34,6 +34,7 @@ import { createReadTool } from "./sessions/tools/read.js";
 import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 import { isToolResultError, readToolResultDetails } from "./tool-result-error.js";
 import { jsonResult, ToolInputError, type AnyAgentTool } from "./tools/common.js";
+import { createInstalledSkillTools } from "./tools/installed-skill-tools.js";
 
 const model: Model = {
   id: "test-model",
@@ -87,7 +88,11 @@ async function runCodeModeAgent(params: {
   const sessionKey = "sessionKey" in harness ? harness.sessionKey : "agent:main:main";
   const runId = "runId" in harness ? harness.runId : "run-code-mode";
   applyCodeModeCatalog({
-    tools: [...tools, ...params.hiddenTools],
+    tools: [
+      ...tools,
+      ...params.hiddenTools,
+      ...createInstalledSkillTools(params.codeModeSkills ?? []),
+    ],
     config,
     sessionId,
     sessionKey,
@@ -563,7 +568,7 @@ describe("Code Mode agent-loop error recovery", () => {
     { name: "skills.read", discovery: 'await skills.read("demo")', value: "Demo instructions" },
   ])(
     "continues ordinary recovery after $name metadata and a guest error",
-    async ({ discovery, value }) => {
+    async ({ name, discovery, value }) => {
       const complete = pluginToolWithExecute("complete_task", "Complete the task", async () =>
         jsonResult({ completed: true }),
       );
@@ -588,7 +593,7 @@ describe("Code Mode agent-loop error recovery", () => {
           status: "failed",
           error: expect.stringContaining("ReferenceError: missingFn is not defined"),
           output: [{ type: "json", value }],
-          telemetry: expect.objectContaining({ callCount: 0 }),
+          telemetry: expect.objectContaining({ callCount: name === "skills.read" ? 1 : 0 }),
         }),
       });
       expect(agent.state.messages).toContainEqual(failure);

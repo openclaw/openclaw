@@ -71,6 +71,7 @@ const bridgeMethods = new Set<string>([
   "agentSpawn",
   "agentWait",
   "skillsList",
+  "skillsSearch",
   "skillsRead",
   "sleep",
   "swarmNote",

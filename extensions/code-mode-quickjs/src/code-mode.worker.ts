@@ -146,6 +146,7 @@ function createHostRequestHandler(params: {
       method !== "agentSpawn" &&
       method !== "agentWait" &&
       method !== "skillsList" &&
+      method !== "skillsSearch" &&
       method !== "skillsRead" &&
       method !== "sleep" &&
       method !== "swarmNote"

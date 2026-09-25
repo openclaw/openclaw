@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { loadWorkspaceSkills } from "../../skills/loading/workspace-skill-loader.js";
@@ -11,6 +12,7 @@ import { resolveWorkshopSkillsDir } from "../../skills/workshop/skills-root.js";
 import { readCodeModeSkill } from "../code-mode-skills.js";
 import { createCoreCodingTools } from "../core-coding-tools.js";
 import { getTextContent } from "../test-helpers/agent-tools-fs-helpers.js";
+import { createInstalledSkillTools } from "../tools/installed-skill-tools.js";
 import { registerAgentWorkspaceAccess } from "../workspace-access.js";
 import { prepareEmbeddedSkills } from "./skill-runtime.js";
 
@@ -67,6 +69,7 @@ it.each([false, true])("Code Mode file ownership (same-name pin: %s)", async (co
   libraryFixture.entries = loadWorkspaceSkills(library, { workspaceOnly: true });
   const config = {
     plugins: { enabled: false },
+    skills: { limits: { maxSkillsInPrompt: 1 } },
     agents: { entries: { main: { agentDir: path.join(root, "agent") } } },
   };
   const workshopDir = path.join(resolveWorkshopSkillsDir(config, "main"), "workshop");
@@ -134,6 +137,14 @@ it.each([false, true])("Code Mode file ownership (same-name pin: %s)", async (co
       applySkillEnvironment: false,
     });
     expect(prepared.codeModeSkills).toHaveLength(3);
+    expect(prepared.skillsSnapshotForRun?.resolvedSkills).toHaveLength(1);
+    const tools = createInstalledSkillTools(prepared.installedSkills);
+    const search = expectDefined(tools[0], "installed skill search tool");
+    const read = expectDefined(tools[1], "installed skill read tool");
+    expect((await search.execute("search", { query: "pinned" })).details).toMatchObject({
+      skills: [{ name: "pinned" }],
+    });
+    expect(getTextContent(await read.execute("read", { name: "pinned" }))).toBe(libraryBody);
     const skill = prepared.codeModeSkills.find((entry) => entry.name === "guide")!;
     expect(await readCodeModeSkill(skill)).toBe(header + "current host body");
     await fs.writeFile(path.join(host, relative), header + "edited host body");
@@ -147,6 +158,9 @@ it.each([false, true])("Code Mode file ownership (same-name pin: %s)", async (co
     expect(readFile).not.toHaveBeenCalled();
     release();
     await expect(readCodeModeSkill(skill)).rejects.toThrow("Workspace access is stopped");
+    await expect(read.execute("stopped", { name: "guide" })).rejects.toThrow(
+      "Workspace access is stopped",
+    );
   } finally {
     release();
   }

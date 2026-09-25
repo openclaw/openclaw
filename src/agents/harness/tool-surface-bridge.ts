@@ -14,6 +14,7 @@ import {
   resolveLocalModelLeanPreserveToolNames,
 } from "../local-model-lean.js";
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
+import { isToolExecutionAllowed } from "../tool-policy-shared.js";
 import { filterRuntimeCompatibleTools } from "../tool-schema-projection.js";
 import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../tool-search-types.js";
 import {
@@ -145,6 +146,12 @@ export function createAgentHarnessToolSurfaceRuntimeCore(params: {
     let effectiveTools = prepared
       ? projectedUncompactedTools
       : filterRuntimeCompatibleTools(projectedUncompactedTools).tools;
+    const codeModeSkills =
+      effectiveTools.some((tool) => tool.name === "skills_read") &&
+      (!prepared?.toolExecutionAllow ||
+        isToolExecutionAllowed(prepared.toolExecutionAllow, "skills_read"))
+        ? prepared?.codeModeSkills
+        : [];
     const codeModeTools = codeModeControlsEnabled
       ? createCodeModeTools({
           config: params.config,
@@ -159,7 +166,7 @@ export function createAgentHarnessToolSurfaceRuntimeCore(params: {
           executeTool: prepared?.executeTool ?? params.executeTool,
           forceRestartSafeTools: prepared?.forceRestartSafeTools,
           toolExecutionAllow: prepared?.toolExecutionAllow,
-          codeModeSkills: prepared?.codeModeSkills,
+          codeModeSkills,
         })
       : [];
     const compacted = applyAgentToolSurfaceCatalog({
@@ -176,7 +183,7 @@ export function createAgentHarnessToolSurfaceRuntimeCore(params: {
       catalogRef: toolSearchCatalogRef,
       toolHookContext: options.hookContext,
       toolExecutionAllow: prepared?.toolExecutionAllow,
-      codeModeSkills: prepared?.codeModeSkills,
+      codeModeSkills,
     });
     const projectedCompactedTools =
       !prepared && options.localModelLeanApplied

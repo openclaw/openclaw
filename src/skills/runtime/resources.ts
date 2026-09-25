@@ -366,6 +366,7 @@ export async function materializeSkillResources(
       snapshot: {
         skills: resolvedSkills.map((skill) => ({ name: skill.name, skillKey: skill.name })),
         resolvedSkills,
+        discoverySkills: resolvedSkills.filter((skill) => !skill.disableModelInvocation),
         prompt: formatSkillsForPromptBounded({
           skills: resolvedSkills.filter((skill) => !skill.disableModelInvocation),
           preserveOrder: true,

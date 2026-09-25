@@ -15,6 +15,7 @@ import {
   runUntilCompleted,
 } from "./code-mode.test-support.js";
 import { createReadTool } from "./sessions/index.js";
+import { createInstalledSkillTools } from "./tools/installed-skill-tools.js";
 
 function skillCandidate(params: {
   name: string;
@@ -64,7 +65,7 @@ describe("Code Mode skills and read tools", () => {
     ]);
   });
 
-  it("lists and reads only prompt-eligible skills through the worker bridge", async () => {
+  it("searches and reads eligible skills through the worker bridge and normal tool dispatch", async () => {
     const demo = skillCandidate({
       name: "demo",
       description: "Full demo description",
@@ -101,7 +102,11 @@ describe("Code Mode skills and read tools", () => {
       codeModeSkills,
     });
     applyCodeModeCatalog({
-      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
+      tools: [
+        ...codeModeTools,
+        ...createInstalledSkillTools(codeModeSkills),
+        pluginTool("fake_noop", "Noop"),
+      ],
       config,
       sessionId: "session-code-mode",
       sessionKey: "agent:main:main",
@@ -115,6 +120,7 @@ describe("Code Mode skills and read tools", () => {
       waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
       code: `
         const listed = await skills.list();
+        const found = await skills.search("demo");
         const body = await skills.read("demo");
         let unknown;
         try {
@@ -122,11 +128,11 @@ describe("Code Mode skills and read tools", () => {
         } catch (error) {
           unknown = error.message;
         }
-        return { listed, body, unknown };
+        return { listed, found, body, unknown };
       `,
     });
 
-    expect(details.status).toBe("completed");
+    expect(details.status, JSON.stringify(details)).toBe("completed");
     expect(details.value).toEqual({
       listed: [
         {
@@ -136,7 +142,17 @@ describe("Code Mode skills and read tools", () => {
         },
       ],
       body: "---\nname: demo\n---\n\n# Complete demo instructions\n",
-      unknown: 'Unknown skill "missing". Available skills: demo',
+      found: {
+        skills: [
+          {
+            name: "demo",
+            description: "Full demo description",
+            location: "/guest/skills/demo/SKILL.md",
+          },
+        ],
+        hasMore: false,
+      },
+      unknown: 'Unknown installed skill "missing".',
     });
     expect(codeModeTools[0]?.description).toContain("`await skills.read(name)`");
     expect(reader).toHaveBeenCalledOnce();
@@ -144,6 +160,35 @@ describe("Code Mode skills and read tools", () => {
       location: "/guest/skills/demo/SKILL.md",
       signal: expect.any(AbortSignal),
     });
+  });
+
+  it.each([
+    ["skills_read", 'await skills.read("guide")'],
+    ["skills_search", 'await skills.search("guide")'],
+    ["skills_search", "await skills.list()"],
+  ])("does not let skill globals bypass removed %s (%s)", async (denied, call) => {
+    const skills = [
+      {
+        name: "guide",
+        description: "Guide",
+        location: "/skills/guide/SKILL.md",
+        source: { filePath: "/skills/guide/SKILL.md", readContent: "Private instructions" },
+      },
+    ];
+    const { ctx, tools } = createCodeModeHarness({ codeModeSkills: skills });
+    applyCodeModeCatalog({
+      ...ctx,
+      tools: [
+        ...tools,
+        ...createInstalledSkillTools(skills).filter((tool) => tool.name !== denied),
+      ],
+    });
+    const result = await runUntilCompleted({
+      execTool: tools[0]!,
+      waitTool: tools[1]!,
+      code: `try { ${call}; } catch (error) { return error.message; }`,
+    });
+    expect(result.value).toBe(`${denied} is not available in this run.`);
   });
 
   it.each([

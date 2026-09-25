@@ -1246,19 +1246,6 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("read exact <location>");
   });
 
-  it("switches skills access guidance under code mode", () => {
-    const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      codeModeActive: true,
-      toolNames: ["exec"],
-      skillsPrompt:
-        "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>",
-    });
-
-    expect(prompt).toContain('`skills.read("<name>")`');
-    expect(prompt).not.toContain("read exact <location> with `read`");
-  });
-
   it("omits code-mode skill guidance when the actual exec tool is unavailable", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

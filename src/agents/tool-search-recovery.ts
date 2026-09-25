@@ -57,7 +57,10 @@ export function formatUnknownToolIdError(
 ): string {
   const skill = options.codeModeSkills?.find((candidate) => candidate.name === needle);
   const canReadSkills = entries.some(
-    (entry) => entry.source === "openclaw" && entry.sourceName === "core" && entry.name === "read",
+    (entry) =>
+      entry.source === "openclaw" &&
+      entry.sourceName === "core" &&
+      (entry.name === "read" || entry.name === "skills_read"),
   );
   if (skill && canReadSkills) {
     // Use admitted, mapped prompt locations; never load a skill as a side effect of recovery.

@@ -9,7 +9,7 @@ const MAX_QUERY_CHARS = 1_000;
 const MAX_RESULTS = 20;
 const MAX_DESCRIPTION_CHARS = 512;
 const MAX_RESULT_CHARS = 16_000;
-const MAX_SKILL_INSTRUCTION_BYTES = 256 * 1024;
+export const MAX_SKILL_INSTRUCTION_BYTES = 256 * 1024;
 
 function buildIndex(skills: readonly InstalledSkill[]) {
   return buildLexicalIndex(

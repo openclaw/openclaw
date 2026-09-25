@@ -23,6 +23,36 @@ async function loadSnapshot(workspace: string) {
 }
 
 describe("prepared workspace skill resources", () => {
+  it("keeps a large discovery catalog out of bounded worker resource delivery", async () => {
+    const workspace = temps.make("skill-discovery-delivery-");
+    await writeSkill(workspace, "alpha");
+    await writeSkill(workspace, "zulu");
+    await writeSkill(
+      workspace,
+      "hidden",
+      "---\ndescription: Hidden\ndisable-model-invocation: true\n---\nHidden body",
+    );
+    const snapshot = await buildSkillSnapshot(workspace, {
+      entries: loadWorkspaceSkills(workspace, { workspaceOnly: true }),
+      config: { skills: { limits: { maxSkillsInPrompt: 1 } } },
+    });
+    expect(snapshot.resolvedSkills?.map((skill) => skill.name)).toEqual(["alpha"]);
+    const omitted = snapshot.discoverySkills!.find((skill) => skill.name === "zulu")!;
+    snapshot.discoverySkills!.push(
+      ...Array.from({ length: 300 }, (_, index) => ({ ...omitted, name: `extra-${index}` })),
+    );
+    const delivery = await prepareSkillResourceDelivery(snapshot, () => {});
+    expect(delivery?.skills.map((skill) => skill.name)).toEqual(["alpha"]);
+    const worker = await materializeSkillResources(delivery!, () => {});
+    try {
+      expect(worker.snapshot.discoverySkills?.map((skill) => skill.name)).toEqual(["alpha"]);
+      const delivered = worker.snapshot.discoverySkills![0]!;
+      expect(delivered.filePath).not.toBe(snapshot.resolvedSkills![0]!.filePath);
+      expect(await fs.readFile(delivered.filePath, "utf8")).toBe(markdown);
+    } finally {
+      await worker.cleanup();
+    }
+  });
   it.each(["AbortError", "TimeoutError"])(
     "preserves the exact frozen %s after partial materialization and failed cleanup",
     async (name) => {

@@ -412,6 +412,30 @@ export function findSkillUsageMatch(params: {
     }
   }
 
+  if (params.toolName === "skills_read") {
+    const name = isPlainObject(params.toolParams) ? params.toolParams.name : undefined;
+    if (typeof name !== "string") {
+      return undefined;
+    }
+    const snapshot = params.ctx?.skillsSnapshot;
+    const skill = (snapshot?.discoverySkills ?? snapshot?.resolvedSkills)?.find(
+      (entry) => entry.name === name.trim() && !entry.disableModelInvocation,
+    );
+    if (!skill) {
+      return undefined;
+    }
+    const usage = params.ctx?.skillUsagePaths?.find(
+      (entry) => entry.skillName === skill.name && entry.readPath === skill.filePath,
+    );
+    return usage
+      ? {
+          skillFile: usage.skillFile,
+          skillName: usage.skillName,
+          skillSource: usage.skillSource,
+          activation: "read",
+        }
+      : resolvedSkillUsageMatch({ activation: "read", skill });
+  }
   if (params.toolName !== "read") {
     return undefined;
   }

@@ -164,10 +164,16 @@ export function resolveSandboxSkillRuntimeInputs(params: {
     });
     // An explicit empty snapshot excludes instructions; it has no host paths to remap.
     let selectedSnapshot =
-      params.skillsSnapshot && !params.skillsSnapshot.prompt.trim()
+      params.skillsSnapshot &&
+      !params.skillsSnapshot.prompt.trim() &&
+      !params.skillsSnapshot.discoverySkills?.length
         ? params.skillsSnapshot
         : undefined;
-    if (params.skillsSnapshot?.librarySelections?.length) {
+    const snapshot = params.skillsSnapshot;
+    if (
+      snapshot &&
+      (snapshot.librarySelections?.length || (snapshot.discoverySkills && skillUsagePaths?.length))
+    ) {
       const usageBySkillName = new Map<string, SkillUsagePath>();
       for (const usage of skillUsagePaths ?? []) {
         // Duplicate names keep their first delivered path.
@@ -175,7 +181,7 @@ export function resolveSandboxSkillRuntimeInputs(params: {
           usageBySkillName.set(usage.skillName, usage);
         }
       }
-      const resolvedSkills = params.skillsSnapshot.resolvedSkills?.map((skill) => {
+      const mapSkill = (skill: NonNullable<SkillSnapshot["resolvedSkills"]>[number]) => {
         const materialized = usageBySkillName.get(skill.name);
         if (!materialized) {
           throw new Error(`Selected skill ${skill.name} was not delivered to the sandbox.`);
@@ -185,13 +191,21 @@ export function resolveSandboxSkillRuntimeInputs(params: {
           filePath: materialized.readPath,
           baseDir: path.posix.dirname(materialized.readPath),
         };
-      });
+      };
+      const resolvedSkills = snapshot.resolvedSkills
+        ?.filter((skill) => snapshot.librarySelections?.length || usageBySkillName.has(skill.name))
+        .map(mapSkill);
+      // Discovery cannot advertise host resources absent from this sandbox's delivery.
+      const discoverySkills = snapshot.discoverySkills
+        ?.filter((skill) => usageBySkillName.has(skill.name))
+        .map(mapSkill);
       if (!resolvedSkills) {
         throw new Error("Selected skill snapshot must be hydrated before sandbox delivery.");
       }
       selectedSnapshot = {
-        ...params.skillsSnapshot,
+        ...snapshot,
         resolvedSkills,
+        discoverySkills,
         prompt: formatSkillsForPromptBounded({ skills: resolvedSkills, preserveOrder: true }),
       };
     }

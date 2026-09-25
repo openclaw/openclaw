@@ -20,6 +20,7 @@ import {
 } from "./code-mode.test-support.js";
 import { clearToolSearchCatalog } from "./tool-search.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
+import { createInstalledSkillTools } from "./tools/installed-skill-tools.js";
 
 afterEach(resetCodeModeTestState);
 
@@ -35,9 +36,10 @@ describe.each(["interactive", "headless"] as const)("Code Mode %s program data",
       source: { filePath: string; readContent: string };
     }> = [],
   ) {
+    const allTools = [...tools, ...createInstalledSkillTools(skills)];
     if (mode === "headless") {
       return await runCodeModeScriptHeadless({
-        ctx: { ...createHeadlessCodeModeHarness(tools), codeModeSkills: skills },
+        ctx: { ...createHeadlessCodeModeHarness(allTools), codeModeSkills: skills },
         code,
         overrides: { maxOutputBytes: 1024, ...limits },
         maxToolCalls: 128,
@@ -46,7 +48,7 @@ describe.each(["interactive", "headless"] as const)("Code Mode %s program data",
     const { ctx } = createCodeModeHarness({ codeModeSkills: skills });
     const config = { tools: { codeMode: { enabled: true, maxOutputBytes: 1024, ...limits } } };
     const controls = createCodeModeTools({ ...ctx, config, runtimeConfig: config });
-    applyCodeModeCatalog({ ...ctx, config, tools: [...controls, ...tools] });
+    applyCodeModeCatalog({ ...ctx, config, tools: [...controls, ...allTools] });
     return await runUntilCompleted({ execTool: controls[0]!, waitTool: controls[1]!, code });
   }
 
@@ -134,7 +136,7 @@ describe.each(["interactive", "headless"] as const)("Code Mode %s program data",
         value:
           bytes < 10 * 1024 * 1024
             ? { length: bytes, tail: "END!" }
-            : { error: expect.stringMatching(/program-data budget exceeded/) },
+            : { error: expect.stringMatching(/instruction limit/) },
       });
     },
   );

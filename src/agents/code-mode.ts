@@ -162,7 +162,7 @@ function createCodeModeExecDescription(
       ? "\n- nodes: paired Gateway nodes; nodes.list(), (await nodes.get(id)).invoke(command, params)\n"
       : "";
   const skillsGuidance = ctx.codeModeSkills?.length
-    ? " Skills are available through the async `skills` global: use `await skills.list()` and `await skills.read(name)`."
+    ? " Installed skills: use `await skills.search(query, limit)` to find relevant skills, then `await skills.read(name)` for complete instructions. A known exact name can be read directly. `await skills.list()` lists up to 20 entries; pass an offset for later pages."
     : "";
   const { maxOutputBytes, timeoutMs } = config;
   // The catalog already reserves built-in namespace globals without constructing their runtimes.

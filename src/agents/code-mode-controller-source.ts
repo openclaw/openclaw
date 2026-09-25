@@ -243,7 +243,8 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
   });
 
   const skills = Object.freeze({
-    list: () => request("skillsList", []),
+    list: (offset = 0) => request("skillsList", [offset]),
+    search: (query, limit) => request("skillsSearch", limit === undefined ? [query] : [query, limit]),
     read: (name) => request("skillsRead", [name]),
   });
 

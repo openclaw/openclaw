@@ -34,6 +34,7 @@ import {
   getActiveAgentRingZeroTools,
   mergeAgentRingZeroTools,
 } from "./agent-tools.ring-zero-context.js";
+import { createAgentToolSearchControls } from "./agent-tools.tool-search.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { resolveConfiguredApplyPatchPolicy } from "./apply-patch-policy.js";
 import { waitForExecScope } from "./bash-process-registry.js";
@@ -78,7 +79,6 @@ import {
   replaceWithEffectiveToolAllowlist,
 } from "./tool-policy.js";
 import {
-  createToolSearchTools,
   resolveToolSearchConfig,
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
@@ -478,21 +478,12 @@ export function createOpenClawCodingToolsInternal(
     options?.clientCaps,
   );
   const ringZeroTools = includeOpenClawTools ? getActiveAgentRingZeroTools() : [];
-  const toolSearchTools =
-    toolSearchControlsEnabled && ringZeroTools.length === 0
-      ? createToolSearchTools({
-          config: options?.config,
-          runtimeConfig: options?.config,
-          agentId,
-          sessionKey: options?.sessionKey,
-          sessionId: options?.sessionId,
-          runId: options?.runId,
-          catalogRef: options?.toolSearchCatalogRef,
-          codeModeSkills: options?.codeModeSkills,
-          abortSignal: options?.abortSignal,
-          executeTool: options?.toolSearchCatalogExecutor,
-        })
-      : [];
+  const toolSearchTools = createAgentToolSearchControls({
+    enabled: toolSearchControlsEnabled,
+    hasRingZeroTools: ringZeroTools.length > 0,
+    agentId,
+    options,
+  });
   const scheduledCoreTools = scheduledExecTarget
     ? coreTools.map((tool) =>
         tool.name === "exec"
@@ -612,6 +603,7 @@ export function createOpenClawCodingToolsInternal(
             modelId: options?.modelId,
             modelContextWindowTokens: options?.modelContextWindowTokens,
             skillWorkshop: options?.skillWorkshop,
+            installedSkills: options?.installedSkills,
             replyToMode: options?.replyToMode,
             hasRepliedRef: options?.hasRepliedRef,
             modelHasVision: options?.modelHasVision,

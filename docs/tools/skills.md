@@ -799,6 +799,40 @@ the total number of operating-system file watches.
   </Accordion>
 </AccordionGroup>
 
+## Search installed skills
+
+The prompt contains a bounded skill directory. Skills omitted by the prompt
+budget remain discoverable through `skills_search` when that tool is enabled.
+Small catalogs continue to appear in full.
+
+- `skills_search({ query, limit? })` searches eligible installed names and
+  descriptions. The default limit is 5; the maximum is 20. Queries must contain
+  1-1,000 characters. Results contain names, locations, and shortened descriptions, not
+  instructions. `hasMore` indicates that additional matches exist.
+- `skills_read({ name })` loads the complete `SKILL.md` for an exact name.
+  Search is not required when the name is already known. Instructions larger
+  than 256 KiB are rejected, not truncated.
+
+Both tools use the current session's eligible catalog. Disabled, filtered,
+ineligible, and model-hidden skills are not added by search. Existing explicit
+user references remain separate. Search does not query ClawHub, install a
+skill, or grant permission to execute its commands.
+
+In OpenClaw Code Mode, use `await skills.search(query, limit)` and
+`await skills.read(name)`. These calls dispatch through the same tools and
+policies. `await skills.list(offset)` returns up to 20 directory entries;
+the default offset is 0. Codex receives the OpenClaw tools through its dynamic
+tool surface; these are distinct from Codex's native skill-resource tools.
+
+Search uses an in-memory lexical index of the prepared catalog. It follows the
+existing [snapshot and refresh rules](/tools/skills#snapshots-and-refresh), with
+no embedding service or persistent search index.
+Sandbox search includes only readable, delivered skills. Discovery does not
+expand the existing worker transfer selection or its 8 MiB total resource limit.
+Dedicated remote workers retain their existing tool protocol; the new search
+tools are not added to that protocol. Use a Gateway run to search its full
+eligible catalog.
+
 ## Token impact
 
 When skills are eligible, OpenClaw injects a compact XML block into the system

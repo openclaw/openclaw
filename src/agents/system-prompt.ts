@@ -72,6 +72,7 @@ import type {
   ProviderSystemPromptSectionId,
 } from "./system-prompt-contribution.js";
 import { buildMessagingSection } from "./system-prompt-messaging.js";
+import { buildSkillsSection } from "./system-prompt-skills.js";
 import { buildSystemPromptToolLines } from "./system-prompt-tool-list.js";
 import type { PromptMode, SilentReplyPromptMode } from "./system-prompt.types.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
@@ -159,28 +160,6 @@ function buildExecApprovalPromptGuidance(params: {
     return `${policyGuidance} exec approval-pending: native card/buttons first. Plain /approve only when tool requires chat/manual approval; copy exact "Reply with:" command.`;
   }
   return `${policyGuidance} exec approval-pending: send exact /approve from "Reply with:"; never ask for another code.`;
-}
-
-function buildSkillsSection(params: {
-  skillsPrompt?: string;
-  readToolName: string;
-  codeModeActive?: boolean;
-}) {
-  const trimmed = params.skillsPrompt?.trim();
-  if (!trimmed) {
-    return [];
-  }
-  return [
-    "## Skills",
-    params.codeModeActive
-      ? 'Scan <available_skills>. Clear match: use `skills.read("<name>")` inside `exec`; obey.'
-      : `Scan <available_skills>. Clear match: read exact <location> with \`${params.readToolName}\`; obey.`,
-    "Several: most specific. None: read none.",
-    "Up-front max one. Never invent paths.",
-    "External writes: batch safely; no tight loops; honor 429/Retry-After.",
-    trimmed,
-    "",
-  ];
 }
 
 function buildMemorySection(params: {
@@ -808,12 +787,16 @@ export function buildAgentSystemPrompt(params: {
   // Keep their skill catalog visible while embedded runs require a real read tool.
   const canAccessSkills = params.codeModeActive
     ? visibleTools.has("exec")
-    : visibleTools.has("read") || promptSurface === "cli_backend";
+    : visibleTools.has("read") ||
+      availableTools.has("skills_read") ||
+      promptSurface === "cli_backend";
   const skillsSection = canAccessSkills
     ? buildSkillsSection({
         skillsPrompt,
         readToolName,
         codeModeActive: params.codeModeActive,
+        installedSkillSearch: availableTools.has("skills_search"),
+        installedSkillRead: availableTools.has("skills_read"),
       })
     : [];
   const skillWorkshopSection = availableTools.has(SKILL_WORKSHOP_TOOL_NAME)

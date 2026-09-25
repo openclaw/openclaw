@@ -19,6 +19,7 @@ import type {
 } from "../../tool-search-types.js";
 import { createToolSearchTools } from "../../tool-search.js";
 import type { AnyAgentTool } from "../../tools/common.js";
+import { createInstalledSkillTools } from "../../tools/installed-skill-tools.js";
 import {
   beginPromptCacheObservation,
   collectPromptCacheTools,
@@ -324,7 +325,11 @@ describe("runEmbeddedAttempt skill policy projections", () => {
       { label: "wildcard", toolsAllow: ["*"] },
       { label: "mixed wildcard", toolsAllow: ["message", "*"] },
       { label: "finite", toolsAllow: ["message"] },
-      { label: "read executable", toolExecutionAllow: ["skill_workshop", "read"] },
+      {
+        label: "read executable",
+        toolExecutionAllow: ["skill_workshop", "read", "skills_read", "skills_search"],
+      },
+      { label: "skill read denied", toolExecutionAllow: ["read"] },
       { label: "read denied", toolExecutionAllow: ["skill_workshop"] },
       { label: "execution denied", toolExecutionAllow: [] },
     ];
@@ -336,6 +341,9 @@ describe("runEmbeddedAttempt skill policy projections", () => {
         loadSkillEntries: vi.fn(() => [createFixtureSkillEntry("demo")]),
       });
       hoisted.resolveSkillsPromptForRunMock.mockReturnValue(skillsPrompt);
+      hoisted.createOpenClawCodingToolsMock.mockImplementation((options) =>
+        createInstalledSkillTools(options?.installedSkills ?? []),
+      );
 
       await createContextEngineAttemptRunner({
         contextEngine: createContextEngineBootstrapAndAssemble(),
@@ -372,6 +380,7 @@ describe("runEmbeddedAttempt skill policy projections", () => {
       { label: "mixed wildcard", skillsPrompt, skillsListAvailable: true },
       { label: "finite", skillsPrompt: undefined, skillsListAvailable: false },
       { label: "read executable", skillsPrompt, skillsListAvailable: true },
+      { label: "skill read denied", skillsPrompt, skillsListAvailable: false },
       { label: "read denied", skillsPrompt: "", skillsListAvailable: false },
       { label: "execution denied", skillsPrompt: "", skillsListAvailable: false },
     ]);

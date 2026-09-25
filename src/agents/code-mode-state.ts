@@ -477,6 +477,7 @@ function isPendingBridgeRequestReplaySafe(
     request.method === "agentSpawn" ||
     request.method === "agentWait" ||
     request.method === "skillsList" ||
+    request.method === "skillsSearch" ||
     request.method === "skillsRead" ||
     request.method === "sleep"
   ) {
