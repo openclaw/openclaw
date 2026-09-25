@@ -191,7 +191,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     return { sha: git("rev-parse", "HEAD"), git };
   }
 
-  it.each(["base", "msteams-polls", "missing-configured-plugin-migration"])(
+  it.each(["base", "missing-configured-plugin-migration"])(
     "admits the current frozen catalog for %s",
     (scenario) => {
       const root = tempDirs.make("openclaw-current-inert-catalog-");
@@ -213,6 +213,16 @@ describe("scripts/lib/docker-e2e-plan", () => {
     },
   );
 
+  it("rejects execution of the retired Teams JSON migration scenario", () => {
+    expect(() =>
+      planFor({
+        selectedLaneNames: ["published-upgrade-survivor"],
+        upgradeSurvivorBaselines: "2026.9.5",
+        upgradeSurvivorScenarios: "msteams-polls",
+      }),
+    ).toThrow("invalid published upgrade survivor scenario");
+  });
+
   it.each(["committed", "unapproved checkout"])(
     "reads declared JSON capabilities without executing its %s modules",
     (mode) => {
@@ -231,13 +241,13 @@ describe("scripts/lib/docker-e2e-plan", () => {
       const plan = planFor({
         selectedLaneNames: ["published-upgrade-survivor"],
         upgradeSurvivorBaselines: "2026.9.4",
-        upgradeSurvivorScenarios: "msteams-polls",
+        upgradeSurvivorScenarios: "legacy-operator-state",
         upgradeSurvivorTargetRoot: root,
         allowFrozenTargetScenarioOmissions: false,
         ...(mode === "committed" ? { frozenTarget: { mode: "inert" as const, source } } : {}),
       });
       expect(plan.lanes.map((lane) => lane.name)).toEqual([
-        "published-upgrade-survivor-2026.9.4-msteams-polls",
+        "published-upgrade-survivor-2026.9.4-legacy-operator-state",
       ]);
       expect(existsSync(marker)).toBe(false);
     },
@@ -561,6 +571,7 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
       ["live-codex-npm-plugin", "e2e/codex-npm-plugin-live-docker.sh"],
       ["upgrade-survivor", "e2e/upgrade-survivor-docker.sh"],
       ["published-upgrade-survivor", "e2e/upgrade-survivor-docker.sh"],
+      ["dreaming-cron-doctor", "e2e/upgrade-survivor-docker.sh"],
       ["root-managed-vps-upgrade", "e2e/upgrade-survivor-docker.sh"],
       ["update-migration", "e2e/upgrade-survivor-docker.sh"],
     ]);
@@ -1514,15 +1525,18 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
     }
   });
 
-  it("pins opt-in Workshop Doctor recovery to published 9.4 without credentials", () => {
+  it.each([
+    ["workshop-doctor-recovery", "2026.9.4", "2026.9.3 2026.9.4 2026.9.5"],
+    ["update-report-recovery", "2026.9.6", "2026.9.5 2026.9.6 2026.9.7"],
+  ])("pins opt-in %s to published %s without credentials", (scenario, baseline, baselines) => {
     const plan = planFor({
       selectedLaneNames: ["published-upgrade-survivor"],
-      upgradeSurvivorBaselines: "2026.9.3 2026.9.4 2026.9.5",
-      upgradeSurvivorScenarios: "workshop-doctor-recovery",
+      upgradeSurvivorBaselines: baselines,
+      upgradeSurvivorScenarios: scenario,
     });
-    const name = "published-upgrade-survivor-2026.9.4-workshop-doctor-recovery";
+    const name = `published-upgrade-survivor-${baseline}-${scenario}`;
     expect(plan.lanes.map(summarizeLane)).toEqual([
-      publishedUpgradeSurvivorLane(name, "openclaw@2026.9.4", "workshop-doctor-recovery"),
+      publishedUpgradeSurvivorLane(name, `openclaw@${baseline}`, scenario),
     ]);
     expect(plan.requiredPrepublishPluginPackages).toEqual([]);
     expect(plan.credentials).toEqual([]);
@@ -1530,7 +1544,7 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
       expect(
         planFor({
           selectedLaneNames: ["published-upgrade-survivor"],
-          upgradeSurvivorBaselines: "2026.9.4",
+          upgradeSurvivorBaselines: baseline,
           upgradeSurvivorScenarios: alias,
         }).lanes.map((lane) => lane.name),
       ).not.toContain(name);
@@ -1558,17 +1572,22 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
     ).toContain(name);
   });
 
-  it.each(["projects-doctor", "projects-startup-migration", "taskflow-restoration"])(
-    "plans %s only for its exact published writer without registry or credential fixtures",
-    (scenario) => {
+  it.each([
+    { scenario: "projects-doctor", baseline: "2026.9.4" },
+    { scenario: "projects-startup-migration", baseline: "2026.9.4" },
+    { scenario: "taskflow-restoration", baseline: "2026.9.4" },
+    { scenario: "dreaming-cron-doctor", baseline: "2026.9.6" },
+  ])(
+    "plans $scenario only for its exact published writer without registry or credential fixtures",
+    ({ scenario, baseline }) => {
       const plan = planFor({
         selectedLaneNames: ["published-upgrade-survivor"],
-        upgradeSurvivorBaselines: "2026.9.3 2026.9.4 2026.9.5 latest",
+        upgradeSurvivorBaselines: "2026.9.3 2026.9.4 2026.9.5 2026.9.6 2026.9.7 latest",
         upgradeSurvivorScenarios: scenario,
       });
-      const name = `published-upgrade-survivor-2026.9.4-${scenario}`;
+      const name = `published-upgrade-survivor-${baseline}-${scenario}`;
       expect(plan.lanes.map(summarizeLane)).toEqual([
-        publishedUpgradeSurvivorLane(name, "openclaw@2026.9.4", scenario),
+        publishedUpgradeSurvivorLane(name, `openclaw@${baseline}`, scenario),
       ]);
       expect(plan.requiredPrepublishPluginPackages).toEqual([]);
       expect(plan.credentials).toEqual([]);
@@ -1576,7 +1595,7 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
         expect(
           planFor({
             selectedLaneNames: ["published-upgrade-survivor"],
-            upgradeSurvivorBaselines: "2026.9.4",
+            upgradeSurvivorBaselines: baseline,
             upgradeSurvivorScenarios: alias,
           }).lanes.map((lane) => lane.name),
         ).not.toContain(name);
@@ -2431,25 +2450,6 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
       "@openclaw/discord",
       "@openclaw/whatsapp",
     ]);
-  });
-
-  it("stages Teams poll migration only when explicitly requested", () => {
-    const plan = planFor({
-      selectedLaneNames: ["published-upgrade-survivor"],
-      upgradeSurvivorBaselines: "2026.9.4",
-      upgradeSurvivorScenarios: "msteams-polls",
-    });
-    expect(plan.lanes.map((lane) => lane.name)).toEqual([
-      "published-upgrade-survivor-2026.9.4-msteams-polls",
-    ]);
-    expect(plan.requiredPrepublishPluginPackages).toContain("@openclaw/msteams");
-    const aggregate = planFor({
-      selectedLaneNames: ["published-upgrade-survivor"],
-      upgradeSurvivorBaselines: "2026.9.4",
-      upgradeSurvivorScenarios: "far-reaching",
-    });
-    expect(aggregate.lanes.some((lane) => lane.name.endsWith("-msteams-polls"))).toBe(false);
-    expect(aggregate.requiredPrepublishPluginPackages).not.toContain("@openclaw/msteams");
   });
 
   it("does not request a prerelease plugin registry for unrelated lanes", () => {

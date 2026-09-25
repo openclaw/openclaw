@@ -11,7 +11,7 @@ import {
 import { isContextEngineMaintenanceTaskOwnerActive } from "../../tasks/context-engine-maintenance-task-owner.js";
 import type { DetachedTaskCreateParams } from "../../tasks/detached-task-runtime-contract.js";
 import type { TaskRecord } from "../../tasks/task-registry.types.js";
-import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import {
   runContextEngineMaintenance,
   waitForDeferredTurnMaintenanceForSession,

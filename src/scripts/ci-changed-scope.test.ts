@@ -228,6 +228,30 @@ describe("detectChangedScope", () => {
     },
   );
 
+  it("routes Skills watcher ownership to desktop Node proof without native app builds", () => {
+    for (const changedPath of [
+      "src/skills/runtime/refresh.ts",
+      "src/skills/runtime/refresh-content-native.ts",
+      "src/skills/runtime/refresh-ancestor-native.ts",
+      "src/skills/runtime/refresh-watch-close.ts",
+      "src/skills/runtime/refresh-content-native.test.ts",
+      "src/skills/runtime/refresh-content-native.entries.test.ts",
+      "src/skills/runtime/refresh.native-content.integration.test.ts",
+      "src/skills/runtime/refresh.missing-root.integration.test.ts",
+      "src/skills/runtime/refresh.symbolic-source.integration.test.ts",
+    ]) {
+      expect(detectChangedScope([changedPath]), changedPath).toEqual({
+        ...expectedNodeOnlyScope,
+        runMacosNode: true,
+        runWindows: true,
+      });
+    }
+    expect(detectChangedScope(["src/skills/runtime/refreshing.ts"])).toEqual(expectedNodeOnlyScope);
+    expect(detectChangedScope(["src/skills/loading/workspace-skill-loader.ts"])).toEqual(
+      expectedNodeOnlyScope,
+    );
+  });
+
   it("runs Android and Node CI for Android toolchain action changes", () => {
     expect(detectChangedScope([".github/actions/setup-android-toolchain/action.yml"])).toEqual({
       ...expectedNodeOnlyScope,
@@ -514,6 +538,7 @@ describe("detectChangedScope", () => {
     ["scripts/npm-runner.mts", true, false],
     ["scripts/lib/format-generated-module.mts", true, false],
     ["scripts/lib/ci-windows-test-plan.mts", true, false],
+    ["scripts/lib/vitest-build-prerequisites.mts", true, false],
     ["test/scripts/ci-windows-test-plan.test.ts", true, false],
     ["test/scripts/format-generated-module.test.ts", true, false],
     [".github/workflows/openclaw-cross-os-release-checks-reusable.yml", true, false],
@@ -867,6 +892,7 @@ describe("detectChangedScope", () => {
         "scripts/ci-changed-scope.mjs",
         "scripts/lib/arg-utils.runtime.mjs",
         "scripts/lib/changed-path-facts.mjs",
+        "scripts/lib/ci-native-generated-scope.mjs",
         "scripts/lib/direct-run.mjs",
         "scripts/lib/merge-head-diff-base.mjs",
       ]) {

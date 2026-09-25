@@ -465,7 +465,7 @@ async function agentCommandInternal(
           }),
         { config: cfg },
       );
-      sessionEntry = embeddedSessionState.sessionEntry;
+      ({ sessionEntry, opts } = embeddedSessionState);
       const { requestedThinkLevel, runContext } = embeddedSessionState;
 
       const modelSelection = await measureAgentStartup(

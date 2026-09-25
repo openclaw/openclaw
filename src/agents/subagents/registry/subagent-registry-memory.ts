@@ -73,10 +73,49 @@ type SubagentRetirementScope = {
       >)
     | { entry?: never; generation?: never; createdAt?: never; state: "superseded" };
   isSuccessor: (candidate: SubagentRunRecord) => boolean;
+  publication: {
+    entry: SubagentRunRecord;
+    promise: Promise<void>;
+    resolve: () => void;
+    settled: boolean;
+  };
 };
 
+const retirementPublications = new WeakMap<
+  SubagentRunRecord,
+  Set<SubagentRetirementScope["publication"]>
+>();
+
+export function waitForSubagentRetirementPublication(
+  entry: SubagentRunRecord,
+): Promise<void> | undefined {
+  const pending = retirementPublications.get(entry);
+  if (!pending?.size) {
+    return undefined;
+  }
+  return Promise.all([...pending].map((publication) => publication.promise)).then(() => undefined);
+}
+
+export function hasPendingSubagentRetirementPublication(entry: SubagentRunRecord): boolean {
+  return Boolean(retirementPublications.get(entry)?.size);
+}
+
+function completeRetirementPublication(scope: SubagentRetirementScope): void {
+  const publication = scope.publication;
+  if (publication.settled) {
+    return;
+  }
+  publication.settled = true;
+  const pending = retirementPublications.get(publication.entry);
+  pending?.delete(publication);
+  if (pending?.size === 0) {
+    retirementPublications.delete(publication.entry);
+  }
+  publication.resolve();
+}
+
 type CompletionAuthority = NonNullable<
-  ReturnType<typeof captureOperatorToolGatewayContinuationContext>
+  Awaited<ReturnType<typeof captureOperatorToolGatewayContinuationContext>>
 >;
 type CompletionCustody = {
   authority: CompletionAuthority;
@@ -86,6 +125,7 @@ type CompletionCustody = {
 
 class SubagentRunMap extends Map<string, SubagentRunRecord> {
   private readonly retirementScopes = new Set<SubagentRetirementScope>();
+  private readonly registrationScopes = new Set<{ childSessionKey: string; current: boolean }>();
   private readonly completionAuthorities = new Map<SubagentRunRecord, CompletionCustody>();
   // A tombstone rejects stale callbacks without retaining closed Gateway/source contexts.
   private readonly operatorCompletionEntries = new WeakSet<SubagentRunRecord>();
@@ -221,6 +261,15 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     entry: SubagentRunRecord,
     isSuccessor: (candidate: SubagentRunRecord) => boolean,
   ) {
+    let resolvePublication!: () => void;
+    const publication = {
+      entry,
+      promise: new Promise<void>((resolve) => {
+        resolvePublication = resolve;
+      }),
+      resolve: () => resolvePublication(),
+      settled: false,
+    };
     const scope: SubagentRetirementScope = {
       observation: {
         entry,
@@ -229,15 +278,41 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
         state: "selected",
       },
       isSuccessor,
+      publication,
     };
     this.retirementScopes.add(scope);
+    const pending = retirementPublications.get(entry);
+    if (pending) {
+      pending.add(publication);
+    } else {
+      retirementPublications.set(entry, new Set([publication]));
+    }
     return {
       get observation() {
         return scope.observation;
       },
+      completePublication: () => completeRetirementPublication(scope),
       release: () => {
+        completeRetirementPublication(scope);
         scope.observation = { state: "superseded" };
         this.retirementScopes.delete(scope);
+      },
+    };
+  }
+
+  /** A committed successor remains superseding even if it retires before preparation finishes. */
+  captureRegistrationOwnership(childSessionKey: string) {
+    const scope = { childSessionKey, current: true };
+    this.registrationScopes.add(scope);
+    return {
+      assertCurrent: () => {
+        if (!scope.current) {
+          throw new Error("Subagent registration owner changed during preparation");
+        }
+      },
+      release: () => {
+        scope.current = false;
+        this.registrationScopes.delete(scope);
       },
     };
   }
@@ -246,6 +321,11 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
   commitOwnership(entry: SubagentRunRecord): void {
     if (this.get(entry.runId) !== entry) {
       return;
+    }
+    for (const scope of this.registrationScopes) {
+      if (scope.childSessionKey === entry.childSessionKey) {
+        scope.current = false;
+      }
     }
     for (const scope of this.retirementScopes) {
       const previous = scope.observation.entry;
@@ -316,10 +396,15 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
   }
 
   override clear(): void {
+    for (const scope of this.registrationScopes) {
+      scope.current = false;
+    }
+    this.registrationScopes.clear();
     for (const entry of this.completionAuthorities.keys()) {
       this.releaseCompletionAuthority(entry);
     }
     for (const scope of this.retirementScopes) {
+      completeRetirementPublication(scope);
       scope.observation = { state: "superseded" };
     }
     this.retirementScopes.clear();

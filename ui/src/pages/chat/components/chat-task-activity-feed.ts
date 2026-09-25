@@ -55,12 +55,6 @@ type Entry = { key: string; timestamp: number | null } & (
     }
 );
 
-function toolLine(call: ToolCard): string {
-  const view = resolveToolCallView(call);
-  const text = view.command ?? view.code ?? call.inputText ?? call.name;
-  return redactToolPayloadText(text.trim());
-}
-
 function entries(messages: unknown[]): Entry[] {
   const result: Entry[] = [];
   // Give inferred calls the canonical block type before message normalization,
@@ -189,7 +183,9 @@ function toolIcon(call: ToolCard) {
 
 function renderToolLine(call: ToolCard) {
   const view = resolveToolCallView(call);
-  const raw = toolLine(call);
+  const raw = redactToolPayloadText(
+    (view.command ?? view.code ?? call.inputText ?? call.name).trim(),
+  );
   const command = view.command ? stripShellPreamble(view.command).command : undefined;
   const label = truncateUtf16Safe(
     redactToolPayloadText(

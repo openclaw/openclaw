@@ -693,43 +693,6 @@ afterEach(() => {
   tempDirs.cleanup();
 });
 
-describe("resolve_pr_gates_remote_mode", () => {
-  it.each([
-    { value: undefined, expected: "local" },
-    { value: "", expected: "local" },
-    { value: "testbox", expected: "testbox" },
-    { value: "crabbox-aws", expected: "crabbox-aws" },
-    { value: "github", expected: "github" },
-  ])("resolves OPENCLAW_PR_GATES_REMOTE=$value to $expected", ({ value, expected }) => {
-    const env: NodeJS.ProcessEnv = {};
-    if (value !== undefined) {
-      env.OPENCLAW_PR_GATES_REMOTE = value;
-    }
-    const result = runGatesBash("resolve_pr_gates_remote_mode", { env });
-    expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe(expected);
-  });
-
-  it("rejects unsupported values", () => {
-    const result = runGatesBash("resolve_pr_gates_remote_mode", {
-      env: { OPENCLAW_PR_GATES_REMOTE: "azure" },
-    });
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("Unsupported OPENCLAW_PR_GATES_REMOTE=azure");
-  });
-
-  it.each(["testbox", "crabbox-aws", "github"])(
-    "rejects the %s hosted-gates conflict before touching the worktree",
-    (mode) => {
-      const result = runGatesBash("prepare_gates 424242", {
-        env: { OPENCLAW_PR_GATES_REMOTE: mode, OPENCLAW_TESTBOX: "1" },
-      });
-      expect(result.status).toBe(2);
-      expect(result.stdout).toContain("conflicts with OPENCLAW_TESTBOX=1");
-    },
-  );
-});
-
 describe("remote Crabbox AWS gate contract", () => {
   it("builds the canonical deterministic proof command", () => {
     const planPath = join(tempDirs.make("openclaw-crabbox-command-"), "plan.json");

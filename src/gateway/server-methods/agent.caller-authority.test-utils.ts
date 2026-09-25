@@ -14,6 +14,7 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import * as userTurn from "../agent-turn/agent-run-user-turn.js";
 import {
   captureGatewayDeviceRevocation,
@@ -44,6 +45,7 @@ describe("gateway agent caller authority custody", () => {
     "preserves accepted %s authority through command admission and later tool calls",
     async (kind) => {
       prime();
+      const sourceProfileId = ensureProfileForEmail(`source-${kind}@example.test`).id;
       const context = makeContext();
       context.resolveGatewayContext = () => context;
       const write = vi.fn(({ respond }: GatewayRequestHandlerOptions) =>
@@ -65,7 +67,7 @@ describe("gateway agent caller authority custody", () => {
               if (kind !== "system") {
                 expect(reader?.internal?.operatorRoleActor).toEqual({
                   kind: "operator",
-                  profileId: `source-${kind}`,
+                  profileId: sourceProfileId,
                 });
                 expect(reader?.authenticatedUserProfile?.profileId).not.toBe("later-maintainer");
               }
@@ -91,7 +93,7 @@ describe("gateway agent caller authority custody", () => {
           operatorRoleActor:
             kind === "system"
               ? { kind: "system" as const }
-              : { kind: "operator" as const, profileId: `source-${kind}` },
+              : { kind: "operator" as const, profileId: sourceProfileId },
         },
       };
       const caller = captureGatewayDeviceRevocation(
@@ -236,7 +238,10 @@ describe("gateway agent caller authority custody", () => {
     const source = new AbortController();
     const guestConnection = new AbortController();
     const staffConnection = new AbortController();
-    const actor = { kind: "operator" as const, profileId: "same-person" };
+    const actor = {
+      kind: "operator" as const,
+      profileId: ensureProfileForEmail("same-person@example.test").id,
+    };
     const guestClient = {
       ...operatorWriteCliClient(),
       connectionSignal: guestConnection.signal,

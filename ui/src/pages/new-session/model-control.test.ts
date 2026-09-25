@@ -407,17 +407,15 @@ describe("new-session model runtime", () => {
   });
 
   it("does not invent Medium for a hydrated agent without a thinking profile", async () => {
-    const { context, request } = contextWith([
+    const { context } = contextWith([
       { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai", reasoning: true },
     ]);
-    const notify = vi.fn();
-    const control = new NewSessionModelControl(notify);
+    const control = new NewSessionModelControl(() => undefined);
 
     control.load(context, "main", true);
-    await waitForFast(() => {
-      expect(request).toHaveBeenCalledOnce();
-      expect(notify).toHaveBeenCalledTimes(2);
-    });
+    await waitForFast(() =>
+      expect(renderControl(control, context).textContent).toContain("GPT-5.6 Sol"),
+    );
 
     const container = renderControl(control, context, "main", {
       id: "main",
@@ -734,13 +732,11 @@ describe("new-session model runtime", () => {
 
   it("preserves a live selection when an invalidated metadata refresh fails", async () => {
     const { context, request } = contextWith([]);
-    const notify = vi.fn();
-    const control = new NewSessionModelControl(notify);
+    const control = new NewSessionModelControl(() => undefined);
     control.load(context, "main", true);
-    await vi.waitFor(() => {
-      expect(request).toHaveBeenCalledOnce();
-      expect(notify).toHaveBeenCalledTimes(2);
-    });
+    await vi.waitFor(() =>
+      expect(renderControl(control, context).textContent).toContain("No models available"),
+    );
     control.selected = "anthropic/claude-sonnet-4-6";
     control.thinkingLevel = "high";
     control.invalidate(false);

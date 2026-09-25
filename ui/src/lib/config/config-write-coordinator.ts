@@ -17,6 +17,7 @@ import {
   type ConfigSubmissionObserver,
   type ConfigWriteCoordinator,
   type ConfigMethod,
+  type ConfigWriteCoordinatorContext,
   type RuntimeConfigExternalMutationOptions,
   type RuntimeConfigExternalMutationResult,
 } from "./config-gateway-operations.ts";
@@ -28,8 +29,6 @@ import {
   isCurrentConfigConnection,
   nextRequestVersion,
   resolveEditableSnapshotConfig,
-  type RuntimeConfigGateway,
-  type RuntimeConfigState,
 } from "./config-state-model.ts";
 import {
   createConfigWriteReconciliation,
@@ -38,28 +37,6 @@ import {
 
 /** Debounce window between the last form edit and its automatic config.set. */
 const CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS = 800;
-
-type ConfigWriteCoordinatorContext = {
-  state: RuntimeConfigState;
-  gateway: RuntimeConfigGateway;
-  publish: () => void;
-  run: <T>(task: () => Promise<T>, loadKey?: "config" | "schema") => Promise<T>;
-  mutate: (task: () => void) => void;
-  resetLoads: () => void;
-  resetConfigLoad: () => void;
-  refreshConnectionState: (
-    beforeApplySnapshot?: () => void,
-    preservePendingChanges?: boolean,
-  ) => Promise<boolean>;
-  canCallConfigMethod: (
-    method: ConfigMethod,
-    options?: { requireAdvertisement?: boolean },
-  ) => boolean;
-  cancelAppliedRefresh: () => void;
-  reconcileAppliedRefresh: () => void;
-  disposeAppliedRefresh: () => void;
-  isDisposed: () => boolean;
-};
 
 export function createConfigWriteCoordinator({
   state,
@@ -105,6 +82,9 @@ export function createConfigWriteCoordinator({
     const allowed = canCallConfigMethod(method);
     if (!allowed && state.connected) {
       state.lastError = t("configView.adminRequired");
+      if (state.configAutoSaveStatus === "rejected") {
+        state.configAutoSaveStatus = "error";
+      }
       publish();
     }
     if (allowed && method !== "config.patch" && !reconciliation.canWriteDraft()) {

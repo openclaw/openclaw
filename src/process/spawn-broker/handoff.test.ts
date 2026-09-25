@@ -1,3 +1,4 @@
+import { deepStrictEqual } from "node:assert/strict";
 import { once } from "node:events";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { spawnBrokerCommand } from "./execa-client.js";
@@ -88,8 +89,8 @@ describe.skipIf(skipBrokerTests)("spawn broker pipe handoff", () => {
       await closed;
       await command;
       const expected = Buffer.from(Array.from({ length: size }, (_, index) => index % 251));
-      expect(Buffer.concat(chunks.stdout)).toEqual(expected);
-      expect(Buffer.concat(chunks.stderr)).toEqual(expected);
+      deepStrictEqual(Buffer.concat(chunks.stdout), expected);
+      deepStrictEqual(Buffer.concat(chunks.stderr), expected);
     },
   );
 });

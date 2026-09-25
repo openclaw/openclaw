@@ -10,8 +10,35 @@ import {
 } from "../../scripts/lib/release-publish-preflight-interface.mts";
 
 describe("release publish preflight operator interface", () => {
+  it("accepts a full workflow SHA without a workflow ref", () => {
+    expect(
+      parsePublishPreflightArgs(["--tag", "v2026.9.5", "--workflow-sha", "a".repeat(40)])?.options,
+    ).toMatchObject({
+      workflowRef: "",
+      workflowSha: "a".repeat(40),
+    });
+  });
+
+  it.each([{ flags: [] }, { flags: ["--workflow-ref", "main", "--workflow-sha", "a".repeat(40)] }])(
+    "rejects missing or conflicting workflow selectors: $flags",
+    ({ flags }) => {
+      expect(() => parsePublishPreflightArgs(["--tag", "v2026.9.5", ...flags])).toThrow(
+        "--tag and exactly one of --workflow-ref or --workflow-sha are required.",
+      );
+    },
+  );
+
+  it.each(["a".repeat(12), "A".repeat(40), "g".repeat(40)])(
+    "rejects malformed workflow SHA %s",
+    (sha) => {
+      expect(() =>
+        parsePublishPreflightArgs(["--tag", "v2026.9.5", "--workflow-sha", sha]),
+      ).toThrow("--workflow-sha must be a lowercase 40-character commit SHA.");
+    },
+  );
+
   it.skipIf(process.platform === "win32")(
-    "prints a shell-safe POSIX dispatch that preserves acknowledgement and exact resume inputs",
+    "prints a shell-safe POSIX dispatch that preserves waiver and exact resume inputs",
     () => {
       const dir = mkdtempSync(join(tmpdir(), "publish-dispatch-"));
       try {
@@ -22,7 +49,7 @@ describe("release publish preflight operator interface", () => {
           `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(output)}, JSON.stringify(process.argv.slice(2)));\n`,
         );
         chmodSync(executable, 0o755);
-        const acknowledgement = "Owner's approved reason\n$(touch should-not-exist); `false`";
+        const waiver = "Owner's approved reason\n$(touch should-not-exist); `false`";
         const command = buildReleasePublishDispatchCommand(
           {
             repo: "openclaw/openclaw",
@@ -31,7 +58,7 @@ describe("release publish preflight operator interface", () => {
             fullReleaseValidationRunId: "123",
             npmDistTag: "latest",
             pluginPublishScope: "all-publishable",
-            pluginSdkApiAcknowledgement: acknowledgement,
+            stableSoakWaiver: waiver,
           },
           "2",
           "release-publish/aaaaaaaaaaaa-123",
@@ -42,7 +69,7 @@ describe("release publish preflight operator interface", () => {
           env: { ...process.env, PATH: `${dir}:${process.env.PATH}` },
         });
         const args = JSON.parse(readFileSync(output, "utf8"));
-        expect(args).toContain(`plugin_sdk_api_acknowledgement=${acknowledgement}`);
+        expect(args).toContain(`stable_soak_waiver=${waiver}`);
         expect(args).toContain("full_release_validation_run_attempt=2");
         expect(args).toContain("openclaw_npm_resume_run_id=456");
         expect(args).toContain("release-publish/aaaaaaaaaaaa-123");
@@ -96,7 +123,7 @@ describe("release publish preflight operator interface", () => {
             id: "publisher.soak",
             status: "FAIL",
             message: "Missing soak | evidence",
-            remediation: "Run soak\nbefore publication",
+            remediation: "Run soak\nor supply the operator reason",
           },
         ],
         command: "gh workflow run ...",
@@ -106,7 +133,7 @@ describe("release publish preflight operator interface", () => {
     );
     expect(text).toContain("| FAIL | publisher.soak |");
     expect(text).toContain("Missing soak \\| evidence");
-    expect(text).toContain("Run soak before publication");
+    expect(text).toContain("Run soak or supply the operator reason");
     expect(text).toContain("Resolve FAIL rows");
     expect(text).not.toContain("gh workflow run");
   });

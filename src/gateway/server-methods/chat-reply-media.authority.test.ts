@@ -10,6 +10,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { listManagedImageRecordEntries } from "../managed-image-record-store.js";
 import { loadSessionEntry } from "../session-utils.js";
 import {
@@ -32,6 +33,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
   await drainGlobalSingletonLifecycleState();
   await state.cleanup();
 });
@@ -106,9 +108,11 @@ it.each([
         { kind: "raw", payload: { mediaUrls: [audioSource], trustedLocalMedia: true } },
       ],
     });
-    const rejected = expect(delivery).rejects.toThrow(
-      change === "abort" ? "aborted" : "Session media access changed",
+    const settled = delivery.then(
+      () => undefined,
+      () => undefined,
     );
+    let authorityChanged = false;
     try {
       await opened.promise;
       const staged = await fs.readdir(outbound);
@@ -126,10 +130,17 @@ it.each([
           ...(change === "placement" ? { execNode: "remote-test-node" } : {}),
         });
       }
+      authorityChanged = true;
     } finally {
+      if (!authorityChanged) {
+        controller.abort();
+      }
       release.resolve();
+      await settled;
     }
-    await rejected;
+    await expect(delivery).rejects.toThrow(
+      change === "abort" ? "aborted" : "Session media access changed",
+    );
     expect(audioReadCounts.length).toBeGreaterThan(0);
     expect(audioReadCounts.reduce((total, count) => total + count(), 0)).toBe(0);
     expect(await fs.readdir(outbound)).toEqual([]);

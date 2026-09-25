@@ -84,7 +84,7 @@ export function createGateway(
       }
       const invalidation = modelCatalogEventInvalidation({ event, payload });
       if (invalidation) {
-        invalidateChatMetadataStore(client, undefined, undefined, invalidation === "clear");
+        invalidateChatMetadataStore(client, undefined, undefined, invalidation);
       }
       for (const listener of events) {
         listener({ type: "event", event, payload });

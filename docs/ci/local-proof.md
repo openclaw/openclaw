@@ -14,6 +14,16 @@ without applying lint defaults to declaration preparation. Explicit Go settings
 remain inherited. Frozen revisions retain the workflow limits because their
 wrappers can predate this policy.
 
+The runtime topology CI job also supplies `GOGC=30` and `GOMEMLIMIT=3GiB`
+defaults to `pnpm check:architecture`, preserving caller overrides. Both import
+cycle checks and the remaining architecture checks inherit these settings.
+The memory target is soft: a four-CPU, 15.42-GiB Testbox comparison on Node
+24.21.0 measured peak checker/compiler process-group RSS of 14.24 GiB without
+the defaults and 11.31 GiB with them; peak swap use fell from 4.74 GiB to zero.
+Two hosted runners shut down during the native Madge check, but their logs did
+not establish a kernel OOM. These measurements support reducing memory pressure,
+not a hard 3-GiB RSS cap or a confirmed cause for those shutdowns.
+
 On serial hosts with less than 24 GiB of memory, full lint runs core targets in
 five disjoint batches and plugins in smaller chunks. These runs retain the same
 type-aware rules and TypeScript configuration while bounding checker caches.
@@ -37,9 +47,14 @@ timestamp predates restored build information. Frozen targets keep their
 original stripe invocations. Per-graph elapsed times appear in the job log.
 
 The test-type jobs restore their own `.artifacts/tsgo-cache` state across runs.
-Cache keys separate compiler/dependency/configuration versions and CI rows;
-the compiler still validates every selected graph after a hit. Pull requests
-only restore state, while the existing trusted cache writer policy controls
+Exact cache keys separate compiler/dependency/configuration versions and CI rows.
+Rows reuse incremental state across source revisions only when those inputs match.
+Compiler, dependency, or configuration changes start with an empty cache: updating
+older state can cost substantially more than a fresh check. The compiler still
+validates current roots, options, source, and dependency contents after restoration.
+The central changed-graph queue also
+restores the five core stripe caches that full runs publish. Every selected graph
+still runs after a hit. Pull requests only restore state, while the existing trusted cache writer policy controls
 publication after successful checks. Cache-off and frozen-target runs retain
 their original behavior. Lint programs do not share these compiler caches.
 
@@ -71,7 +86,7 @@ pnpm test:ui                                  # Control UI unit/browser suite
 pnpm ui:i18n:check                            # generated Control UI locale parity (release gate)
 pnpm native:i18n:baseline                     # update source-owned native extraction inventory
 pnpm native:i18n:verify                       # source inventory + Android/Apple localization safety
-pnpm native:i18n:check                        # strict translated/platform-generated parity (release gate)
+pnpm native:i18n:check                        # strict local translated/platform-generated parity
 pnpm test:channels
 pnpm test:contracts:channels
 pnpm check:docs                               # docs format + lint + broken links
@@ -90,6 +105,19 @@ pnpm test:startup:memory
 pnpm test:extensions:memory -- --json .artifacts/openclaw-performance/source/mock-provider/extension-memory.json
 pnpm perf:kova:summary --report .artifacts/kova/reports/mock-provider/report.json --output .artifacts/kova/summary.md
 ```
+
+Native locale checks remain strict locally. With `CI=true` or `CI=1`, the native
+check warns about obsolete translation IDs, Android generated rows, and Apple catalog
+rows awaiting the serialized locale refresh. Android warnings require canonical, unreferenced,
+noninterpolated obsolete rows whose removal leaves every other byte unchanged.
+Apple warnings require canonical plain generator rows absent from the active
+inventory; removing those rows must leave the exact generated catalog, including
+metadata. Obsolete rows still need valid dictionary and string-unit structure for
+Xcode, but do not need active locales or translated/nonempty copy. Unsupported
+metadata and variation shapes retain strict parity checks.
+Missing active translations or resources, active placeholder drift, invalid
+artifact syntax, and other generated-output differences remain blocking. Generator sync
+and the standalone Android and Apple checks retain their strict behavior.
 
 The Gateway watch regression check starts its idle CPU window only after readiness
 and the settle period. Startup and early-exit failures still fail the check. Missing
@@ -119,6 +147,26 @@ remote checker. Crabbox synchronizes working-tree files, not the local Git
 index, so remote results describe those materialized files rather than an exact
 copy of the staged snapshot. Keep the intended proof files consistent before
 using that route.
+
+## Workflow lint tools
+
+`pnpm check:workflows` requires actionlint built from the revision pinned in
+`scripts/check-workflows.mts` and `.pre-commit-config.yaml`. Released and unknown
+builds intentionally use the pinned fallback on every platform. Install Go to
+let the wrapper acquire that revision, or use the pinned pre-commit hook.
+
+The zizmor check also requires pre-commit, the Python `pre_commit` module, or
+Python 3.10+ with venv support so the wrapper can install its pinned pre-commit
+runtime. A matching installed actionlint does not remove this requirement.
+
+For offline use, have a pre-commit runtime and its zizmor hook cached, plus
+either a matching installed actionlint or the pinned actionlint hook cached.
+With pre-commit installed, prime both hook environments while online:
+
+```bash
+pre-commit run actionlint --all-files
+pre-commit run zizmor --all-files
+```
 
 ## Surface ratchets
 
@@ -258,7 +306,7 @@ without downloading pnpm again. These archives do not replace the frozen-lockfil
 dependency install.
 
 With `install-bun: "true"`, `setup-node-env` can also reuse the original pinned
-Bun 1.4.0 ZIPs from `/opt/crabbox/toolchain-archives` on Linux glibc x64.
+Bun 1.4.2 ZIPs from `/opt/crabbox/toolchain-archives` on Linux glibc x64.
 It authenticates a private copy before extracting a fresh job-private `bun`
 and `bunx`, then publishes their directory after the Node PATH entry.
 The baseline archive is the default; the optimized x64 archive requires AVX

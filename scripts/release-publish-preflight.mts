@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Read-only publication admission: gather all known blockers before dispatch.
+// Publication admission; only an explicit --workflow-sha tooling-tag mint mutates state.
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -17,9 +17,11 @@ import {
   evaluateReleasePublishGates,
   type ReleasePublishGate,
 } from "./lib/release-publish-gates.mts";
+import { resolveReleasePublishInputs } from "./lib/release-publish-inputs.mjs";
 import {
   createPublishPreflightEvidenceClient,
   createPublishPreflightGh,
+  ensureReleasePublishToolingTag,
   inspectPublishPreflightTelegramEvidence,
   preflightApi,
   requirePreflightRecord,
@@ -66,9 +68,10 @@ const POSITIVE_ID = /^[1-9][0-9]*$/u;
 const PUBLISH_REF = /^release-publish\/([a-f0-9]{12})-[1-9][0-9]*$/u;
 
 export async function runReleasePublishPreflight(
-  options: ReleasePublishPreflightOptions,
+  inputOptions: ReleasePublishPreflightOptions,
   context: PreflightContext = {},
 ): Promise<PreflightReport> {
+  let options = inputOptions;
   const rows: ReleasePublishGate[] = [];
   const runGh = createPublishPreflightGh();
   const api = (endpoint: string) => preflightApi(runGh, options.repo, endpoint);
@@ -102,6 +105,12 @@ export async function runReleasePublishPreflight(
     () => {
       if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(options.repo)) {
         throw new Error("repo must be owner/name.");
+      }
+      if (options.workflowSha && (!SHA.test(options.workflowSha) || options.workflowRef)) {
+        throw new Error("workflowSha must be a lowercase 40-character SHA without workflowRef.");
+      }
+      if (!options.workflowSha && !options.workflowRef) {
+        throw new Error("A workflow ref or workflow SHA is required.");
       }
       if (
         !/^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-(alpha|beta)\.[1-9][0-9]*)|(-[1-9][0-9]*))?$/u.test(
@@ -191,6 +200,23 @@ export async function runReleasePublishPreflight(
     "Protected publisher identity is valid.",
     "Use an existing protected lightweight release-publish/<sha12>-<provenance> tag at the approved tooling SHA.",
     () => {
+      if (options.workflowSha) {
+        const ensured = ensureReleasePublishToolingTag({
+          runGh,
+          repo: options.repo,
+          toolingSha: options.workflowSha,
+        });
+        workflowRef = ensured.tag;
+        console.error(
+          `[release-publish-preflight] ${ensured.created ? "created" : "reusing"} protected tooling tag ${ensured.tag} at ${options.workflowSha}`,
+        );
+        rows.push({
+          id: "publisher.tooling-tag",
+          status: "PASS",
+          message: `Protected tooling tag ${ensured.tag} ${ensured.created ? "created" : "reused"} at ${options.workflowSha}.`,
+          remediation: "",
+        });
+      }
       if (PUBLISH_REF.test(workflowRef)) {
         toolingSha = resolvePreflightTag(runGh, options.repo, workflowRef);
         verifyReleasePreflightToolingIdentity({
@@ -220,7 +246,7 @@ export async function runReleasePublishPreflight(
         toolingSha ||= String(main.sha);
         const proposed = `release-publish/${toolingSha.slice(0, 12)}-${Math.floor(Date.now() / 1000)}`;
         workflowRef = proposed;
-        const remediation = `After explicit release authorization: git tag ${proposed} ${toolingSha} && git push origin refs/tags/${proposed}; repeat preflight with --workflow-ref ${proposed}.`;
+        const remediation = `Repeat preflight with --workflow-sha ${toolingSha}; the helper reuses or mints the protected tooling tag (or create ${proposed} yourself with gh api -X POST repos/${options.repo}/git/refs).`;
         if (!context.allowPlannedTag) {
           throw new Error(`Mutating publish cannot dispatch from main. ${remediation}`);
         }
@@ -263,6 +289,7 @@ export async function runReleasePublishPreflight(
     options.pluginPublishScope === "all-publishable" ||
     Boolean(options.fullReleaseValidationRunId || options.preflightRunId);
   let manifest = context.manifest;
+  let sealedInputs: ReturnType<typeof resolveReleasePublishInputs> | undefined;
   let attempt = String(options.fullReleaseValidationRunAttempt ?? "");
   if (evidenceRequired) {
     const run = await check(
@@ -309,6 +336,27 @@ export async function runReleasePublishPreflight(
     }
     if (manifest) {
       const fullManifest = manifest;
+      sealedInputs = await check(
+        "validation.publish-inputs",
+        "Sealed publication defaults resolved.",
+        "Reseal Full Release Validation for this source and selector, or correct the explicit override.",
+        () =>
+          resolveReleasePublishInputs(fullManifest, {
+            targetSha: sourceSha,
+            npmDistTag: options.npmDistTag,
+            pluginSdkApiAcknowledgement: options.pluginSdkApiAcknowledgement,
+            stableSoakWaiver: options.stableSoakWaiver,
+            // Report a sealed waiver as active only while the variable still holds it.
+            currentStableSoakWaiver: process.env.OPENCLAW_RELEASE_STABLE_SOAK_WAIVER,
+          }),
+      );
+      if (sealedInputs) {
+        options = {
+          ...options,
+          pluginSdkApiAcknowledgement: sealedInputs.pluginSdkApiAcknowledgement,
+          stableSoakWaiver: sealedInputs.stableSoakWaiver,
+        };
+      }
       for (const consumer of [
         "publisher",
         ...(options.publishOpenclawNpm === false ? [] : ["core-npm"]),
@@ -324,6 +372,11 @@ export async function runReleasePublishPreflight(
             consumer: consumer as "publisher" | "core-npm" | "stable-closeout",
             releaseTag: options.tag,
             npmDistTag: options.npmDistTag,
+            stableSoakWaiver: options.stableSoakWaiver,
+            // The gate re-resolves the manifest; carry the live variable so a
+            // revoked sealed waiver is reported as revoked here too.
+            currentStableSoakWaiver: process.env.OPENCLAW_RELEASE_STABLE_SOAK_WAIVER ?? "",
+            laneWaiver: options.laneWaiver,
             expectedSha: sourceSha,
             expectedReleaseProfile: options.releaseProfile,
           }),
@@ -445,6 +498,7 @@ export async function runReleasePublishPreflight(
             plugins: inventory.npmPlugins,
             corePackages: inventory.corePackages,
             publishOpenclawNpm: options.publishOpenclawNpm,
+            npmDecisions: sealedInputs?.npmDecisions,
           }),
       )
     : undefined;
@@ -470,6 +524,7 @@ export async function runReleasePublishPreflight(
                 publishTag: plan.publishTag,
                 packageVersion: pkg.version,
                 releaseProfile: manifest?.releaseProfile,
+                stableSoakWaiver: options.stableSoakWaiver,
               });
         rows.push({ ...gate, id: `plugin-npm.bootstrap.${pkg.packageName}` });
       }

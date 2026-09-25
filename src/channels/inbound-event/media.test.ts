@@ -435,6 +435,19 @@ describe("channel inbound media facts", () => {
     ]);
   });
 
+  it("does not smear a singular legacy MediaUrl onto later slots after plural paths", () => {
+    const facts = resolveMediaFacts({
+      MediaPaths: ["/tmp/a.png", "/tmp/b.png"],
+      MediaUrls: ["file:///tmp/a.png"],
+      MediaUrl: "file:///tmp/a.png",
+    });
+    expect(facts).toHaveLength(2);
+    expect(facts[0]?.path).toBe("/tmp/a.png");
+    expect(facts[0]?.url).toBe("file:///tmp/a.png");
+    expect(facts[1]?.path).toBe("/tmp/b.png");
+    expect(facts[1]?.url).toBeUndefined();
+  });
+
   it("keeps canonical facts ahead of conflicting legacy fields and preserves sparse alignment", () => {
     const facts = resolveMediaFacts({
       media: [

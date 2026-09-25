@@ -8,6 +8,10 @@ read_when:
   - You are changing ClawSweeper dispatch or GitHub activity forwarding
 ---
 
+CI continues during Full Release Validation; the legacy release-priority variable
+does not pause workflow admission. See [release recovery](/reference/RELEASING#release-priority)
+for runs already deferred by older workflow revisions.
+
 This page is an index. CI is documented on nine pages, one per reader
 job. Open the page that matches your task.
 
@@ -15,17 +19,24 @@ job. Open the page that matches your task.
 no-op events before runner allocation and concurrency, keeping automation on
 GitHub-hosted runners.
 
+PR Node matrices stop sibling rows on failure. Same-repository PRs also cancel
+other job families through a scoped monitor, preserving a failed aggregate that
+names the originating job. Main and manual runs retain complete matrices. See
+[failure cancellation](/ci/pipeline#fail-fast-order).
+
 For the published-upgrade regression gate, see [selection and routing](/ci/scope-and-routing#scope-and-routing), [runner budgets](/ci/capacity#runner-registration-budget), and [Package Acceptance baselines](/ci/release-validation#suite-profiles). Weekly validation is listed under [Update Migration](/ci/scheduled-workflows#update-migration).
 
-Full `main` CI and cache warming are [hourly by default](/ci/scheduled-workflows#hourly-main-ci); `OPENCLAW_CI_ON_PUSH=true` restores their existing per-push admission. CodeQL, Workflow Sanity, and CI's `security-fast` keep their existing main-push scopes. Docs-only `main` pushes still skip the CI workflow and push-triggered cache warming. The cache warmer publishes dependencies independently of long builds and maintains a bounded hosted seed in hybrid mode. Every admitted canonical `main` run exercises one published-driver × candidate Docker upgrade; ordinary manual/release validation adds the other five Docker seed lanes. QA Smoke, real-Gateway browser checks, and named process proofs retain their selected `main` coverage and manual/release validation. Pull requests and exact-head PR fallback dispatches retain unit, boundary, build, and mocked-Gateway coverage. Windows retains its complete inventory across five measured file shards. See [scope selection](/ci/scope-and-routing/selection) and [capacity](/ci/capacity#owner-path-and-release-coverage) for the coverage trade-off.
+Full `main` CI and cache warming are [hourly by default](/ci/scheduled-workflows#hourly-main-ci); `OPENCLAW_CI_ON_PUSH=true` restores their existing per-push admission. CodeQL, Workflow Sanity, and CI's `security-fast` keep their existing main-push scopes. Docs-only `main` pushes still skip the CI workflow and push-triggered cache warming. The cache warmer publishes dependencies independently of long builds and maintains a bounded hosted seed in hybrid mode. Every admitted canonical `main` run exercises one published-driver × candidate Docker upgrade; ordinary manual/release validation adds the other five Docker seed lanes. QA Smoke, real-Gateway browser checks, and named process proofs retain their selected `main` coverage and manual/release validation. Pull requests and exact-head PR fallback dispatches retain unit, boundary, build, and mocked-Gateway coverage. Windows retains its complete inventory across five measured file shards. Hourly iOS retains `ios-build (tests)`; screenshot capture runs for its own changed inputs and full manual/release validation. See [scope selection](/ci/scope-and-routing/selection) and [capacity](/ci/capacity#owner-path-and-release-coverage) for the coverage trade-off.
 
-Core-test-only PRs use targeted type checks only when every selected test exists in the checkout. Deleting a core test keeps the full type-check plan, including the existing core stripes on GitHub and hybrid profiles.
+Eligible core-source and core-test PRs use targeted type checks when every selected path exists in the checkout. GitHub and hybrid profiles distribute the selected consumers across their existing core stripes; the Blacksmith profile checks them in the central row. Ambiguous ownership and deleted core tests keep the full type-check coverage.
 
 The [Testbox check workflow](/ci/local-proof#testbox-validation) defaults to a four-hour outer job budget for delegated full-suite proof. Individual test deadlines remain unchanged.
 
-Full GitHub and hybrid type checks run the five core stripes independently, retaining two compiler children per job. Current hybrid runs also split extension lint across six hosted jobs. Frozen targets keep their earlier layout; see [static checks](/ci/runners#runner-backend-modes).
+Full GitHub and hybrid type checks run the five core stripes independently, retaining two compiler children per job. Current hybrid runs also split extension lint across six hosted jobs. Trusted hybrid first attempts place the heavy first packed core-lint row on the Blacksmith 16-class, the second on the 8-class, and the final gate on the 4-class to avoid serial hosted assignment delays. Frozen targets keep their earlier layout; see [static checks](/ci/runners#runner-backend-modes).
 
 Core lint discovers separate source and UI TypeScript projects, retaining shared ambient declarations and imported dependencies. The source project also includes `src/**/*.test-support.cjs`; unrelated JavaScript files are not added as roots. See [local checks](/ci/local-proof#local-equivalents).
+
+Runtime topology checks inherit the existing [Go memory defaults](/ci/local-proof#local-equivalents), with caller overrides and the full architecture check sequence retained.
 
 Android native resource preparation uses the Mermaid renderer's filtered dependency install, including optional build tooling. Pnpm retains root dependencies but omits unrelated plugin packages; Gradle still builds the assets and runs the selected native tests and lint. Historical targets keep their compatibility path.
 
@@ -57,9 +68,19 @@ Compact planning reserves the actual appended plugin rows before applying those
 Node matrix caps, allowing existing hosted tooling compaction to use the
 remaining capacity.
 
+Plugin-sensitive PRs run the complete `agentic-plugins` suite, including bundled
+metadata public-surface coverage, in both precise and fallback plans. The scope
+includes `extensions/**`, `src/plugins/**`, and the manifest/catalog generators;
+see [Node test lanes](/ci/scope-and-routing/node-test-lanes).
+
 Roomy serial Blacksmith Node jobs use [measured Vitest worker sizing](/ci/capacity#vitest-worker-sizing), with existing hosted, frozen-target, and overlapping-plan limits.
 
 Source-only Linux Node shards can reuse content-validated compiled workers from the protected warmer; [fixed preparation costs](/ci/capacity#fixed-job-preparation) remain separate from test execution and runner capacity.
+
+Changed-target shards containing canonical E2E tests prepare the private-QA
+runtime once before launching test children. Only a successful preparation step
+enables prebuilt consumption, so the children reuse its JavaScript, assets, and
+freshness stamps instead of starting another full build.
 
 Vitest transform-cache fingerprints exclude the generated `.ci-harness` checkout so CI consumers and the protected warmer hash the same source inputs. Node bytecode caching remains enabled for ordinary Vitest runs; Vitest owns the worker-level coverage safeguard described in [local testing](/reference/test/local#core-commands).
 
@@ -68,12 +89,83 @@ prevents cached UI imports from mixing separate projects' Lit instances when a
 focused run and a full run share the persistent cache.
 
 Linux PR tests use Bun for the measured compatible unit lanes and Control UI
-Vitest job, with a targeted CSS-tokenizer optimizer workaround. Full Release Validation
-keeps their Node coverage and runs them on Bun too; see [test runtime selection](/ci/pipeline#test-runtime-selection).
+Vitest job. Full Release Validation keeps their Node coverage and runs them on Bun
+too; see [test runtime selection](/ci/pipeline#test-runtime-selection).
+Both runtimes group uncached, non-isolated UI files by environment in batches
+to reduce worker restarts while retaining native shard ownership and worker budgets.
+
+Frozen-target CI loads its Node shard planner, planning helpers, and measured
+costs from the pinned `workflow_sha` checkout. Test discovery and execution still
+use the candidate source, so current shard budgets do not replace release bytes.
+
+The npm/ClawHub release decision treats normal CI tests, plugin prerelease,
+cross-OS, performance, and QA lanes as advisory recorded evidence. Artifact,
+install-smoke, survivor, all first-hop compatibility, pack/npm qualification,
+package-integrity, and target-resolution proofs remain required. Aggregators follow required inputs;
+identity and provenance verification still apply.
+
+For publication, the sealed manifest supplies the SDK evidence digest,
+per-package npm decisions, and any approved `OPENCLAW_RELEASE_STABLE_SOAK_WAIVER`
+text. Explicit publisher inputs override those defaults; historical manifests
+retain their existing input contract. SDK API changes still need an
+operator-supplied acknowledgement, and the sealed waiver applies only while the
+repository variable still holds the same text. Publishers still validate live authority,
+artifact bytes, and registry state at the mutation boundary.
+
+Flaky tests never block npm/ClawHub publication: record advisory failures and
+investigate their owners without waiting for a green rerun. A passing replay
+alone does not prove a fix. Required artifact, install, update, target, and
+provenance proofs remain enforced. Native app publication is fully decoupled
+from npm/ClawHub, GitHub finalization, and main closeout; report each platform's
+readiness separately. The approximately 20-minute validation and one-hour
+publication targets require hosted timing evidence before being claimed.
+
+Release closeout refreshes hosted full-release shard costs with
+`node --import ./scripts/tsx.mjs scripts/ci-shard-timings-refresh.mts --run <ci-child-run-id>`.
+The generator records successful hosted job walls, including setup, in the existing
+`config/ci-test-timings.json` store. Release keys stay separate from compact CI
+spans and survive the daily refit. The hosted full planner splits measured rows
+above 12 minutes after file bundling, retaining exact coverage and worker settings.
+Complete split generations keep subsequent plans from recombining expensive work.
+An indivisible over-budget test fails planning with its owner named; unmeasured
+rows still need native timing evidence before claiming the 20-minute objective.
 
 Full Release Validation's exact-target UI job retains the current three native
 shards for both runtimes. Historical compatibility targets keep their original
 unsharded package command; see [UI job budgets](/ci/scope-and-routing/job-budgets).
+
+Set the repository variable `OPENCLAW_RELEASE_RUNNER_GROUP` to reserve a runner
+group for Full Release Validation and its artifact, validation, and reusable
+worker jobs. The Release Publish parent and its dispatched publish children read
+the same variable. It selects the group; it does not provision runners or increase
+concurrency limits. Missing group capacity queues jobs. Shared workflows receive
+an optional `runner_group` from their release caller, including `docker-release.yml`
+and `vercel-container-registry-publish.yml` from Release Publish; `docker-image-refresh.yml`,
+ordinary CI, scheduled performance, and unrelated reusable callers retain their routing.
+Approval and credentialed publish jobs (npm trusted publishing, ClawHub, Docker)
+keep their default GitHub-hosted labels, and the hourly plugin npm preview routes
+only when Release Publish dispatches it.
+The runner count, matrix caps, and default labels do not change.
+
+To reserve capacity outside ordinary PR/main pools:
+
+1. Create an org runner group with Linux runners labelled `ubuntu-latest`/`ubuntu-24.04`, plus the Windows/macOS labels used by validation.
+2. Grant `openclaw/openclaw` access to the group.
+3. Set `OPENCLAW_RELEASE_RUNNER_GROUP` to the group name; unset it to release the reservation and restore ordinary routing.
+
+Full Release Validation starts source-only children alongside artifact producers
+after admission and reuse selection. Candidate consumers start as soon as the
+candidate is verified, while npm qualification and independent validation can
+continue; see the [release fast path](/reference/RELEASING#fast-path-default).
+
+Release-dispatched validation children add one best-effort hosted receipt job
+each, up to seven per full campaign and none for ordinary PR/main CI. It retains
+job results independently of parent completion. With `reuse_evidence=true`, each
+dispatch checks bounded prior receipts for its exact target and inputs, including
+candidate bytes, and adopts only verified successful children. Other roles still
+dispatch. Failed, cancelled, and active parents can supply green children; the
+current parent seals and revalidates each immutable selection. Discovery adds no
+jobs or Blacksmith registrations and falls back to fresh work on a miss.
 
 Auto-reply reply tests run files in parallel with two workers per compact group. Their planner uses separate parallel timing identities; until those have measurements, serial group costs are divided by the effective worker count, with single-file groups retaining their full cost.
 

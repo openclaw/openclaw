@@ -70,6 +70,14 @@ export async function repairDoctorAgentDeletionJournal(params: {
       ],
     };
   }
+  if (missing && params.preflight.agentDatabaseRecoveryConfigValid !== true) {
+    return {
+      changes,
+      warnings: [
+        "Agent deletion journal missing; stores remain held because the ownership configuration could not be verified. Repair the configuration, then rerun openclaw doctor --fix.",
+      ],
+    };
+  }
   if (missing && params.shouldRepair) {
     if (params.preflight.pendingMigrations?.some((entry) => entry.kind === "state")) {
       const { prepareLegacyStateDatabaseSchema } =

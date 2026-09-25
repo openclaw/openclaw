@@ -257,7 +257,7 @@ test.each([
         } else if (key === second.sessionKey) {
           await firstRead.promise;
           if (change === "role") {
-            setUserProfileRole(viewerId, "self");
+            expect(setUserProfileRole(viewerId, "self").role).toBe("self");
           } else {
             await patchSessionEntryCore(first, () =>
               change === "draft"
@@ -293,17 +293,36 @@ test.each([
           if (!isRecord(params)) {
             throw new Error("Inventory requests require object parameters");
           }
+          if (change === "role" && params.sessionKey === first.sessionKey) {
+            expect(JSON.stringify(response)).toContain(bufferedText);
+          }
           await afterRead(params.sessionKey);
         }
         return response;
       };
-      const result = await asReader(() =>
+      const pending = asReader(() =>
         createSessionsListTool({ config: cfg, callGateway }).execute("buffered-inventory", {
           includeDerivedTitles: true,
           includeLastMessage: true,
           ...(stage === "chat.history" ? { messageLimit: 1 } : {}),
         }),
       );
+      if (change === "role") {
+        await expect(pending).rejects.toThrow(
+          "Your operator role changed; reconnect before continuing.",
+        );
+        expect(changed).toBe(true);
+      }
+      const result =
+        change === "role"
+          ? await asReader(() =>
+              createSessionsListTool({ config: cfg }).execute("fresh-inventory", {
+                includeDerivedTitles: true,
+                includeLastMessage: true,
+                messageLimit: 1,
+              }),
+            )
+          : await pending;
       expect(changed).toBe(true);
       expect(result.details).toMatchObject({
         count: change === "metadata" ? 2 : 1,

@@ -181,6 +181,41 @@ describe("successful update finalization ordering", () => {
   registerForegroundFinalizationTests({ tempDirs, mocks });
   registerServiceInstallationConvergenceTests(() => tempDirs.make("update-install-drift-"), mocks);
 
+  it("keeps an absent service out of already-current maintenance steps", async () => {
+    const message = "Gateway restart skipped: no Gateway service or listener is running.";
+    await finishSuccessfulPackageSwitch(
+      {},
+      {
+        coreAlreadyCurrent: true,
+        mutationStarted: false,
+        result: {
+          status: "skipped",
+          reason: "already-current",
+          mode: "npm",
+          steps: [],
+          durationMs: 0,
+        },
+        preManagedServiceStop: {
+          stopped: false,
+          inspected: true,
+          runtimeInspected: true,
+          running: false,
+          serviceMutationAllowed: false,
+          serviceMutationSkipMessage: message,
+          serviceUpdateVerdict: { kind: "absent" },
+        },
+      },
+    );
+    expect(mocks.restartService).not.toHaveBeenCalled();
+    expect(mocks.stopService).not.toHaveBeenCalled();
+    expect(mocks.printResult.mock.lastCall?.[0]).toMatchObject({
+      status: "skipped",
+      reason: "already-current",
+      steps: [],
+    });
+    expect(defaultRuntime.error).toHaveBeenCalledWith(message);
+  });
+
   it("refuses same-schema finalization after requester revocation", async () => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("finalizer-revoked-requester-") };
     const record = createUpdateRun({ trigger: "cli" }, { env });

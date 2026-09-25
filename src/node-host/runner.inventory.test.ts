@@ -1,5 +1,6 @@
 /** Tests node-host capability discovery and inventory publication. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { EventLoopReadyResult } from "../../packages/gateway-client/src/event-loop-ready.js";
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/schema/frames.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { GatewayClientOptions } from "../gateway/client.js";
@@ -24,6 +25,8 @@ async function withRunningNodeHost(runTest: () => Promise<void>): Promise<void> 
     ready: true,
     aborted: false,
     elapsedMs: 0,
+    maxDriftMs: 0,
+    checks: 1,
   });
   const processOnSpy = vi.spyOn(process, "on");
   const previousExitCode = process.exitCode;
@@ -79,6 +82,8 @@ describe("runNodeHost", () => {
       ready: true,
       aborted: false,
       elapsedMs: 0,
+      maxDriftMs: 0,
+      checks: 1,
     });
     mocks.availabilityOnWatch = {
       caps: ["canvas"],
@@ -373,6 +378,8 @@ describe("runNodeHost", () => {
       ready: true,
       aborted: false,
       elapsedMs: 0,
+      maxDriftMs: 0,
+      checks: 1,
     });
     const processOnSpy = vi.spyOn(process, "on");
     const previousExitCode = process.exitCode;
@@ -456,9 +463,7 @@ describe("runNodeHost", () => {
   });
 
   it("publishes plugin tools during MCP discovery and republishes catalog changes", async () => {
-    let resolveReadiness:
-      | ((value: { ready: false; aborted: false; elapsedMs: number }) => void)
-      | undefined;
+    let resolveReadiness: ((value: EventLoopReadyResult) => void) | undefined;
     mocks.startGatewayClientWhenEventLoopReady.mockReturnValueOnce(
       new Promise((resolve) => {
         resolveReadiness = resolve;
@@ -520,7 +525,7 @@ describe("runNodeHost", () => {
     await vi.waitFor(() => {
       expect(publishedToolNames()).toEqual(["healthy_search", "remote_echo"]);
     });
-    resolveReadiness?.({ ready: false, aborted: false, elapsedMs: 0 });
+    resolveReadiness?.({ ready: false, aborted: false, elapsedMs: 0, maxDriftMs: 0, checks: 0 });
     await expect(running).rejects.toThrow("event loop readiness timeout");
   });
 });

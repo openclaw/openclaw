@@ -165,7 +165,7 @@ model value into a different embedding model. See [llama.cpp](/plugins/llama-cpp
   <Accordion title="2. Legacy config key migrations">
     Ordinary Doctor, including `doctor --non-interactive`, automatically normalizes a legacy single-file config when the shared migration transforms produce a fully valid result. This also covers older npm updaters that invoke Doctor without `--fix`. The planner still requires complete plugin validation. Doctor preserves the original in the config backup ring and keeps state migration ordering intact. Includes, externally managed config, newer-written config, and remaining validation errors require the existing explicit repair or operator recovery path. Updaters that explicitly defer plugin repair or advertise a later writable config handoff keep automatic normalization deferred. This does not enable repair maintenance, service changes, or exec-approval migration without `--fix`.
 
-    Older Git updaters can keep an in-memory config snapshot and write it after Doctor exits. When that parent marks the update in progress without advertising support for Doctor config writes, Doctor preserves the config and defers importing retired plugin install records, including with `--fix`. The first fresh Gateway startup then performs the complete migration. Existing canonical plugin install records keep precedence; missing records from the legacy config are imported before that config is rewritten. Startup also handles records restored after the same build previously completed its migration checkpoint.
+    Older Git updaters can keep an in-memory config snapshot and write it after Doctor exits. When that parent marks the update in progress without advertising support for Doctor config writes, Doctor preserves the config and defers importing retired plugin install records, including with `--fix`. The first fresh Gateway startup then performs the complete migration. Existing canonical plugin install records keep precedence; missing records from the legacy config are imported before that config is rewritten. Importing these records does not skip required workspace-state migration or require a second Doctor run. Startup also handles records restored after the same build previously completed its migration checkpoint.
 
     Gateway startup automatically applies deterministic, prompt-free legacy config migrations when an otherwise invalid single-file config can be fully migrated. It uses the same migration transforms as `openclaw doctor --fix`, validates the complete result including plugin config before writing, and reports the applied changes. The write runs under the startup migration lease and preserves the previous config in the five-slot `openclaw.json.bak` / `.bak.1` through `.bak.4` backup ring.
 
@@ -199,8 +199,15 @@ model value into a different embedding model. See [llama.cpp](/plugins/llama-cpp
       can proceed.
     </Note>
 
-    Doctor no longer repairs the pre-June agent `embeddedHarness`, `embeddedPi`,
-    `sandbox.perSession`, `agents.defaults.llm`, and top-level `heartbeat` keys.
+    Doctor no longer repairs these pre-June keys:
+
+    - Agent `embeddedHarness`, `embeddedPi`, `sandbox.perSession`, and `agents.defaults.llm`.
+    - Top-level `heartbeat`, `routing.allowFrom`, and `routing.groupChat`.
+    - `channels.telegram.requireMention`, `channels.feishu.accounts.<id>.botName`,
+      and retired `channels.webchat` / `gateway.webchat` sections.
+    - `session.threadBindings.ttlHours` and Discord/LINE/Matrix/Telegram `threadBindings.ttlHours`,
+      including per-account settings.
+
     Configs containing these keys must be repaired before current validation can
     succeed. Doctor preserves the config and stops with recovery guidance instead
     of stripping these settings or replacing them with a backup. For an older installation,
@@ -213,14 +220,6 @@ model value into a different embedding model. See [llama.cpp](/plugins/llama-cpp
     | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
     | `tools.codeMode.runtime: "quickjs-wasi"` (global and per-agent)                                | `tools.codeMode.executor: "quickjs"` (an existing executor selection wins) |
     | `tools.codeMode.languages`, `agents.entries.*.tools.codeMode.languages`                         | removed (Code Mode executes JavaScript; activation and limits are preserved) |
-    | `routing.allowFrom`                                                                              | `channels.whatsapp.allowFrom`                                                |
-    | `routing.groupChat.requireMention`                                                               | `channels.whatsapp/telegram/imessage.groups."*".requireMention`             |
-    | `routing.groupChat.historyLimit`                                                                 | `messages.groupChat.historyLimit`                                            |
-    | `routing.groupChat.mentionPatterns`                                                              | `messages.groupChat.mentionPatterns`                                         |
-    | `channels.telegram.requireMention`                                                               | `channels.telegram.groups."*".requireMention`                               |
-    | `channels.webchat`, `gateway.webchat`                                                            | removed (WebChat is retired)                                                 |
-    | `channels.feishu.accounts.<accountId>.botName`                                                   | `channels.feishu.accounts.<accountId>.name`                                 |
-    | `session.threadBindings.ttlHours`, `channels.<id>.threadBindings.ttlHours` (and per-account)      | `...threadBindings.idleHours`                                               |
     | legacy `talk.voiceId`/`talk.voiceAliases`/`talk.modelId`/`talk.outputFormat`/`talk.apiKey`        | `talk.provider` + `talk.providers.<provider>`                               |
     | legacy top-level realtime Talk selectors (`talk.mode`/`talk.transport`/`talk.brain`/`talk.model`/`talk.voice`) | `talk.realtime`                                                              |
     | `messages.tts`                                                                                  | top-level `tts`                                                              |

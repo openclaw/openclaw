@@ -204,8 +204,8 @@ describe("subagent registry archive behavior", () => {
     vi.useRealTimers();
   });
 
-  it("does not set archiveAtMs for keep-mode run subagents", () => {
-    mod.registerSubagentRun({
+  it("does not set archiveAtMs for keep-mode run subagents", async () => {
+    await mod.registerSubagentRun({
       runId: "run-keep-1",
       childSessionKey: "agent:main:subagent:keep-1",
       requesterSessionKey: "agent:main:main",
@@ -226,7 +226,7 @@ describe("subagent registry archive behavior", () => {
     };
     vi.mocked(getAgentRunContext).mockReturnValue({} as never);
 
-    mod.registerSubagentRun({
+    await mod.registerSubagentRun({
       runId: "run-delete-1",
       childSessionKey: "agent:main:subagent:delete-1",
       requesterSessionKey: "agent:main:main",
@@ -260,7 +260,7 @@ describe("subagent registry archive behavior", () => {
     vi.mocked(captureSubagentCompletionReply).mockResolvedValue("completed result");
     vi.mocked(runSubagentAnnounceFlow).mockResolvedValue("retryable");
 
-    mod.registerSubagentRun({
+    await mod.registerSubagentRun({
       runId: "run-delete-completed",
       childSessionKey: "agent:main:subagent:delete-completed",
       requesterSessionKey: "agent:main:main",
@@ -971,8 +971,8 @@ describe("subagent registry archive behavior", () => {
     });
   });
 
-  it("does not set archiveAtMs for persistent session-mode runs", () => {
-    mod.registerSubagentRun({
+  it("does not set archiveAtMs for persistent session-mode runs", async () => {
+    await mod.registerSubagentRun({
       runId: "run-session-1",
       childSessionKey: "agent:main:subagent:session-1",
       requesterSessionKey: "agent:main:main",
@@ -988,8 +988,8 @@ describe("subagent registry archive behavior", () => {
     expect(run?.archiveAtMs).toBeUndefined();
   });
 
-  it("keeps archiveAtMs unset when replacing a keep-mode run after steer restart", () => {
-    mod.registerSubagentRun({
+  it("keeps archiveAtMs unset when replacing a keep-mode run after steer restart", async () => {
+    await mod.registerSubagentRun({
       runId: "run-old",
       childSessionKey: "agent:main:subagent:run-1",
       requesterSessionKey: "agent:main:main",
@@ -1016,7 +1016,7 @@ describe("subagent registry archive behavior", () => {
       agents: { defaults: { subagents: { archiveAfterMinutes: 1 } } },
     };
 
-    mod.registerSubagentRun({
+    await mod.registerSubagentRun({
       runId: "run-delete-old",
       childSessionKey: "agent:main:subagent:delete-old",
       requesterSessionKey: "agent:main:main",
@@ -1047,7 +1047,7 @@ describe("subagent registry archive behavior", () => {
     await fs.mkdir(attachmentsDir, { recursive: true });
     await fs.writeFile(path.join(attachmentsDir, "artifact.txt"), "artifact", "utf8");
 
-    mod.registerSubagentRun({
+    await mod.registerSubagentRun({
       runId: "run-delete-attachments-old",
       childSessionKey: "agent:main:subagent:delete-attachments-old",
       requesterSessionKey: "agent:main:main",
@@ -1067,12 +1067,12 @@ describe("subagent registry archive behavior", () => {
     await expect(fs.access(attachmentsDir)).resolves.toBeUndefined();
   });
 
-  it("treats archiveAfterMinutes=0 as never archive", () => {
+  it("treats archiveAfterMinutes=0 as never archive", async () => {
     currentConfig = {
       agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
     };
 
-    mod.registerSubagentRun({
+    await mod.registerSubagentRun({
       runId: "run-no-archive",
       childSessionKey: "agent:main:subagent:no-archive",
       requesterSessionKey: "agent:main:main",

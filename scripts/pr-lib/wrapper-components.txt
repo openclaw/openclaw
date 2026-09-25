@@ -1,5 +1,6 @@
 .github/workflows/pr-crabbox-gate-publisher.yml
 cli-root-options.mjs
+node-compile-cache.mjs
 node-sqlite.mjs
 node-version.mjs
 package.json
@@ -134,6 +135,7 @@ scripts/lib/record-shared.mjs
 scripts/lib/release-changelog.mjs
 scripts/lib/repo-root.mjs
 scripts/lib/test-selector-source-facts.mts
+scripts/lib/test-source-term-matcher.mts
 scripts/lib/tsdown-declaration-boundary.mts
 scripts/lib/tsgo-core-test-shards.mts
 scripts/lib/tsx-cli-shim.mjs
@@ -184,6 +186,7 @@ src/agents/defaults.ts
 src/agents/glob-pattern.ts
 src/agents/internal-runtime-context.ts
 src/agents/mcp-oauth-store-error.ts
+src/agents/model-auth-policy.ts
 src/agents/model-catalog-lookup.ts
 src/agents/model-catalog-metadata.ts
 src/agents/model-compat-catalog.ts
@@ -353,6 +356,7 @@ src/config/channel-schema-selection.ts
 src/config/cloud-worker-project-profiles.ts
 src/config/codex-plugin-diagnostics.ts
 src/config/config-env-vars.ts
+src/config/config-journal-snapshot.kernel.ts
 src/config/config-journal-snapshot.ts
 src/config/config-path-mutation.ts
 src/config/config-paths.ts
@@ -368,6 +372,7 @@ src/config/future-version-guard.ts
 src/config/gateway-control-ui-origins.ts
 src/config/gateway-env-selection.ts
 src/config/gateway-portal-ingress.ts
+src/config/gateway-public-origin.ts
 src/config/github-identity-profile-id.ts
 src/config/include-write-boundary.ts
 src/config/includes.ts
@@ -634,11 +639,8 @@ src/infra/file-descriptor.ts
 src/infra/file-lock-manager.ts
 src/infra/file-lock-sync.ts
 src/infra/file-lock.ts
-src/infra/file-read.ts
 src/infra/fixed-window-rate-limit.ts
-src/infra/fs-safe-advanced.ts
 src/infra/fs-safe-copy.worker.ts
-src/infra/fs-safe-defaults.ts
 src/infra/fs-safe.ts
 src/infra/gateway-lock-process.ts
 src/infra/gateway-owner-lease.ts
@@ -703,16 +705,12 @@ src/infra/openclaw-root.ts
 src/infra/path-case.ts
 src/infra/path-existence.ts
 src/infra/path-guards.ts
-src/infra/path-safety.ts
 src/infra/plain-object.ts
 src/infra/ports-lsof.ts
 src/infra/ports-netstat.ts
 src/infra/private-mode.ts
-src/infra/private-temp-workspace.ts
 src/infra/process-env.ts
 src/infra/prototype-keys.ts
-src/infra/regular-file.ts
-src/infra/replace-file.ts
 src/infra/restart-stale-pids.ts
 src/infra/runtime-process-entrypoints.ts
 src/infra/runtime-process-url.ts
@@ -736,6 +734,7 @@ src/infra/sqlite-existing-database.ts
 src/infra/sqlite-file-generation.ts
 src/infra/sqlite-files.ts
 src/infra/sqlite-handle-lifecycle.ts
+src/infra/sqlite-index-recovery.ts
 src/infra/sqlite-index-schema.ts
 src/infra/sqlite-integrity.ts
 src/infra/sqlite-live-snapshot.ts
@@ -769,6 +768,8 @@ src/infra/sqlite-snapshot-staging-owner.ts
 src/infra/sqlite-snapshot-staging.ts
 src/infra/sqlite-snapshot-wal-prefix.ts
 src/infra/sqlite-source-handle.ts
+src/infra/sqlite-source-revision.ts
+src/infra/sqlite-source-revision.worker.ts
 src/infra/sqlite-staging-token.ts
 src/infra/sqlite-store.worker.ts
 src/infra/sqlite-strict.ts
@@ -798,6 +799,7 @@ src/infra/startup-maintenance-required.ts
 src/infra/startup-migration-checkpoint.ts
 src/infra/state-database-coordinator-delegate.ts
 src/infra/state-database-coordinator-errors.ts
+src/infra/state-database-coordinator-owner.ts
 src/infra/state-database-coordinator-paths.ts
 src/infra/state-database-coordinator-acquisition.ts
 src/infra/state-database-coordinator.ts
@@ -889,6 +891,7 @@ src/memory/root-memory-files.ts
 src/model-catalog/bundled-catalog-stamp.ts
 src/model-catalog/index.ts
 src/model-catalog/manifest-planner.ts
+src/model-catalog/remote-bundle.ts
 src/model-catalog/remote-config.ts
 src/model-catalog/remote-overlay.ts
 src/model-catalog/remote-store.ts
@@ -899,6 +902,7 @@ src/plugin-sdk/file-lock.ts
 src/plugin-sdk/keyed-async-queue.ts
 src/plugin-sdk/message-tool-delivery-hints.ts
 src/plugin-state/plugin-blob-store.types.ts
+src/plugin-state/plugin-state-worker-contract.ts
 src/plugins/activation-planner.ts
 src/plugins/activation-source-config.ts
 src/plugins/bundle-manifest.ts
@@ -1026,6 +1030,7 @@ src/plugins/plugin-generation-artifact.ts
 src/plugins/plugin-generation-source-lookup.ts
 src/plugins/plugin-install-default-choice.ts
 src/plugins/plugin-instance-argument-views.ts
+src/plugins/plugin-instance-disposal.ts
 src/plugins/plugin-instance-error.ts
 src/plugins/plugin-instance-invocation.ts
 src/plugins/plugin-instance-module-loader.ts
@@ -1242,6 +1247,8 @@ src/state/openclaw-state-db-audit-migration.ts
 src/state/openclaw-state-db-borrow.ts
 src/state/openclaw-state-db-cache.idle.ts
 src/state/openclaw-state-db-cache.ts
+src/state/openclaw-state-db-content-version.ts
+src/state/openclaw-state-db-cache.wal.ts
 src/state/openclaw-state-db-contract.ts
 src/state/openclaw-state-db-delivery-queue-backfill.ts
 src/state/openclaw-state-db-doctor-schema.ts

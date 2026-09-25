@@ -92,6 +92,7 @@ type ChatModelControlsProps = {
   onFastModeSelect?: (value: ChatFastModeSelectValue, sessionKey: string) => unknown;
   onContextWindowSelect?: (value: string, sessionKey: string) => unknown;
   onModelSetup?: () => void;
+  onProviderSettings?: (provider: string) => void;
   onModelPickerOpen?: () => unknown;
   onModelPickerOpenChange?: (open: boolean) => void;
   onModelSelect?: (value: string, sessionKey: string, agentRuntime?: string | null) => unknown;
@@ -637,6 +638,8 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
           !selectionKnown,
         onModelSetup:
           policy?.restricted || retired || uninitialized ? undefined : props.onModelSetup,
+        onProviderSettings:
+          policy?.restricted || retired || uninitialized ? undefined : props.onProviderSettings,
         onOpen: props.onModelPickerOpen,
         onOpenChange: props.onModelPickerOpenChange,
         onModelSelect: async (next, targetSessionKey, agentRuntime) =>

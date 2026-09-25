@@ -9,6 +9,7 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 import { captureSidebarUiProof } from "./sidebar-customization.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Agent-first sidebar geometry" });
+const fixtureNow = Date.UTC(2026, 8, 24, 12);
 const imageAvatar =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAIElEQVR4nGN4nhWCFTEQkPj64w8ag5AEPqPgiDgdmAgA9YRzYZfFh50AAAAASUVORK5CYII=";
 const agentsList: AgentsListResult = {
@@ -45,7 +46,7 @@ const sessionRows = [
     hasActiveRun: true,
     status: "running",
     unread: true,
-    startedAt: Date.now() - 3_000,
+    startedAt: fixtureNow - 3_000,
   }),
   sessionRow("failure", "Review failed checks", {
     spawnedBy: "agent:main:parent",
@@ -83,6 +84,7 @@ suite.define(() => {
           hasTouch: touch,
         },
         async ({ page }) => {
+          await page.clock.setFixedTime(fixtureNow);
           await page.addInitScript(
             ({ key, prefs }) => {
               localStorage.setItem(key, JSON.stringify(prefs));
