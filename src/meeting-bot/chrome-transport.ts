@@ -26,6 +26,7 @@ import type {
   MeetingChromeTransportOptions,
 } from "./chrome-transport-types.js";
 import type { MeetingBrowserRequestCaller } from "./platform-adapter-contract.js";
+import type { MeetingRealtimeAudioTransport } from "./realtime-audio-transport.js";
 import { createBrowserMeetingRealtimeAudioTransport } from "./realtime-browser-audio-transport.js";
 import type { MeetingRealtimeAudioEngineHandle } from "./realtime-engine.js";
 import type {
@@ -167,6 +168,47 @@ function createMeetingChromeTransportWithAudioPolicy<
     await prepareAudioRuntime(params);
   }
 
+  async function startRealtimeEngine(
+    params: MeetingChromeLaunchParams<Config, Mode>,
+    transport: MeetingRealtimeAudioTransport,
+    node?: { nodeId: string; bridgeId: string },
+  ): Promise<MeetingRealtimeAudioEngineHandle> {
+    const bindings = options.runtime.createBindings({ platform: options.platform, ...params });
+    const engineContext = {
+      meetingSessionId: params.meetingSessionId,
+      requesterSessionKey: params.requesterSessionKey,
+      ...(node ? { logPrefix: "node" as const } : {}),
+      transport,
+      logger: params.logger,
+    };
+    if (params.mode === "agent") {
+      return await options.runtime.startAgentRealtimeEngine({
+        config: params.config,
+        fullConfig: params.fullConfig,
+        runtime: params.runtime,
+        platform: bindings.platform,
+        ...engineContext,
+        consultAgent: bindings.consultAgent,
+      });
+    }
+    return await options.runtime.startRealtimeEngine({
+      config: {
+        ...params.config,
+        realtime: { ...params.config.realtime, strategy: "bidi" },
+      },
+      fullConfig: params.fullConfig,
+      runtime: params.runtime,
+      ...bindings,
+      ...engineContext,
+      ...(node
+        ? {
+            talkSessionId: `${options.platform.id}:${params.meetingSessionId}:${node.bridgeId}:node-realtime`,
+            talkContext: node,
+          }
+        : {}),
+    });
+  }
+
   async function startLocalAudioBridge(
     params: MeetingChromeLaunchParams<Config, Mode> & {
       audio: MeetingAudioRuntime;
@@ -224,36 +266,7 @@ function createMeetingChromeTransportWithAudioPolicy<
         targetId: params.tab?.targetId,
         audioFormat: params.config.chrome.audioFormat,
       });
-      const bindings = options.runtime.createBindings({
-        platform: options.platform,
-        ...params,
-      });
-      const engine =
-        params.mode === "agent"
-          ? await options.runtime.startAgentRealtimeEngine({
-              config: params.config,
-              fullConfig: params.fullConfig,
-              runtime: params.runtime,
-              platform: bindings.platform,
-              meetingSessionId: params.meetingSessionId,
-              requesterSessionKey: params.requesterSessionKey,
-              transport,
-              logger: params.logger,
-              consultAgent: bindings.consultAgent,
-            })
-          : await options.runtime.startRealtimeEngine({
-              config: {
-                ...params.config,
-                realtime: { ...params.config.realtime, strategy: "bidi" },
-              },
-              fullConfig: params.fullConfig,
-              runtime: params.runtime,
-              ...bindings,
-              meetingSessionId: params.meetingSessionId,
-              requesterSessionKey: params.requesterSessionKey,
-              transport,
-              logger: params.logger,
-            });
+      const engine = await startRealtimeEngine(params, transport);
       return audioBridge.local(engine, params.audio);
     } catch (error) {
       await transport.dispose().catch(() => {});
@@ -506,40 +519,10 @@ function createMeetingChromeTransportWithAudioPolicy<
         audioFormat: params.config.chrome.audioFormat,
       });
       audioTransport = transport;
-      const bindings = options.runtime.createBindings({
-        platform: options.platform,
-        ...params,
+      const engine = await startRealtimeEngine(params, transport, {
+        nodeId,
+        bridgeId: result.bridgeId,
       });
-      const engine =
-        params.mode === "agent"
-          ? await options.runtime.startAgentRealtimeEngine({
-              config: params.config,
-              fullConfig: params.fullConfig,
-              runtime: params.runtime,
-              platform: bindings.platform,
-              meetingSessionId: params.meetingSessionId,
-              requesterSessionKey: params.requesterSessionKey,
-              logPrefix: "node",
-              transport,
-              logger: params.logger,
-              consultAgent: bindings.consultAgent,
-            })
-          : await options.runtime.startRealtimeEngine({
-              config: {
-                ...params.config,
-                realtime: { ...params.config.realtime, strategy: "bidi" },
-              },
-              fullConfig: params.fullConfig,
-              runtime: params.runtime,
-              ...bindings,
-              meetingSessionId: params.meetingSessionId,
-              requesterSessionKey: params.requesterSessionKey,
-              logPrefix: "node",
-              talkSessionId: `${options.platform.id}:${params.meetingSessionId}:${result.bridgeId}:node-realtime`,
-              talkContext: { nodeId, bridgeId: result.bridgeId },
-              transport,
-              logger: params.logger,
-            });
       return {
         nodeId,
         launched: browser.launched || result.launched === true,

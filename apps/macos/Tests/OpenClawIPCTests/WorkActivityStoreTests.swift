@@ -141,14 +141,36 @@ struct WorkActivityStoreTests {
 
     @Test func `resolve icon state honors override selection`() {
         let store = WorkActivityStore()
+        store.handleJob(sessionKey: "discord:group:1", state: "started")
         store.handleJob(sessionKey: "main", state: "started")
         #expect(store.iconState == .workingMain(.job))
 
+        let overrides: [(IconOverrideSelection, IconState)] = [
+            (.idle, .idle),
+            (.mainBash, .overridden(.tool(.bash))),
+            (.mainRead, .overridden(.tool(.read))),
+            (.mainWrite, .overridden(.tool(.write))),
+            (.mainEdit, .overridden(.tool(.edit))),
+            (.mainOther, .overridden(.tool(.other))),
+            (.otherBash, .overridden(.tool(.bash))),
+            (.otherRead, .overridden(.tool(.read))),
+            (.otherWrite, .overridden(.tool(.write))),
+            (.otherEdit, .overridden(.tool(.edit))),
+            (.otherOther, .overridden(.tool(.other))),
+        ]
+        for (selection, expected) in overrides {
+            store.resolveIconState(override: selection)
+            #expect(store.iconState == expected)
+        }
+
+        store.resolveIconState(override: .system)
+        #expect(store.iconState == .workingMain(.job))
+
+        store.handleJob(sessionKey: "main", state: "finished")
         store.resolveIconState(override: .idle)
         #expect(store.iconState == .idle)
-
-        store.resolveIconState(override: .otherEdit)
-        #expect(store.iconState == .overridden(.tool(.edit)))
+        store.resolveIconState(override: .system)
+        #expect(store.iconState == .workingOther(.job))
     }
 }
 

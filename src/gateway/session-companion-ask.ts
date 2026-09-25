@@ -37,7 +37,7 @@ import {
   sanitizeAnswer,
   selectDeltaNotes,
   type SessionCompanionPromptMessage,
-} from "./session-companion-prompts.js";
+} from "./session-companion-prompt.js";
 import {
   trimSessionCompanionExchanges,
   type SessionCompanionThread,

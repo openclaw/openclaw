@@ -85,19 +85,13 @@ it("reuses Doctor's readonly child for pending records and discovery, then joins
       }
       return child;
     };
+    vi.mocked(spawn).mockImplementation(observeChild);
     try {
-      const completed: { result?: Awaited<ReturnType<typeof runDoctorConfigPreflight>> } = {};
-      await vi.mocked(spawn).withImplementation(observeChild, async () => {
-        completed.result = await runDoctorConfigPreflight({
-          migrateLegacyConfig: false,
-          requireStartupMigrationCheckpoint: true,
-          observe: false,
-        });
+      const result = await runDoctorConfigPreflight({
+        migrateLegacyConfig: false,
+        requireStartupMigrationCheckpoint: true,
+        observe: false,
       });
-      const result = completed.result;
-      if (!result) {
-        throw new Error("Doctor preflight did not settle");
-      }
       expect(result.snapshot.valid).toBe(true);
       expect(pendingReadLaunches.length).toBeGreaterThan(0);
       expect(pendingReadLaunches.every((count) => count === 0)).toBe(true);
@@ -137,6 +131,7 @@ it("reuses Doctor's readonly child for pending records and discovery, then joins
       }
       expect(checkpoint.hasActiveStartupMigrationLease()).toBe(false);
     } finally {
+      vi.mocked(spawn).mockImplementation(spawnChild);
       await closeOpenClawStateDatabaseAsync();
     }
   });
