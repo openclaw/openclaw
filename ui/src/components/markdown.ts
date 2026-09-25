@@ -705,8 +705,9 @@ export function toStreamingMarkdownParts(
     (previous.markdown === stableMarkdown ||
       (previous.markdown.endsWith("\n") &&
         !/^(?: {4}| {0,3}[\t>])/mu.test(stableMarkdown) &&
-        !/^ {0,3}(?:[-+*]|\d{1,9}[.)])[ \t]*$/mu.test(stableMarkdown) &&
+        !/^ {0,3}(?:[-+*]|\d{1,9}[.)])(?:[ \t]|$)/mu.test(stableMarkdown) &&
         !stableMarkdown.includes("<") &&
+        !isMarkdownBlockArtText(stableMarkdown) &&
         !previous.html.includes('class="markdown-block-art"') &&
         (renderOptions.mode === "document" || boundary <= MARKDOWN_PARSE_LIMIT)));
   let stableHtml = incremental ? previous.html : "";

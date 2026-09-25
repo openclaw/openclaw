@@ -12,7 +12,7 @@ import {
 } from "./markdown-details.ts";
 import { createMarkdownParser } from "./markdown-parser.ts";
 
-const FENCE_OPEN_RE = /^ {0,3}(`{3,}|~{3,})/;
+const FENCE_OPEN_RE = /^[ \t]{0,3}(`{3,}|~{3,})/;
 const FENCE_CONTAINER_PREFIX_RE = /^[ \t]{0,3}(?:(?:>\s?)|(?:(?:[-+*]|\d{1,9}[.)])[ \t]+))/;
 const LIST_ITEM_OPEN_RE = /^[ \t]{0,3}(?:[-+*]|\d{1,9}[.)])[ \t]+/u;
 const LINK_REFERENCE_CANDIDATE_RE = /^[ \t]*\[/u;

@@ -89,6 +89,34 @@ describe("toStreamingMarkdownParts", () => {
     );
   });
 
+  it("classifies accumulated glyph paragraphs as one block-art prefix", () => {
+    const key = "accumulated-block-art";
+    const source = "▀▀▀▀\n\n";
+    toStreamingMarkdownParts(source, {}, key);
+    const fragment = htmlFragment(
+      toStreamingMarkdownParts(`${source}▄▄▄▄\n\nIntro`, {}, key).join(""),
+    );
+    expect(fragment.querySelector("code.markdown-block-art")?.textContent).toBe("▀▀▀▀\n\n▄▄▄▄\n\n");
+  });
+
+  it("keeps list-looking fence markers inside a root code block", () => {
+    const key = "literal-list-fence";
+    const source = "~~~\ncode\n- ~~~\n";
+    toStreamingMarkdownParts(source, {}, key);
+    const fragment = htmlFragment(toStreamingMarkdownParts(`${source}more\n\n`, {}, key).join(""));
+    expect(fragment.querySelector("pre code")?.textContent).toBe("code\n- ~~~\nmore\n\n");
+  });
+
+  it("keeps tab-indented list fences incomplete until their closer arrives", () => {
+    const fragment = htmlFragment(
+      toStreamingMarkdownParts("- item\n\n\t~~~mermaid\n\tgraph TD;\n", {}, "tab-list-fence").join(
+        "",
+      ),
+    );
+    expect(fragment.querySelector(".markdown-mermaid")).toBeNull();
+    expect(fragment.querySelector("li code")?.textContent).toBe("graph TD;\n");
+  });
+
   it("keeps a completed fence and its continuation in one blockquote", () => {
     const key = "quoted-fence-continuation";
     const source = "> ~~~\n> code\n> ~~~\n";
