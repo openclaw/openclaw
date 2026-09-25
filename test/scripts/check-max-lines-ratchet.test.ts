@@ -58,6 +58,19 @@ function git(cwd: string, args: string[]): void {
   });
 }
 
+function gitOutput(cwd: string, args: string[]): string {
+  return execFileSync(
+    "git",
+    ["-c", "user.email=test@example.com", "-c", "user.name=Test", ...args],
+    {
+      cwd,
+      env: fixtureEnv(),
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  ).trim();
+}
+
 function commitFixture(root: string, message = "base"): void {
   for (const args of [["init"], ["add", "."], ["commit", "-m", message]]) {
     git(root, args);
@@ -353,7 +366,7 @@ describe("check-max-lines-ratchet", () => {
     fs.writeFileSync(path.join(root, "unrelated.txt"), "unrelated\n");
     git(root, ["add", "."]);
     git(root, ["commit", "-m", "disconnected base"]);
-    const disconnectedBase = git(root, "rev-parse", "HEAD");
+    const disconnectedBase = gitOutput(root, ["rev-parse", "HEAD"]);
     git(root, ["checkout", "release"]);
 
     vi.spyOn(console, "error").mockImplementation(() => {});
