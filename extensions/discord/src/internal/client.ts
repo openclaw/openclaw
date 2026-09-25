@@ -6,14 +6,18 @@ import { ComponentRegistry } from "./component-registry.js";
 import { BaseMessageInteractiveComponent, type Modal } from "./components.js";
 import { DiscordEntityCache } from "./entity-cache.js";
 import { DiscordEventQueue, type DiscordEventQueueOptions } from "./event-queue.js";
+import type { GatewayPlugin } from "./gateway.js";
 import { dispatchInteraction } from "./interaction-dispatch.js";
 import { RequestClient, type RequestClientOptions } from "./rest.js";
 import type { Guild, GuildMember, User } from "./structures.js";
+import type { VoicePlugin } from "./voice.js";
 
 export abstract class Plugin {
   abstract readonly id: string;
   registerClient?(client: Client): Promise<void> | void;
 }
+
+export type RegisteredPlugin = GatewayPlugin | VoicePlugin;
 
 type AnyListener = {
   type: string;
@@ -31,7 +35,7 @@ interface ClientOptions {
 }
 
 export class Client {
-  plugins: Array<{ id: string; plugin: Plugin }> = [];
+  plugins: RegisteredPlugin[] = [];
   options: ClientOptions;
   commands: DiscordCommand[];
   listeners: AnyListener[];
@@ -52,7 +56,7 @@ export class Client {
       components?: BaseMessageInteractiveComponent[];
       modals?: Modal[];
     },
-    plugins: Plugin[] = [],
+    plugins: RegisteredPlugin[] = [],
   ) {
     if (!options.clientId) {
       throw new Error("Missing Discord application ID");
@@ -92,12 +96,15 @@ export class Client {
     }
     for (const plugin of plugins) {
       void plugin.registerClient?.(this);
-      this.plugins.push({ id: plugin.id, plugin });
+      this.plugins.push(plugin);
     }
   }
 
-  getPlugin<T = Plugin>(id: string): T | undefined {
-    return this.plugins.find((entry) => entry.id === id)?.plugin as T | undefined;
+  getPlugin(id: "gateway"): GatewayPlugin | undefined;
+  getPlugin(id: "voice"): VoicePlugin | undefined;
+  getPlugin(id: string): RegisteredPlugin | undefined;
+  getPlugin(id: string): RegisteredPlugin | undefined {
+    return this.plugins.find((plugin) => plugin.id === id);
   }
 
   registerListener(listener: AnyListener): AnyListener {
