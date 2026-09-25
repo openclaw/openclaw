@@ -117,12 +117,18 @@ sanitized issue body and defaults confirmation to **No**. After confirmation,
 OpenClaw checks the GitHub CLI's active `github.com` account with a silent,
 read-only request before issue creation. Fallback and pending outcomes retain the
 sanitized report locally; a confirmed issue keeps only its durable issue URL.
-If the CLI is missing or that check cannot confirm authentication, OpenClaw
-provides a prefilled issue link without starting issue creation. If the exact
-report exceeds the browser URL limit, OpenClaw keeps the sanitized body locally
-and returns to the action menu, where reporting can be chosen and confirmed
-again. A report preparation or submission
-error also returns to that menu; Diagnose runs only when selected explicitly.
+If the CLI is missing, authentication is unavailable, or GitHub rejects the
+upload, OpenClaw keeps the sanitized report locally and returns to the previous
+action menu. Fix the problem, then choose **Report update failure** and confirm
+again to retry the same report, or choose **Report in browser** to review and
+submit it with your browser's GitHub account. The browser choice is available
+when the prepared report fits a prefilled link and no uncertain upload is pending;
+it does not require the GitHub CLI. Completed update and Doctor checks are not
+rerun. Preparation or submission errors also return to the menu. An uncertain
+upload stays pending: **Check report status** looks for the existing issue without
+creating another one, and no browser handoff is offered.
+Successful submission, explicit exit, and cancellation retain their normal
+behavior; Diagnose runs only when selected explicitly.
 In the Control UI, an interrupted
 pre-create preparation becomes retryable after its local reservation expires.
 After an uncertain creation result, OpenClaw checks for an issue matching the

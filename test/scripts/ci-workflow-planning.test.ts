@@ -8958,23 +8958,6 @@ describe("ci workflow guards", () => {
     ]);
   });
 
-  it("fails a release-deferred CI gate by naming the release run", () => {
-    const deferred = runCiGateFixture(renderCiGateEnvironment({}, { preflight: "skipped" }), {
-      PREFLIGHT_RESULT: "skipped",
-      RELEASE_PRIORITY_RUN: "77",
-    });
-    expect(deferred.status).toBe(1);
-    expect(deferred.stdout).toContain("::error title=Deferred for release 77::");
-    expect(deferred.stdout).toContain("pnpm frv prioritize --restore");
-    // Without an active release, a skipped preflight is an ordinary gate failure.
-    const plain = runCiGateFixture(renderCiGateEnvironment({}, { preflight: "skipped" }), {
-      PREFLIGHT_RESULT: "skipped",
-      RELEASE_PRIORITY_RUN: "",
-    });
-    expect(plain.status).toBe(1);
-    expect(plain.stdout).not.toContain("Deferred for release");
-  });
-
   it("emits one final CI gate after every selected lane", () => {
     const workflow = readCiWorkflow();
     const gate = workflow.jobs["ci-gate"];
@@ -9026,11 +9009,6 @@ describe("ci workflow guards", () => {
     const verifyStep = gate.steps.find(
       (step: WorkflowStep) => step.name === "Verify selected CI lanes",
     );
-    expect(Object.keys(verifyStep.env)).toEqual([
-      "PREFLIGHT_RESULT",
-      "RELEASE_PRIORITY_RUN",
-      "JOB_RESULTS",
-    ]);
     const resultRows: string[] = verifyStep.env.JOB_RESULTS.trim().split("\n");
     expect(resultRows.slice(0, requiredJobs.length)).toEqual(
       requiredJobs.map((job) => `${job}=\${{ needs.${job}.result }}|true`),

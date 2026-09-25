@@ -8,6 +8,10 @@ read_when:
   - You are changing ClawSweeper dispatch or GitHub activity forwarding
 ---
 
+CI continues during Full Release Validation; the legacy release-priority variable
+does not pause workflow admission. See [release recovery](/reference/RELEASING#release-priority)
+for runs already deferred by older workflow revisions.
+
 This page is an index. CI is documented on nine pages, one per reader
 job. Open the page that matches your task.
 

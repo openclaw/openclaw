@@ -12,9 +12,8 @@ permissions: {}
 jobs:
   real-behavior-proof:
     name: PR context and evidence
-    # Release priority: hosted-runner work defers while OPENCLAW_RELEASE_PRIORITY_RUN names an active Full Release Validation.
     if: >-
-      ${{ (vars.OPENCLAW_RELEASE_PRIORITY_RUN == '' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/heads/release') || startsWith(github.base_ref, 'release')) && (
+      ${{ (
         github.event.pull_request.user.type != 'Bot' &&
         !endsWith(github.event.pull_request.user.login, '[bot]') &&
         !startsWith(github.event.pull_request.user.login, 'app/') &&

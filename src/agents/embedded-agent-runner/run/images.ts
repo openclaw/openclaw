@@ -1,6 +1,7 @@
 import path from "node:path";
 import { MAX_VIDEO_BYTES } from "@openclaw/media-core/constants";
 import { normalizeMimeType } from "@openclaw/media-core/mime";
+import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type {
   ModelInputContent,
@@ -176,15 +177,11 @@ export function detectImageReferences(prompt: string): MediaFileRef[] {
     }
   }
 
-  while ((match = WINDOWS_DRIVE_PATH_PATTERN.exec(pathPrompt)) !== null) {
-    if (match[1]) {
-      addPathRef(match[1]);
-    }
-  }
-
-  while ((match = PATH_PATTERN.exec(pathPrompt)) !== null) {
-    if (match[1]) {
-      addPathRef(match[1]);
+  for (const pattern of [WINDOWS_DRIVE_PATH_PATTERN, PATH_PATTERN]) {
+    while ((match = pattern.exec(pathPrompt)) !== null) {
+      if (match[1]) {
+        addPathRef(match[1]);
+      }
     }
   }
 
@@ -272,22 +269,6 @@ async function loadMediaFromRef(
     );
     return null;
   }
-}
-
-async function loadImageFromRef(
-  ref: MediaFileRef,
-  workspaceDir: string,
-  options?: Parameters<typeof loadMediaFromRef>[2],
-): Promise<ImageContent | null> {
-  const media = await loadMediaFromRef(ref, workspaceDir, { ...options, label: "Native image" });
-  if (!media || media.kind !== "image") {
-    return null;
-  }
-  return {
-    type: "image",
-    data: media.buffer.toString("base64"),
-    mimeType: media.contentType ?? "image/jpeg",
-  };
 }
 
 export async function detectAndLoadPromptImages(params: {
@@ -445,7 +426,8 @@ export async function detectAndLoadPromptImages(params: {
           "prepareTurnAttachments",
         )?.prepareTurnAttachments,
       );
-    const image = await loadImageFromRef(ref, ref.workspaceDir ?? params.workspaceDir, {
+    const loadedMedia = await loadMediaFromRef(ref, ref.workspaceDir ?? params.workspaceDir, {
+      label: "Native image",
       maxBytes: params.maxBytes,
       workspaceOnly: params.workspaceOnly,
       localRoots: gatewayAttachment
@@ -453,12 +435,17 @@ export async function detectAndLoadPromptImages(params: {
         : (params.localRoots ?? (params.workspaceOnly ? [params.workspaceDir] : undefined)),
       sandbox: gatewayAttachment ? undefined : params.sandbox,
     });
-    if (image) {
-      loadedCount++;
-      log.debug(`Native image: loaded ${ref.type} ${ref.resolved}`);
-    } else {
+    if (!loadedMedia || loadedMedia.kind !== "image") {
       skippedCount++;
+      return null;
     }
+    const image: ImageContent = {
+      type: "image",
+      data: loadedMedia.buffer.toString("base64"),
+      mimeType: loadedMedia.contentType ?? "image/jpeg",
+    };
+    loadedCount++;
+    log.debug(`Native image: loaded ${ref.type} ${ref.resolved}`);
     return image;
   };
   const promptImages: PromptImageEntry[] = [];
@@ -676,10 +663,7 @@ async function materializePromptMediaMessages(
       } as ProviderContext["messages"][number] as AgentMessage;
       continue;
     }
-    const nextMeta =
-      meta && typeof meta === "object" && !Array.isArray(meta)
-        ? { ...(meta as Record<string, unknown>) }
-        : {};
+    const nextMeta = { ...asNonArrayRecord(meta) };
     if (result.images.length > 0) {
       nextMeta.mediaImageBlockFactIndexes = result.imageFactIndexes;
     } else {
