@@ -267,7 +267,7 @@ describe("Anthropic Claude Code version probe real Gateway proof", () => {
     const logs = gateway.logs();
     const marker = await fs.readFile(probe.markerPath, "utf8");
     const proof = {
-      warning,
+      warning: WARNING,
       warningCount: logs.split(WARNING).length - 1,
       requestCount: provider.requests.length,
       request: {
@@ -285,7 +285,7 @@ describe("Anthropic Claude Code version probe real Gateway proof", () => {
     };
     console.log(`[anthropic-version-proof] ${JSON.stringify(proof)}`);
     expect(proof).toMatchObject({
-      warning,
+      warning: WARNING,
       warningCount: 1,
       requestCount: 1,
       fakeProbeInvoked: true,
