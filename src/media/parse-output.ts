@@ -240,6 +240,35 @@ function splitMediaDirectiveParts(payload: string): string[] {
   return parts;
 }
 
+// A directive can list several quoted references, as in
+// `MEDIA:"/tmp/first image.png" "/tmp/second image.png"`. Such a payload also starts and ends with the
+// same quote, so unwrapping it as one value would merge the references. They are only separate when
+// whitespace — at least one character of it — sits between them. A single quoted reference whose own
+// value ends with the enclosing quote, such as `MEDIA:"https://example.com/video.mp4?token=ends""`,
+// leaves that final quote outside every pair, so it still unwraps as one value. A value that ends with
+// a quote pair, such as `MEDIA:"https://example.com/video.mp4?token=ends"""`, pairs those two trailing
+// quotes with no gap between them, so it unwraps as one value as well and the URL keeps its tail.
+const QUOTED_REFERENCE_RE = /"[^"]*"|'[^']*'|`[^`]*`/g;
+
+function listsSeparateQuotedReferences(payload: string): boolean {
+  const references = [...payload.matchAll(QUOTED_REFERENCE_RE)];
+  if (references.length < 2) {
+    return false;
+  }
+  let cursor = 0;
+  for (const [position, reference] of references.entries()) {
+    const index = reference.index ?? 0;
+    const gap = payload.slice(cursor, index);
+    // Only real whitespace separates references. Touching quote pairs are siblings of one value, so
+    // an empty gap after the first reference keeps the payload whole instead of truncating it.
+    if (gap.trim() !== "" || (position > 0 && gap === "")) {
+      return false;
+    }
+    cursor = index + reference[0].length;
+  }
+  return payload.slice(cursor).trim() === "";
+}
+
 function unwrapQuoted(value: string): string | undefined {
   const trimmed = value.trim();
   if (trimmed.length < 2) {
@@ -251,9 +280,6 @@ function unwrapQuoted(value: string): string | undefined {
     return undefined;
   }
   if (first !== `"` && first !== "'" && first !== "`") {
-    return undefined;
-  }
-  if (trimmed.indexOf(first, 1) !== trimmed.length - 1) {
     return undefined;
   }
   return trimmed.slice(1, -1).trim();
@@ -493,7 +519,11 @@ export function splitMediaOutput(
       pieces.push(line.slice(cursor, start));
 
       const payload = expectDefined(match[1], "parse regex capture 1");
-      const unwrapped = unwrapQuoted(payload);
+      const quotedValue = unwrapQuoted(payload);
+      const unwrapped =
+        quotedValue !== undefined && !listsSeparateQuotedReferences(payload)
+          ? quotedValue
+          : undefined;
       const payloadValue = unwrapped ?? payload;
       const parts = unwrapped ? [unwrapped] : splitMediaDirectiveParts(payload);
       const mediaStartIndex = media.length;
@@ -501,7 +531,8 @@ export function splitMediaOutput(
       const invalidParts: string[] = [];
       let hasValidMedia = false;
       for (const part of parts) {
-        const candidate = cleanCandidate(part);
+        // Matched quotes delimit the reference; punctuation inside them belongs to its value.
+        const candidate = unwrapped === undefined ? cleanCandidate(part) : part;
         const allowSpaces = Boolean(unwrapped) || /\s/.test(candidate);
         if (isValidMedia(candidate, { allowSpaces })) {
           media.push(candidate);
@@ -535,7 +566,7 @@ export function splitMediaOutput(
       }
 
       if (!hasValidMedia) {
-        const fallback = cleanCandidate(payloadValue);
+        const fallback = unwrapped ?? cleanCandidate(payloadValue);
         if (isValidMedia(fallback, { allowSpaces: true, allowBareFilename: true })) {
           media.push(fallback);
           hasValidMedia = true;

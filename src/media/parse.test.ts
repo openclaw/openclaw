@@ -194,6 +194,40 @@ describe("splitMediaFromOutput", () => {
     expectParsedMediaOutputCase(input, { mediaUrls: [...mediaUrls] });
   });
 
+  it("separates quoted references without truncating a quoted signed URL", () => {
+    // Both payloads start and end with the same quote: the first one lists two references, the second
+    // is a single reference whose own value ends with that quote, which a signed URL can do.
+    expectParsedMediaOutputCase('MEDIA:"/tmp/ends" "/tmp/second.png"', {
+      mediaUrls: ["/tmp/ends", "/tmp/second.png"],
+    });
+    for (const quote of ['"', "'"]) {
+      const signedUrl = 'https://example.com/video.mp4?token=ends"';
+      expectAcceptedMediaPathCase(signedUrl, `MEDIA:${quote}${signedUrl}${quote}`);
+    }
+    const signedPath = "/tmp/signed?token=ends'";
+    expectAcceptedMediaPathCase(signedPath, `MEDIA:'${signedPath}'`);
+    // A quoted value that is too long is rejected outright rather than cleaned down to an accepted URL.
+    const prefix = "https://example.com/video.mp4?token=";
+    const tooLong = `${prefix}${"a".repeat(4096 - prefix.length)},`;
+    expectRejectedRemoteMediaUrlCase(`MEDIA:"${tooLong}"`);
+  });
+
+  it("keeps a trailing quote pair inside one quoted reference", () => {
+    // The two closing quotes pair up with nothing between them, so they are part of the single quoted
+    // value rather than a second, empty reference. Splitting there would cut the signed URL short and
+    // leak the quotes into the visible reply text.
+    expectParsedMediaOutputCase('MEDIA:"https://example.com/video.mp4?token=ends"""', {
+      mediaUrls: ['https://example.com/video.mp4?token=ends""'],
+    });
+    // Real whitespace still separates references, including when the second value is empty.
+    expectParsedMediaOutputCase(
+      'MEDIA:"https://example.com/video.mp4?token=ends" "/tmp/second.png"',
+      {
+        mediaUrls: ["https://example.com/video.mp4?token=ends", "/tmp/second.png"],
+      },
+    );
+  });
+
   it.each([
     "MEDIA:../../../etc/passwd",
     "MEDIA:../../.env",
