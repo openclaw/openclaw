@@ -904,6 +904,13 @@ export function assertReleaseCandidateTag(tag: string, targetSha: string, cwd: s
   }
 }
 
+function savedPublishWorkflowRef(statePath: string) {
+  const saved = existsSync(statePath)
+    ? readJson(statePath, "release candidate state").publishWorkflowRef
+    : undefined;
+  return typeof saved === "string" && PUBLISH_TOOLING_TAG_PATTERN.test(saved) ? saved : "";
+}
+
 function gitIsAncestor(ancestor: string, target: string, cwd = process.cwd()) {
   const result = spawnSync(
     "git",
@@ -2063,17 +2070,24 @@ async function main() {
     workflowRef: options.workflowRef,
   });
   // Publication may use repaired tooling while the prepared tarball retains its original producer.
+  const statePath = join(options.outputDir, RELEASE_CANDIDATE_STATE_FILE);
   if (options.workflowSha && !options.publishWorkflowRef) {
     if (options.workflowSha !== toolingSha) {
       throw new Error(
         `--workflow-sha ${options.workflowSha} does not match tooling checkout ${toolingSha}`,
       );
     }
-    const ensured = ensureReleasePublishToolingTag({
-      runGh: runReleaseToolingGh,
-      repo: options.repo,
-      toolingSha,
-    });
+    // A resumed candidate keeps the exact tag it recorded; a newer tag at the
+    // same SHA must not fail state reconciliation. The identity check below
+    // still proves that saved tag resolves to this tooling SHA.
+    const savedTag = savedPublishWorkflowRef(statePath);
+    const ensured = savedTag
+      ? { tag: savedTag, created: false }
+      : ensureReleasePublishToolingTag({
+          runGh: runReleaseToolingGh,
+          repo: options.repo,
+          toolingSha,
+        });
     options.publishWorkflowRef = ensured.tag;
     console.log(
       `${ensured.created ? "created" : "reusing"} protected tooling tag ${ensured.tag} at ${toolingSha}`,
@@ -2100,7 +2114,6 @@ async function main() {
   if (registryPackageNames.size !== options.parallelsRegistryPackageArtifacts.length) {
     throw new Error("Parallels registry package artifacts must have unique package names");
   }
-  const statePath = join(options.outputDir, RELEASE_CANDIDATE_STATE_FILE);
   const expectedState = buildReleaseCandidateState(options, { targetSha, toolingSha });
   let candidateState = reconcileReleaseCandidateState(
     existsSync(statePath) ? readJson(statePath, "release candidate state") : undefined,

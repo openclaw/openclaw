@@ -219,8 +219,16 @@ describe("release candidate checklist", () => {
     registryAdmission?: boolean;
     preflightFailure?: boolean;
     workflowSha?: string;
+    savedToolingTag?: string;
   }>([
     { tag: "v2026.9.1", pin: "2026.9.1", expected: "passed", failedRegistry: "" },
+    {
+      tag: "v2026.9.1",
+      pin: "2026.9.1",
+      expected: "passed",
+      workflowSha: "b".repeat(40),
+      savedToolingTag: "release-publish/bbbbbbbbbbbb-100",
+    },
     ...["normal", "prepared"].map((publicationRoute) => ({
       tag: "v2026.9.1",
       pin: "2026.9.1",
@@ -331,6 +339,7 @@ describe("release candidate checklist", () => {
       registryAdmission = false,
       preflightFailure = false,
       workflowSha,
+      savedToolingTag,
     }) => {
       const { root: targetRoot, git } = candidateGitFixture({
         "package.json": JSON.stringify({ version: tag.slice(1) }),
@@ -379,6 +388,8 @@ describe("release candidate checklist", () => {
         source.match(/^function checkCandidateAndroidVersion\([\s\S]*?^\}/mu)?.[0] ?? "";
       const selectPublication =
         source.match(/^function publicationSelectionForChecklist\([\s\S]*?^\}/mu)?.[0] ?? "";
+      const savedTagReader =
+        source.match(/^function savedPublishWorkflowRef\([\s\S]*?^\}/mu)?.[0] ?? "";
       const log = vi.fn();
       const stages: string[] = [];
       const writeState = vi.fn<(path: string, state: unknown) => void>(
@@ -407,7 +418,12 @@ describe("release candidate checklist", () => {
               npmPreflightRunId: "444",
               ...(launch === "mismatch" ? { targetSha: "c".repeat(40) } : {}),
             }
-          : undefined;
+          : savedToolingTag
+            ? {
+                ...buildReleaseCandidateState(options, { targetSha, toolingSha }),
+                publishWorkflowRef: savedToolingTag,
+              }
+            : undefined;
       if (savedState) {
         writeFileSync(statePath, JSON.stringify(savedState));
       }
@@ -479,11 +495,14 @@ describe("release candidate checklist", () => {
       // Run the real coordinator and evidence writers; unrelated remote release gates are fixtures.
       const dispatches: Record<string, string>[] = [];
       const completion = runInNewContext(
-        stripNodeTypeScriptTypes(`${android}\n${selectPublication}\n${main}\nmain();`),
+        stripNodeTypeScriptTypes(
+          `${android}\n${selectPublication}\n${savedTagReader}\n${main}\nmain();`,
+        ),
         {
           process: { argv: [], cwd: () => targetRoot, env: {} },
           console: { log, warn: log },
           TOOLING_ROOT: "/trusted/tooling",
+          PUBLISH_TOOLING_TAG_PATTERN: /^release-publish\/[a-f0-9]{12}-[1-9][0-9]*$/u,
           TRUSTED_TOOLING_SHA_ENV: "OPENCLAW_RELEASE_CANDIDATE_TRUSTED_TOOLING_SHA",
           RELEASE_CANDIDATE_STATE_FILE: "release-candidate-state.json",
           parseArgs: () => options,
@@ -707,28 +726,30 @@ describe("release candidate checklist", () => {
       );
       const output = log.mock.calls.map(([line]) => line).join("\n");
       if (workflowSha) {
-        expect(ensureToolingTag).toHaveBeenCalledExactlyOnceWith({
-          runGh: runReleaseToolingGh,
-          repo: "openclaw/openclaw",
-          toolingSha,
-        });
+        // A resumed candidate keeps its recorded tag even though a newer tag exists at the SHA.
+        const toolingTag = savedToolingTag || publishWorkflowRef;
+        if (savedToolingTag) {
+          expect(ensureToolingTag).not.toHaveBeenCalled();
+        } else {
+          expect(ensureToolingTag).toHaveBeenCalledExactlyOnceWith({
+            runGh: runReleaseToolingGh,
+            repo: "openclaw/openclaw",
+            toolingSha,
+          });
+        }
         expect(output).toContain(
-          `created protected tooling tag ${publishWorkflowRef} at ${toolingSha}`,
+          `${savedToolingTag ? "reusing" : "created"} protected tooling tag ${toolingTag} at ${toolingSha}`,
         );
         expect(output).toContain(
-          publicationRoute === "prepared"
-            ? `'--ref' '${publishWorkflowRef}'`
-            : `--ref ${publishWorkflowRef}`,
+          publicationRoute === "prepared" ? `'--ref' '${toolingTag}'` : `--ref ${toolingTag}`,
         );
         expect(writeState).toHaveBeenCalledWith(
           statePath,
-          expect.objectContaining({ publishWorkflowRef }),
+          expect.objectContaining({ publishWorkflowRef: toolingTag }),
         );
-        expect(JSON.parse(readFileSync(statePath, "utf8")).publishWorkflowRef).toBe(
-          publishWorkflowRef,
-        );
+        expect(JSON.parse(readFileSync(statePath, "utf8")).publishWorkflowRef).toBe(toolingTag);
         expect(evidence.publishWorkflowIdentity).toMatchObject({
-          workflowRef: publishWorkflowRef,
+          workflowRef: toolingTag,
           workflowSha: toolingSha,
         });
       } else {
