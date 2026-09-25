@@ -65,6 +65,12 @@ import { rotateOversizedCodexAppServerStartupBinding } from "./startup-binding.j
 
 export async function prepareCodexAttemptConnection({ params, options }: CodexRunAttemptInput) {
   const attemptStartedAt = Date.now();
+  // Monotonic counterpart of attemptStartedAt, sampled at the same instant. The
+  // attempt execution/settlement deadline uses this so wall-clock jumps (NTP
+  // correction, sleep/resume, manual changes) cannot stretch or shrink the
+  // configured turn timeout. attemptStartedAt itself stays wall-clock because
+  // lifecycle diagnostics report it as an epoch timestamp.
+  const attemptStartedAtMonotonicMs = performance.now();
   const profilerEnabled = isCodexAppServerProfilerEnabled(params.config);
   const codexModelCallTrace = freezeDiagnosticTraceContext(
     createDiagnosticTraceContextFromActiveScope(),
@@ -583,6 +589,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       releaseModelExecution,
       options,
       attemptStartedAt,
+      attemptStartedAtMonotonicMs,
       profilerEnabled,
       codexModelCallTrace,
       codexModelContentCapture,

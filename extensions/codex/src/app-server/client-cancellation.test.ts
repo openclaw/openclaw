@@ -1,5 +1,8 @@
 import { once } from "node:events";
-import { createAgentHarnessAttemptDeadlineController } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
+import {
+  createAgentHarnessAttemptDeadlineController,
+  type AgentHarnessAttemptTimeout,
+} from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
@@ -125,9 +128,20 @@ describe("Codex app-server cancellation diagnostics", () => {
         .request("turn/start", { threadId: "receiver" }, { signal: controller.signal })
         .catch((error: unknown) => error);
       await turnReceived;
-      const onTimeout = vi.fn(() => controller.abort(reason));
+      const onTimeout = vi.fn<(timeout: AgentHarnessAttemptTimeout) => void>(() =>
+        controller.abort(reason),
+      );
+      // Admit the attempt 15s in the past with a 1s budget so the execution
+      // deadline is already exhausted by 14s and fires immediately. Supply the
+      // matching monotonic seed (captured at the same instant as the wall-clock
+      // admission timestamp) so the monotonic clock also sees 15s of elapsed
+      // budget — without it the controller would sample performance.now() at
+      // creation and arm a fresh 1s timer instead of an already-expired budget.
+      const admissionStartedAtMs = Date.now() - 15_000;
+      const admissionStartedAtMonotonicMs = performance.now() - 15_000;
       const deadline = createAgentHarnessAttemptDeadlineController({
-        startedAtMs: Date.now() - 15_000,
+        startedAtMs: admissionStartedAtMs,
+        startedAtMonotonicMs: admissionStartedAtMonotonicMs,
         timeoutMs: 1_000,
         settlementTimeoutMs: TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS,
         signal: controller.signal,
@@ -140,6 +154,10 @@ describe("Codex app-server cancellation diagnostics", () => {
           elapsedMs: expect.any(Number),
           timeoutMs: 1_000,
         });
+        // The admission budget was already exhausted by ~14s; the reported
+        // elapsed time must reflect that already-expired admission budget, not
+        // a fresh 1s timer started at controller creation.
+        expect(onTimeout.mock.calls[0]?.[0]?.elapsedMs).toBeGreaterThanOrEqual(14_000);
         expect(formatErrorMessage(error)).toBe(
           "turn/start aborted: codex app-server execution budget timed out",
         );

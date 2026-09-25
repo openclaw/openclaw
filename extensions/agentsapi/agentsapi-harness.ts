@@ -172,6 +172,12 @@ async function runAgentsApiSession(
   target: ReturnType<typeof validateAgentsApiInput>,
 ): Promise<AgentHarnessAttemptResult> {
   const startedAtMs = Date.now();
+  // Monotonic counterpart of startedAtMs, sampled at the same instant. The
+  // shared attempt deadline controller uses this so wall-clock jumps (NTP
+  // correction, sleep/resume, manual changes) cannot stretch or shrink the
+  // configured turn timeout. startedAtMs itself stays wall-clock because
+  // lifecycle diagnostics report it as an epoch timestamp.
+  const startedAtMonotonicMs = performance.now();
   const cancellationState = {
     explicitCancellationObserved: false,
     terminalOutcomeFrozen: false,
@@ -218,6 +224,7 @@ async function runAgentsApiSession(
   let settlementDeadlineAtMs: number | undefined;
   const deadlines = createAgentHarnessAttemptDeadlineController({
     startedAtMs,
+    startedAtMonotonicMs,
     timeoutMs: params.timeoutMs,
     settlementTimeoutMs: 30_000,
     signal: controller.signal,
