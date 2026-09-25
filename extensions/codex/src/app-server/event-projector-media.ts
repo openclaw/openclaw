@@ -3,7 +3,10 @@ import {
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   type MessagingToolSend,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { generatedImageAssetFromBase64 } from "openclaw/plugin-sdk/image-generation";
+import {
+  generatedImageAssetFromBase64,
+  parseImageDataUrl,
+} from "openclaw/plugin-sdk/image-generation";
 import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import {
   normalizeMediaReferenceForComparison,
@@ -12,13 +15,31 @@ import {
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexConfirmedMediaDelivery } from "./dynamic-tools.js";
 import { readItemString } from "./event-projector-values.js";
-import type { CodexThreadItem, JsonObject } from "./protocol.js";
+import { sanitizeInlineImageDataUrl } from "./image-payload-sanitizer.js";
+import { isJsonObject, type CodexThreadItem, type JsonObject } from "./protocol.js";
 import type { CodexRemoteWorkspaceFileReader } from "./remote-workspace-media.js";
 
 const GENERATED_IMAGE_MEDIA_SUBDIR = "tool-image-generation";
 
+interface RecordImageParams {
+  itemId: string;
+  result: string;
+  revisedPrompt?: string;
+  source: "native" | "raw";
+  // True for actual image-generation results (billable/replay-unsafe side
+  // effect); false for images projected out of a tool-output attachment
+  // (e.g. a screenshot), which are delivery media only.
+  isGeneratedSideEffect: boolean;
+}
+
 export class CodexGeneratedMediaProjection {
   private readonly itemIds = new Set<string>();
+  // Only actual image-generation identities (native `imageGeneration` items and
+  // raw `image_generation_call` events) count toward billing/replay-safety.
+  // Projected tool-output attachments (e.g. a screenshot handed back by a
+  // native tool) are delivery media, not a generation side effect, and must
+  // stay out of this set.
+  private readonly generatedSideEffectItemIds = new Set<string>();
   private readonly mediaByItemId = new Map<string, { mediaUrl?: string; savedPath?: string }>();
   private readonly gatewayMaterializedItemIds = new Set<string>();
   private readonly pendingMaterializationsByItemId = new Map<string, Promise<void>>();
@@ -34,7 +55,7 @@ export class CodexGeneratedMediaProjection {
   ) {}
 
   hasGeneratedMedia(): boolean {
-    return this.itemIds.size > 0;
+    return this.generatedSideEffectItemIds.size > 0;
   }
 
   async recordNative(item: CodexThreadItem | undefined): Promise<void> {
@@ -44,6 +65,7 @@ export class CodexGeneratedMediaProjection {
     // Image generation is already a billable side effect even if its remote
     // artifact cannot be transferred into this gateway's media store.
     this.itemIds.add(item.id);
+    this.generatedSideEffectItemIds.add(item.id);
     const savedPath = readItemString(item, "savedPath")?.trim();
     if (savedPath) {
       this.mediaByItemId.set(item.id, { ...this.mediaByItemId.get(item.id), savedPath });
@@ -55,6 +77,7 @@ export class CodexGeneratedMediaProjection {
         result,
         revisedPrompt: readItemString(item, "revisedPrompt"),
         source: "native",
+        isGeneratedSideEffect: true,
       });
       return;
     }
@@ -84,6 +107,7 @@ export class CodexGeneratedMediaProjection {
             result: response.dataBase64,
             revisedPrompt: readItemString(item, "revisedPrompt"),
             source: "native",
+            isGeneratedSideEffect: true,
           });
         } catch (error) {
           embeddedAgentLog.warn("codex app-server remote image file read failed", {
@@ -98,29 +122,67 @@ export class CodexGeneratedMediaProjection {
   }
 
   async recordRaw(item: JsonObject): Promise<void> {
-    if (readString(item, "type") !== "image_generation_call") {
+    const type = readString(item, "type");
+    if (type === "image_generation_call") {
+      const result = readString(item, "result");
+      if (!result) {
+        return;
+      }
+      const itemId = readString(item, "id") ?? `raw-image-${this.itemIds.size}`;
+      await this.recordImage({
+        itemId,
+        result,
+        revisedPrompt: readString(item, "revised_prompt") ?? readString(item, "revisedPrompt"),
+        source: "raw",
+        isGeneratedSideEffect: true,
+      });
       return;
     }
-    const result = readString(item, "result");
-    if (!result) {
-      return;
+    if (type === "function_call_output" || type === "custom_tool_call_output") {
+      await this.recordRawToolOutputImages(item);
     }
-    const itemId = readString(item, "id") ?? `raw-image-${this.itemIds.size}`;
-    await this.recordImage({
-      itemId,
-      result,
-      revisedPrompt: readString(item, "revised_prompt") ?? readString(item, "revisedPrompt"),
-      source: "raw",
-    });
   }
 
-  private async recordImage(params: {
-    itemId: string;
-    result: string;
-    revisedPrompt?: string;
-    source: "native" | "raw";
-  }): Promise<void> {
+  // Native tool results (e.g. Codex's ImageView) surface here as a raw
+  // function/custom tool-output item whose output array carries nested
+  // input_image entries; readCodexResponseOutput deliberately leaves those
+  // bytes to this media owner instead of copying them into the text transcript.
+  private async recordRawToolOutputImages(item: JsonObject): Promise<void> {
+    if (!Array.isArray(item.output)) {
+      return;
+    }
+    const baseItemId =
+      readString(item, "id") ??
+      readString(item, "call_id") ??
+      `raw-tool-output-${this.itemIds.size}`;
+    let index = 0;
+    for (const part of item.output) {
+      if (!isJsonObject(part) || readString(part, "type") !== "input_image") {
+        continue;
+      }
+      const rawImageUrl = readString(part, "image_url");
+      const sanitizedImageUrl = rawImageUrl ? sanitizeInlineImageDataUrl(rawImageUrl) : undefined;
+      const parsed = sanitizedImageUrl ? parseImageDataUrl(sanitizedImageUrl) : undefined;
+      if (!parsed) {
+        continue;
+      }
+      await this.recordImage({
+        itemId: `${baseItemId}-image-${index}`,
+        result: parsed.base64,
+        source: "raw",
+        // A projected tool-output attachment (e.g. a screenshot) is delivery
+        // media, not a billable/replay-unsafe generation side effect.
+        isGeneratedSideEffect: false,
+      });
+      index += 1;
+    }
+  }
+
+  private async recordImage(params: RecordImageParams): Promise<void> {
     this.itemIds.add(params.itemId);
+    if (params.isGeneratedSideEffect) {
+      this.generatedSideEffectItemIds.add(params.itemId);
+    }
     if (this.gatewayMaterializedItemIds.has(params.itemId)) {
       return;
     }
@@ -146,12 +208,7 @@ export class CodexGeneratedMediaProjection {
     }
   }
 
-  private async materializeImage(params: {
-    itemId: string;
-    result: string;
-    revisedPrompt?: string;
-    source: "native" | "raw";
-  }): Promise<void> {
+  private async materializeImage(params: RecordImageParams): Promise<void> {
     const maxBytes = resolveGeneratedMediaMaxBytes(this.config, "image");
     const estimatedDecodedBytes = estimateBase64DecodedBytes(params.result);
     if (estimatedDecodedBytes !== undefined && estimatedDecodedBytes > maxBytes) {

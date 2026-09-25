@@ -372,6 +372,39 @@ describe("CodexAppServerEventProjector media projection", () => {
     });
   });
 
+  it("saves a native tool-output input_image as reply media", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "custom_tool_call_output",
+          id: "tool_raw_1",
+          output: [
+            { type: "input_text", text: "Screenshot captured" },
+            { type: "input_image", image_url: `data:image/png;base64,${tinyPngBase64}` },
+          ],
+        },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    const mediaUrl = result.toolMediaUrls?.[0];
+
+    expect(result.toolMediaUrls).toHaveLength(1);
+    expect(result.hostOwnedToolMediaUrls).toEqual(result.toolMediaUrls);
+    expect(mediaUrl?.endsWith(".png")).toBe(true);
+    await expect(fs.readFile(mediaUrl ?? "")).resolves.toEqual(
+      Buffer.from(tinyPngBase64, "base64"),
+    );
+    // A native tool-output attachment (e.g. a screenshot) is delivery media,
+    // not a billable/replay-unsafe image-generation side effect.
+    expect(result.replayMetadata).toStrictEqual({
+      hadPotentialSideEffects: false,
+      replaySafe: true,
+    });
+  });
+
   it("does not let delayed raw completion consume a newer assistant echo", async () => {
     const projector = await createProjector();
     await projector.handleNotification(
