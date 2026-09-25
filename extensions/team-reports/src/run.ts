@@ -135,6 +135,11 @@ export async function generateReportPeriods(params: {
     if (report.sources.discord) {
       statuses[`${period.period}/${period.key}/discord`] = report.sources.discord;
     }
+    // Failed recollection is diagnostic evidence, not a replacement activity
+    // snapshot. Keep accepted counts/prose; the run still records these failures.
+    if (period.period === "day" && Object.values(report.sources).some((source) => !source.ok)) {
+      continue;
+    }
     // Commit collected evidence before the model call, including deterministic text for readers.
     const fallback = await generateSummaries({
       report,
