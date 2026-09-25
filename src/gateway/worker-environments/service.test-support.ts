@@ -28,12 +28,12 @@ import type { WorkerInstallationArtifact } from "./bundle.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { hashWorkerCredential } from "./credential.js";
 import { createWorkerInferenceStore } from "./inference-store.js";
-import type { WorkerSessionTurnClaim } from "./placement-record.js";
+import { sameWorkerSessionTurnClaim, type WorkerSessionTurnClaim } from "./placement-record.js";
+import type { PlacementTurnClaimAuthority } from "./placement-turn-authority.js";
 import {
   attachWorkerTurnExecutionIdentityStore,
   bindWorkerTurnOwner,
   getWorkerTurnExecutionIdentityCapability,
-  signalWorkerTurnClaimClosed,
 } from "./placement-turn-claim-events.js";
 import { createWorkerEnvironmentService, type WorkerEnvironmentService } from "./service.js";
 import {
@@ -230,6 +230,8 @@ export function createService(
       | "applyTranscriptCommit"
       | "bootstrapCallTimeoutMs"
       | "executeInference"
+      | "inferenceStore"
+      | "closeNodeBootstrapArtifacts"
       | "executeSessionTool"
       | "executeComputer"
       | "providerCallTimeoutMs"
@@ -277,7 +279,7 @@ export function createService(
       message: "Inference cancelled",
     }),
     inferenceStore: createWorkerInferenceStore({
-      database: testState.stateDb,
+      path: testState.stateDb.path,
       now: () => testState.nowMs,
     }),
     now: () => testState.nowMs,
@@ -590,13 +592,13 @@ export async function placementHarness(
   return bindPlacementHarness(identity, serviceOptions, sessionTarget);
 }
 
-export function bindPlacementHarness(
+export async function bindPlacementHarness(
   identity: WorkerConnectionIdentity,
   serviceOptions: Parameters<typeof createService>[1] = {},
   target?: BoundAgentRunSessionTarget,
 ) {
   const sessionId = expectDefined(identity.sessionId, "worker fixture session identity");
-  const claim = expectDefined(identity.turnClaim, "worker fixture turn claim");
+  const claim = structuredClone(expectDefined(identity.turnClaim, "worker fixture turn claim"));
   const sessionTarget = target ?? {
     agentId: "main",
     sessionId,
@@ -604,7 +606,59 @@ export function bindPlacementHarness(
     storePath: path.join(testState.root, "sessions.json"),
   };
   const validateWorkerTurn = vi.fn<(claim: WorkerSessionTurnClaim) => boolean>(() => true);
-  const executionStore = { validateTurnClaim: validateWorkerTurn };
+  let sourceReleased = false;
+  const retainedClaims = new Set<() => void>();
+  const executionStore = {
+    async prepareTurnClaimAuthority(
+      requested: WorkerSessionTurnClaim,
+    ): Promise<PlacementTurnClaimAuthority> {
+      const captured = structuredClone(requested);
+      Object.freeze(captured.owner);
+      Object.freeze(captured);
+      let released = false;
+      let revoked = false;
+      const listeners = new Set<() => void>();
+      const revoke = () => {
+        if (revoked) {
+          return;
+        }
+        revoked = true;
+        const pending = [...listeners];
+        listeners.clear();
+        for (const listener of pending) {
+          listener();
+        }
+      };
+      const isCurrent = () =>
+        !released &&
+        !revoked &&
+        !sourceReleased &&
+        sameWorkerSessionTurnClaim(captured, claim) &&
+        validateWorkerTurn(captured);
+      retainedClaims.add(revoke);
+      return {
+        claim: captured,
+        identity: Object.freeze({
+          agentId: sessionTarget.agentId,
+          sessionKey: sessionTarget.sessionKey,
+        }),
+        isCurrent,
+        onRevoked(listener) {
+          if (!isCurrent()) {
+            listener();
+            return () => {};
+          }
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+        release() {
+          released = true;
+          listeners.clear();
+          retainedClaims.delete(revoke);
+        },
+      };
+    },
+  };
   const databasePath = testState.stateDb.path;
   attachWorkerTurnExecutionIdentityStore(executionStore, databasePath);
   const placementStore = {
@@ -632,24 +686,28 @@ export function bindPlacementHarness(
     },
     authority.claimId,
   );
-  let sourceReleased = false;
   const releaseSource = () => {
     if (sourceReleased) {
       return;
     }
     sourceReleased = true;
-    signalWorkerTurnClaimClosed(databasePath, claim);
+    for (const revoke of retainedClaims) {
+      revoke();
+    }
     releaseAgentRunDelegatedAuthority(authority);
   };
   testState.releaseTurnOwners.push(releaseSource);
-  bindWorkerTurnOwner(executionStore, claim, undefined, instance, sessionTarget, () => {
-    if (!validateWorkerTurn(claim)) {
-      throw new Error("Worker fixture claim is no longer current");
-    }
-  });
-  const source = expectDefined(
-    getWorkerTurnExecutionIdentityCapability(executionStore, claim),
-    "worker fixture source capability",
+  const { capability: source } = await bindWorkerTurnOwner(
+    executionStore,
+    claim,
+    undefined,
+    instance,
+    sessionTarget,
+    () => {
+      if (!validateWorkerTurn(claim)) {
+        throw new Error("Worker fixture claim is no longer current");
+      }
+    },
   );
   const workerService = createService(createProvider(), { ...serviceOptions, placementStore });
   return { identity, placementStore, workerService, source, releaseSource };

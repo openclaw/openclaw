@@ -11,7 +11,7 @@ import { listGitTrackedFiles, toRepoRelativePath } from "../test-utils/repo-file
 const REPO_ROOT = path.resolve(import.meta.dirname, "../..");
 const SCAN_ROOTS = ["src", "packages", "extensions"] as const;
 
-const ALLOWED_PREFIXES = ["src/infra/", "src/plugin-sdk/", "packages/memory-host-sdk/"] as const;
+const ALLOWED_PREFIXES = ["src/", "packages/memory-host-sdk/"] as const;
 
 function isSourceFile(filePath: string): boolean {
   return filePath.endsWith(".ts") && !filePath.endsWith(".test.ts") && !filePath.endsWith(".d.ts");
@@ -89,6 +89,14 @@ const PLUGIN_OWNED_FS_SAFE_IMPORTS: Record<
       values: ["movePathWithCopyFallback"],
       types: ["MovePathPublicationReceipt"],
     },
+    "@openclaw/fs-safe/guest": { values: ["GUEST_FILESYSTEM_PYTHON"] },
+  },
+  "extensions/matrix/src/matrix/state-layout-walk.ts": {
+    "@openclaw/fs-safe/path": { values: ["hasNodeErrorCode"] },
+    "@openclaw/fs-safe/walk": { values: ["walkDirectory"] },
+  },
+  "extensions/memory-core/src/migration/doctor-memory-sidecar.ts": {
+    "@openclaw/fs-safe/walk": { values: ["walkDirectory"] },
   },
   "extensions/file-transfer/src/node-host/file-write.ts": {
     "@openclaw/fs-safe/advanced": { values: ["overwriteFileHandle"] },
@@ -234,7 +242,7 @@ describe("fs-safe import boundary", () => {
   it.each([
     ["extensions/openshell/src/elsewhere.ts", true],
     ["extensions/example/src/backend.ts", true],
-    ["src/infra/replace-file.ts", false],
+    ["src/agents/workspace-bootstrap-publish.ts", false],
   ] as const)("preserves the file boundary for %s", (filePath, expected) => {
     expect(
       hasDisallowedFsSafeImport(
@@ -263,7 +271,7 @@ describe("fs-safe import boundary", () => {
     });
   });
 
-  it("keeps direct fs-safe imports behind OpenClaw policy wrappers", () => {
+  it("keeps plugin filesystem imports within their reviewed dependency surface", () => {
     const violations = listSourceFiles()
       .map((filePath) => toRepoRelativePath(REPO_ROOT, filePath))
       .filter((filePath) =>

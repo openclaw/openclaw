@@ -129,6 +129,11 @@ on:
         type: string
   workflow_call:
     inputs:
+      runner_group:
+        description: Optional dedicated release runner group; empty retains the current labels
+        required: false
+        default: ""
+        type: string
       allow_frozen_target_scenario_omissions:
         description: Allow source-qualified omission of current-only default scenarios
         required: false
@@ -265,12 +270,12 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.19.0"
+  NODE_VERSION: "24.21.0"
 
 jobs:
   run_package_telegram_e2e:
     name: Run package Telegram E2E
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
+    runs-on: ${{ (inputs.runner_group || (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP) || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((inputs.runner_group || (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP) || '')), toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404') }}
     timeout-minutes: 60
     environment: qa-live-shared
     permissions:
@@ -324,7 +329,7 @@ jobs:
 
       - name: Checkout frozen package source capabilities
         if: inputs.allow_frozen_target_scenario_omissions && inputs.package_source_sha != '' && inputs.scenario == ''
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           ref: ${{ inputs.package_source_sha }}
           path: .artifacts/frozen-telegram-target
@@ -829,3 +834,16 @@ jobs:
           path: .artifacts/qa-e2e/
           retention-days: 14
           if-no-files-found: error
+
+  seal_release_child_evidence:
+    name: Seal full release child evidence
+    needs:
+      - run_package_telegram_e2e
+    if: ${{ always() && !cancelled() && github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') }}
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/full-release-child-evidence.yml
+    with:
+      role: npmTelegram
+      target_sha: ${{ inputs.harness_ref }}

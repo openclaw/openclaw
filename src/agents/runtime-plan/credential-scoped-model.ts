@@ -2,9 +2,9 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { shouldPreferProviderRuntimeResolvedModel } from "../../plugins/provider-runtime.js";
 import { getOrCreatePromise } from "../../shared/lazy-promise.js";
+import { resolveProviderModelAuthPolicy } from "../model-auth-policy.js";
 import {
   resolveProviderModelMaterializationAuthMode,
-  resolveProviderModelRouteAuthRequirement,
   type ProviderModelRouteMaterializationAuthMode,
 } from "../provider-model-route-auth.js";
 import { materializePreparedRuntimeModel } from "./materialize-model.js";
@@ -135,7 +135,11 @@ export function resolveCredentialScopedAuthAttemptModelDecision(params: {
     authRequirement:
       params.attempt.plan.modelRoute?.authRequirement ??
       (shouldMaterialize && params.providerUsesProfileScopedModelMetadata
-        ? resolveProviderModelRouteAuthRequirement(params.attempt.plan.selectedAuthMode)
+        ? (resolveProviderModelAuthPolicy({
+            provider: params.attempt.plan.providerForAuth,
+            mode: params.attempt.plan.selectedAuthMode,
+            authFlow: params.attempt.plan.selectedAuthFlow,
+          }).authRequirement ?? undefined)
         : undefined),
   };
 }
@@ -171,6 +175,7 @@ function routeModelMemoKey(
     params.modelId,
     plan.forwardedAuthProfileId ?? "",
     plan.selectedAuthMode ?? "",
+    plan.selectedAuthFlow ?? "",
     route?.api ?? "",
     route?.baseUrl ?? "",
     route?.authRequirement ?? "",

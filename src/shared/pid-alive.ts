@@ -6,6 +6,32 @@ import { readWindowsProcessStartTimeSync } from "../infra/windows-process-start.
 import { readFreeBsdProcessStartTime } from "./freebsd-process-identity.ts";
 
 const PROCESS_START_TIMEOUT_MS = 1000;
+// Bound corrupted/cyclic ancestry while allowing nested service supervisors.
+export const MAX_ANCESTOR_WALK_DEPTH = 32;
+
+/** Project a best-effort ancestor chain without deciding liveness or authority. */
+export function collectProcessAncestorPids(
+  immediateParent: number,
+  readParentPid: (pid: number) => number | null,
+  throughPid?: number,
+): Set<number> {
+  const pids = new Set<number>([process.pid]);
+  if (!Number.isFinite(immediateParent) || immediateParent <= 0) {
+    return pids;
+  }
+  pids.add(immediateParent);
+  let current = immediateParent;
+  for (let depth = 0; depth < MAX_ANCESTOR_WALK_DEPTH && current !== throughPid; depth++) {
+    const parent = readParentPid(current);
+    if (parent == null || parent <= 0 || pids.has(parent)) {
+      break;
+    }
+    pids.add(parent);
+    current = parent;
+  }
+  return pids;
+}
+
 // Cache only a successful self read: this identity lasts for the process.
 // Failed reads must retry, and foreign PIDs must stay fresh to detect PID reuse.
 let selfStartTime: number | null = null;
@@ -83,6 +109,56 @@ function getDarwinProcessStartTime(
     // a system timezone change cannot make a live lock owner look like PID reuse.
     const startedAtMs = Date.parse(`${startedAt} UTC`);
     return Number.isFinite(startedAtMs) ? Math.floor(startedAtMs / 1000) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Read one Darwin PID's parent and birth together, without enumerating unrelated processes. */
+export function readDarwinProcessIdentity(
+  pid: number,
+  env: NodeJS.ProcessEnv = process.env,
+  timeoutMs = PROCESS_START_TIMEOUT_MS,
+): { parentPid: number; startedAt: number } | null {
+  if (process.platform !== "darwin" || !isValidPid(pid)) {
+    return null;
+  }
+  try {
+    const stdout = childProcess.execFileSync(
+      "/bin/ps",
+      ["-o", "pid=,ppid=,lstart=", "-p", String(pid)],
+      {
+        encoding: "utf8",
+        env: { ...resolveDiagnosticProcessEnv(env), LC_ALL: "C", TZ: "UTC" },
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: timeoutMs,
+        killSignal: "SIGKILL",
+        maxBuffer: 4096,
+      },
+    );
+    // A complete single-PID record is required; truncated or extra rows are unknown.
+    if (!stdout.endsWith("\n") || /[\r\n]/.test(stdout.slice(0, -1))) {
+      return null;
+    }
+    const match =
+      /^[ \t]*(\d+)[ \t]+(\d+)[ \t]+(Sun|Mon|Tue|Wed|Thu|Fri|Sat) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) +(\d{1,2}) (\d{2}:\d{2}:\d{2}) (\d{4})[ \t]*$/.exec(
+        stdout.slice(0, -1),
+      );
+    if (!match || Number(match[1]) !== pid || match[5] === undefined) {
+      return null;
+    }
+    const parentPid = Number(match[2]);
+    const date = `${match[3]}, ${match[5].padStart(2, "0")} ${match[4]} ${match[7]} ${match[6]} GMT`;
+    const startedAtMs = Date.parse(date);
+    if (
+      !Number.isSafeInteger(parentPid) ||
+      parentPid < 0 ||
+      !Number.isFinite(startedAtMs) ||
+      new Date(startedAtMs).toUTCString() !== date
+    ) {
+      return null;
+    }
+    return { parentPid, startedAt: Math.floor(startedAtMs / 1000) };
   } catch {
     return null;
   }

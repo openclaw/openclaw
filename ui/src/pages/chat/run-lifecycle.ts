@@ -209,7 +209,7 @@ export function setChatRunError(
   setChatRunOwner(state, runId);
   state.chatRunError = {
     ...(kind ? { kind } : {}),
-    summary: redactToolDetail(summary.trim(), { preservePaths: true }),
+    summary: redactToolDetail(summary.trim()),
     ...(runId ? { runId } : {}),
   };
 }

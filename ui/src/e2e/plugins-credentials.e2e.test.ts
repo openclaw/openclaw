@@ -329,9 +329,12 @@ suite.define(() => {
           await reference.click();
           expect(await identifier.inputValue()).toBe("/search/updated");
           await identifier.fill("/search/failed");
+          const writesBeforeFailure = (await gateway.getRequests("config.set")).length;
           await gateway.deferNext("config.set");
           await dialog.getByRole("button", { name: "Save", exact: true }).click();
-          await gateway.waitForRequest("config.set");
+          const uncertainWrite = await gateway.waitForRequest("config.set", {
+            after: writesBeforeFailure,
+          });
           await gateway.rejectDeferred("config.set", {
             code: width === 390 ? "INVALID_REQUEST" : "UNAVAILABLE",
             message: "Fixture write rejected",
@@ -369,6 +372,30 @@ suite.define(() => {
               .toContain("Fixture config read unavailable");
             expect(await dialog.isVisible()).toBe(true);
             expect(await identifier.inputValue()).toBe("/search/failed");
+            await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+            await expect
+              .poll(() => dialog.getByRole("alert").textContent())
+              .toContain("The last save could not be confirmed");
+            expect(await dialog.isVisible()).toBe(true);
+            expect(await identifier.inputValue()).toBe("/search/failed");
+            expect(await gateway.getRequests("config.set")).toHaveLength(writesBeforeFailure + 1);
+            // A successful old snapshot cannot fence the unknown write. Its later
+            // persisted bytes let Cancel reconcile without restoring the older reference.
+            const confirmedRaw = String(asRecord(uncertainWrite.params).raw);
+            await gateway.setMethodResponse("config.get", {
+              ...configMocks["config.get"],
+              config: JSON.parse(confirmedRaw),
+              raw: confirmedRaw,
+              hash: "confirmed-credential-write",
+            });
+            await gateway.setMethodResponse("plugins.credentials.inspect", {
+              baseHash: "confirmed-credential-write",
+              credential: {
+                kind: "reference",
+                ref: { ...originalRef, id: "/search/failed" },
+                unresolved: false,
+              },
+            });
           }
           await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
           await dialog.waitFor({ state: "hidden" });
@@ -387,7 +414,8 @@ suite.define(() => {
                   config: {
                     search: {
                       ...sourceConfig.plugins.entries.workboard.config.search,
-                      apiKey: changedRef,
+                      apiKey:
+                        width === 1174 ? { ...originalRef, id: "/search/failed" } : changedRef,
                       mode: "llm-context",
                     },
                   },

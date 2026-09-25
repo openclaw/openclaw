@@ -28,14 +28,14 @@ describe("resolveSessionGitCoauthorPrompt", () => {
 
   it.each(["agent:main:main", "agent:main:cron:nightly"])(
     "resolves credit for a stable session %s",
-    (sessionKey) => {
-      vi.mocked(resolveGitCoauthorAttribution).mockReturnValue({
+    async (sessionKey) => {
+      vi.mocked(resolveGitCoauthorAttribution).mockResolvedValue({
         trailers,
         logins: ["ada", "grace"],
       });
       const params = { config: {}, agentId: "main", sessionKey };
 
-      expect(resolveSessionGitCoauthorPrompt(params)).toBe(expectedPrompt);
+      expect(await resolveSessionGitCoauthorPrompt(params)).toBe(expectedPrompt);
       expect(resolveGitCoauthorAttribution).toHaveBeenCalledExactlyOnceWith({
         ...params,
         storePath: undefined,
@@ -43,8 +43,8 @@ describe("resolveSessionGitCoauthorPrompt", () => {
     },
   );
 
-  it("preserves an explicit session-store path", () => {
-    vi.mocked(resolveGitCoauthorAttribution).mockReturnValue({
+  it("pins credit to the supplied session and store", async () => {
+    vi.mocked(resolveGitCoauthorAttribution).mockResolvedValue({
       trailers,
       logins: ["ada", "grace"],
     });
@@ -52,10 +52,11 @@ describe("resolveSessionGitCoauthorPrompt", () => {
       config: {},
       agentId: "work",
       sessionKey: "agent:work:shared",
+      sessionId: "work-session",
       storePath: "/isolated/session-store/sessions.json",
     };
 
-    expect(resolveSessionGitCoauthorPrompt(params)).toBe(expectedPrompt);
+    expect(await resolveSessionGitCoauthorPrompt(params)).toBe(expectedPrompt);
     expect(resolveGitCoauthorAttribution).toHaveBeenCalledExactlyOnceWith(params);
   });
 
@@ -75,19 +76,19 @@ describe("resolveSessionGitCoauthorPrompt", () => {
       agentId: "main",
       sessionKey: "agent:main:dashboard:incognito-two-turns",
     },
-  ])("skips credit lookup with $name", ({ config, agentId, sessionKey }) => {
-    vi.mocked(resolveGitCoauthorAttribution).mockReturnValue({
+  ])("skips credit lookup with $name", async ({ config, agentId, sessionKey }) => {
+    vi.mocked(resolveGitCoauthorAttribution).mockResolvedValue({
       trailers,
       logins: ["ada", "grace"],
     });
 
-    expect(resolveSessionGitCoauthorPrompt({ config, agentId, sessionKey })).toBeUndefined();
+    expect(await resolveSessionGitCoauthorPrompt({ config, agentId, sessionKey })).toBeUndefined();
     expect(resolveGitCoauthorAttribution).not.toHaveBeenCalled();
   });
 
-  it("omits trailers when the session has nobody to credit", () => {
+  it("omits trailers when the session has nobody to credit", async () => {
     expect(
-      resolveSessionGitCoauthorPrompt({
+      await resolveSessionGitCoauthorPrompt({
         config: {},
         agentId: "main",
         sessionKey: "agent:main:main",
@@ -96,14 +97,12 @@ describe("resolveSessionGitCoauthorPrompt", () => {
     expect(resolveGitCoauthorAttribution).toHaveBeenCalledOnce();
   });
 
-  it("keeps prompt building available and warns once when credit lookup fails", () => {
+  it("keeps prompt building available and warns once when credit lookup fails", async () => {
     const error = new Error("participant store unavailable");
-    vi.mocked(resolveGitCoauthorAttribution).mockImplementation(() => {
-      throw error;
-    });
+    vi.mocked(resolveGitCoauthorAttribution).mockRejectedValue(error);
 
     expect(
-      resolveSessionGitCoauthorPrompt({
+      await resolveSessionGitCoauthorPrompt({
         config: {},
         agentId: "main",
         sessionKey: "agent:main:main",

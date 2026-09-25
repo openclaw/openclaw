@@ -5,12 +5,16 @@ import {
   GATEWAY_CLIENT_CAPS,
   hasGatewayClientCap,
 } from "../../../packages/gateway-protocol/src/client-info.js";
-import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import {
+  assertAdmittedRunOperatorAuthority,
+  type AdmittedRunOperatorAuthority,
+} from "../../agents/admitted-run-context.js";
 import {
   resolveConversationCapabilityProfile,
   type ResolvedConversationCapabilityProfile,
 } from "../../agents/conversation-capability-profile.js";
 import { resolveConversationToolPolicies } from "../../agents/conversation-tool-policy-pipeline.js";
+import { readOperatorModelPolicyMembership } from "../../agents/operator-model-policy.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { isRuntimeToolAllowed, isToolAllowedByPolicies } from "../../agents/tool-policy-match.js";
 import {
@@ -327,19 +331,41 @@ export function resolveReplyOperatorAuthorityKey(
   ]);
 }
 
+function assertCurrentOperatorAuthority(authority: AdmittedRunOperatorAuthority | undefined): void {
+  if (authority) {
+    assertAdmittedRunOperatorAuthority(authority);
+    authority.assertCurrent();
+  }
+}
+
 function resolveReplyToolAuthorityInputFingerprint(
   snapshot: ReplyToolAuthorityInput,
   route?: ReplyToolAuthorityRoute,
 ): string {
   const execution = snapshot.run;
   const { provider, model, capabilityProfile } = resolveReplyToolAuthorityContext(snapshot, route);
+  const authority = snapshot.operatorAuthority;
+  assertCurrentOperatorAuthority(authority);
+  const screenTarget = resolveReplyScreenToolTarget(snapshot, capabilityProfile);
   return createHash("sha256")
     .update(
       stableStringify({
         provider,
         model,
         policy: capabilityProfile.policy,
-        operatorAuthority: resolveReplyOperatorAuthorityKey(snapshot.operatorAuthority),
+        operatorAuthority: authority
+          ? {
+              profileId: authority.profileId,
+              scopes: [...new Set(authority.scopes)].toSorted(),
+              gatewayAccessGrant:
+                authority.gatewayAccessGrant === undefined
+                  ? resolveReplyOperatorAuthorityKey(authority)
+                  : authority.gatewayAccessGrant,
+              modelPolicy:
+                readOperatorModelPolicyMembership(authority.modelPolicy) ??
+                resolveReplyOperatorAuthorityKey(authority),
+            }
+          : undefined,
         toolsAllow: snapshot.toolsAllow,
         toolsAllowIntersection: snapshot.toolsAllow
           ? readToolAllowlistIntersection(snapshot.toolsAllow)
@@ -357,7 +383,10 @@ function resolveReplyToolAuthorityInputFingerprint(
         traceAuthorized: execution.traceAuthorized === true,
         authProfileId: execution.authProfileId,
         clientCaps: [...new Set(execution.clientCaps ?? [])].toSorted(),
-        gatewayUiCommandTarget: resolveReplyScreenToolTarget(snapshot, capabilityProfile),
+        gatewayUiCommandTarget:
+          authority && screenTarget?.profileId === authority.profileId
+            ? { profileId: screenTarget.profileId }
+            : screenTarget,
         themeProfileId: resolveReplyThemeProfileId(snapshot, capabilityProfile),
         toolBindings: execution.toolBindings,
       }),
@@ -382,6 +411,8 @@ export function prepareReplyToolAuthority(
   return {
     fingerprint: (route) => resolveReplyToolAuthorityInputFingerprint(snapshot, route),
     project: (overlay, route) => {
+      // Steering retains the running turn's authority and browser bindings across reconnects.
+      assertCurrentOperatorAuthority(snapshot.operatorAuthority);
       const incoming = applyReplyToolAuthorityOverlay(snapshot, overlay);
       return resolveReplyToolAuthorityInputFingerprint(narrow ? narrow(incoming) : incoming, route);
     },

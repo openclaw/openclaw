@@ -130,28 +130,52 @@ export function watchRegisteredNodeHostCommandAvailability(
   context: OpenClawPluginNodeHostCommandAvailabilityContext,
   onChange: () => void,
   commandAllowlist?: ReadonlySet<string>,
-): () => void {
+): () => Promise<void> {
   const registry = resolveNodeHostPluginRegistry();
-  const cleanups: Array<() => void> = [];
+  let cleanups: Array<() => void | Promise<void>> = [];
+  let stopped = false;
+  let stopping: Promise<void> | undefined;
   withPluginRuntimeRegistryScope(registry, () => {
     for (const entry of registry?.nodeHostCommands ?? []) {
       if (commandAllowlist && !commandAllowlist.has(entry.command.command)) {
         continue;
       }
-      const cleanup = entry.command.watchAvailability?.(context, () =>
-        withPluginRuntimeRegistryScope(registry, onChange),
-      );
+      const cleanup = entry.command.watchAvailability?.(context, () => {
+        if (!stopped) {
+          withPluginRuntimeRegistryScope(registry, onChange);
+        }
+      });
       if (cleanup) {
         cleanups.push(cleanup);
       }
     }
   });
-  return () =>
-    withPluginRuntimeRegistryScope(registry, () => {
-      for (const cleanup of cleanups.splice(0)) {
-        cleanup();
-      }
-    });
+  return () => {
+    stopped = true;
+    return (stopping ??= Promise.resolve()
+      .then(async () => {
+        const results = await Promise.allSettled(
+          cleanups.map(async (cleanup) =>
+            withPluginRuntimeRegistryScope(registry, () => cleanup()),
+          ),
+        );
+        // Retry only unfinished owners; successful cleanup must not run twice.
+        cleanups = cleanups.filter((_cleanup, index) => results[index]?.status === "rejected");
+        const failures = results.flatMap((result) =>
+          result.status === "rejected" ? [result.reason] : [],
+        );
+        if (failures.length === 1) {
+          throw failures[0];
+        }
+        if (failures.length > 1) {
+          throw new AggregateError(failures, "node-host watcher cleanup failed");
+        }
+      })
+      .catch((error: unknown) => {
+        stopping = undefined;
+        throw error;
+      }));
+  };
 }
 
 /** Release plugin command state before a reconnected Gateway can invoke it again. */

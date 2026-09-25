@@ -256,13 +256,12 @@ function accountSummary(
   links: UserModelLinks,
 ): UserModelAccount {
   const { credential } = parseRecord(value, profileSchema);
+  const identity = [credential.email?.trim(), credential.displayName?.trim()].filter(Boolean);
   return {
     authProfileId,
     provider: credential.provider,
     label: truncateUtf16Safe(
-      toUSVString(
-        credential.displayName?.trim() || credential.email?.trim() || credential.provider,
-      ),
+      toUSVString([...new Set(identity)].join(" · ") || credential.provider),
       256,
     ),
     authType: credential.type,

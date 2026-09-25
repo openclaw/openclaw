@@ -14,7 +14,6 @@ import { isTrustedMessageActionTurnIngress } from "../../gateway/message-action-
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
 import type { AgentRunRequest } from "../../gateway/server-methods/agent-request-types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { CommandLane } from "../../process/lanes.js";
 import { MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL } from "../../sessions/input-provenance.js";
 import { formatSystemTurnPrompt } from "../../sessions/system-turn-prompt.js";
@@ -50,8 +49,8 @@ import {
   isRestartRecoveryDeliveryCurrent,
   resolveRestartRecoveryDeliveryContext,
 } from "./main-session-restart-recovery-delivery.js";
+import { mainSessionRecoveryLog as log } from "./main-session-restart-recovery-shared.js";
 
-const log = createSubsystemLogger("main-session-restart-recovery");
 const RESTART_RECOVERY_RESUME_MESSAGE = formatSystemTurnPrompt(
   "Your previous turn was interrupted by a gateway restart while " +
     "OpenClaw was waiting on tool/model work. The restart did not cancel the user's task. " +
@@ -288,6 +287,8 @@ async function resumeMainSessionWithinAdmission(
     const restored = await commitMainSessionRecovery({
       command: {
         kind: "mark_admitted_recovery_interrupted",
+        cycleId: params.observation.cycleId,
+        attempt: params.recoveryAttempt,
         lifecycleGeneration,
         now: Date.now(),
         runId: recoveryRunId,
@@ -298,7 +299,7 @@ async function resumeMainSessionWithinAdmission(
       target,
     });
     return params.shouldContinue?.() !== false &&
-      restored.transition.kind === "applied" &&
+      (restored.transition.kind === "applied" || restored.transition.kind === "no_change") &&
       restored.entry &&
       restored.sessionKey
       ? {

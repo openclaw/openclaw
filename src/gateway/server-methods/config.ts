@@ -707,6 +707,12 @@ async function commitConfigRestartWrite(params: {
   if (!writeResult) {
     return;
   }
+  const persistedConfig = {
+    ...(writeResult.hash
+      ? { hash: params.context.configRevisionProjector.projectRawHash(writeResult.hash) }
+      : {}),
+    config: redactConfigObject(writeResult.config, params.uiHints),
+  };
   if (writeResult.application) {
     const outcome = await writeResult.application;
     if (outcome !== "applied") {
@@ -716,7 +722,13 @@ async function commitConfigRestartWrite(params: {
           : outcome === "restart-pending"
             ? `${params.mode} persisted and was accepted for restart; wait for the Gateway to restart, then run config.get to confirm the active revision`
             : `${params.mode} persisted but was not applied to the active Gateway (${outcome}); run config.get, then use config.apply to reapply the saved config or restart the Gateway`;
-      params.respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message));
+      params.respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, message, {
+          details: { persistedConfig },
+        }),
+      );
       writeResult.queueFollowUp();
       return;
     }
@@ -740,10 +752,7 @@ async function commitConfigRestartWrite(params: {
       path: writeResult.path,
       // Additive ack hash: matches the hash config.get would report for the
       // persisted bytes, so writers can adopt it without a reload.
-      ...(writeResult.hash
-        ? { hash: params.context.configRevisionProjector.projectRawHash(writeResult.hash) }
-        : {}),
-      config: redactConfigObject(writeResult.config, params.uiHints),
+      ...persistedConfig,
       ...(params.mode === "config.patch" ? { changedPaths } : {}),
       ...preparedSecretDegradationPayload(params.preparedSecretsSnapshot),
       restart,

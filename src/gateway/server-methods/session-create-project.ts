@@ -20,7 +20,7 @@ import { ADMIN_SCOPE } from "../operator-scopes.js";
 import type {
   PrepareGatewaySessionLifecycle,
   PreparedGatewaySessionLifecycle,
-} from "../session-lifecycle-preparation.js";
+} from "../session-create-service.types.js";
 import { hasExplicitSessionName, resolveExplicitSessionName } from "../session-title-state.js";
 import {
   prepareSessionWorktree,

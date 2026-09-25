@@ -16,7 +16,7 @@ import {
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import { createGatewayMethodRegistry } from "../methods/registry.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import type { OperatorScope } from "../operator-scopes.js";
@@ -95,7 +95,7 @@ async function withHostedQuestion(
     context.resolveGatewayContext = () => context;
     const source = new AbortController();
     const captured = expectDefined(
-      captureGatewayOperatorRunAuthority({
+      await captureGatewayOperatorRunAuthority({
         client: browser,
         context,
         sourceAuthority: {

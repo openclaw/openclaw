@@ -13,6 +13,7 @@ import {
   neutralizeCodexExplicitMentionSigils,
   type CodexProjectedImageGroup,
 } from "./context-engine-projection.js";
+import { joinPresentSections } from "./developer-instruction-sections.js";
 import type {
   CodexSandboxPolicy,
   CodexTurnEnvironmentParams,
@@ -96,7 +97,6 @@ export function buildTurnStartParams(
     model?: string | null;
     modelProvider?: string | null;
     turnScopedDeveloperInstructions?: string;
-    skillsCollaborationInstructions?: string;
     memoryCollaborationInstructions?: string;
     preserveNativeTurnSettings?: boolean;
     parentLocalEgress?: boolean;
@@ -122,7 +122,6 @@ export function buildTurnStartParams(
     ? buildTurnCollaborationMode(params, {
         model: modelSelection.model,
         turnScopedDeveloperInstructions: options.turnScopedDeveloperInstructions,
-        skillsCollaborationInstructions: options.skillsCollaborationInstructions,
         memoryCollaborationInstructions: options.memoryCollaborationInstructions,
       })
     : undefined;
@@ -252,7 +251,6 @@ export function buildTurnCollaborationMode(
   options: {
     model?: string;
     turnScopedDeveloperInstructions?: string;
-    skillsCollaborationInstructions?: string;
     memoryCollaborationInstructions?: string;
   } = {},
 ): CodexTurnCollaborationMode {
@@ -275,14 +273,14 @@ export function buildCodexParentLocalInstructions(
   params: EmbeddedRunAttemptParams,
   options: {
     turnScopedDeveloperInstructions?: string;
-    skillsCollaborationInstructions?: string;
+    skillsInstructions?: string;
     memoryCollaborationInstructions?: string;
   } = {},
 ): string | null {
   const contextInstructions = joinPresentSections(
     options.turnScopedDeveloperInstructions,
+    options.skillsInstructions,
     options.memoryCollaborationInstructions,
-    options.skillsCollaborationInstructions,
   );
   if (params.trigger === "cron") {
     return joinPresentSections(buildCronCollaborationInstructions(), contextInstructions);
@@ -327,8 +325,4 @@ function buildCronCollaborationInstructions(): string {
     "Use context already provided by the runtime, but do not spend time loading or re-reading workspace bootstrap, memory, or project-doc files before executing the cron payload. Inspect those files only if the payload asks for them or the command fails and they are needed to diagnose it.",
     "Keep output concise and automation-oriented. Prefer the final command result or a short failure summary over status narration.",
   ].join("\n\n");
-}
-
-function joinPresentSections(...sections: Array<string | undefined>): string {
-  return sections.filter((section): section is string => Boolean(section?.trim())).join("\n\n");
 }

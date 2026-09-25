@@ -1,11 +1,21 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cpSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  cpSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { create as createTar, ReadEntry } from "tar";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { resolveNpmRunner } from "../../scripts/npm-runner.mts";
 import { resolvePnpmRunner } from "../../scripts/pnpm-runner.mts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { listFilesRecursively, withTarball } from "./package-tarball-fixture.js";
 
 const require = createRequire(import.meta.url);
@@ -195,59 +205,104 @@ describe("bundled browser MCP package", () => {
     );
   });
 
-  it.each([
-    ...[
-      "build/src/TextSnapshot.js",
-      "build/src/McpPage.js",
-      "build/src/third_party/index.js",
-      "build/src/OPENCLAW_PATCH_NOTICE.md",
-    ].map((file) => ({
-      file,
-      change: "modify",
-      error: `unpatched or changed runtime entry ${file}`,
-    })),
-    ...[
-      MCP_CLI,
-      "build/src/bin/chrome-devtools-mcp-main.js",
-      "build/src/third_party/devtools-formatter-worker.js",
-      "build/src/third_party/devtools-heap-snapshot-worker.js",
-      "build/src/third_party/lighthouse-devtools-mcp-bundle.js",
-      "LICENSE",
-      "build/src/third_party/THIRD_PARTY_NOTICES",
-    ].map((file) => ({ file, change: "remove", error: `missing required runtime entry ${file}` })),
-    {
-      file: "build/src/third_party/issue-descriptions",
-      change: "remove",
-      error: "missing third-party issue descriptions",
-    },
-  ])(
-    "rejects $change of bundled $file",
-    ({ file, change, error }) => {
+  describe("payload integrity", () => {
+    const fixtureDirs = useAutoCleanupTempDirTracker(afterAll);
+    const mutationDirs = useAutoCleanupTempDirTracker(afterEach);
+    let templateTarball: string;
+
+    beforeAll(() => {
+      templateTarball = join(fixtureDirs.make("openclaw-mcp-tarball-template-"), "template.tgz");
       withTarball(
         ["dist/index.js"],
         { "dist/index.js": "export {};\n" },
         (tarball) => {
           const result = check(tarball);
-          expect(result.status).toBe(1);
-          expect(result.stderr).toContain(error);
+          expect(result.status, result.stderr).toBe(0);
+          copyFileSync(tarball, templateTarball);
         },
         undefined,
         {
           packageJson,
           pack: "npm",
           beforePack(root) {
-            const bundled = join(root, MCP_PREFIX);
-            cpSync(sourceRoot(), bundled, { recursive: true, dereference: true });
-            const target = join(bundled, file);
-            if (change === "remove") {
-              rmSync(target, { recursive: true });
-            } else {
-              writeFileSync(target, Buffer.concat([readFileSync(target), Buffer.from("\n")]));
-            }
+            cpSync(sourceRoot(), join(root, MCP_PREFIX), { recursive: true, dereference: true });
           },
         },
       );
-    },
-    60_000,
-  );
+    }, 60_000);
+
+    it.each([
+      ...[
+        "build/src/TextSnapshot.js",
+        "build/src/McpPage.js",
+        "build/src/third_party/index.js",
+        "build/src/OPENCLAW_PATCH_NOTICE.md",
+      ].map((file) => ({
+        file,
+        change: "modify",
+        error: `unpatched or changed runtime entry ${file}`,
+      })),
+      ...[
+        MCP_CLI,
+        "build/src/bin/chrome-devtools-mcp-main.js",
+        "build/src/third_party/devtools-formatter-worker.js",
+        "build/src/third_party/devtools-heap-snapshot-worker.js",
+        "build/src/third_party/lighthouse-devtools-mcp-bundle.js",
+        "LICENSE",
+        "build/src/third_party/THIRD_PARTY_NOTICES",
+      ].map((file) => ({
+        file,
+        change: "remove",
+        error: `missing required runtime entry ${file}`,
+      })),
+      {
+        file: "build/src/third_party/issue-descriptions",
+        change: "remove",
+        error: "missing third-party issue descriptions",
+      },
+    ])(
+      "rejects $change of bundled $file",
+      ({ file, change, error }) => {
+        const root = mutationDirs.make("openclaw-mcp-tarball-mutation-");
+        const tarball = join(root, "openclaw.tgz");
+        const target = `package/${MCP_PREFIX}/${file}`;
+        if (change === "modify") {
+          const replacement = join(root, target);
+          mkdirSync(dirname(replacement), { recursive: true });
+          writeFileSync(
+            replacement,
+            Buffer.concat([readFileSync(join(sourceRoot(), file)), Buffer.from("\n")]),
+          );
+          chmodSync(replacement, 0o644);
+        }
+        let removed = 0;
+        // Packing inclusion is covered above; these cases corrupt independently copied payloads.
+        createTar(
+          {
+            cwd: root,
+            file: tarball,
+            gzip: { level: 1 },
+            sync: true,
+            strict: true,
+            filter(path, entry) {
+              if (
+                entry instanceof ReadEntry &&
+                (path === target || path.startsWith(`${target}/`))
+              ) {
+                removed += 1;
+                return false;
+              }
+              return true;
+            },
+          },
+          [`@${templateTarball}`, ...(change === "modify" ? [target] : [])],
+        );
+        expect(removed).toBeGreaterThan(0);
+        const result = check(tarball);
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain(error);
+      },
+      60_000,
+    );
+  });
 });

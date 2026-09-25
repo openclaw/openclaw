@@ -2019,7 +2019,7 @@ run_update_smoke
     expect(script).toContain("==> Still running");
     expect(script).toContain("print_install_audit");
     expect(script).toContain('install -g "$@"');
-    expect(script).toContain("openclaw update --tag");
+    expect(script).toContain('openclaw update --channel stable --tag "$UPDATE_TAG_URL"');
     expect(script).toContain("is_self_swapped_package_process_exit");
     expect(script).toContain("legacy updater process exited after self-swap");
     expect(script).toContain("parseFirstJsonObject");
@@ -2952,7 +2952,7 @@ node -e 'const fs=require("node:fs");const p=process.argv[1];const value=JSON.pa
     expect(workflow).toContain("bun_global_install_smoke:");
     expect(workflow).toContain("Setup trusted release harness for Bun smoke");
     expect(workflow).toContain("uses: ./.release-harness/.github/actions/setup-release-harness");
-    expect(workflow).toContain("npm install -g bun@1.4.0");
+    expect(workflow).toContain("npm install -g bun@1.4.2");
     expect(workflow).toContain('install-bun: "false"');
     expect(workflow).toContain("Run Bun global install candidate-payload smoke");
     expect(workflow).toContain("working-directory: .release-harness");

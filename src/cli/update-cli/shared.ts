@@ -36,11 +36,8 @@ import {
   describeUpdateInstallRoot,
   resolveUnmanagedUpdateInstallReason,
 } from "../../infra/update-runner-install-surface.js";
-import type {
-  UpdateRunResult,
-  UpdateStepProgress,
-  UpdateStepResult,
-} from "../../infra/update-runner-types.js";
+import type { UpdateRunResult, UpdateStepProgress } from "../../infra/update-runner-types.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { UpdateRecoveryStep } from "../../shared/update-outcome.js";
@@ -69,6 +66,8 @@ export type UpdateCommandOptions = {
     defaultStepTimeoutMs?: number;
     activationTimeoutMs?: number;
     env: NodeJS.ProcessEnv;
+    /** Candidate-reported admission checks; execution authority remains installed-owned. */
+    candidateAdmissionChecks?: readonly string[];
     /** Completion routing only; mutation authority remains with the live executor. */
     completionOwner?: "gateway-restart";
     /** The handoff helper acknowledged the foreground Gateway's closure. */
@@ -79,6 +78,7 @@ export type UpdateCommandOptions = {
     executorFence?: UpdateRecoveryFence;
   };
   acceptCapabilities?: boolean;
+  admission?: "auto" | "installed";
   json?: boolean;
   restart?: boolean;
   dryRun?: boolean;
@@ -92,6 +92,14 @@ export type UpdateStatusOptions = {
   json?: boolean;
   timeout?: string;
 };
+
+/** Only package updates hand admission to a privately staged candidate. */
+export function usesCandidateUpdateAdmission(
+  opts: Pick<UpdateCommandOptions, "admission" | "dryRun">,
+  installKind: "git" | "package" | "unknown",
+): boolean {
+  return installKind === "package" && !opts.dryRun && opts.admission !== "installed";
+}
 
 export type UpdateFinalizeOptions = {
   acceptCapabilities?: boolean;
@@ -111,6 +119,8 @@ export type UpdateWizardOptions = {
 };
 
 export class UpdatePreMutationError extends Error {
+  readonly origin?: "candidate-admission";
+  readonly nextAction?: string;
   readonly recoverySteps?: readonly UpdateRecoveryStep[];
   readonly failureFacts: UpdateFailureFact[];
 
@@ -120,10 +130,14 @@ export class UpdatePreMutationError extends Error {
     options?: ErrorOptions & {
       failureFacts?: readonly UpdateFailureFact[];
       recoverySteps?: readonly UpdateRecoveryStep[];
+      origin?: "candidate-admission";
+      nextAction?: string;
     },
   ) {
     super(message, options);
     this.name = "UpdatePreMutationError";
+    this.origin = options?.origin;
+    this.nextAction = options?.nextAction;
     this.recoverySteps = options?.recoverySteps;
     this.failureFacts = normalizeUpdateFailureFacts(
       options?.failureFacts ?? [{ check: reason, code: reason, message }],
@@ -246,7 +260,10 @@ export function resolveGitInstallDir(): string {
 }
 
 /** Locate the installed OpenClaw package root that should receive update operations. */
-export async function resolveUpdateRoot(): Promise<string> {
+export async function resolveUpdateRoot(context?: { root: string }): Promise<string> {
+  if (context) {
+    return path.resolve(context.root);
+  }
   // Preserve the lexical package path from the invoking shim. pnpm 11 package
   // modules realpath into a shared store, which is not the install owner.
   const invocationRoot = process.argv[1]

@@ -1,6 +1,11 @@
 import { html, noChange, nothing } from "lit";
 import type { GatewayAgentRow } from "../api/types.ts";
-import { pathForAgentPanel, type RouteId } from "../app-route-paths.ts";
+import {
+  pathForAgentPanel,
+  pathForPluginCatalogEntry,
+  pathForPluginSettings,
+  type RouteId,
+} from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
 import { registerCommandPaletteEnglish } from "../i18n/locales/en-command-palette.ts";
@@ -57,6 +62,7 @@ type CommandPaletteProps = {
   defaultAgentId: string;
   sessionItems: readonly PaletteItem[];
   catalogItems: readonly PaletteItem[];
+  primaryModelSearch: boolean;
   modelSearchError: string | null;
   sessionSearchPending: boolean;
   catalogSearchPending: boolean;
@@ -78,6 +84,8 @@ type CommandPaletteProps = {
   onNavigate?: ApplicationContext["navigate"];
   onSelectSession?: (sessionKey: string) => void;
   onSlashCommand?: (command: string) => void;
+  pluginIconUrls: Readonly<Record<string, string>>;
+  onPluginIconError: (pluginId: string) => void;
   desktopAvailable: boolean;
   custodianAvailable: boolean;
   onInputRef: (element: Element | undefined) => void;
@@ -107,6 +115,14 @@ function selectItem(item: PaletteItem, props: CommandPaletteProps) {
     if (item.agentId) {
       props.onNavigate?.(routeId, {
         pathname: pathForAgentPanel(item.agentId, null, props.basePath),
+      });
+    } else if (item.catalogId) {
+      props.onNavigate?.(routeId, {
+        pathname: pathForPluginCatalogEntry(item.catalogId, props.basePath),
+      });
+    } else if (item.pluginId && routeId === "plugin-settings") {
+      props.onNavigate?.(routeId, {
+        pathname: pathForPluginSettings(item.pluginId, props.basePath),
       });
     } else if (item.search || item.hash) {
       props.onNavigate?.(routeId, { search: item.search, hash: item.hash });
@@ -445,7 +461,7 @@ export function renderCommandPalette(readProps: () => CommandPaletteProps) {
                                 }}
                                 @mouseenter=${() => props.onActiveIdChange(item.id)}
                               >
-                                ${renderCommandPaletteResult(item, props.searchQuery, agent, props.agentIdentity?.get(agentId))}
+                                ${renderCommandPaletteResult(item, props.searchQuery, agent, props.agentIdentity?.get(agentId), props.pluginIconUrls, props.onPluginIconError)}
                               </div>
                             `;
                           })}

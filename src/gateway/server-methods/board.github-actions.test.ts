@@ -1,6 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  type Mock,
+  vi,
+} from "vitest";
 import type {
   BoardSnapshot,
   BoardWidgetDeclared,
@@ -21,6 +31,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { toRequestUrl } from "../../test-utils/provider-usage-fetch.js";
+import { drainSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { gitHubPublicApi } from "../github-public-api.js";
 import { createBoardHarness } from "./board.test-support.js";
 import type { GatewayRequestHandlerOptions, RespondFn } from "./types.js";
@@ -72,11 +83,29 @@ function observeSharedReadAdmission() {
 
 describe("board authenticated GitHub Actions", () => {
   let state: OpenClawTestState;
+  let boardStore: ReturnType<typeof createTestBoardStore>;
+  let caseNumber = 0;
   let config: OpenClawConfig;
   let actions: () => Response | Promise<Response>;
   let http: Mock<typeof fetch>;
   const account = vi.fn(async () => json({ id: 100, login: "fixture-user", avatar_url: null }));
   const native = vi.fn<typeof processExec.runCommandBuffered>();
+  const credentialDirs = new Set<string>();
+
+  const boardSessionKey = (agentId = "main") => `agent:${agentId}:runs-${caseNumber}`;
+
+  beforeAll(async () => {
+    state = await createOpenClawTestState({
+      prefix: "board-github-",
+      env: { GH_TOKEN: undefined, GITHUB_TOKEN: undefined },
+    });
+    // Keep the real database workers prepared; each case owns distinct session rows.
+    boardStore = createTestBoardStore({ stateDir: state.stateDir });
+  });
+
+  afterAll(async () => {
+    await state?.cleanup();
+  });
 
   async function writeCredential(
     scope: "system" | "agent",
@@ -85,6 +114,7 @@ describe("board authenticated GitHub Actions", () => {
     agentId = "main",
   ) {
     const profile = resolveManagedGitHubProfileDir({ agentId, scope, profileId: id });
+    credentialDirs.add(profile);
     await fs.mkdir(profile, { recursive: true, mode: 0o700 });
     await fs.writeFile(
       path.join(profile, "hosts.yml"),
@@ -94,12 +124,12 @@ describe("board authenticated GitHub Actions", () => {
   }
 
   beforeEach(async () => {
+    caseNumber += 1;
     resetPluginRuntimeStateForTest();
     clearGitHubCredentialVerificationCache();
-    state = await createOpenClawTestState({
-      prefix: "board-github-",
-      env: { GH_TOKEN: undefined, GITHUB_TOKEN: undefined },
-    });
+    state.envVars.GH_TOKEN = undefined;
+    state.envVars.GITHUB_TOKEN = undefined;
+    state.applyEnv();
     config = {
       agents: { entries: { main: { default: true } } },
       tools: { exec: { mode: "full" }, github: { profileId } },
@@ -125,20 +155,19 @@ describe("board authenticated GitHub Actions", () => {
     readCanvas?: Parameters<typeof createBoardHarness>[0],
     dependencies: Parameters<typeof createBoardHarness>[1] = {},
   ) {
-    return createBoardHarness(
-      readCanvas,
-      dependencies,
-      createTestBoardStore({ stateDir: state.stateDir }),
-      {
-        getRuntimeConfig: () => config,
-      },
-    );
+    return createBoardHarness(readCanvas, dependencies, boardStore, {
+      getRuntimeConfig: () => config,
+    });
   }
   afterEach(async () => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     resetPluginRuntimeStateForTest();
-    await state?.cleanup();
+    await drainSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
+    for (const profile of credentialDirs) {
+      await fs.rm(profile, { recursive: true, force: true });
+    }
+    credentialDirs.clear();
   });
 
   async function reader(
@@ -151,7 +180,7 @@ describe("board authenticated GitHub Actions", () => {
   ) {
     const harness = options.harness ?? createGitHubBoardHarness();
     const name = options.name ?? "runs";
-    const sessionKey = `agent:${options.agentId ?? "main"}:runs`;
+    const sessionKey = boardSessionKey(options.agentId);
     await harness.invoke("board.widget.put", {
       sessionKey,
       name,
@@ -179,7 +208,7 @@ describe("board authenticated GitHub Actions", () => {
     "rejects pinning with %s identity before changing an existing widget",
     async (unavailable) => {
       const { invoke, store, broadcast } = createGitHubBoardHarness();
-      const target = { sessionKey: "agent:main:runs", agentId: "main" };
+      const target = { sessionKey: boardSessionKey(), agentId: "main" };
       await invoke("board.widget.put", {
         ...target,
         name: "runs",
@@ -248,7 +277,7 @@ describe("board authenticated GitHub Actions", () => {
         html: "canvas",
         cspSandbox: "scripts",
       }));
-      const target = { sessionKey: "agent:main:runs", agentId: "main" };
+      const target = { sessionKey: boardSessionKey(), agentId: "main" };
       const input = {
         ...target,
         name: "runs",
@@ -299,7 +328,7 @@ describe("board authenticated GitHub Actions", () => {
     });
     const { invoke } = createGitHubBoardHarness();
     const response = await invoke("board.widget.put", {
-      sessionKey: "agent:main:runs",
+      sessionKey: boardSessionKey(),
       name: "native",
       content: { kind: "html", html: "runs" },
       declared: { tools: ["github.actions.runs:owner/repo"] },
@@ -321,7 +350,7 @@ describe("board authenticated GitHub Actions", () => {
         "github.actions.runs:owner/repo",
       ]);
       const response = await invoke("board.widget.put", {
-        sessionKey: "agent:main:runs",
+        sessionKey: boardSessionKey(),
         name: "other",
         content: kind === "mcp-app" ? { kind, viewId: "fixture" } : { kind: "html", html: "plain" },
       });
@@ -330,7 +359,7 @@ describe("board authenticated GitHub Actions", () => {
         expect(
           (
             await store.readWidgetMcpApp(
-              { sessionKey: "agent:main:runs", agentId: "main" },
+              { sessionKey: boardSessionKey(), agentId: "main" },
               "other",
             )
           )?.declaredTools,
@@ -354,7 +383,7 @@ describe("board authenticated GitHub Actions", () => {
     "rejects pinning when %s authority changes during verification without persistence",
     async (changed) => {
       const { handlers, context, store, broadcast } = createGitHubBoardHarness();
-      const target = { sessionKey: "agent:main:runs", agentId: "main" };
+      const target = { sessionKey: boardSessionKey(), agentId: "main" };
       const before = await store.getSnapshot(target);
       const controller = new AbortController();
       let current = true;
@@ -401,7 +430,7 @@ describe("board authenticated GitHub Actions", () => {
           config.agents = { entries: { other: { default: true } } };
         }
         if (changed === "routing") {
-          config.session = { scope: "global", mainKey: "runs" };
+          config.session = { scope: "global", mainKey: `runs-${caseNumber}` };
         }
         return json({ id: 100, login: "fixture-user", avatar_url: null });
       });
@@ -448,7 +477,7 @@ describe("board authenticated GitHub Actions", () => {
 
   it("rejects malformed or authority-overriding params without changing a usable board", async () => {
     const { read, store } = await reader();
-    const target = { sessionKey: "agent:main:runs", agentId: "main" };
+    const target = { sessionKey: boardSessionKey(), agentId: "main" };
     const before = await store.getSnapshot(target);
     const callsBeforeRead = http.mock.calls.length;
     for (const invalid of [
@@ -639,7 +668,7 @@ describe("board authenticated GitHub Actions", () => {
         await Promise.race([started.promise.then(() => "reading"), pending.then(() => "done")]),
       ).toBe("reading");
       await invoke("board.update", {
-        sessionKey: "agent:main:runs",
+        sessionKey: boardSessionKey(),
         ops: [{ kind: "widget_remove", name: "runs" }],
       });
     } finally {
@@ -694,7 +723,7 @@ describe("board authenticated GitHub Actions", () => {
       await started.promise;
       if (changed === "widget") {
         await invoke("board.widget.put", {
-          sessionKey: "agent:main:runs",
+          sessionKey: boardSessionKey(),
           name: "runs",
           content: { kind: "html", html: "replacement" },
           declared: { tools: ["github.actions.runs:owner/repo"] },
@@ -702,7 +731,7 @@ describe("board authenticated GitHub Actions", () => {
       }
       if (changed === "grant") {
         await invoke("board.widget.put", {
-          sessionKey: "agent:main:runs",
+          sessionKey: boardSessionKey(),
           name: "runs",
           content: { kind: "html", html: "runs" },
         });
@@ -742,7 +771,7 @@ describe("board authenticated GitHub Actions", () => {
       const followerRead = follower.read();
       await joined;
       await leader.invoke("board.update", {
-        sessionKey: "agent:main:runs",
+        sessionKey: boardSessionKey(),
         ops: [{ kind: "widget_remove", name: removed }],
       });
       release.resolve();
@@ -764,7 +793,7 @@ describe("board authenticated GitHub Actions", () => {
       clearGitHubCredentialVerificationCache();
       account.mockImplementationOnce(async () => {
         await survivor.invoke("board.update", {
-          sessionKey: "agent:main:runs",
+          sessionKey: boardSessionKey(),
           ops: [{ kind: "widget_remove", name: surviving }],
         });
         return json({ id: 100, login: "fixture-user", avatar_url: null });
@@ -795,7 +824,7 @@ describe("board authenticated GitHub Actions", () => {
     const followerRead = follower.read();
     await joined;
     await leader.invoke("board.update", {
-      sessionKey: "agent:main:runs",
+      sessionKey: boardSessionKey(),
       ops: [{ kind: "widget_remove", name: "leader" }],
     });
     clearGitHubCredentialVerificationCache();

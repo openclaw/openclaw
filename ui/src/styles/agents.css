@@ -16,6 +16,69 @@
   border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
 
+.agent-profile-tree,
+.agent-profile-tree ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.agent-profile-tree {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.agent-profile-tree ul {
+  margin-inline-start: var(--space-2);
+  padding-block-start: var(--space-2);
+  padding-inline-start: var(--space-4);
+}
+
+.agent-profile-tree ul > li {
+  position: relative;
+}
+
+.agent-profile-tree ul > li::before {
+  content: "";
+  position: absolute;
+  inset-inline-start: calc(-1 * var(--space-4));
+  inset-block-start: calc(-1 * var(--space-2));
+  inline-size: var(--space-3);
+  block-size: calc(var(--space-2) + 0.75em);
+  border-inline-start: 1px solid var(--border);
+  border-block-end: 1px solid var(--border);
+}
+
+.agent-profile-tree__label {
+  font-weight: 500;
+  line-height: 1.5;
+}
+
+.agent-profile-tree__details {
+  position: relative;
+  padding-block-start: var(--space-1);
+  padding-inline-start: var(--space-4);
+}
+
+.agent-profile-tree__branch > .agent-profile-tree__details::before {
+  content: "";
+  position: absolute;
+  inset-inline-start: var(--space-2);
+  inset-block: 0;
+  border-inline-start: 1px solid var(--border);
+}
+
+.agent-profile-tree__value {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.agent-profile-tree__source {
+  color: var(--muted);
+}
+
 @media (max-width: 640px) {
   .agents-layout,
   .agents-main {

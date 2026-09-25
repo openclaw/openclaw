@@ -310,6 +310,7 @@ describe("update config provenance", () => {
           expect(result.repaired).toBe(true);
         } else if (flow === "converge") {
           await convergeUpdatePlugins({
+            candidateRuntime: true,
             result: {
               status: "ok",
               mode: "git",

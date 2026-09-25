@@ -145,31 +145,11 @@ function resolveOptionFilteredFileOperandIndex(params: {
   cwd: string | undefined;
   optionsWithValue?: ReadonlySet<string>;
 }): number | null {
-  let afterDoubleDash = false;
-  for (let i = params.startIndex; i < params.argv.length; i += 1) {
-    const token = readTrimmedArgToken(params.argv, i);
-    if (!token) {
-      continue;
-    }
-    if (afterDoubleDash) {
-      return resolvesToExistingFileSync(token, params.cwd) ? i : null;
-    }
-    if (token === "--") {
-      afterDoubleDash = true;
-      continue;
-    }
-    if (token === "-") {
-      return null;
-    }
-    if (token.startsWith("-")) {
-      if (!token.includes("=") && params.optionsWithValue?.has(token)) {
-        i += 1;
-      }
-      continue;
-    }
-    return resolvesToExistingFileSync(token, params.cwd) ? i : null;
-  }
-  return null;
+  const index = resolveOptionFilteredPositionalIndex(params);
+  return index !== null &&
+    resolvesToExistingFileSync(readTrimmedArgToken(params.argv, index), params.cwd)
+    ? index
+    : null;
 }
 
 function resolveOptionFilteredPositionalIndex(params: {

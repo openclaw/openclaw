@@ -80,7 +80,7 @@ function shortenHomeInString(input: string): string {
   // Browser-safe home shortening: avoid importing Node-only helpers (keeps Vite builds working in Docker/CI).
   return input
     .replace(/^\/(?:Users|home)\/[^/]+(\/|$)/, "~$1")
-    .replace(/^C:\\Users\\[^\\]+(\\|$)/i, "~$1");
+    .replace(/^[A-Za-z]:\\Users\\[^\\]+(\\|$)/i, "~$1");
 }
 
 export function resolveToolDisplay(params: {
