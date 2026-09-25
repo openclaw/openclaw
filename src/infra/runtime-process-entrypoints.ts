@@ -31,6 +31,9 @@ export const runtimeProcessEntrypoints = {
   boardStore: runtimeProcessEntrypoint("boards/sqlite-board-store.worker"),
   sessionSharingStore: runtimeProcessEntrypoint("config/sessions/session-sharing-store.worker"),
   heartbeatOutcomeStore: runtimeProcessEntrypoint("infra/heartbeat-outcome-store.worker"),
+  contextEngineTurnOutbox: runtimeProcessEntrypoint(
+    "agents/harness/context-engine-turn-outbox.worker",
+  ),
   sqliteStore: runtimeProcessEntrypoint("infra/sqlite-store.worker"),
   agentSchemaInspection: runtimeProcessEntrypoint("state/openclaw-agent-schema-inspection.worker"),
   stateMigrationSnapshot: runtimeProcessEntrypoint("infra/state-migrations.snapshot.worker"),
