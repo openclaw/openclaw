@@ -3,6 +3,7 @@ import { testing as cliBackendsTesting } from "../agents/cli-backends.test-suppo
 import { resolveBundledStaticCatalogModel } from "../agents/embedded-agent-runner/model.static-catalog.js";
 import type { RunEmbeddedAgentInternalParams } from "../agents/embedded-agent-runner/run/internal-params.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../agents/harness/tool-surface-bridge.js";
+import { ProviderAuthError } from "../agents/model-auth-runtime-shared.js";
 import { createStubTool } from "../agents/test-helpers/agent-tool-stubs.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -19,6 +20,7 @@ const runEmbeddedAgent = vi.hoisted(() =>
 );
 
 const resolveModelAsync = vi.hoisted(() => vi.fn());
+const resolveApiKeyForProviderCore = vi.hoisted(() => vi.fn());
 const resolveSelection = vi.hoisted(() =>
   vi.fn(() => ({ provider: "test", modelId: "model-a" }) as { provider: string; modelId: string }),
 );
@@ -76,6 +78,7 @@ vi.mock("../agents/simple-completion-runtime.js", () => ({
 }));
 vi.mock("../agents/cli-runner/prepare.runtime.js", () => ({ prepareCliRunContext }));
 vi.mock("../agents/cli-runner/execute.runtime.js", () => ({ executePreparedCliRun }));
+vi.mock("../agents/model-auth-provider.js", () => ({ resolveApiKeyForProviderCore }));
 
 function createCompanion(cfg: OpenClawConfig = {}) {
   return createSessionCompanion({
@@ -105,6 +108,11 @@ const question = {
 describe("session companion embedded invocation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resolveApiKeyForProviderCore
+      .mockReset()
+      .mockRejectedValue(
+        new ProviderAuthError("missing-provider-auth", "anthropic", "No API key found"),
+      );
     resolveModelAsync.mockReset().mockResolvedValue({ model: { input: ["text", "image"] } });
     appendMessage.mockReset();
     admitWrite.mockReset().mockImplementation(async (_manager, write) => write());
@@ -344,6 +352,7 @@ describe("session companion embedded invocation", () => {
         expect.objectContaining({
           provider: "claude-cli",
           model: "claude-haiku-4-5",
+          requesterModel: { provider: "anthropic", model: "claude-haiku-4-5" },
           executionMode: "side-question",
           disableTools: true,
           sessionKey: preparedTarget.sessionKey,
@@ -352,6 +361,20 @@ describe("session companion embedded invocation", () => {
         }),
       );
       expect(executePreparedCliRun).toHaveBeenCalledOnce();
+      resolveApiKeyForProviderCore.mockResolvedValue({ apiKey: "synthetic-key", mode: "api-key" });
+      resolveSelection.mockReturnValueOnce({ provider: "anthropic", modelId: "claude-haiku-4-5" });
+      await expect(
+        companion.ask({
+          ...question,
+          attachments: [{ mimeType: "image/png", content: imageBase64 }],
+        }),
+      ).resolves.toMatchObject({ answer: "The session is reading a file." });
+      expect(runEmbeddedAgent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          images: [expect.objectContaining({ type: "image" })],
+          toolsAllow: ["read", "sessions_history", "sessions_search"],
+        }),
+      );
       expect(removeSession).toHaveBeenCalledWith(preparedTarget, undefined);
     } finally {
       cliBackendsTesting.resetDepsForTest();

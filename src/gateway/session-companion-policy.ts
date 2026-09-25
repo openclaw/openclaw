@@ -2,6 +2,9 @@ import {
   assertOperatorModelAllowed,
   type AdmittedRunOperatorAuthority,
 } from "../agents/admitted-run-context.js";
+import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { resolveApiKeyForProviderCore } from "../agents/model-auth-provider.js";
+import { isProviderAuthError } from "../agents/model-auth-runtime-shared.js";
 import {
   isCliRuntimeAliasForProvider,
   resolveCliRuntimeExecutionProvider,
@@ -55,17 +58,14 @@ export function resolveSessionCompanionModel(params: {
 }
 
 /**
- * CLI runtime that answers Side chat for the selected model, if any. The
- * automatic utility model is derived from the agent's primary provider, so it
- * also follows the CLI runtime that serves that primary: subscription-only
- * installs (for example `claude-cli`) have no direct provider credential.
- * An explicit utility model keeps its own route.
+ * Use a CLI side question only when the existing direct route lacks provider
+ * authentication. Working direct routes retain images and read-only tools.
  */
-export function resolveSessionCompanionCliRuntime(params: {
+export async function resolveSessionCompanionCliRuntime(params: {
   cfg: OpenClawConfig;
   agentId: string;
   selection: Pick<AgentSimpleCompletionSelection, "provider" | "modelId" | "profileId">;
-}): string | undefined {
+}): Promise<string | undefined> {
   const selected = resolveCliRuntimeExecutionProvider({
     provider: params.selection.provider,
     cfg: params.cfg,
@@ -73,8 +73,8 @@ export function resolveSessionCompanionCliRuntime(params: {
     modelId: params.selection.modelId,
     authProfileId: params.selection.profileId,
   });
-  if (selected || readUtilityModelSetting(params.cfg, params.agentId).kind !== "auto") {
-    return selected;
+  if (!selected && readUtilityModelSetting(params.cfg, params.agentId).kind !== "auto") {
+    return undefined;
   }
   const primary = resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId });
   const runtime = resolveCliRuntimeExecutionProvider({
@@ -83,14 +83,36 @@ export function resolveSessionCompanionCliRuntime(params: {
     agentId: params.agentId,
     modelId: primary.model,
   });
-  return runtime &&
+  const candidate =
+    selected ??
+    (runtime &&
     isCliRuntimeAliasForProvider({
       runtime,
       provider: params.selection.provider,
       cfg: params.cfg,
     })
-    ? runtime
-    : undefined;
+      ? runtime
+      : undefined);
+  if (!candidate) {
+    return undefined;
+  }
+  try {
+    await resolveApiKeyForProviderCore({
+      provider: params.selection.provider,
+      modelId: params.selection.modelId,
+      profileId: params.selection.profileId,
+      lockedProfile: Boolean(params.selection.profileId),
+      cfg: params.cfg,
+      agentDir: resolveAgentDir(params.cfg, params.agentId),
+      workspaceDir: resolveAgentWorkspaceDir(params.cfg, params.agentId),
+    });
+    return undefined;
+  } catch (error) {
+    if (!isProviderAuthError(error, "missing-provider-auth")) {
+      throw error;
+    }
+    return candidate;
+  }
 }
 
 export function buildSessionCompanionSystemPrompt(sessionKey: string): string {

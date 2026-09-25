@@ -142,7 +142,7 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
   if (!current || current.role !== "user") {
     throw new Error("Session companion has no current question.");
   }
-  const cliRuntime = resolveSessionCompanionCliRuntime({
+  const cliRuntime = await resolveSessionCompanionCliRuntime({
     cfg: params.cfg,
     agentId: params.agentId,
     selection: selectedModel,
@@ -194,6 +194,7 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
         ...params,
         cliRuntime,
         modelId: selectedModel.modelId,
+        requesterModel: { provider: selectedModel.provider, model: selectedModel.modelId },
         authProfileId: selectedModel.profileId,
         target,
         preparedRunAdmission,
@@ -307,6 +308,7 @@ async function runSessionCompanionViaCliRuntime(
   params: SessionCompanionRunParams & {
     cliRuntime: string;
     modelId: string;
+    requesterModel: { provider: string; model: string };
     authProfileId?: string;
     target: InternalSessionEffectsTarget;
     preparedRunAdmission: PreparedAgentRunAdmission;
@@ -347,6 +349,7 @@ async function runSessionCompanionViaCliRuntime(
       executionMode: "side-question",
       provider: params.cliRuntime,
       model: params.modelId,
+      requesterModel: params.requesterModel,
       disableTools: true,
       timeoutMs: ASK_TIMEOUT_MS,
       runTimeoutOverrideMs: ASK_TIMEOUT_MS,
