@@ -269,12 +269,18 @@ describe("line-cap growth ratchet", () => {
     fs.writeFileSync(target, source(6));
     git(root, "add", ".");
     git(root, "commit", "-m", "grow release file");
-    fs.writeFileSync(path.join(root, "src/branch-change.ts"), "export const branchChange = true;\n");
+    fs.writeFileSync(
+      path.join(root, "src/branch-change.ts"),
+      "export const branchChange = true;\n",
+    );
     git(root, "add", ".");
     git(root, "commit", "-m", "later release commit");
 
     git(root, "checkout", "upstream");
-    fs.writeFileSync(path.join(root, "src/upstream-change.ts"), "export const upstreamChange = true;\n");
+    fs.writeFileSync(
+      path.join(root, "src/upstream-change.ts"),
+      "export const upstreamChange = true;\n",
+    );
     git(root, "add", ".");
     git(root, "commit", "-m", "upstream update");
 
