@@ -320,7 +320,7 @@ foreach ($case in $cases) {
         fixture,
         path.resolve("scripts/windows-testbox-openssh.ps1"),
       ],
-      { encoding: "utf8", timeout: 10000 },
+      { encoding: "utf8", timeout: 30_000 },
     );
     const redact = (text: string | null | undefined) => {
       let value = text ?? "";

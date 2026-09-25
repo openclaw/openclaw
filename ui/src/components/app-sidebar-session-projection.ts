@@ -237,8 +237,9 @@ export class SidebarSessionProjection {
       // totalRowCount is the pre-pagination size: headers and empty-zone
       // checks must not mistake a page-filtered section for an empty one.
       const totalRowCount = section.rows.length;
-      const renderHeader =
-        !section.id.startsWith("agent:") && (section.id !== "ungrouped" || ungroupedHasPeerHeader);
+      const renderHeader = section.id.startsWith("agent:")
+        ? Boolean(section.category)
+        : section.id !== "ungrouped" || ungroupedHasPeerHeader;
       const collapsed =
         (renderHeader || section.id.startsWith("agent:")) &&
         input.collapsedSections.has(section.id);

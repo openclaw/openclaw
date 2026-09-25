@@ -7,7 +7,10 @@ import { serializeSidebarEntry } from "../app-navigation.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
-import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
+import {
+  groupSidebarAgentSessionRows,
+  type SidebarSessionsGrouping,
+} from "../lib/sessions/grouping.ts";
 import { runSessionNavigationIntent } from "../lib/sessions/navigation-handoff.ts";
 import {
   composerDraftSearch,
@@ -432,15 +435,15 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     const roster = this.groupedSessionSource;
     const sections = roster?.agentIds.flatMap((agentId) => {
       const agentRows = rows.filter((row) => this.sessionNavigationAgentId(row) === agentId);
-      return [true, false].map((pinned) => ({
-        id: `agent:${agentId}:${pinned ? "pinned" : "recent"}` as const,
-        rows: agentRows.filter((row) => row.pinned === pinned),
-      }));
+      return groupSidebarAgentSessionRows(agentId, agentRows, this.knownSectionOrder());
     });
     const collapsedSections = new Set(this.collapsedSessionSections);
     for (const agentId of roster?.collapsedAgentIds ?? []) {
-      collapsedSections.add(`agent:${agentId}:pinned`);
-      collapsedSections.add(`agent:${agentId}:recent`);
+      for (const section of sections ?? []) {
+        if (section.id.startsWith(`agent:${agentId}:`)) {
+          collapsedSections.add(section.id);
+        }
+      }
     }
     return this.sessionProjection.project({
       rows,

@@ -448,3 +448,19 @@ function orderedGroupIds(
   }
   return ids;
 }
+
+/** Read-only categories within one agent's already-loaded roster window.
+ * Team mode always uses named categories, independently of the single-agent
+ * grouping preference. IDs scope collapse and pagination to the owning agent.
+ */
+export function groupSidebarAgentSessionRows<Row extends SidebarGroupableRow>(
+  agentId: string,
+  rows: Row[],
+  sectionOrder: readonly string[] = [],
+): SidebarSessionSection<Row>[] {
+  const sections = groupSidebarSessionRows(rows, { grouping: "category", sectionOrder });
+  for (const section of sections) {
+    section.id = `agent:${agentId}:${section.id === "ungrouped" ? "recent" : section.id}`;
+  }
+  return sections.filter((section) => section.rows.length > 0);
+}

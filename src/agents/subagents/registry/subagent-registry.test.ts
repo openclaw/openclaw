@@ -5141,6 +5141,10 @@ describe("subagent registry seam flow", () => {
   });
 
   it("completes a registered run across timing persistence, lifecycle status, and announce cleanup", async () => {
+    setDetachedTaskLifecycleRuntime({
+      ...getDetachedTaskLifecycleRuntime(),
+      findTaskRun: () => undefined,
+    });
     mocks.entries["agent:main:subagent:child"] = createSessionEntry({
       lifecycleRevision: "revision-child",
       lastRunError: "previous failure",
@@ -5152,10 +5156,7 @@ describe("subagent registry seam flow", () => {
       task: "finish the task",
       cleanup: "delete",
     });
-
-    await waitForFast(() => {
-      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
-    });
+    await waitForFast(() => expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1));
 
     expect(mocks.emitSessionLifecycleEvent).toHaveBeenCalledWith({
       sessionKey: "agent:main:subagent:child",
@@ -5174,12 +5175,7 @@ describe("subagent registry seam flow", () => {
         task: "finish the task",
         cleanup: "delete",
         roundOneReply: "final completion reply",
-        outcome: {
-          status: "ok",
-          startedAt: 111,
-          endedAt: 222,
-          elapsedMs: 111,
-        },
+        outcome: { status: "ok", startedAt: 111, endedAt: 222, elapsedMs: 111 },
       },
       "completion announce params",
     );
