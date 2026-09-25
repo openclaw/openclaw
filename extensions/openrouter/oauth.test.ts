@@ -506,6 +506,44 @@ describe("OpenRouter OAuth", () => {
     });
   });
 
+  it("publishes no provider auth result when exchange fails after a valid callback", async () => {
+    const waitForCallback = vi.fn(async () => ({
+      type: "authorization_code" as const,
+      code: "AUTHCODE",
+      state: "state-1",
+    }));
+    const close = vi.fn(async () => undefined);
+    const startCallback = vi.fn(async () => ({ waitForCallback, close }));
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      jsonResponse({ error: "forced exchange failure" }, { status: 502 }),
+    );
+    const { ctx } = createOpenRouterOAuthContext({ isRemote: false });
+    const publishProviderAuthResult = vi.fn();
+    const method = createOpenRouterOAuthAuthMethod({
+      createPkce: () => ({ verifier: "verifier-1", challenge: "challenge-1" }),
+      createState: () => "state-1",
+      fetchImpl,
+      startCallback,
+    });
+
+    await expect(
+      method.run(ctx).then((result) => {
+        publishProviderAuthResult(result);
+      }),
+    ).rejects.toThrow("OpenRouter OAuth key exchange failed (502): forced exchange failure");
+
+    expect(waitForCallback).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(requestJsonBody(fetchImpl.mock.calls[0]?.[1])).toEqual({
+      code: "AUTHCODE",
+      code_verifier: "verifier-1",
+      code_challenge_method: "S256",
+    });
+    expect(publishProviderAuthResult).not.toHaveBeenCalled();
+    expect(ctx.config).toEqual({});
+  });
+
   it("closes a state-bound provider denial without exchanging a code", async () => {
     const fetchImpl = vi.fn<typeof fetch>(async () => jsonResponse({ key: "sk-or-v1-test" }));
     const waitForCallback = vi.fn(async () => ({

@@ -110,11 +110,11 @@ export function renderOAuthPage(options: {
 </html>`;
 }
 
-/** Renders the local OAuth callback success page after provider authentication completes. */
+/** Renders the local OAuth callback page after an authorization code is received. */
 export function oauthSuccessHtml(message: string): string {
   return renderOAuthPage({
-    title: "Authentication successful",
-    heading: "Authentication successful",
+    title: "Authorization received",
+    heading: "Authorization received",
     message,
   });
 }
