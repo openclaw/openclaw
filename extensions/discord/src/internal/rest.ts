@@ -9,7 +9,7 @@ import {
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { getDiscordEndpointRuntime, type DiscordEndpointRuntime } from "../endpoint-runtime.js";
 import { captureDiscordRequestAuthority } from "./request-authority.js";
-import { serializeRequestBody } from "./rest-body.js";
+import { serializeRequestBody, type RequestData } from "./rest-body.js";
 import {
   DiscordError,
   RateLimitError,
@@ -56,13 +56,6 @@ type NormalizedRequestClientOptions = RequestClientOptions & {
   apiVersion: number;
   maxQueueSize: number;
   timeout: number;
-};
-
-export type RequestData = {
-  body?: unknown;
-  multipartStyle?: "message" | "form";
-  rawBody?: boolean;
-  headers?: Record<string, string>;
 };
 
 type RequestDispatchData = {

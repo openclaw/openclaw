@@ -10,14 +10,9 @@ import {
   VoiceStateUpdateListener,
 } from "../internal/discord.js";
 import type { GatewayPlugin } from "../internal/gateway.js";
-import type { DiscordVoiceManager } from "./voice-runtime.js";
+import type { DiscordVoiceListenerManager } from "./listener-contract.js";
 
 const logger = createSubsystemLogger("discord/voice");
-
-type DiscordVoiceListenerManager = Pick<
-  DiscordVoiceManager,
-  "autoJoin" | "reconcileAutoJoinGuild" | "refreshGuildRoster" | "handleVoiceStateUpdate"
->;
 
 function startAutoJoin(operation: () => Promise<unknown>, context = "") {
   void operation().catch((err: unknown) =>
