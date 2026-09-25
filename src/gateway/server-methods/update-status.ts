@@ -122,7 +122,7 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
         : getUpdateSchedule();
       mark("response");
       const externalSupervisorGuidance = await resolveExternalSupervisorGuidance("update", {
-        config,
+        config: currentConfig,
       });
       const result = {
         sentinel,
