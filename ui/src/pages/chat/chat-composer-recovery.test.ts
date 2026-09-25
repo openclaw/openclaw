@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   getChatAttachmentDataUrl,
@@ -201,5 +202,31 @@ describe("pending send composer ownership", () => {
     expect(reopened.state.chatQueue).toEqual([]);
     expect(reopened.state.chatMessage).toBe("");
     expect(reopened.state.chatAttachments).toEqual([]);
+  });
+
+  it("keeps an accepted follow-up in flight when a live pane restores its composer", async () => {
+    const transport = makeChatHost({
+      requestHandlers: {
+        "chat.send": (params: unknown) => ({
+          runId: (params as { idempotencyKey: string }).idempotencyKey,
+          status: "started",
+        }),
+      },
+    });
+    const source = mount(transport);
+    source.state.chatRunId = "active-run";
+    source.state.handleChatDraftChange("follow-up while replying", []);
+    await source.state.handleSendChat();
+    expect(source.state.chatQueue).toMatchObject([{ sendState: "sending", sendAttempts: 1 }]);
+    const { id, sendRunId } = source.state.chatQueue[0]!;
+
+    // Presenting the pane again restores from storage, which holds the reload alias.
+    source.controller.restoreComposer();
+
+    expect(source.state.chatQueue).toMatchObject([{ id, sendRunId, sendState: "sending" }]);
+    // Reload recovery still sees the durable alias.
+    expect(listStoredChatOutboxes(source.state).flatMap(({ queue }) => queue)).toMatchObject([
+      { id, sendState: "waiting-reconnect" },
+    ]);
   });
 });
