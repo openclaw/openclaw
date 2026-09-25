@@ -467,7 +467,7 @@ ${new TextDecoder().decode(this.fileBytes.subarray(0, 65536))}</pre>
               ?disabled=${this.busy || !this.gateway.connected || !this.sessionKey}
               @click=${() => void this.refresh()}
             >
-              ${t("common.refresh")}
+              ${t("tasksPage.supervision.reload")}
             </button>`,
         })}
         ${this.error ? html`<p role="alert">${this.error}</p>` : nothing}

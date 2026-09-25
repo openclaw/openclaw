@@ -2577,6 +2577,8 @@ export const en: TranslationMap & {
         "Task outcomes, continuation ownership, and notification delivery are tracked separately.",
       session: "Source conversation",
       chooseSession: "Choose a conversation",
+      // Not "Refresh": the page header already owns that accessible name.
+      reload: "Reload supervised work",
       details: "Details and controls",
       more: "Load more",
       input: "Additional instructions or requested input",

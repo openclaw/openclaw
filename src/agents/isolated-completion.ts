@@ -188,16 +188,7 @@ async function runCliIsolatedCompletion(params: {
           isolatedCompletion: true,
           outputTextPolicy: params.request.outputTextPolicy,
         });
-        if (
-          result.didSendViaMessagingTool ||
-          result.didDeliverSourceReplyViaMessageTool ||
-          result.messagingToolSentTexts?.length ||
-          result.messagingToolSentMediaUrls?.length ||
-          result.messagingToolSentTargets?.length ||
-          result.messagingToolSourceReplyPayloads?.length ||
-          result.acceptedSessionSpawns?.length ||
-          result.successfulCronAdds
-        ) {
+        if (hasCliSideEffectEvidence(result)) {
           throw new IsolatedCompletionError(
             "output-rejected",
             "Isolated CLI completion returned side-effect evidence; result rejected.",
