@@ -96,7 +96,6 @@ import { resolveContextTokensForModel } from "../context.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { waitForDeferredTurnMaintenanceForSession } from "../embedded-agent-runner/context-engine-maintenance.js";
-import { resolvePromptBuildHookResult } from "../embedded-agent-runner/run/attempt-prompt-helpers.js";
 import { composeSystemPromptWithHookContext } from "../embedded-agent-runner/run/attempt-thread-helpers.js";
 import {
   applyEmbeddedAttemptToolsAllow,
@@ -149,6 +148,10 @@ import {
 } from "./execution-target.js";
 import { isClaudeCliBackendId, normalizeCliModel } from "./helpers.js";
 import { prepareCliHistoryBoundary } from "./history-boundary.js";
+import {
+  resolveAuthorizedCliPromptBuildHookResult,
+  resolveCliPromptBuildHookResult,
+} from "./hook-prompt-build.js";
 import { cliBackendLog } from "./log.js";
 import {
   buildCliMcpGrantContext,
@@ -823,24 +826,15 @@ async function prepareCliRunContextWithinReadFence(
     ...buildAgentHookContextChannelFields(params),
   };
   const promptBuildHookRunner = skipsTurnPreparation ? undefined : getGlobalHookRunner();
-  const promptBuildHookResult = await (async () => {
-    if (skipsTurnPreparation) {
-      return undefined;
-    }
-    try {
-      return await resolvePromptBuildHookResult({
-        config: runConfig,
-        prompt: params.prompt,
-        messages: await loadOpenClawHistoryMessages(),
-        hookCtx: promptBuildHookContext,
-        hookRunner: promptBuildHookRunner,
-        bootstrapContextRunKind: params.bootstrapContextRunKind,
-      });
-    } catch (error) {
-      cliBackendLog.warn(`cli prompt-build hook preparation failed: ${String(error)}`);
-      return undefined;
-    }
-  })();
+  const promptBuildHookResult = await resolveCliPromptBuildHookResult({
+    skipsTurnPreparation,
+    config: runConfig,
+    prompt: params.prompt,
+    loadMessages: loadOpenClawHistoryMessages,
+    hookCtx: promptBuildHookContext,
+    hookRunner: promptBuildHookRunner,
+    bootstrapContextRunKind: params.bootstrapContextRunKind,
+  });
   const promptBuildToolsAllow = mergeForcedEmbeddedAttemptToolsAllow(
     promptBuildHookResult?.toolsAllow,
     {
@@ -1157,38 +1151,16 @@ async function prepareCliRunContextWithinReadFence(
     : nodeSkillWorkshop
       ? [nodeSkillWorkshop]
       : [];
-  const authorizedPromptBuildResult = await (async () => {
-    const toolAuthorityFingerprint = params.toolAuthorityFingerprint;
-    if (!promptBuildHookRunner || !toolAuthorityFingerprint) {
-      return undefined;
-    }
-    const admittedParams = await admitCliRunParams(params, workspaceResolution.agentId);
-    params = admittedParams;
-    const assertHostActive = resolveAdmittedRunActiveAssertion(
-      admittedParams.admittedRunContext,
-      admittedParams.abortSignal,
-    );
-    if (!assertHostActive) {
-      return undefined;
-    }
-    try {
-      return await promptBuildHookRunner.runAuthorizedPromptBuild(
-        {
-          prompt: params.prompt,
-          messages: await loadOpenClawHistoryMessages(),
-        },
-        promptBuildHookContext,
-        {
-          toolAuthorityFingerprint,
-          activeToolNames: promptTools.map((tool) => tool.name),
-          assertHostActive,
-        },
-      );
-    } catch (error) {
-      cliBackendLog.warn(`authorized CLI prompt-build hook failed: ${String(error)}`);
-      return undefined;
-    }
-  })();
+  const authorizedPromptBuild = await resolveAuthorizedCliPromptBuildHookResult({
+    params,
+    admitParams: (candidate) => admitCliRunParams(candidate, workspaceResolution.agentId),
+    hookRunner: promptBuildHookRunner,
+    hookCtx: promptBuildHookContext,
+    loadMessages: loadOpenClawHistoryMessages,
+    activeToolNames: promptTools.map((tool) => tool.name),
+  });
+  params = authorizedPromptBuild.params;
+  const authorizedPromptBuildResult = authorizedPromptBuild.result;
   params.assertCurrent?.();
   const messageToolAvailable = promptTools.some(
     (tool) => normalizeToolPolicyName(tool.name) === "message",
