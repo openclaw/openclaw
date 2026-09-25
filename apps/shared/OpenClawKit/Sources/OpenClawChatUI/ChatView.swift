@@ -437,7 +437,8 @@ public struct OpenClawChatView: View {
             .safeAreaInset(edge: .top, spacing: 0) {
                 self.messageListNoticeBanner
             }
-            .scrollPosition(id: self.$scrollPosition, anchor: .bottom)
+            // Visible-ID writeback must not turn a one-shot command into a persistent layout target.
+            .scrollPosition(id: Binding(get: { self.scrollPosition }, set: { _ in }), anchor: .bottom)
             .onScrollGeometryChange(for: Bool.self) { geometry in
                 let distanceFromBottom = geometry.contentSize.height - geometry.visibleRect.maxY
                 return distanceFromBottom <= Layout.liveEdgeThreshold
