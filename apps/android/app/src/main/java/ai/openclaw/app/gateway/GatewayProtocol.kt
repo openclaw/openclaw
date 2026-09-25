@@ -76,7 +76,6 @@ data class GatewayNodeInvokeRequest(
   val paramsJson: String? = null,
   val timeoutMs: Long? = null,
   val idempotencyKey: String? = null,
-  val sessionKey: String? = null,
 )
 
 @Serializable

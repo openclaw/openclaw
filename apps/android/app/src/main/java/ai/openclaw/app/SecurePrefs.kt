@@ -137,28 +137,6 @@ class SecurePrefs(
     appContext.getSharedPreferences(plainPrefsName, Context.MODE_PRIVATE)
   private val hadPlainPrefsBeforeInit = plainPrefs.all.isNotEmpty()
 
-  internal fun wasPermissionDenied(permission: String): Boolean = plainPrefs.getStringSet("permissions.denied", emptySet()).orEmpty().contains(permission)
-
-  internal fun recordPermissionResults(grants: Map<String, Boolean>) {
-    val denied = plainPrefs.getStringSet("permissions.denied", emptySet()).orEmpty()
-    val updated = denied.toMutableSet()
-    grants.forEach { (permission, granted) ->
-      if (granted) updated.remove(permission) else updated.add(permission)
-    }
-    if (updated != denied) plainPrefs.edit { putStringSet("permissions.denied", updated) }
-  }
-
-  internal fun permissionNotificationShown(key: String): Boolean = plainPrefs.getStringSet("permissions.notified", emptySet())!!.contains(key)
-
-  internal fun recordPermissionNotification(key: String) {
-    val notified = plainPrefs.getStringSet("permissions.notified", emptySet())!!
-    plainPrefs.edit { putStringSet("permissions.notified", notified + key) }
-  }
-
-  internal fun resetPermissionNotifications() {
-    plainPrefs.edit { remove("permissions.notified") }
-  }
-
   // Gateway credentials and arbitrary secret strings are isolated behind EncryptedSharedPreferences.
   private val masterKey by lazy {
     MasterKey

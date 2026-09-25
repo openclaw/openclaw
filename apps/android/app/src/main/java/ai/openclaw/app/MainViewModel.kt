@@ -716,6 +716,7 @@ class MainViewModel private constructor(
   ) {
     val runtime = runtimeRef.value ?: return
     runtime.camera.attachLifecycleOwner(owner)
+    runtime.sms.attachPermissionRequester(permissionRequester)
     this.permissionRequester = permissionRequester
   }
 

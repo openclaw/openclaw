@@ -1583,7 +1583,6 @@ class GatewaySessionInvokeTest {
       assertEquals("node-1", result.request.nodeId)
       assertEquals("debug.ping", result.request.command)
       assertEquals("""{"ping":"pong"}""", result.request.paramsJson)
-      assertNull(result.request.sessionKey)
       assertNull(handshakeOrigin.get())
       assertEquals("invoke-1", result.resultParams["id"]?.jsonPrimitive?.content)
       assertEquals("node-1", result.resultParams["nodeId"]?.jsonPrimitive?.content)
@@ -1611,7 +1610,7 @@ class GatewaySessionInvokeTest {
       val result =
         runInvokeScenario(
           invokeEventFrame =
-            """{"type":"event","event":"node.invoke.request","payload":{"id":"invoke-2","nodeId":"node-2","command":"debug.raw","paramsJSON":"{\"raw\":true}","params":{"ignored":1},"timeoutMs":5000,"sessionKey":"agent:assistant:main"}}""",
+            """{"type":"event","event":"node.invoke.request","payload":{"id":"invoke-2","nodeId":"node-2","command":"debug.raw","paramsJSON":"{\"raw\":true}","params":{"ignored":1},"timeoutMs":5000}}""",
         ) {
           GatewaySession.InvokeResult.ok("""{"handled":true}""")
         }
@@ -1620,7 +1619,6 @@ class GatewaySessionInvokeTest {
       assertEquals("node-2", result.request.nodeId)
       assertEquals("debug.raw", result.request.command)
       assertEquals("""{"raw":true}""", result.request.paramsJson)
-      assertEquals("agent:assistant:main", result.request.sessionKey)
       assertEquals("invoke-2", result.resultParams["id"]?.jsonPrimitive?.content)
       assertEquals("node-2", result.resultParams["nodeId"]?.jsonPrimitive?.content)
       assertEquals(

@@ -1,6 +1,5 @@
 package ai.openclaw.app.node
 
-import ai.openclaw.app.PhonePermission
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.protocol.OpenClawCalendarCommand
 import ai.openclaw.app.protocol.OpenClawCallLogCommand
@@ -16,11 +15,9 @@ import ai.openclaw.app.protocol.OpenClawPhotosCommand
 import ai.openclaw.app.protocol.OpenClawSmsCommand
 import ai.openclaw.app.protocol.OpenClawSystemCommand
 import ai.openclaw.app.protocol.OpenClawTalkCommand
-import android.Manifest
-import kotlinx.serialization.json.JsonPrimitive
 
 /** Owns Android command bindings and their live advertised/invoke availability. */
-class InvokeDispatcher internal constructor(
+class InvokeDispatcher(
   cameraHandler: CameraHandler,
   locationHandler: LocationHandler,
   deviceHandler: DeviceHandler,
@@ -49,7 +46,6 @@ class InvokeDispatcher internal constructor(
   motionPedometerAvailable: () -> Boolean,
   mobileUiAvailable: () -> Boolean,
   private val voiceWakeAvailable: () -> Boolean,
-  private val requestPermission: suspend (PhonePermission, List<String>, String?) -> String?,
 ) {
   private class CommandGate(
     val isAvailable: () -> Boolean,
@@ -62,8 +58,6 @@ class InvokeDispatcher internal constructor(
     val invoke: suspend (String?) -> GatewaySession.InvokeResult,
     val gate: CommandGate? = null,
     val requiresForeground: Boolean = false,
-    val permission: PhonePermission? = null,
-    val requiredPermissions: List<String> = permission?.permissions.orEmpty(),
   )
 
   private val cameraGate =
@@ -97,32 +91,32 @@ class InvokeDispatcher internal constructor(
   // Keep protocol ordering stable. The same entries advertise and dispatch each bound handler.
   private val commands =
     listOf(
-      Command(OpenClawSystemCommand.Notify.rawValue, systemHandler::handleSystemNotify, permission = PhonePermission.Notifications),
-      Command(OpenClawTalkCommand.PttStart.rawValue, talkHandler::handlePttStart, permission = PhonePermission.Voice),
+      Command(OpenClawSystemCommand.Notify.rawValue, systemHandler::handleSystemNotify),
+      Command(OpenClawTalkCommand.PttStart.rawValue, talkHandler::handlePttStart),
       Command(OpenClawTalkCommand.PttStop.rawValue, talkHandler::handlePttStop),
       Command(OpenClawTalkCommand.PttCancel.rawValue, talkHandler::handlePttCancel),
-      Command(OpenClawTalkCommand.PttOnce.rawValue, talkHandler::handlePttOnce, requiresForeground = true, permission = PhonePermission.Voice),
-      Command(OpenClawCameraCommand.List.rawValue, cameraHandler::handleList, cameraGate, requiresForeground = true, permission = PhonePermission.Camera),
-      Command(OpenClawCameraCommand.Snap.rawValue, cameraHandler::handleSnap, cameraGate, requiresForeground = true, permission = PhonePermission.Camera),
-      Command(OpenClawCameraCommand.Clip.rawValue, cameraHandler::handleClip, cameraGate, requiresForeground = true, permission = PhonePermission.Camera),
-      Command(OpenClawLocationCommand.Get.rawValue, locationHandler::handleLocationGet, locationGate, permission = PhonePermission.Location),
+      Command(OpenClawTalkCommand.PttOnce.rawValue, talkHandler::handlePttOnce, requiresForeground = true),
+      Command(OpenClawCameraCommand.List.rawValue, cameraHandler::handleList, cameraGate, requiresForeground = true),
+      Command(OpenClawCameraCommand.Snap.rawValue, cameraHandler::handleSnap, cameraGate, requiresForeground = true),
+      Command(OpenClawCameraCommand.Clip.rawValue, cameraHandler::handleClip, cameraGate, requiresForeground = true),
+      Command(OpenClawLocationCommand.Get.rawValue, locationHandler::handleLocationGet, locationGate),
       Command(OpenClawDeviceCommand.Status.rawValue, deviceHandler::handleDeviceStatus),
       Command(OpenClawDeviceCommand.Info.rawValue, deviceHandler::handleDeviceInfo),
       Command(OpenClawDeviceCommand.Permissions.rawValue, deviceHandler::handleDevicePermissions),
       Command(OpenClawDeviceCommand.Health.rawValue, deviceHandler::handleDeviceHealth),
       Command(OpenClawDeviceCommand.Apps.rawValue, deviceHandler::handleDeviceApps, installedAppsGate),
-      Command(OpenClawNotificationsCommand.List.rawValue, notificationsHandler::handleNotificationsList, permission = PhonePermission.NotificationListener),
-      Command(OpenClawNotificationsCommand.Actions.rawValue, notificationsHandler::handleNotificationsActions, permission = PhonePermission.NotificationListener),
-      Command(OpenClawPhotosCommand.Latest.rawValue, photosHandler::handlePhotosLatest, photosGate, permission = PhonePermission.Photos),
-      Command(OpenClawContactsCommand.Search.rawValue, contactsHandler::handleContactsSearch, permission = PhonePermission.Contacts, requiredPermissions = listOf(Manifest.permission.READ_CONTACTS)),
-      Command(OpenClawContactsCommand.Add.rawValue, contactsHandler::handleContactsAdd, permission = PhonePermission.Contacts),
-      Command(OpenClawCalendarCommand.Events.rawValue, calendarHandler::handleCalendarEvents, permission = PhonePermission.Calendar, requiredPermissions = listOf(Manifest.permission.READ_CALENDAR)),
-      Command(OpenClawCalendarCommand.Add.rawValue, calendarHandler::handleCalendarAdd, permission = PhonePermission.Calendar),
-      Command(OpenClawMotionCommand.Activity.rawValue, motionHandler::handleMotionActivity, motionActivityGate, permission = PhonePermission.Motion),
-      Command(OpenClawMotionCommand.Pedometer.rawValue, motionHandler::handleMotionPedometer, motionPedometerGate, permission = PhonePermission.Motion),
-      Command(OpenClawSmsCommand.Send.rawValue, smsHandler::handleSmsSend, smsSendGate, permission = PhonePermission.Sms, requiredPermissions = listOf(Manifest.permission.SEND_SMS)),
-      Command(OpenClawSmsCommand.Search.rawValue, smsHandler::handleSmsSearch, smsSearchGate, permission = PhonePermission.Sms, requiredPermissions = listOf(Manifest.permission.READ_SMS)),
-      Command(OpenClawCallLogCommand.Search.rawValue, callLogHandler::handleCallLogSearch, callLogGate, permission = PhonePermission.CallLog),
+      Command(OpenClawNotificationsCommand.List.rawValue, notificationsHandler::handleNotificationsList),
+      Command(OpenClawNotificationsCommand.Actions.rawValue, notificationsHandler::handleNotificationsActions),
+      Command(OpenClawPhotosCommand.Latest.rawValue, photosHandler::handlePhotosLatest, photosGate),
+      Command(OpenClawContactsCommand.Search.rawValue, contactsHandler::handleContactsSearch),
+      Command(OpenClawContactsCommand.Add.rawValue, contactsHandler::handleContactsAdd),
+      Command(OpenClawCalendarCommand.Events.rawValue, calendarHandler::handleCalendarEvents),
+      Command(OpenClawCalendarCommand.Add.rawValue, calendarHandler::handleCalendarAdd),
+      Command(OpenClawMotionCommand.Activity.rawValue, motionHandler::handleMotionActivity, motionActivityGate),
+      Command(OpenClawMotionCommand.Pedometer.rawValue, motionHandler::handleMotionPedometer, motionPedometerGate),
+      Command(OpenClawSmsCommand.Send.rawValue, smsHandler::handleSmsSend, smsSendGate),
+      Command(OpenClawSmsCommand.Search.rawValue, smsHandler::handleSmsSearch, smsSearchGate),
+      Command(OpenClawCallLogCommand.Search.rawValue, callLogHandler::handleCallLogSearch, callLogGate),
       Command(OpenClawMobileUiCommand.Observe.rawValue, mobileUiHandler::handleObserve, mobileUiGate),
       Command(OpenClawMobileUiCommand.Act.rawValue, mobileUiHandler::handleAct, mobileUiGate),
       Command("debug.logs", { debugHandler.handleLogs() }, debugGate),
@@ -133,32 +127,8 @@ class InvokeDispatcher internal constructor(
   suspend fun handleInvoke(
     command: String,
     paramsJson: String?,
-    sessionKey: String? = null,
   ): GatewaySession.InvokeResult {
     val binding = commandsByName[command] ?: return unavailable("INVALID_REQUEST", "unknown command")
-    if (binding.permission != null) {
-      if (binding.gate != null && !binding.gate.isAvailable()) return binding.gate.unavailable
-      requestPermission(binding.permission, binding.requiredPermissions, sessionKey)?.let {
-        return unavailable(binding.permission.errorCode, it)
-      }
-    }
-    if (command == OpenClawCameraCommand.Clip.rawValue &&
-      parseJsonBooleanFlag(parseJsonParamsObject(paramsJson), "includeAudio") != false
-    ) {
-      requestPermission(PhonePermission.Voice, PhonePermission.Voice.permissions, sessionKey)?.let {
-        return unavailable(PhonePermission.Voice.errorCode, it)
-      }
-    }
-    if (command == OpenClawSmsCommand.Search.rawValue) {
-      val params = parseJsonParamsObject(paramsJson)
-      if ((params?.get("phoneNumber") as? JsonPrimitive)?.content.isNullOrBlank() &&
-        !(params?.get("contactName") as? JsonPrimitive)?.content.isNullOrBlank()
-      ) {
-        requestPermission(PhonePermission.Contacts, listOf(Manifest.permission.READ_CONTACTS), sessionKey)?.let {
-          return unavailable(PhonePermission.Contacts.errorCode, it)
-        }
-      }
-    }
     if (binding.requiresForeground && !isForeground()) {
       return unavailable("NODE_BACKGROUND_UNAVAILABLE", "command requires foreground")
     }

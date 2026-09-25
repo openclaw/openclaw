@@ -2,12 +2,8 @@ package ai.openclaw.app
 
 import android.Manifest
 import android.app.Dialog
-import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
 import android.content.pm.PackageManager
 import android.os.Looper
-import android.provider.Settings
 import androidx.activity.ComponentActivity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -22,13 +18,11 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
-import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowDialog
@@ -36,210 +30,6 @@ import org.robolectric.shadows.ShadowDialog
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class PermissionRequesterTest {
-  @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
-  fun backgroundPermissionNotificationStaysSuppressedUntilPermissionListReset() =
-    runTest {
-      Dispatchers.setMain(StandardTestDispatcher(testScheduler))
-      val app = RuntimeEnvironment.getApplication() as NodeApp
-      shadowOf(app).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
-      val manager = app.getSystemService(NotificationManager::class.java)
-      val requester = PermissionRequester(app)
-
-      try {
-        val guidance = requester.requestOnFirstUse(PhonePermission.Contacts, listOf(Manifest.permission.READ_CONTACTS), agentName = "Research agent")
-        assertTrue(requireNotNull(guidance).contains("posted"))
-        val notification = manager.activeNotifications.single().notification
-        val text = notification.extras.getCharSequence(Notification.EXTRA_TEXT).toString()
-        assertTrue(text.contains("Research agent"))
-        assertTrue(text.contains("Contacts"))
-
-        manager.cancelAll()
-        requester.requestOnFirstUse(PhonePermission.Contacts, agentName = "Research agent")
-        val recreated = PermissionRequester(app)
-        recreated.requestOnFirstUse(PhonePermission.Contacts, agentName = "Research agent")
-        assertTrue(manager.activeNotifications.isEmpty())
-
-        recreated.resetPermissionNotifications()
-        recreated.requestOnFirstUse(PhonePermission.Contacts, agentName = "Research agent")
-        assertEquals(1, manager.activeNotifications.size)
-      } finally {
-        Dispatchers.resetMain()
-      }
-    }
-
-  @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
-  fun disabledNotificationsDoNotClaimDeliveryOrSuppressLaterPermissionAlerts() =
-    runTest {
-      Dispatchers.setMain(StandardTestDispatcher(testScheduler))
-      val app = RuntimeEnvironment.getApplication() as NodeApp
-      shadowOf(app).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
-      val manager = app.getSystemService(NotificationManager::class.java)
-      val requester = PermissionRequester(app)
-
-      try {
-        for (blockChannel in listOf(false, true)) {
-          requester.resetPermissionNotifications()
-          shadowOf(manager).setNotificationsEnabled(blockChannel)
-          if (blockChannel) {
-            manager.createNotificationChannel(
-              NotificationChannel("openclaw.permissions", "Permissions", NotificationManager.IMPORTANCE_NONE),
-            )
-          }
-
-          val guidance = requester.requestOnFirstUse(PhonePermission.Calendar, agentName = "Research agent")
-          assertTrue(requireNotNull(guidance).contains("Notifications are disabled"))
-          assertTrue(manager.activeNotifications.isEmpty())
-
-          shadowOf(manager).setNotificationsEnabled(true)
-          // Robolectric exposes the stored channel, allowing a user settings change without a new channel.
-          manager.notificationChannels.single().importance = NotificationManager.IMPORTANCE_DEFAULT
-          requester.requestOnFirstUse(PhonePermission.Calendar, agentName = "Research agent")
-          assertEquals(1, manager.activeNotifications.size)
-        }
-      } finally {
-        Dispatchers.resetMain()
-      }
-    }
-
-  @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
-  fun expiredOneTimeGrantCanBeRequestedAgain() =
-    runTest {
-      Dispatchers.setMain(StandardTestDispatcher(testScheduler))
-      val activity = activity()
-      val app = activity.application as NodeApp
-      val requests = FakePermissionRequests()
-      val requester = requester(activity, requests)
-
-      try {
-        val initial = async { requester.request(PhonePermission.Voice) }
-        runCurrent()
-        assertEquals(1, requests.size)
-        shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
-        requests.deliver(requester, 0, mapOf(Manifest.permission.RECORD_AUDIO to true))
-        runCurrent()
-        assertTrue(initial.await())
-
-        shadowOf(app).denyPermissions(Manifest.permission.RECORD_AUDIO)
-        val renewed = async { requester.requestOnFirstUse(PhonePermission.Voice, agentName = "Research agent") }
-        runCurrent()
-        assertEquals(2, requests.size)
-        shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
-        requests.deliver(requester, 1, mapOf(Manifest.permission.RECORD_AUDIO to true))
-        runCurrent()
-        assertTrue(requireNotNull(renewed.await()).contains("Permission granted"))
-      } finally {
-        Dispatchers.resetMain()
-      }
-    }
-
-  @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
-  fun deniedPermissionDoesNotPromptOnFirstUseAgainAndExplicitTapOpensSettings() =
-    runTest {
-      Dispatchers.setMain(StandardTestDispatcher(testScheduler))
-      val activity = activity()
-      val requests = FakePermissionRequests()
-      val requester = requester(activity, requests)
-
-      try {
-        assertFalse(requester.isBlocked(PhonePermission.Voice))
-        val pending = async { requester.request(PhonePermission.Voice) }
-        runCurrent()
-        assertEquals(1, requests.size)
-        assertTrue(requests.deliver(requester, 0, mapOf(Manifest.permission.RECORD_AUDIO to false)))
-        runCurrent()
-        cancelDialog(checkNotNull(ShadowDialog.getLatestDialog()))
-        runCurrent()
-        assertFalse(pending.await())
-        assertTrue(requester.isBlocked(PhonePermission.Voice))
-
-        val guidance = requester.requestOnFirstUse(PhonePermission.Voice, agentName = "Research agent")
-        assertTrue(requireNotNull(guidance).contains("Settings"))
-        assertEquals(1, requests.size)
-
-        assertFalse(requester.request(PhonePermission.Voice))
-        assertEquals(1, requests.size)
-        val settingsIntent = shadowOf(activity).nextStartedActivity
-        assertEquals(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, settingsIntent.action)
-        assertEquals("package:${activity.packageName}", settingsIntent.data.toString())
-      } finally {
-        Dispatchers.resetMain()
-      }
-    }
-
-  @Test
-  fun partialAndroidGrantsDoNotAuthorizePermissionGroups() {
-    val app = RuntimeEnvironment.getApplication() as NodeApp
-    val permissionGroups =
-      listOf(
-        PhonePermission.Contacts to listOf(Manifest.permission.READ_CONTACTS, Manifest.permission.WRITE_CONTACTS),
-        PhonePermission.Calendar to listOf(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR),
-        PhonePermission.Sms to listOf(Manifest.permission.SEND_SMS, Manifest.permission.READ_SMS),
-      )
-
-    for ((permission, required) in permissionGroups) {
-      for (granted in required) {
-        shadowOf(app).denyPermissions(*required.toTypedArray())
-        shadowOf(app).grantPermissions(granted)
-        assertFalse("$permission must not accept only $granted", permission.isGranted(app))
-      }
-      shadowOf(app).grantPermissions(*required.toTypedArray())
-      assertTrue(permission.isGranted(app))
-    }
-  }
-
-  @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
-  fun androidGrantsDoNotChangeCameraOrLocationFeatureChoices() =
-    runTest {
-      Dispatchers.setMain(StandardTestDispatcher(testScheduler))
-      val app = RuntimeEnvironment.getApplication() as NodeApp
-      shadowOf(app).grantPermissions(Manifest.permission.CAMERA, Manifest.permission.ACCESS_COARSE_LOCATION)
-      val requester = PermissionRequester(app)
-
-      try {
-        assertTrue(requester.request(PhonePermission.Camera))
-        assertTrue(requester.request(PhonePermission.Location))
-        assertFalse(app.prefs.cameraEnabled.value)
-        assertEquals(LocationMode.Off, app.prefs.locationMode.value)
-        assertNull(requester.requestOnFirstUse(PhonePermission.Camera, agentName = "Research agent"))
-        assertNull(requester.requestOnFirstUse(PhonePermission.Location, agentName = "Research agent"))
-        val persisted = SecurePrefs(app)
-        assertFalse(persisted.cameraEnabled.value)
-        assertEquals(LocationMode.Off, persisted.locationMode.value)
-      } finally {
-        Dispatchers.resetMain()
-      }
-    }
-
-  @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
-  fun preciseLocationUpgradeRequestsBothAndroidPermissions() =
-    runTest {
-      Dispatchers.setMain(StandardTestDispatcher(testScheduler))
-      val activity = activity()
-      shadowOf(activity.application).grantPermissions(Manifest.permission.ACCESS_COARSE_LOCATION)
-      val requests = FakePermissionRequests()
-      val requester = requester(activity, requests)
-      try {
-        val pending = async { requester.request(PhonePermission.Location, listOf(Manifest.permission.ACCESS_FINE_LOCATION)) }
-        runCurrent()
-        assertEquals(
-          setOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION),
-          requests[0].permissions.toSet(),
-        )
-        shadowOf(activity.application).grantPermissions(Manifest.permission.ACCESS_FINE_LOCATION)
-        requests.deliver(requester, 0, requests[0].permissions.associateWith { true })
-        runCurrent()
-        assertTrue(pending.await())
-      } finally {
-        Dispatchers.resetMain()
-      }
-    }
-
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
   fun timedOutRequestCallbackDoesNotCompleteNextRequest() =

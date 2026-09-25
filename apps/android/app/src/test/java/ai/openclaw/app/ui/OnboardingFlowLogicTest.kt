@@ -2,9 +2,12 @@ package ai.openclaw.app.ui
 
 import ai.openclaw.app.GatewayConnectionProblem
 import ai.openclaw.app.GatewayNodeCapabilityApproval
+import ai.openclaw.app.LocationMode
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.i18n.nativeText
+import ai.openclaw.app.i18n.resolveNativeText
 import ai.openclaw.app.ui.design.MascotMood
+import android.Manifest
 import androidx.compose.runtime.saveable.SaverScope
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.launch
@@ -175,11 +178,113 @@ class OnboardingFlowLogicTest {
   }
 
   @Test
+  fun deviceCapabilityStartsOffEvenWhenAndroidPermissionWasGranted() {
+    assertBooleanCases(
+      false to initialDeviceCapabilityEnabled(savedCapabilityEnabled = false, androidPermissionGranted = false),
+      false to initialDeviceCapabilityEnabled(savedCapabilityEnabled = false, androidPermissionGranted = true),
+      false to initialDeviceCapabilityEnabled(savedCapabilityEnabled = true, androidPermissionGranted = false),
+      true to initialDeviceCapabilityEnabled(savedCapabilityEnabled = true, androidPermissionGranted = true),
+    )
+  }
+
+  @Test
+  fun locationCapabilityRequiresBothTheSavedModeAndAndroidPermission() {
+    listOf(
+      Triple(LocationMode.Off, false, false),
+      Triple(LocationMode.Off, true, false),
+      Triple(LocationMode.WhileUsing, false, false),
+      Triple(LocationMode.WhileUsing, true, true),
+      Triple(LocationMode.Always, false, false),
+      Triple(LocationMode.Always, true, true),
+    ).forEach { (savedMode, androidPermissionGranted, expected) ->
+      assertEquals(
+        "savedMode=$savedMode androidPermissionGranted=$androidPermissionGranted",
+        expected,
+        initialDeviceCapabilityEnabled(
+          savedCapabilityEnabled = savedMode != LocationMode.Off,
+          androidPermissionGranted = androidPermissionGranted,
+        ),
+      )
+    }
+  }
+
+  @Test
+  fun deviceCapabilityRowDistinguishesAndroidPermissionFromCapabilityOptIn() {
+    assertEqualsCases(
+      "Allow" to deviceCapabilityRowStatusText(capabilityEnabled = false, androidPermissionGranted = false).resolveNativeText(),
+      "Off" to deviceCapabilityRowStatusText(capabilityEnabled = false, androidPermissionGranted = true).resolveNativeText(),
+      "Enabled" to deviceCapabilityRowStatusText(capabilityEnabled = true, androidPermissionGranted = true).resolveNativeText(),
+    )
+  }
+
+  @Test
   fun onboardingErrorCodeSaverRoundTripsTypedState() {
     val saved = with(OnboardingErrorCodeSaver) { SaverScope { true }.save(OnboardingErrorCode.ManualInvalidUrl) }
 
     assertEquals("ManualInvalidUrl", saved)
     assertEquals(OnboardingErrorCode.ManualInvalidUrl, OnboardingErrorCodeSaver.restore(requireNotNull(saved)))
+  }
+
+  @Test
+  fun deviceCapabilityRowTogglesOnlyWhenAndroidPermissionAlreadyGranted() {
+    assertNull(deviceCapabilityAfterRowTap(currentCapabilityEnabled = false, androidPermissionGranted = false))
+    assertTrue(deviceCapabilityAfterRowTap(currentCapabilityEnabled = false, androidPermissionGranted = true)!!)
+    assertFalse(deviceCapabilityAfterRowTap(currentCapabilityEnabled = true, androidPermissionGranted = true)!!)
+  }
+
+  @Test
+  fun permissionChangesRequireNodeApprovalWhenAdvertisedSurfaceChanges() {
+    listOf(
+      PermissionApprovalCase(expected = true, requestedCameraEnabled = true),
+      PermissionApprovalCase(expected = true, requestedLocationMode = LocationMode.WhileUsing),
+      PermissionApprovalCase(expected = true, currentSmsGranted = false),
+      PermissionApprovalCase(expected = true, requestedSmsGranted = false),
+      PermissionApprovalCase(expected = false),
+      PermissionApprovalCase(
+        expected = false,
+        currentCameraEnabled = true,
+        requestedCameraEnabled = true,
+        currentLocationMode = LocationMode.WhileUsing,
+        requestedLocationMode = LocationMode.WhileUsing,
+      ),
+      PermissionApprovalCase(
+        expected = false,
+        currentLocationMode = LocationMode.Always,
+        requestedLocationMode = LocationMode.Always,
+      ),
+      PermissionApprovalCase(
+        expected = true,
+        currentLocationMode = LocationMode.Always,
+        requestedLocationMode = LocationMode.WhileUsing,
+      ),
+      PermissionApprovalCase(
+        expected = true,
+        currentLocationMode = LocationMode.Always,
+        requestedLocationMode = LocationMode.Off,
+      ),
+      PermissionApprovalCase(
+        expected = true,
+        currentLocationMode = LocationMode.WhileUsing,
+        requestedLocationMode = LocationMode.Always,
+      ),
+      PermissionApprovalCase(
+        expected = true,
+        currentLocationMode = LocationMode.Off,
+        requestedLocationMode = LocationMode.Always,
+      ),
+    ).forEach { case ->
+      assertBoolean(
+        case.expected,
+        permissionChangesRequireNodeApproval(
+          currentCameraEnabled = case.currentCameraEnabled,
+          requestedCameraEnabled = case.requestedCameraEnabled,
+          currentLocationMode = case.currentLocationMode,
+          requestedLocationMode = case.requestedLocationMode,
+          currentSmsGranted = case.currentSmsGranted,
+          requestedSmsGranted = case.requestedSmsGranted,
+        ),
+      )
+    }
   }
 
   @Test
@@ -260,6 +365,78 @@ class OnboardingFlowLogicTest {
   @Test
   fun blocksFinishForLegacyNodeListUntilNodeConnects() {
     assertFalse(canFinishOnboarding(isConnected = true, isNodeConnected = false, nodeCapabilityApproval = GatewayNodeCapabilityApproval.Unsupported))
+  }
+
+  @Test
+  fun splitSmsPermissionCallbacksMergePerPermissionGrantState() {
+    val requiredPermissions = listOf(Manifest.permission.SEND_SMS, Manifest.permission.READ_SMS)
+    val afterSendOnly =
+      mergedRequiredPermissionGrantState(
+        permissions = mapOf(Manifest.permission.SEND_SMS to true),
+        requiredPermissions = requiredPermissions,
+        currentlyGranted = { false },
+      )
+    assertFalse(afterSendOnly)
+
+    val afterReadOnly =
+      mergedRequiredPermissionGrantState(
+        permissions = mapOf(Manifest.permission.READ_SMS to true),
+        requiredPermissions = requiredPermissions,
+        currentlyGranted = { permission -> permission == Manifest.permission.SEND_SMS },
+      )
+    assertTrue(afterReadOnly)
+
+    val deniedRead =
+      mergedRequiredPermissionGrantState(
+        permissions = mapOf(Manifest.permission.READ_SMS to false),
+        requiredPermissions = requiredPermissions,
+        currentlyGranted = { true },
+      )
+    assertFalse(deniedRead)
+
+    val afterUnrelatedPermission =
+      mergedRequiredPermissionGrantState(
+        permissions = mapOf(Manifest.permission.RECORD_AUDIO to true),
+        requiredPermissions = requiredPermissions,
+        currentlyGranted = { true },
+      )
+    assertTrue(afterUnrelatedPermission)
+
+    val afterUnrelatedPermissionWithSmsDenied =
+      mergedRequiredPermissionGrantState(
+        permissions = mapOf(Manifest.permission.RECORD_AUDIO to true),
+        requiredPermissions = requiredPermissions,
+        currentlyGranted = { false },
+      )
+    assertFalse(afterUnrelatedPermissionWithSmsDenied)
+  }
+
+  @Test
+  fun contactAndCalendarPermissionGroupsRequireBothGrants() {
+    val permissionGroups =
+      listOf(
+        listOf(Manifest.permission.READ_CONTACTS, Manifest.permission.WRITE_CONTACTS),
+        listOf(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR),
+      )
+
+    for (requiredPermissions in permissionGroups) {
+      val readPermission = requiredPermissions.first()
+      val writePermission = requiredPermissions.last()
+      assertFalse(
+        mergedRequiredPermissionGrantState(
+          permissions = mapOf(readPermission to true),
+          requiredPermissions = requiredPermissions,
+          currentlyGranted = { false },
+        ),
+      )
+      assertTrue(
+        mergedRequiredPermissionGrantState(
+          permissions = mapOf(writePermission to true),
+          requiredPermissions = requiredPermissions,
+          currentlyGranted = { permission -> permission == readPermission },
+        ),
+      )
+    }
   }
 
   @Test
@@ -687,6 +864,16 @@ class OnboardingFlowLogicTest {
       ),
     )
   }
+
+  private data class PermissionApprovalCase(
+    val expected: Boolean,
+    val currentCameraEnabled: Boolean = false,
+    val requestedCameraEnabled: Boolean = false,
+    val currentLocationMode: LocationMode = LocationMode.Off,
+    val requestedLocationMode: LocationMode = LocationMode.Off,
+    val currentSmsGranted: Boolean = true,
+    val requestedSmsGranted: Boolean = true,
+  )
 
   private data class GatewayContinueCase(
     val expected: OnboardingStep?,

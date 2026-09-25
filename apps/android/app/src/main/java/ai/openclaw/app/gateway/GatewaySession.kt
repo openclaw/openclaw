@@ -341,7 +341,6 @@ class GatewaySession(
     val command: String,
     val paramsJson: String?,
     val timeoutMs: Long?,
-    val sessionKey: String? = null,
   )
 
   data class InvokeResult(
@@ -2153,7 +2152,6 @@ class GatewaySession(
             command = payload.command,
             paramsJson = paramsJson,
             timeoutMs = payload.timeoutMs,
-            sessionKey = payload.sessionKey,
           )
         val result = executeInvokeRequest(request)
         sendInvokeResult(payload.id, payload.nodeId, result, payload.timeoutMs)

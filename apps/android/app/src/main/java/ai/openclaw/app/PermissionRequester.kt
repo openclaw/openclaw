@@ -2,9 +2,6 @@ package ai.openclaw.app
 
 import ai.openclaw.app.i18n.nativeString
 import android.Manifest
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -15,8 +12,6 @@ import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.appcompat.app.AlertDialog
 import androidx.core.app.ActivityCompat
-import androidx.core.app.NotificationCompat
-import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -73,7 +68,6 @@ class PermissionRequester internal constructor(
   }
 
   private val appContext = context.applicationContext
-  private val prefs by lazy { (appContext as NodeApp).prefs }
   private val mutex = Mutex()
   private val activityHostLock = Any()
   private val permissionRequestsLock = Any()
@@ -83,124 +77,6 @@ class PermissionRequester internal constructor(
   private val activeActivityHost = MutableStateFlow<ActiveActivityHost?>(null)
   private var nextActivityActivation = 0L
   private val pendingPermissionRequests = mutableMapOf<Int, PendingPermissionRequest>()
-
-  internal fun isBlocked(
-    permission: PhonePermission,
-    required: List<String> = permission.permissions,
-  ): Boolean {
-    val activity =
-      activeActivityHost.value?.host?.activity ?: synchronized(activityHostLock) {
-        activityHosts.keys.firstOrNull { !it.isFinishing && !it.isDestroyed }
-      } ?: return false
-    if (permission.isGranted(appContext, required)) return false
-    return required.any {
-      ContextCompat.checkSelfPermission(appContext, it) != PackageManager.PERMISSION_GRANTED &&
-        prefs.wasPermissionDenied(it) && !ActivityCompat.shouldShowRequestPermissionRationale(activity, it)
-    }
-  }
-
-  internal fun resetPermissionNotifications() {
-    prefs.resetPermissionNotifications()
-    val manager = appContext.getSystemService(NotificationManager::class.java)
-    PhonePermission.entries.forEach { manager.cancel(it.name, PERMISSION_NOTIFICATION_ID) }
-  }
-
-  internal suspend fun request(
-    permission: PhonePermission,
-    required: List<String> = permission.permissions,
-    firstUse: Boolean = false,
-  ): Boolean {
-    if (!permission.isAvailable(appContext)) return false
-    if (!permission.isGranted(appContext, required)) {
-      if (permission == PhonePermission.NotificationListener || isBlocked(permission, required)) {
-        withTimeout(20_000) {
-          while (true) {
-            val active = awaitActiveActivityHost(20_000)
-            val opened =
-              withContext(Dispatchers.Main) {
-                if (!isCurrentActiveHost(active)) return@withContext false
-                val intent =
-                  if (permission == PhonePermission.NotificationListener) {
-                    Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
-                  } else {
-                    Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", appContext.packageName, null))
-                  }
-                if (permission == PhonePermission.NotificationListener) prefs.recordPermissionResults(mapOf(permission.name to false))
-                active.host.activity.startActivity(intent)
-                true
-              }
-            if (opened) break
-          }
-        }
-        return false
-      }
-      requestIfMissing(required, firstUse = firstUse)
-    }
-    val granted = permission.isGranted(appContext, required)
-    if (granted) recordGrantedPermissions(permission, required)
-    return granted
-  }
-
-  private fun recordGrantedPermissions(
-    permission: PhonePermission,
-    required: List<String>,
-  ) {
-    val granted = required.filter { ContextCompat.checkSelfPermission(appContext, it) == PackageManager.PERMISSION_GRANTED }
-    prefs.recordPermissionResults((granted + permission.name).associateWith { true })
-  }
-
-  internal suspend fun requestOnFirstUse(
-    permission: PhonePermission,
-    required: List<String> = permission.permissions,
-    agentName: String,
-  ): String? {
-    if (permission.isGranted(appContext, required)) {
-      recordGrantedPermissions(permission, required)
-      return null
-    }
-    val keys =
-      required
-        .filter { ContextCompat.checkSelfPermission(appContext, it) != PackageManager.PERMISSION_GRANTED }
-        .ifEmpty { listOf(permission.name) }
-    if (activeActivityHost.value != null) {
-      if (keys.any(prefs::wasPermissionDenied)) return "Allow access in OpenClaw Settings > Phone Capabilities."
-      request(permission, required, firstUse = true)
-      return if (permission.isGranted(appContext, required)) {
-        "Permission granted. Retry after the phone reconnects and any required Gateway approval completes."
-      } else {
-        "Permission requested. Allow access in OpenClaw Settings > Phone Capabilities before retrying."
-      }
-    }
-    return withContext(Dispatchers.Main) {
-      val manager = appContext.getSystemService(NotificationManager::class.java)
-      manager.createNotificationChannel(NotificationChannel(PERMISSION_CHANNEL, nativeString("Permissions"), NotificationManager.IMPORTANCE_DEFAULT))
-      if (!NotificationManagerCompat.from(appContext).areNotificationsEnabled() ||
-        manager.getNotificationChannel(PERMISSION_CHANNEL).importance == NotificationManager.IMPORTANCE_NONE
-      ) {
-        return@withContext "Notifications are disabled. Open OpenClaw Settings > Phone Capabilities to allow access."
-      }
-      if (keys.any(prefs::permissionNotificationShown)) {
-        return@withContext "Permission was already requested. Open OpenClaw Settings > Phone Capabilities to allow access."
-      }
-      val intent =
-        Intent(appContext, PermissionNotificationActivity::class.java)
-          .setAction(permission.name)
-          .putExtra("permissions", required.toTypedArray())
-      val pendingIntent = PendingIntent.getActivity(appContext, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-      val notification =
-        NotificationCompat
-          .Builder(appContext, PERMISSION_CHANNEL)
-          .setSmallIcon(R.mipmap.ic_launcher)
-          .setContentTitle(nativeString("Permission required"))
-          .setContentText(nativeString("\$agentName wants to use \$feature. Tap to allow.", agentName, permission.label))
-          .setContentIntent(pendingIntent)
-          .setAutoCancel(true)
-          .build()
-      manager.notify(permission.name, PERMISSION_NOTIFICATION_ID, notification)
-      keys.forEach(prefs::recordPermissionNotification)
-      "Permission notification posted. Retry after the user allows access and any required Gateway approval completes."
-    }
-  }
 
   internal fun attach(
     activity: ComponentActivity,
@@ -244,7 +120,6 @@ class PermissionRequester internal constructor(
   suspend fun requestIfMissing(
     permissions: List<String>,
     timeoutMs: Long = 20_000,
-    firstUse: Boolean = false,
   ): Map<String, Boolean> =
     mutex.withLock {
       val missing =
@@ -252,9 +127,6 @@ class PermissionRequester internal constructor(
           ContextCompat.checkSelfPermission(appContext, perm) != PackageManager.PERMISSION_GRANTED
         }
       if (missing.isEmpty()) return@withLock permissions.associateWith { true }
-      if (firstUse && missing.any(prefs::wasPermissionDenied)) {
-        return@withLock permissions.associateWith { it !in missing }
-      }
 
       if (!confirmRationaleIfNeeded(missing, timeoutMs)) {
         return@withLock permissions.associateWith { perm ->
@@ -262,17 +134,10 @@ class PermissionRequester internal constructor(
         }
       }
 
-      // Android 12+ requires coarse and fine together, including upgrades from approximate access.
-      val platformPermissions =
-        if (Manifest.permission.ACCESS_FINE_LOCATION in missing) {
-          (missing + Manifest.permission.ACCESS_COARSE_LOCATION).distinct()
-        } else {
-          missing
-        }
-      val request = reservePermissionRequest(platformPermissions)
+      val request = reservePermissionRequest(missing)
       val result =
         try {
-          launchPermissionRequest(platformPermissions, request.requestCode, timeoutMs)
+          launchPermissionRequest(missing, request.requestCode, timeoutMs)
           withTimeout(timeoutMs) { request.deferred.await() }
         } finally {
           // Retire the code on launch failure, timeout, or cancellation before admitting another prompt.
@@ -304,9 +169,7 @@ class PermissionRequester internal constructor(
         .mapIndexed { index, permission ->
           permission to (grantResults.getOrNull(index) == PackageManager.PERMISSION_GRANTED)
         }.toMap()
-    val results = request.permissions.associateWith { permission -> grants[permission] == true }
-    prefs.recordPermissionResults(results)
-    request.deferred.complete(results)
+    request.deferred.complete(request.permissions.associateWith { permission -> grants[permission] == true })
     return true
   }
 
@@ -403,9 +266,9 @@ class PermissionRequester internal constructor(
       error("unreachable")
     }
 
-  private suspend fun showSettingsForPermanentDenials(
+  internal suspend fun showSettingsForPermanentDenials(
     grants: Map<String, Boolean>,
-    timeoutMs: Long,
+    timeoutMs: Long = 20_000,
   ) {
     if (grants.values.none { granted -> !granted }) return
     withTimeout(timeoutMs) {
@@ -544,8 +407,6 @@ class PermissionRequester internal constructor(
     when (permission) {
       Manifest.permission.CAMERA -> nativeString("Camera")
       Manifest.permission.RECORD_AUDIO -> nativeString("Microphone")
-      Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION -> nativeString("Location")
-      Manifest.permission.POST_NOTIFICATIONS -> nativeString("Notifications")
       Manifest.permission.SEND_SMS -> nativeString("Send SMS")
       Manifest.permission.READ_SMS -> nativeString("Read SMS")
       Manifest.permission.READ_CONTACTS -> nativeString("Read Contacts")
@@ -559,11 +420,6 @@ class PermissionRequester internal constructor(
       Manifest.permission.READ_EXTERNAL_STORAGE -> nativeString("Photos")
       else -> permission
     }
-
-  private companion object {
-    const val PERMISSION_CHANNEL = "openclaw.permissions"
-    const val PERMISSION_NOTIFICATION_ID = 1
-  }
 }
 
 internal class PermissionRequestCodeAllocator(

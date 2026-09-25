@@ -1,6 +1,5 @@
 package ai.openclaw.app.node
 
-import ai.openclaw.app.PhonePermission
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.testDeviceIdentityStore
 import ai.openclaw.app.protocol.OpenClawCallLogCommand
@@ -227,20 +226,26 @@ class InvokeDispatcherTest {
     runTest {
       var foreground = false
       var cameraEnabled = false
+      var cameraReads = 0
       val dispatcher =
         newInvokeDispatcher(
           isForeground = { foreground },
-          cameraEnabled = { cameraEnabled },
+          cameraEnabled = {
+            cameraReads += 1
+            cameraEnabled
+          },
         )
 
       assertEquals("INVALID_REQUEST", dispatcher.handleInvoke("not.real", null).error?.code)
       assertEquals(
-        "CAMERA_DISABLED",
+        "NODE_BACKGROUND_UNAVAILABLE",
         dispatcher.handleInvoke(OpenClawCameraCommand.List.rawValue, null).error?.code,
       )
+      assertEquals(0, cameraReads)
 
       foreground = true
       assertEquals("CAMERA_DISABLED", dispatcher.handleInvoke(OpenClawCameraCommand.List.rawValue, null).error?.code)
+      assertEquals(1, cameraReads)
 
       cameraEnabled = true
       assertTrue(dispatcher.buildInvokeCommands().contains(OpenClawCameraCommand.List.rawValue))
@@ -248,54 +253,6 @@ class InvokeDispatcherTest {
       cameraEnabled = false
       assertFalse(dispatcher.buildInvokeCommands().contains(OpenClawCameraCommand.List.rawValue))
       assertEquals("CAMERA_DISABLED", dispatcher.handleInvoke(OpenClawCameraCommand.List.rawValue, null).error?.code)
-    }
-
-  @Test
-  fun missingCameraPermissionCanNotifyBeforeTheForegroundGateWithoutBypassingDisabledAccess() =
-    runTest {
-      var cameraEnabled = true
-      val requests = mutableListOf<PhonePermission>()
-      val dispatcher =
-        newInvokeDispatcher(
-          isForeground = { false },
-          cameraEnabled = { cameraEnabled },
-          requestPermission = { permission, _, sessionKey ->
-            assertEquals("agent:alice:main", sessionKey)
-            requests += permission
-            "Permission notification posted."
-          },
-        )
-      val result = dispatcher.handleInvoke(OpenClawCameraCommand.Snap.rawValue, null, "agent:alice:main")
-      assertEquals("CAMERA_PERMISSION_REQUIRED", result.error?.code)
-      assertTrue(result.error!!.message.contains("notification posted"))
-      assertEquals(listOf(PhonePermission.Camera), requests)
-
-      cameraEnabled = false
-      assertEquals("CAMERA_DISABLED", dispatcher.handleInvoke(OpenClawCameraCommand.Snap.rawValue, null).error?.code)
-      assertEquals(1, requests.size)
-    }
-
-  @Test
-  fun permissionWaitRechecksLiveFeatureAndForegroundAuthority() =
-    runTest {
-      for (disableCamera in listOf(true, false)) {
-        var cameraEnabled = true
-        var foreground = true
-        val dispatcher =
-          newInvokeDispatcher(
-            isForeground = { foreground },
-            cameraEnabled = { cameraEnabled },
-            requestPermission = { _, _, _ ->
-              kotlinx.coroutines.yield()
-              if (disableCamera) cameraEnabled = false else foreground = false
-              null
-            },
-          )
-        assertEquals(
-          if (disableCamera) "CAMERA_DISABLED" else "NODE_BACKGROUND_UNAVAILABLE",
-          dispatcher.handleInvoke(OpenClawCameraCommand.Snap.rawValue, null).error?.code,
-        )
-      }
     }
 
   @Test
@@ -378,7 +335,6 @@ internal fun newInvokeDispatcher(
   talkHandler: TalkHandler = InvokeDispatcherFakeTalkHandler(),
   smsSearchPossible: () -> Boolean = { smsFeatureEnabled && smsTelephonyAvailable },
   voiceWakeAvailable: () -> Boolean = { false },
-  requestPermission: suspend (PhonePermission, List<String>, String?) -> String? = { _, _, _ -> null },
 ): InvokeDispatcher {
   val appContext = RuntimeEnvironment.getApplication()
   shadowOf(appContext.packageManager).setSystemFeature(PackageManager.FEATURE_TELEPHONY, smsTelephonyAvailable)
@@ -419,7 +375,6 @@ internal fun newInvokeDispatcher(
     motionPedometerAvailable = { motionPedometerAvailable },
     mobileUiAvailable = { mobileUiAvailable },
     voiceWakeAvailable = voiceWakeAvailable,
-    requestPermission = requestPermission,
   )
 }
 

@@ -1335,7 +1335,7 @@ class NodeRuntime private constructor(
       isForeground = { _isForeground.value },
       cameraEnabled = { cameraEnabled.value },
       locationEnabled = { locationMode.value != LocationMode.Off },
-      sendSmsAvailable = { SensitiveFeatureConfig.smsEnabled && sms.hasTelephonyFeature() },
+      sendSmsAvailable = { SensitiveFeatureConfig.smsEnabled && sms.canSendSms() },
       readSmsAvailable = { SensitiveFeatureConfig.smsEnabled && sms.canReadSms() },
       smsSearchPossible = { SensitiveFeatureConfig.smsEnabled && sms.hasTelephonyFeature() },
       callLogAvailable = { SensitiveFeatureConfig.callLogEnabled },
@@ -1348,20 +1348,6 @@ class NodeRuntime private constructor(
         SensitiveFeatureConfig.accessibilityControlEnabled && mobileUiHandler.isConnected.value
       },
       voiceWakeAvailable = ::isVoiceWakeCapabilityEnabled,
-      requestPermission = { permission, required, sessionKey ->
-        val agentId = resolveAgentIdFromMainSessionKey(sessionKey)
-        val agentName = gatewayAgents.value.firstOrNull { it.id == agentId }?.name ?: agentId ?: nativeString("Your agent")
-        val guidance = (appContext as NodeApp).permissionRequester.requestOnFirstUse(permission, required, agentName)
-        currentCoroutineContext().ensureActive()
-        if (guidance != null) {
-          guidance
-        } else if (!nodeSession.isReady() || connectionManager.buildPermissions() != lastNodePermissions) {
-          refreshNodePermissionSurface()
-          "Permissions changed. Retry after the phone reconnects and any required Gateway approval completes."
-        } else {
-          null
-        }
-      },
     )
 
   private val connectionManager: ConnectionManager =
@@ -2130,7 +2116,7 @@ class NodeRuntime private constructor(
     }
   }
 
-  private val nodeSession: GatewaySession =
+  private val nodeSession =
     GatewaySession(
       scope = scope,
       identityStore = identityStore,
@@ -2174,7 +2160,7 @@ class NodeRuntime private constructor(
       },
       onEvent = ::handleNodeGatewayEvent,
       onInvoke = { req ->
-        invokeDispatcher.handleInvoke(req.command, req.paramsJson, req.sessionKey)
+        invokeDispatcher.handleInvoke(req.command, req.paramsJson)
       },
       onTlsFingerprint = { stableId, fingerprint ->
         prefs.saveGatewayTlsFingerprint(stableId, fingerprint)
