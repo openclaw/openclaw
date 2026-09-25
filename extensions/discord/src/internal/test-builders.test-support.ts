@@ -60,9 +60,7 @@ export function createInternalTestClient(
 ): Client {
   return new Client(
     {
-      baseUrl: "http://localhost",
       clientId: "app1",
-      publicKey: "public",
       token: "token",
       ...options,
     },

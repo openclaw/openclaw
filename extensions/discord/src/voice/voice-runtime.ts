@@ -142,7 +142,6 @@ export class DiscordVoiceManager {
       speakerContext,
     });
     this.following = new DiscordVoiceFollowing({
-      accountId: params.accountId,
       allowedChannels: this.allowedChannels,
       autoJoinChannels: this.autoJoinChannels,
       botUserId: () => this.botUserId,

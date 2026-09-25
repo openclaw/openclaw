@@ -27,7 +27,6 @@ import { isDiscordRateLimitBody } from "./schemas.js";
 
 export { DiscordError, isUnknownDiscordVoiceStateError, RateLimitError } from "./rest-errors.js";
 
-type RuntimeProfile = "serverless" | "persistent";
 type RequestPriority = RestRequestPriority;
 type RequestSchedulerOptions = {
   lanes?: Partial<
@@ -48,7 +47,6 @@ export type RequestClientOptions = {
   timeout?: number;
   queueRequests?: boolean;
   maxQueueSize?: number;
-  runtimeProfile?: RuntimeProfile;
   scheduler?: RequestSchedulerOptions;
   fetch?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 };
@@ -80,7 +78,6 @@ const defaultOptions = {
   timeout: 15_000,
   queueRequests: true,
   maxQueueSize: 1000,
-  runtimeProfile: "persistent" as RuntimeProfile,
 };
 
 const DEFAULT_MAX_CONCURRENT_WORKERS = 4;

@@ -113,7 +113,12 @@ describe("resolveSlackChannelType", () => {
       type: "dm",
       user: "U09G2DJ0275",
     });
-    expect(createSlackReadClientMock).toHaveBeenCalledWith("xoxb-test", { teamId: undefined });
+    expect(createSlackReadClientMock).toHaveBeenCalledWith(
+      "xoxb-test",
+      { teamId: undefined },
+      undefined,
+      undefined,
+    );
     expect(createSlackWebClientMock).not.toHaveBeenCalled();
     expect(conversationsInfoMock).toHaveBeenCalledWith({ channel: "DINFOMETADATA1" });
     expect(conversationsOpenMock).not.toHaveBeenCalled();
@@ -160,7 +165,7 @@ describe("resolveSlackChannelType", () => {
       type: "dm",
       user: "U09G2DJ0275",
     });
-    expect(createSlackWebClientMock).toHaveBeenCalledWith("botB", { teamId: undefined });
+    expect(createSlackWebClientMock).toHaveBeenCalledWith("botB", { teamId: undefined }, undefined);
     expect(createSlackReadClientMock).not.toHaveBeenCalled();
     expect(conversationsOpenMock).toHaveBeenCalledWith({
       channel: "DEXPLICITWRITE1",
@@ -196,9 +201,13 @@ describe("resolveSlackChannelType", () => {
       type: "dm",
       user: "U09G2DJ0275",
     });
-    expect(createSlackWebClientMock).toHaveBeenCalledWith("test-user-token", {
-      teamId: undefined,
-    });
+    expect(createSlackWebClientMock).toHaveBeenCalledWith(
+      "test-user-token",
+      {
+        teamId: undefined,
+      },
+      undefined,
+    );
     expect(createSlackReadClientMock).not.toHaveBeenCalled();
     expect(conversationsOpenMock).toHaveBeenCalledWith({
       channel: "DUSERIDENTITY1",
@@ -234,7 +243,12 @@ describe("resolveSlackChannelType", () => {
       type: "dm",
       user: "U09G2DJ0275",
     });
-    expect(createSlackReadClientMock).toHaveBeenCalledWith("envUsr", { teamId: undefined });
+    expect(createSlackReadClientMock).toHaveBeenCalledWith(
+      "envUsr",
+      { teamId: undefined },
+      undefined,
+      undefined,
+    );
     expect(createSlackWebClientMock).not.toHaveBeenCalled();
     expect(conversationsInfoMock).toHaveBeenCalledWith({ channel: "DENVUSERREAD1" });
     expect(conversationsOpenMock).not.toHaveBeenCalled();
@@ -266,7 +280,11 @@ describe("resolveSlackChannelType", () => {
       type: "dm",
       user: "U09G2DJ0275",
     });
-    expect(createSlackWebClientMock).toHaveBeenCalledWith("envBot", { teamId: undefined });
+    expect(createSlackWebClientMock).toHaveBeenCalledWith(
+      "envBot",
+      { teamId: undefined },
+      undefined,
+    );
     expect(createSlackReadClientMock).not.toHaveBeenCalled();
     expect(conversationsOpenMock).toHaveBeenCalledWith({
       channel: "DENVBOTWRITE1",
@@ -302,9 +320,14 @@ describe("resolveSlackChannelType", () => {
       type: "group",
       name: "mpdm-alice--bob-1",
     });
-    expect(createSlackReadClientMock).toHaveBeenCalledWith("xoxp-reader", {
-      teamId: undefined,
-    });
+    expect(createSlackReadClientMock).toHaveBeenCalledWith(
+      "xoxp-reader",
+      {
+        teamId: undefined,
+      },
+      undefined,
+      undefined,
+    );
     expect(createSlackWebClientMock).not.toHaveBeenCalled();
     expect(conversationsInfoMock).toHaveBeenCalledWith({ channel: "CREADCREDENTIAL1" });
   });
@@ -349,12 +372,24 @@ describe("resolveSlackChannelType", () => {
       }),
     ).resolves.toMatchObject({ name: "after-rotation" });
 
-    expect(createSlackReadClientMock).toHaveBeenNthCalledWith(1, "xoxb-before", {
-      teamId: undefined,
-    });
-    expect(createSlackReadClientMock).toHaveBeenNthCalledWith(2, "xoxb-after", {
-      teamId: undefined,
-    });
+    expect(createSlackReadClientMock).toHaveBeenNthCalledWith(
+      1,
+      "xoxb-before",
+      {
+        teamId: undefined,
+      },
+      undefined,
+      undefined,
+    );
+    expect(createSlackReadClientMock).toHaveBeenNthCalledWith(
+      2,
+      "xoxb-after",
+      {
+        teamId: undefined,
+      },
+      undefined,
+      undefined,
+    );
     expect(conversationsInfoMock).toHaveBeenCalledTimes(2);
   });
 
