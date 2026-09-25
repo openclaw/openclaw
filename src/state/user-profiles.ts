@@ -66,7 +66,7 @@ import {
   type UserProfileAvatarMime,
 } from "./user-profiles.types.js";
 
-export { formatUserProfileAvatarEtag, getProfileAvatar } from "./user-profiles-internal.js";
+export { formatUserProfileAvatarEtag } from "./user-profiles-internal.js";
 export {
   getUserProfileDisplay,
   readUserProfileAliases,

@@ -98,6 +98,7 @@ import {
 } from "./user-profile-identity.read.js";
 import { projectUserProfileDisplay } from "./user-profile-list.js";
 import {
+  readUserProfileAvatarCommand,
   selectProfileDisplayEntries,
   selectResolvedUserProfileMetadataById,
   userProfilesDb,
@@ -614,6 +615,12 @@ serveOwnedWorkerTasks(
                     emailBindings: readUserProfileEmailBindings(db, command.profileId),
                   }));
                   return { ok: true, type: command.type, sourceAdmitted, ...facts };
+                }
+                if (
+                  command.type === "userProfiles.avatar.inspect" ||
+                  command.type === "userProfiles.avatar.read"
+                ) {
+                  return { ok: true, ...readUserProfileAvatarCommand(db, command), sourceAdmitted };
                 }
                 if (command.type === "userProfiles.catalog") {
                   const facts = runSqliteDeferredTransactionSync(db, () => ({

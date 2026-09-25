@@ -91,6 +91,10 @@ import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context
 import type { OpenClawStateWorkerErrorPayload } from "./openclaw-state-worker-error.js";
 import type { SessionRepositoryWorkspaceRecord } from "./session-repository-workspaces.types.js";
 import type {
+  readUserProfileAvatarCommand,
+  UserProfileAvatarReadCommand,
+} from "./user-profiles-internal.js";
+import type {
   UserChannelIdentitySelector,
   UserChannelIdentityLink,
   UserChannelIdentityAuthorityFacts,
@@ -162,6 +166,7 @@ export type OpenClawStateReadCommand =
   | { type: "sessionGroups.members"; cfg: OpenClawConfig }
   | { type: "onboardingRecommendations.read"; configKey: string }
   | { type: "userProfiles.reconcile"; profileId: string }
+  | UserProfileAvatarReadCommand
   | { type: "userProfiles.channelIdentity.list"; profileId: string }
   | { type: "userProfiles.channelIdentity.resolve"; identity: UserChannelIdentitySelector }
   | { type: "userProfiles.authority.resolve"; profileId: string }
@@ -400,6 +405,7 @@ export type OpenClawStateReadReply = (
       profile: ProfileDisplayRow | undefined;
       emailBindings: UserProfileEmailBinding[];
     }
+  | ({ ok: true; sourceAdmitted: true } & ReturnType<typeof readUserProfileAvatarCommand>)
   | {
       ok: true;
       type: "userProfiles.channelIdentity.list";
