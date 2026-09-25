@@ -4,7 +4,10 @@ import { getRuntimeConfig } from "../../../config/config.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { callGateway } from "../../../gateway/call.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
-import { onAgentEvent } from "../../../infra/agent-events.js";
+import {
+  isAgentEventLifecycleGenerationCurrent,
+  onAgentEvent,
+} from "../../../infra/agent-events.js";
 import { registerSystemEventStoreOwner } from "../../../infra/system-event-ownership.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import {
@@ -82,6 +85,7 @@ const subagentRegistryBootstrapState: {
 const resumeRetryTimers = new Set<ReturnType<typeof setTimeout>>();
 let activeGatewayContextResolver: GatewayContextResolver | undefined;
 const SUBAGENT_ANNOUNCE_TIMEOUT_MS = 120_000;
+const SUBAGENT_WAIT_EXPIRY_TERMINAL_GRACE_MS = 250;
 const GATEWAY_ADMISSION_RETRY_DELAY_MS = 1_000;
 
 // Hot lifecycle callers name every changed or removed row. Zero ids is reserved
@@ -554,6 +558,78 @@ const subagentRunManager = createSubagentRunManager({
   completeCleanupBookkeeping,
   completeSubagentRun: async (params) => {
     await completionRuntime.completeSubagentRunWithRecovery(params, "subagent-wait");
+  },
+  reportSubagentWaitExpiry: async ({ entry, observedAt, startedAt, lifecycleGeneration }) => {
+    // A restart may retain the row, but must retire the original wait's writes
+    // and delivery authority across both the grace timer and announcement.
+    const isCurrent = () =>
+      isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) &&
+      subagentRuns.get(entry.runId) === entry &&
+      typeof entry.execution.endedAt !== "number";
+    const ownsObservation = () => isCurrent() && entry.waitExpiryObservedAt === observedAt;
+    // The runtime owns configured execution deadlines and commonly emits its
+    // terminal event in the same clock tick as agent.wait expires. Give that
+    // authoritative event one brief turn to win before publishing a still-live
+    // observation; this avoids a duplicate provisional wake for normal timeouts.
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, SUBAGENT_WAIT_EXPIRY_TERMINAL_GRACE_MS);
+      timer.unref?.();
+    });
+    if (
+      !isCurrent() ||
+      typeof entry.waitExpiryAnnouncedAt === "number" ||
+      (typeof entry.waitExpiryObservedAt === "number" && entry.waitExpiryObservedAt !== observedAt)
+    ) {
+      return;
+    }
+    entry.waitExpiryObservedAt ??= observedAt;
+    if (typeof startedAt === "number" && Number.isFinite(startedAt)) {
+      entry.execution = { ...entry.execution, startedAt };
+      entry.sessionStartedAt ??= startedAt;
+    }
+    persistSubagentRunsOrThrow(entry.runId);
+
+    if (entry.collect === true || entry.expectsCompletionMessage === false) {
+      return;
+    }
+    const announceResult = await (
+      await loadSubagentAnnounceModule()
+    ).runSubagentAnnounceFlow({
+      childSessionKey: entry.childSessionKey,
+      childRunId: entry.runId,
+      requesterSessionKey: entry.requesterSessionKey,
+      requesterAgentId: entry.requesterAgentId,
+      requesterOrigin: entry.requesterOrigin,
+      requesterDisplayKey: entry.requesterDisplayKey,
+      task: entry.task,
+      timeoutMs: SUBAGENT_ANNOUNCE_TIMEOUT_MS,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt,
+      endedAt: observedAt,
+      label: entry.label,
+      outcome: { status: "timeout", disposition: "still-running" },
+      deliveryPhase: "wait-expiry",
+      expectsCompletionMessage: entry.expectsCompletionMessage,
+      completionTarget: entry.completionTarget,
+      completionRequesterSessionId: entry.completionRequesterSessionId,
+      spawnMode: entry.spawnMode,
+      wakeOnDescendantSettle: entry.wakeOnDescendantSettle,
+      suppressChildSessionEffects: true,
+      isCompletionDeliveryAllowed: ownsObservation,
+      resolveGatewayContext: getGatewayContextResolver(entry),
+    });
+    if (
+      announceResult !== "delivered" &&
+      announceResult !== "intentional_non_delivery" &&
+      announceResult !== "permanent_failure"
+    ) {
+      throw new Error("subagent wait-expiry announcement did not settle");
+    }
+    if (ownsObservation()) {
+      entry.waitExpiryAnnouncedAt = Date.now();
+      persistSubagentRunsOrThrow(entry.runId);
+    }
   },
   resolveSubagentTask: findSubagentTaskForRun,
 });

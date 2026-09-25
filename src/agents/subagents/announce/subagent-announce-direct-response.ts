@@ -38,6 +38,7 @@ type DirectAnnounceResponseContext = {
   isSubagentCompletion: boolean;
   hasSuccessfulTrustedSubagentNoOutputCompletion: boolean;
   hasRequiredSubagentNoOutputCompletion: boolean;
+  hasProvisionalTrustedSubagentCompletion: boolean;
   subagentDirectMessageCompletionRequiresMessageTool: boolean;
   effectiveDirectOrigin: DeliveryContext | undefined;
   requesterSessionOrigin: DeliveryContext | undefined;
@@ -67,6 +68,7 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
     isSubagentCompletion,
     hasSuccessfulTrustedSubagentNoOutputCompletion,
     hasRequiredSubagentNoOutputCompletion,
+    hasProvisionalTrustedSubagentCompletion,
     subagentDirectMessageCompletionRequiresMessageTool,
     effectiveDirectOrigin,
     requesterSessionOrigin,
@@ -193,6 +195,23 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
     const hasIntentionalSilentCompletionReply = Boolean(
       directAnnounceResult && hasIntentionalSilentAgentPayload(directAnnounceResult),
     );
+    // A provisional expiry instructs the parent to stay quiet, so intentional
+    // silence is the instruction being carried out and settles the
+    // notification. This holds in every delivery mode, not just message-tool-only:
+    // an internal parent on the automatic route follows the same instruction and
+    // would otherwise fall through to `visible_reply_missing`, leaving the wait
+    // manager to re-announce every few seconds while the child still works.
+    // Real delivery evidence is unaffected (it produces a visible reply) and so
+    // are synthesis failures (they throw before reaching here).
+    const settlesAsProvisionalSilence =
+      hasProvisionalTrustedSubagentCompletion && hasIntentionalSilentCompletionReply;
+    const provisionalSilenceSettled: SubagentAnnounceDeliveryResult = {
+      delivered: false,
+      path: "direct",
+      reason: "delivery_suppressed",
+      terminal: true,
+      disposition: "intentional_non_delivery",
+    };
     const hasCompletionSideEffect = Boolean(
       directAnnounceResult && hasCommittedOutboundDeliveryEvidence(directAnnounceResult),
     );
@@ -222,6 +241,9 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
       ) {
         if (hasSuccessfulTrustedSubagentNoOutputCompletion) {
           return missingVisibleReplyResult();
+        }
+        if (settlesAsProvisionalSilence) {
+          return provisionalSilenceSettled;
         }
         const missingDelivery: SubagentAnnounceDeliveryResult = {
           delivered: false,
@@ -254,6 +276,9 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
                 ? normalizeMessageChannel(origin.channel) === INTERNAL_MESSAGE_CHANNEL
                 : !origin?.to,
             )));
+      if (!hasVisibleCompletionReply && settlesAsProvisionalSilence) {
+        return provisionalSilenceSettled;
+      }
       const acceptsIntentionalSilentCompletion =
         hasIntentionalSilentCompletionReply && !isSubagentCompletion;
       if (
