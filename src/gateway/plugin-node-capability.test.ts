@@ -9,6 +9,7 @@ import {
   indexPluginNodeCapabilitySurfaces,
   normalizePluginNodeCapabilityScopedUrl,
   pluginNodeCapabilityScopedHostUrlsConflict,
+  prepareClientPluginNodeCapabilities,
   reconcileClientPluginNodeCapabilities,
   refreshClientPluginNodeCapability,
   setClientPluginNodeCapability,
@@ -37,6 +38,81 @@ function makeClient(
 }
 
 describe("plugin node capability helpers", () => {
+  test("publishes plugin surface replacement atomically while retaining unaffected credentials", () => {
+    const canvas = { surface: "canvas", scopeKey: "drawing:canvas" };
+    const files = { surface: "files", scopeKey: "storage:files" };
+    const removed = { surface: "retired", scopeKey: "drawing:retired" };
+    const client = makeClient({ pluginSurfaceBaseUrl: "https://gateway.example" });
+    prepareClientPluginNodeCapabilities({
+      client,
+      surfaces: [canvas, files, removed],
+      changedPluginIds: new Set(),
+    })();
+    const previous = { ...client.pluginSurfaceUrls };
+    const publish = prepareClientPluginNodeCapabilities({
+      client,
+      surfaces: [canvas, files],
+      changedPluginIds: new Set(["drawing"]),
+    });
+    expect(client.pluginSurfaceUrls).toEqual(previous);
+    expect(
+      hasAuthorizedClientPluginNodeCapabilityUrl({
+        client,
+        surface: canvas,
+        url: previous.canvas!,
+      }),
+    ).toBe(true);
+    publish();
+    expect(client.pluginSurfaceUrls?.files).toBe(previous.files);
+    expect(client.pluginSurfaceUrls?.retired).toBeUndefined();
+    expect(
+      hasAuthorizedClientPluginNodeCapabilityUrl({
+        client,
+        surface: canvas,
+        url: previous.canvas!,
+      }),
+    ).toBe(false);
+    expect(
+      hasAuthorizedClientPluginNodeCapabilityUrl({
+        client,
+        surface: removed,
+        url: previous.retired!,
+      }),
+    ).toBe(false);
+    expect(
+      hasAuthorizedClientPluginNodeCapabilityUrl({
+        client,
+        surface: canvas,
+        url: client.pluginSurfaceUrls!.canvas!,
+      }),
+    ).toBe(true);
+  });
+
+  test("publishes newly enabled surfaces only within the client's admitted capabilities", () => {
+    const canvas = { surface: "canvas", scopeKey: "drawing:canvas" };
+    const files = { surface: "files", scopeKey: "storage:files" };
+    const client = makeClient({ pluginSurfaceBaseUrl: "https://gateway.example" });
+    const publish = prepareClientPluginNodeCapabilities({
+      client,
+      surfaces: [canvas, files],
+      changedPluginIds: new Set(["drawing", "storage"]),
+      allowedSurfaces: new Set(["canvas"]),
+    });
+    expect(client.pluginSurfaceUrls).toBeUndefined();
+    expect(client.pluginNodeCapabilities).toBeUndefined();
+    publish();
+    expect(Object.keys(client.pluginSurfaceUrls ?? {})).toEqual(["canvas"]);
+    expect(client.pluginNodeCapabilitySurfaces).toEqual({ canvas });
+    expect(
+      hasAuthorizedClientPluginNodeCapabilityUrl({
+        client,
+        surface: canvas,
+        url: client.pluginSurfaceUrls!.canvas!,
+      }),
+    ).toBe(true);
+    expect(Object.keys(client.pluginNodeCapabilities ?? {})).toEqual(["canvas\0drawing:canvas"]);
+  });
+
   test("builds scoped host urls from clean base urls", () => {
     expect(
       buildPluginNodeCapabilityScopedHostUrl(

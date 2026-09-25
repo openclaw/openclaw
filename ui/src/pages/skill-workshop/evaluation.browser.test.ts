@@ -1,11 +1,12 @@
 import { nothing, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import { page, userEvent } from "vitest/browser";
 import type {
   SkillWorkshopEvaluation,
   SkillWorkshopMode,
   SkillWorkshopProposal,
 } from "../../lib/skill-workshop/index.ts";
-import { createSkillWorkshopHistoryScanState } from "./state.ts";
+import { getRenderedModalDialog } from "../../test-helpers/modal-dialog.ts";
 import type { SkillWorkshopProps } from "./view-types.ts";
 import { renderSkillWorkshop } from "./view.ts";
 
@@ -94,7 +95,6 @@ function propsFor(mode: SkillWorkshopMode): SkillWorkshopProps {
       canApply: true,
       canRevise: true,
       canReject: true,
-      canScanHistory: true,
     },
     loading: false,
     error: null,
@@ -118,7 +118,6 @@ function propsFor(mode: SkillWorkshopMode): SkillWorkshopProps {
     assistantName: "OpenClaw",
     workshopAgentName: "Research",
     selfLearning: null,
-    historyScan: createSkillWorkshopHistoryScanState(),
     onRetry: vi.fn(),
     onQueryChange: vi.fn(),
     onFilePreviewQueryChange: vi.fn(),
@@ -137,11 +136,51 @@ function propsFor(mode: SkillWorkshopMode): SkillWorkshopProps {
     onPreviewFile: vi.fn(),
     onClosePreview: vi.fn(),
     onSelfLearningToggle: vi.fn(),
-    onHistoryScan: vi.fn(),
   };
 }
 
 describe("Skill Workshop evaluation results (browser)", () => {
+  it.each(["submitting", "recovering"])(
+    "keeps revision instructions available when Escape is pressed while %s",
+    async (phase) => {
+      const container = document.createElement("div");
+      const props = propsFor("suggestions");
+      props.revisionKey = proposal.key;
+      props.revisionDraft = "Add rollback guidance.";
+      props.actionBusy = phase === "submitting" ? { key: proposal.key, action: "revise" } : null;
+      props.revisionRecoveryActive = phase === "recovering";
+      document.body.append(container);
+
+      try {
+        render(renderSkillWorkshop(props), container);
+        const { modal, dialog } = await getRenderedModalDialog(container);
+        await expect
+          .element(page.getByRole("textbox", { name: "Revise suggestion", exact: true }))
+          .toHaveValue(props.revisionDraft);
+        const dismissal = new Promise<Event>((resolve) => {
+          modal.addEventListener("modal-cancel", resolve, { once: true });
+        });
+
+        await userEvent.keyboard("{Escape}");
+
+        expect((await dismissal).defaultPrevented).toBe(true);
+        expect(dialog.open).toBe(true);
+        expect(props.onRevisionCancel).not.toHaveBeenCalled();
+
+        props.actionBusy = null;
+        props.revisionRecoveryActive = false;
+        render(renderSkillWorkshop(props), container);
+        await userEvent.keyboard("{Escape}");
+
+        expect(props.onRevisionCancel).toHaveBeenCalledOnce();
+        await expect.poll(() => dialog.open).toBe(false);
+      } finally {
+        render(nothing, container);
+        container.remove();
+      }
+    },
+  );
+
   it.each([800, 390])("keeps embedded images within the suggestion card at %spx", async (width) => {
     const canvas = document.createElement("canvas");
     canvas.width = 1600;

@@ -16,9 +16,12 @@ async function canExecute(path: string): Promise<boolean> {
   }
 }
 
-export async function resolveLsofCommand(): Promise<string> {
+export async function resolveLsofCommand(signal?: AbortSignal): Promise<string> {
   for (const candidate of LSOF_CANDIDATES) {
-    if (await canExecute(candidate)) {
+    signal?.throwIfAborted();
+    const executable = await canExecute(candidate);
+    signal?.throwIfAborted();
+    if (executable) {
       return candidate;
     }
   }

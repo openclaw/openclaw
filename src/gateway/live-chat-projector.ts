@@ -6,7 +6,7 @@ import {
   startsWithSilentToken,
   stripLeadingSilentToken,
 } from "../auto-reply/tokens.js";
-import { isRelativeAssistantMediaReference, splitMediaFromOutput } from "../media/parse.js";
+import { isRelativeAssistantMediaReference, splitMediaOutput } from "../media/parse-output.js";
 import { resolveAssistantEventPhase } from "../shared/chat-message-content.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import type { AssistantTextSnapshot } from "./agent-event-assistant-text.js";
@@ -27,7 +27,16 @@ export function capLiveAssistantText(snapshot: AssistantTextSnapshot): string {
       ? sliceUtf16Safe(text, -MAX_LIVE_CHAT_BUFFER_CHARS)
       : text;
   if (scope) {
-    scope.prefix = sliceUtf16Safe(scope.prefix, text.length - capped.length);
+    const retired = text.length - capped.length;
+    const retiredAfterPrefix = Math.max(0, retired - scope.prefix.length);
+    // Retire padding with its prefix, including a cap that cuts through the
+    // separator. Later deltas must not recreate or consume those newlines.
+    scope.boundaryNewlines =
+      retiredAfterPrefix > scope.separatorLength
+        ? 0
+        : Math.max(0, scope.boundaryNewlines - retiredAfterPrefix);
+    scope.separatorLength = Math.max(0, scope.separatorLength - retiredAfterPrefix);
+    scope.prefix = sliceUtf16Safe(scope.prefix, retired);
   }
   return capped;
 }
@@ -42,9 +51,8 @@ export function normalizeLiveAssistantBufferedText(
     ? { text: normalized, tail: "" }
     : splitTrailingDirective(normalized);
   const parsedTail = trailing.tail
-    ? splitMediaFromOutput(trailing.tail, {
+    ? splitMediaOutput(trailing.tail, {
         extractAudioDirectives: false,
-        extractMarkdownImages: false,
       })
     : undefined;
   // Hold an ambiguous final line until it is either a client-renderable legacy

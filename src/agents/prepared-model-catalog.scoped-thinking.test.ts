@@ -1,4 +1,4 @@
-// Capability reads retain published facts and use static ownership when no owner exists.
+// Capability reads retain published facts without acquiring missing inventory.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -27,6 +27,13 @@ const preparedSnapshotMock =
 const acquireSnapshotMock =
   vi.fn<(input: PreparedModelRuntimeInput) => Promise<PreparedModelRuntimeSnapshot>>();
 const releaseSnapshotMock = vi.fn();
+const augmentCatalogMock =
+  vi.fn<(params: { snapshot: ModelCatalogSnapshot }) => Promise<ModelCatalogSnapshot>>();
+
+vi.mock("./harness/model-catalog.js", () => ({
+  augmentModelCatalogWithAgentHarness: (params: { snapshot: ModelCatalogSnapshot }) =>
+    augmentCatalogMock(params),
+}));
 
 vi.mock("./model-catalog.js", () => ({ loadManifestModelCatalog: () => manifestCatalogMock() }));
 vi.mock("./prepared-model-runtime.js", async (importOriginal) => ({
@@ -36,7 +43,7 @@ vi.mock("./prepared-model-runtime.js", async (importOriginal) => ({
   prepareModelRuntimeSnapshot: (input: PreparedModelRuntimeInput) => preparedSnapshotMock(input),
   acquireReadOnlyPreparedModelRuntime: async (input: PreparedModelRuntimeInput) => ({
     snapshot: await acquireSnapshotMock(input),
-    release: releaseSnapshotMock,
+    [Symbol.asyncDispose]: releaseSnapshotMock,
   }),
 }));
 vi.mock("./prepared-model-runtime.scoped-catalog.js", () => ({
@@ -60,6 +67,7 @@ function owner(config: OpenClawConfig, entries: ModelCatalogEntry[]): PreparedMo
     allowGatewaySubagentBinding: false,
     modelCatalog: { entries, routeVariants: entries },
     configuredRuntimeModels: [],
+    findConfiguredRuntimeModel: () => undefined,
     inlineProviderModels: [],
     createStores: () => {
       throw new Error("Passive capability reads must not create stores");
@@ -90,6 +98,7 @@ describe("loadProviderScopedThinkingCatalog", () => {
       return published;
     });
     acquireSnapshotMock.mockImplementation(async (input) => owner(input.config, []));
+    augmentCatalogMock.mockImplementation(async ({ snapshot }) => snapshot);
   });
 
   it.each(["thinking", "input"] as const)(
@@ -118,6 +127,7 @@ describe("loadProviderScopedThinkingCatalog", () => {
         allowGatewaySubagentBinding: false,
         modelCatalog: { entries: [missingEntry], routeVariants: [missingEntry] },
         configuredRuntimeModels: [],
+        findConfiguredRuntimeModel: () => undefined,
         inlineProviderModels: [],
         createStores: () => {
           throw new Error("Passive capability reads must not create stores");
@@ -164,6 +174,7 @@ describe("loadProviderScopedThinkingCatalog", () => {
         routeVariants: [completedEntry],
       };
       setPreparedModelFullCatalogAuth(completed, {
+        providerAuthLabels: new Map(),
         authStore: { version: 1, profiles: {} },
         authModes: {},
       });
@@ -192,7 +203,7 @@ describe("loadProviderScopedThinkingCatalog", () => {
     },
   );
 
-  it("uses and releases a static owner when no published owner exists", async () => {
+  it("leaves facts absent when no published owner exists", async () => {
     const config = {};
     const staticEntry = { ...entry, reasoning: true };
     acquireSnapshotMock.mockResolvedValue(owner(config, [staticEntry]));
@@ -203,8 +214,9 @@ describe("loadProviderScopedThinkingCatalog", () => {
         provider: entry.provider,
         model: entry.id,
       }),
-    ).toEqual([staticEntry]);
-    expect(releaseSnapshotMock).toHaveBeenCalledOnce();
+    ).toEqual([]);
+    expect(acquireSnapshotMock).not.toHaveBeenCalled();
+    expect(releaseSnapshotMock).not.toHaveBeenCalled();
     expect(manifestCatalogMock).not.toHaveBeenCalled();
     expect(scopedStaticMock).not.toHaveBeenCalled();
     expect(scopedLiveMock).not.toHaveBeenCalled();
@@ -218,6 +230,74 @@ describe("loadProviderScopedThinkingCatalog", () => {
     await expect(
       loadProviderScopedThinkingCatalog({ config, provider: entry.provider, model: entry.id }),
     ).rejects.toBeInstanceOf(PreparedModelCatalogConfigReplacedError);
+    expect(scopedStaticMock).not.toHaveBeenCalled();
+    expect(scopedLiveMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps native harness observations available without a published owner", async () => {
+    const nativeEntry = { ...entry, nativeRuntime: "test-harness", reasoning: true };
+    augmentCatalogMock.mockResolvedValue({ entries: [nativeEntry], routeVariants: [nativeEntry] });
+    const { loadProviderScopedThinkingCatalog } = await import("./prepared-model-catalog.js");
+    await expect(
+      loadProviderScopedThinkingCatalog({ config: {}, provider: entry.provider, model: entry.id }),
+    ).resolves.toEqual([nativeEntry]);
+    expect(acquireSnapshotMock).not.toHaveBeenCalled();
+    expect(scopedLiveMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { agentRuntime: "openclaw", expectedRuntime: undefined },
+    { agentRuntime: "native-one", expectedRuntime: "native-one" },
+    { agentRuntime: "native-two", expectedRuntime: "native-two" },
+  ])("selects $agentRuntime thinking facts without changing other entries", async (testCase) => {
+    const config = {};
+    const host: ModelCatalogEntry = {
+      ...entry,
+      reasoning: true,
+      compat: { supportedReasoningEfforts: ["high"] },
+    };
+    const first: ModelCatalogEntry = {
+      provider: entry.provider,
+      id: entry.id,
+      name: "Native one",
+      nativeRuntime: "native-one",
+      reasoning: true,
+      compat: { supportedReasoningEfforts: ["high", "ultra"] },
+    };
+    const second: ModelCatalogEntry = {
+      ...first,
+      name: "Native two",
+      nativeRuntime: "native-two",
+      reasoning: false,
+      compat: { supportsReasoningEffort: false, supportedReasoningEfforts: [] },
+    };
+    const other = { ...entry, id: "other", name: "Other model", reasoning: true };
+    const snapshot = {
+      ...owner(config, [first, other]),
+      modelCatalog: {
+        entries: [first, other],
+        routeVariants: [first, second, host, other],
+      },
+    };
+    publishedSnapshotMock.mockReturnValue(snapshot);
+    const { loadProviderScopedThinkingCatalog } = await import("./prepared-model-catalog.js");
+    const catalog = await loadProviderScopedThinkingCatalog({
+      config,
+      provider: entry.provider,
+      model: entry.id,
+      agentRuntime: testCase.agentRuntime,
+    });
+    const selected = [host, first, second].find(
+      (candidate) => candidate.nativeRuntime === testCase.expectedRuntime,
+    );
+
+    expect(catalog).toEqual([selected, other]);
+    expect(snapshot.modelCatalog.entries).toEqual([first, other]);
+    expect(augmentCatalogMock).toHaveBeenCalledWith(
+      expect.objectContaining({ agentRuntime: testCase.agentRuntime }),
+    );
+    expect(acquireSnapshotMock).not.toHaveBeenCalled();
+    expect(manifestCatalogMock).not.toHaveBeenCalled();
     expect(scopedStaticMock).not.toHaveBeenCalled();
     expect(scopedLiveMock).not.toHaveBeenCalled();
   });

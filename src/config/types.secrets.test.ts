@@ -1,10 +1,7 @@
 // Verifies secret config type guards and normalization helpers.
 import { describe, expect, it } from "vitest";
-import {
-  coerceSecretRef,
-  collectEnvSecretRefIds,
-  parseEnvTemplateSecretRef,
-} from "./types.secrets.js";
+import { collectEnvSecretRefIds } from "./resolution-facts.js";
+import { coerceSecretRef, parseEnvTemplateSecretRef } from "./types.secrets.js";
 
 describe("parseEnvTemplateSecretRef", () => {
   it("parses ${VAR} template syntax", () => {

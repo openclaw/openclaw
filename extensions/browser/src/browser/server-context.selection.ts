@@ -2,9 +2,8 @@
  * Browser tab selection operations for default tab choice, focus, and close.
  */
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
+import { formatErrorMessage, type SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { formatErrorMessage } from "../infra/errors.js";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { assertChromeMcpCdpTransportAllowed } from "./cdp-reachability-policy.js";
 import { fetchOk, normalizeCdpHttpBaseForJsonEndpoints } from "./cdp.helpers.js";
 import { appendCdpPath } from "./cdp.js";
@@ -25,6 +24,7 @@ import type {
   EnsureTabAvailableOptions,
   ProfileRuntimeState,
 } from "./server-context.types.js";
+import { assertBrowserDashboardTabCanClose } from "./session-tab-store.js";
 import { resolveTargetIdFromTabs } from "./target-id.js";
 
 type SelectionDeps = {
@@ -257,7 +257,7 @@ export function createProfileSelectionOps({
       return;
     }
 
-    if (capabilities.usesPersistentPlaywright) {
+    if (capabilities.usesPersistentPlaywright || options?.assertCurrent) {
       const mod = await getPwAiModule({ mode: "strict" });
       const focusPageByTargetIdViaPlaywright = (mod as Partial<PwAiModule> | null)
         ?.focusPageByTargetIdViaPlaywright;
@@ -268,9 +268,13 @@ export function createProfileSelectionOps({
           targetId: resolvedTargetId,
           ssrfPolicy: getCdpControlPolicy(),
           ...(options?.signal ? { signal: options.signal } : {}),
+          ...(options?.assertCurrent ? { assertCurrent: options.assertCurrent } : {}),
         });
         runtime.lastTargetId = resolvedTargetId;
         return;
+      }
+      if (options?.assertCurrent) {
+        throw new Error("Playwright focus is unavailable for this dashboard tab");
       }
     }
 
@@ -286,6 +290,7 @@ export function createProfileSelectionOps({
 
   const closeTab = async (targetId: string, options?: BrowserTabTargetOptions): Promise<string> => {
     const resolvedTargetId = await resolveTargetIdOrThrow(targetId, options);
+    assertBrowserDashboardTabCanClose(resolvedTargetId, profile.name);
 
     if (capabilities.usesChromeMcp) {
       assertChromeMcpCdpTransportAllowed(profile, getCdpControlPolicy());
@@ -301,6 +306,7 @@ export function createProfileSelectionOps({
           ?.closePageByTargetIdViaPlaywright;
         if (typeof closePageByTargetIdViaPlaywright === "function") {
           options?.signal?.throwIfAborted();
+          assertBrowserDashboardTabCanClose(resolvedTargetId, profile.name);
           await closePageByTargetIdViaPlaywright({
             cdpUrl: profile.cdpUrl,
             targetId: resolvedTargetId,
@@ -313,6 +319,7 @@ export function createProfileSelectionOps({
 
       if (!closedViaPlaywright) {
         options?.signal?.throwIfAborted();
+        assertBrowserDashboardTabCanClose(resolvedTargetId, profile.name);
         await fetchOk(
           appendCdpPath(cdpHttpBase, `/json/close/${resolvedTargetId}`),
           undefined,

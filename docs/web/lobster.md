@@ -1,20 +1,20 @@
 ---
 summary: "A lobster sometimes visits the Control UI. This page explains just enough."
 read_when:
-  - You saw a small lobster in your sidebar and want answers
+  - You saw a small critter around the new-session composer and want answers
   - You want to turn lobster visits on or off
   - You right-clicked a lobster and feel bad about it
 title: "The Lobster"
 sidebarTitle: "The Lobster"
 ---
 
-If you use the [Control UI](/web/control-ui) long enough, at some point a small lobster will wander into the bottom of your sidebar, look around, and make itself at home for a few minutes.
+When you open a new session in the [Control UI](/web/control-ui), a small lobster may visit the composer, look around, and make itself at home for a few minutes. Other critters sometimes pass through too.
 
 This is normal. This is OpenClaw.
 
 ## What you are looking at
 
-Every session hatches its own lobster: its color, size, build, claw proportions, accessories, and personality are rolled fresh each time you load the page. Some are round, some are tall, some have claws that are frankly too big for them. Some nap constantly. Some never sit still. One of them waves a lot.
+Each new composer opening gets its own cast: color, size, claw proportions, accessories, and personality stay stable while you type or change controls. Their bodies keep their natural proportions; some are small, some are large, and some have claws that are frankly too big for them. Some nap constantly. Some never sit still. One of them waves a lot.
 
 Hover over a visitor and it will tell you its name.
 
@@ -22,9 +22,11 @@ Hover over a visitor and it will tell you its name.
 
 Sometimes. That is the point.
 
-The lobster is a guest, not furniture. Half of session/page-load rolls skip scheduled visits entirely. Otherwise, the base first-arrival delay is 2–10 minutes, with 30–60-minute gaps between visits. Familiarity adjusts those timings: new visitors arrive after 2.6–13 minutes, while familiar ones arrive after 1.4–7 minutes and return after 24–48 minutes. Frequent dismissals can make a visitor wary, extending its return gaps by another 70%.
+The lobster is a guest, not furniture. Half of composer-opening rolls skip scheduled visits entirely. Other openings get a short arrival delay, with long gaps between repeat visits if you leave the composer open. Familiar visitors arrive sooner and stay longer; frequent dismissals make them more wary. Passing critters keep their own rare appearances.
 
-Status visits keep their own schedule: **when your Gateway disconnects**, the lobster comes out and paces, visibly worried, until the connection is back. During runs lasting more than ten minutes, it settles in for a quiet vigil. The visits toggle and dismissals still take precedence.
+Visitors can perch on the top edge, walk along an empty stretch of the bottom row, or hop between them. Your prompt and controls take priority: crowded or occupied composers keep the floor clear.
+
+While the new composer is open, status visits keep their own schedule: **when your Gateway disconnects**, the lobster comes out and paces, visibly worried, until the connection is back. During runs lasting more than ten minutes, it settles in for a quiet vigil. The visits toggle and dismissals still take precedence.
 
 ## Things you can do
 
@@ -32,7 +34,7 @@ Status visits keep their own schedule: **when your Gateway disconnects**, the lo
 - **Click it** to say hi. It startles, which is rude of you, but it forgives quickly.
 - **Click it repeatedly** and you will learn something about lobster patience. Keep going and you will learn something about lobster dignity.
 - **Press and hold** to pet it. There is a heart. Any accumulated grudges are forgotten.
-- **Right-click it** to open a small menu: **Dismiss** shoos it away for the rest of the page load, and **Dismiss and don't show again** turns Lobster visits off for good. It will not take either personally. It will, however, remember.
+- **Right-click it** to open a small menu: **Dismiss** shoos it away for that composer opening, and **Dismiss and don't show again** turns Lobster visits off for good. It will not take either personally. It will, however, remember.
 - **Watch it when a run finishes.** Lobsters take genuine pride in your completed work, and it shows when things went well. When things did not go well, they take that seriously too.
 - **Move your cursor around.** You are being watched. Affectionately.
 
@@ -41,6 +43,12 @@ Status visits keep their own schedule: **when your Gateway disconnects**, the lo
 Settings → Appearance → **Lobster visits**.
 
 The toggle is browser-local and does exactly what it says. Off means never, including the worried disconnect pacing. Your Gateway status dot continues to work regardless; the lobster was never your only source of truth, just the most sympathetic one.
+
+A theme without a mascot hides the resident lobster and visiting lobster strangers while it is active. Ordinary critters can still cross the composer ledge when **Lobster visits** is enabled. Your toggle stays unchanged, and enabled lobster visits return when you switch to a theme with the mascot.
+
+Themes can add occasional penguin or fedora visitors to that ledge traffic. These visitors follow the same visits toggle. A theme can also add occasional decorative hats to agent avatars from the `fedora`, `crown`, `santa`, `party`, and `pumpkin` catalog; those hats are separate from composer visits.
+
+Plugin themes can bring their own [SVG hats and visitors](/plugins/manifest/surfaces#themes), with visitors following the same visits toggle.
 
 Reduced-motion users get calm, stationary lobsters automatically.
 
@@ -56,7 +64,7 @@ Hover a filled slot and it will tell you who visited first, and when. The Lobste
 
 ## Field notes
 
-Collected observations from people who spend too much time watching their sidebar:
+Collected observations from people who spend too much time watching their composer:
 
 - Lobsters visit the [dream scene](/concepts/memory) too — the Memory tab on the Agents page — where they are asleep. Observers report the sleeping lobster looks suspiciously familiar.
 - Night-shift users report their visitors yawn a lot after 10pm.
@@ -64,12 +72,12 @@ Collected observations from people who spend too much time watching their sideba
 - Some visitors do not come alone.
 - Around certain times of the year, lobsters have been observed wearing things.
 - There is one day each year when every lobster looks like it walked out of an old logo. Nobody will tell you which day.
-- Not every lobster that crosses your sidebar is your lobster. Most of them do not even stop.
+- Not every lobster that crosses your composer is your lobster. Most of them do not even stop.
 - At least one recorded visitor was not a lobster. It maintains that it is.
 - People who have used the same browser for a long time report their lobster arrives sooner, stays longer, and waves at them. People who shoo a lot describe a certain distance.
 - After a Gateway upgrade, pay attention to what the first visitor is carrying.
-- The lobster in the sidebar has a cousin in the terminal. It shows up in the `openclaw` banner on days of its own choosing, and no one has successfully predicted which.
-- On the days the cousin appears, sidebar lobsters have been seen dressed nautically. The two refuse to explain the connection.
+- The lobster in the composer has a cousin in the terminal. It shows up in the `openclaw` banner on days of its own choosing, and no one has successfully predicted which.
+- On the days the cousin appears, composer lobsters have been seen dressed nautically. The two refuse to explain the connection.
 - During very long runs, the lobster stops playing and settles in to wait with you. Solidarity.
 - When something crosses the ledge, the resident stops what it is doing and watches. You would too.
 - After bad news, some lobsters tidy the ledge. It seems to help them.
@@ -80,3 +88,9 @@ Collected observations from people who spend too much time watching their sideba
 ## Privacy
 
 Everything on this page happens locally in your browser: the randomness, the schedule, the Lobsterdex. No lobster data leaves your machine. OpenClaw does not know which lobsters you have met, and frankly it is jealous.
+
+## Related
+
+- [Control UI](/web/control-ui) - the dashboard the lobster wanders into
+- [Settings](/web/control-ui/settings#appearance-themes) - the Control UI Appearance panel that holds the visits and sounds toggles
+- [OpenClaw lore](/start/lore) - why there is a lobster at all

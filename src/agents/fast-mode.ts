@@ -48,49 +48,30 @@ export function resolveFastModeState(params: {
     ...params,
     modelParamSources: [agentModelParams, modelParams],
   });
-  const sessionOverride = normalizeFastMode(params.sessionEntry?.fastMode);
-  if (sessionOverride !== undefined) {
-    return {
-      mode: sessionOverride,
-      enabled: sessionOverride === "auto" ? true : sessionOverride,
-      source: "session",
-      fastAutoOnSeconds,
-    };
+  let mode = normalizeFastMode(params.sessionEntry?.fastMode);
+  let source: FastModeSource = "session";
+  if (mode === undefined) {
+    mode = normalizeFastMode(
+      params.agentId && params.cfg
+        ? resolveAgentConfig(params.cfg, params.agentId)?.fastModeDefault
+        : undefined,
+    );
+    source = "agent";
   }
-
-  const agentDefault =
-    params.agentId && params.cfg
-      ? resolveAgentConfig(params.cfg, params.agentId)?.fastModeDefault
-      : undefined;
-  const normalizedAgentDefault = normalizeFastMode(agentDefault);
-  if (normalizedAgentDefault !== undefined) {
-    return {
-      mode: normalizedAgentDefault,
-      enabled: normalizedAgentDefault === "auto" ? true : normalizedAgentDefault,
-      source: "agent",
-      fastAutoOnSeconds,
-    };
-  }
-
-  const configuredRaw =
-    agentModelParams?.fastMode ??
-    agentModelParams?.fast_mode ??
-    modelParams?.fastMode ??
-    modelParams?.fast_mode;
-  const configured = normalizeFastMode(configuredRaw as string | boolean | null | undefined);
-  if (configured !== undefined) {
-    return {
-      mode: configured,
-      enabled: configured === "auto" ? true : configured,
-      source: "config",
-      fastAutoOnSeconds,
-    };
+  if (mode === undefined) {
+    const configuredRaw =
+      agentModelParams?.fastMode ??
+      agentModelParams?.fast_mode ??
+      modelParams?.fastMode ??
+      modelParams?.fast_mode;
+    mode = normalizeFastMode(configuredRaw as string | boolean | null | undefined);
+    source = "config";
   }
 
   return {
-    mode: false,
-    enabled: false,
-    source: "default",
+    mode: mode ?? false,
+    enabled: mode === "auto" || mode === true,
+    source: mode === undefined ? "default" : source,
     fastAutoOnSeconds,
   };
 }

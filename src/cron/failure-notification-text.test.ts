@@ -13,7 +13,7 @@ const SCRIPT_FAILURE_COPY = {
   snapshot_limit_exceeded: "exceeded its state limit",
   internal_error: "failed internally",
   tool_budget_exceeded: "exceeded its tool budget",
-} satisfies Record<CronTriggerFailureCode, string>;
+} satisfies Record<Exclude<CronTriggerFailureCode, "plugin_reload_failed">, string>;
 
 describe("cronFailureDetailLines", () => {
   it.each(["timeout", "rate_limit"] as const)("keeps classified %s failures compact", (reason) => {

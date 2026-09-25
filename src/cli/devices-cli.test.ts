@@ -3,6 +3,7 @@ import { Command } from "commander";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { expectObjectFields } from "../test-utils/mock-call-assertions.js";
 import { registerDevicesCli } from "./devices-cli.js";
 
 const mocks = vi.hoisted(() => ({
@@ -71,7 +72,7 @@ async function runDevicesApprove(argv: string[]) {
 }
 
 async function runDevicesCommand(argv: string[]) {
-  const program = new Command();
+  const program = new Command().exitOverride();
   registerDevicesCli(program);
   await program.parseAsync(["devices", ...argv], { from: "user" });
 }
@@ -199,19 +200,13 @@ const nodeApprovalErrorCases = [
   },
 ];
 
-function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
-  for (const [key, value] of Object.entries(fields)) {
-    expect(record[key]).toEqual(value);
-  }
-}
-
 function requireGatewayCall(index: number): Record<string, unknown> {
   const call = (callGateway.mock.calls as unknown[][])[index]?.[0];
   return requireRecord(call, `gateway call ${index + 1}`);
 }
 
 function expectGatewayCall(index: number, fields: Record<string, unknown>) {
-  expectRecordFields(requireGatewayCall(index), fields);
+  expectObjectFields(requireGatewayCall(index), fields);
 }
 
 function hasGatewayMethod(method: string): boolean {
@@ -759,6 +754,38 @@ describe("devices cli clear", () => {
 });
 
 describe("devices cli tokens", () => {
+  it.each([
+    { name: "omitted", flags: [], requestedScopes: undefined },
+    { name: "explicitly empty", flags: ["--no-scopes"], requestedScopes: [] },
+  ])("preserves $name rotation scope intent", async ({ flags, requestedScopes }) => {
+    callGateway.mockResolvedValueOnce({ ok: true });
+
+    await runDevicesCommand(["rotate", "--device", "device-1", "--role", "node", ...flags]);
+
+    expectGatewayCall(0, {
+      method: "device.token.rotate",
+      params: { deviceId: "device-1", role: "node", scopes: requestedScopes },
+      scopes: ["operator.admin"],
+    });
+    expect(callGateway).toHaveBeenCalledOnce();
+  });
+
+  it("rejects conflicting scope options before rotating a token", async () => {
+    await expect(
+      runDevicesCommand([
+        "rotate",
+        "--device",
+        "device-1",
+        "--role",
+        "node",
+        "--scope",
+        "node.read",
+        "--no-scopes",
+      ]),
+    ).rejects.toThrow("cannot be used with option");
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
   describe.each(["rotate", "revoke"])("%s", (command) => {
     it.each([
       { role: "node", scopes: ["operator.admin"] },
@@ -1318,6 +1345,19 @@ describe("devices cli rename", () => {
       params: { deviceId: "device-1", label: "Kitchen Mac" },
     });
     expect(stripAnsi(readRuntimeOutput())).toContain("Kitchen Mac");
+  });
+});
+
+describe("devices cli help", () => {
+  it("cross-references `openclaw qr` for mobile app setup codes", () => {
+    const program = new Command();
+    registerDevicesCli(program);
+
+    const devices = program.commands.find((cmd) => cmd.name() === "devices");
+    const joinCode = devices?.commands.find((cmd) => cmd.name() === "join-code");
+
+    expect(devices?.description()).toContain("openclaw qr");
+    expect(joinCode?.description()).toContain("openclaw qr");
   });
 });
 

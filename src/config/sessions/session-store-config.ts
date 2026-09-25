@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { sameFileIdentity } from "../../infra/fs-safe-advanced.js";
+import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { tryResolvePathCaseInsensitive } from "../../infra/path-case.js";
 import { resolveSessionStorePathCore } from "./paths.js";
 
@@ -74,6 +74,24 @@ function resolveMissingStorePathIdentity(pathname: string): string | undefined {
 
 export function isPerAgentSessionStoreConfig(storeConfig: string | undefined): boolean {
   return !storeConfig?.trim() || storeConfig.includes("{agentId}");
+}
+
+export function isSameAuthoredSessionStoreConfig(
+  source: string | undefined,
+  target: string | undefined,
+): boolean {
+  return (!source?.trim() && !target?.trim()) || source === target;
+}
+
+export function isSameSessionStoreConfig(
+  source: string | undefined,
+  target: string | undefined,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  if (isPerAgentSessionStoreConfig(source) || isPerAgentSessionStoreConfig(target)) {
+    return isSameAuthoredSessionStoreConfig(source, target);
+  }
+  return isSameFixedSessionStoreConfig(source, target, env);
 }
 
 export function isSameFixedSessionStoreConfig(

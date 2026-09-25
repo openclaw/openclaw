@@ -300,6 +300,7 @@ private struct ChatMarkdownDisclosureView: View {
     let typography: ChatMarkdownRenderer.Typography
     let textColor: Color
 
+    // periphery:ignore - Read and written through $isExpanded; Xcode 27 omits the projected-binding reference.
     @State private var isExpanded: Bool
 
     init(

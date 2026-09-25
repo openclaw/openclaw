@@ -2,10 +2,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { CONFIG_DIR } from "../utils.js";
-import { replaceFileAtomicSync } from "./replace-file.js";
 
 const DNS_LABEL_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/;
 const MAX_DNS_NAME_LENGTH = 253;
@@ -150,7 +150,9 @@ export type WideAreaGatewayZoneOpts = {
   cliPath?: string;
 };
 
-function renderZone(opts: WideAreaGatewayZoneOpts & { serial: number }): string {
+export function renderWideAreaGatewayZoneText(
+  opts: WideAreaGatewayZoneOpts & { serial: number },
+): string {
   const hostname = os.hostname().split(".")[0] ?? "openclaw";
   const hostLabel = dnsLabel(opts.hostLabel ?? hostname, "openclaw");
   const instanceLabel = dnsLabel(opts.instanceLabel ?? `${hostname}-gateway`, "openclaw-gw");
@@ -207,12 +209,6 @@ function renderZone(opts: WideAreaGatewayZoneOpts & { serial: number }): string 
   const contentHash = computeContentHash(hashBody);
 
   return `; openclaw-content-hash: ${contentHash}\n${contentBody}`;
-}
-
-export function renderWideAreaGatewayZoneText(
-  opts: WideAreaGatewayZoneOpts & { serial: number },
-): string {
-  return renderZone(opts);
 }
 
 export async function writeWideAreaGatewayZone(

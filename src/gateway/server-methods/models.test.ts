@@ -39,121 +39,8 @@ const OPENCLAW_DEVICE_PLACEMENT: NonNullable<GatewayAgentRuntime["devicePlacemen
 };
 
 const modelPluginMetadataSnapshot = await vi.hoisted(async () => {
-  const { buildDeclaredProviderOwnerIndex } = await import("../../plugins/provider-owner-index.js");
-  const plugins = [
-    {
-      id: "anthropic",
-      channels: [],
-      providers: ["anthropic"],
-      cliBackends: ["claude-cli"],
-      syntheticAuthRefs: ["claude-cli"],
-      providerAuthChoices: [
-        {
-          provider: "anthropic",
-          method: "cli",
-          choiceId: "anthropic-cli",
-          deprecatedChoiceIds: ["claude-cli"],
-        },
-        { provider: "anthropic", method: "setup-token", choiceId: "setup-token" },
-        { provider: "anthropic", method: "api-key", choiceId: "apiKey" },
-      ],
-      modelSupport: { modelPrefixes: ["claude-"] },
-      skills: [],
-      hooks: [],
-      origin: "bundled",
-      enabledByDefault: true,
-      rootDir: "/test/anthropic",
-      source: "/test/anthropic/index.js",
-      manifestPath: "/test/anthropic/openclaw.plugin.json",
-    },
-    {
-      id: "byteplus",
-      channels: [],
-      providers: ["byteplus", "byteplus-plan"],
-      syntheticAuthRefs: [],
-      providerAuthAliases: { "byteplus-plan": "byteplus" },
-      providerAuthChoices: [
-        { provider: "byteplus", method: "api-key", choiceId: "byteplus-api-key" },
-      ],
-      cliBackends: [],
-      skills: [],
-      hooks: [],
-      origin: "bundled",
-      rootDir: "/test/byteplus",
-      source: "/test/byteplus/index.js",
-      manifestPath: "/test/byteplus/openclaw.plugin.json",
-    },
-    {
-      id: "github-copilot",
-      channels: [],
-      providers: ["github-copilot"],
-      syntheticAuthRefs: [],
-      providerAuthChoices: [
-        { provider: "github-copilot", method: "device", choiceId: "github-copilot" },
-        {
-          provider: "github-copilot",
-          method: "device-enterprise",
-          choiceId: "github-copilot-enterprise",
-        },
-      ],
-      cliBackends: [],
-      skills: [],
-      hooks: [],
-      origin: "bundled",
-      rootDir: "/test/github-copilot",
-      source: "/test/github-copilot/index.js",
-      manifestPath: "/test/github-copilot/openclaw.plugin.json",
-    },
-  ];
-  const index: PluginMetadataSnapshot["index"] = {
-    version: 1,
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
-    policyHash: "models-test-plugin-policy",
-    generatedAtMs: 0,
-    installRecords: {},
-    // A real isolated bundled snapshot has no installed-index rows; bundled
-    // manifest records remain the authoritative graph for this fixture.
-    plugins: [],
-    diagnostics: [],
-  };
-  return {
-    policyHash: "models-test-plugin-policy",
-    index,
-    registryIndex: index,
-    registryDiagnostics: [],
-    manifestRegistry: { plugins, diagnostics: [] },
-    plugins,
-    diagnostics: [],
-    byPluginId: new Map(plugins.map((plugin) => [plugin.id, plugin])),
-    normalizePluginId: (pluginId: string) => pluginId,
-    declaredProviderOwners: buildDeclaredProviderOwnerIndex(plugins),
-    owners: {
-      channels: new Map(),
-      channelConfigs: new Map(),
-      providers: new Map([
-        ["anthropic", ["anthropic"]],
-        ["byteplus", ["byteplus"]],
-        ["byteplus-plan", ["byteplus"]],
-        ["github-copilot", ["github-copilot"]],
-      ]),
-      modelCatalogProviders: new Map(),
-      cliBackends: new Map([["claude-cli", ["anthropic"]]]),
-      setupProviders: new Map(),
-      commandAliases: new Map(),
-      contracts: new Map(),
-      modelIdNormalizationPolicies: new Map(),
-    },
-    metrics: {
-      registrySnapshotMs: 0,
-      manifestRegistryMs: 0,
-      ownerMapsMs: 0,
-      totalMs: 0,
-      indexPluginCount: 0,
-      manifestPluginCount: plugins.length,
-    },
-  };
+  const { createModelPluginMetadataSnapshot } = await import("./models-metadata.test-support.js");
+  return createModelPluginMetadataSnapshot();
 });
 
 vi.mock("../../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
@@ -276,6 +163,7 @@ function requestModelsList(params: {
     workspaceDir?: string;
   }) => Promise<Array<Record<string, unknown>>>;
   reqId?: string;
+  includeDefaultModels?: boolean;
   includeProviderCapabilities?: boolean;
   deferredAuth?: Promise<PreparedModelRuntimeAuth>;
   refresh?: boolean;
@@ -352,6 +240,9 @@ function requestModelsList(params: {
   });
   const requestParams = {
     view: params.view,
+    ...(params.includeDefaultModels === undefined
+      ? {}
+      : { includeDefaultModels: params.includeDefaultModels }),
     ...(params.refresh ? { refresh: true } : {}),
     ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(params.includeProviderCapabilities ? { includeProviderCapabilities: true } : {}),
@@ -384,6 +275,40 @@ function requestModelsList(params: {
 }
 
 describe("models.list", () => {
+  it.each(["claude-fable-5-1", "Claude Gateway/claude-fable-5-1"])(
+    "publishes the native Fable effort ladder for %s on a custom Messages provider",
+    async (id) => {
+      const { request, respond } = requestModelsList({
+        view: "all",
+        loadGatewayModelCatalog: vi.fn(async () => [
+          {
+            id,
+            name: "Pooled Fable",
+            provider: "proxy",
+            api: "anthropic-messages",
+            reasoning: true,
+          },
+        ]),
+      });
+
+      await request;
+
+      expect(respond.mock.calls[0]?.[1]).toMatchObject({
+        models: [
+          {
+            id,
+            provider: "proxy",
+            thinkingLevels: ["low", "medium", "high", "xhigh", "max", "ultra"].map((level) => ({
+              id: level,
+              label: level,
+            })),
+            thinkingDefault: "medium",
+          },
+        ],
+      });
+    },
+  );
+
   it("loads the requested agent catalog", async () => {
     const loadGatewayModelCatalog = vi.fn(async () => [
       { id: "writer-model", name: "Writer Model", provider: "test" },
@@ -433,6 +358,7 @@ describe("models.list", () => {
 
     const selected = requestModelsList({
       view: "configured",
+      includeDefaultModels: false,
       agentId: "research",
       runtimeConfig,
       loadGatewayModelCatalog: vi.fn(async () => []),
@@ -528,6 +454,7 @@ describe("models.list", () => {
           { id: "low", label: "low" },
           { id: "medium", label: "medium" },
           { id: "high", label: "high" },
+          { id: "ultra", label: "ultra" },
         ],
       });
     }
@@ -576,7 +503,10 @@ describe("models.list", () => {
     ).toMatchObject({
       reasoning: false,
       agentRuntime: { id: "claude-cli" },
-      thinkingLevels: [{ id: "off", label: "off" }],
+      thinkingLevels: [
+        { id: "off", label: "off" },
+        { id: "ultra", label: "ultra" },
+      ],
     });
   });
 
@@ -640,6 +570,7 @@ describe("models.list", () => {
         { id: "high", label: "high" },
         { id: "xhigh", label: "xhigh" },
         { id: "max", label: "max" },
+        { id: "ultra", label: "ultra" },
       ],
       thinkingDefault: "high",
     });
@@ -748,7 +679,10 @@ describe("models.list", () => {
       provider: "anthropic",
       reasoning: true,
       agentRuntime: { id: "claude-cli" },
-      thinkingLevels: [{ id: "off", label: "off" }],
+      thinkingLevels: [
+        { id: "off", label: "off" },
+        { id: "ultra", label: "ultra" },
+      ],
       thinkingDefault: "off",
     });
     expect(model).not.toHaveProperty("thinkingPolicyProvider");
@@ -850,6 +784,7 @@ describe("models.list", () => {
                 { id: "low", label: "low" },
                 { id: "medium", label: "medium" },
                 { id: "high", label: "high" },
+                { id: "ultra", label: "ultra" },
               ],
               thinkingDefault: "medium",
             },
@@ -944,6 +879,7 @@ describe("models.list", () => {
       const { request, respond } = requestModelsList({
         publishedCatalog: [],
         view: "configured",
+        includeDefaultModels: false,
         runtimeConfig,
         loadGatewayModelCatalog,
         reqId: "req-models-list-slow-catalog",
@@ -994,6 +930,7 @@ describe("models.list", () => {
       const { request, respond } = requestModelsList({
         publishedCatalog: [],
         view: "configured",
+        includeDefaultModels: false,
         runtimeConfig,
         deferredAuth: auth.promise,
         loadGatewayModelCatalog: vi.fn(() =>
@@ -1045,6 +982,7 @@ describe("models.list", () => {
       const { request, respond } = requestModelsList({
         refresh: true,
         view: "configured",
+        includeDefaultModels: false,
         runtimeConfig,
         deferredAuth: Promise.reject(new Error("auth refresh failed")),
         loadGatewayModelCatalog: vi.fn(() =>
@@ -1099,6 +1037,7 @@ describe("models.list", () => {
       const { request, respond } = requestModelsList({
         refresh: true,
         view: "configured",
+        includeDefaultModels: false,
         runtimeConfig,
         preparedAuthModes: { openai: "oauth" },
         deferredAuth: Promise.resolve({
@@ -1207,6 +1146,7 @@ describe("models.list", () => {
     const { request, respond } = requestModelsList({
       publishedCatalog: [],
       view: "configured",
+      includeDefaultModels: false,
       runtimeConfig,
       loadGatewayModelCatalog,
       reqId: "req-models-list-secretref-timeout",
@@ -1346,6 +1286,7 @@ describe("models.list", () => {
       const loadConfiguredCatalog = vi.fn(() => Promise.resolve(catalog));
       const { request: configuredRequest, respond: configuredRespond } = requestModelsList({
         view: "configured",
+        includeDefaultModels: false,
         runtimeConfig: cfg,
         loadGatewayModelCatalog: loadConfiguredCatalog,
         reqId: "req-models-list-provider-allowlist",
@@ -1501,6 +1442,7 @@ describe("models.list", () => {
           for (const view of ["default", "configured"] as const) {
             const { request, respond } = requestModelsList({
               view,
+              includeDefaultModels: false,
               runtimeConfig: cfg,
               loadGatewayModelCatalog: vi.fn(() => Promise.resolve(catalog)),
               reqId: `req-models-list-local-wildcard-${view}`,

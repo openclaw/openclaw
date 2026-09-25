@@ -37,6 +37,7 @@ const requestUpdate = vi.fn();
 function callbacks() {
   return {
     activatePanel: vi.fn(),
+    togglePanelExpanded: vi.fn(),
     closeSlot: vi.fn(),
     openSlot: vi.fn(),
     reorderPanel: vi.fn(),
@@ -60,6 +61,7 @@ class NativeCloseLayoutFixture extends LitElement {
 
   override render() {
     return renderSidebarRegion({
+      presentationId: "sidebar-layout-fixture",
       availableWidth: 1_400,
       availableSlots: ["detail", "workspace"],
       callbacks: {
@@ -83,9 +85,15 @@ class NativeCloseLayoutFixture extends LitElement {
 
 customElements.define("native-close-layout-fixture", NativeCloseLayoutFixture);
 
-async function renderLayout(container: HTMLElement, layout: SidebarLayout, narrow = false) {
+async function renderLayout(
+  container: HTMLElement,
+  layout: SidebarLayout,
+  narrow = false,
+  presentationId = "sidebar-layout-fixture",
+) {
   render(
     renderSidebarRegion({
+      presentationId,
       availableWidth: narrow ? 620 : 1_400,
       availableSlots: ["detail", "terminal", "workspace"],
       callbacks: callbacks(),
@@ -109,6 +117,45 @@ afterEach(() => {
 });
 
 describe("chat pane sidebar layout", () => {
+  it("keeps tab targets within split and retained conversation presentations", async () => {
+    const layout = openSlot({ columns: [] }, "detail");
+    const presentations = [
+      ["left", "session-a"],
+      ["right", "session-a"],
+      ["left", "session-b"],
+    ];
+    const targetIds: string[] = [];
+    const tabIds: string[] = [];
+    for (const presentation of presentations) {
+      const container = document.createElement("div");
+      containers.push(container);
+      document.body.append(container);
+      const presentationId = JSON.stringify(presentation);
+      await renderLayout(container, layout, false, presentationId);
+      const detail = container.querySelector("[data-detail]")!;
+      const primary = container.querySelector("[data-primary]")!;
+      for (const next of [layout, promoteSidebarPanel(layout, "detail"), layout]) {
+        await renderLayout(container, next, false, presentationId);
+        const tab = container.querySelector("wa-tab[active]")!;
+        const targetId = tab.getAttribute("aria-controls")!;
+        const target = document.getElementById(targetId);
+        const chatSelected = tab.getAttribute("panel") === "conversation";
+        expect(target).toBe((chatSelected ? primary : detail).closest("[data-region]"));
+        expect(target?.getAttribute("role")).toBe("region");
+        expect(target?.getAttribute("aria-label")).toBe(chatSelected ? "Chat" : "Review");
+        expect(target?.contains(chatSelected ? detail : primary)).toBe(false);
+        expect(container.querySelector("[data-primary]")).toBe(primary);
+        expect(container.querySelector("[data-detail]")).toBe(detail);
+        if (next !== layout) {
+          targetIds.push(targetId);
+          tabIds.push(tab.id);
+        }
+      }
+    }
+    expect(new Set(targetIds).size).toBe(presentations.length);
+    expect(new Set(tabIds).size).toBe(presentations.length);
+  });
+
   it("restores focus to the surviving tab after its parent commits native Close", async () => {
     const parent = new NativeCloseLayoutFixture();
     containers.push(parent);
@@ -178,6 +225,7 @@ describe("chat pane sidebar layout", () => {
     containers.push(container);
     render(
       renderSidebarRegion({
+        presentationId: "sidebar-layout-fixture",
         availableWidth: 0,
         availableSlots: ["detail"],
         callbacks: callbacks(),

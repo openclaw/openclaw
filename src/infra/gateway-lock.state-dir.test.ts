@@ -4,8 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveGatewayLockDir } from "../config/paths.js";
+import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { acquireGatewayLock, GatewayLockError } from "./gateway-lock.js";
+import * as windowsProcessStart from "./windows-process-start.js";
 
 type GatewayLock = NonNullable<Awaited<ReturnType<typeof acquireGatewayLock>>>;
 
@@ -21,6 +23,39 @@ afterEach(() => {
 });
 
 describe("gateway lock state directory", () => {
+  it.skipIf(process.platform !== "win32")(
+    "reuses the current process identity across gateway lock lifetimes",
+    async () => {
+      const startTime = getFileLockProcessStartTime(process.pid);
+      expect(startTime).not.toBeNull();
+      const probe = vi.spyOn(windowsProcessStart, "readWindowsProcessStartTimeSync");
+      await withTempDir("openclaw-gateway-lock-identity-", async (root) => {
+        const env = {
+          ...process.env,
+          OPENCLAW_STATE_DIR: root,
+          OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
+        };
+        await fs.writeFile(env.OPENCLAW_CONFIG_PATH, "{}", "utf8");
+        for (let index = 0; index < 2; index += 1) {
+          const lock = expectGatewayLock(
+            await acquireGatewayLock({ allowInTests: true, env, timeoutMs: 30 }),
+          );
+          try {
+            for (const lockPath of [lock.lockPath, lock.stateLockPath]) {
+              expect(JSON.parse(await fs.readFile(lockPath, "utf8"))).toMatchObject({
+                pid: process.pid,
+                startTime,
+              });
+            }
+          } finally {
+            await lock.release();
+          }
+        }
+      });
+      expect(probe).not.toHaveBeenCalled();
+    },
+  );
+
   it("releases in-tree locks separately from Gateway lifecycle ownership", async () => {
     await withTempDir("openclaw-gateway-lock-release-", async (root) => {
       const stateDir = path.join(await fs.realpath(root), "state");

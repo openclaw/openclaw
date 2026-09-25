@@ -13,6 +13,7 @@ import {
   archiveLegacyCronStoreForMigration,
   loadLegacyCronStoreForMigration,
 } from "../commands/doctor/cron/legacy-store-migration.js";
+import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
@@ -139,6 +140,40 @@ describe("resolveCronStorePath", () => {
 });
 
 describe("cron store", () => {
+  it("reads an absent cron table without touching source WAL artifacts", async () => {
+    await withOpenClawTestState({ prefix: "openclaw-cron-readonly-wal-" }, async (state) => {
+      const databasePath = resolveOpenClawStateSqlitePath(state.env);
+      await fs.mkdir(path.dirname(databasePath), { recursive: true });
+      const writer = new DatabaseSync(databasePath);
+      writer.exec(
+        "PRAGMA journal_mode = WAL; CREATE TABLE marker(value TEXT); INSERT INTO marker VALUES ('committed');",
+      );
+      const files = [databasePath, `${databasePath}-wal`, `${databasePath}-shm`];
+      const hashes = () =>
+        Promise.all(
+          files.map(async (file) =>
+            createHash("sha256")
+              .update(await fs.readFile(file))
+              .digest("hex"),
+          ),
+        );
+      const before = await hashes();
+      try {
+        const loaded = await withArtifactPreservingStateReads(() =>
+          loadCronJobsStoreWithConfigJobsReadOnly(
+            path.join(state.stateDir, "cron", "jobs.json"),
+            state.env,
+          ),
+        );
+        expect(loaded.store).toEqual({ version: 1, jobs: [] });
+        expect(await hashes()).toEqual(before);
+        expect(writer.prepare("SELECT value FROM marker").all()).toEqual([{ value: "committed" }]);
+      } finally {
+        writer.close();
+      }
+    });
+  });
+
   it("returns empty store when file does not exist", async () => {
     const store = await makeStorePath();
     const loaded = await loadCronStore(store.storePath);
@@ -438,7 +473,7 @@ describe("cron store", () => {
     await saveCronStore(storePath, store);
     const database = openOpenClawStateDatabase().db;
     database.exec(
-      "CREATE TEMP TRIGGER fail_cron_quarantine_update BEFORE UPDATE ON cron_jobs BEGIN SELECT RAISE(ABORT, 'cron update rejected'); END",
+      "CREATE TRIGGER fail_cron_quarantine_update BEFORE UPDATE ON cron_jobs BEGIN SELECT RAISE(ABORT, 'cron update rejected'); END",
     );
     try {
       await expect(
@@ -470,7 +505,7 @@ describe("cron store", () => {
     saveCronQuarantinedJobs({ storePath, nowMs: 123, entries: [entry] });
     const database = openOpenClawStateDatabase().db;
     database.exec(
-      "CREATE TEMP TRIGGER fail_cron_recovery_update BEFORE UPDATE ON cron_jobs BEGIN SELECT RAISE(ABORT, 'cron recovery rejected'); END",
+      "CREATE TRIGGER fail_cron_recovery_update BEFORE UPDATE ON cron_jobs BEGIN SELECT RAISE(ABORT, 'cron recovery rejected'); END",
     );
     try {
       await expect(
@@ -670,8 +705,19 @@ describe("cron store", () => {
     const first = makeStore("job-1", true);
     const second = makeStore("job-2", false);
 
+    expectDefined(first.jobs[0], "prior job").description = "x".repeat(128 * 1024);
     await saveCronStore(store.storePath, first);
-    await saveCronStore(store.storePath, second);
+    const counter = trackSqliteStatementExecutions(
+      openOpenClawStateDatabase().db,
+      ["priorRows"],
+      (sql) => (/^select\b/i.test(sql) && sql.includes('"cron_jobs"') ? "priorRows" : null),
+    );
+    try {
+      await saveCronStore(store.storePath, second);
+      expect(counter.textBytes.priorRows).toBeLessThan(1024);
+    } finally {
+      counter.restore();
+    }
 
     const loaded = await loadCronStore(store.storePath);
     expect(loaded.jobs.map((job) => job.id)).toEqual(["job-2"]);
@@ -1828,11 +1874,12 @@ describe("cron jobs fingerprint guard", () => {
         const fingerprint = createHash("sha256")
           .update(JSON.stringify(expectedOrder))
           .digest("hex");
+        const loaded = await loadCronJobsStoreWithConfigJobs(storePath);
         const reads = trackSqliteStatementExecutions(db, ["jobs"], (sql) =>
           sql.startsWith("select ") && sql.includes('from "cron_jobs"') ? "jobs" : null,
         );
         try {
-          const loaded = await loadCronJobsStoreWithConfigJobs(storePath);
+          expect(loadCronJobsStoreSync(storePath)).toEqual(loaded.store);
           expect(loaded.jobsFingerprint).toBe(fingerprint);
           expect(loaded.store.jobs.map((job) => job.id)).toEqual(["z", "\u{10000}", "\ue000"]);
           expect(loaded.invalidConfigRows).toHaveLength(1);

@@ -2,17 +2,17 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { bundledPluginRootAt, repoInstallSpec } from "openclaw/plugin-sdk/test-fixtures";
+import { repoInstallSpec } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { hashConfigIncludeRaw } from "../config/includes.js";
 import type { ConfigWriteOptions } from "../config/io.js";
 import type { ConfigFileSnapshot } from "../config/types.openclaw.js";
 import {
+  loadConfigForInstall,
   resolvePluginInstallRequestContext,
   type PluginInstallRequestContext,
-} from "./plugin-install-config-policy.js";
-import { loadConfigForInstall } from "./plugins-install-config.js";
+} from "../plugins/install-config.js";
 
 const hoisted = vi.hoisted(() => ({
   assertConfigPathForWriteMock: vi.fn(),
@@ -56,7 +56,7 @@ vi.mock("../plugins/installed-plugin-index-records.js", async (importOriginal) =
   };
 });
 
-vi.mock("./plugins-location-bridges.js", () => ({
+vi.mock("../plugins/location-bridges.js", () => ({
   listPersistedBundledPluginRecoveryLocations: () =>
     listPersistedBundledPluginRecoveryLocationsMock(),
 }));
@@ -96,7 +96,6 @@ function makeSnapshot(overrides: Partial<ConfigFileSnapshot> = {}): ConfigFileSn
 describe("loadConfigForInstall", () => {
   const discordNpmRequest = {
     rawSpec: "@openclaw/discord",
-    normalizedSpec: "@openclaw/discord",
     installKind: "plugin",
     bundledPluginId: "discord",
     allowInvalidConfigRecovery: true,
@@ -117,6 +116,48 @@ describe("loadConfigForInstall", () => {
       "/tmp/plugins.json5": "/tmp/plugins.json5",
     });
     listPersistedBundledPluginRecoveryLocationsMock.mockResolvedValue([]);
+  });
+
+  it("does not borrow local recovery authority for a resolved registry source", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "plugin-source-context-"));
+    const localPath = path.join(root, "fixture-package");
+    fs.mkdirSync(localPath);
+    fs.writeFileSync(
+      path.join(localPath, "package.json"),
+      JSON.stringify({
+        name: "fixture-package",
+        openclaw: { install: { allowInvalidConfigRecovery: true } },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(localPath, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "fixture-local",
+        configSchema: { type: "object", properties: {} },
+      }),
+    );
+    const cwd = vi.spyOn(process, "cwd").mockReturnValue(root);
+    try {
+      const registry = resolvePluginInstallRequestContext({
+        rawSpec: "fixture-package",
+        source: "npm",
+        localPath,
+      });
+      expect(registry).toMatchObject({ ok: true });
+      if (!registry.ok) {
+        throw new Error(registry.error);
+      }
+      expect(registry.request).not.toHaveProperty("bundledPluginId");
+      expect(registry.request.allowInvalidConfigRecovery).not.toBe(true);
+      const local = resolvePluginInstallRequestContext({ rawSpec: localPath, source: "local" });
+      expect(local).toMatchObject({
+        ok: true,
+        request: { bundledPluginId: "fixture-local", allowInvalidConfigRecovery: true },
+      });
+    } finally {
+      cwd.mockRestore();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("returns the source config and base hash when the snapshot is valid", async () => {
@@ -479,7 +520,6 @@ describe("loadConfigForInstall", () => {
 
     const result = await loadConfigForInstall({
       ...repoRequest.request,
-      resolvedPath: bundledPluginRootAt("/tmp/repo", "discord"),
     });
     expect(result.config).toBe(snapshotCfg);
   });
@@ -584,7 +624,6 @@ describe("loadConfigForInstall", () => {
 
     const result = await loadConfigForInstall({
       rawSpec: "maybe-hook-pack",
-      normalizedSpec: "maybe-hook-pack",
     });
 
     expect(result.config).toBe(snapshotCfg);
@@ -642,7 +681,6 @@ describe("loadConfigForInstall", () => {
 
     const result = await loadConfigForInstall({
       rawSpec: "maybe-hook-pack",
-      normalizedSpec: "maybe-hook-pack",
     });
 
     expect(result.hookMutation).toEqual({
@@ -683,7 +721,6 @@ describe("loadConfigForInstall", () => {
     try {
       const result = await loadConfigForInstall({
         rawSpec: "maybe-hook-pack",
-        normalizedSpec: "maybe-hook-pack",
       });
       expect(result.hookMutation).toEqual({
         mode: "blocked",
@@ -735,7 +772,6 @@ describe("loadConfigForInstall", () => {
     try {
       const result = await loadConfigForInstall({
         rawSpec: "maybe-hook-pack",
-        normalizedSpec: "maybe-hook-pack",
       });
       expect(result.hookMutation).toEqual({
         mode: "blocked",
@@ -778,7 +814,6 @@ describe("loadConfigForInstall", () => {
     try {
       const ambiguousResult = await loadConfigForInstall({
         rawSpec: "maybe-hook-pack",
-        normalizedSpec: "maybe-hook-pack",
       });
       expect(ambiguousResult.pluginMutation).toEqual({
         mode: "blocked",
@@ -852,7 +887,6 @@ describe("loadConfigForInstall", () => {
 
       const result = await loadConfigForInstall({
         rawSpec: "maybe-hook-pack",
-        normalizedSpec: "maybe-hook-pack",
       });
 
       expect(result.pluginMutation).toEqual({
@@ -933,7 +967,6 @@ describe("loadConfigForInstall", () => {
     await expect(
       loadConfigForInstall({
         rawSpec: "alpha",
-        normalizedSpec: "alpha",
       }),
     ).rejects.toThrow("Config invalid; run `openclaw doctor --fix` before installing plugins.");
   });

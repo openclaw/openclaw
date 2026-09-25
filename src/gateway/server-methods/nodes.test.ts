@@ -26,7 +26,7 @@ import {
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import { loadApnsRegistration, registerApnsRegistration } from "../../infra/push-apns.js";
 import { resetRemoteNodeSkillsForTests } from "../../skills/runtime/remote-skills.test-support.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -98,7 +98,7 @@ afterEach(async () => {
   resetNodeWakeStateForTest();
   pairingGenerationHooks.beforeCapture.mockReset();
   vi.clearAllMocks();
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
   while (createdStates.length > 0) {
     await createdStates.pop()?.cleanup();
   }
@@ -485,6 +485,7 @@ describe("nodeHandlers node.pair.approve", () => {
         }),
     );
     const client = createWorkerSupervisorNodeClient("conn-surface-reapproval");
+    const send = vi.spyOn(client.socket, "send");
     runtime.nodeRegistry.register(client, {
       pairingIdentity: previousState?.identity.key ?? "",
       pairingGeneration: previousState?.generation?.key,
@@ -531,6 +532,12 @@ describe("nodeHandlers node.pair.approve", () => {
       undefined,
     );
     await expect(runtime.nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([]);
+    const message = send.mock.calls.at(-1)?.[0];
+    expect(typeof message === "string" && JSON.parse(message)).toMatchObject({
+      type: "event",
+      event: "node.pair.resolved",
+      payload: { requestId: pending.request.requestId, nodeId, decision: "approved" },
+    });
     const republish = createOptions(
       {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],

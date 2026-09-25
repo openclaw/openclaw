@@ -33,6 +33,7 @@ import {
 import { createCompactionRuntime } from "./compaction/runtime.js";
 import { preflightManualSessionCompaction } from "./manual-compaction-preflight.js";
 import { generateSessionEntryId } from "./session-manager-id.js";
+import { withSessionManagerWrite } from "./session-manager-write-admission.js";
 import { getLatestCompactionEntry } from "./session-manager.js";
 import { recordSessionModelUsage } from "./session-model-usage.js";
 import type { SettingsManager } from "./settings-manager.js";
@@ -62,11 +63,11 @@ export const agentSessionSetContextReplacementHook: unique symbol = Symbol.for(
 );
 
 export abstract class AgentSessionCompaction extends AgentSessionInspection {
-  private onContextReplaced?: (tokensAfter: number) => void;
+  private onContextReplaced?: (tokensAfter: number, tokensBefore: number) => void;
   private assertContextReplacementActive?: () => void;
 
   [agentSessionSetContextReplacementHook](
-    callback: ((tokensAfter: number) => void) | undefined,
+    callback: ((tokensAfter: number, tokensBefore: number) => void) | undefined,
     assertActive?: () => void,
   ): void {
     this.onContextReplaced = callback;
@@ -205,6 +206,8 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     pendingUserEntryId?: string;
   }): Promise<CompactionWorkOutcome> {
     const isManual = options.mode === "manual";
+    const assertContextReplacementActive = this.assertContextReplacementActive;
+    const onContextReplaced = this.onContextReplaced;
     if (!this.model) {
       if (isManual) {
         throw new Error(formatNoModelSelectedMessage());
@@ -391,14 +394,14 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       return { status: "aborted" };
     }
 
-    compactionResult = {
+    const completedCompaction = {
       ...compactionResult,
       summary: capCompactionSummary(compactionResult.summary),
     };
 
     // Custom hooks may choose a different retained boundary. Validate their
     // complete result before commit, without modifying an already audited artifact.
-    const { firstKeptEntryId } = compactionResult;
+    const { firstKeptEntryId } = completedCompaction;
     const firstKeptIndex = pathEntries.findIndex((entry) => entry.id === firstKeptEntryId);
     if (pendingEntryIndex >= 0 && (firstKeptIndex < 0 || firstKeptIndex > pendingEntryIndex)) {
       throw new Error("Compaction must retain the unprocessed pending user request.");
@@ -407,7 +410,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       requestBudget &&
       requestTokenLimit !== undefined &&
       estimateCompactedRequestTokens(
-        projectReplacement(compactionResult, compactionResult.summary),
+        projectReplacement(completedCompaction, completedCompaction.summary),
         requestBudget,
       ) > requestTokenLimit
     ) {
@@ -416,30 +419,50 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       );
     }
 
-    // An in-memory transcript has no SQLite writer fence. Revalidate its
-    // captured owner after summarization, immediately before replacing context.
-    this.assertContextReplacementActive?.();
-    const compactionEntryId = this.sessionManager.appendCompaction(
-      compactionResult.summary,
-      compactionResult.firstKeptEntryId,
-      compactionResult.tokensBefore,
-      compactionResult.details,
-      fromExtension,
-      { itemId: options.itemId },
-    );
-    const sessionContext = this.sessionManager.buildSessionContext();
-    // Compaction replaces the request prefix, invalidating retained usage and thinking signatures.
-    // Sanitize at assignment so every continuation driver receives replay-safe history.
-    this.agent.state.messages = sanitizeCompactionReplayMessages(sessionContext.messages);
-    // Commit accounting and invalidation must precede awaited extension work;
-    // cancellation there can prevent the public completed event from reaching its owner.
-    const tokensAfter = requestBudget
-      ? estimateCompactedRequestTokens(this.agent.state.messages, {
-          ...requestBudget,
-          pendingTokens: 0,
-        })
-      : estimateContextTokens(this.agent.state.messages).tokens;
-    this.onContextReplaced?.(tokensAfter);
+    const committed = await withSessionManagerWrite(this.sessionManager, () => {
+      const currentController = isManual
+        ? this.compactionAbortController
+        : this.autoCompactionAbortController;
+      if (
+        options.signal.aborted ||
+        currentController?.signal !== options.signal ||
+        this.assertContextReplacementActive !== assertContextReplacementActive ||
+        this.onContextReplaced !== onContextReplaced
+      ) {
+        return undefined;
+      }
+      // Revalidate after admission too. In-memory transcripts have no SQLite
+      // writer fence, and cancellation must not publish a replaced context.
+      assertContextReplacementActive?.();
+      const replacementMessages = sanitizeCompactionReplayMessages(
+        projectReplacement(completedCompaction, completedCompaction.summary),
+      );
+      const tokensAfter = requestBudget
+        ? estimateCompactedRequestTokens(replacementMessages, {
+            ...requestBudget,
+            pendingTokens: 0,
+          })
+        : estimateContextTokens(replacementMessages).tokens;
+      const entryId = this.sessionManager.appendCompaction(
+        completedCompaction.summary,
+        completedCompaction.firstKeptEntryId,
+        completedCompaction.tokensBefore,
+        completedCompaction.details,
+        fromExtension,
+        { itemId: options.itemId },
+        tokensAfter,
+      );
+      const sessionContext = this.sessionManager.buildSessionContext();
+      // Compaction replaces the prefix; sanitize replay and publish accounting
+      // before any await can let cancellation hide the committed replacement.
+      this.agent.state.messages = sanitizeCompactionReplayMessages(sessionContext.messages);
+      onContextReplaced?.(tokensAfter, completedCompaction.tokensBefore);
+      return { entryId, tokensAfter };
+    });
+    if (committed === undefined) {
+      return { status: "aborted" };
+    }
+    const { entryId: compactionEntryId, tokensAfter } = committed;
 
     const savedCompactionEntry = this.sessionManager.getEntry(compactionEntryId);
     if (this.currentExtensionRunner && savedCompactionEntry?.type === "compaction") {
@@ -450,7 +473,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       });
     }
 
-    return { status: "completed", result: compactionResult, tokensAfter };
+    return { status: "completed", result: completedCompaction, tokensAfter };
   }
 
   /**

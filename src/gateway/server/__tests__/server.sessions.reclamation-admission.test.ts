@@ -1,6 +1,6 @@
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import type { WorkerOptions } from "node:worker_threads";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, expect, onTestFinished, test, vi } from "vitest";
 import { withTestTimeout } from "../../../../test/helpers/promise.js";
 import {
   deleteSessionEntryLifecycle,
@@ -8,7 +8,9 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../../config/sessions/session-sqlite-target.js";
 import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-admission.js";
+import { invalidateOpenClawAgentDatabaseValidation } from "../../../state/openclaw-agent-db-validation-cache.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../../state/openclaw-agent-db.js";
@@ -16,6 +18,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../../state/openclaw-state-db.js";
+import { retainSessionListForegroundWork } from "../../session-projection-work.js";
 import { rpcReq, writeSessionStore } from "../../test-helpers.js";
 import {
   loadSeededTranscriptEvents,
@@ -46,7 +49,7 @@ vi.mock("node:worker_threads", async (importOriginal) => {
             import { DatabaseSync } from 'node:sqlite';
             import { workerData } from 'node:worker_threads';
             const gate = new Int32Array(workerData.reclamationTestGate);
-            const databasePath = realpathSync(workerData.plan.databaseOptions.path);
+            const databasePath = realpathSync(workerData.databaseOptions.path);
             const validated = new WeakSet();
             const prepare = DatabaseSync.prototype.prepare;
             DatabaseSync.prototype.prepare = function (sql) {
@@ -110,7 +113,8 @@ vi.mock("node:worker_threads", async (importOriginal) => {
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawAgentDatabasesAsync();
   reclamation.gate = undefined;
   reclamation.exits = [];
   reclamation.exitCodes = [];
@@ -159,6 +163,7 @@ function holdReclamationValidation() {
     async close() {
       release();
       await Promise.allSettled(pending);
+      await closeOpenClawAgentDatabasesAsync();
       await Promise.all(reclamation.exits);
     },
   };
@@ -182,6 +187,9 @@ test("sessions.delete admits unrelated same-store patches during Worker validati
     expect(await rpcReq(ws, "sessions.patch", { key: unrelatedKey, label: "warm" })).toMatchObject({
       ok: true,
     });
+    invalidateOpenClawAgentDatabaseValidation(
+      resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
+    );
     const deletion = validation.own(rpcReq(ws, "sessions.delete", { key: targetKey }));
     await validation.entered(deletion);
     expect(loadSessionEntry({ sessionKey: targetKey, storePath })?.sessionId).toBe(
@@ -228,6 +236,8 @@ test("sessions.delete admits unrelated same-store patches during Worker validati
     expect(loadSessionEntry({ sessionKey: targetKey, storePath })).toBeUndefined();
     expect(Atomics.load(gate, 2)).toBeGreaterThan(0);
     expect(Atomics.load(gate, 3)).toBeGreaterThan(0);
+    expect(reclamation.exitCodes).toEqual([]);
+    await closeOpenClawAgentDatabasesAsync();
     expect(reclamation.exitCodes).toEqual([0]);
   } finally {
     await validation.close();
@@ -236,6 +246,8 @@ test("sessions.delete admits unrelated same-store patches during Worker validati
 });
 
 test("sessions.delete rejects revoked authority before repairing the same database", async () => {
+  // This test invokes the lifecycle owner directly instead of the foreground RPC dispatcher.
+  onTestFinished(retainSessionListForegroundWork());
   const sessionKey = "agent:main:validation-revoked";
   const sessionId = "validation-revoked";
   const { storePath } = await createSessionStoreDir();
@@ -259,6 +271,7 @@ test("sessions.delete rejects revoked authority before repairing the same databa
   // A late commit guard can roll back deletion but cannot undo an earlier
   // database-open repair. Keep the original cached handle warm throughout.
   database.db.exec("DROP INDEX idx_agent_cache_expiry");
+  invalidateOpenClawAgentDatabaseValidation(database.path);
   const readRepairIndex = () =>
     database.db
       .prepare("SELECT name FROM sqlite_schema WHERE type = 'index' AND name = ?")

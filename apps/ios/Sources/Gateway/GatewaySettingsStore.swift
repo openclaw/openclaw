@@ -579,26 +579,6 @@ enum GatewaySettingsStore {
         }
     }
 
-    static func clearGatewayRegistry(defaults: UserDefaults = .standard) {
-        _ = KeychainStore.delete(service: self.gatewayService, account: self.gatewayRegistryAccount)
-        _ = KeychainStore.delete(service: self.gatewayService, account: self.lastGatewayConnectionAccount)
-        self.removeLastGatewayDefaults(defaults)
-    }
-
-    static func saveGatewayRegistry(_ registry: GatewayRegistry) -> Bool {
-        guard self.gatewayRegistryMutationsAllowed() else { return false }
-        let normalized = self.normalizedGatewayRegistry(registry)
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        guard let data = try? encoder.encode(normalized),
-              let json = String(data: data, encoding: .utf8)
-        else { return false }
-        return KeychainStore.saveString(
-            json,
-            service: self.gatewayService,
-            account: self.gatewayRegistryAccount)
-    }
-
     private static func gatewayRegistryMutationsAllowed() -> Bool {
         guard let json = KeychainStore.loadString(
             service: self.gatewayService,
@@ -1034,6 +1014,37 @@ enum GatewaySettingsStore {
 }
 
 extension GatewaySettingsStore {
+    /// Invalidates read-only UI projections after the registry owner commits a mutation.
+    static let gatewayRegistryDidChange = Notification.Name("GatewaySettingsStore.gatewayRegistryDidChange")
+
+    static func clearGatewayRegistry(defaults: UserDefaults = .standard) {
+        let registryRemoved = KeychainStore.delete(service: self.gatewayService, account: self.gatewayRegistryAccount)
+        if registryRemoved {
+            NotificationCenter.default.post(name: self.gatewayRegistryDidChange, object: nil)
+        }
+        _ = KeychainStore.delete(service: self.gatewayService, account: self.lastGatewayConnectionAccount)
+        self.removeLastGatewayDefaults(defaults)
+    }
+
+    static func saveGatewayRegistry(_ registry: GatewayRegistry) -> Bool {
+        guard self.gatewayRegistryMutationsAllowed() else { return false }
+        let normalized = self.normalizedGatewayRegistry(registry)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(normalized),
+              let json = String(data: data, encoding: .utf8)
+        else { return false }
+        guard KeychainStore.saveString(
+            json,
+            service: self.gatewayService,
+            account: self.gatewayRegistryAccount)
+        else { return false }
+        NotificationCenter.default.post(name: self.gatewayRegistryDidChange, object: nil)
+        return true
+    }
+}
+
+extension GatewaySettingsStore {
     @discardableResult
     static func completeGatewayCredentialHandoff(
         instanceId: String,
@@ -1202,10 +1213,10 @@ enum GatewayDiagnostics {
         return String(collapsed[..<end]) + "..."
     }
 
-    private static func isoTimestamp() -> String {
+    private static func isoTimestamp(_ date: Date) -> String {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter.string(from: Date())
+        return formatter.string(from: date)
     }
 
     private static var fileURL: URL? {
@@ -1263,10 +1274,11 @@ enum GatewayDiagnostics {
     }
 
     static func bootstrap() {
-        guard let url = fileURL else { return }
+        let date = Date()
         self.queue.async {
+            guard let url = fileURL else { return }
             self.truncateLogIfNeeded(url: url)
-            let timestamp = self.isoTimestamp()
+            let timestamp = self.isoTimestamp(date)
             let line = "[\(timestamp)] gateway diagnostics started\n"
             if let data = line.data(using: .utf8) {
                 self.appendToLog(url: url, data: data)
@@ -1276,12 +1288,12 @@ enum GatewayDiagnostics {
     }
 
     static func log(_ message: String) {
-        let timestamp = self.isoTimestamp()
-        let line = "[\(timestamp)] \(message)"
-        self.logger.info("\(line, privacy: .public)")
-
-        guard let url = fileURL else { return }
+        // Developer log transport can block; preserve occurrence time without blocking callers.
+        let date = Date()
         self.queue.async {
+            let line = "[\(self.isoTimestamp(date))] \(message)"
+            self.logger.info("\(line, privacy: .public)")
+            guard let url = fileURL else { return }
             let shouldTruncate = self.logWritesSinceCheck.withLock { count in
                 count += 1
                 if count >= self.logSizeCheckEveryWrites {

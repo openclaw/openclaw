@@ -1,5 +1,5 @@
 import type { RouteLocation, RouterHistory } from "@openclaw/uirouter";
-import { sameRouteLocation, type RouteId } from "../../app-routes.ts";
+import { pluginSlugCandidate, sameRouteLocation } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { readSessionDefaults } from "../../lib/sessions/session-key.ts";
@@ -11,13 +11,14 @@ export function isDefaultChatLanding(
 ): boolean {
   return (
     !new URLSearchParams(location.search + "&" + location.hash.slice(1)).has("session") &&
+    !pluginSlugCandidate(location.pathname, basePath) &&
     (routeIdFromPath(location.pathname, basePath) === null ||
       /^\/chat(?:\/main)?\/?$/u.test(location.pathname.slice(basePath.length)))
   );
 }
 
 export async function startModelSetupFirstRunRedirectAfterLocation(params: {
-  context: ApplicationContext<RouteId>;
+  context: ApplicationContext;
   enabled: boolean;
   history: Pick<RouterHistory, "location" | "replace">;
   initialLocationReady: Promise<RouteLocation>;
@@ -52,9 +53,7 @@ export async function startModelSetupFirstRunRedirectAfterLocation(params: {
       params.onInitialDecision?.();
     }
   };
-  const handleSnapshot: Parameters<ApplicationContext<RouteId>["gateway"]["subscribe"]>[0] = (
-    snapshot,
-  ) => {
+  const handleSnapshot: Parameters<ApplicationContext["gateway"]["subscribe"]>[0] = (snapshot) => {
     if (initialDecisionSettled) {
       return;
     }

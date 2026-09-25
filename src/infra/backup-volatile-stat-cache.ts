@@ -1,7 +1,5 @@
 import type { Stats } from "node:fs";
 
-type BackupLinkCacheKey = `${number}:${number}`;
-
 const VOLATILE_BACKUP_SYNTHETIC_STAT = {
   isBlockDevice: () => false,
   isCharacterDevice: () => false,
@@ -17,6 +15,15 @@ class BackupVolatileStatCache extends Map<string, Stats> {
     super();
   }
 
+  override set(key: string, stat: Stats): this {
+    // Each archive name is an independent file. Project this before node-tar
+    // schedules pending hardlinks; suppressing link-cache writes can deadlock it.
+    if (stat.isFile()) {
+      stat.nlink = 1;
+    }
+    return super.set(key, stat);
+  }
+
   override get(key: string): Stats | undefined {
     const cached = super.get(key);
     if (cached) {
@@ -28,24 +35,8 @@ class BackupVolatileStatCache extends Map<string, Stats> {
   }
 }
 
-// node-tar emits hardlink entries when this cache returns an earlier inode path.
-// Suppressing both reads and writes keeps every backup entry independently restorable.
-class BackupLinkCache extends Map<BackupLinkCacheKey, string> {
-  override get(_key: BackupLinkCacheKey): undefined {
-    return undefined;
-  }
-
-  override set(_key: BackupLinkCacheKey, _value: string): this {
-    return this;
-  }
-}
-
 export function createBackupVolatileStatCache(
   isVolatilePath: (sourcePath: string) => boolean,
 ): Map<string, Stats> {
   return new BackupVolatileStatCache(isVolatilePath);
-}
-
-export function createBackupLinkCache(): Map<BackupLinkCacheKey, string> {
-  return new BackupLinkCache();
 }

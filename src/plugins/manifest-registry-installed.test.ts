@@ -144,6 +144,69 @@ function createIndexWithUnhashedPackageJson(rootDir: string): InstalledPluginInd
 }
 
 describe("loadPluginManifestRegistryForInstalledIndex", () => {
+  it.each([undefined, "plugin-state", "future-store"])(
+    "preserves known backing-store metadata %s through installed records",
+    (backingStore) => {
+      const root = makeTempDir();
+      writePlugin(root, "installed", "installed/");
+      fs.writeFileSync(
+        path.join(root, "package.json"),
+        JSON.stringify({
+          name: "@openclaw/installed",
+          version: "1.0.0",
+          openclaw: {
+            channel: {
+              id: "installed",
+              persistedAuthState: {
+                specifier: "./auth-presence",
+                exportName: "hasAuth",
+                backingStore,
+              },
+            },
+          },
+        }),
+      );
+      const index = createIndex(root);
+      expectDefined(index.plugins[0], "installed fixture record").packageJson = {
+        path: "package.json",
+        hash: "fixture-package-metadata",
+      };
+      const registry = loadPluginManifestRegistryForInstalledIndex({
+        index,
+        env: { VITEST: "true" },
+        includeDisabled: true,
+      });
+      expect(registry.plugins[0]?.packageChannel?.persistedAuthState).toEqual({
+        specifier: "./auth-presence",
+        exportName: "hasAuth",
+        ...(backingStore === "plugin-state" ? { backingStore: "plugin-state" } : {}),
+      });
+    },
+  );
+
+  it("loadPluginManifestRegistryForInstalledIndex preserves account-key policy after index persistence", async () => {
+    const rootDir = makeTempDir();
+    const stateDir = makeTempDir();
+    const policy = { canonicalAliasesRequireOwnField: "account" };
+    writePlugin(rootDir, "installed", "installed-");
+    fs.writeFileSync(
+      path.join(rootDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "installed",
+        configSchema: { type: "object" },
+        channels: ["selected"],
+        channelAccountKeyPolicies: { selected: policy, foreign: policy },
+      }),
+    );
+    await writePersistedInstalledPluginIndex(createIndex(rootDir), { stateDir });
+    const index = expectDefined(
+      await readPersistedInstalledPluginIndex({ stateDir }),
+      "persisted installed plugin index",
+    );
+    const manifestRegistry = loadPluginManifestRegistryForInstalledIndex({ index });
+    expect(manifestRegistry.plugins[0]?.channelAccountKeyPolicies).toEqual({ selected: policy });
+  });
+
   const loadRegistry = (index: InstalledPluginIndex) =>
     loadPluginManifestRegistryForInstalledIndex({
       index,

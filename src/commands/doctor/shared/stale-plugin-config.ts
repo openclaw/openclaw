@@ -1,4 +1,3 @@
-// Doctor scanner and repair for plugin/channel config that references missing plugins.
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { resolveAgentWorkspaceDir, tryResolveDefaultAgentId } from "../../../agents/agent-scope.js";
@@ -9,6 +8,7 @@ import {
   isRetiredPluginId,
   normalizePluginId,
 } from "../../../plugins/config-state.js";
+import { hasIncompletePluginDiscovery } from "../../../plugins/discovery-availability.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../../../plugins/installed-plugin-index-records.js";
 import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
 import {
@@ -36,7 +36,7 @@ type StalePluginRegistryState = {
   officialLookupIds: Set<string>;
   knownChannelIds: Set<string>;
   missingInstalledIds: Set<string>;
-  hasDiscoveryErrors: boolean;
+  incompleteDiscovery: boolean;
 };
 
 function collectPluginRegistryState(
@@ -91,11 +91,11 @@ function collectPluginRegistryState(
     officialLookupIds,
     knownChannelIds,
     missingInstalledIds: new Set([...installedIds].filter((pluginId) => !knownIds.has(pluginId))),
-    hasDiscoveryErrors: registry.diagnostics.some((diag) => diag.level === "error"),
+    incompleteDiscovery: hasIncompletePluginDiscovery(registry.diagnostics),
   };
 }
 
-/** Return true when plugin discovery errors should pause stale-plugin auto-removal. */
+/** Incomplete discovery cannot prove that a configured plugin should be removed. */
 export function isStalePluginAutoRepairBlocked(
   cfg: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
@@ -103,7 +103,7 @@ export function isStalePluginAutoRepairBlocked(
   if (cfg.plugins?.enabled === false) {
     return false;
   }
-  return collectPluginRegistryState(cfg, env).hasDiscoveryErrors;
+  return collectPluginRegistryState(cfg, env).incompleteDiscovery;
 }
 
 /** Scan plugin/channel config surfaces for ids no longer present in manifests or installs. */
@@ -341,7 +341,7 @@ export function collectStalePluginConfigWarnings(params: {
   }
   if (params.autoRepairBlocked) {
     lines.push(
-      `- Auto-removal is paused because plugin discovery currently has errors. Fix plugin discovery first, then rerun "${params.doctorFixCommand}".`,
+      `- Auto-removal is paused because plugin discovery is incomplete; uninspected configuration is preserved. Resolve the plugin discovery diagnostics, then rerun "${params.doctorFixCommand}".`,
     );
   } else {
     lines.push(
@@ -368,7 +368,7 @@ export function maybeRepairStalePluginConfig(
   }
   const environment = env ?? process.env;
   const registryState = collectPluginRegistryState(cfg, environment);
-  if (registryState.hasDiscoveryErrors) {
+  if (registryState.incompleteDiscovery) {
     return { config: cfg, changes: [] };
   }
 

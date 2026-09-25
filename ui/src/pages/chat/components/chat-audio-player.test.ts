@@ -47,6 +47,31 @@ describe("ChatAudioPlayer", () => {
     ).toBe("data:audio/wav;base64,UklGRg==");
   });
 
+  it("keeps voice notes player-only and never opens the attachment sidebar", async () => {
+    const player = await createPlayer("voice-note");
+    player.voiceNote = true;
+    player.onExpand = vi.fn();
+    player.sizeBytes = 2048;
+    await player.updateComplete;
+    expect(player.querySelector(".chat-assistant-attachment-card__header")).toBeNull();
+    expect(player.querySelector(".chat-attachment-file-icon, [data-openable]")).toBeNull();
+    expect(player.textContent).not.toContain("voice-note.mp3");
+    expect(player.querySelector('[role="group"]')?.getAttribute("aria-label")).toBe("Voice note");
+    player.querySelector<HTMLElement>(".chat-assistant-attachment-card")!.click();
+    expect(player.onExpand).not.toHaveBeenCalled();
+
+    player.querySelector("audio")!.dispatchEvent(new Event("error"));
+    await player.updateComplete;
+    expect(player.querySelector("audio, .chat-audio-player__toggle")).toBeNull();
+    expect(player.querySelector("[role=status]")?.textContent).toContain("Preview unavailable");
+    expect(player.querySelector("a[download]")).toMatchObject({
+      href: "https://example.com/voice-note.mp3",
+      target: "_blank",
+      rel: "noreferrer",
+    });
+    expect(player.querySelector(".chat-assistant-attachment-card__expand")).toBeNull();
+  });
+
   it("formats elapsed and total media time", async () => {
     const player = await createPlayer("timing");
     expect(
@@ -106,11 +131,35 @@ describe("ChatAudioPlayer", () => {
     seek.dispatchEvent(new Event("input", { bubbles: true }));
     expect(media.currentTime).toBe(35);
 
+    for (const [key, time] of [
+      ["ArrowRight", 40],
+      ["ArrowUp", 45],
+      ["ArrowLeft", 40],
+      ["ArrowDown", 35],
+    ] as const) {
+      const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+      seek.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(true);
+      expect(media.currentTime).toBe(time);
+    }
+
     const controls = player.querySelector<HTMLElement>(".chat-audio-player")!;
     controls.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
     expect(media.currentTime).toBe(40);
     controls.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
     expect(pause).toHaveBeenCalledOnce();
+  });
+
+  it("does not expand the attachment when muting through the changing SVG icon", async () => {
+    const player = await createPlayer("voice");
+    player.onExpand = vi.fn();
+    await player.updateComplete;
+    const icon = player.querySelector(".chat-audio-player__volume svg polygon")!;
+    icon.addEventListener("click", () => icon.remove(), { once: true });
+    icon.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await player.updateComplete;
+    expect(player.querySelector("audio")!.muted).toBe(true);
+    expect(player.onExpand).not.toHaveBeenCalled();
   });
 
   it("pauses the previous player when another chat audio starts", async () => {
@@ -320,6 +369,15 @@ describe("ChatAudioPlayer", () => {
         ),
       ).size,
     ).toBeGreaterThan(1);
+    player.voiceNote = true;
+    await player.updateComplete;
+    const voiceHeights = Array.from(
+      player.querySelectorAll(".chat-audio-player__waveform rect"),
+      (rect) => Number(rect.getAttribute("height")),
+    );
+    expect(Math.min(...voiceHeights)).toBeGreaterThanOrEqual(6);
+    expect(Math.max(...voiceHeights)).toBeLessThanOrEqual(14);
+    expect(new Set(voiceHeights).size).toBeGreaterThan(1);
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(decodeAudioData).toHaveBeenCalledOnce();
     expect(media.getAttribute("src")).toBe("blob:waveform-audio");

@@ -51,13 +51,31 @@ describe("doctor channel capabilities", () => {
           },
         },
       },
-      { dmAllowFromModes: new Map([["googlechat", dmAllowFromMode]]) },
+      { dmPolicyMetadata: new Map([["googlechat", { id: "googlechat", dmAllowFromMode }]]) },
     );
 
     expect(warnings.map(({ path }) => path)).toEqual([
       "channels.googlechat.allowFrom",
       "channels.googlechat.accounts.work.allowFrom",
     ]);
+  });
+
+  it("retains empty allowlist warnings when open DMs do not require a wildcard", () => {
+    const warnings = collectChannelDmPolicyDependencyWarnings(
+      { channels: { qqbot: { dmPolicy: "allowlist", allowFrom: [] } } },
+      {
+        dmPolicyMetadata: new Map([
+          ["qqbot", { id: "qqbot", openDmRequiresAllowFromWildcard: false }],
+        ]),
+      },
+    );
+
+    expect(warnings).toContainEqual(
+      expect.objectContaining({
+        path: "channels.qqbot.allowFrom",
+        message: expect.stringContaining('channels.qqbot.dmPolicy="allowlist"'),
+      }),
+    );
   });
 
   it("returns Slack route semantics without loading its channel plugin", () => {
@@ -78,6 +96,15 @@ describe("doctor channel capabilities", () => {
     });
     expect(channelPluginMocks.getChannelPlugin).not.toHaveBeenCalled();
     expect(channelPluginMocks.getBundledChannelPlugin).not.toHaveBeenCalled();
+  });
+
+  it("returns sender-scoped group semantics for line without a DM allowlist fallback", () => {
+    expect(getDoctorChannelCapabilities("line")).toEqual({
+      dmAllowFromMode: "topOnly",
+      groupModel: "sender",
+      groupAllowFromFallbackToAllowFrom: false,
+      warnOnEmptyGroupSenderAllowlist: true,
+    });
   });
 
   it("returns capability overrides from matrix plugin metadata", () => {
@@ -116,27 +143,41 @@ describe("doctor channel capabilities", () => {
     });
   });
 
-  it("falls back conservatively when channel plugin resolution throws", () => {
+  it("falls back conservatively when channel plugin resolution throws", async () => {
     channelPluginMocks.getChannelPlugin.mockImplementation(() => {
       throw new Error("missing generated bundled module");
     });
 
-    expect(resolveDoctorChannelAccountIds("telegram", {}, [])).toBeUndefined();
+    expect(await resolveDoctorChannelAccountIds("telegram", {}, [])).toBeUndefined();
   });
 
-  it("resolves configured and runtime account ids through plugin semantics", () => {
-    channelPluginMocks.getChannelPlugin.mockReturnValue({
-      config: {
-        listAccountIds: () => ["default", "Work"],
-        resolveAccount: (_cfg: unknown, accountId?: string | null) => ({
-          accountId: accountId === "Work" ? "work" : accountId,
-        }),
-      },
-    } as never);
+  it.each([false, true])(
+    "resolves account ids through plugin semantics (async: %s)",
+    async (asyncResolution) => {
+      const resolveAccount = (_cfg: unknown, accountId?: string | null) => ({
+        accountId: accountId === "Work" ? "work" : accountId,
+      });
+      channelPluginMocks.getChannelPlugin.mockReturnValue({
+        config: {
+          listAccountIds: () => ["default", "Work"],
+          resolveAccount: asyncResolution
+            ? () => {
+                throw new Error("legacy account resolution");
+              }
+            : resolveAccount,
+          ...(asyncResolution
+            ? {
+                resolveAccountAsync: async (cfg: unknown, accountId?: string | null) =>
+                  resolveAccount(cfg, accountId),
+              }
+            : {}),
+        },
+      } as never);
 
-    expect(resolveDoctorChannelAccountIds("signal", {}, ["Work"])).toEqual({
-      configured: ["work"],
-      runtime: ["default", "work"],
-    });
-  });
+      expect(await resolveDoctorChannelAccountIds("signal", {}, ["Work"])).toEqual({
+        configured: ["work"],
+        runtime: ["default", "work"],
+      });
+    },
+  );
 });

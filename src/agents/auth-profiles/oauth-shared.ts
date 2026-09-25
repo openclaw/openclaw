@@ -6,13 +6,17 @@
 import { cloneAuthProfileStore } from "./clone.js";
 import { hasUsableOAuthCredential } from "./credential-state.js";
 import {
+  hasOAuthIdentity,
   isSafeToCopyOAuthIdentity,
+  type OAuthIdentity,
+} from "./oauth-identity.js";
+import type { AuthProfileStore, OAuthCredential, RuntimeAuthProfileStore } from "./types.js";
+
+export {
+  hasOAuthIdentity,
   normalizeAuthEmailToken,
   normalizeAuthIdentityToken,
 } from "./oauth-identity.js";
-import type { AuthProfileStore, OAuthCredential } from "./types.js";
-
-export { normalizeAuthEmailToken, normalizeAuthIdentityToken } from "./oauth-identity.js";
 
 /** OAuth profile imported from a runtime external CLI source. */
 export type RuntimeExternalOAuthProfile = {
@@ -42,20 +46,10 @@ export function areOAuthCredentialsEquivalent(
   );
 }
 
-/** Returns true when an OAuth credential has account or email identity. */
-export function hasOAuthIdentity(
-  credential: Pick<OAuthCredential, "accountId" | "email">,
-): boolean {
-  return (
-    normalizeAuthIdentityToken(credential.accountId) !== undefined ||
-    normalizeAuthEmailToken(credential.email) !== undefined
-  );
-}
-
-/** Returns true when OAuth identity fields match by account id or email. */
+/** Returns true when both credentials describe the same registered identity. */
 export function hasMatchingOAuthIdentity(
-  existing: Pick<OAuthCredential, "accountId" | "email">,
-  incoming: Pick<OAuthCredential, "accountId" | "email">,
+  existing: OAuthIdentity,
+  incoming: OAuthIdentity,
 ): boolean {
   return hasOAuthIdentity(existing) && isSafeToCopyOAuthIdentity(existing, incoming);
 }
@@ -99,13 +93,10 @@ function isSafeOAuthIdentityTransition(
   if (existing.provider !== incoming.provider) {
     return false;
   }
-  if (areOAuthCredentialsEquivalent(existing, incoming)) {
-    return true;
-  }
-  if (!hasOAuthIdentity(existing)) {
-    return policy.whenExistingIdentityMissing;
-  }
-  return hasMatchingOAuthIdentity(existing, incoming);
+  return (
+    isSafeToCopyOAuthIdentity(existing, incoming) &&
+    (hasOAuthIdentity(existing) || policy.whenExistingIdentityMissing)
+  );
 }
 
 /** Returns true when bootstrap may adopt an external OAuth identity. */
@@ -150,10 +141,11 @@ export function overlayRuntimeExternalOAuthProfiles(
   options?: { runtimeExternalProfileIdsAuthoritative?: boolean },
 ): AuthProfileStore {
   const externalProfiles = Array.from(profiles);
-  const next = cloneAuthProfileStore(store);
+  const next: RuntimeAuthProfileStore = cloneAuthProfileStore(store);
   const overlaidProfileIds = new Set(externalProfiles.map((profile) => profile.profileId));
   for (const profile of externalProfiles) {
     next.profiles[profile.profileId] = profile.credential;
+    delete next.runtimeCredentialSources?.[profile.profileId];
   }
   next.runtimePersistedProfileIds = store.runtimePersistedProfileIds
     ?.filter((profileId) => next.profiles[profileId] && !overlaidProfileIds.has(profileId))

@@ -74,9 +74,9 @@ async function main() {
 
   const statusModule = await runtimeModule.loadStatusMessageRuntimeModule();
   assert.equal(
-    typeof statusModule.buildStatusMessage,
+    typeof statusModule.buildStatusMessageParts,
     "function",
-    "status-message runtime did not load buildStatusMessage",
+    "status-message runtime did not load buildStatusMessageParts",
   );
 }
 

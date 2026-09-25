@@ -1,7 +1,6 @@
 // sessions_send tests cover tool-driven agent-to-agent delivery, transcript
 // updates, gateway auth, plugin routing, and emitted agent events.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import {
   afterAll,
@@ -14,6 +13,7 @@ import {
   vi,
   type Mock,
 } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildAgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.js";
 import type { AgentCommandGatewayIngressOpts } from "../agents/command/types.js";
@@ -28,10 +28,10 @@ import { emitAgentEvent } from "../infra/agent-events.js";
 import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { captureEnv } from "../test-utils/env.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { runDirectSessionAnnounceScenario } from "./server.sessions-send.direct-announce.test-support.js";
 import {
   agentCommandMock,
-  getGatewayTestPort,
   installGatewayTestHooks,
   prepareGatewayReplyRuntimeForTest,
   startTestGatewayServer,
@@ -39,6 +39,7 @@ import {
   testState,
   writeSessionStore,
 } from "./test-helpers.js";
+import { releaseGatewaySessionStoreFixture } from "./test/server-sessions-resources.test-helpers.js";
 
 const { createOpenClawTools } = await import("../agents/openclaw-tools.js");
 
@@ -48,7 +49,14 @@ let server: Awaited<ReturnType<typeof startTestGatewayServer>>;
 let gatewayPort: number;
 const gatewayToken = "test-gateway-token-1234567890";
 let envSnapshot: ReturnType<typeof captureEnv>;
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    for (const dir of tempDirs.dirs) {
+      await releaseGatewaySessionStoreFixture(dir);
+    }
+    cleanup();
+  }),
+);
 
 type SessionSendTool = ReturnType<typeof createOpenClawTools>[number];
 const SESSION_SEND_E2E_TIMEOUT_MS = 10_000;
@@ -76,7 +84,7 @@ function expectSessionsSendDetails(
     reply?: string;
     sessionKey?: string;
   };
-  expect(details.status).toBe("ok");
+  expect(details.status, JSON.stringify(details)).toBe("ok");
   expect(details.reply).toBe(expected.reply);
   expect(details.sessionKey).toBe(expected.sessionKey);
 }
@@ -91,6 +99,8 @@ async function emitLifecycleAssistantReply(params: {
     sessionId?: string;
     sessionKey?: string;
     runId?: string;
+    agentId?: string;
+    lifecycleGeneration?: string;
     extraSystemPrompt?: string;
   };
   const sessionId = commandParams.sessionId ?? params.defaultSessionId;
@@ -99,9 +109,16 @@ async function emitLifecycleAssistantReply(params: {
     throw new Error("expected session key for lifecycle reply");
   }
 
+  const routing = {
+    runId,
+    sessionKey: commandParams.sessionKey,
+    sessionId,
+    agentId: commandParams.agentId,
+    lifecycleGeneration: commandParams.lifecycleGeneration,
+  };
   const startedAt = Date.now();
   emitAgentEvent({
-    runId,
+    ...routing,
     stream: "lifecycle",
     data: { phase: "start", startedAt },
   });
@@ -126,7 +143,7 @@ async function emitLifecycleAssistantReply(params: {
   );
 
   emitAgentEvent({
-    runId,
+    ...routing,
     stream: "lifecycle",
     data: {
       phase: "end",
@@ -139,7 +156,6 @@ async function emitLifecycleAssistantReply(params: {
 
 beforeAll(async () => {
   envSnapshot = captureEnv(["OPENCLAW_GATEWAY_PORT", "OPENCLAW_GATEWAY_TOKEN"]);
-  gatewayPort = await getGatewayTestPort();
   const { approveDevicePairing } = await import("../infra/device-pairing-approval.js");
   const { requestDevicePairing } = await import("../infra/device-pairing.js");
   const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } =
@@ -158,9 +174,11 @@ beforeAll(async () => {
     callerScopes: pending.request.scopes ?? ["operator.admin"],
   });
   testState.gatewayAuth = { mode: "token", token: gatewayToken };
+  const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+  gatewayPort = portClaim.port;
   process.env.OPENCLAW_GATEWAY_PORT = String(gatewayPort);
   process.env.OPENCLAW_GATEWAY_TOKEN = gatewayToken;
-  server = await startTestGatewayServer(gatewayPort);
+  server = await startTestGatewayServer(portClaim);
   // Prepare the real history handler before the RPC deadline starts.
   await import("./server-methods/chat.js");
 });
@@ -169,8 +187,21 @@ beforeEach(async () => {
   testState.gatewayAuth = { mode: "token", token: gatewayToken };
   process.env.OPENCLAW_GATEWAY_PORT = String(gatewayPort);
   process.env.OPENCLAW_GATEWAY_TOKEN = gatewayToken;
+  testState.sessionStorePath = path.join(
+    tempDirs.make("openclaw-sessions-send-case-"),
+    "sessions.json",
+  );
+  await writeSessionStore({ entries: {} });
   await prepareGatewayReplyRuntimeForTest();
 });
+
+// Detached A2A steps retain their selected store until the owner has settled.
+afterEach(
+  async () => {
+    await waitForGatewayActiveWork(SESSION_SEND_E2E_TIMEOUT_MS * 3);
+  },
+  SESSION_SEND_E2E_TIMEOUT_MS * 3 + 1_000,
+);
 
 afterAll(async () => {
   await server.close();
@@ -222,25 +253,33 @@ describe("sessions_send gateway loopback", () => {
 
   it("returns reply when lifecycle ends before agent.wait", async () => {
     const body = "    const first = 1;\n        const second = 2;";
+    const announcement = createDeferred();
+    void announcement.promise.catch(() => {});
     const spy = agentCommandMock as unknown as Mock<
       (opts: AgentCommandGatewayIngressOpts) => Promise<void>
     >;
-    spy.mockImplementation(async (opts) => {
-      await opts.userTurnTranscriptRecorder?.persistApproved();
-      await emitLifecycleAssistantReply({
-        opts,
-        defaultSessionId: "main",
-        includeTimestamp: true,
-        resolveText: (extraSystemPrompt) => {
-          if (extraSystemPrompt?.includes("Agent-to-agent reply step")) {
-            return "REPLY_SKIP";
-          }
-          if (extraSystemPrompt?.includes("Agent-to-agent announce step")) {
-            return "ANNOUNCE_SKIP";
-          }
-          return "pong";
-        },
-      });
+    spy.mockImplementation((opts) => {
+      const completed = (async () => {
+        await opts.userTurnTranscriptRecorder?.persistApproved();
+        await emitLifecycleAssistantReply({
+          opts,
+          defaultSessionId: "main",
+          includeTimestamp: true,
+          resolveText: (extraSystemPrompt) => {
+            if (extraSystemPrompt?.includes("Agent-to-agent reply step")) {
+              return "REPLY_SKIP";
+            }
+            if (extraSystemPrompt?.includes("Agent-to-agent announce step")) {
+              return "ANNOUNCE_SKIP";
+            }
+            return "pong";
+          },
+        });
+      })();
+      if (opts.extraSystemPrompt?.includes("Agent-to-agent announce step")) {
+        announcement.resolve(completed);
+      }
+      return completed;
     });
 
     const tool = getSessionsSendTool();
@@ -260,6 +299,8 @@ describe("sessions_send gateway loopback", () => {
     expect(result.details).toMatchObject({ runId: firstCall?.runId });
     expect(firstCall?.userTurnTranscriptRecorder?.hasPersisted()).toBe(true);
 
+    // The reply precedes its detached announcement's writes to this same transcript.
+    await announcement.promise;
     const { callGateway } = await import("./call.js");
     const history = await callGateway<{ messages?: unknown[] }>({
       method: "chat.history",
@@ -306,7 +347,11 @@ describe("sessions_send gateway loopback", () => {
     "delivers a $label session announcement through the authenticated Gateway without stored delivery context",
     { timeout: SESSION_SEND_DM_ROUTING_E2E_TIMEOUT_MS },
     async ({ sessionKey, expectedAccountId }) => {
-      await runDirectSessionAnnounceScenario({ sessionKey, expectedAccountId });
+      await runDirectSessionAnnounceScenario({
+        dir: tempDirs.make("openclaw-direct-announce-"),
+        sessionKey,
+        expectedAccountId,
+      });
     },
   );
 
@@ -314,7 +359,7 @@ describe("sessions_send gateway loopback", () => {
     "announces through gateway send using external deliveryContext over stale webchat session fields",
     { timeout: SESSION_SEND_E2E_TIMEOUT_MS },
     async () => {
-      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-send-route-"));
+      const dir = tempDirs.make("openclaw-sessions-send-route-");
       const sendCalls: Array<{
         to?: string;
         text?: string;
@@ -389,7 +434,7 @@ describe("sessions_send gateway loopback", () => {
           },
         });
 
-        agentStepTesting.setDepsForTest({
+        await agentStepTesting.setDepsForTest({
           agentCommandFromIngress: async () => ({
             payloads: [{ text: "announce through channel", mediaUrl: null }],
             meta: { durationMs: 1 },
@@ -397,6 +442,7 @@ describe("sessions_send gateway loopback", () => {
         });
 
         await runSessionsSendA2AFlow({
+          targetAgentId: "main",
           targetSessionKey: "agent:main:whatsapp:direct:peer-1",
           displayKey: "agent:main:whatsapp:direct:peer-1",
           message: "ping",
@@ -418,9 +464,7 @@ describe("sessions_send gateway loopback", () => {
           { timeout: 5_000 },
         );
       } finally {
-        agentStepTesting.setDepsForTest();
-        testState.sessionStorePath = undefined;
-        await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+        await agentStepTesting.setDepsForTest();
       }
     },
   );
@@ -429,7 +473,7 @@ describe("sessions_send gateway loopback", () => {
     "honors source delivery from agent.wait when the transcript has no tool result",
     { timeout: SESSION_SEND_E2E_TIMEOUT_MS },
     async () => {
-      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-send-mirror-"));
+      const dir = tempDirs.make("openclaw-sessions-send-mirror-");
       const sessionKey = "agent:main:whatsapp:direct:peer-1";
       const sessionId = "sess-whatsapp-mirror";
       const runId = `run-message-tool-mirror-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -574,7 +618,7 @@ describe("sessions_send gateway loopback", () => {
           terminalReply: { disposition: "visible", text: deliveredReply },
           terminalReceipt: { runId, sourceReplyDelivered: true },
         });
-        agentStepTesting.setDepsForTest({
+        await agentStepTesting.setDepsForTest({
           agentCommandFromIngress: async () => ({
             payloads: [{ text: "SHOULD_NOT_SEND", mediaUrl: null }],
             meta: { durationMs: 1 },
@@ -582,6 +626,7 @@ describe("sessions_send gateway loopback", () => {
         });
 
         await runSessionsSendA2AFlow({
+          targetAgentId: "main",
           targetSessionKey: sessionKey,
           requesterSessionKey: sessionKey,
           requesterChannel: "whatsapp",
@@ -594,9 +639,7 @@ describe("sessions_send gateway loopback", () => {
 
         expect(sendCalls).toEqual([]);
       } finally {
-        agentStepTesting.setDepsForTest();
-        testState.sessionStorePath = undefined;
-        await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+        await agentStepTesting.setDepsForTest();
       }
     },
   );
@@ -664,16 +707,6 @@ describe("sessions_send label lookup", () => {
 });
 
 describe("sessions_send agent targeting", () => {
-  // The announce/ping-pong flow is detached from the tool request and keeps
-  // running agent steps for agent:orion:main; drain it outside the row's own
-  // timeout budget so a slow tail neither fails the row nor pollutes the next.
-  afterEach(
-    async () => {
-      await waitForGatewayActiveWork(SESSION_SEND_E2E_TIMEOUT_MS * 3);
-    },
-    SESSION_SEND_E2E_TIMEOUT_MS * 3 + 1_000,
-  );
-
   it.each([
     { name: "default cross-agent access", tools: undefined },
     {
@@ -698,7 +731,7 @@ describe("sessions_send agent targeting", () => {
       if (!configPath) {
         throw new Error("OPENCLAW_CONFIG_PATH missing in gateway test environment");
       }
-      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-send-agent-"));
+      const dir = tempDirs.make("openclaw-sessions-send-agent-");
       const config: OpenClawConfig = {
         ...(tools ? { tools } : {}),
         agents: {
@@ -789,8 +822,6 @@ describe("sessions_send agent targeting", () => {
         expect(stored?.sessionId).toBe(orionCall?.sessionId);
       } finally {
         testState.agentsConfig = undefined;
-        testState.sessionStorePath = undefined;
-        await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
       }
     },
   );
@@ -838,7 +869,7 @@ describe("sessions_send direct-message requester routing", () => {
       if (!configPath) {
         throw new Error("OPENCLAW_CONFIG_PATH missing in gateway test environment");
       }
-      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-send-dm-scope-"));
+      const dir = tempDirs.make("openclaw-sessions-send-dm-scope-");
       // A2A follow-ups outlive tool.execute. Give every real Gateway case its
       // own agent so a preceding case can never satisfy this case's spy.
       const targetAgentId = `orion-${label.toLowerCase().replaceAll(" ", "-")}`;
@@ -986,8 +1017,6 @@ describe("sessions_send direct-message requester routing", () => {
       } finally {
         testState.sessionConfig = undefined;
         testState.agentsConfig = undefined;
-        testState.sessionStorePath = undefined;
-        await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
       }
     },
   );

@@ -25,15 +25,10 @@ import type { AnyAgentTool } from "./agent-tools.types.js";
 import { createProcessTool } from "./bash-tools.process.js";
 import { execSchema, processSchema } from "./bash-tools.schemas.js";
 import {
-  BEFORE_TOOL_CALL_HOOK_CONTEXT,
-  BEFORE_TOOL_CALL_SOURCE_TOOL,
+  getBeforeToolCallHookContext,
+  getBeforeToolCallSourceTool,
 } from "./before-tool-call-metadata.js";
 import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
-
-const beforeToolCallTesting = {
-  BEFORE_TOOL_CALL_HOOK_CONTEXT,
-  BEFORE_TOOL_CALL_SOURCE_TOOL,
-};
 
 const TEST_USAGE = createZeroUsageFixture();
 
@@ -403,6 +398,27 @@ describe("normalizeToolParameterSchema", () => {
     });
   });
 
+  it.each(["own", "inherited"] as const)(
+    "inlines definitions attached to %s array roots",
+    (kind) => {
+      const schemas = [{ $ref: "#/$defs/Value" }, { $ref: "#/definitions/Value" }];
+      const definitions = {
+        $defs: { Value: { type: "string" } },
+        definitions: { Value: { type: "integer" } },
+      };
+      if (kind === "own") {
+        Object.assign(schemas, definitions);
+      } else {
+        Object.setPrototypeOf(schemas, Object.assign(Object.create(Array.prototype), definitions));
+      }
+
+      expect(normalizeToolParameterSchema(schemas)).toEqual([
+        { type: "string" },
+        { type: "integer" },
+      ]);
+    },
+  );
+
   it("inlines nested local $ref schemas for provider-neutral tools", () => {
     expect(
       normalizeToolParameterSchema({
@@ -722,30 +738,34 @@ describe("normalizeToolParameterSchema", () => {
     });
   });
 
-  it("normalizes OpenAPI nullable and schema-only annotations", () => {
-    expect(
-      normalizeToolParameterSchema({
+  it.each(["first", "last"] as const)(
+    "normalizes OpenAPI annotations declared %s while preserving unchanged siblings",
+    (position) => {
+      const status = { type: "string", enum: ["available"] };
+      const annotations = { nullable: true, readOnly: true, example: "available" };
+      const unchanged = { allOf: [{ type: "string" }, { minLength: 1 }] };
+      const schema = {
         type: "object",
         properties: {
+          unchanged,
+          status:
+            position === "first" ? { ...annotations, ...status } : { ...status, ...annotations },
+        },
+      };
+      const original = JSON.stringify(schema);
+      expect(normalizeToolParameterSchema(schema)).toEqual({
+        type: "object",
+        properties: {
+          unchanged,
           status: {
-            type: "string",
-            enum: ["available"],
-            nullable: true,
-            readOnly: true,
-            example: "available",
+            type: ["string", "null"],
+            enum: ["available", null],
           },
         },
-      }),
-    ).toEqual({
-      type: "object",
-      properties: {
-        status: {
-          type: ["string", "null"],
-          enum: ["available", null],
-        },
-      },
-    });
-  });
+      });
+      expect(JSON.stringify(schema)).toBe(original);
+    },
+  );
 
   it("preserves schema properties named like OpenAPI annotations", () => {
     expect(
@@ -1020,11 +1040,9 @@ describe("normalizeToolParameters", () => {
     const wrapped = wrapToolWithBeforeToolCallHook(source, hookContext);
 
     const normalized = normalizeToolParameters(wrapped);
-    const tagged = normalized as unknown as Record<symbol, unknown>;
-
     expect(isToolWrappedWithBeforeToolCallHook(normalized)).toBe(true);
-    expect(tagged[beforeToolCallTesting.BEFORE_TOOL_CALL_SOURCE_TOOL]).toBe(source);
-    expect(tagged[beforeToolCallTesting.BEFORE_TOOL_CALL_HOOK_CONTEXT]).toBe(hookContext);
+    expect(getBeforeToolCallSourceTool(normalized)).toBe(source);
+    expect(getBeforeToolCallHookContext(normalized)).toBe(hookContext);
   });
 
   it("normalizes truly empty schemas to type:object with properties:{} (MCP parameter-free tools)", () => {

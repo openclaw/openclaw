@@ -105,31 +105,32 @@ describe("model-selection plugin runtime normalization", () => {
     expect(normalizeProviderModelIdWithPluginMock).not.toHaveBeenCalled();
   });
 
-  it("keeps provider plugin normalization when inferring provider for bare defaults", async () => {
-    normalizeProviderModelIdWithPluginMock.mockImplementation(normalizeLegacyFixtureModel);
+  it.each([true, false])(
+    "normalizes bare defaults with configured provider rows=%s",
+    async (hasRows) => {
+      normalizeProviderModelIdWithPluginMock.mockImplementation(normalizeLegacyFixtureModel);
 
-    const { resolveConfiguredModelRef } = await import("./model-selection.js");
+      const { resolveConfiguredModelRef } = await import("./model-selection.js");
 
-    expect(
-      resolveConfiguredModelRef({
-        cfg: {
-          agents: {
-            defaults: {
-              model: { primary: "custom-legacy-model" },
-              models: {
-                "custom-provider/custom-legacy-model": {},
+      expect(
+        resolveConfiguredModelRef({
+          cfg: {
+            agents: {
+              defaults: {
+                model: { primary: "custom-legacy-model" },
+                models: hasRows ? { "custom-provider/custom-legacy-model": {} } : {},
               },
             },
           },
-        },
-        defaultProvider: "openai",
-        defaultModel: "gpt-5.5",
-      }),
-    ).toEqual({
-      provider: "custom-provider",
-      model: "custom-modern-model",
-    });
-  });
+          defaultProvider: hasRows ? "openai" : "custom-provider",
+          defaultModel: "gpt-5.5",
+        }),
+      ).toEqual({
+        provider: "custom-provider",
+        model: "custom-modern-model",
+      });
+    },
+  );
 
   it.each([
     ["keeps model visibility policy construction off plugin runtime hooks by default", undefined],
@@ -160,6 +161,65 @@ describe("model-selection plugin runtime normalization", () => {
     }
   });
 
+  it("normalizes an unrestricted reply default before selecting it", async () => {
+    normalizeProviderModelIdWithPluginMock.mockImplementation(normalizeLegacyFixtureModel);
+    const cfg = {
+      agents: {
+        defaults: { model: "custom-provider/custom-legacy-model", modelPolicy: { allow: [] } },
+      },
+    };
+    const { resolveDefaultModel } =
+      await import("../auto-reply/reply/directive-handling.defaults.js");
+    const { defaultProvider, defaultModel } = resolveDefaultModel({ cfg });
+    const state = await createModelSelectionStateForTest({
+      agentId: "main",
+      cfg,
+      agentCfg: cfg.agents.defaults,
+      defaultProvider,
+      defaultModel,
+      provider: defaultProvider,
+      model: defaultModel,
+      hasModelDirective: false,
+    });
+
+    expect({ provider: state.provider, model: state.model }).toEqual({
+      provider: "custom-provider",
+      model: "custom-modern-model",
+    });
+  });
+
+  it("resolves bare reply defaults from the captured manifest once", async () => {
+    const cfg = { agents: { defaults: { model: "entry" } } };
+    const snapshot = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "fixture",
+          modelIdNormalization: {
+            providers: { openai: { aliases: { entry: "middle", middle: "final" } } },
+          },
+        },
+      ],
+    });
+    getCurrentPluginMetadataSnapshotMock.mockImplementation((params) =>
+      params?.config === cfg ? snapshot : undefined,
+    );
+    const { resolveDefaultModel } =
+      await import("../auto-reply/reply/directive-handling.defaults.js");
+    const { defaultProvider, defaultModel } = resolveDefaultModel({ cfg });
+    expect(defaultModel).toBe("middle");
+    const selection = await createModelSelectionStateForTest({
+      agentId: "main",
+      cfg,
+      agentCfg: cfg.agents.defaults,
+      defaultProvider,
+      defaultModel,
+      provider: defaultProvider,
+      model: defaultModel,
+      hasModelDirective: false,
+    });
+    expect(selection).toMatchObject({ provider: "openai", model: "middle" });
+  });
+
   it("keeps plugin-normalized stored overrides allowed in auto-reply runtime selection", async () => {
     // Stored session overrides are runtime inputs, so provider-owned
     // normalization keeps old persisted ids usable without resetting them.
@@ -184,6 +244,7 @@ describe("model-selection plugin runtime normalization", () => {
     const sessionStore = { [sessionKey]: sessionEntry };
 
     const state = await createModelSelectionStateForTest({
+      agentId: "main",
       cfg,
       agentCfg: cfg.agents.defaults,
       sessionEntry,
@@ -200,6 +261,66 @@ describe("model-selection plugin runtime normalization", () => {
     expect(state.model).toBe("custom-modern-model");
     expect(state.resetModelOverride).toBe(false);
   });
+
+  it.each(["session", "parent"])(
+    "resolves raw %s pins with captured manifest metadata",
+    async (source) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: "snapshot-fixture/default",
+            modelPolicy: { allow: ["snapshot-fixture/stored-modern"] },
+          },
+        },
+      };
+      const metadataSnapshot = createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "snapshot-fixture",
+            modelIdNormalization: {
+              providers: {
+                "snapshot-fixture": { aliases: { "stored-legacy": "stored-modern" } },
+              },
+            },
+          },
+        ],
+      });
+      getCurrentPluginMetadataSnapshotMock.mockImplementation((params) =>
+        params?.config === cfg ? metadataSnapshot : undefined,
+      );
+      const sessionKey = "agent:main:snapshot-child";
+      const parentSessionKey = "agent:main:snapshot-parent";
+      const storedEntry = {
+        sessionId: "snapshot-pin",
+        updatedAt: 1,
+        providerOverride: "snapshot-fixture",
+        modelOverride: "stored-legacy",
+      };
+      const sessionEntry =
+        source === "session" ? storedEntry : { sessionId: sessionKey, updatedAt: 1 };
+      const state = await createModelSelectionStateForTest({
+        agentId: "main",
+        cfg,
+        agentCfg: cfg.agents.defaults,
+        sessionEntry,
+        sessionStore: { [sessionKey]: sessionEntry, [parentSessionKey]: storedEntry },
+        sessionKey,
+        parentSessionKey: source === "parent" ? parentSessionKey : undefined,
+        defaultProvider: "snapshot-fixture",
+        defaultModel: "default",
+        provider: "snapshot-fixture",
+        model: "default",
+        hasModelDirective: false,
+      });
+
+      expect(state).toMatchObject({
+        provider: "snapshot-fixture",
+        model: "stored-modern",
+        resetModelOverride: false,
+      });
+      expect(storedEntry.modelOverride).toBe("stored-legacy");
+    },
+  );
 
   it("keeps resolved persisted overrides off plugin runtime hooks", () => {
     normalizeProviderModelIdWithPluginMock.mockReturnValue("incorrectly-renormalized-model");
@@ -255,6 +376,7 @@ describe("model-selection plugin runtime normalization", () => {
     };
 
     const state = await createModelSelectionStateForTest({
+      agentId: "main",
       cfg,
       agentCfg: cfg.agents.defaults,
       defaultProvider: "custom-provider",
@@ -302,6 +424,7 @@ describe("model-selection plugin runtime normalization", () => {
 
     const select = (cfg: ReturnType<typeof createConfig>, model: string) =>
       createModelSelectionStateForTest({
+        agentId: "main",
         cfg,
         agentCfg: cfg.agents.defaults,
         defaultProvider: "custom-provider",
@@ -366,6 +489,7 @@ describe("model-selection plugin runtime normalization", () => {
     };
 
     const state = await createModelSelectionStateForTest({
+      agentId: "main",
       cfg,
       agentCfg: cfg.agents.defaults,
       sessionEntry,

@@ -10,10 +10,13 @@
  * overwrite each other's tokens, registered commands, or handlers.
  */
 
+import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import type { MattermostConfig } from "../types.js";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 import {
+  createWebhookInFlightLimiter,
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
   sendHttpRequestRejection,
@@ -32,6 +35,9 @@ import {
 
 const MULTI_ACCOUNT_BODY_MAX_BYTES = 64 * 1024;
 const MULTI_ACCOUNT_BODY_TIMEOUT_MS = 5_000;
+const slashRouteInFlightLimiter = createWebhookInFlightLimiter();
+const SLASH_ROUTE_IN_FLIGHT_KEY = "mattermost:slash";
+const SLASH_AUTHENTICATED_IN_FLIGHT_KEY = `${SLASH_ROUTE_IN_FLIGHT_KEY}:authenticated`;
 type SlashHandler = ReturnType<typeof createSlashCommandHttpHandler>;
 type SlashHandlerMatchSource = "token" | "command";
 type SlashHandlerMatch =
@@ -87,14 +93,39 @@ function getSlashAccountStates(): Map<string, SlashCommandAccountState> {
 
 const accountStates = getSlashAccountStates();
 
-function resolveSlashHandlerForToken(token: string): SlashHandlerMatch {
+function resolveSlashRouteInFlightKey(authorization: string | undefined): string {
+  const token = authorization?.match(/^Token ([^,\s]+)$/iu)?.[1];
+  if (!token) {
+    return SLASH_ROUTE_IN_FLIGHT_KEY;
+  }
+
+  let matched = false;
+  for (const state of accountStates.values()) {
+    for (const commandToken of state.commandTokens) {
+      matched = safeEqualSecret(token, commandToken) || matched;
+    }
+  }
+
+  // Only known credentials create keys, never arbitrary headers or raw secrets.
+  // Distinct credentials stay isolated even when one startup token is later revoked.
+  return matched
+    ? `${SLASH_AUTHENTICATED_IN_FLIGHT_KEY}:${createHash("sha256")
+        .update(`${SLASH_AUTHENTICATED_IN_FLIGHT_KEY}:${token}`)
+        .digest("hex")}`
+    : SLASH_ROUTE_IN_FLIGHT_KEY;
+}
+
+function resolveSlashHandler(
+  source: SlashHandlerMatchSource,
+  matchesState: (state: SlashCommandAccountState) => boolean,
+): SlashHandlerMatch {
   const matches: Array<{
     accountId: string;
     handler: SlashHandler;
   }> = [];
 
   for (const [accountId, state] of accountStates) {
-    if (state.commandTokens.has(token) && state.handler) {
+    if (state.handler && matchesState(state)) {
       matches.push({ accountId, handler: state.handler });
     }
   }
@@ -109,7 +140,7 @@ function resolveSlashHandlerForToken(token: string): SlashHandlerMatch {
     }
     return {
       kind: "single",
-      source: "token",
+      source,
       handler: match.handler,
       accountIds: [match.accountId],
     };
@@ -117,7 +148,7 @@ function resolveSlashHandlerForToken(token: string): SlashHandlerMatch {
 
   return {
     kind: "ambiguous",
-    source: "token",
+    source,
     accountIds: matches.map((entry) => entry.accountId),
   };
 }
@@ -131,43 +162,9 @@ function resolveSlashHandlerForCommand(params: {
     return { kind: "none" };
   }
 
-  const matches: Array<{
-    accountId: string;
-    handler: SlashHandler;
-  }> = [];
-
-  for (const [accountId, state] of accountStates) {
-    if (
-      state.handler &&
-      state.registeredCommands.some(
-        (cmd) => cmd.teamId === params.teamId && cmd.trigger === trigger,
-      )
-    ) {
-      matches.push({ accountId, handler: state.handler });
-    }
-  }
-
-  if (matches.length === 0) {
-    return { kind: "none" };
-  }
-  if (matches.length === 1) {
-    const match = matches[0];
-    if (!match) {
-      return { kind: "none" };
-    }
-    return {
-      kind: "single",
-      source: "command",
-      handler: match.handler,
-      accountIds: [match.accountId],
-    };
-  }
-
-  return {
-    kind: "ambiguous",
-    source: "command",
-    accountIds: matches.map((entry) => entry.accountId),
-  };
+  return resolveSlashHandler("command", (state) =>
+    state.registeredCommands.some((cmd) => cmd.teamId === params.teamId && cmd.trigger === trigger),
+  );
 }
 
 /**
@@ -291,7 +288,11 @@ export function registerSlashCommandRoute(api: OpenClawPluginApi) {
     addCallbackPaths(accountCommandsRaw);
   }
 
-  const routeHandler = async (req: IncomingMessage, res: ServerResponse) => {
+  const dispatchRoute = async (
+    req: IncomingMessage,
+    res: ServerResponse,
+    onRequestAuthenticated: () => void,
+  ) => {
     if (accountStates.size === 0) {
       res.statusCode = 503;
       res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -322,7 +323,7 @@ export function registerSlashCommandRoute(api: OpenClawPluginApi) {
         );
         return;
       }
-      await state.handler(req, res);
+      await state.handler(req, res, undefined, onRequestAuthenticated);
       return;
     }
 
@@ -361,7 +362,9 @@ export function registerSlashCommandRoute(api: OpenClawPluginApi) {
       // parse failed — will be caught by handler
     }
 
-    let match: SlashHandlerMatch = token ? resolveSlashHandlerForToken(token) : { kind: "none" };
+    let match: SlashHandlerMatch = token
+      ? resolveSlashHandler("token", (state) => state.commandTokens.has(token))
+      : { kind: "none" };
     if (match.kind === "none") {
       const payload = parseSlashCommandPayload(bodyStr, ct);
       if (payload) {
@@ -406,7 +409,31 @@ export function registerSlashCommandRoute(api: OpenClawPluginApi) {
 
     // Routing already enforced the body limit. Retain the original transport
     // and pass those bytes forward instead of replaying a socket-less request.
-    await match.handler(req, res, bodyStr);
+    await match.handler(req, res, bodyStr, onRequestAuthenticated);
+  };
+
+  const routeHandler = async (req: IncomingMessage, res: ServerResponse) => {
+    // Header matching only selects a capacity pool. The handler still authenticates
+    // the body token and current command before releasing this admission guard.
+    const inFlightKey = resolveSlashRouteInFlightKey(req.headers.authorization);
+    if (!slashRouteInFlightLimiter.tryAcquire(inFlightKey)) {
+      await sendHttpRequestRejection(req, res, 429, "Too Many Requests");
+      return;
+    }
+
+    let released = false;
+    const release = () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      slashRouteInFlightLimiter.release(inFlightKey);
+    };
+    try {
+      await dispatchRoute(req, res, release);
+    } finally {
+      release();
+    }
   };
 
   for (const callbackPath of callbackPaths) {

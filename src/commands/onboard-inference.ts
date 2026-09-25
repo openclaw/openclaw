@@ -225,9 +225,7 @@ export async function detectInferenceBackends(
       credentials: true,
     });
   }
-  const envCandidates = detectAmbientInferenceBackends(env).filter(
-    (candidate) => candidate.kind === "openai-api-key" || candidate.kind === "anthropic-api-key",
-  );
+  const envCandidates = detectAmbientInferenceBackends(env);
 
   const [claudeProbe, codexProbe, geminiProbe] = await Promise.all([
     probe("claude"),

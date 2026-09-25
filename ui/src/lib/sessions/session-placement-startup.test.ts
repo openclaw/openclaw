@@ -17,6 +17,7 @@ const params = {
   agentId: "cloud",
   target: { kind: "profile", profileId: "aws" } as const,
   message: "run remotely",
+  mode: "dispatch" as const,
 };
 
 function clientWith(request: ReturnType<typeof vi.fn>): Pick<GatewayBrowserClient, "request"> {
@@ -292,6 +293,40 @@ describe("session placement startup", () => {
     expect(request).toHaveBeenCalledTimes(6);
   });
 
+  it.each(["gateway-suspending", "gateway-restarting"])(
+    "continues provisioning automatically after %s without reclaiming the worker",
+    async (reason) => {
+      vi.useFakeTimers();
+      try {
+        let unavailableReads = 0;
+        const request = vi.fn(async (method: string) => {
+          if (method === "sessions.dispatch") {
+            return { placement: { state: "provisioning" } };
+          }
+          if (method === "sessions.describe") {
+            if (unavailableReads++ < 8) {
+              throw new GatewayRequestError({
+                code: "UNAVAILABLE",
+                message: "Gateway temporarily unavailable",
+                retryable: true,
+                details: { reason },
+              });
+            }
+            return { session: { placement: { state: "active" } } };
+          }
+          return { status: "started" };
+        });
+        const outcome = startSessionPlacementInitialTurn(clientWith(request), params, () => true);
+        await vi.runAllTimersAsync();
+        await expect(outcome).resolves.toMatchObject({ status: "started" });
+        expect(request).not.toHaveBeenCalledWith("sessions.reclaim", expect.anything());
+        expect(request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it.each([
     {
       name: "reclaims the session placement",
@@ -336,25 +371,50 @@ describe("session placement startup", () => {
     }
   });
 
-  it("keeps a still-provisioning placement recoverable after reconciliation times out", async () => {
-    vi.useFakeTimers();
-    try {
-      const request = vi.fn().mockResolvedValue({
-        placement: { state: "provisioning", environmentId: "environment-slow" },
-        session: { placement: { state: "provisioning", environmentId: "environment-slow" } },
-      });
+  it.each(["pending", "unavailable", "pending then unavailable"] as const)(
+    "explains an unfinished placement without discarding it when the Gateway is %s",
+    async (observation) => {
+      vi.useFakeTimers();
+      try {
+        const pending = { state: "provisioning", environmentId: "environment-slow" };
+        const request = vi.fn();
+        if (observation === "pending") {
+          request.mockResolvedValue({ session: { placement: pending } });
+        } else {
+          request.mockRejectedValue(
+            new GatewayRequestError({
+              code: "UNAVAILABLE",
+              message: "gateway restarting",
+              retryable: true,
+              details: { reason: "gateway-restarting" },
+            }),
+          );
+        }
+        if (observation !== "unavailable") {
+          request.mockResolvedValueOnce({ session: { placement: pending } });
+        }
 
-      const outcome = startSessionPlacementInitialTurn(clientWith(request), params, () => true);
-      await vi.runAllTimersAsync();
-      await expect(outcome).resolves.toEqual({
-        status: "cleanup-rejected",
-        error: "session placement reconciliation timed out",
-      });
-      expect(request).not.toHaveBeenCalledWith("sessions.reclaim", expect.anything());
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+        const outcome = startSessionPlacementInitialTurn(
+          clientWith(request),
+          { ...params, mode: "recover" },
+          () => true,
+        );
+        await vi.runAllTimersAsync();
+        await expect(outcome).resolves.toEqual({
+          status: "cleanup-rejected",
+          error:
+            observation === "pending"
+              ? "Worker setup is still in progress. Retry to check the existing worker; your message has not been sent."
+              : "Could not confirm whether worker setup finished. Retry to check again; your message has not been sent.",
+        });
+        expect(request).not.toHaveBeenCalledWith("sessions.reclaim", expect.anything());
+        expect(request).not.toHaveBeenCalledWith("sessions.send", expect.anything());
+        expect(request).not.toHaveBeenCalledWith("sessions.dispatch", expect.anything());
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("keeps a cancelled placement recoverable when reclaim fails", async () => {
     const request = vi
@@ -535,7 +595,7 @@ describe("session placement startup", () => {
         {
           ...params,
           messageId: "message-recovered",
-          recovering: true,
+          mode: "recover",
         },
         () => true,
       ),
@@ -840,7 +900,7 @@ describe("session placement startup", () => {
     await expect(
       startSessionPlacementInitialTurn(
         clientWith(request),
-        { ...params, recovering: true, messageId: "recovery-message-1" },
+        { ...params, mode: "recover", messageId: "recovery-message-1" },
         () => true,
       ),
     ).resolves.toEqual({ status: "started", messageId: "recovery-message-1" });

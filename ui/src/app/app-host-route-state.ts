@@ -1,6 +1,5 @@
 import type { RouteLocation, RouterState } from "@openclaw/uirouter";
-import { isSessionRouteId } from "../app-route-paths.ts";
-import type { RouteId } from "../app-routes.ts";
+import { isSessionRouteId, sameRouteLocation, type RouteId } from "../app-route-paths.ts";
 import { selectRenderedRouteMatch } from "./router-outlet.ts";
 
 export type ShellRouteState = {
@@ -17,9 +16,12 @@ function sessionKeyFromRouteData(routeId: RouteId, data: unknown): string | unde
     return undefined;
   }
   const record = data as { kind?: unknown; sessionKey?: unknown };
-  return record.kind === "session" && typeof record.sessionKey === "string"
-    ? record.sessionKey.trim() || undefined
-    : undefined;
+  return (
+    (record.kind === "session" &&
+      typeof record.sessionKey === "string" &&
+      record.sessionKey.trim()) ||
+    undefined
+  );
 }
 
 export function selectShellRouteState(routerState: RouterState<RouteId>): ShellRouteState {
@@ -29,16 +31,24 @@ export function selectShellRouteState(routerState: RouterState<RouteId>): ShellR
     ? sessionKeyFromRouteData(committedMatch.routeId, committedMatch.data)
     : undefined;
   return {
-    ...(match
-      ? {
-          routeId: match.routeId,
-          location: match.location,
-          routeFailed: match.status === "error" || match.status === "notFound",
-        }
-      : {}),
-    ...(committedMatch
-      ? { committedRouteId: committedMatch.routeId, committedLocation: committedMatch.location }
-      : {}),
-    ...(committedSessionKey ? { committedSessionKey } : {}),
+    routeId: match?.routeId,
+    location: match?.location,
+    routeFailed: match
+      ? match.status === "error" || match.status === "notFound"
+      : routerState.status === "notFound" || undefined,
+    committedRouteId: committedMatch?.routeId,
+    committedLocation: committedMatch?.location,
+    committedSessionKey,
   };
+}
+
+export function equalShellRouteState(previous: ShellRouteState, next: ShellRouteState): boolean {
+  return (
+    previous.routeId === next.routeId &&
+    previous.routeFailed === next.routeFailed &&
+    sameRouteLocation(previous.location, next.location) &&
+    previous.committedRouteId === next.committedRouteId &&
+    sameRouteLocation(previous.committedLocation, next.committedLocation) &&
+    previous.committedSessionKey === next.committedSessionKey
+  );
 }

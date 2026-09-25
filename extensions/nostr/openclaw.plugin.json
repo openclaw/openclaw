@@ -1,5 +1,6 @@
 {
   "id": "nostr",
+  "categories": ["channels"],
   "doctorContract": {
     "stateMigrations": [
       { "id": "nostr-bus-state-json-to-plugin-state" },

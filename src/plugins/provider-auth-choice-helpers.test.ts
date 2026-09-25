@@ -92,6 +92,53 @@ describe("applyProviderAuthConfigPatch", () => {
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
 
+  it("preserves nested merge and replacement contracts without mutating inputs", () => {
+    const config = {
+      merged: { keep: "base", replace: "before" },
+      scalar: "before",
+      array: ["before"],
+      nullified: { keep: "before" },
+      replaced: { keep: "before" },
+      removed: "before",
+    };
+    const baseLocal = {
+      plugins: { entries: { example: { config } } },
+    } satisfies OpenClawConfig;
+    const before = structuredClone(baseLocal);
+    const replacement = JSON.parse(
+      '[{"safe":"after","__proto__":{"polluted":true},"constructor":{"polluted":true},"nested":{"prototype":{"polluted":true},"keep":true}}]',
+    );
+    const patch = {
+      plugins: {
+        entries: {
+          example: {
+            config: {
+              merged: { replace: "after" },
+              scalar: { added: true },
+              array: { added: true },
+              nullified: null,
+              replaced: replacement,
+              removed: undefined,
+            },
+          },
+        },
+      },
+    };
+
+    const next = applyProviderAuthConfigPatch(baseLocal, patch);
+
+    expect(next.plugins?.entries?.example?.config).toEqual({
+      merged: { keep: "base", replace: "after" },
+      scalar: { added: true },
+      array: { added: true },
+      nullified: null,
+      replaced: [{ safe: "after", nested: { keep: true } }],
+    });
+    expect(baseLocal).toEqual(before);
+    expect(Object.hasOwn(replacement[0], "__proto__")).toBe(true);
+    expect(Object.hasOwn(Object.prototype, "polluted")).toBe(false);
+  });
+
   it("keeps normal recursive merges for unrelated provider auth patch fields", () => {
     const baseLocal = {
       agents: {

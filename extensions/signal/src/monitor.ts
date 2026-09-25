@@ -1,4 +1,3 @@
-// Signal plugin module implements monitor behavior.
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-outbound";
@@ -13,7 +12,9 @@ import {
   estimateBase64DecodedBytes,
   saveMediaBuffer,
 } from "openclaw/plugin-sdk/media-runtime";
-import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
+// Signal plugin module implements monitor behavior.
+import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
+import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import {
   deliverTextOrMediaReply,
   resolveSendableOutboundReplyParts,
@@ -372,7 +373,7 @@ export async function deliverReplies(params: {
       sendMedia: ({ mediaUrl, caption }) => send(caption ?? "", mediaUrl),
     });
     if (delivered !== "empty") {
-      registerSignalReactionTargetsForDeliveredPayload({
+      await registerSignalReactionTargetsForDeliveredPayload({
         cfg: params.cfg,
         target: {
           channel: "signal",
@@ -396,11 +397,8 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
     cfg,
     accountId: opts.accountId,
   });
-  const historyLimit = Math.max(
-    0,
-    accountInfo.config.historyLimit ??
-      cfg.messages?.groupChat?.historyLimit ??
-      DEFAULT_GROUP_HISTORY_LIMIT,
+  const historyLimit = resolvePromptHistoryLimit(
+    accountInfo.config.historyLimit ?? cfg.messages?.groupChat?.historyLimit,
   );
   const groupHistories = new Map<string, HistoryEntry[]>();
   const textLimit = resolveTextChunkLimit(cfg, "signal", accountInfo.accountId);
@@ -436,6 +434,13 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
   const transportKind = accountInfo.transport.kind;
   const managedTransport =
     accountInfo.transport.kind === "managed-native" ? accountInfo.transport : undefined;
+  const socketPath = managedTransport?.socketPath;
+  if (
+    socketPath &&
+    (opts.baseUrl !== undefined || opts.httpHost !== undefined || opts.httpPort !== undefined)
+  ) {
+    throw new Error("Signal socket transport cannot be combined with HTTP endpoint overrides");
+  }
   const ignoreAttachments = opts.ignoreAttachments ?? accountInfo.config.ignoreAttachments ?? false;
   const sendReadReceipts = Boolean(opts.sendReadReceipts ?? accountInfo.config.sendReadReceipts);
   const waitForTransportReadyFn = opts.waitForTransportReady ?? waitForTransportReady;
@@ -471,6 +476,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       await assertSignalDaemonEndpointAvailable({
         httpHost,
         httpPort,
+        ...(socketPath ? { socketPath } : {}),
         abortSignal: endpointProbeSignal,
       });
     } catch (error) {
@@ -501,6 +507,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       account,
       httpHost,
       httpPort,
+      ...(socketPath ? { socketPath } : {}),
       receiveMode: opts.receiveMode ?? managedTransport?.receiveMode,
       ignoreAttachments: opts.ignoreAttachments ?? accountInfo.config.ignoreAttachments,
       ignoreStories: opts.ignoreStories ?? managedTransport?.ignoreStories,

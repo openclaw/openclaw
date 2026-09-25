@@ -7,8 +7,14 @@ import {
   releaseChatAttachmentPayloads,
   releaseDisplacedChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
+import type { ChatComposerRecoveryOwner } from "./chat-send-contract.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { storedChatOutboxScopeKey } from "./composer-persistence.ts";
+import type { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
+import {
+  CHAT_COMPOSER_DRAFT_STORAGE_ERROR,
+  loadChatComposerDraftRevision,
+  storedChatOutboxScopeKey,
+} from "./composer-persistence.ts";
 import type { ChatSplitLayout } from "./split-layout-types.ts";
 import { panesOf, visiblePanesOf } from "./split-layout.ts";
 
@@ -21,6 +27,8 @@ type ComposerPresentation = {
   presented: () => boolean;
   pause: () => void;
   resume: (restore?: boolean) => void;
+  takeAttachmentReads: () => ChatAttachmentReadLifecycle;
+  adoptAttachmentReads: (reads: ChatAttachmentReadLifecycle) => void;
 };
 type ComposerOwnerScope = {
   owner: NonNullable<ChatAttachmentGatewayOwner>;
@@ -36,9 +44,10 @@ export class ChatPaneComposerHandoff {
   private readonly presentations: Set<ChatPaneComposerHandoff>;
   private scope: ComposerOwnerScope | null;
   private ownsComposer = true;
+  private custody = Symbol("chat-composer-custody");
 
   constructor(
-    context: ApplicationContext,
+    private readonly context: ApplicationContext,
     private readonly host: ComposerPresentation,
   ) {
     let presentations = composerPresentations.get(context);
@@ -66,6 +75,42 @@ export class ChatPaneComposerHandoff {
     // Most recently presented wins when the same Home appeared in multiple splits.
     this.presentations.delete(this);
     this.presentations.add(this);
+  }
+
+  captureOwner(): ChatComposerRecoveryOwner | undefined {
+    const scope = this.currentScope();
+    if (!scope) {
+      return undefined;
+    }
+    const custody = this.custody;
+    const resolveOwner = () => {
+      const candidates = [this, ...[...this.presentations].toReversed()];
+      for (const candidate of candidates) {
+        if (
+          !this.presentations.has(candidate) ||
+          !candidate.ownsComposer ||
+          candidate.custody !== custody
+        ) {
+          continue;
+        }
+        const current = candidate.currentScope();
+        // Reconnect may retain payload custody; command completion separately
+        // fences draft mutation with its submitted client and connection epoch.
+        if (
+          current &&
+          (current.owner === scope.owner || current.owner.recoveryScopeReady) &&
+          candidate.matchesScope({ ...scope, owner: current.owner })
+        ) {
+          return candidate.host.state();
+        }
+      }
+      return undefined;
+    };
+    return {
+      resolveOwner,
+      retainedAttachmentIds: (attachments) =>
+        this.context.chatAttachmentHandoff.retainedAttachmentIds(attachments),
+    };
   }
 
   dispose(): void {
@@ -157,8 +202,11 @@ export class ChatPaneComposerHandoff {
     sourceState.chatQueuedEdit = null;
     sourceState.chatAttachments = [];
     sourceState.chatComposerFallbackByScope = {};
+    // Pending file reads move with the draft, including Send's preparation gate.
+    target.host.adoptAttachmentReads(this.host.takeAttachmentReads());
     this.ownsComposer = false;
     target.ownsComposer = true;
+    target.custody = this.custody;
     target.scope = target.currentScope();
     target.host.resume();
     sourceState.requestUpdate?.();
@@ -184,10 +232,18 @@ export function restorePaneStagedAttachments(
   if (!restored) {
     return;
   }
+  const current =
+    restored.draftRevision === undefined ||
+    restored.draftRevision >= loadChatComposerDraftRevision(state, state.sessionKey);
+  if (current && restored.draftRevision !== undefined) {
+    state.chatMessage = restored.message ?? "";
+    state.chatMentions = restored.mentions;
+    state.chatGoalDraftMode = restored.goalMode ?? null;
+  }
   const currentIds = new Set(state.chatAttachments.map((attachment) => attachment.id));
   state.chatAttachments = [
     ...state.chatAttachments,
-    ...restored.attachments.filter((attachment) => !currentIds.has(attachment.id)),
+    ...(current ? restored.attachments.filter((attachment) => !currentIds.has(attachment.id)) : []),
   ];
   const displaced = Object.entries(restored.fallbacks)
     .filter(([scopeKey]) => Object.hasOwn(state.chatComposerFallbackByScope, scopeKey))
@@ -196,10 +252,19 @@ export function restorePaneStagedAttachments(
     ...restored.fallbacks,
     ...state.chatComposerFallbackByScope,
   };
-  releaseDisplacedChatAttachmentPayloads(displaced, [
-    state.chatAttachments,
-    ...Object.values(state.chatComposerFallbackByScope).map((fallback) => fallback.attachments),
-  ]);
+  const currentFallback =
+    state.chatComposerFallbackByScope[handoffKey(paneId, state, owner).scopeKey];
+  if (current && currentFallback?.storageFailed) {
+    state.lastError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
+    state.chatError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
+  }
+  releaseDisplacedChatAttachmentPayloads(
+    [...displaced, ...(!current ? restored.attachments : [])],
+    [
+      state.chatAttachments,
+      ...Object.values(state.chatComposerFallbackByScope).map((fallback) => fallback.attachments),
+    ],
+  );
 }
 
 export function preparePaneStagedAttachments(
@@ -207,12 +272,17 @@ export function preparePaneStagedAttachments(
   paneId: string,
   state: ChatPageHost,
   owner: ChatAttachmentGatewayOwner,
+  draftRevision: number,
 ): void {
   const attachments = [...state.chatAttachments];
   context.chatAttachmentHandoff.prepare({
     ...handoffKey(paneId, state, owner),
     attachments,
     fallbacks: state.chatComposerFallbackByScope,
+    message: state.chatMessage,
+    mentions: state.chatMentions,
+    goalMode: state.chatGoalDraftMode,
+    draftRevision,
   });
 }
 

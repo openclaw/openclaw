@@ -11,11 +11,11 @@ struct DashboardBrowserRect: Codable, Equatable, Sendable {
 }
 
 enum DashboardBrowserAction: String, Equatable, Sendable {
-    case back, forward, reload, stop, close, snapshot
+    case back, forward, reload, stop, close, snapshot, download
 }
 
 enum DashboardBrowserRequest: Equatable, Sendable {
-    case open(tabId: String, url: URL, activate: Bool)
+    case open(tabId: String, url: URL, sessionKey: String?, activate: Bool)
     case navigate(tabId: String, url: URL)
     case action(DashboardBrowserAction, tabId: String)
     case present(scope: String, tabId: String?, rect: DashboardBrowserRect?, visible: Bool)
@@ -29,6 +29,8 @@ enum DashboardBrowserError: Error, LocalizedError {
     case duplicateTab
     case unavailable
     case captureFailed
+    case downloadFailed
+    case downloadInProgress
 
     var errorDescription: String? {
         switch self {
@@ -37,6 +39,8 @@ enum DashboardBrowserError: Error, LocalizedError {
         case .duplicateTab: "This Mac tab already exists."
         case .unavailable: "The native browser is no longer available."
         case .captureFailed: "Could not capture this Mac tab. Try again after the page loads."
+        case .downloadFailed: "Could not download this asset. Try again after the page loads."
+        case .downloadInProgress: "This tab already has a download in progress."
         }
     }
 }
@@ -66,8 +70,14 @@ final class DashboardBrowserMessageHandler: NSObject, WKScriptMessageHandlerWith
         switch type {
         case "open":
             let activate = try Self.boolean(payload["activate"] ?? true)
+            // Released UIs omit sessionKey; nil keeps their tabs window-owned, distinct
+            // from the empty shell scope. Remove when supported Mac/Gateway pairs all send it.
+            let sessionKey = try payload["sessionKey"].map { try Self.identifier($0, allowEmpty: true) }
             return try .open(
-                tabId: Self.identifier(payload["tabId"]), url: Self.url(payload["url"]), activate: activate)
+                tabId: Self.identifier(payload["tabId"]),
+                url: Self.url(payload["url"]),
+                sessionKey: sessionKey,
+                activate: activate)
         case "navigate":
             return try .navigate(tabId: Self.identifier(payload["tabId"]), url: Self.url(payload["url"]))
         case "present":
@@ -119,8 +129,8 @@ final class DashboardBrowserMessageHandler: NSObject, WKScriptMessageHandlerWith
         return url
     }
 
-    private nonisolated static func identifier(_ value: Any?) throws -> String {
-        guard let value = value as? String, !value.isEmpty,
+    private nonisolated static func identifier(_ value: Any?, allowEmpty: Bool = false) throws -> String {
+        guard let value = value as? String, allowEmpty || !value.isEmpty,
               value == value.trimmingCharacters(in: .whitespacesAndNewlines)
         else { throw DashboardBrowserError.invalidRequest }
         return value

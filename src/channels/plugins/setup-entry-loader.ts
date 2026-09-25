@@ -6,10 +6,8 @@ import {
   resolveSetupChannelRegistration,
 } from "../../plugins/loader-channel-setup.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
-import {
-  getCachedPluginModuleLoader,
-  preparePluginModule,
-} from "../../plugins/plugin-module-loader-cache.js";
+import { preparePluginModule } from "../../plugins/plugin-module-loader-cache.js";
+import { getPluginSetupModuleLoader } from "../../plugins/plugin-setup-module.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 
 const log = createSubsystemLogger("channels");
@@ -41,39 +39,29 @@ export function loadSetupChannelPluginFromManifestRecord(params: {
         env: params.env,
       }),
     });
-    const moduleLoader = getCachedPluginModuleLoader({
+    const moduleLoader = getPluginSetupModuleLoader(
+      params.record,
       modulePath,
-      rootDir: params.record.rootDir,
-      importerUrl: import.meta.url,
-      preferBuiltDist: true,
-      loaderFilename: import.meta.url,
-      tryNative: true,
-      cacheScopeKey: "read-only-setup-entry",
-    });
-    const registration = resolveSetupChannelRegistration(moduleLoader(modulePath));
-    if (registration.loadError) {
-      return {
-        failure: {
-          channelId: params.channelId,
+      params.record.rootDir,
+    );
+    return moduleLoader.initialize(() => {
+      const registration = resolveSetupChannelRegistration(moduleLoader(modulePath));
+      if ("loadError" in registration) {
+        // Preserve the plugin's original failure, including non-Error values.
+        throw registration.loadError;
+      }
+      if (
+        !registration.plugin ||
+        !channelPluginIdBelongsToManifest({
+          channelId: registration.plugin.id,
           pluginId: params.record.id,
-          source: params.record.setupSource,
-          message: `failed to load setup entry: ${formatErrorMessage(registration.loadError)}`,
-        },
-      };
-    }
-    if (!registration.plugin) {
-      return {};
-    }
-    if (
-      !channelPluginIdBelongsToManifest({
-        channelId: registration.plugin.id,
-        pluginId: params.record.id,
-        manifestChannels: params.record.channels,
-      })
-    ) {
-      return {};
-    }
-    return { plugin: registration.plugin };
+          manifestChannels: params.record.channels,
+        })
+      ) {
+        return {};
+      }
+      return { plugin: registration.plugin };
+    });
   } catch (error) {
     const detail = formatErrorMessage(error);
     log.warn(`[channels] failed to load channel setup ${params.record.id}: ${detail}`);

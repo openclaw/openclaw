@@ -1,4 +1,5 @@
-import { html } from "lit";
+import { html, nothing } from "lit";
+import { renderAgentRowChip } from "../../components/agent-row-chip.ts";
 import { t } from "../../i18n/index.ts";
 import type { SkillWorkshopProposal } from "../../lib/skill-workshop/index.ts";
 import type { SkillWorkshopProps } from "./view-types.ts";
@@ -29,7 +30,7 @@ export function renderSkillWorkshopProposalList(params: {
       <div class="sw-queue__body">
         ${
           total === 0
-            ? html`<div class="sw-queue__empty">${params.emptyText}</div>`
+            ? html`<div class="sw-queue__empty" role="status">${params.emptyText}</div>`
             : groups.map(
                 (group) => html`
                   <div class="sw-queue__group">
@@ -53,13 +54,16 @@ function renderProposalRow(
   const isSelected = selected?.key === proposal.key;
   return html`
     <button
+      type="button"
       class="sw-row ${isSelected ? "is-selected" : ""}"
+      aria-current=${isSelected ? "true" : nothing}
       @click=${() => props.onSelect(proposal.key)}
     >
       <span class="sw-row__dot"></span>
       <span>
         <span class="sw-row__title">${proposal.name}</span>
         <span class="sw-row__desc">${proposal.oneLine}</span>
+        ${proposal.origin?.agentId ? renderAgentRowChip(proposal.origin.agentId) : nothing}
       </span>
       <span class="sw-row__meta">${proposal.ageLabel}</span>
     </button>

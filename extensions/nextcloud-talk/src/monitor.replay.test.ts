@@ -42,6 +42,18 @@ async function invokeWebhookRequestListener(params: {
     let status = 0;
     const res = {
       headersSent: false,
+      writableFinished: false,
+      destroyed: false,
+      once() {
+        return this;
+      },
+      off() {
+        return this;
+      },
+      destroy() {
+        this.destroyed = true;
+        return this;
+      },
       writeHead(code: number) {
         status = code;
         this.headersSent = true;

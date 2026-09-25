@@ -2,6 +2,7 @@
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { DmScope, ReplyToMode } from "../config/types.base.js";
 import type { GroupToolPolicyConfig } from "../config/types.tools.js";
+import type { GatewayUiCommandTarget } from "../gateway/ui-command-target.types.js";
 import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
@@ -11,6 +12,7 @@ import type { PluginHookChannelContext } from "../plugins/hook-channel-context.t
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { CommandTurnContext } from "./command-turn-context.js";
 import type { CommandArgs } from "./commands-args.types.js";
+import type { GroupThreadMentionFacts } from "./group-thread.types.js";
 import type { HistoryEntry } from "./reply/history.types.js";
 import type { ReplyThreadingPolicy } from "./types.js";
 
@@ -55,6 +57,8 @@ export type ChannelStructuredContextEntry = {
 export type SessionTranscriptContext = {
   chatWindow?: boolean;
   historyLimit: number;
+  /** A platform-selected recent window keeps its configured bound and does not merge transcript rows. */
+  historyKind?: "pending" | "recent";
   beforeTimestampMs?: number;
   minTimestampMs?: number;
   senderLabels?: { assistant: string; user: string };
@@ -149,6 +153,8 @@ export type MsgContext = Partial<CanonicalInboundText> & {
    * id, such as selected-agent global sessions.
    */
   AgentId?: string;
+  /** Participant mention facts prepared once from the physical inbound message. */
+  GroupThread?: GroupThreadMentionFacts;
   /** Effective routed DM scope, including binding overrides. */
   DmScope?: DmScope;
   /**
@@ -307,7 +313,7 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   /** System-attached provenance for the current inbound message. */
   InputProvenance?: InputProvenance;
   /** Internal wake cause, independent of transport, transcript provenance, and execution authority. */
-  InternalTurnSource?: "heartbeat" | "cron" | "exec";
+  InternalTurnSource?: "heartbeat" | "cron" | "exec" | "progress-card-refresh";
   /** Explicit owner allowlist overrides (trusted, configuration-derived). */
   OwnerAllowFrom?: Array<string | number>;
   SenderName?: string;
@@ -376,6 +382,8 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   GatewayClientScopes?: string[];
   /** Gateway client capabilities when the message originates from the gateway. */
   GatewayClientCaps?: string[];
+  /** Server-bound requesting browser; never sourced from message text or rendered into prompts. */
+  GatewayUiCommandTarget?: GatewayUiCommandTarget;
   /** Run-scoped plugin tool bindings; never rendered into prompt text. */
   GatewayRunToolBindings?: Readonly<Record<string, unknown>>;
   /** Gateway device id allowed to review approvals initiated by this turn. */

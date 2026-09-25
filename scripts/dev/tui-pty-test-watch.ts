@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import { terminateManagedChild } from "../lib/managed-child-process.mts";
 import { sleep as delay } from "../lib/sleep.mjs";
 import { resolveVitestHomeSelection } from "../lib/vitest-home-selection.mts";
+import { resolveVitestNodeArgs } from "../lib/vitest-process-env.mts";
 import { spawnOwnedVitestProcess } from "../lib/vitest-process.mts";
 
 type Options = {
@@ -243,7 +244,7 @@ async function main(): Promise<void> {
     ),
     command: process.execPath,
     args: [
-      "--no-maglev",
+      ...resolveVitestNodeArgs(),
       resolveVitestCliEntry(),
       "run",
       "--config",

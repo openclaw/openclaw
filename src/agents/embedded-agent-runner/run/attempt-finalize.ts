@@ -19,6 +19,7 @@ import { isSignalTimeoutReason } from "../../failover-error.js";
 import { runAgentEndSideEffects } from "../../harness/agent-end-side-effects.js";
 import { finalizeHarnessContextEngineTurn } from "../../harness/context-engine-lifecycle.js";
 import type { AgentSession, SessionMessageEntry } from "../../sessions/index.js";
+import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { log } from "../logger.js";
 import { markActiveEmbeddedRunAbandoned, type EmbeddedAgentQueueHandle } from "../runs.js";
@@ -232,6 +233,12 @@ export async function completeEmbeddedAttemptAfterTurn(
           aborted: lifecycleState.aborted,
           yieldAborted,
           isHeartbeat: isHeartbeatLifecycleRunKind(attempt.bootstrapContextRunKind),
+          runtimeContext: {
+            provider: attempt.provider,
+            modelId: attempt.modelId,
+            modelContextWindow: attempt.modelContextWindow,
+            tokenBudget: attempt.contextTokenBudget,
+          },
         });
       }
     } else {
@@ -282,18 +289,23 @@ export async function completeEmbeddedAttemptAfterTurn(
     }
   }
 
-  if (!beforeAgentFinalizeRevisionReason) {
-    await withOwnedTranscriptWrite(async () => {
-      const lifecycleState = projectAgentRunAttemptTerminal(executionState.terminal);
-      if (
-        shouldPersistCompletedBootstrapTurn({
-          shouldRecordCompletedBootstrapTurn,
-          promptError,
-          aborted: lifecycleState.aborted,
-          timedOutDuringCompaction: lifecycleState.timedOutDuringCompaction,
-          compactionOccurredThisAttempt,
-        })
-      ) {
+  const shouldPersistBootstrapCompletion = () => {
+    const lifecycleState = projectAgentRunAttemptTerminal(executionState.terminal);
+    return shouldPersistCompletedBootstrapTurn({
+      shouldRecordCompletedBootstrapTurn,
+      promptError,
+      aborted: lifecycleState.aborted,
+      timedOutDuringCompaction: lifecycleState.timedOutDuringCompaction,
+      compactionOccurredThisAttempt,
+    });
+  };
+  if (!beforeAgentFinalizeRevisionReason && shouldPersistBootstrapCompletion()) {
+    await withOwnedTranscriptWrite(() =>
+      withSessionManagerWrite(sessionManager, () => {
+        // Cancellation can arrive while an eligible completion waits for its writer.
+        if (!shouldPersistBootstrapCompletion()) {
+          return;
+        }
         try {
           sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, {
             timestamp: Date.now(),
@@ -303,8 +315,8 @@ export async function completeEmbeddedAttemptAfterTurn(
         } catch (entryErr) {
           log.warn(`failed to persist bootstrap completion entry: ${String(entryErr)}`);
         }
-      }
-    });
+      }),
+    );
   }
 
   const lifecycleAfterTurn = projectAgentRunAttemptTerminal(executionState.terminal);

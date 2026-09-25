@@ -3,28 +3,12 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { isToolResultError } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
-import type { PersistedWorkboardCard, WorkboardKeyedStore } from "./persistence-types.js";
-import { WorkboardStore } from "./store.js";
+import {
+  createWorkboardSqliteTestHarness,
+  createWorkboardSqliteTestStore,
+} from "./test/sqlite-store.js";
 import { createWorkboardTools } from "./tools.js";
 import { guardWorkboardToolsForWorkspaceAccess } from "./workspace-access.js";
-
-function createMemoryStore<T = PersistedWorkboardCard>(): WorkboardKeyedStore<T> {
-  const entries = new Map<string, T>();
-  return {
-    async register(key, value) {
-      entries.set(key, value);
-    },
-    async lookup(key) {
-      return entries.get(key);
-    },
-    async delete(key) {
-      return entries.delete(key);
-    },
-    async entries() {
-      return [...entries].flatMap(([key, value]) => (value ? [{ key, value }] : []));
-    },
-  };
-}
 
 function readPayload(result: unknown): Record<string, unknown> {
   return (result as { details?: Record<string, unknown> }).details ?? {};
@@ -32,7 +16,7 @@ function readPayload(result: unknown): Record<string, unknown> {
 
 describe("workboard tools", () => {
   it("inherits the active tool filesystem boundary for workspace metadata", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const restrictedContext = {
       agentId: "main",
       workspaceDir: "/workspace",
@@ -109,7 +93,7 @@ describe("workboard tools", () => {
   });
 
   it("preserves read-only sandbox authority while allowing manual card movement", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const context: NonNullable<Parameters<typeof guardWorkboardToolsForWorkspaceAccess>[1]> = {
       agentId: "main",
       sessionKey: "agent:main:subagent:readonly",
@@ -147,8 +131,8 @@ describe("workboard tools", () => {
   });
 
   it("lists, claims, heartbeats, and reads worker context", async () => {
-    const keyed = createMemoryStore();
-    const workboardStore = new WorkboardStore(keyed);
+    const { store: workboardStore, stores } = createWorkboardSqliteTestHarness();
+    const keyed = stores.cards;
     const tools = createWorkboardTools({
       store: workboardStore,
       context: { agentId: "main", sessionKey: "session-1" },
@@ -228,9 +212,10 @@ describe("workboard tools", () => {
   });
 
   it("keeps blocked-card mutations out of the host tool failure contract", async () => {
-    const keyed = createMemoryStore();
+    const { store, stores } = createWorkboardSqliteTestHarness();
+    const keyed = stores.cards;
     const tools = createWorkboardTools({
-      store: new WorkboardStore(keyed),
+      store,
       context: { agentId: "main" },
     });
     const byName = new Map(tools.map((tool) => [tool.name, tool]));
@@ -284,8 +269,7 @@ describe("workboard tools", () => {
   });
 
   it("can share one store across tool instances for claim coordination", async () => {
-    const keyed = createMemoryStore();
-    const store = new WorkboardStore(keyed);
+    const store = createWorkboardSqliteTestStore();
     const mainTools = new Map(
       createWorkboardTools({
         store,
@@ -308,8 +292,7 @@ describe("workboard tools", () => {
   });
 
   it("requires claim scope before creating or linking dependencies against claimed cards", async () => {
-    const keyed = createMemoryStore();
-    const store = new WorkboardStore(keyed);
+    const store = createWorkboardSqliteTestStore();
     const mainTools = new Map(
       createWorkboardTools({
         store,
@@ -352,7 +335,7 @@ describe("workboard tools", () => {
       token: claimed.token,
     });
     const child = await store.create({ title: "Claimed child" });
-    await store.claim(child.id, { ownerId: "main", token: "child-token" });
+    await store.claim(child.id, { ownerId: "child-worker", token: "child-token" });
     await expect(
       otherTools.get("workboard_link")?.execute("call-3", {
         parentId: parent.id,
@@ -379,8 +362,7 @@ describe("workboard tools", () => {
   });
 
   it("creates dependent cards and completes claimed work through tools", async () => {
-    const keyed = createMemoryStore();
-    const store = new WorkboardStore(keyed);
+    const store = createWorkboardSqliteTestStore();
     const tools = new Map(
       createWorkboardTools({
         store,
@@ -457,8 +439,7 @@ describe("workboard tools", () => {
   });
 
   it("redacts claim tokens from dispatch tool results", async () => {
-    const keyed = createMemoryStore();
-    const store = new WorkboardStore(keyed);
+    const store = createWorkboardSqliteTestStore();
     const tools = new Map(
       createWorkboardTools({
         store,
@@ -493,8 +474,7 @@ describe("workboard tools", () => {
   });
 
   it("exposes board lifecycle, decomposition, runs, and notification tools", async () => {
-    const keyed = createMemoryStore();
-    const store = new WorkboardStore(keyed);
+    const store = createWorkboardSqliteTestStore();
     const tools = new Map(
       createWorkboardTools({
         store,
@@ -627,7 +607,7 @@ describe("workboard tools", () => {
   });
 
   it("moves cards with agent claim scope", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const tools = new Map(
       createWorkboardTools({ store, context: { agentId: "agent-b" } }).map((tool) => [
         tool.name,

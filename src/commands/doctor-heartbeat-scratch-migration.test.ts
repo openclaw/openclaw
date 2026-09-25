@@ -11,7 +11,10 @@ import {
   resolveCronJobsStorePath,
   resolveCronJobsStorePathFromConfig,
 } from "../cron/store.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import {
   collectHeartbeatScratchMigrationFindings,
   maybeMigrateHeartbeatFilesToScratch,
@@ -28,6 +31,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
   if (originalHome === undefined) {

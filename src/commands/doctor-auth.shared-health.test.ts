@@ -18,7 +18,7 @@ import { collectAuthProfileHealthFindings, noteAuthProfileHealth } from "./docto
 import { createDoctorPrompter } from "./doctor-prompter.js";
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
-const cliCredentials = vi.hoisted(() => ({ readCodex: vi.fn() }));
+const cliCredentials = vi.hoisted(() => ({ readCodex: vi.fn(), readMiniMax: vi.fn() }));
 const refreshProfile = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock("../agents/auth-profiles.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/auth-profiles.js")>()),
@@ -26,12 +26,13 @@ vi.mock("../agents/auth-profiles.js", async (importOriginal) => ({
 }));
 vi.mock("../agents/cli-credentials.js", () => ({
   readCodexCliCredentialsCached: cliCredentials.readCodex,
-  readMiniMaxCliCredentialsCached: () => null,
+  readMiniMaxCliCredentialsCached: cliCredentials.readMiniMax,
 }));
 
 afterEach(() => {
   vi.clearAllMocks();
   cliCredentials.readCodex.mockReset();
+  cliCredentials.readMiniMax.mockReset();
 });
 
 describe("Doctor shared auth health", () => {
@@ -145,7 +146,7 @@ describe("Doctor shared auth health", () => {
     });
   });
 
-  it("preserves external CLI overlays when checking an agent-local auth store", async () => {
+  it("reports a missing host profile without importing the native Codex account", async () => {
     await withOpenClawTestState({ prefix: "openclaw-doctor-cli-auth-" }, async (state) => {
       const cfg: OpenClawConfig = {
         agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } },
@@ -168,10 +169,50 @@ describe("Doctor shared auth health", () => {
         expires: Date.now() + 7 * 86_400_000,
       });
 
-      expect(await collectAuthProfileHealthFindings({ cfg })).toEqual([]);
-      expect(cliCredentials.readCodex).toHaveBeenCalledWith(
-        expect.objectContaining({ allowKeychainPrompt: false }),
+      expect(await collectAuthProfileHealthFindings({ cfg })).toEqual([
+        expect.objectContaining({
+          target: "openai:default",
+          requirement: "missing_credential",
+          fixHint: expect.stringContaining("openclaw models auth login --provider openai"),
+        }),
+      ]);
+      expect(cliCredentials.readCodex).not.toHaveBeenCalled();
+    });
+  });
+
+  it("preserves supported external CLI overlays when checking an agent-local auth store", async () => {
+    await withOpenClawTestState({ prefix: "openclaw-doctor-minimax-auth-" }, async (state) => {
+      const cfg: OpenClawConfig = {
+        agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } },
+        plugins: { enabled: false },
+      };
+      await state.writeConfig(cfg);
+      writeConfigMachineState("auth.sharedStore", { location: "state-db" });
+      writePersistedAuthProfileStoreRaw(
+        {
+          version: 1,
+          profiles: {
+            "minimax-portal:minimax-cli": {
+              type: "oauth",
+              provider: "minimax-portal",
+              accountId: "synthetic-cli-account",
+              expires: 1,
+            },
+          },
+        },
+        state.agentDir("alpha"),
       );
+      cliCredentials.readMiniMax.mockReturnValue({
+        type: "oauth",
+        provider: "minimax-portal",
+        accountId: "synthetic-cli-account",
+        access: "synthetic-cli-access",
+        refresh: "synthetic-cli-refresh",
+        expires: Date.now() + 7 * 86_400_000,
+      });
+
+      expect(await collectAuthProfileHealthFindings({ cfg })).toEqual([]);
+      expect(cliCredentials.readCodex).not.toHaveBeenCalled();
     });
   });
 

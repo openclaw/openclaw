@@ -39,12 +39,14 @@ type GatewayStartupActivationParams = PluginStartupActivationParams & {
   configuredGenerationProviderIds: ConfiguredGenerationProviderIds;
   configuredVoiceProviderIds: ConfiguredVoiceProviderIds;
   configuredMemoryEmbeddingProviderIds: ReadonlySet<string>;
+  configuredDecisionProviderIds: ReadonlySet<string>;
 };
 
 type StartupActivationPolicy =
   | "provider"
   | "implicit-external"
   | "worker"
+  | "decision"
   | "speech"
   | "root"
   | "harness"
@@ -54,6 +56,7 @@ type StartupContractKey =
   | keyof ConfiguredGenerationProviderIds
   | keyof ConfiguredVoiceProviderIds
   | "embeddingProviders"
+  | "decisionProviders"
   | "webSearchProviders";
 
 export function addRequiredAgentHarnessPluginIds(
@@ -175,7 +178,11 @@ function passesPluginStartupPolicy(
   }
   const activationState = resolveStartupActivationState(
     params,
-    policy === "worker" ? "cloud worker provider required" : undefined,
+    policy === "worker"
+      ? "cloud worker provider required"
+      : policy === "decision"
+        ? "decision model selected"
+        : undefined,
     isProviderCompatStartupPolicy(policy) &&
       isBundledProviderCompatPlugin({
         origin: plugin.origin,
@@ -186,7 +193,7 @@ function passesPluginStartupPolicy(
   if (!activationState.enabled) {
     return false;
   }
-  if (policy === "harness" || policy === "implicit-external") {
+  if (policy === "harness" || policy === "implicit-external" || policy === "decision") {
     return true;
   }
   if (policy === "hook") {
@@ -226,6 +233,11 @@ const GATEWAY_STARTUP_ACTIVATION_POLICIES: readonly {
   policy: StartupActivationPolicy;
   matches: (params: GatewayStartupActivationParams) => boolean;
 }[] = [
+  {
+    policy: "decision",
+    matches: ({ manifest, configuredDecisionProviderIds }) =>
+      manifestOwnsConfiguredContract(manifest, "decisionProviders", configuredDecisionProviderIds),
+  },
   {
     policy: "harness",
     matches: ({ plugin, requiredAgentHarnessRuntimes }) =>

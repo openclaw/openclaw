@@ -4,7 +4,7 @@ import type {
   ModelChoice,
   ModelsListParams,
   ModelsListResult,
-} from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
+} from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
 import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/server-capabilities.js";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { modelKey } from "../../agents/model-ref-shared.js";
@@ -14,11 +14,10 @@ import { getRuntimeConfig } from "../../config/config.js";
 import { callGateway, isImplicitLocalGatewayTarget } from "../../gateway/call.js";
 import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import { ensureFlagCompatibility } from "./list.options.js";
 import { printModelTable } from "./list.table.js";
 import type { ModelRow } from "./list.types.js";
 import { loadModelsConfigWithSource } from "./load-config.js";
-import { resolveModelsTargetAgent } from "./shared.js";
+import { ensureFlagCompatibility, resolveModelsTargetAgent } from "./shared.js";
 
 // The catalog worker permits three minutes; leave room for connection and result projection.
 const MODEL_CATALOG_REFRESH_TIMEOUT_MS = 210_000;
@@ -131,7 +130,10 @@ export async function modelsListCommand(
       },
     );
   }
-  if (opts.refresh && result.providerOutcomes?.some((outcome) => outcome.status !== "ready")) {
+  if (
+    result.refreshFailed ||
+    (opts.refresh && result.providerOutcomes?.some((outcome) => outcome.status !== "ready"))
+  ) {
     runtime.error(
       "Model discovery could not refresh all providers. Showing the available published model list.",
     );

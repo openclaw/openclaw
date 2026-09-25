@@ -4,7 +4,7 @@ import {
   type ChannelSetupInput,
 } from "openclaw/plugin-sdk/channel-setup";
 import { normalizeSecretInputString } from "openclaw/plugin-sdk/secret-input";
-// Slack plugin module implements setup core behavior.
+import { patchTopLevelChannelConfigSection } from "openclaw/plugin-sdk/setup";
 import {
   createAccountScopedAllowFromSection,
   createAccountScopedGroupAccessSection,
@@ -13,7 +13,6 @@ import {
   createStandardChannelSetupStatus,
   DEFAULT_ACCOUNT_ID,
   defineTokenCredential,
-  parseMentionOrPrefixedId,
   patchChannelConfigForAccount,
   setSetupChannelEnabled,
   createSetupTranslator,
@@ -27,6 +26,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { inspectSlackAccount } from "./account-inspect.js";
 import {
   buildSlackManifest,
+  buildSlackAllowFromPrompt,
   buildSlackSetupLines,
   SLACK_CHANNEL as channel,
   setSlackChannelAllowlist,
@@ -74,15 +74,12 @@ function setSlackSetupIdentity(params: {
     return next;
   }
   if (params.accountId === DEFAULT_ACCOUNT_ID) {
-    const nextSlack = { ...slack };
-    delete nextSlack.postAs;
-    return {
-      ...next,
-      channels: {
-        ...next.channels,
-        slack: nextSlack,
-      },
-    } as OpenClawConfig;
+    return patchTopLevelChannelConfigSection({
+      cfg: next,
+      channel,
+      clearFields: ["postAs"],
+      patch: {},
+    });
   }
 
   const account = slack.accounts?.[params.accountId];
@@ -97,19 +94,16 @@ function setSlackSetupIdentity(params: {
   } else {
     delete nextAccount.postAs;
   }
-  return {
-    ...next,
-    channels: {
-      ...next.channels,
-      slack: {
-        ...slack,
-        accounts: {
-          ...slack.accounts,
-          [params.accountId]: nextAccount,
-        },
+  return patchTopLevelChannelConfigSection({
+    cfg: next,
+    channel,
+    patch: {
+      accounts: {
+        ...slack.accounts,
+        [params.accountId]: nextAccount,
       },
     },
-  } as OpenClawConfig;
+  });
 }
 
 function createSlackTokenCredential(params: {
@@ -435,26 +429,7 @@ export function createSlackSetupWizardBase(handlers: {
     dmPolicy: slackDmPolicy,
     allowFrom: createAccountScopedAllowFromSection({
       channel,
-      helpTitle: t("wizard.slack.allowlistTitle"),
-      helpLines: [
-        t("wizard.slack.allowlistIntro"),
-        t("wizard.slack.examples"),
-        "- U12345678",
-        "- @alice",
-        t("wizard.slack.multipleEntries"),
-        t("wizard.channels.docs", { link: formatDocsLink("/slack", "slack") }),
-      ],
-      message: t("wizard.slack.allowFromPrompt"),
-      placeholder: "@alice, U12345678",
-      invalidWithoutCredentialNote: t("wizard.slack.allowFromInvalidWithoutToken"),
-      parseId: (value: string) =>
-        parseMentionOrPrefixedId({
-          value,
-          mentionPattern: /^<@([A-Z0-9]+)>$/i,
-          prefixPattern: /^(slack:|user:)/i,
-          idPattern: /^[A-Z][A-Z0-9]+$/i,
-          normalizeId: (id) => id.toUpperCase(),
-        }),
+      ...buildSlackAllowFromPrompt(),
       resolveEntries: handlers.resolveAllowFromEntries,
     }),
     groupAccess: createAccountScopedGroupAccessSection({

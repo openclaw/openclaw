@@ -6,6 +6,8 @@
     <string name="controls" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"控制項"</string>
     <string name="talk" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"語音對話"</string>
     <string name="real_time_audio_failed" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"手錶音訊失敗"</string>
+    <string name="microphone_permission_required" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"需要麥克風權限"</string>
+    <string name="open_settings" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"開啟設定"</string>
     <string name="dictate" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"聽寫"</string>
     <string name="live" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"即時"</string>
     <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"討論串"</string>
@@ -26,6 +28,7 @@
     <string name="speak_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"朗讀最新回覆"</string>
     <string name="speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"正在朗讀"</string>
     <string name="listening" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"正在聆聽"</string>
+    <string name="stopping" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"正在結束通話…"</string>
     <string name="connecting" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"正在連線"</string>
     <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"思考中"</string>
     <string name="typing" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"輸入中"</string>
@@ -79,6 +82,8 @@
     <string name="message_not_sent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"動作未被接受"</string>
     <string name="something_went_wrong" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"發生錯誤"</string>
     <string name="refresh_and_try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"請重新整理清單，然後再試一次。"</string>
+    <string name="model_catalog_refresh_failed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"部分模型無法重新整理。清單中的模型仍可使用。"</string>
+    <string name="model_catalog_update_required" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"請更新手機上的 OpenClaw 和 Gateway，以便為此對話選擇模型。"</string>
     <string name="try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"請從手錶再試一次。"</string>
     <string name="update_required" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"需要更新"</string>
     <string name="update_required_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"請更新手機和手錶上的 OpenClaw。"</string>
@@ -121,4 +126,14 @@
     <string name="pulse_phase_counts" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"已排入佇列 %1$d，執行中 %2$d，已完成 %3$d，失敗 %4$d，已隱藏 %5$d"</string>
     <string name="pulse_more_phases" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"尚有更多階段未顯示"</string>
     <string name="pulse_unknown" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"未知"</string>
+    <string name="read_full_reply" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"閱讀完整回覆"</string>
+    <string name="reply_stream_preview" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"即時預覽。回覆完成後即可閱讀完整內容。"</string>
+    <string name="reply_previous_page" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"上一部分"</string>
+    <string name="reply_next_page" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"下一部分"</string>
+    <string name="reply_loading" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"正在載入完整回覆…"</string>
+    <string name="reply_unsupported" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"請更新手機應用程式和 Gateway，以閱讀完整回覆。"</string>
+    <string name="reply_too_large" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"這則回覆太長，無法在這裡閱讀。請在手機上開啟。"</string>
+    <string name="reply_changed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"回覆或連線已變更。請從頭重試。"</string>
+    <string name="reply_unavailable" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"全文已無法取得。"</string>
+    <string name="reply_failed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"無法載入完整回覆。請再試一次。"</string>
 </resources>

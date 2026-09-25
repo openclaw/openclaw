@@ -4,18 +4,20 @@
  * Registers endpoints that wait for a pending download or trigger a referenced
  * page download while keeping files scoped to the configured downloads root.
  */
-import { formatErrorMessage } from "../../infra/errors.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
+import { ensureOutputDirectory } from "../output-directories.js";
+import { DEFAULT_DOWNLOAD_DIR } from "../paths.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import {
+  browserNavigationPolicyForProfile,
   readBody,
   requirePwAi,
   resolveTargetIdFromBody,
   withRouteTabContext,
 } from "./agent.shared.js";
 import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
-import { ensureOutputRootDir, resolveWritableOutputPathOrRespond } from "./output-paths.js";
-import { DEFAULT_DOWNLOAD_DIR } from "./path-output.js";
+import { resolveWritableOutputPathOrRespond } from "./output-paths.js";
 import { readRouteTimerTimeoutMs } from "./route-numeric.js";
 import type { BrowserRouteRegistrar } from "./types.js";
 import { jsonError, toStringOrEmpty } from "./utils.js";
@@ -50,7 +52,7 @@ export function registerBrowserAgentActDownloadRoutes(
       ctx,
       targetId,
       enforceCurrentUrlAllowed: true,
-      run: async ({ profileCtx, cdpUrl, tab, signal }) => {
+      run: async ({ profileCtx, cdpUrl, tab, signal, assertCurrent }) => {
         if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
           return jsonError(res, 501, EXISTING_SESSION_LIMITS.download.waitUnsupported);
         }
@@ -58,7 +60,7 @@ export function registerBrowserAgentActDownloadRoutes(
         if (!pw) {
           return;
         }
-        await ensureOutputRootDir(DEFAULT_DOWNLOAD_DIR);
+        await ensureOutputDirectory(DEFAULT_DOWNLOAD_DIR);
         let downloadPath: string | undefined;
         if (out.trim()) {
           const resolvedDownloadPath = await resolveWritableOutputPathOrRespond({
@@ -75,9 +77,11 @@ export function registerBrowserAgentActDownloadRoutes(
         const requestBase = buildDownloadRequestBase(cdpUrl, tab.targetId, timeoutMs);
         const result = await pw.waitForDownloadViaPlaywright({
           ...requestBase,
+          ...browserNavigationPolicyForProfile(ctx, profileCtx),
           path: downloadPath,
           rootDir: DEFAULT_DOWNLOAD_DIR,
           signal,
+          ...(assertCurrent ? { assertCurrent } : {}),
         });
         res.json({ ok: true, targetId: tab.targetId, download: result });
       },
@@ -89,16 +93,30 @@ export function registerBrowserAgentActDownloadRoutes(
     const targetId = resolveTargetIdFromBody(body);
     const ref = toStringOrEmpty(body.ref);
     const out = toStringOrEmpty(body.path);
+    const currentDocument = body.currentDocument === true;
+    const expectedUrl = typeof body.expectedUrl === "string" ? body.expectedUrl : "";
     let timeoutMs: number | undefined;
     try {
       timeoutMs = readRouteTimerTimeoutMs(body.timeoutMs);
     } catch (err) {
       return jsonError(res, 400, formatErrorMessage(err));
     }
-    if (!ref) {
+    if (body.currentDocument !== undefined && typeof body.currentDocument !== "boolean") {
+      return jsonError(res, 400, "currentDocument must be a boolean");
+    }
+    if (currentDocument && (body.ref !== undefined || body.path !== undefined)) {
+      return jsonError(res, 400, "currentDocument cannot be combined with ref or path");
+    }
+    if (currentDocument && !expectedUrl.trim()) {
+      return jsonError(res, 400, "expectedUrl is required for currentDocument");
+    }
+    if (!currentDocument && body.expectedUrl !== undefined) {
+      return jsonError(res, 400, "expectedUrl requires currentDocument");
+    }
+    if (!currentDocument && !ref) {
       return jsonError(res, 400, "ref is required");
     }
-    if (!out) {
+    if (!currentDocument && !out) {
       return jsonError(res, 400, "path is required");
     }
 
@@ -108,7 +126,7 @@ export function registerBrowserAgentActDownloadRoutes(
       ctx,
       targetId,
       enforceCurrentUrlAllowed: true,
-      run: async ({ profileCtx, cdpUrl, tab, signal }) => {
+      run: async ({ profileCtx, cdpUrl, tab, signal, assertCurrent }) => {
         if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
           return jsonError(res, 501, EXISTING_SESSION_LIMITS.download.downloadUnsupported);
         }
@@ -116,7 +134,20 @@ export function registerBrowserAgentActDownloadRoutes(
         if (!pw) {
           return;
         }
-        await ensureOutputRootDir(DEFAULT_DOWNLOAD_DIR);
+        await ensureOutputDirectory(DEFAULT_DOWNLOAD_DIR);
+        const requestBase = buildDownloadRequestBase(cdpUrl, tab.targetId, timeoutMs);
+        if (currentDocument) {
+          const result = await pw.downloadCurrentDocumentViaPlaywright({
+            ...requestBase,
+            ...browserNavigationPolicyForProfile(ctx, profileCtx),
+            expectedUrl,
+            rootDir: DEFAULT_DOWNLOAD_DIR,
+            signal,
+            ...(assertCurrent ? { assertCurrent } : {}),
+          });
+          res.json({ ok: true, targetId: tab.targetId, download: result });
+          return;
+        }
         const downloadPath = await resolveWritableOutputPathOrRespond({
           res,
           rootDir: DEFAULT_DOWNLOAD_DIR,
@@ -126,13 +157,14 @@ export function registerBrowserAgentActDownloadRoutes(
         if (!downloadPath) {
           return;
         }
-        const requestBase = buildDownloadRequestBase(cdpUrl, tab.targetId, timeoutMs);
         const result = await pw.downloadViaPlaywright({
           ...requestBase,
+          ...browserNavigationPolicyForProfile(ctx, profileCtx),
           ref,
           path: downloadPath,
           rootDir: DEFAULT_DOWNLOAD_DIR,
           signal,
+          ...(assertCurrent ? { assertCurrent } : {}),
         });
         res.json({ ok: true, targetId: tab.targetId, download: result });
       },

@@ -132,10 +132,7 @@ function estimateTranscriptMessageChars(message: unknown): number {
   }, 0);
 }
 
-export function aggregateSessionTranscriptUsage(
-  messages: unknown[],
-  source: TranscriptUsageSource = "sqlite",
-): SessionTranscriptUsageSnapshot | null {
+export function createSessionTranscriptUsageAccumulator(source: TranscriptUsageSource = "sqlite") {
   const aggregate: SessionTranscriptUsageSnapshot = {};
   let sawUsage = false;
   let inputTokens = 0;
@@ -150,7 +147,7 @@ export function aggregateSessionTranscriptUsage(
   let sawCost = false;
   let estimatedTranscriptChars = 0;
   let sawEstimateModelIdentity = false;
-  for (const message of messages) {
+  const add = (message: unknown): void => {
     if (source === "artifact" && isRecord(message)) {
       const provider = typeof message.provider === "string" ? message.provider.trim() : undefined;
       const model = typeof message.model === "string" ? message.model.trim() : undefined;
@@ -166,7 +163,7 @@ export function aggregateSessionTranscriptUsage(
     }
     const snapshot = extractTranscriptUsageSnapshot(message, source);
     if (!snapshot) {
-      continue;
+      return;
     }
     sawUsage = true;
     if (snapshot.modelProvider) {
@@ -209,37 +206,51 @@ export function aggregateSessionTranscriptUsage(
       costUsd += snapshot.costUsd;
       sawCost = true;
     }
-  }
-  if (!sawUsage) {
-    return null;
-  }
-  if (sawInput) {
-    aggregate.inputTokens = inputTokens;
-  }
-  if (sawOutput) {
-    aggregate.outputTokens = outputTokens;
-  }
-  if (sawCacheRead) {
-    aggregate.cacheRead = cacheRead;
-  }
-  if (sawCacheWrite) {
-    aggregate.cacheWrite = cacheWrite;
-  }
-  if (sawCost) {
-    aggregate.costUsd = costUsd;
-  }
-  if (
-    source === "artifact" &&
-    typeof aggregate.totalTokens !== "number" &&
-    aggregate.contextUsage?.state !== "unavailable" &&
-    estimatedTranscriptChars > 0 &&
-    sawEstimateModelIdentity
-  ) {
-    const estimatedTotalTokens = estimateTokensFromChars(estimatedTranscriptChars);
-    if (estimatedTotalTokens > 0) {
-      aggregate.totalTokens = estimatedTotalTokens;
-      aggregate.totalTokensFresh = true;
+  };
+  const finish = (): SessionTranscriptUsageSnapshot | null => {
+    if (!sawUsage) {
+      return null;
     }
+    if (sawInput) {
+      aggregate.inputTokens = inputTokens;
+    }
+    if (sawOutput) {
+      aggregate.outputTokens = outputTokens;
+    }
+    if (sawCacheRead) {
+      aggregate.cacheRead = cacheRead;
+    }
+    if (sawCacheWrite) {
+      aggregate.cacheWrite = cacheWrite;
+    }
+    if (sawCost) {
+      aggregate.costUsd = costUsd;
+    }
+    if (
+      source === "artifact" &&
+      typeof aggregate.totalTokens !== "number" &&
+      aggregate.contextUsage?.state !== "unavailable" &&
+      estimatedTranscriptChars > 0 &&
+      sawEstimateModelIdentity
+    ) {
+      const estimatedTotalTokens = estimateTokensFromChars(estimatedTranscriptChars);
+      if (estimatedTotalTokens > 0) {
+        aggregate.totalTokens = estimatedTotalTokens;
+        aggregate.totalTokensFresh = true;
+      }
+    }
+    return aggregate;
+  };
+  return { add, finish };
+}
+
+export function aggregateSessionTranscriptUsage(
+  messages: unknown[],
+  source: TranscriptUsageSource = "sqlite",
+): SessionTranscriptUsageSnapshot | null {
+  const usage = createSessionTranscriptUsageAccumulator(source);
+  for (const message of messages) {
+    usage.add(message);
   }
-  return aggregate;
+  return usage.finish();
 }

@@ -1,11 +1,15 @@
 // Focused incomplete-turn behavior coverage.
 import { describe, expect, it } from "vitest";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,
 } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { isIncompleteTerminalAssistantTurn } from "./incomplete-turn-classification.js";
-import { resolveSettledToolTerminalContinuationInstruction } from "./incomplete-turn-recovery.js";
+import {
+  resolveSettledToolBatchEvidence,
+  resolveSettledToolTerminalContinuationInstruction,
+} from "./incomplete-turn-recovery.js";
 import { resolveReplayInvalidFlag, resolveRunLivenessState } from "./incomplete-turn-resolution.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
@@ -408,12 +412,33 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   );
 
   it.each([
-    { label: "progress", sourceReplyFinal: false, expectedFinalization: true },
-    { label: "final reply", sourceReplyFinal: true, expectedFinalization: false },
-    { label: "legacy unmarked send", sourceReplyFinal: undefined, expectedFinalization: false },
+    {
+      label: "progress",
+      sourceReplyFinal: false,
+      didDeliverSourceReplyViaMessageTool: false,
+      expectedFinalization: true,
+    },
+    {
+      label: "final reply",
+      sourceReplyFinal: true,
+      didDeliverSourceReplyViaMessageTool: false,
+      expectedFinalization: false,
+    },
+    {
+      label: "legacy source-confirmed send",
+      sourceReplyFinal: undefined,
+      didDeliverSourceReplyViaMessageTool: true,
+      expectedFinalization: false,
+    },
+    {
+      label: "legacy coarse outbound send",
+      sourceReplyFinal: undefined,
+      didDeliverSourceReplyViaMessageTool: false,
+      expectedFinalization: true,
+    },
   ])(
     "handles $label delivery evidence before settled finalization",
-    ({ sourceReplyFinal, expectedFinalization }) => {
+    ({ sourceReplyFinal, didDeliverSourceReplyViaMessageTool, expectedFinalization }) => {
       const emptyStopAssistant = makeLastAssistant();
       const instruction = resolveSettledToolTerminalContinuationInstruction(
         makeSettledContinuationParams(
@@ -422,6 +447,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
             toolMetas: [{ toolName: "write" }],
             itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
             didSendViaMessagingTool: true,
+            didDeliverSourceReplyViaMessageTool,
             messagingToolSentTexts: ["Writing note.txt…"],
             messagingToolSentTargets: [
               {
@@ -508,6 +534,48 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     );
 
     expect(instruction).toBeNull();
+  });
+
+  it("keeps a successful terminating batch terminal with a stale earlier error (#132762)", () => {
+    const failedAssistant = makeLastAssistant({
+      stopReason: "toolUse",
+      content: [{ type: "toolCall", id: "tool-failed", name: "exec", arguments: {} }],
+    });
+    const toolUseAssistant = makeLastAssistant({
+      stopReason: "toolUse",
+      content: [{ type: "toolCall", id: "tool_1", name: "ask_user", arguments: {} }],
+    });
+    const lastToolError = { toolName: "exec", error: "earlier failure" };
+    const attempt = makeAttemptResult({
+      assistantTexts: [],
+      toolMetas: [
+        { toolName: "exec", toolCallId: "tool-failed", isError: true },
+        { toolName: "ask_user", toolCallId: "tool_1", isError: false, terminate: true },
+      ],
+      itemLifecycle: { startedCount: 2, completedCount: 2, activeCount: 0 },
+      messagesSnapshot: [
+        { role: "user", content: "Ask for the missing detail.", timestamp: 0 },
+        failedAssistant,
+        makeTextToolResult("tool-failed", "exec", "earlier failure", true, 1),
+        toolUseAssistant,
+        makeTextToolResult("tool_1", "ask_user", "Question delivered", false, 2),
+      ],
+      lastAssistant: toolUseAssistant,
+      currentAttemptAssistant: toolUseAssistant,
+      lastToolError,
+    });
+    const evidence = resolveSettledToolBatchEvidence(attempt);
+
+    expect(evidence).toMatchObject({
+      allToolsProvenSettled: true,
+      hasStaleToolError: true,
+      hasUnsettledToolError: false,
+      intentionalTermination: true,
+    });
+    expect(
+      resolveSettledToolTerminalContinuationInstruction(makeSettledContinuationParams(attempt)),
+    ).toBeNull();
+    expect(attempt.lastToolError).toBe(lastToolError);
   });
 
   it.each([

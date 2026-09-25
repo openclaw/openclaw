@@ -3,6 +3,7 @@ import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-aut
 import { buildOpenAICompatibleLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { classifyQwenFailoverReason } from "./failover.js";
 import { buildQwenMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import {
   isQwen38ModelId,
@@ -273,6 +274,8 @@ export default defineSingleProviderPluginEntry({
       staticRun: async () => ({ provider: buildQwenProvider() }),
     },
     wrapStreamFn: wrapQwenProviderStream,
+    wrapSimpleCompletionStreamFn: wrapQwenProviderStream,
+    classifyFailoverReason: classifyQwenFailoverReason,
     resolveThinkingProfile: ({ modelId }) => resolveQwenThinkingProfile(modelId),
     normalizeConfig: ({ providerConfig }) => {
       if (!isQwenCodingPlanBaseUrl(providerConfig.baseUrl)) {
@@ -316,6 +319,8 @@ export default defineSingleProviderPluginEntry({
         }),
       },
       wrapStreamFn: wrapQwenProviderStream,
+      wrapSimpleCompletionStreamFn: wrapQwenProviderStream,
+      classifyFailoverReason: classifyQwenFailoverReason,
       resolveThinkingProfile: ({ modelId }) => resolveQwenTokenPlanThinkingProfile(modelId),
     });
     api.registerProvider({
@@ -324,6 +329,8 @@ export default defineSingleProviderPluginEntry({
       docsPath: "/providers/qwen",
       auth: [],
       wrapStreamFn: wrapQwenProviderStream,
+      wrapSimpleCompletionStreamFn: wrapQwenProviderStream,
+      classifyFailoverReason: classifyQwenFailoverReason,
     });
     api.registerMediaUnderstandingProvider(buildQwenMediaUnderstandingProvider());
     api.registerVideoGenerationProvider(qwenVideoGenerationProvider);

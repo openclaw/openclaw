@@ -70,6 +70,7 @@ describe("SessionLinkTitler", () => {
     await titler.decorate(anchor);
 
     expect(anchor.textContent).toBe("Cached research");
+    expect(anchor.querySelector(":scope > .session-label")?.textContent).toBe("Cached research");
     expect(anchor.classList.contains("markdown-session-link--titled")).toBe(true);
     expect(anchor.title).toBe(SESSION_KEY);
     expect(anchor.getAttribute("href")).toBe("/chat/main/research");
@@ -87,9 +88,29 @@ describe("SessionLinkTitler", () => {
 
     expect(first.textContent).toBe("Research plan");
     expect(second.textContent).toBe("Research plan");
+    expect(first.querySelectorAll(":scope > .session-label")).toHaveLength(1);
+    await titler.decorate(first, true);
+    expect(first.querySelectorAll(":scope > .session-label")).toHaveLength(1);
     expect(first.getAttribute("href")).toBe("/chat/main/research");
     expect(request).toHaveBeenCalledTimes(1);
     expect(request).toHaveBeenCalledWith("controlUi.sessionPreview", { sessionKey: SESSION_KEY });
+  });
+
+  it("preserves a producer-owned label node when resolving its title", async () => {
+    const request = vi.fn().mockResolvedValue(previewResponse());
+    const { titler } = createTitler([], request);
+    const anchor = sessionAnchor();
+    const label = document.createElement("span");
+    label.className = "session-label";
+    label.textContent = SESSION_KEY;
+    anchor.replaceChildren(label);
+
+    await titler.decorate(anchor, true);
+
+    expect(anchor.firstElementChild).toBe(label);
+    expect(label.textContent).toBe("Research plan");
+    label.textContent = "Updated by the producer";
+    expect(anchor.textContent).toBe("Updated by the producer");
   });
 
   it("expires successful and failed cache entries at their separate TTLs", async () => {
@@ -197,6 +218,52 @@ describe("SessionLinkTitler", () => {
     titler.refresh();
     expect(link.dataset.sessionKey).toBeUndefined();
     expect(request).not.toHaveBeenCalled();
+  });
+
+  it("keeps unchanged session links free of mutations across roster refreshes", () => {
+    const key = "agent:main:dashboard:d0effac9-3211-4641-b993-10f619f124e6";
+    const rows: GatewaySessionRow[] = [
+      { key, kind: "direct", displayName: "Shared contract", updatedAt: Date.now() },
+    ];
+    const { host, titler, request } = createTitler(rows);
+    host.innerHTML = toSanitizedMarkdownHtml(
+      "[First](/chat/main/d0effac9?view=details#first) " +
+        "[Second](/chat/main/d0effac9?view=details#second) " +
+        "[Unknown](/chat/main/aabbccdd)",
+      { sessionLinks: true },
+    );
+    titler.refresh();
+    const links = [...host.querySelectorAll<HTMLAnchorElement>("a.markdown-session-link")];
+    const observer = new MutationObserver(() => undefined);
+    observer.observe(host, { attributes: true, childList: true, subtree: true });
+    try {
+      rows[0] = { ...rows[0]!, updatedAt: Date.now() + 1 };
+      titler.refresh();
+      expect(observer.takeRecords()).toEqual([]);
+      expect(links.map((link) => link.getAttribute("href"))).toEqual([
+        "/chat/main/d0effac9?view=details#first",
+        "/chat/main/d0effac9?view=details#second",
+        "/chat/main/aabbccdd",
+      ]);
+
+      rows.push({ key: key.replace("3211", "4322"), kind: "direct", updatedAt: Date.now() });
+      titler.refresh();
+      expect(links.map((link) => link.dataset.sessionKey)).toEqual([
+        undefined,
+        undefined,
+        undefined,
+      ]);
+      observer.takeRecords();
+      titler.refresh();
+      expect(observer.takeRecords()).toEqual([]);
+
+      rows.pop();
+      titler.refresh();
+      expect(links.map((link) => link.dataset.sessionKey)).toEqual([key, key, undefined]);
+      expect(request).not.toHaveBeenCalled();
+    } finally {
+      observer.disconnect();
+    }
   });
 
   it("leaves remote links and code spans plain", () => {

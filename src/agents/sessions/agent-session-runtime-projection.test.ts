@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTestTimeout } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { toClientToolDefinitions, toToolDefinitions } from "../agent-tool-definition-adapter.js";
 import { wrapToolWithBeforeToolCallHook } from "../agent-tools.before-tool-call.js";
 import {
@@ -32,8 +33,15 @@ import { createAgentSession } from "./sdk.js";
 import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    for (const stateDir of tempDirs.dirs) {
+      await cleanupSessionStateForTest({ stateDir });
+    }
+    cleanup();
+  }),
+);
 registerAgentSessionLoopTestLifecycle();
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("AgentSession runtime and transcript projections", () => {
   it.each([

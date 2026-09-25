@@ -3,11 +3,12 @@ import { property, state } from "lit/decorators.js";
 import { t } from "../i18n/index.ts";
 import type { ConfigAutoSaveStatus } from "../lib/config/config-state-model.ts";
 import { icons } from "./icons.ts";
+import { currentThemeBranding } from "./neutral-mark.ts";
 
 const SAVED_VISIBLE_MS = 2_000;
 
 export type SettingsSaveIndicatorProps = {
-  status: ConfigAutoSaveStatus;
+  status: ConfigAutoSaveStatus | "recovery";
   lastError: string | null;
   needsApply: boolean;
   applying: boolean;
@@ -25,7 +26,7 @@ class SettingsSaveIndicator extends LitElement {
 
   @property({ attribute: false }) props?: SettingsSaveIndicatorProps;
   @state() private savedVisible = false;
-  private previousStatus: ConfigAutoSaveStatus | undefined;
+  private previousStatus: SettingsSaveIndicatorProps["status"] | undefined;
   private savedTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
 
   override willUpdate(): void {
@@ -56,7 +57,7 @@ class SettingsSaveIndicator extends LitElement {
 
   private renderClaw(modifier: string) {
     return html`<span class="settings-save-indicator__claw ${modifier}" aria-hidden="true"
-      >${icons.claw}</span
+      >${currentThemeBranding().mascot === "none" ? icons.mark : icons.claw}</span
     >`;
   }
 
@@ -77,6 +78,42 @@ class SettingsSaveIndicator extends LitElement {
     } else if (props.status === "saving") {
       content = html` ${this.renderClaw("settings-save-indicator__claw--saving")}
         <span>${t("configView.autoSaveSaving")}</span>`;
+    } else if (props.status === "recovery") {
+      modifier = " settings-save-indicator--danger settings-save-indicator--recovery";
+      content = html`<span>${props.lastError}</span>
+        <button
+          class="btn btn--xs settings-save-indicator__action"
+          type="button"
+          @click=${props.onReload}
+        >
+          ${t("configView.recoveryReload")}
+        </button>`;
+    } else if (props.status === "rejected") {
+      modifier = " settings-save-indicator--rejected";
+      content = html`<span>${t("configView.autoSaveRejected")}</span>
+        <span>${t("configView.autoSaveRejectedHint")}</span>
+        ${
+          props.lastError
+            ? html`<details>
+                <summary>${t("configView.rejectionDetails")}</summary>
+                <span>${props.lastError}</span>
+              </details>`
+            : nothing
+        }
+        <button
+          class="btn btn--xs settings-save-indicator__action"
+          type="button"
+          @click=${props.onRetry}
+        >
+          ${t("configView.retry")}
+        </button>
+        <button
+          class="btn btn--xs settings-save-indicator__action"
+          type="button"
+          @click=${props.onReload}
+        >
+          ${t("configView.recoveryReload")}
+        </button>`;
     } else if (props.status === "error") {
       title = props.lastError?.trim() ?? "";
       label = title ? `${t("configView.autoSaveFailed")}: ${title}` : "";

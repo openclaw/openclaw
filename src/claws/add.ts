@@ -10,6 +10,7 @@ import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { normalizeWindowsPathForComparison } from "../infra/path-guards.js";
+import type { PluginInstallBatchReload } from "../plugins/install-runtime-batch.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { recordAgentProvenance } from "../state/agent-provenance.js";
@@ -54,6 +55,7 @@ export const CLAW_ADD_RESULT_SCHEMA_VERSION = "openclaw.clawAddResult.v1" as con
 
 type ConfigCommit = (transform: (config: OpenClawConfig) => OpenClawConfig) => Promise<void>;
 type ClawAddApplyOptions = OpenClawStateDatabaseOptions & {
+  reloadPlugins?: PluginInstallBatchReload;
   consentPlanIntegrity?: string;
   resumeRecord?: PersistedClawInstall;
   resumePlan?: ClawAddPlan;

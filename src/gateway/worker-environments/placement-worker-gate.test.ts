@@ -13,6 +13,7 @@ import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
+import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 
 const SESSION: WorkerSessionPlacementIdentity = {
@@ -64,6 +65,11 @@ describe("worker session placement gate", () => {
         workspaceBaseManifestRef: "manifest-worker-gate",
         remoteWorkspaceDir: "/workspace/worker-gate",
       },
+    });
+    seedAttachedPlacementEnvironment(database, {
+      environmentId: ENVIRONMENT_ID,
+      sessionId: SESSION.sessionId,
+      ownerEpoch: OWNER_EPOCH,
     });
     return store.transition({
       sessionId: SESSION.sessionId,

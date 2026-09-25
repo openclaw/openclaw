@@ -43,6 +43,28 @@ type OpenAiImageMediaCandidateDecision =
   | { kind: "substitute"; ref: string; provider: string }
   | { kind: "drop" };
 
+export function applyAgentDefaultModelConfig(
+  cfg: OpenClawConfig | undefined,
+  key: "imageModel" | "image" | "video" | "music",
+  modelConfig: ToolModelConfig,
+): OpenClawConfig | undefined {
+  if (!cfg) {
+    return undefined;
+  }
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        ...(key === "imageModel"
+          ? { imageModel: modelConfig }
+          : { mediaModels: { ...cfg.agents?.defaults?.mediaModels, [key]: modelConfig } }),
+      },
+    },
+  };
+}
+
 /** Returns whether a tool model config contains a primary or fallback model ref. */
 export function hasToolModelConfig(model: ToolModelConfig | undefined): boolean {
   return Boolean(
@@ -287,12 +309,6 @@ function hasDirectProviderApiKeyAuthForTool(params: {
     authStore: params.authStore,
     type: "api_key",
   });
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.modelConfigHelpersTestApi")] = {
-    hasDirectProviderApiKeyAuthForTool,
-  };
 }
 
 function hasCanonicalOpenAiCodexAuthSignal(params: {

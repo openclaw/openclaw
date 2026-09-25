@@ -13,7 +13,7 @@ const TEST_TIMESTAMP = "2026-01-01T00:00:00.000Z";
 
 function createMessagePayload(overrides = {}) {
   return {
-    id: "m1",
+    id: "1001",
     channel_id: "c1",
     content: "what did this mean?",
     attachments: [],
@@ -42,7 +42,7 @@ function createDefaultReplyPayload(overrides = {}) {
   return createMessagePayload({
     message_reference: {
       type: MessageReferenceType.Default,
-      message_id: "m0",
+      message_id: "1000",
       channel_id: "c1",
     },
     type: MessageType.Reply,
@@ -50,13 +50,14 @@ function createDefaultReplyPayload(overrides = {}) {
   });
 }
 
-function createReferencedMessagePayload(content: string) {
+function createReferencedMessagePayload(content: string, bot = false) {
   return createMessagePayload({
-    id: "m0",
+    id: "1000",
     content,
     author: {
       id: "u2",
       username: "bob",
+      bot,
       discriminator: "0",
       avatar: null,
     },
@@ -83,7 +84,7 @@ describe("hydrateDiscordMessageIfNeeded", () => {
         mention_roles: ["role1"],
         mention_everyone: false,
         referenced_message: createMessagePayload({
-          id: "m0",
+          id: "1000",
           content: "earlier",
           author: {
             id: "u3",
@@ -94,7 +95,10 @@ describe("hydrateDiscordMessageIfNeeded", () => {
         }),
       }),
     ]);
-    const message = new Message<true>(client, { id: "m1", channelId: "c1" }) as unknown as Message;
+    const message = new Message<true>(client, {
+      id: "1001",
+      channelId: "c1",
+    }) as unknown as Message;
 
     const { message: hydrated } = await hydrateDiscordMessageIfNeeded({
       client: { rest },
@@ -163,58 +167,75 @@ describe("hydrateDiscordMessageIfNeeded", () => {
       messageChannelId: "c1",
     });
 
-    expect(rest.calls.map((call) => call.path)).toEqual(["/channels/c1/messages/m1"]);
+    expect(rest.calls.map((call) => call.path)).toEqual(["/channels/c1/messages/1001"]);
     expect(hydrated.referencedMessage?.content).toBe("the replied-to message");
   });
 
-  it("fetches the referenced message when the hydrated reply still omits it", async () => {
-    const client = createInternalTestClient();
-    const rest = createFakeRestClient([
-      createReferencedMessagePayload("the directly fetched message"),
-    ]);
-    const message = new Message(
-      client,
-      createDefaultReplyPayload({
-        content: "<@bot> ok do it",
-        mentions: [
-          {
-            id: "bot",
-            username: "openclaw",
-            global_name: null,
-            discriminator: "0",
-            avatar: null,
-          },
-        ],
-      }),
-    );
+  it.each([
+    { botUserId: undefined, referenced: undefined },
+    { botUserId: "u2", referenced: undefined },
+    { botUserId: "bot", referenced: createReferencedMessagePayload("", true) },
+  ])(
+    "fetches missing or empty reply context (botUserId=$botUserId)",
+    async ({ botUserId, referenced }) => {
+      const client = createInternalTestClient();
+      const rest = createFakeRestClient([
+        createReferencedMessagePayload(
+          "Release repair: https://github.com/example/project/pull/42",
+          true,
+        ),
+      ]);
+      const message = new Message(
+        client,
+        createDefaultReplyPayload({
+          ...(referenced ? { referenced_message: referenced } : {}),
+          content: "<@bot> ok do it",
+          mentions: [
+            {
+              id: "bot",
+              username: "openclaw",
+              global_name: null,
+              discriminator: "0",
+              avatar: null,
+            },
+          ],
+        }),
+      );
 
-    const { message: hydrated } = await hydrateDiscordMessageIfNeeded({
-      client: { rest },
-      message,
-      messageChannelId: "c1",
-    });
+      const { message: hydrated } = await hydrateDiscordMessageIfNeeded({
+        client: { rest },
+        message,
+        messageChannelId: "c1",
+      });
 
-    expect(rest.calls.map((call) => call.path)).toEqual(["/channels/c1/messages/m0"]);
-    expect(hydrated.referencedMessage?.content).toBe("the directly fetched message");
+      expect(rest.calls.map((call) => call.path)).toEqual(["/channels/c1/messages/1000"]);
+      expect(hydrated.referencedMessage?.content).toBe(
+        "Release repair: https://github.com/example/project/pull/42",
+      );
 
-    const ctx = await createBaseDiscordMessageContext({
-      message: hydrated,
-      author: hydrated.author,
-      baseText: hydrated.content,
-      messageText: hydrated.content,
-    });
-    const result = await buildDiscordMessageProcessContext({
-      ctx,
-      text: hydrated.content,
-      mediaList: [],
-    });
-    if (!result) {
-      throw new Error("expected a built Discord message context");
-    }
+      const ctx = await createBaseDiscordMessageContext({
+        discordConfig: { allowBots: false },
+        botUserId,
+        message: hydrated,
+        author: hydrated.author,
+        baseText: hydrated.content,
+        messageText: hydrated.content,
+      });
+      const result = await buildDiscordMessageProcessContext({
+        ctx,
+        text: hydrated.content,
+        mediaList: [],
+      });
+      if (!result) {
+        throw new Error("expected a built Discord message context");
+      }
 
-    expect(result.ctxPayload.ReplyToId).toBe("m0");
-    expect(result.ctxPayload.ReplyToBody).toBe("the directly fetched message");
-  });
+      expect(result.ctxPayload.ReplyToId).toBe("1000");
+      expect(result.ctxPayload.ReplyToBody).toBe(
+        "Release repair: https://github.com/example/project/pull/42",
+      );
+    },
+  );
 
   it("replaces a mismatched nested reply with the canonical referenced message", async () => {
     const client = createInternalTestClient();
@@ -237,8 +258,8 @@ describe("hydrateDiscordMessageIfNeeded", () => {
       messageChannelId: "c1",
     });
 
-    expect(rest.calls.map((call) => call.path)).toEqual(["/channels/c1/messages/m0"]);
-    expect(hydrated.referencedMessage?.id).toBe("m0");
+    expect(rest.calls.map((call) => call.path)).toEqual(["/channels/c1/messages/1000"]);
+    expect(hydrated.referencedMessage?.id).toBe("1000");
     expect(hydrated.referencedMessage?.content).toBe("the canonical reply target");
 
     const ctx = await createBaseDiscordMessageContext({
@@ -256,7 +277,7 @@ describe("hydrateDiscordMessageIfNeeded", () => {
       throw new Error("expected a built Discord message context");
     }
 
-    expect(result.ctxPayload.ReplyToId).toBe("m0");
+    expect(result.ctxPayload.ReplyToId).toBe("1000");
     expect(result.ctxPayload.ReplyToBody).toBe("the canonical reply target");
     expect(result.ctxPayload.ReplyToBody).not.toContain("unrelated older context");
   });
@@ -300,7 +321,7 @@ describe("hydrateDiscordMessageIfNeeded", () => {
       throw new Error("expected a built Discord message context");
     }
 
-    expect(result.ctxPayload.ReplyToId).toBeUndefined();
+    expect(result.ctxPayload.ReplyToId).toBe("1000");
     expect(result.ctxPayload.ReplyToBody).toBeUndefined();
   });
 
@@ -309,7 +330,7 @@ describe("hydrateDiscordMessageIfNeeded", () => {
     const reply = createDefaultReplyPayload({
       message_reference: {
         type: MessageReferenceType.Default,
-        message_id: "m0",
+        message_id: "1000",
         channel_id: "c2",
       },
     });
@@ -324,7 +345,7 @@ describe("hydrateDiscordMessageIfNeeded", () => {
       messageChannelId: "c1",
     });
 
-    expect(rest.calls[0]?.path).toBe("/channels/c2/messages/m0");
+    expect(rest.calls[0]?.path).toBe("/channels/c2/messages/1000");
     expect(hydrated.referencedMessage?.content).toBe("the cross-channel message");
   });
 
@@ -362,7 +383,7 @@ describe("hydrateDiscordMessageIfNeeded", () => {
       createMessagePayload({
         message_reference: {
           type: MessageReferenceType.Forward,
-          message_id: "m0",
+          message_id: "1000",
           channel_id: "c1",
         },
       }),

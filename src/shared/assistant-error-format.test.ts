@@ -9,6 +9,13 @@ import {
 } from "./assistant-error-format.js";
 
 describe("formatProviderRefusalText", () => {
+  it("directs a misalignment stop to review instead of another ordinary retry", () => {
+    expect(
+      formatProviderRefusalText({
+        diagnostics: [{ type: "provider_refusal", details: { category: "misalignment" } }],
+      }),
+    ).toBe("Chat stopped as a precaution. Review the findings in chat before continuing.");
+  });
   it.each(["bio", "cyber"])("formats a sanitized %s refusal", (category) => {
     expect(
       formatProviderRefusalText({
@@ -94,7 +101,7 @@ describe("extractErrorHttpStatus", () => {
 });
 
 describe("HTTP status consumers", () => {
-  it.each(["500 ", "500: ", "HTTP 502: "])(
+  it.each(["", "error: ", "500 ", "500: ", "HTTP 502: "])(
     "preserves distinct validation type and code after %s",
     (prefix) => {
       const error = {
@@ -105,6 +112,24 @@ describe("HTTP status consumers", () => {
       expect(parseApiErrorInfo(`${prefix}${JSON.stringify({ error })}`)).toMatchObject(error);
     },
   );
+
+  it("extracts the final upstream rejection from a proxy failure envelope", () => {
+    const message = "A maximum of 4 blocks with cache_control may be provided. Found 5.";
+    const raw = `400: ${JSON.stringify({
+      error: {
+        message: "All target providers failed.",
+        attempts: [
+          { status: 503, details: { error: { type: "api_error", message: "Unavailable" } } },
+          { status: 400, details: { error: { type: "invalid_request_error", message } } },
+        ],
+      },
+    })}`;
+    expect(parseApiErrorInfo(raw)).toMatchObject({
+      httpCode: "400",
+      type: "invalid_request_error",
+      message,
+    });
+  });
 
   it("does not return raw HTML after an HTTP reason phrase", () => {
     const raw = [

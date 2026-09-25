@@ -28,6 +28,7 @@ export function resolveDeferredChannelReloadIssue(
 export function collectGatewayChannelStatusIssues(params: {
   payload: Record<string, unknown>;
   plugins: readonly ChannelPlugin[];
+  reloadingChannels?: ReadonlyMap<ChannelId, string | undefined>;
   defaultAccountIds: Record<string, unknown>;
   context: GatewayRequestContext;
   warnings: string[];
@@ -35,7 +36,11 @@ export function collectGatewayChannelStatusIssues(params: {
   const issues: ChannelStatusIssue[] = [];
   for (const plugin of params.plugins) {
     try {
-      issues.push(...collectChannelStatusIssues(params.payload, [plugin]));
+      issues.push(
+        ...collectChannelStatusIssues(params.payload, [
+          params.reloadingChannels?.has(plugin.id) ? { id: plugin.id } : plugin,
+        ]),
+      );
     } catch (error) {
       params.warnings.push(`${plugin.id} status diagnostics failed: ${formatForLog(error)}`);
     }

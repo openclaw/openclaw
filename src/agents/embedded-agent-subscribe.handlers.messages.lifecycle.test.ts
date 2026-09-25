@@ -5,6 +5,7 @@ import {
   endMessage,
   firstMockCall,
   firstMockArg,
+  updateMessage,
 } from "./embedded-agent-subscribe.handlers.messages.test-helpers.js";
 import {
   createOpenAiResponsesPartial,
@@ -14,24 +15,37 @@ import {
 describe("handleMessageEnd", () => {
   it.each(["answer part A msg [[E1008]timeout] answer part B", "answer ending ["])(
     "keeps malformed directive-looking final text identical across delivery paths: %s",
-    (text) => {
+    async (text) => {
       const onAgentEvent = vi.fn();
       const onBlockReply = vi.fn();
       const ctx = createMessageEndContext({ onAgentEvent, onBlockReply });
-      ctx.blockChunker.append(text);
-      void ctx.flushBlockReplyBuffer();
+      const message = { role: "assistant", content: [{ type: "text", text }] };
+      await updateMessage(ctx, {
+        message,
+        assistantMessageEvent: {
+          type: "text_delta",
+          contentIndex: 0,
+          delta: text,
+          partial: message,
+        },
+      });
+      await ctx.flushBlockReplyBuffer();
+      expect(onBlockReply).toHaveBeenCalledOnce();
       const streamed = (firstMockArg(onBlockReply, "streamed block reply") as { text: string })
         .text;
+      const streamedUiText = (
+        firstMockArg(onAgentEvent, "streamed agent event") as { data: { text: string } }
+      ).data.text;
       onBlockReply.mockClear();
+      onAgentEvent.mockClear();
 
-      void endMessage(ctx, {
-        message: { role: "assistant", content: [{ type: "text", text }] },
-      });
+      await endMessage(ctx, { message });
 
       expect(firstMockArg(onAgentEvent, "agent event")).toMatchObject({
         stream: "assistant",
-        data: { text, delta: text },
+        data: { text, delta: text.slice(streamedUiText.length) },
       });
+      expect(onBlockReply).toHaveBeenCalledOnce();
       const finalBlockText = (firstMockArg(onBlockReply, "block reply") as { text?: string }).text;
       expect(`${streamed}${finalBlockText ?? ""}`).toBe(text);
       expect(ctx.finalizeAssistantTexts).toHaveBeenCalledWith(expect.objectContaining({ text }));
@@ -316,22 +330,35 @@ describe("handleMessageEnd", () => {
 
   it.each(["Hello world", "Hello world."])(
     "does not duplicate text_end block replies after %j was delivered",
-    (lastBlockReplyText) => {
+    async (lastBlockReplyText) => {
       const onBlockReply = vi.fn();
       const ctx = createMessageEndContext({
         onBlockReply,
         state: {
-          assistantStream: { raw: "", text: "Hello world" },
           blockReplyBreak: "text_end",
-          deltaBuffer: "",
         },
       });
-      ctx.blockChunker.append(lastBlockReplyText);
-      void ctx.flushBlockReplyBuffer({ final: true });
+      const message = {
+        role: "assistant",
+        content: [{ type: "text", text: lastBlockReplyText }],
+      };
+      for (const type of ["text_delta", "text_end"] as const) {
+        await updateMessage(ctx, {
+          message,
+          assistantMessageEvent: {
+            type,
+            contentIndex: 0,
+            partial: message,
+            ...(type === "text_delta"
+              ? { delta: lastBlockReplyText }
+              : { content: lastBlockReplyText }),
+          },
+        });
+      }
       expect(onBlockReply.mock.calls.map(([reply]) => reply.text)).toEqual([lastBlockReplyText]);
       onBlockReply.mockClear();
 
-      void endMessage(ctx, {
+      await endMessage(ctx, {
         message: {
           role: "assistant",
           content: [{ type: "text", text: "Hello world" }],
@@ -367,29 +394,32 @@ describe("handleMessageEnd", () => {
     });
   });
 
-  it("emits final media and malformed pending text after flushing buffered message_end text", () => {
+  it("emits final media and malformed pending text after flushing buffered message_end text", async () => {
     const onBlockReply = vi.fn();
     const text = "Caption [[oops\nMEDIA:/tmp/final.png";
     const ctx = createMessageEndContext({
       onBlockReply,
       state: {
-        assistantStream: { raw: "", text: "Caption [[oops" },
         blockReplyBreak: "message_end",
       },
     });
-    ctx.blockChunker.append(text);
-    void ctx.flushBlockReplyBuffer();
+    const message = {
+      role: "assistant",
+      content: [{ type: "text", text }],
+      usage: { input: 10, output: 5, total: 15 },
+    };
+    await updateMessage(ctx, {
+      message,
+      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: text, partial: message },
+    });
+    await ctx.flushBlockReplyBuffer();
+    expect(onBlockReply).toHaveBeenCalledOnce();
     const streamed = (firstMockArg(onBlockReply, "streamed block reply") as { text: string }).text;
+    expect(streamed).toBe("Caption ");
     expect(onBlockReply.mock.calls.flatMap(([reply]) => reply.mediaUrls ?? [])).toEqual([]);
     onBlockReply.mockClear();
 
-    void endMessage(ctx, {
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text }],
-        usage: { input: 10, output: 5, total: 15 },
-      },
-    });
+    await endMessage(ctx, { message });
 
     expect(onBlockReply).toHaveBeenCalledOnce();
     const finalReply = firstMockArg(onBlockReply, "block reply") as {
@@ -397,24 +427,21 @@ describe("handleMessageEnd", () => {
       mediaUrls?: string[];
     };
     expect(finalReply).toMatchObject({
-      text: " [[oops",
+      text: "[[oops",
       mediaUrls: ["/tmp/final.png"],
     });
     expect(`${streamed}${finalReply.text ?? ""}`).toBe("Caption [[oops");
   });
 
-  it("preserves literal reasoning-looking tags in unphased final visible text", () => {
+  it("preserves literal reasoning-looking tags in unphased final visible text", async () => {
     const onAgentEvent = vi.fn();
-    const stripBlockTags = vi.fn(() => "Before");
+    const onBlockReply = vi.fn();
     const ctx = createMessageEndContext({
       onAgentEvent,
-      stripBlockTags,
-      state: {
-        deltaBuffer: "",
-      },
+      onBlockReply,
     });
 
-    void endMessage(ctx, {
+    await endMessage(ctx, {
       message: {
         role: "assistant",
         content: [
@@ -428,7 +455,10 @@ describe("handleMessageEnd", () => {
       },
     });
 
-    expect(stripBlockTags).not.toHaveBeenCalled();
+    expect(onBlockReply).toHaveBeenCalledOnce();
+    expect(firstMockArg(onBlockReply, "block reply")).toMatchObject({
+      text: "Before <think>literal tag text after",
+    });
     expect(firstMockArg(onAgentEvent, "assistant stream")).toMatchObject({
       stream: "assistant",
       data: {
@@ -436,24 +466,19 @@ describe("handleMessageEnd", () => {
         delta: "Before <think>literal tag text after",
       },
     });
-    expect(ctx.finalizeAssistantTexts).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "Before <think>literal tag text after" }),
-    );
+    expect(ctx.state.assistantTexts).toEqual(["Before <think>literal tag text after"]);
   });
 
-  it("keeps final-tag enforcement in message_end fallback", () => {
+  it("keeps final-tag enforcement in message_end fallback", async () => {
     const onAgentEvent = vi.fn();
-    const stripBlockTags = vi.fn(() => "");
+    const onBlockReply = vi.fn();
     const ctx = createMessageEndContext({
       enforceFinalTag: true,
       onAgentEvent,
-      stripBlockTags,
-      state: {
-        deltaBuffer: "",
-      },
+      onBlockReply,
     });
 
-    void endMessage(ctx, {
+    await endMessage(ctx, {
       message: {
         role: "assistant",
         content: "Hello world",
@@ -461,12 +486,9 @@ describe("handleMessageEnd", () => {
       },
     });
 
-    expect(stripBlockTags).toHaveBeenCalledWith(
-      "Hello world",
-      expect.objectContaining({ thinking: false, final: false }),
-      { final: true },
-    );
     expect(onAgentEvent).not.toHaveBeenCalled();
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(ctx.state.assistantTexts).toEqual([]);
     expect(ctx.finalizeAssistantTexts).toHaveBeenCalledWith(expect.objectContaining({ text: "" }));
   });
 

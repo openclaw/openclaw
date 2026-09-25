@@ -1,9 +1,11 @@
+import assert from "node:assert/strict";
 import type { ExecFileException } from "node:child_process";
 import { createHash } from "node:crypto";
 import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import * as fileDurability from "@openclaw/fs-safe/durability";
 import JSZip from "jszip";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -15,6 +17,9 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("node:child_process", () => ({ execFile: mocks.execFile }));
+vi.mock("@openclaw/fs-safe/durability", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@openclaw/fs-safe/durability")>()),
+}));
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
   fetchWithSsrFGuard: mocks.fetchWithSsrFGuard,
@@ -124,23 +129,11 @@ describe("cached file integrity", () => {
     const original = Buffer.from("GGUFverified");
     const digest = createHash("sha256").update(original).digest("hex");
     await fs.writeFile(destination, original);
-    let scans = 0;
-    const createReadStream = nodeFs.createReadStream.bind(nodeFs);
-    vi.spyOn(nodeFs, "createReadStream").mockImplementation((...args) => {
-      scans += 1;
-      return createReadStream(...args);
-    });
-    injectFileHandle((handle) => {
-      const stream = handle.createReadStream.bind(handle);
-      handle.createReadStream = (...args) => {
-        scans += 1;
-        return stream(...args);
-      };
-    });
+    const scans = vi.spyOn(fileDurability, "sha256File");
 
     expect(await sha256File(destination)).toBe(digest);
     expect(await sha256File(destination)).toBe(digest);
-    expect(scans).toBe(1);
+    expect(scans).toHaveBeenCalledTimes(1);
     // Preserve length and mtime: inode/ctime changes must still invalidate verification.
     const previous = await fs.stat(destination);
     const replacement = `${destination}.replacement`;
@@ -152,7 +145,7 @@ describe("cached file integrity", () => {
     expect(await sha256File(destination)).toBe(digest);
     await fs.rm(destination);
     await expect(sha256File(destination)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(scans).toBe(3);
+    expect(scans).toHaveBeenCalledTimes(3);
   });
 
   it.each(["replacement", "cancellation"] as const)(
@@ -163,19 +156,15 @@ describe("cached file integrity", () => {
       await fs.writeFile(destination, Buffer.alloc(2 * 1024 * 1024, 1));
       await fs.writeFile(replacement, "replacement bytes");
       const controller = new AbortController();
-      injectFileHandle((handle) => {
-        const createReadStream = handle.createReadStream.bind(handle);
-        handle.createReadStream = (...args) => {
-          const stream = createReadStream(...args);
-          stream.once("data", () => {
-            if (mode === "cancellation") {
-              controller.abort();
-            } else {
-              nodeFs.renameSync(replacement, destination);
-            }
-          });
-          return stream;
-        };
+      const hashFile = fileDurability.sha256File;
+      vi.spyOn(fileDurability, "sha256File").mockImplementationOnce(async (...args) => {
+        const hashed = hashFile(...args);
+        if (mode === "cancellation") {
+          controller.abort();
+        } else {
+          nodeFs.renameSync(replacement, destination);
+        }
+        return await hashed;
       });
       await expect(sha256File(destination, controller.signal)).rejects.toThrow(
         mode === "cancellation" ? /abort/iu : "File changed during integrity verification",
@@ -198,15 +187,72 @@ describe("cached file integrity", () => {
       destination,
       expectedSha256: digest,
     });
-    const directScan = vi.spyOn(nodeFs, "createReadStream");
+    const scan = vi.spyOn(fileDurability, "sha256File");
     const opened = vi.spyOn(fs, "open");
     expect(await sha256File(destination)).toBe(digest);
-    expect(directScan).not.toHaveBeenCalled();
+    expect(scan).not.toHaveBeenCalled();
     expect(opened).not.toHaveBeenCalled();
   });
 });
 
 describe("downloadVerifiedFile", () => {
+  it.each([
+    { label: "shared clock ticks", times: [1000, 1000, 1010], rates: [0, 0, 300_000_000] },
+    {
+      label: "shared clock ticks after an established sample",
+      times: [1010, 1010, 1030],
+      rates: [100_000_000, 100_000_000, 100_000_000],
+    },
+    {
+      label: "distinct clock ticks",
+      times: [1010, 1020, 1030],
+      rates: [100_000_000, 100_000_000, 100_000_000],
+    },
+  ])("counts every persisted byte in the rate across $label", async ({ times, rates }) => {
+    const { destination } = await createDestination();
+    const chunks = [1, 2, 3].map((value) => Buffer.alloc(1_000_000, value));
+    const payload = Buffer.concat(chunks);
+    const release = vi.fn();
+    mocks.fetchWithSsrFGuard.mockResolvedValue({
+      response: new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            for (const chunk of chunks) {
+              controller.enqueue(chunk);
+            }
+            controller.close();
+          },
+        }),
+      ),
+      release,
+    });
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1000);
+    let written = 0;
+    injectFileHandle((handle) => {
+      const writeFile = handle.writeFile.bind(handle);
+      handle.writeFile = async (...args) => {
+        await writeFile(...args);
+        clock.mockReturnValue(times[written++]!);
+      };
+    });
+    const onProgress = vi.fn();
+
+    await downloadVerifiedFile({
+      url: "https://downloads.example/model.gguf",
+      destination,
+      expectedSize: payload.byteLength,
+      expectedSha256: createHash("sha256").update(payload).digest("hex"),
+      onProgress,
+    });
+
+    expect(onProgress.mock.calls.map(([progress]) => progress.bytesPerSecond)).toEqual(rates);
+    expect(onProgress.mock.calls.map(([progress]) => progress.downloadedSize)).toEqual([
+      1_000_000, 2_000_000, 3_000_000,
+    ]);
+    assert.deepStrictEqual(await fs.readFile(destination), payload);
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it("persists complete chunks before reporting progress under positive short writes", async () => {
     const payload = Buffer.from("short writes must not truncate verified downloads");
     const { destination, root } = await createDestination();

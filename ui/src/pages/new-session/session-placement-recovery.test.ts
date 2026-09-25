@@ -414,6 +414,7 @@ describe("session placement recovery", () => {
 
   it.each([
     { projectId: "openclaw", worktree: true as const },
+    { worktree: true as const, worktreeSource: "empty" as const },
     { repository: { url: "https://github.com/openclaw/openclaw.git", ref: "release/next" } },
   ])("requires matching create parameters for a creating recovery: %j", (workspace) => {
     const creating = {
@@ -457,6 +458,19 @@ describe("session placement recovery", () => {
   });
 
   it.each([
+    { name: "an unsupported workspace source", value: { worktreeSource: "folder" } },
+    {
+      name: "an empty workspace with a previous checkout",
+      value: { worktreeSource: "empty", cwd: "/previous/checkout" },
+    },
+    {
+      name: "an empty workspace with a repository",
+      value: {
+        worktreeSource: "empty",
+        worktree: undefined,
+        repository: { url: "https://github.com/openclaw/openclaw.git" },
+      },
+    },
     { name: "an empty project id", value: { projectId: "" } },
     { name: "a non-string project id", value: { projectId: 42 } },
     { name: "a project id with a cwd", value: { projectId: "openclaw", cwd: "/tmp/repo" } },

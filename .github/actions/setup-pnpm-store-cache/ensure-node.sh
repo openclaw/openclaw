@@ -104,13 +104,15 @@ openclaw_find_toolcache_node() {
 
   local node_root candidate candidate_version
   for node_root in ${roots[@]+"${roots[@]}"}; do
+    # Hosted binaries are at version/arch/bin/node (Windows omits bin);
+    # cached distributions are shallower. Do not scan bundled npm trees.
     while IFS= read -r candidate; do
       candidate_version="$("$candidate" -p 'process.versions.node' 2>/dev/null || true)"
       if openclaw_node_version_matches "$candidate_version" "$requested_node"; then
         printf '%s\n' "$candidate"
         return 0
       fi
-    done < <(find "$node_root" \( -name node -o -name node.exe \) -type f 2>/dev/null | sort -r)
+    done < <(find "$node_root" -maxdepth 4 \( -name node -o -name node.exe \) -type f 2>/dev/null | sort -r)
   done
   return 1
 }
@@ -126,8 +128,8 @@ openclaw_resolve_node_download_version() {
   prefix="${prefix%%[xX]*}"
   prefix="v${prefix}"
   [[ "$prefix" == *. ]] || prefix="${prefix}."
-  curl -fsSL --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 \
-    https://nodejs.org/dist/index.json |
+  curl -fSL --no-progress-meter --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 \
+    https://nodejs.org/dist/index.json 2> >(sed 's/^Warning: /::warning::/' >&2) |
     OPENCLAW_NODE_PREFIX="$prefix" python3 -c 'import json, os, sys
 prefix = os.environ["OPENCLAW_NODE_PREFIX"]
 for item in json.load(sys.stdin):
@@ -182,8 +184,8 @@ openclaw_download_node() {
     rm -rf "$install_root"
     mkdir -p "$install_root"
     echo "Downloading Node ${version} from ${archive_url}"
-    curl -fsSL --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 \
-      -o "$archive_path" "$archive_url"
+    curl -fSL --no-progress-meter --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 \
+      -o "$archive_path" "$archive_url" 2> >(sed 's/^Warning: /::warning::/' >&2)
     ps_archive_path="$archive_path"
     ps_install_root="$install_root"
     if command -v cygpath >/dev/null 2>&1; then
@@ -208,8 +210,8 @@ openclaw_download_node() {
     mkdir -p "$install_root"
     echo "Downloading Node ${version} from ${archive_url}"
     rm -f "$archive_path"
-    if ! curl -fsSL --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 \
-      -o "$archive_path" "$archive_url"; then
+    if ! curl -fSL --no-progress-meter --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 \
+      -o "$archive_path" "$archive_url" 2> >(sed 's/^Warning: /::warning::/' >&2); then
       rm -f "$archive_path"
       return 1
     fi

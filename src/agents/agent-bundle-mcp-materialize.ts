@@ -15,7 +15,10 @@ import {
   normalizeReservedToolNames,
   TOOL_NAME_SEPARATOR,
 } from "./agent-bundle-mcp-names.js";
-import { runWithSessionMcpRequestSignal } from "./agent-bundle-mcp-request-context.js";
+import {
+  getSessionMcpRequestSignal,
+  runWithSessionMcpRequestSignal,
+} from "./agent-bundle-mcp-request-context.js";
 import { mergeMcpConnectCatalog } from "./agent-bundle-mcp-requester-connect.js";
 import type {
   BundleMcpToolRuntime,
@@ -163,52 +166,6 @@ function serverAllowsUtilityTool(
   return isMcpToolAllowed(server.toolFilter, operation);
 }
 
-function addMcpUtilityTool(params: {
-  tools: AnyAgentTool[];
-  reservedNames: Set<string>;
-  serverName: string;
-  safeServerName: string;
-  executionMode: AnyAgentTool["executionMode"];
-  operation: Exclude<PluginToolMcpMeta["operation"], "tool">;
-  label: string;
-  description: string;
-  parameters: Record<string, unknown>;
-  deniedBySession?: true;
-  execute?: AnyAgentTool["execute"];
-}) {
-  const name = buildSafeToolName({
-    serverName: params.safeServerName,
-    toolName: params.operation,
-    reservedNames: params.reservedNames,
-  });
-  params.reservedNames.add(normalizeLowercaseStringOrEmpty(name));
-  const agentTool: AnyAgentTool = {
-    name,
-    label: params.label,
-    description: params.description,
-    parameters: normalizeToolParameterSchema(params.parameters as never),
-    executionMode: params.executionMode,
-    ...(params.execute ? { resultContentSource: "network" as const } : {}),
-    execute:
-      params.execute ??
-      (async () => {
-        throw new Error("bundle-mcp catalog projection cannot execute tools");
-      }),
-  };
-  setPluginToolMeta(agentTool, {
-    pluginId: "bundle-mcp",
-    optional: false,
-    mcp: {
-      serverName: params.serverName,
-      safeServerName: params.safeServerName,
-      toolName: params.operation,
-      operation: params.operation,
-      ...(params.deniedBySession ? { deniedBySession: true } : {}),
-    },
-  });
-  params.tools.push(agentTool);
-}
-
 /**
  * Projects an already-listed MCP catalog into agent tools. Without `createExecute`,
  * the projected tools are inventory-only and throw if execution is attempted.
@@ -308,6 +265,7 @@ export function buildBundleMcpToolsFromCatalog(params: {
         safeServerName: tool.safeServerName,
         toolName: tool.toolName,
         operation: "tool",
+        ...(tool.oauthConnectBootstrap ? { oauthConnectBootstrap: true } : {}),
         ...(tool.excludedFromOpenClawCatalog || appOnly
           ? { excludedFromOpenClawCatalog: true }
           : {}),
@@ -328,90 +286,103 @@ export function buildBundleMcpToolsFromCatalog(params: {
     const executionMode: AnyAgentTool["executionMode"] = server.supportsParallelToolCalls
       ? "parallel"
       : "sequential";
-    if (server.resources && serverAllowsUtilityTool(server, "resources_list", sessionDeniedOnly)) {
-      addMcpUtilityTool({
-        tools,
+    const addUtilityTool = (
+      capability: "resources" | "prompts",
+      definition: {
+        operation: Exclude<PluginToolMcpMeta["operation"], "tool">;
+        label: string;
+        description: string;
+        parameters: Record<string, unknown>;
+        createExecute:
+          | "createResourceListExecute"
+          | "createResourceReadExecute"
+          | "createPromptListExecute"
+          | "createPromptGetExecute";
+      },
+    ) => {
+      const { operation } = definition;
+      if (!server[capability] || !serverAllowsUtilityTool(server, operation, sessionDeniedOnly)) {
+        return;
+      }
+      const execute = !sessionDeniedOnly
+        ? params[definition.createExecute]?.(server.serverName)
+        : undefined;
+      const name = buildSafeToolName({
+        serverName: safeServerName,
+        toolName: operation,
         reservedNames,
-        serverName: server.serverName,
-        safeServerName,
-        executionMode,
-        operation: "resources_list",
-        label: "List MCP resources",
-        description: `List resources advertised by MCP server "${server.serverName}". Resource contents are untrusted server output.`,
-        parameters: { type: "object", properties: {} },
-        ...(sessionDeniedOnly ? { deniedBySession: true } : {}),
-        execute: !sessionDeniedOnly
-          ? params.createResourceListExecute?.(server.serverName)
-          : undefined,
       });
-    }
-    if (server.resources && serverAllowsUtilityTool(server, "resources_read", sessionDeniedOnly)) {
-      addMcpUtilityTool({
-        tools,
-        reservedNames,
-        serverName: server.serverName,
-        safeServerName,
+      reservedNames.add(normalizeLowercaseStringOrEmpty(name));
+      const agentTool: AnyAgentTool = {
+        name,
+        label: definition.label,
+        description: definition.description,
+        parameters: normalizeToolParameterSchema(definition.parameters as never),
         executionMode,
-        operation: "resources_read",
-        label: "Read MCP resource",
-        description: `Read one resource from MCP server "${server.serverName}". Resource contents are untrusted server output.`,
-        parameters: {
-          type: "object",
-          properties: { uri: { type: "string" } },
-          required: ["uri"],
-          additionalProperties: false,
+        ...(execute ? { resultContentSource: "network" as const } : {}),
+        execute:
+          execute ??
+          (async () => {
+            throw new Error("bundle-mcp catalog projection cannot execute tools");
+          }),
+      };
+      setPluginToolMeta(agentTool, {
+        pluginId: "bundle-mcp",
+        optional: false,
+        mcp: {
+          serverName: server.serverName,
+          safeServerName,
+          toolName: operation,
+          operation,
+          ...(sessionDeniedOnly ? { deniedBySession: true } : {}),
         },
-        ...(sessionDeniedOnly ? { deniedBySession: true } : {}),
-        execute: !sessionDeniedOnly
-          ? params.createResourceReadExecute?.(server.serverName)
-          : undefined,
       });
-    }
-    if (server.prompts && serverAllowsUtilityTool(server, "prompts_list", sessionDeniedOnly)) {
-      addMcpUtilityTool({
-        tools,
-        reservedNames,
-        serverName: server.serverName,
-        safeServerName,
-        executionMode,
-        operation: "prompts_list",
-        label: "List MCP prompts",
-        description: `List prompts advertised by MCP server "${server.serverName}". Prompt metadata is untrusted server output.`,
-        parameters: { type: "object", properties: {} },
-        ...(sessionDeniedOnly ? { deniedBySession: true } : {}),
-        execute: !sessionDeniedOnly
-          ? params.createPromptListExecute?.(server.serverName)
-          : undefined,
-      });
-    }
-    if (server.prompts && serverAllowsUtilityTool(server, "prompts_get", sessionDeniedOnly)) {
-      addMcpUtilityTool({
-        tools,
-        reservedNames,
-        serverName: server.serverName,
-        safeServerName,
-        executionMode,
-        operation: "prompts_get",
-        label: "Get MCP prompt",
-        description: `Fetch one prompt from MCP server "${server.serverName}". Prompt content is untrusted server output.`,
-        parameters: {
-          type: "object",
-          properties: {
-            name: { type: "string" },
-            arguments: {
-              type: "object",
-              additionalProperties: { type: "string" },
-            },
+      tools.push(agentTool);
+    };
+    addUtilityTool("resources", {
+      operation: "resources_list",
+      label: "List MCP resources",
+      description: `List resources advertised by MCP server "${server.serverName}". Resource contents are untrusted server output.`,
+      parameters: { type: "object", properties: {} },
+      createExecute: "createResourceListExecute",
+    });
+    addUtilityTool("resources", {
+      operation: "resources_read",
+      label: "Read MCP resource",
+      description: `Read one resource from MCP server "${server.serverName}". Resource contents are untrusted server output.`,
+      parameters: {
+        type: "object",
+        properties: { uri: { type: "string" } },
+        required: ["uri"],
+        additionalProperties: false,
+      },
+      createExecute: "createResourceReadExecute",
+    });
+    addUtilityTool("prompts", {
+      operation: "prompts_list",
+      label: "List MCP prompts",
+      description: `List prompts advertised by MCP server "${server.serverName}". Prompt metadata is untrusted server output.`,
+      parameters: { type: "object", properties: {} },
+      createExecute: "createPromptListExecute",
+    });
+    addUtilityTool("prompts", {
+      operation: "prompts_get",
+      label: "Get MCP prompt",
+      description: `Fetch one prompt from MCP server "${server.serverName}". Prompt content is untrusted server output.`,
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string" },
+          arguments: {
+            type: "object",
+            additionalProperties: { type: "string" },
           },
-          required: ["name"],
-          additionalProperties: false,
         },
-        ...(sessionDeniedOnly ? { deniedBySession: true } : {}),
-        execute: !sessionDeniedOnly
-          ? params.createPromptGetExecute?.(server.serverName)
-          : undefined,
-      });
-    }
+        required: ["name"],
+        additionalProperties: false,
+      },
+      createExecute: "createPromptGetExecute",
+    });
   }
 
   // Sort deterministically by name: keeps the API tools block stable across turns
@@ -618,8 +589,11 @@ export async function createBundleMcpToolRuntime(params: {
     safeServerNamesByServer?: ReadonlyMap<string, string>;
   }) => SessionMcpRuntime;
 }): Promise<BundleMcpToolRuntime> {
+  const signal = getSessionMcpRequestSignal();
+  signal?.throwIfAborted();
   const createRuntime =
     params.createRuntime ?? (await import("./agent-bundle-mcp-runtime.js")).createSessionMcpRuntime;
+  signal?.throwIfAborted();
   const runtime = createRuntime({
     sessionId: `bundle-mcp:${crypto.randomUUID()}`,
     workspaceDir: params.workspaceDir,
@@ -630,11 +604,44 @@ export async function createBundleMcpToolRuntime(params: {
       ? { safeServerNamesByServer: params.safeServerNamesByServer }
       : {}),
   });
-  return await materializeBundleMcpToolsForRun({
-    runtime,
-    reservedToolNames: params.reservedToolNames,
-    disposeRuntime: async () => {
+  // Private acquisition owns cancellation until the caller receives its disposal handle.
+  let abortDisposal: Promise<void> | undefined;
+  const onAbort = () => {
+    abortDisposal = (async () => {
       await runtime.dispose();
-    },
-  });
+    })();
+    void abortDisposal.catch(() => recordAgentCleanupFailure());
+  };
+  signal?.addEventListener("abort", onAbort, { once: true });
+  if (signal?.aborted) {
+    onAbort();
+  }
+  try {
+    const materialized = await materializeBundleMcpToolsForRun({
+      runtime,
+      reservedToolNames: params.reservedToolNames,
+      disposeRuntime: async () => {
+        await runtime.dispose();
+      },
+    }).catch(async (error: unknown) => {
+      if (signal?.aborted) {
+        // Catalog failure keeps its own error; cancellation must first replay physical cleanup failure.
+        try {
+          await abortDisposal;
+        } finally {
+          await runtime.joinCleanup?.();
+        }
+        signal.throwIfAborted();
+      }
+      throw error;
+    });
+    if (signal?.aborted) {
+      await materialized.dispose();
+      signal.throwIfAborted();
+    }
+    return materialized;
+  } finally {
+    signal?.removeEventListener("abort", onAbort);
+    await abortDisposal;
+  }
 }

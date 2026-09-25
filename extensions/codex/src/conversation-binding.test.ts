@@ -59,6 +59,9 @@ const codexRequirementsTomlMock = vi.hoisted(() => vi.fn<() => string | undefine
 const resolveSandboxContextMock = vi.hoisted(() =>
   vi.fn<(...args: unknown[]) => Promise<{ enabled: boolean } | null>>(async () => null),
 );
+const configLayerPolicyMocks = vi.hoisted(() => ({
+  readCodexEffectiveConfig: vi.fn(),
+}));
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
@@ -89,6 +92,11 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
     resolveSandboxContext: resolveSandboxContextMock,
   };
 });
+
+vi.mock("./app-server/config-layer-policy.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./app-server/config-layer-policy.js")>()),
+  readCodexEffectiveConfig: configLayerPolicyMocks.readCodexEffectiveConfig,
+}));
 
 vi.mock("openclaw/plugin-sdk/conversation-binding-runtime", async (importOriginal) => {
   const actual =
@@ -448,6 +456,37 @@ function conversationThreadStartResult(threadId: string, canAcceptDirectInput?: 
   };
 }
 
+function createCompletingBoundTurnClient(turnStartParams: Record<string, unknown>[]) {
+  let notificationHandler: ((notification: unknown) => void) | undefined;
+  return {
+    request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
+      if (method === "turn/start") {
+        turnStartParams.push(requestParams);
+        setImmediate(() =>
+          notificationHandler?.({
+            method: "turn/completed",
+            params: {
+              threadId: "thread-1",
+              turn: {
+                id: "turn-1",
+                status: "completed",
+                items: [{ type: "agentMessage", id: "item-1", text: "done" }],
+              },
+            },
+          }),
+        );
+        return { turn: { id: "turn-1" } };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    }),
+    addNotificationHandler: vi.fn((handler: (notification: unknown) => void) => {
+      notificationHandler = handler;
+      return () => undefined;
+    }),
+    addRequestHandler: vi.fn(() => () => undefined),
+  };
+}
+
 function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0): unknown {
   const call = mock.mock.calls[callIndex];
   if (!call) {
@@ -490,6 +529,12 @@ describe("codex conversation binding", () => {
     codexRequirementsTomlMock.mockReset();
     resolveSandboxContextMock.mockReset();
     resolveSandboxContextMock.mockResolvedValue(null);
+    configLayerPolicyMocks.readCodexEffectiveConfig.mockReset();
+    configLayerPolicyMocks.readCodexEffectiveConfig.mockResolvedValue({
+      config: {},
+      origins: {},
+      layers: [],
+    });
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
@@ -806,6 +851,16 @@ describe("codex conversation binding", () => {
       auth: { order: { openai: ["openai:default"] } },
     };
     const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    configLayerPolicyMocks.readCodexEffectiveConfig.mockResolvedValue({
+      config: { project_doc_max_bytes: 200_000 },
+      origins: {
+        project_doc_max_bytes: {
+          name: { type: "user", file: "/codex/config.toml", profile: null },
+          version: "sha256:authored-budget",
+        },
+      },
+      layers: [],
+    });
     sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
       request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
         requests.push({ method, params: requestParams });
@@ -838,7 +893,12 @@ describe("codex conversation binding", () => {
     expect(requests[0]?.params.model).toBe("gpt-5.4-mini");
     expect(requests[0]?.params.personality).toBe("none");
     expect(requests[0]?.params.ephemeral).toBe(true);
-    expect(requests[0]?.params.config).toMatchObject({ project_doc_max_bytes: 131_072 });
+    expect(requests[0]?.params.config).toMatchObject({ project_doc_max_bytes: 200_000 });
+    expect(configLayerPolicyMocks.readCodexEffectiveConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ request: expect.any(Function) }),
+      tempDir,
+      expect.objectContaining({ timeoutMs: 60_000, assertCurrent: expect.any(Function) }),
+    );
     // An intent without an authored profile must not turn an implicit lookup into
     // a persisted pin; shared-client startup owns that selection.
     const binding = await readTestConversationBinding(sessionFile);
@@ -1199,6 +1259,11 @@ describe("codex conversation binding", () => {
   it.each([undefined, null, true])(
     "reconfigures a retained interactive or unknown-capability thread (%s)",
     async (canAcceptDirectInput) => {
+      configLayerPolicyMocks.readCodexEffectiveConfig.mockResolvedValue({
+        config: { project_doc_max_bytes: 32_768 },
+        origins: {},
+        layers: [],
+      });
       const sessionFile = path.join(tempDir, "retained-child-session.jsonl");
       const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
       const client = {
@@ -1251,6 +1316,169 @@ describe("codex conversation binding", () => {
     },
   );
 
+  it("bounds a pending native config read without releasing the bound thread or its sibling", async () => {
+    const actualConfig = await vi.importActual<
+      typeof import("./app-server/config-layer-policy.js")
+    >("./app-server/config-layer-policy.js");
+    configLayerPolicyMocks.readCodexEffectiveConfig.mockImplementation(
+      actualConfig.readCodexEffectiveConfig,
+    );
+    const sharedClientRuntime = await import("./app-server/shared-client.js");
+    const actualSharedClientRuntime = await vi.importActual<
+      typeof import("./app-server/shared-client.js")
+    >("./app-server/shared-client.js");
+    const retry = vi
+      .spyOn(sharedClientRuntime, "withLeasedCodexAppServerClientStartSelectionRetry")
+      .mockImplementation(
+        actualSharedClientRuntime.withLeasedCodexAppServerClientStartSelectionRetry,
+      );
+    const releaseLease = vi.mocked(sharedClientRuntime.releaseCodexAppServerClientLease);
+    releaseLease.mockClear();
+    const sessionFile = path.join(tempDir, "pending-config-read.jsonl");
+    const harness = createClientHarness();
+    ensureCodexAppServerClientRuntime(harness.client, { agentDir: tempDir });
+    const releaseBoundThread = vi.fn(async () => undefined);
+    const releaseSibling = vi.fn(async () => undefined);
+    await retainCodexAppServerLiveThread(harness.client, "thread-current", releaseBoundThread);
+    await retainCodexAppServerLiveThread(harness.client, "thread-sibling", releaseSibling);
+    await writeTestConversationBinding(sessionFile, {
+      threadId: "thread-current",
+      clientId: harness.client.getInstanceId(),
+      cwd: tempDir,
+    });
+    const before = await readTestConversationBinding(sessionFile);
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(harness.client);
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const settled = vi.fn();
+    const result = prepareTestConversationBinding({
+      pluginConfig: { appServer: { requestTimeoutMs: 1_000 } },
+      sessionFile,
+      threadId: "thread-current",
+      workspaceDir: tempDir,
+    }).then(
+      () => {
+        settled();
+        return undefined;
+      },
+      (error: unknown) => {
+        settled();
+        return error;
+      },
+    );
+    try {
+      expect(JSON.parse(await harness.waitForWrite(0))).toMatchObject({
+        method: "config/read",
+        params: { cwd: tempDir, includeLayers: true },
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(settled).toHaveBeenCalledOnce();
+      await expect(result).resolves.toMatchObject({ message: "config/read timed out" });
+      expect(harness.writes).toHaveLength(1);
+      expect(releaseLease).toHaveBeenCalledOnce();
+      expect(releaseBoundThread).not.toHaveBeenCalled();
+      expect(releaseSibling).not.toHaveBeenCalled();
+      expect(harness.stdinDestroyed).toBe(false);
+      await expect(readTestConversationBinding(sessionFile)).resolves.toEqual(before);
+      await expect(
+        consumeCodexAppServerLiveThread(harness.client, "thread-current"),
+      ).resolves.toEqual(expect.objectContaining({ release: expect.any(Function) }));
+      await expect(
+        consumeCodexAppServerLiveThread(harness.client, "thread-sibling"),
+      ).resolves.toEqual(expect.objectContaining({ release: expect.any(Function) }));
+    } finally {
+      harness.client.close();
+      await result;
+      retry.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses the selected physical client's budget when rebinding a thread", async () => {
+    const actualConfig = await vi.importActual<
+      typeof import("./app-server/config-layer-policy.js")
+    >("./app-server/config-layer-policy.js");
+    configLayerPolicyMocks.readCodexEffectiveConfig.mockImplementation(
+      actualConfig.readCodexEffectiveConfig,
+    );
+    const sessionFile = path.join(tempDir, "selected-config-owner.jsonl");
+    const threadId = "thread-selected-config-owner";
+    const createBudgetClient = (budget: number) =>
+      createClientHarness({
+        onWrite: (line, send) => {
+          const request: { id: number; method: string } = JSON.parse(line);
+          if (request.method === "config/read") {
+            send({
+              id: request.id,
+              result: {
+                config: { project_doc_max_bytes: budget },
+                origins: {
+                  project_doc_max_bytes: {
+                    name: { type: "user", file: "/codex/config.toml", profile: null },
+                    version: "sha256:authored-budget",
+                  },
+                },
+                layers: [],
+              },
+            });
+          } else if (request.method === "thread/read") {
+            send({
+              id: request.id,
+              result: { thread: conversationThreadStartResult(threadId).thread },
+            });
+          } else if (request.method === "thread/resume") {
+            send({ id: request.id, result: conversationThreadStartResult(threadId) });
+          } else if (request.method === "thread/unsubscribe") {
+            send({ id: request.id, result: {} });
+          } else {
+            throw new Error(`Unexpected native request: ${request.method}`);
+          }
+        },
+      });
+    const previous = createBudgetClient(180_000);
+    const selected = createBudgetClient(240_000);
+    ensureCodexAppServerClientRuntime(previous.client, { agentDir: tempDir });
+    ensureCodexAppServerClientRuntime(selected.client, { agentDir: tempDir });
+    await retainCodexAppServerLiveThread(previous.client, threadId);
+    await writeTestConversationBinding(sessionFile, {
+      threadId,
+      clientId: previous.client.getInstanceId(),
+      cwd: tempDir,
+    });
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(selected.client);
+    sharedClientMocks.retainSharedCodexAppServerClientByInstanceId.mockImplementation((clientId) =>
+      clientId === previous.client.getInstanceId()
+        ? { client: previous.client, release: vi.fn() }
+        : undefined,
+    );
+    try {
+      await prepareTestConversationBinding({ sessionFile, threadId, workspaceDir: tempDir });
+      const selectedRequests = selected.writes.map((line): { method: string; params: unknown } =>
+        JSON.parse(line),
+      );
+      expect(selectedRequests.find(({ method }) => method === "config/read")?.params).toEqual({
+        cwd: tempDir,
+        includeLayers: true,
+      });
+      expect(
+        selectedRequests.find(({ method }) => method === "thread/resume")?.params,
+      ).toMatchObject({
+        threadId,
+        cwd: tempDir,
+        config: { project_doc_max_bytes: 240_000 },
+      });
+      expect(previous.writes.map((line) => JSON.parse(line).method)).toEqual([
+        "thread/unsubscribe",
+      ]);
+      await expect(readTestConversationBinding(sessionFile)).resolves.toMatchObject({
+        threadId,
+        clientId: selected.client.getInstanceId(),
+      });
+    } finally {
+      previous.client.close();
+      selected.client.close();
+    }
+  });
+
   it.each(["preflight", "commit", "retention", "binding-read"] as const)(
     "preserves the current owner when attachment fails during %s",
     async (expiresDuring) => {
@@ -1284,13 +1512,12 @@ describe("codex conversation binding", () => {
         client: harness.client,
         release: vi.fn(),
       });
-      vi.useFakeTimers({ toFake: ["Date"] });
-      const startedAt = Date.now();
+      const elapsedClock = vi.spyOn(performance, "now").mockReturnValue(0);
       let resumeAccepted = false;
       const request = vi.spyOn(harness.client, "request").mockImplementation(async (method) => {
         if (method === "thread/read") {
           if (expiresDuring === "preflight") {
-            vi.setSystemTime(startedAt + 1_001);
+            elapsedClock.mockReturnValue(1_001);
           }
           return { thread: response.thread } as never;
         }
@@ -1319,14 +1546,14 @@ describe("codex conversation binding", () => {
                     throw new Error("Invalid Codex app-server binding row");
                   }
                   if (expiresDuring === "retention") {
-                    vi.setSystemTime(startedAt + 1_001);
+                    elapsedClock.mockReturnValue(1_001);
                   }
                 }
                 return testCodexAppServerBindingStore.read(identity);
               },
               mutate: async (...args) => {
                 if (expiresDuring === "commit") {
-                  vi.setSystemTime(startedAt + 1_001);
+                  elapsedClock.mockReturnValue(1_001);
                 }
                 return await testCodexAppServerBindingStore.mutate(...args);
               },
@@ -1356,7 +1583,7 @@ describe("codex conversation binding", () => {
       } finally {
         retry.mockRestore();
         harness.client.close();
-        vi.useRealTimers();
+        elapsedClock.mockRestore();
       }
     },
   );
@@ -1428,7 +1655,7 @@ describe("codex conversation binding", () => {
       .spyOn(harness.client, "request")
       .mockResolvedValue(conversationThreadStartResult("thread-active-child") as never);
     ensureCodexAppServerClientRuntime(harness.client, { agentDir: tempDir });
-    const parent = codexNativeSubagentMonitorRuntime.register({
+    const parent = await codexNativeSubagentMonitorRuntime.register({
       client: harness.client,
       parentThreadId: "thread-parent",
     });
@@ -1468,7 +1695,7 @@ describe("codex conversation binding", () => {
       expect(request).not.toHaveBeenCalled();
       expect(isCodexAppServerLiveThreadClaimed(harness.client, "thread-active-child")).toBe(true);
     } finally {
-      parent.unregister();
+      await parent.unregister();
       harness.client.close();
     }
   });
@@ -2217,58 +2444,6 @@ describe("codex conversation binding", () => {
       reply: { text: "Only an owner or operator.admin can control Codex native execution." },
     });
     expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
-  });
-
-  it("routes a programmatically bound Control UI session through node resume", async () => {
-    const resumeCodexCliSessionOnNode = vi.fn(async () => ({
-      ok: true as const,
-      sessionId: "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd",
-      text: "done",
-    }));
-
-    const result = await handleCodexConversationInboundClaim(
-      {
-        content: "continue the task",
-        channel: "webchat",
-        isGroup: false,
-        commandAuthorized: true,
-        sessionKey: "node-session",
-      },
-      {
-        channelId: "webchat",
-        sessionKey: "node-session",
-        pluginBinding: {
-          bindingId: "binding-1",
-          pluginId: "codex",
-          pluginRoot: tempDir,
-          channel: "webchat",
-          accountId: "default",
-          conversationId: "node-session",
-          boundAt: Date.now(),
-          data: {
-            kind: "codex-cli-node-session",
-            version: 1,
-            nodeId: "mb-m5",
-            sessionId: "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd",
-            cwd: "/repo",
-          },
-        },
-      },
-      {
-        config: { tools: { exec: { host: "node", node: "mb-m5" } } },
-        resumeCodexCliSessionOnNode,
-        timeoutMs: 1234,
-      },
-    );
-
-    expect(result).toEqual({ handled: true, reply: { text: "done" } });
-    expect(resumeCodexCliSessionOnNode).toHaveBeenCalledWith({
-      nodeId: "mb-m5",
-      sessionId: "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd",
-      prompt: "continue the task",
-      cwd: "/repo",
-      timeoutMs: 1234,
-    });
   });
 
   it("blocks bound Codex app-server turns when the current OpenClaw session is sandboxed", async () => {
@@ -3468,35 +3643,10 @@ describe("codex conversation binding", () => {
       approvalPolicy: "never",
       sandbox: "danger-full-access",
     });
-    let notificationHandler: ((notification: unknown) => void) | undefined;
     const turnStartParams: Record<string, unknown>[] = [];
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
-      request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
-        if (method === "turn/start") {
-          turnStartParams.push(requestParams);
-          setImmediate(() =>
-            notificationHandler?.({
-              method: "turn/completed",
-              params: {
-                threadId: "thread-1",
-                turn: {
-                  id: "turn-1",
-                  status: "completed",
-                  items: [{ type: "agentMessage", id: "item-1", text: "done" }],
-                },
-              },
-            }),
-          );
-          return { turn: { id: "turn-1" } };
-        }
-        throw new Error(`unexpected method: ${method}`);
-      }),
-      addNotificationHandler: vi.fn((handler: (notification: unknown) => void) => {
-        notificationHandler = handler;
-        return () => undefined;
-      }),
-      addRequestHandler: vi.fn(() => () => undefined),
-    });
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(
+      createCompletingBoundTurnClient(turnStartParams),
+    );
 
     const result = await handleCodexConversationInboundClaim(
       {
@@ -4291,35 +4441,10 @@ describe("codex conversation binding", () => {
       threadId: "thread-1",
       cwd: tempDir,
     });
-    let notificationHandler: ((notification: unknown) => void) | undefined;
     const turnStartParams: Record<string, unknown>[] = [];
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
-      request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
-        if (method === "turn/start") {
-          turnStartParams.push(requestParams);
-          setImmediate(() =>
-            notificationHandler?.({
-              method: "turn/completed",
-              params: {
-                threadId: "thread-1",
-                turn: {
-                  id: "turn-1",
-                  status: "completed",
-                  items: [{ type: "agentMessage", id: "item-1", text: "done" }],
-                },
-              },
-            }),
-          );
-          return { turn: { id: "turn-1" } };
-        }
-        throw new Error(`unexpected method: ${method}`);
-      }),
-      addNotificationHandler: vi.fn((handler: (notification: unknown) => void) => {
-        notificationHandler = handler;
-        return () => undefined;
-      }),
-      addRequestHandler: vi.fn(() => () => undefined),
-    });
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(
+      createCompletingBoundTurnClient(turnStartParams),
+    );
 
     const result = await handleCodexConversationInboundClaim(
       {
@@ -4374,35 +4499,10 @@ describe("codex conversation binding", () => {
       networkProxyProfileName: NETWORK_PROXY_PROFILE_NAME,
       networkProxyConfigFingerprint: NETWORK_PROXY_CONFIG_FINGERPRINT,
     });
-    let notificationHandler: ((notification: unknown) => void) | undefined;
     const turnStartParams: Record<string, unknown>[] = [];
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
-      request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
-        if (method === "turn/start") {
-          turnStartParams.push(requestParams);
-          setImmediate(() =>
-            notificationHandler?.({
-              method: "turn/completed",
-              params: {
-                threadId: "thread-1",
-                turn: {
-                  id: "turn-1",
-                  status: "completed",
-                  items: [{ type: "agentMessage", id: "item-1", text: "done" }],
-                },
-              },
-            }),
-          );
-          return { turn: { id: "turn-1" } };
-        }
-        throw new Error(`unexpected method: ${method}`);
-      }),
-      addNotificationHandler: vi.fn((handler: (notification: unknown) => void) => {
-        notificationHandler = handler;
-        return () => undefined;
-      }),
-      addRequestHandler: vi.fn(() => () => undefined),
-    });
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(
+      createCompletingBoundTurnClient(turnStartParams),
+    );
 
     const result = await handleCodexConversationInboundClaim(
       {
@@ -4620,35 +4720,10 @@ describe("codex conversation binding", () => {
       approvalPolicy: "never",
       sandbox: "danger-full-access",
     });
-    let notificationHandler: ((notification: unknown) => void) | undefined;
     const turnStartParams: Record<string, unknown>[] = [];
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
-      request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
-        if (method === "turn/start") {
-          turnStartParams.push(requestParams);
-          setImmediate(() =>
-            notificationHandler?.({
-              method: "turn/completed",
-              params: {
-                threadId: "thread-1",
-                turn: {
-                  id: "turn-1",
-                  status: "completed",
-                  items: [{ type: "agentMessage", id: "item-1", text: "done" }],
-                },
-              },
-            }),
-          );
-          return { turn: { id: "turn-1" } };
-        }
-        throw new Error(`unexpected method: ${method}`);
-      }),
-      addNotificationHandler: vi.fn((handler: (notification: unknown) => void) => {
-        notificationHandler = handler;
-        return () => undefined;
-      }),
-      addRequestHandler: vi.fn(() => () => undefined),
-    });
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(
+      createCompletingBoundTurnClient(turnStartParams),
+    );
 
     const result = await handleCodexConversationInboundClaim(
       {
@@ -4702,35 +4777,10 @@ describe("codex conversation binding", () => {
       approvalPolicy: "on-request",
       sandbox: "workspace-write",
     });
-    let notificationHandler: ((notification: unknown) => void) | undefined;
     const turnStartParams: Record<string, unknown>[] = [];
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
-      request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
-        if (method === "turn/start") {
-          turnStartParams.push(requestParams);
-          setImmediate(() =>
-            notificationHandler?.({
-              method: "turn/completed",
-              params: {
-                threadId: "thread-1",
-                turn: {
-                  id: "turn-1",
-                  status: "completed",
-                  items: [{ type: "agentMessage", id: "item-1", text: "done" }],
-                },
-              },
-            }),
-          );
-          return { turn: { id: "turn-1" } };
-        }
-        throw new Error(`unexpected method: ${method}`);
-      }),
-      addNotificationHandler: vi.fn((handler: (notification: unknown) => void) => {
-        notificationHandler = handler;
-        return () => undefined;
-      }),
-      addRequestHandler: vi.fn(() => () => undefined),
-    });
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(
+      createCompletingBoundTurnClient(turnStartParams),
+    );
 
     await expect(
       handleCodexConversationInboundClaim(

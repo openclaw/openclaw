@@ -17,7 +17,6 @@ import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import {
-  DEFAULT_LIVE_RETRIES,
   DEFAULT_RESOURCE_LIMITS,
   resolveDockerE2ePlan,
 } from "../../scripts/lib/docker-e2e-plan.mts";
@@ -41,10 +40,12 @@ import {
   validateDockerCandidateEnvironment,
   writeRunSummary,
 } from "../../scripts/test-docker-all.mts";
+import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
 import { waitForChildClose } from "../helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { copyDockerSchedulerHarness } from "./docker-all-harness.test-support.js";
 import { createScriptTestHarness } from "./test-helpers.js";
+import { toolingMtsEntrypoints } from "./tooling-mts-runtime.test-support.mts";
 
 const { createPrepublishPluginRegistryArtifact } = vi.hoisted(() => ({
   createPrepublishPluginRegistryArtifact: vi.fn(),
@@ -393,7 +394,6 @@ describe("scripts/test-docker-all scheduler", () => {
       allowFrozenTargetScenarioOmissions: true,
       includeOpenWebUI: false,
       liveMode: "all",
-      liveRetries: DEFAULT_LIVE_RETRIES,
       orderLanes: <T>(lanes: T[]) => lanes,
       planReleaseAll: false,
       profile: "all",
@@ -760,8 +760,10 @@ describe("scripts/test-docker-all scheduler", () => {
 
       const failureIndexFile = path.join(logDir, "failures.json");
       const failureIndex = JSON.parse(readFileSync(failureIndexFile, "utf8"));
+      expect(failureIndex).not.toHaveProperty("status");
       expect(failureIndex.combinedGhWorkflowCommand).toContain("allow_unreleased_changelog=true");
 
+      const rerunOutputs: string[] = [];
       for (const artifact of [summaryFile, failureIndexFile]) {
         const rerun = spawnSync(
           process.execPath,
@@ -773,9 +775,12 @@ describe("scripts/test-docker-all scheduler", () => {
           },
         );
         expect(rerun.status, rerun.stderr).toBe(0);
+        rerunOutputs.push(rerun.stdout);
         expect(rerun.stdout).toContain(`-f ref='${selectedSha}'`);
+        expect(rerun.stdout).toContain("docker_lanes='install-e2e'");
         expect(rerun.stdout).toContain("allow_unreleased_changelog=true");
       }
+      expect(rerunOutputs[1]).toBe(rerunOutputs[0]);
     } finally {
       rmSync(logDir, { force: true, recursive: true });
     }
@@ -895,12 +900,17 @@ describe("scripts/test-docker-all scheduler", () => {
 
       expect(result.status).toBe(0);
       expect(result.stdout).toContain("Docker lanes omitted");
-      expect(result.stdout).toContain("no selected lane is supported by the frozen target");
+      expect(result.stdout).toContain(
+        "No selected Docker lane is supported by the frozen target; finalizing run summary",
+      );
       const summary = JSON.parse(readFileSync(path.join(logDir, "summary.json"), "utf8"));
       expect(summary.status).toBe("passed");
       expect(summary.lanes).toEqual([]);
-      expect(summary.omittedUnsupportedLanes).toHaveLength(13);
+      expect(summary.omittedUnsupportedLanes).toHaveLength(14);
       expect(summary.omittedUnsupportedLanes).toContain("published-upgrade-survivor");
+      expect(summary.omittedUnsupportedLanes).toContain(
+        "published-upgrade-survivor-custom-plugin-siblings",
+      );
       expect(summary.omittedUnsupportedLanes).toContain(
         "published-upgrade-survivor-legacy-operator-state",
       );
@@ -908,7 +918,7 @@ describe("scripts/test-docker-all scheduler", () => {
         "published-upgrade-survivor-versioned-runtime-deps",
       );
       const failures = JSON.parse(readFileSync(path.join(logDir, "failures.json"), "utf8"));
-      expect(failures.status).toBe("passed");
+      expect(failures).not.toHaveProperty("status");
       expect(failures.lanes).toEqual([]);
     } finally {
       rmSync(root, { force: true, recursive: true });
@@ -946,7 +956,10 @@ describe("scripts/test-docker-all scheduler", () => {
       } else {
         const plan = JSON.parse(result.stdout);
         expect(plan.lanes).toEqual([]);
-        expect(plan.omittedUnsupportedLanes).toHaveLength(13);
+        expect(plan.omittedUnsupportedLanes).toHaveLength(14);
+        expect(plan.omittedUnsupportedLanes).toContain(
+          "published-upgrade-survivor-custom-plugin-siblings",
+        );
         expect(plan.omittedUnsupportedLanes).toContain(
           "published-upgrade-survivor-legacy-operator-state",
         );
@@ -1048,7 +1061,7 @@ process.exit(0);
       });
 
       const failureIndex = JSON.parse(readFileSync(path.join(logDir, "failures.json"), "utf8"));
-      expect(failureIndex.status).toBe("failed");
+      expect(failureIndex).not.toHaveProperty("status");
       expect(failureIndex.combinedGhWorkflowCommand).toBeUndefined();
       expect(failureIndex.lanes[0]?.ghWorkflowCommand).toBeUndefined();
       expect(failureIndex.lanes).toEqual([
@@ -1478,7 +1491,7 @@ const startedAt = realNow();
 Date.now = () => startedAt + (realNow() - startedAt) * 100;
 
 const { runShellCommand } = await import(${JSON.stringify(
-        new URL("../../scripts/test-docker-all.mts", import.meta.url).href,
+        resolveRuntimeWorkerUrl(toolingMtsEntrypoints.dockerAll).href,
       )});
 
 await runShellCommand({

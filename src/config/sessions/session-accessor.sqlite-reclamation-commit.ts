@@ -2,8 +2,8 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { setSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
+import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import {
-  isSqliteLockError,
   runSqliteImmediateTransactionSync,
   withSqliteWriteAdmissionService,
 } from "../../infra/sqlite-transaction.js";
@@ -15,6 +15,8 @@ const REJECTED = 2;
 const COMMITTING = 3;
 const SETTLED = 4;
 const REQUESTED = 5;
+const PARENT_RELEASED = 6;
+const PARENT_RELEASE_FAILED = 7;
 
 /** Preserve the reclamation owner's context when an unrelated synchronous writer helps. */
 export async function withSqliteReclamationAuthorization<T>(
@@ -72,13 +74,20 @@ function rejectCommit(shared: Int32Array): void {
   Atomics.notify(shared, 0);
 }
 
+/** Revoke a pending request before a synchronous native close can wait on its writer lock. */
+export function revokeSqliteReclamationCommit(buffer: SharedArrayBuffer): void {
+  rejectCommit(new Int32Array(buffer));
+}
+
 /** Called by the Worker while its deletion transaction still owns the writer lock. */
 export function waitForSqliteReclamationCommit(
   buffer: SharedArrayBuffer,
   request: () => void,
 ): void {
   const shared = new Int32Array(buffer);
-  Atomics.store(shared, 0, REQUESTED);
+  if (Atomics.compareExchange(shared, 0, WAITING, REQUESTED) !== WAITING) {
+    throw new Error("SQLite session reclamation commit was revoked");
+  }
   request();
   Atomics.wait(shared, 0, REQUESTED, COMMIT_DECISION_TIMEOUT_MS);
   if (Atomics.compareExchange(shared, 0, APPROVED, COMMITTING) !== APPROVED) {
@@ -91,8 +100,44 @@ export function waitForSqliteReclamationCommit(
 export function markSqliteReclamationSettled(buffer: SharedArrayBuffer | undefined): void {
   if (buffer) {
     const shared = new Int32Array(buffer);
-    Atomics.store(shared, 0, SETTLED);
-    Atomics.notify(shared, 0);
+    let current = Atomics.load(shared, 0);
+    while (current !== PARENT_RELEASED && current !== PARENT_RELEASE_FAILED) {
+      const observed = Atomics.compareExchange(shared, 0, current, SETTLED);
+      if (observed === current) {
+        Atomics.notify(shared, 0);
+        return;
+      }
+      current = observed;
+    }
+  }
+}
+
+/** Post-commit maintenance must not contend with the parent's own settlement probe. */
+export function waitForSqliteReclamationParentRelease(buffer: SharedArrayBuffer): void {
+  const shared = new Int32Array(buffer);
+  const decision = Atomics.load(shared, 0);
+  // Nonmutating requests never ask the parent for commit approval.
+  if (decision === WAITING) {
+    return;
+  }
+  if (
+    decision !== COMMITTING &&
+    decision !== SETTLED &&
+    decision !== PARENT_RELEASED &&
+    decision !== PARENT_RELEASE_FAILED
+  ) {
+    throw new Error("SQLite session reclamation commit was not authorized");
+  }
+  markSqliteReclamationSettled(buffer);
+  for (;;) {
+    const phase = Atomics.load(shared, 0);
+    if (phase === PARENT_RELEASED) {
+      return;
+    }
+    if (phase === PARENT_RELEASE_FAILED) {
+      throw new Error("SQLite parent commit-settlement probe did not release its writer lock");
+    }
+    Atomics.wait(shared, 0, SETTLED);
   }
 }
 
@@ -108,6 +153,7 @@ function authorizeSqliteReclamationCommit(
   let database: DatabaseSync | undefined;
   const recoveredErrors: unknown[] = [];
   let settled = false;
+  let failure: { error: unknown } | undefined;
   try {
     database = openNodeSqliteDatabase(databasePath);
     setSqliteBusyTimeout(database, COMMIT_DECISION_TIMEOUT_MS);
@@ -125,9 +171,13 @@ function authorizeSqliteReclamationCommit(
       try {
         // The Worker already owns BEGIN IMMEDIATE. Acquiring this lock proves
         // COMMIT, ROLLBACK, or connection close finished, even after abrupt exit.
-        runSqliteImmediateTransactionSync(database, () => {
-          settled = true;
-        });
+        runSqliteImmediateTransactionSync(
+          database,
+          () => {
+            settled = true;
+          },
+          { operationLabel: "session.reclamation.commit-settlement" },
+        );
       } catch (error) {
         if (recoveredErrors.length === 0) {
           recoveredErrors.push(error);
@@ -154,20 +204,40 @@ function authorizeSqliteReclamationCommit(
       }
     }
   } catch (error) {
+    failure = { error };
     rejectCommit(shared);
-    throw error;
   } finally {
+    let closeFailure: { error: unknown } | undefined;
     try {
       if (database?.isOpen) {
         database.close();
       }
     } catch (error) {
-      // The original authorization failure stays fatal. After settlement, the
-      // Worker's result owns success and all postcommit publication must continue.
-      if (settled) {
-        recoveredErrors.push(error);
-      }
+      closeFailure = { error };
     }
+    if (settled) {
+      // Child settlement alone does not release a probe whose own transaction failed.
+      const released = !database?.isOpen || !database.isTransaction;
+      Atomics.store(shared, 0, released ? PARENT_RELEASED : PARENT_RELEASE_FAILED);
+      Atomics.notify(shared, 0);
+      if (closeFailure) {
+        recoveredErrors.push(closeFailure.error);
+      }
+      if (!released) {
+        recoveredErrors.push(
+          new Error("SQLite commit-settlement probe remains in a transaction after close"),
+        );
+      }
+    } else if (failure && closeFailure) {
+      failure = {
+        error: new AggregateError([failure.error, closeFailure.error], String(failure.error), {
+          cause: failure.error,
+        }),
+      };
+    }
+  }
+  if (failure) {
+    throw failure.error;
   }
   return recoveredErrors;
 }

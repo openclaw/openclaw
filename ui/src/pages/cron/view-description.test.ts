@@ -65,8 +65,7 @@ describe("cron view saved metadata", () => {
 
       const state = createInitialCronState();
       startCronEdit(state, job);
-      expect(state.cronEditingJobId).toBe(job.id);
-      expect(state.cronEditingConfigRevision).toBe(job.configRevision);
+      expect(state.cronEditingJob).toEqual(job);
       const detail = renderCronView({ editingJob: state.cronEditingJob, form: state.cronForm });
       expect(detail.querySelector(".cron-detail-title")?.textContent).toBe(expected);
       expect(detail.querySelector<HTMLInputElement>("#cron-name")?.value).toBe(

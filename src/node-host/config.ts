@@ -9,7 +9,8 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import { readConfigMachineStateWithMetadata } from "../state/config-machine-state.js";
+import { logInfo } from "../logger.js";
+import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   runOpenClawStateWriteTransaction,
@@ -39,6 +40,8 @@ export type NodeHostConfig = {
   gateway?: NodeHostGatewayConfig;
   /** Share installed macOS applications through device.apps (default: false). */
   installedAppsSharing?: boolean;
+  /** Restrict this host to these exact command ids; omission keeps the full surface. */
+  commands?: string[];
 };
 
 export const NODE_HOST_CONFIG_KEY = "nodeHost.config";
@@ -157,7 +160,17 @@ function normalizeStoredNodeHostConfig(value: unknown): NodeHostConfig {
     displayName: optionalNonEmptyString(value.displayName, "display_name"),
     gateway,
     installedAppsSharing: value.installedAppsSharing === true,
+    ...(value.commands !== undefined
+      ? { commands: normalizeNodeHostCommands(value.commands) }
+      : {}),
   };
+}
+
+function normalizeNodeHostCommands(value: unknown): string[] {
+  if (!Array.isArray(value) || value.some((id) => typeof id !== "string" || !id.trim())) {
+    throw new Error("invalid node-host commands: expected an array of non-empty command ids");
+  }
+  return [...new Set(value.map((id: string) => id.trim()))].toSorted();
 }
 
 // Own-property parity with the retired column reader: an absent Cloudflare
@@ -180,25 +193,34 @@ function normalizeGatewayConfig(gateway: NodeHostGatewayConfig): NodeHostGateway
   return Object.values(normalized).some((value) => value !== undefined) ? normalized : undefined;
 }
 
-function readNodeHostConfig(env: NodeJS.ProcessEnv): NodeHostConfig | null {
-  const stored = readConfigMachineStateWithMetadata<unknown>(
-    NODE_HOST_CONFIG_KEY,
-    databaseOptions(env),
-  );
+async function readNodeHostConfig(env: NodeJS.ProcessEnv): Promise<NodeHostConfig | null> {
+  const selectedEnv = { ...env, OPENCLAW_STATE_DIR: resolveStateDir(env) };
+  assertNodeHostLegacyStateMigrated(selectedEnv);
+  const reply = await executeExistingOpenClawStateRead(databaseOptions(selectedEnv), {
+    type: NODE_HOST_CONFIG_KEY,
+  });
+  assertNodeHostLegacyStateMigrated(selectedEnv);
+  if (!reply) {
+    return null;
+  }
+  if (!reply.ok || reply.type !== NODE_HOST_CONFIG_KEY) {
+    throw new Error("Unexpected node-host configuration read result");
+  }
+  const stored = reply.row;
   if (!stored) {
     return null;
   }
-  if (!Number.isSafeInteger(stored.updatedAtMs) || stored.updatedAtMs < 0) {
+  const value: unknown = JSON.parse(stored.value_json);
+  if (!Number.isSafeInteger(stored.updated_at_ms) || stored.updated_at_ms < 0) {
     throw new Error("invalid node-host SQLite row: updated_at_ms must be a non-negative integer");
   }
-  return normalizeStoredNodeHostConfig(stored.value);
+  return normalizeStoredNodeHostConfig(value);
 }
 
 /** Load canonical node-host state. Legacy files block the read until Doctor migrates them. */
 export async function loadNodeHostConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<NodeHostConfig | null> {
-  assertNodeHostLegacyStateMigrated(env);
   return readNodeHostConfig(env);
 }
 
@@ -206,7 +228,6 @@ export async function loadNodeHostConfig(
 export async function loadNodeHostConfigReadOnly(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<NodeHostConfig | null> {
-  assertNodeHostLegacyStateMigrated(env);
   return readNodeHostConfig(env);
 }
 
@@ -223,6 +244,8 @@ export async function configureNodeHost(params: {
   nowMs?: number;
   candidateNodeId?: string;
   installedAppsSharing?: boolean;
+  commands?: string[];
+  allCommands?: boolean;
 }): Promise<NodeHostConfig> {
   const env = params.env ?? process.env;
   assertNodeHostLegacyStateMigrated(env);
@@ -231,11 +254,14 @@ export async function configureNodeHost(params: {
   const fallbackDisplayName = optionalInputString(params.fallbackDisplayName);
   const candidateNodeId = params.candidateNodeId?.trim() || crypto.randomUUID();
   const gateway = normalizeGatewayConfig(params.gateway);
+  const commands =
+    params.commands === undefined ? undefined : normalizeNodeHostCommands(params.commands);
   const updatedAtMs = params.nowMs ?? Date.now();
   if (!Number.isSafeInteger(updatedAtMs) || updatedAtMs < 0) {
     throw new Error("invalid node-host updatedAtMs: expected a non-negative integer");
   }
 
+  let clearedCommands = false;
   const config = runOpenClawStateWriteTransaction(({ db }) => {
     const stateDb = getNodeSqliteKysely<NodeHostConfigDatabase>(db);
     const stored = executeSqliteQueryTakeFirstSync(
@@ -248,12 +274,15 @@ export async function configureNodeHost(params: {
     const existing = stored
       ? normalizeStoredNodeHostConfig(JSON.parse(stored.value_json) as unknown)
       : undefined;
+    clearedCommands = params.allCommands === true && existing?.commands !== undefined;
+    const nextCommands = params.allCommands ? undefined : (commands ?? existing?.commands);
     const next: NodeHostConfig = {
       version: 1,
       nodeId: explicitNodeId ?? existing?.nodeId ?? candidateNodeId,
       displayName: explicitDisplayName ?? existing?.displayName ?? fallbackDisplayName,
       gateway,
       installedAppsSharing: params.installedAppsSharing ?? existing?.installedAppsSharing ?? false,
+      ...(nextCommands !== undefined ? { commands: nextCommands } : {}),
     };
     const valueJson = JSON.stringify(next);
     executeSqliteQuerySync(
@@ -276,5 +305,10 @@ export async function configureNodeHost(params: {
 
   // Detect a retired writer that recreated node.json while the transaction committed.
   assertNodeHostLegacyStateMigrated(env);
+  if (clearedCommands) {
+    logInfo(
+      "node-host: cleared saved command allowlist; advertising the full default command surface",
+    );
+  }
   return config;
 }

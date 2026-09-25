@@ -1,8 +1,10 @@
 // Memory Core tests cover manager provider lifecycle lease behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { hashText } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it, vi } from "vitest";
+import * as generationLease from "./manager-index-generation-lease.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
@@ -225,6 +227,19 @@ describe("memory index", () => {
       return [];
     };
 
+    const generationReleaseStarted = createDeferred<void>();
+    const generationReleaseGate = createDeferred<void>();
+    const acquireGeneration = generationLease.acquireMemoryIndexReadGeneration;
+    vi.spyOn(generationLease, "acquireMemoryIndexReadGeneration").mockImplementationOnce(
+      async (...args) => {
+        const release = await acquireGeneration(...args);
+        return async () => {
+          generationReleaseStarted.resolve();
+          await generationReleaseGate.promise;
+          await release();
+        };
+      },
+    );
     const searchPromise = manager.search("alpha");
     await vectorSearchStarted;
     const closePromise = manager.close();
@@ -243,8 +258,17 @@ describe("memory index", () => {
       expect(fields.closing).toBe(true);
       expect(fields.closed).toBe(false);
       expect(providerFixture.providerCloseCalls).toBe(0);
+      releaseVectorSearch();
+      await generationReleaseStarted.promise;
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(closeSettled).toBe(false);
+      expect(providerFixture.providerCloseCalls).toBe(0);
     } finally {
       releaseVectorSearch();
+      generationReleaseGate.resolve();
+      await Promise.allSettled([searchPromise, closePromise]);
     }
 
     await expect(searchPromise).resolves.toBeDefined();

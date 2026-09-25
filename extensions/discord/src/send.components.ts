@@ -1,4 +1,3 @@
-// Discord plugin module implements send.components behavior.
 import { ChannelType } from "discord-api-types/v10";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -24,6 +23,7 @@ import {
   type MessagePayloadObject,
   type RequestClient,
 } from "./internal/discord.js";
+import { withDiscordRequestAuthority } from "./internal/request-authority.js";
 import { parseAndResolveChannelRecipient } from "./recipient-resolution.js";
 import type { DiscordReplyReference } from "./reply-reference.js";
 import { sendMessageDiscord } from "./send.outbound.js";
@@ -135,8 +135,8 @@ export function registerBuiltDiscordComponentMessage(params: {
   buildResult: DiscordComponentBuildResult;
   messageId: string;
   ttlMs?: number;
-}): void {
-  registerDiscordComponentEntries({
+}): Promise<void> {
+  return registerDiscordComponentEntries({
     entries: params.buildResult.entries,
     modals: params.buildResult.modals,
     messageId: params.messageId,
@@ -231,6 +231,16 @@ export async function sendDiscordComponentMessage(
   spec: DiscordComponentMessageSpec,
   opts: DiscordComponentSendOpts,
 ): Promise<DiscordSendResult> {
+  return await withDiscordRequestAuthority(opts.assertPlatformSendAuthorized, () =>
+    sendDiscordComponentMessageInternal(to, spec, opts),
+  );
+}
+
+async function sendDiscordComponentMessageInternal(
+  to: string,
+  spec: DiscordComponentMessageSpec,
+  opts: DiscordComponentSendOpts,
+): Promise<DiscordSendResult> {
   const classicMessage = opts.mediaUrl ? resolveClassicDiscordMessage(spec) : undefined;
   if (classicMessage) {
     return await sendMessageDiscord(to, classicMessage.text, {
@@ -310,7 +320,7 @@ export async function sendDiscordComponentMessage(
   });
   await opts.onDeliveryResult?.(deliveryResult);
 
-  registerBuiltDiscordComponentMessage({
+  await registerBuiltDiscordComponentMessage({
     buildResult,
     messageId: result.id,
     ttlMs: resolveDiscordComponentRegistryTtlMs(accountInfo.config),
@@ -360,7 +370,7 @@ export async function editDiscordComponentMessage(
     });
   }
 
-  registerBuiltDiscordComponentMessage({
+  await registerBuiltDiscordComponentMessage({
     buildResult,
     messageId: result.id ?? messageId,
     ttlMs: resolveDiscordComponentRegistryTtlMs(accountInfo.config),

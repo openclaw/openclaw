@@ -26,6 +26,12 @@ Persist changes with `api.runtime.config.mutateConfigFile(...)` or `api.runtime.
 
 The mutation helpers return `afterWrite` plus a typed `followUp` summary so callers can log or test whether they requested a restart. The gateway still owns when that restart actually happens.
 
+Owner-authorized commands pass their captured `ctx.assertOwnerCurrent` as
+`writeOptions.assertCurrent`. The config writer rechecks it after asynchronous
+preparation and before publication, then completes settlement of an accepted
+write. Do not replace it with an earlier `senderIsOwner` boolean or check it only
+after the mutation returns.
+
 Use `current()`, a passed-in `cfg`, `mutateConfigFile(...)`, or
 `replaceConfigFile(...)` for runtime config access and writes.
 
@@ -42,7 +48,7 @@ Its disk write restores environment references using the original read snapshot.
 
 Internal OpenClaw runtime code follows the same direction: load config once at the CLI, gateway, or process boundary, then pass that value through. Successful mutation writes refresh the process runtime snapshot and advance its internal revision; long-lived caches should key off the runtime-owned cache key instead of serializing config locally. Long-lived runtime modules have a zero-tolerance scanner for ambient `loadConfig()` calls; use a passed `cfg`, a request `context.getRuntimeConfig()`, or `getRuntimeConfig()` at an explicit process boundary.
 
-Provider and channel execution paths must use the active runtime config snapshot, not a file snapshot returned for config readback or editing. File snapshots preserve source values such as SecretRef markers for UI and writes; provider callbacks need the resolved runtime view. When a helper may be called with either the active source snapshot or the active runtime snapshot, route through `selectApplicableRuntimeConfig()` before reading credentials.
+Provider and channel execution paths must use the active runtime config snapshot, not a file snapshot returned for config readback or editing. File snapshots preserve source values such as SecretRef markers for UI and writes; provider callbacks need the resolved runtime view. When a helper may be called with either the active source snapshot or the active runtime snapshot, route through `selectApplicableRuntimeConfig()` before reading credentials. The selector replaces a distinct supplied config only when it matches the runtime snapshot's paired source, including resolution provenance. A pinned snapshot without that source cannot override an explicit config, including a command-scoped config whose secrets have already been resolved. With no supplied config, the selector returns the runtime snapshot.
 
 Retained channel monitors can bind `createRuntimeConfigReader(cfg)` from
 `openclaw/plugin-sdk/runtime-config-snapshot` once at startup. The reader follows
@@ -82,9 +88,68 @@ to `execPolicy.resolveExecModePolicy`, selecting the returned fields they need.
 
 Native command probes should use `runCommandWithTimeout` from
 `openclaw/plugin-sdk/process-runtime` with `timeoutMs`, the caller's `signal`, and
-`killProcessTree: true`. Await its result so timeout or cancellation cleanup finishes
-before returning. For commands whose output is always UTF-8, such as JSON status
-probes, use `runUtf8CommandWithTimeout` from the same subpath.
+`killProcessTree: true`. For commands whose output is always UTF-8, such as JSON status
+probes, use `runUtf8CommandWithTimeout` from the same subpath. A bounded command result
+can return before canceled remote startup delivers its PID. When a command owns a
+session reservation or temporary output, await `withCommandProcessScope` from the
+same subpath around execution before releasing those resources. The scope joins
+late startup and process cleanup; uncertain cleanup remains an error.
+
+For a subprocess that requires Node.js, use `resolveNodeRuntimeExecutable` from
+the same subpath. It reuses the current Node executable and resolves a real Node
+binary when the host runs under Bun, skipping Bun's `node` shim. An unavailable
+Node runtime returns `undefined`; the caller reports the missing requirement.
+
+Interactive process adapters can use `spawnTerminalPty` from the same subpath.
+It owns platform-specific terminal creation, including the Node helper on Bun.
+Pass the caller's construction signal and current-authority check through its
+second argument. The caller owns output subscriptions, termination, and waiting
+for the terminal's exit before releasing its backend resources.
+
+Sandbox command adapters retain the sandbox owner's per-stream output bound,
+`SANDBOX_COMMAND_MAX_BUFFER_BYTES`, from `openclaw/plugin-sdk/sandbox`.
+
+`WorkerTaskPool` from `openclaw/plugin-sdk/process-runtime` retains workers and
+unconsumed inputs when termination fails. Retry `close()` on that same pool;
+dispose dependent files only after closure is acknowledged. The optional
+`onRetirementFailure(error)` observer runs synchronously when termination fails.
+It may return `void` or `Promise<void>`; observer throws and rejections do not
+replace the termination error or release custody, and closure does not wait for
+the observer.
+
+`prepareWorker()` can return `temporaryDirectory` for disposable scratch files
+and an optional asynchronous `releaseResources()` callback for producer-owned
+resources. Both remain retained until Worker exit is confirmed; cleanup also
+runs if construction fails before a Worker exists. When both are supplied,
+the pool attempts temporary-directory removal first, then calls
+`releaseResources()` even if that removal fails. Cleanup failures become warnings.
+Resource cleanup itself does not hold execution capacity after Worker exit;
+pending input preparation can still retain it as described below. `close()`
+joins the cleanup callback before it completes. A failed termination runs neither
+cleanup step; retry `close()` on the same pool to confirm exit and release them.
+
+Cancellation can reject `run()` before an asynchronous input factory settles.
+The pool retains its inputs and capacity until preparation and required worker
+retirement both finish, then invokes `onInputConsumed`. When cancellation's initial
+retirement succeeds, the native execution receipt precedes result rejection. A
+failed stop can reject earlier while retaining native custody and the pending
+receipt for retry.
+
+Input factories must settle independently of the same pool’s `close()`: awaiting
+closure inside a pending factory creates a cycle because closure joins that
+factory. Cancel any awaited work owned by the factory before awaiting `close()`,
+then await closure before disposing resources the factory still captures. The
+`run()` signal cancels the task; it does not interrupt arbitrary work awaited by
+the factory.
+
+Handle errors from `close()` even when `run()` already rejected. For canceled
+pending preparation, input and execution-receipt callback failures are reported
+by `close()`; admission remains held until closure observes the cleanup failure.
+
+When launching an isolated Gateway child that your plugin owns, remove
+`SUPERVISOR_HINT_ENV_VARS` from its environment after applying caller overrides.
+This list is exported from `openclaw/plugin-sdk/process-runtime`; inherited parent
+service markers would otherwise assign restart ownership to that parent's supervisor.
 
 Use `splitCommandArgs(raw)` from the same subpath to group quoted process
 arguments. Backslashes and `#` stay literal; there is no shell expansion.
@@ -204,3 +269,38 @@ spans do not advance the checkpoint used by `mark`.
 clock defaults to `Date.now`. Formatting produces comma-separated
 `name:durationMs@elapsedMs` entries (with `ms` units) or `none`. Callers retain
 ownership of log labels, warning thresholds, and when to emit a summary.
+
+For process-scoped performance logging,
+`openclaw/plugin-sdk/diagnostic-runtime` exports
+`areDiagnosticsEnabledForProcess(): boolean` and `createSubsystemLogger`. This
+focused entrypoint does not load live session diagnostics or network dispatcher
+configuration during plugin descriptor registration. The predicate reads the current process-wide
+diagnostic setting; `isDiagnosticsEnabled(config)` instead reads the supplied
+configuration snapshot. Neither function changes the setting or enables an
+exporter. Combine the process predicate with the selected log level before
+collecting diagnostic-only state:
+
+```typescript
+import {
+  areDiagnosticsEnabledForProcess,
+  createSubsystemLogger,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
+
+const log = createSubsystemLogger("example/catalog");
+function diagnosticsEnabled() {
+  return areDiagnosticsEnabledForProcess() && log.isEnabled("warn");
+}
+```
+
+Recheck the gates when emitting a delayed summary. Keep fields bounded and
+content-free, and preserve the operation's result if the diagnostic sink fails.
+This predicate does not enable or authorize [audit identity collection](/gateway/audit).
+
+`onInternalDiagnosticEvent(listener, interest?)` filters events before copying
+their payload for the listener. `include` and `exclude` apply to every event;
+the optional `includeTrusted` list further restricts only events marked trusted
+by the dispatcher. Omitting it preserves existing behavior, and an empty list
+accepts only untrusted events that pass `include`/`exclude`. Event payload fields
+cannot override the dispatcher's trust metadata. Accepted events retain their
+individual frozen copies; this filter does not change diagnostic collection or
+queue behavior.

@@ -3,32 +3,11 @@ import { createServer, type Server } from "node:http";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cancelTrackedTextResponse } from "../../test-support/streaming-error-response.js";
 import { DiscordApiError, fetchDiscord, requestDiscord } from "./api.js";
 import { jsonResponse } from "./test-http-helpers.js";
 
 const DISCORD_SUCCESS_RESPONSE_LIMIT_BYTES = 4 * 1024 * 1024;
-
-function cancelTrackedResponse(
-  text: string,
-  init: ResponseInit,
-): {
-  response: Response;
-  wasCanceled: () => boolean;
-} {
-  let canceled = false;
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new TextEncoder().encode(text));
-    },
-    cancel() {
-      canceled = true;
-    },
-  });
-  return {
-    response: new Response(stream, init),
-    wasCanceled: () => canceled,
-  };
-}
 
 async function listenLoopbackServer(server: Server): Promise<number> {
   return await new Promise((resolve, reject) => {
@@ -119,7 +98,7 @@ describe("fetchDiscord", () => {
   });
 
   it("bounds Discord API error bodies without using response.text()", async () => {
-    const tracked = cancelTrackedResponse(`${"discord api unavailable ".repeat(1024)}tail`, {
+    const tracked = cancelTrackedTextResponse(`${"discord api unavailable ".repeat(1024)}tail`, {
       status: 503,
       headers: { "content-type": "text/plain" },
     });

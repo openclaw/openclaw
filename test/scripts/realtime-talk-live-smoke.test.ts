@@ -75,7 +75,9 @@ afterEach(() => {
   vi.useRealTimers();
   backend.onFirstAudio = () => {};
   process.argv = originalArgv;
-  process.exitCode = originalExitCode;
+  // oxlint-disable-next-line no-warning-comments -- remove after the upstream Bun exitCode fix ships.
+  // TODO(bun): Bun does not currently clear a nonzero process.exitCode when assigned undefined.
+  process.exitCode = originalExitCode ?? 0;
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -159,7 +161,7 @@ it.each([
       path.resolve("scripts/dev/realtime-talk-live-smoke.ts"),
       "--openai-only",
     ];
-    process.exitCode = undefined;
+    process.exitCode = 0;
 
     const firstAudio = new Promise<void>((resolve) => {
       backend.onFirstAudio = () => resolve();
@@ -183,7 +185,7 @@ it.each([
       `openai-webrtc-browser: ${ok ? "ok" : "failed"}`,
       expect.objectContaining({ protocol: "ga-realtime" }),
     );
-    expect(process.exitCode).toBe(ok ? undefined : 1);
+    expect(process.exitCode).toBe(ok ? 0 : 1);
     expect(browser.contextClose).toHaveBeenCalledOnce();
     expect(browser.close).toHaveBeenCalledOnce();
   },

@@ -23,7 +23,9 @@ scenario:
     - test/e2e/qa-lab/runtime/gateway-rpc-account-health.ts
   execution:
     kind: script
-    parallelSafe: true
+    # This proof launches the repository CLI, whose stale-dist guard may rebuild
+    # shared runtime artifacts. Keep it in the suite's exclusive script phase.
+    parallelSafe: false
     path: test/e2e/qa-lab/runtime/gateway-rpc-account-health.ts
     summary: Starts a real QA bus and CLI Gateway child, performs authenticated health and status RPCs, and patches one account through config CAS and hot reload.
     args:

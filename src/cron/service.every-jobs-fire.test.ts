@@ -34,9 +34,11 @@ describe("CronService interval/cron jobs fire on time", () => {
     jobId: string;
     firstDueAt: number;
   }) => {
-    vi.setSystemTime(new Date(firstDueAt + 5));
+    const untilDueMs = firstDueAt - Date.now();
+    // Move wall time five milliseconds ahead without consuming the timer's remaining delay.
+    vi.setSystemTime(new Date(Date.now() + 5));
     const finishedRun = finished.waitForOk(jobId);
-    await vi.runOnlyPendingTimersAsync();
+    await vi.advanceTimersByTimeAsync(untilDueMs);
     await finishedRun;
     const jobs = await cron.list({ includeDisabled: true });
     return jobs.find((current) => current.id === jobId);
@@ -128,7 +130,7 @@ describe("CronService interval/cron jobs fire on time", () => {
 
     const finishedRun = finished.waitForOk(job.id);
     cron.resumeScheduling();
-    await vi.runOnlyPendingTimersAsync();
+    await vi.advanceTimersByTimeAsync(2_000);
     await finishedRun;
     expectMainSystemEvent(enqueueSystemEvent, "resumed-tick");
 
@@ -162,12 +164,22 @@ describe("CronService interval/cron jobs fire on time", () => {
       throw new Error("arm failed");
     });
 
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
     expect(() => cron.resumeScheduling()).toThrow("arm failed");
-    expect(vi.getTimerCount()).toBe(0);
+    expect(setTimeoutSpy).toHaveBeenCalledExactlyOnceWith(expect.any(Function), 10_000);
+    expect(clearTimeoutSpy).toHaveBeenCalledWith(setTimeoutSpy.mock.results[0]?.value);
+    setTimeoutSpy.mockClear();
+    clearTimeoutSpy.mockClear();
+
     expect(() => cron.resumeScheduling()).not.toThrow();
-    expect(vi.getTimerCount()).toBe(1);
+    expect(setTimeoutSpy).toHaveBeenCalledExactlyOnceWith(expect.any(Function), 10_000);
+    expect(clearTimeoutSpy).not.toHaveBeenCalled();
 
     cron.stop();
+    expect(clearTimeoutSpy).toHaveBeenCalledWith(setTimeoutSpy.mock.results[0]?.value);
+    setTimeoutSpy.mockRestore();
+    clearTimeoutSpy.mockRestore();
     await store.cleanup();
   });
 

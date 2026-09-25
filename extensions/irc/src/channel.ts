@@ -148,7 +148,7 @@ const collectIrcGroupPolicyWarnings =
 const collectIrcOpenGroupFindings = createConditionalWarningCollector.findings({
   collectWarnings: collectIrcGroupPolicyWarnings,
   checkId: "channels.irc.groups.open",
-  severity: "critical",
+  severity: "warn",
   title: "IRC security warning",
 });
 

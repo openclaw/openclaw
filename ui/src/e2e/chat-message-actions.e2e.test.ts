@@ -230,7 +230,7 @@ describeControlUiE2e("Control UI chat message actions", () => {
       await screenshot(page, `${viewport.name}-subagent-actions.png`);
       expect(await page.locator(".agent-chat__composer-combobox textarea").count()).toBe(0);
       expect.soft(await page.getByRole("button", { name: "Reply to message" }).count()).toBe(0);
-      const copy = page.getByRole("button", { name: "Copy as markdown", exact: true });
+      const copy = activePane.locator(".chat-group.assistant .chat-copy-btn");
       await copy.click();
       await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(message);
       await bubble.click({ button: "right" });
@@ -725,9 +725,10 @@ describeControlUiE2e("Control UI chat message actions", () => {
       const applePlatform = process.platform === "darwin";
       const commandPaletteShortcut = applePlatform ? "⌘K" : "Ctrl+K";
       const sidebarShortcut = applePlatform ? "⌘B" : "Ctrl+B";
+      const newSessionShortcut = applePlatform ? "⌘⇧O" : "Ctrl+Shift+O";
       await expectHoverTooltip(
-        page.locator(".sidebar-brand").getByRole("link", { name: "New session" }),
-        "New session",
+        page.locator(".sidebar-brand").getByRole("link", { name: "New conversation" }),
+        `New conversation (${newSessionShortcut})`,
       );
       await expectHoverTooltip(
         page.getByRole("button", { name: "Open command palette" }),
@@ -962,8 +963,16 @@ describeControlUiE2e("Control UI chat message actions", () => {
       await groupedToolBubble.waitFor({ state: "visible" });
       expect(await groupedToolBubble.getAttribute("data-message-text")).toBe(oversizedNotice);
       await groupedToolBubble.click({ button: "right" });
-      expect(await menu.getByRole("menuitem").allTextContents()).toEqual(["Reply"]);
+      expect(await menu.getByRole("menuitem").allTextContents()).toEqual([
+        "Reply",
+        "Copy as markdown",
+      ]);
       await screenshot(page, "09-oversized-tool-actions.png");
+      await menu.getByRole("menuitem", { name: "Copy as markdown" }).click();
+      await expect
+        .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+        .toBe(oversizedNotice);
+      await groupedToolBubble.click({ button: "right" });
       await menu.getByRole("menuitem", { name: "Reply to message" }).click();
       await expect
         .poll(() => fullTextReplyPreview.locator(".chat-reply-preview__text").textContent())

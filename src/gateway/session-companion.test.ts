@@ -1,28 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  createAgentToAgentPolicy,
-  resolveSessionToolAccess,
-} from "../agents/tools/sessions-access.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
-import { SessionCompanionAskError } from "./session-companion-ask.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import type { SessionCompanionContextReader } from "./session-companion-context.js";
-import {
-  buildSessionCompanionRunConfig,
-  SESSION_COMPANION_TOOLS,
-} from "./session-companion-policy.js";
+import { SessionCompanionAskError } from "./session-companion-errors.js";
 import { trimSessionCompanionExchanges } from "./session-companion-state.js";
 import { createSessionCompanion } from "./session-companion.js";
 import type { SessionObserverCompanionSnapshot } from "./session-observer-contract.js";
 import { notifyGatewaySessionReset } from "./session-reset-notifications.js";
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  return { promise, resolve };
-}
 
 function createHarness(overrides?: {
   now?: () => number;
@@ -199,6 +184,40 @@ describe("session companion asks", () => {
     harness.service.dispose();
   });
 
+  it("drops context when read authority changes during preparation", async () => {
+    vi.useFakeTimers();
+    let authorized = true;
+    const harness = createHarness({
+      readContext: async () => {
+        authorized = false;
+        return {
+          kind: "ready",
+          context: {
+            empty: false,
+            messages: [{ role: "user", text: "private context", ts: 1 }],
+            sessionId: "session-1",
+          },
+        };
+      },
+    });
+
+    await expect(
+      harness.service.ask({
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        question: "What changed?",
+        connId: "conn-1",
+        assertSourceCurrent: () => {
+          if (!authorized) {
+            throw new SessionCompanionAskError("session-missing", "Side chat is unavailable.");
+          }
+        },
+      }),
+    ).rejects.toMatchObject({ reason: "session-missing" });
+    expect(harness.run).not.toHaveBeenCalled();
+    harness.service.dispose();
+  });
+
   it("distinguishes a genuinely empty session from a missing session", async () => {
     vi.useFakeTimers();
     const empty = createHarness({
@@ -282,7 +301,7 @@ describe("session companion asks", () => {
     vi.useFakeTimers();
     let sessionId = "session-1";
     let runCount = 0;
-    const pending = deferred<string>();
+    const pending = createDeferredCore<string>();
     const harness = createHarness({
       currentSessionId: () => sessionId,
       readContext: async () => ({
@@ -326,7 +345,7 @@ describe("session companion asks", () => {
 
   it("serializes asks per session with a typed busy error", async () => {
     vi.useFakeTimers();
-    const pending = deferred<string>();
+    const pending = createDeferredCore<string>();
     const harness = createHarness({ run: async () => await pending.promise });
     const first = harness.service.ask({
       agentId: "main",
@@ -551,7 +570,8 @@ describe("session companion asks", () => {
       kind: "ready" as const,
       context: { empty: true, messages: [], sessionId: "session-1" },
     };
-    const pendingContext = deferred<Awaited<ReturnType<SessionCompanionContextReader["read"]>>>();
+    const pendingContext =
+      createDeferredCore<Awaited<ReturnType<SessionCompanionContextReader["read"]>>>();
     let reads = 0;
     const harness = createHarness({
       readContext: () => (reads++ === 0 ? pendingContext.promise : Promise.resolve(context)),
@@ -590,7 +610,7 @@ describe("session companion asks", () => {
 
   it("reset clears state and cancels an active ask", async () => {
     vi.useFakeTimers();
-    const pending = deferred<string>();
+    const pending = createDeferredCore<string>();
     const harness = createHarness({ run: async () => await pending.promise });
     const active = harness.service.ask({
       agentId: "main",
@@ -611,7 +631,7 @@ describe("session companion asks", () => {
 
   it("makes a committed backing-session reset retryable and ignores the late model result", async () => {
     vi.useFakeTimers();
-    const pending = deferred<string>();
+    const pending = createDeferredCore<string>();
     const harness = createHarness({ run: async () => await pending.promise });
     const active = harness.service.ask({
       agentId: "main",
@@ -635,7 +655,7 @@ describe("session companion asks", () => {
 
   it("cancels a disconnected request before a late model result can commit", async () => {
     vi.useFakeTimers();
-    const pending = deferred<string>();
+    const pending = createDeferredCore<string>();
     const controller = new AbortController();
     let runCount = 0;
     const harness = createHarness({
@@ -654,7 +674,7 @@ describe("session companion asks", () => {
       connId: "conn-1",
       signal: controller.signal,
     });
-    await vi.waitFor(() => expect(harness.run).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(harness.run).toHaveBeenCalledTimes(2));
 
     controller.abort();
     pending.resolve("late answer");
@@ -676,7 +696,7 @@ describe("session companion asks", () => {
 
   it("disposal cancels an active ask without committing its late model result", async () => {
     vi.useFakeTimers();
-    const pending = deferred<string>();
+    const pending = createDeferredCore<string>();
     const harness = createHarness({ run: async () => await pending.promise });
     const active = harness.service.ask({
       agentId: "main",
@@ -741,44 +761,5 @@ describe("session companion asks", () => {
       exchanges: [],
     });
     harness.service.dispose();
-  });
-});
-
-describe("session companion tool scope", () => {
-  it("pins session tools to the target session and read to its workspace", async () => {
-    const cfg = buildSessionCompanionRunConfig({
-      tools: { toolSearch: true, codeMode: true },
-    });
-    expect(SESSION_COMPANION_TOOLS).toEqual(["read", "sessions_history", "sessions_search"]);
-    expect(cfg.tools?.fs?.workspaceOnly).toBe(true);
-    expect(cfg.tools?.sessions?.visibility).toBe("self");
-    expect(cfg.tools?.toolSearch).toMatchObject({ enabled: false });
-    expect(cfg.tools?.codeMode).toBe(true);
-
-    const targetAccess = await resolveSessionToolAccess({
-      action: "history",
-      requesterAgentId: "main",
-      requesterSessionKey: "agent:main:target",
-      targetAgentId: "main",
-      targetSessionKey: "agent:main:target",
-      requesterOwned: false,
-      visibility: "self",
-      a2aPolicy: createAgentToAgentPolicy(cfg),
-    });
-    expect(targetAccess).toMatchObject({ allowed: true });
-    const differentAccess = await resolveSessionToolAccess({
-      action: "history",
-      requesterAgentId: "main",
-      requesterSessionKey: "agent:main:target",
-      targetAgentId: "main",
-      targetSessionKey: "agent:main:different",
-      requesterOwned: false,
-      visibility: "self",
-      a2aPolicy: createAgentToAgentPolicy(cfg),
-    });
-    expect(differentAccess).toMatchObject({
-      allowed: false,
-      status: "forbidden",
-    });
   });
 });

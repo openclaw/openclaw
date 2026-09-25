@@ -13,7 +13,8 @@ import {
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
-import { controlUiSessionPath } from "../test-helpers/control-ui-e2e.ts";
+import { installHistoryPaginationProbe } from "./chat-history-pagination-probe.test-support.ts";
+import { installChatLoadingReadinessObserver } from "./chat-loading-readiness.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const selectedKey = "agent:main:loading-proof-12345678-0000-4000-8000-000000000001";
@@ -29,11 +30,13 @@ let config: OpenClawConfig;
 let originalAvatarBytes = 0;
 
 type RpcMetric = {
+  requestId: string;
   method: string;
   sentMs: number;
   receivedMs?: number;
   responseBytes?: number;
   sessionKey?: string;
+  agentId?: string;
   shortId?: string;
   limit?: number;
   maxBytes?: number;
@@ -41,6 +44,8 @@ type RpcMetric = {
   messages?: number;
   historyBytes?: number;
   resolvedKey?: string;
+  resolvedAgentId?: string;
+  resolutionOk?: boolean;
   inlineAvatar?: boolean;
 };
 
@@ -243,7 +248,7 @@ suite.define(() => {
       );
     }
     const handoff = await cliJson(["dashboard", "--json"]);
-    const url = new URL(controlUiSessionPath(selectedKey), suite.server.baseUrl);
+    const url = new URL("/chat/main/12345678", suite.server.baseUrl);
     url.hash = new URL(String(handoff.browserUrl)).hash;
     const artifactDir = suite.artifactDir;
     const rpc: RpcMetric[] = [];
@@ -257,7 +262,20 @@ suite.define(() => {
         ...(captureUiProof ? { recordVideo: { dir: artifactDir, size: viewport } } : {}),
       },
       async ({ page, context }) => {
+        await installChatLoadingReadinessObserver(page);
         await page.addInitScript(() => {
+          // Measure short-link resolution, not cached-roster route recovery. Keep
+          // restored Home preferences; clear identity admission in each new document
+          // because the previous document can persist its boot record on pagehide.
+          for (const key of Object.keys(localStorage)) {
+            if (key.startsWith("openclaw.control.bootRecord.v1:")) {
+              localStorage.removeItem(key);
+            }
+          }
+          window.localStorage.setItem(
+            "openclaw:control-ui:community-invite",
+            JSON.stringify({ dismissedAtMs: 1770000000000 }),
+          );
           const sample: BrowserPerformanceSample = {
             lcpMs: null,
             cls: 0,
@@ -297,6 +315,17 @@ suite.define(() => {
           }).observe({ type: "longtask", buffered: true });
         });
         const pending = new Map<string, RpcMetric>();
+        const waitForResolutionResponse = (requestStart = 0) =>
+          expect
+            .poll(() =>
+              rpc
+                .slice(requestStart)
+                .some(
+                  (metric) =>
+                    metric.method === "sessions.resolve" && metric.receivedMs !== undefined,
+                ),
+            )
+            .toBe(true);
         const waitForStartupCommit = async (
           sessionKey: string,
           pane: Locator,
@@ -309,7 +338,7 @@ suite.define(() => {
                 .some(
                   (metric) =>
                     metric.method === "chat.startup" &&
-                    (metric.sessionKey === sessionKey || metric.resolvedKey === sessionKey) &&
+                    metric.sessionKey === sessionKey &&
                     metric.receivedMs !== undefined,
                 ),
             )
@@ -353,9 +382,11 @@ suite.define(() => {
             }
             const params = isRecord(frame.params) ? frame.params : {};
             const metric: RpcMetric = {
+              requestId: frame.id,
               method: frame.method,
               sentMs: Date.now() - startedAt,
               ...(typeof params.sessionKey === "string" ? { sessionKey: params.sessionKey } : {}),
+              ...(typeof params.agentId === "string" ? { agentId: params.agentId } : {}),
               ...(typeof params.shortId === "string" ? { shortId: params.shortId } : {}),
               ...(typeof params.limit === "number" ? { limit: params.limit } : {}),
               ...(typeof params.maxBytes === "number" ? { maxBytes: params.maxBytes } : {}),
@@ -384,8 +415,10 @@ suite.define(() => {
               metric.messages = body.messages.length;
               metric.historyBytes = Buffer.byteLength(JSON.stringify(body.messages));
             }
-            if (isRecord(body.resolution) && typeof body.resolution.key === "string") {
-              metric.resolvedKey = body.resolution.key;
+            if (metric.method === "sessions.resolve" && typeof body.key === "string") {
+              metric.resolvedKey = body.key;
+              metric.resolvedAgentId = typeof body.agentId === "string" ? body.agentId : undefined;
+              metric.resolutionOk = frame.ok === true && body.ok === true;
             }
             metric.inlineAvatar = JSON.stringify(body).includes("data:image/");
           });
@@ -457,7 +490,10 @@ suite.define(() => {
         if (captureUiProof) {
           await page.screenshot({ path: path.join(artifactDir, "02-selected-and-home-ready.png") });
         }
+        // An accepted identity publication can render the tail before resolve replies.
+        await waitForResolutionResponse();
         const startupMetrics = structuredClone(rpc);
+        const startupIdentity = await page.evaluate(() => window.chatLoadingReadiness);
         const images = await page
           .locator(".sidebar-agent-card__avatar img")
           .evaluateAll((elements) =>
@@ -508,11 +544,52 @@ suite.define(() => {
         };
 
         const thread = selectedPane.locator(".chat-thread");
+        const loadedMessageCount = () =>
+          selectedPane.evaluate(
+            (element) =>
+              (element as HTMLElement & { state: { chatMessages: unknown[] } }).state.chatMessages
+                .length,
+          );
+        // Prefetched pages can commit before the preceding wheel gesture settles.
+        const waitForHistoryGesture = () =>
+          expect
+            .poll(() =>
+              selectedPane.evaluate((element) => {
+                const pane = element as HTMLElement & {
+                  loadingOlder: boolean;
+                  historyIntentConsumed: boolean;
+                };
+                return {
+                  loadingOlder: pane.loadingOlder,
+                  historyIntentConsumed: pane.historyIntentConsumed,
+                };
+              }),
+            )
+            .toEqual({ loadingOlder: false, historyIntentConsumed: false });
         await thread.hover();
-        await thread.evaluate((element) => {
-          element.scrollTop = 0;
-        });
-        await page.mouse.wheel(0, -500);
+        await installHistoryPaginationProbe(selectedPane, transcriptLength, selectedKey);
+        const profiler = captureUiProof ? await context.newCDPSession(page) : undefined;
+        if (profiler) {
+          await profiler.send("Profiler.enable");
+          await profiler.send("Profiler.start");
+        }
+        const paginationStartedAt = Date.now();
+        const performanceBeforePagination = await readPerformanceSample(page);
+        let loadedMessages = await loadedMessageCount();
+        const initialLoadedMessages = loadedMessages;
+        let olderPageCommits = 0;
+        while (loadedMessages < transcriptLength) {
+          await waitForHistoryGesture();
+          await thread.evaluate((element) => {
+            window.historyPaginationProbe.begin();
+            element.scrollTop = 0;
+          });
+          await page.mouse.wheel(0, -500);
+          await expect.poll(loadedMessageCount).toBeGreaterThan(loadedMessages);
+          loadedMessages = await loadedMessageCount();
+          olderPageCommits += 1;
+          expect(loadedMessages).toBeLessThanOrEqual(transcriptLength);
+        }
         await expect
           .poll(() =>
             rpc.some(
@@ -524,16 +601,41 @@ suite.define(() => {
             ),
           )
           .toBe(true);
-        await expect
-          .poll(() =>
-            selectedPane.evaluate(
-              (element) =>
-                (element as HTMLElement & { state: { chatMessages: unknown[] } }).state.chatMessages
-                  .length,
+        expect(loadedMessages).toBe(transcriptLength);
+        const paginationLoadedMs = Date.now() - paginationStartedAt;
+        await selectedPane.evaluate(async (element) => {
+          await (element as HTMLElement & { updateComplete: Promise<boolean> }).updateComplete;
+          await new Promise<void>((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          });
+        });
+        const paginationRenderedMs = Date.now() - paginationStartedAt;
+        const browserPagination = await page.evaluate(async () => {
+          await window.historyPaginationProbe.done;
+          return window.historyPaginationProbe.result();
+        });
+        const performanceAfterPagination = await readPerformanceSample(page);
+        if (profiler) {
+          const { profile } = await profiler.send("Profiler.stop");
+          await writeFile(
+            path.join(artifactDir, "history-pagination.cpuprofile"),
+            JSON.stringify(profile),
+          );
+          await profiler.detach();
+        }
+        expect(
+          await selectedPane.evaluate((element) =>
+            (
+              element as HTMLElement & { state: { chatMessages: unknown[] } }
+            ).state.chatMessages.map((message) =>
+              Number(
+                JSON.stringify(message).match(/Synthetic loading proof message (\d+)\./u)?.[1],
+              ),
             ),
-          )
-          .toBe(transcriptLength);
-        // The prepend preserves the reader's anchor; a second gesture reaches the new start.
+          ),
+        ).toEqual(Array.from({ length: transcriptLength }, (_, index) => index + 1));
+        // Each prepend preserves the reader's anchor; another gesture reaches the new start.
+        await waitForHistoryGesture();
         await page.mouse.wheel(0, -1_000_000);
         await selectedPane
           .locator(".chat-thread", {
@@ -544,12 +646,19 @@ suite.define(() => {
           await page.screenshot({ path: path.join(artifactDir, "03-older-history-loaded.png") });
         }
         const paginationMetrics = structuredClone(rpc.slice(startupMetrics.length));
+        const olderPages = paginationMetrics.filter(
+          (metric) =>
+            metric.method === "chat.history" &&
+            metric.sessionKey === selectedKey &&
+            (metric.offset ?? 0) > 0,
+        );
         const captureNarrowReload = async (stage: string, homeOpen: boolean) => {
           await page.setViewportSize({ width: 1050, height: 900 });
           const requestStart = rpc.length;
           pending.clear();
           startedAt = Date.now();
-          await page.reload();
+          // Keep the same short-link input even if navigation canonicalized the prior URL.
+          await page.goto(`${url.origin}${url.pathname}`);
           await waitForControlUiGatewayReady(page);
           const narrowSelectedCommitted = waitForStartupCommit(
             selectedKey,
@@ -586,6 +695,7 @@ suite.define(() => {
           if (captureUiProof) {
             await page.screenshot({ path: path.join(artifactDir, `${stage}.png`) });
           }
+          await waitForResolutionResponse(requestStart);
           return {
             width: 1050,
             homeOpen,
@@ -596,6 +706,7 @@ suite.define(() => {
             homeAuthoritativeMs: narrowHomeAuthoritativeMs,
             performance,
             startup: structuredClone(rpc.slice(requestStart)),
+            identity: await page.evaluate(() => window.chatLoadingReadiness),
           };
         };
         const narrowHomeOpen = await captureNarrowReload("04-narrow-home-restored", true);
@@ -618,7 +729,15 @@ suite.define(() => {
               homeAuthoritativeMs,
               performanceAtReady,
               startup: startupMetrics,
+              startupIdentity,
               pagination: paginationMetrics,
+              paginationLoadedMs,
+              paginationRenderedMs,
+              browserPagination,
+              initialLoadedMessages,
+              olderPageCommits,
+              performanceBeforePagination,
+              performanceAfterPagination,
               narrowHomeOpen,
               narrowHomeClosed,
               images,
@@ -632,13 +751,55 @@ suite.define(() => {
         );
 
         // Save measurements before asserting budgets so failures retain their evidence.
+        expect(olderPages).toHaveLength(1);
         const selectedStartup = startupMetrics.find(
-          (metric) => metric.method === "chat.startup" && metric.resolvedKey === selectedKey,
+          (metric) => metric.method === "chat.startup" && metric.sessionKey === selectedKey,
         );
         expect(selectedStartup).toBeDefined();
-        expect(
-          startupMetrics.filter((metric) => metric.method === "sessions.resolve"),
-        ).toHaveLength(0);
+        for (const { metrics, identity } of [
+          { metrics: startupMetrics, identity: startupIdentity },
+          { metrics: narrowHomeOpen.startup, identity: narrowHomeOpen.identity },
+          { metrics: narrowHomeClosed.startup, identity: narrowHomeClosed.identity },
+        ]) {
+          const resolutions = metrics.filter((metric) => metric.method === "sessions.resolve");
+          expect(resolutions).toHaveLength(1);
+          const resolved = resolutions[0]!;
+          expect(resolved).toMatchObject({
+            agentId: "main",
+            shortId: "12345678",
+            resolutionOk: true,
+            resolvedKey: selectedKey,
+            resolvedAgentId: "main",
+          });
+          const selected = metrics.filter(
+            (metric) => metric.method === "chat.startup" && metric.sessionKey === selectedKey,
+          );
+          expect(selected).toHaveLength(1);
+          const startup = selected[0]!;
+          expect(identity.connects).toBe(1);
+          expect(identity.observerAttached).toBe(true);
+          const observations = identity.startups.filter(
+            (entry) => entry.requestId === startup.requestId,
+          );
+          expect(observations).toHaveLength(1);
+          const observed = observations[0]!;
+          expect(observed.sessionKey).toBe(selectedKey);
+          expect(observed.agentId ?? "main").toBe("main");
+          expect(observed.resolutionRequestId).toBe(resolved.requestId);
+          if (startup.sentMs >= (resolved.receivedMs ?? Infinity)) {
+            expect(observed.resolutionSourceCurrent).toBe(true);
+          } else {
+            // Early startup needs accepted identity from this connection, not only a wire event.
+            expect(observed.prepared).toMatchObject({
+              plainUrl: true,
+              sourceCurrent: true,
+              scope: { agentId: "main", sessionKey: selectedKey },
+            });
+            expect(observed.prepared?.target).toEqual(identity.target);
+            expect(identity.target).toMatchObject({ agentId: "main", shortId: "12345678" });
+            expect(observed.prepared?.acceptedAtMs).toBeLessThanOrEqual(observed.sentAtMs);
+          }
+        }
         expect(selectedStartup?.messages).toBeLessThanOrEqual(80);
         expect(selectedStartup?.historyBytes).toBeLessThanOrEqual(256 * 1024);
         const homeStartup = startupMetrics.find(

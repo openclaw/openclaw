@@ -7,6 +7,8 @@ import {
   resolveMemoryLightDreamingConfig,
   resolveMemoryRemDreamingConfig,
   resolveMemoryDeepDreamingConfig,
+  resolveMemoryFtsState,
+  resolveMemoryVectorState,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { formatByteSize } from "openclaw/plugin-sdk/number-runtime";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -37,6 +39,7 @@ import {
   type DreamingArtifactsAuditSummary,
   type RepairDreamingArtifactsResult,
 } from "./dreaming-repair.js";
+import { formatRecallRepairDetails } from "./dreaming-shared.js";
 import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
 import {
   auditShortTermPromotionArtifacts,
@@ -66,6 +69,7 @@ function formatMemoryIndexIdentityWarning(
 ): {
   reason: string;
   fix: string;
+  paused: string;
 } | null {
   const diagnostic = resolveMemoryIndexIdentityDiagnostic(status);
   if (!diagnostic) {
@@ -74,6 +78,7 @@ function formatMemoryIndexIdentityWarning(
   return {
     reason: `${diagnostic.reason} (owner: ${diagnostic.owner}, code: ${diagnostic.code})`,
     fix: `Run: ${formatMemoryIndexRebuildGuidance(status, agentId)}`,
+    paused: diagnostic.owner === "configuration" ? "paused until memory is rebuilt" : "paused",
   };
 }
 function formatDreamingSummary(cfg: OpenClawConfig): string {
@@ -99,16 +104,7 @@ function formatDreamingSummary(cfg: OpenClawConfig): string {
 function formatRepairSummary(repair: RepairShortTermPromotionArtifactsResult): string {
   const actions: string[] = [];
   if (repair.rewroteStore) {
-    const removedOverflowEntries = repair.removedOverflowEntries ?? 0;
-    const details = [
-      repair.removedInvalidEntries > 0 ? `-${repair.removedInvalidEntries} invalid` : null,
-      (repair.removedDanglingEntries ?? 0) > 0
-        ? `-${repair.removedDanglingEntries} dangling`
-        : null,
-      removedOverflowEntries > 0 ? `-${removedOverflowEntries} overflow` : null,
-    ]
-      .filter(Boolean)
-      .join(", ");
+    const details = formatRecallRepairDetails(repair);
     actions.push(`rewrote store${details ? ` (${details})` : ""}`);
   }
   if (repair.removedStaleLock) {
@@ -378,7 +374,7 @@ export async function runMemoryStatus(
     const identityWarning = formatMemoryIndexIdentityWarning(status, agentId);
     if (identityWarning) {
       lines.push(`${label("Index identity")} ${warn(identityWarning.reason)}`);
-      lines.push(`${label("Vector search")} ${warn("paused until memory is rebuilt")}`);
+      lines.push(`${label("Vector search")} ${warn(identityWarning.paused)}`);
       lines.push(`${label("Fix")} ${muted(identityWarning.fix)}`);
     }
     if (status.sourceCounts?.length) {
@@ -407,14 +403,9 @@ export async function runMemoryStatus(
       lines.push(`${label("Fallback")} ${warn(status.fallback.from)}`);
     }
     if (status.vector) {
+      const vector = status.vector;
       const formatVectorState = (available: boolean | undefined) =>
-        status.vector?.enabled
-          ? available === undefined
-            ? "unknown"
-            : available
-              ? "ready"
-              : "unavailable"
-          : "disabled";
+        resolveMemoryVectorState({ enabled: vector.enabled, available }).state;
       const formatVectorLine = (lineLabel: string, state: string) => {
         const vectorColor = state === "ready" ? success : state === "unavailable" ? warn : muted;
         lines.push(`${label(lineLabel)} ${vectorColor(state)}`);
@@ -451,11 +442,7 @@ export async function runMemoryStatus(
       }
     }
     if (status.fts) {
-      const ftsState = status.fts.enabled
-        ? status.fts.available
-          ? "ready"
-          : "unavailable"
-        : "disabled";
+      const { state: ftsState } = resolveMemoryFtsState(status.fts);
       const ftsColor = ftsState === "ready" ? success : ftsState === "unavailable" ? warn : muted;
       lines.push(`${label("FTS")} ${ftsColor(ftsState)}`);
       if (status.fts.error) {
@@ -525,27 +512,19 @@ export async function runMemoryStatus(
         lines.push(`  ${warn(issue)}`);
       }
     }
-    if (audit?.issues.length) {
-      if (!scan?.issues.length) {
+    let hasIssues = Boolean(scan?.issues.length);
+    for (const report of [audit, dreamingAudit]) {
+      if (!report?.issues.length) {
+        continue;
+      }
+      if (!hasIssues) {
         lines.push(label("Issues"));
       }
-      for (const issue of audit.issues) {
+      hasIssues = true;
+      for (const issue of report.issues) {
         lines.push(`  ${issue.severity === "error" ? warn(issue.message) : muted(issue.message)}`);
       }
-      if (!opts.fix) {
-        if (audit.issues.some((issue) => issue.fixable)) {
-          lines.push(`  ${muted(`Fix: openclaw memory status --fix --agent ${agentId}`)}`);
-        }
-      }
-    }
-    if (dreamingAudit?.issues.length) {
-      if (!scan?.issues.length && !audit?.issues.length) {
-        lines.push(label("Issues"));
-      }
-      for (const issue of dreamingAudit.issues) {
-        lines.push(`  ${issue.severity === "error" ? warn(issue.message) : muted(issue.message)}`);
-      }
-      if (!opts.fix && dreamingAudit.issues.some((issue) => issue.fixable)) {
+      if (!opts.fix && report.issues.some((issue) => issue.fixable)) {
         lines.push(`  ${muted(`Fix: openclaw memory status --fix --agent ${agentId}`)}`);
       }
     }

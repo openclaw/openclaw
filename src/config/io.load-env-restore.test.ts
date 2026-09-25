@@ -1,55 +1,83 @@
 import { describe, expect, it } from "vitest";
 import { DuplicateAgentDirError } from "./agent-dirs.js";
+import { applyConfigEnvVars, createConfigRuntimeEnvBase, snapshotEnv } from "./config-env-vars.js";
 import { createConfigIO, restoreEnvChangesIfUnchanged } from "./io.js";
 import { getConfigResolutionFacts } from "./resolution-facts.js";
 import { withTempHome, writeOpenClawConfig } from "./test-helpers.js";
 
 describe("restoreEnvChangesIfUnchanged", () => {
-  it("removes a newly injected key when unchanged from after snapshot", () => {
-    const env = { HOME: "/tmp/test" } as Record<string, string | undefined>;
-    const before = { HOME: "/tmp/test" };
-    env["NEW_KEY"] = "injected";
-    const after = { HOME: "/tmp/test", NEW_KEY: "injected" };
+  it("restores external ownership when rejected config replaced equal lower-precedence bytes", () => {
+    const env = { KEY: "same" };
+    const cfg = { env: { vars: { KEY: "same" } } };
+    const before = snapshotEnv(env);
+    applyConfigEnvVars(cfg, env, { lowerPrecedenceEnv: { KEY: "same" } });
+    const after = snapshotEnv(env);
+    expect(createConfigRuntimeEnvBase(cfg, env).KEY).toBeUndefined();
 
-    restoreEnvChangesIfUnchanged({
-      env: env as NodeJS.ProcessEnv,
-      before,
-      after,
-    });
+    restoreEnvChangesIfUnchanged({ env, before, after });
 
-    expect(env.NEW_KEY).toBeUndefined();
+    expect(env.KEY).toBe("same");
+    expect(createConfigRuntimeEnvBase(cfg, env).KEY).toBe("same");
   });
 
-  it("restores an overwritten key back to its before value", () => {
-    const env = { HOME: "/tmp/test", EXISTING: "original" } as Record<string, string | undefined>;
-    const before = { HOME: "/tmp/test", EXISTING: "original" };
-    env["EXISTING"] = "new-value";
-    const after = { HOME: "/tmp/test", EXISTING: "new-value" };
+  it("preserves a later ownership change even when environment bytes are unchanged", () => {
+    const env: NodeJS.ProcessEnv = {};
+    const before = snapshotEnv(env);
+    applyConfigEnvVars({ env: { vars: { KEY: "value" } } }, env);
+    const after = snapshotEnv(env);
+    applyConfigEnvVars({}, env);
 
-    restoreEnvChangesIfUnchanged({
-      env: env as NodeJS.ProcessEnv,
-      before,
-      after,
-    });
+    restoreEnvChangesIfUnchanged({ env, before, after });
 
-    expect(env.EXISTING).toBe("original");
+    expect(env.KEY).toBe("value");
   });
 
-  it("preserves an externally modified key even when different from before", () => {
-    const env = { HOME: "/tmp/test" } as Record<string, string | undefined>;
-    const before = { HOME: "/tmp/test" };
-    env["KEY"] = "config-set";
-    const after = { HOME: "/tmp/test", KEY: "config-set" };
-    // External mutation after the after snapshot
-    env["KEY"] = "external-change";
-
-    restoreEnvChangesIfUnchanged({
-      env: env as NodeJS.ProcessEnv,
-      before,
-      after,
+  it("restores earlier config ownership with its value after a rejected replacement", () => {
+    const env: NodeJS.ProcessEnv = {};
+    const cfg = { env: { vars: { KEY: "old" } } };
+    applyConfigEnvVars(cfg, env);
+    const before = snapshotEnv(env);
+    applyConfigEnvVars({ env: { vars: { KEY: "new" } } }, env, {
+      lowerPrecedenceEnv: { KEY: "old" },
     });
+    const after = snapshotEnv(env);
 
-    expect(env.KEY).toBe("external-change");
+    restoreEnvChangesIfUnchanged({ env, before, after });
+
+    expect(env.KEY).toBe("old");
+    expect(createConfigRuntimeEnvBase(cfg, env).KEY).toBeUndefined();
+  });
+
+  it.each([
+    {
+      name: "removes a newly injected key when unchanged from after snapshot",
+      before: {},
+      after: { KEY: "injected" },
+      current: "injected",
+      expected: undefined,
+    },
+    {
+      name: "restores an overwritten key back to its before value",
+      before: { KEY: "original" },
+      after: { KEY: "new-value" },
+      current: "new-value",
+      expected: "original",
+    },
+    {
+      name: "preserves an externally modified key even when different from before",
+      before: {},
+      after: { KEY: "config-set" },
+      current: "external-change",
+      expected: "external-change",
+    },
+  ])("$name", ({ before, after, current, expected }) => {
+    const env: NodeJS.ProcessEnv = { HOME: "/tmp/test", KEY: current };
+    restoreEnvChangesIfUnchanged({
+      env,
+      before: { HOME: "/tmp/test", ...before },
+      after: { HOME: "/tmp/test", ...after },
+    });
+    expect(env.KEY).toBe(expected);
   });
 });
 
@@ -66,51 +94,6 @@ describe("loadConfig env restoration", () => {
       }).loadConfig();
 
       expect([...(getConfigResolutionFacts(config) ?? [])]).toEqual(["gateway.auth.token"]);
-    });
-  });
-
-  it("restores newly set env var after INVALID_CONFIG is thrown", async () => {
-    await withTempHome(async (home) => {
-      await writeOpenClawConfig(home, {
-        env: { vars: { TEST_VAR: "injected-value" } },
-        // gateway.port must be a number; a string triggers INVALID_CONFIG
-        gateway: { port: "invalid" },
-      });
-
-      const env = { HOME: home } as NodeJS.ProcessEnv;
-      const io = createConfigIO({
-        env,
-        homedir: () => home,
-        logger: { warn: () => {}, error: () => {} },
-      });
-
-      expect(env.TEST_VAR).toBeUndefined();
-      expect(() => io.loadConfig()).toThrow(expect.objectContaining({ code: "INVALID_CONFIG" }));
-      expect(env.TEST_VAR).toBeUndefined();
-    });
-  });
-
-  it("restores overwritten env key when another config section is invalid", async () => {
-    await withTempHome(async (home) => {
-      await writeOpenClawConfig(home, {
-        env: { vars: { PRE_EXISTING: "new-value" } },
-        gateway: { port: "invalid" },
-      });
-
-      const env = {
-        HOME: home,
-        PRE_EXISTING: "original-value",
-      } as NodeJS.ProcessEnv;
-
-      const io = createConfigIO({
-        env,
-        homedir: () => home,
-        logger: { warn: () => {}, error: () => {} },
-      });
-
-      expect(env.PRE_EXISTING).toBe("original-value");
-      expect(() => io.loadConfig()).toThrow(expect.objectContaining({ code: "INVALID_CONFIG" }));
-      expect(env.PRE_EXISTING).toBe("original-value");
     });
   });
 
@@ -140,49 +123,38 @@ describe("loadConfig env restoration", () => {
   });
 });
 
-describe("readConfigFileSnapshot env restoration", () => {
-  it("removes a newly injected env var after invalid snapshot validation", async () => {
-    await withTempHome(async (home) => {
-      await writeOpenClawConfig(home, {
-        env: { vars: { TEST_VAR: "injected-value" } },
-        gateway: { port: "invalid" },
+describe.each(["loadConfig", "readConfigFileSnapshot"] as const)(
+  "%s env restoration after invalid config",
+  (read) => {
+    it.each([
+      { key: "TEST_VAR", original: undefined, injected: "injected-value" },
+      { key: "PRE_EXISTING", original: "original-value", injected: "new-value" },
+    ])("restores $key to $original", async ({ key, original, injected }) => {
+      await withTempHome(async (home) => {
+        await writeOpenClawConfig(home, {
+          env: { vars: { [key]: injected } },
+          gateway: { port: "invalid" },
+        });
+        const env: NodeJS.ProcessEnv = { HOME: home };
+        if (original !== undefined) {
+          env[key] = original;
+        }
+        const io = createConfigIO({
+          env,
+          homedir: () => home,
+          logger: { warn: () => {}, error: () => {} },
+        });
+
+        expect(env[key]).toBe(original);
+        if (read === "loadConfig") {
+          expect(() => io.loadConfig()).toThrow(
+            expect.objectContaining({ code: "INVALID_CONFIG" }),
+          );
+        } else {
+          expect((await io.readConfigFileSnapshot()).valid).toBe(false);
+        }
+        expect(env[key]).toBe(original);
       });
-
-      const env = { HOME: home } as NodeJS.ProcessEnv;
-      const io = createConfigIO({
-        env,
-        homedir: () => home,
-        logger: { warn: () => {}, error: () => {} },
-      });
-
-      const snapshot = await io.readConfigFileSnapshot();
-
-      expect(snapshot.valid).toBe(false);
-      expect(env.TEST_VAR).toBeUndefined();
     });
-  });
-
-  it("restores an overwritten env var after invalid snapshot validation", async () => {
-    await withTempHome(async (home) => {
-      await writeOpenClawConfig(home, {
-        env: { vars: { PRE_EXISTING: "new-value" } },
-        gateway: { port: "invalid" },
-      });
-
-      const env = {
-        HOME: home,
-        PRE_EXISTING: "original-value",
-      } as NodeJS.ProcessEnv;
-      const io = createConfigIO({
-        env,
-        homedir: () => home,
-        logger: { warn: () => {}, error: () => {} },
-      });
-
-      const snapshot = await io.readConfigFileSnapshot();
-
-      expect(snapshot.valid).toBe(false);
-      expect(env.PRE_EXISTING).toBe("original-value");
-    });
-  });
-});
+  },
+);

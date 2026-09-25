@@ -2,7 +2,6 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
@@ -10,6 +9,7 @@ import {
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
+import { createRequireRecord } from "../../../test/helpers/record.js";
 import type { CronJob } from "../api/types.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
@@ -132,7 +132,7 @@ catalogSuite.define(() => {
           locale: "en-US",
           serviceWorkers: "block",
           viewport: { height: 900, width: 1280 },
-          recordVideo: { dir: catalogSuite.artifactDir },
+          ...(captureEnabled ? { recordVideo: { dir: catalogSuite.artifactDir } } : {}),
         },
         async ({ page }) => {
           await page.routeWebSocket(`ws://127.0.0.1:${owner.port}/**`, (socket) => {
@@ -187,13 +187,17 @@ catalogSuite.define(() => {
           await expect
             .poll(() => picker.locator('[role="option"][data-value="retiring"]').count())
             .toBe(1);
-          await page.screenshot({ path: path.join(catalogSuite.artifactDir, "initial.png") });
+          if (captureEnabled) {
+            await page.screenshot({ path: path.join(catalogSuite.artifactDir, "initial.png") });
+          }
           await publish("published");
           await expect
             .poll(() => picker.locator('[role="option"][data-value="published"]').count())
             .toBe(1);
           expect(await picker.locator('[role="option"][data-value="retiring"]').count()).toBe(0);
-          await page.screenshot({ path: path.join(catalogSuite.artifactDir, "published.png") });
+          if (captureEnabled) {
+            await page.screenshot({ path: path.join(catalogSuite.artifactDir, "published.png") });
+          }
 
           rejectCatalogReplies = true;
           await publish("held");
@@ -202,7 +206,11 @@ catalogSuite.define(() => {
           await error.waitFor({ state: "visible" });
           expect(await error.textContent()).toContain("Catalog transport unavailable");
           expect(await picker.locator('[role="option"][data-value="published"]').count()).toBe(1);
-          await page.screenshot({ path: path.join(catalogSuite.artifactDir, "read-failure.png") });
+          if (captureEnabled) {
+            await page.screenshot({
+              path: path.join(catalogSuite.artifactDir, "read-failure.png"),
+            });
+          }
 
           rejectCatalogReplies = false;
           await publish("recovered");
@@ -214,7 +222,9 @@ catalogSuite.define(() => {
           expect(await page.locator("#cron-payload-text").inputValue()).toBe(
             "Do not submit this draft",
           );
-          await page.screenshot({ path: path.join(catalogSuite.artifactDir, "recovered.png") });
+          if (captureEnabled) {
+            await page.screenshot({ path: path.join(catalogSuite.artifactDir, "recovered.png") });
+          }
         },
       );
     } finally {
@@ -460,6 +470,68 @@ async function readAlertFields(page: Page) {
 }
 
 suite.define(() => {
+  it("timeout override: clearing restores the default after save and reload", async () => {
+    await withGatewayCommands("real-timeout-clear-commands.json", async (cliJson) => {
+      const job = await cliJson([
+        "automations",
+        "add",
+        "--name",
+        "Clear timeout override",
+        "--agent",
+        "main",
+        "--session",
+        "isolated",
+        "--message",
+        "Synthetic paused timeout fixture",
+        "--disabled",
+        "--every",
+        "2h",
+        "--timeout-seconds",
+        "90",
+        "--no-deliver",
+        "--json",
+      ]);
+      const jobId = cronJobId(job);
+      await withCronJobPage(cliJson, jobId, async (evidence) => {
+        const { page, servedDocumentSha256, servedAssets } = evidence;
+        await page.getByRole("button", { name: "Dismiss and don't show again" }).click();
+        await page.locator("details.cron-advanced > summary").click();
+        const timeout = page.locator("#cron-timeout-seconds");
+        expect(await timeout.inputValue()).toBe("90");
+        await timeout.fill("");
+        const cleared = await submitCronForm(evidence, cliJson, "cron.update");
+        await page.reload();
+        await waitForControlUiGatewayReady(page);
+        await page.locator("details.cron-advanced > summary").click();
+        await timeout.scrollIntoViewIfNeeded();
+        await capture(page, "real-timeout-clear-reloaded", {
+          ...cleared,
+          reloadedTimeout: await timeout.inputValue(),
+          servedDocumentSha256,
+          servedAssets: await Promise.all(servedAssets),
+        });
+        if (captureEnabled) {
+          const formBounds = await page.locator(".cron-page").boundingBox();
+          if (!formBounds) {
+            throw new Error("Automation form has no visible bounds");
+          }
+          await page.screenshot({
+            path: path.join(suite.artifactDir, "real-timeout-form-reloaded.png"),
+            clip: { x: formBounds.x, y: 0, width: formBounds.width, height: 900 },
+          });
+        }
+        expect(cleared.stored.payload).not.toHaveProperty("timeoutSeconds");
+        expect(await timeout.inputValue()).toBe("");
+        for (const value of ["0", "0.25"]) {
+          await timeout.fill(value);
+          const saved = await submitCronForm(evidence, cliJson, "cron.update");
+          expect(saved.stored.payload).toMatchObject({ timeoutSeconds: Number(value) });
+          expect(await timeout.inputValue()).toBe(value);
+        }
+      });
+    });
+  });
+
   it("configured duration precision: saves stagger through the real Gateway and CLI readback", async () => {
     await withGatewayCommands("real-gateway-commands.json", async (cliJson) => {
       const job = await cliJson([

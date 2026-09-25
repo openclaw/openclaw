@@ -80,18 +80,13 @@ describe("plugin dashboard declarations", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
       id: "invalid-widget-kind",
-      body: `module.exports = {
-        id: "invalid-widget-kind",
-        register(api) {
-          api.registerBoardWidgetContentKind({
-            kind: "html",
-            label: "Invalid",
-            resources: { surface: "canvas", paths: ["/__openclaw__/invalid/app.js"] },
-            validateSource() {},
-            composeDocument() { return ""; },
-          });
-        },
-      };`,
+      registration: `api.registerBoardWidgetContentKind({
+        kind: "html",
+        label: "Invalid",
+        resources: { surface: "canvas", paths: ["/__openclaw__/invalid/app.js"] },
+        validateSource() {},
+        composeDocument() { return ""; },
+      });`,
     });
 
     const registry = loadFixture(plugin);
@@ -248,16 +243,11 @@ describe("plugin dashboard declarations", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
       id: "dashboard-foreign-method",
-      body: `module.exports = {
-        id: "dashboard-foreign-method",
-        register(api) {
-          api.registerGatewayMethod(
-            "dashboard-foreign-method.read",
-            ({ respond }) => respond(true, { ok: true }),
-            { scope: "operator.read" },
-          );
-        },
-      };`,
+      registration: `api.registerGatewayMethod(
+        "dashboard-foreign-method.read",
+        ({ respond }) => respond(true, { ok: true }),
+        { scope: "operator.read" },
+      );`,
     });
     updateDashboardManifest(plugin, {
       dataBindings: [{ id: "foreign", method: "sessions.list", description: "Foreign method" }],
@@ -280,16 +270,11 @@ describe("plugin dashboard declarations", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
       id: "dashboard-wrong-scope",
-      body: `module.exports = {
-        id: "dashboard-wrong-scope",
-        register(api) {
-          api.registerGatewayMethod(
-            "dashboard-wrong-scope.read",
-            ({ respond }) => respond(true, { ok: true }),
-            { scope: "operator.write" },
-          );
-        },
-      };`,
+      registration: `api.registerGatewayMethod(
+        "dashboard-wrong-scope.read",
+        ({ respond }) => respond(true, { ok: true }),
+        { scope: "operator.write" },
+      );`,
     });
     updateDashboardManifest(plugin, {
       dataBindings: [
@@ -318,16 +303,11 @@ describe("plugin dashboard declarations", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
       id: "sessions",
-      body: `module.exports = {
-        id: "sessions",
-        register(api) {
-          api.registerGatewayMethod(
-            "sessions.pluginWrite",
-            ({ respond }) => respond(true, { ok: true }),
-            { scope: "operator.write" },
-          );
-        },
-      };`,
+      registration: `api.registerGatewayMethod(
+        "sessions.pluginWrite",
+        ({ respond }) => respond(true, { ok: true }),
+        { scope: "operator.write" },
+      );`,
     });
     updateDashboardManifest(plugin, {
       actionVerbs: [
@@ -357,16 +337,11 @@ describe("plugin dashboard declarations", () => {
     const plugin = writePlugin({
       id: "cron.trigger:nightly",
       filename: "cron-trigger-nightly.cjs",
-      body: `module.exports = {
-        id: "cron.trigger:nightly",
-        register(api) {
-          api.registerGatewayMethod(
-            "plugin.nightly.read",
-            ({ respond }) => respond(true, { ok: true }),
-            { scope: "operator.read" },
-          );
-        },
-      };`,
+      registration: `api.registerGatewayMethod(
+        "plugin.nightly.read",
+        ({ respond }) => respond(true, { ok: true }),
+        { scope: "operator.read" },
+      );`,
     });
     updateDashboardManifest(plugin, {
       dataBindings: [
@@ -389,16 +364,11 @@ describe("plugin dashboard declarations", () => {
     const dataPlugin = writePlugin({
       id: "dashboard",
       filename: "dashboard-data.cjs",
-      body: `module.exports = {
-        id: "dashboard",
-        register(api) {
-          api.registerGatewayMethod(
-            "dashboard.items",
-            ({ respond }) => respond(true, { items: [] }),
-            { scope: "operator.read" },
-          );
-        },
-      };`,
+      registration: `api.registerGatewayMethod(
+        "dashboard.items",
+        ({ respond }) => respond(true, { items: [] }),
+        { scope: "operator.read" },
+      );`,
     });
     updateDashboardManifest(dataPlugin, {
       dataBindings: [
@@ -412,16 +382,11 @@ describe("plugin dashboard declarations", () => {
     const actionPlugin = writePlugin({
       id: "dashboard.segmented",
       filename: "dashboard-segmented-action.cjs",
-      body: `module.exports = {
-        id: "dashboard.segmented",
-        register(api) {
-          api.registerGatewayMethod(
-            "dashboard.segmented.refresh",
-            ({ respond }) => respond(true, { ok: true }),
-            { scope: "operator.write" },
-          );
-        },
-      };`,
+      registration: `api.registerGatewayMethod(
+        "dashboard.segmented.refresh",
+        ({ respond }) => respond(true, { ok: true }),
+        { scope: "operator.write" },
+      );`,
     });
     updateDashboardManifest(actionPlugin, {
       actionVerbs: [
@@ -435,16 +400,11 @@ describe("plugin dashboard declarations", () => {
     const literalEscapePlugin = writePlugin({
       id: "dashboard%2Esegmented",
       filename: "dashboard-literal-escape.cjs",
-      body: `module.exports = {
-        id: "dashboard%2Esegmented",
-        register(api) {
-          api.registerGatewayMethod(
-            "dashboard.literal-escape.items",
-            ({ respond }) => respond(true, { items: [] }),
-            { scope: "operator.read" },
-          );
-        },
-      };`,
+      registration: `api.registerGatewayMethod(
+        "dashboard.literal-escape.items",
+        ({ respond }) => respond(true, { items: [] }),
+        { scope: "operator.read" },
+      );`,
     });
     updateDashboardManifest(literalEscapePlugin, {
       dataBindings: [
@@ -478,21 +438,16 @@ describe("plugin dashboard declarations", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
       id: "dashboard-valid",
-      body: `module.exports = {
-        id: "dashboard-valid",
-        register(api) {
-          api.registerGatewayMethod(
-            "dashboard-valid.items",
-            ({ respond }) => respond(true, { items: [] }),
-            { scope: "operator.read" },
-          );
-          api.registerGatewayMethod(
-            "dashboard-valid.refresh",
-            ({ respond }) => respond(true, { ok: true }),
-            { scope: "operator.write" },
-          );
-        },
-      };`,
+      registration: `api.registerGatewayMethod(
+        "dashboard-valid.items",
+        ({ respond }) => respond(true, { items: [] }),
+        { scope: "operator.read" },
+      );
+      api.registerGatewayMethod(
+        "dashboard-valid.refresh",
+        ({ respond }) => respond(true, { ok: true }),
+        { scope: "operator.write" },
+      );`,
     });
     updateDashboardManifest(plugin, {
       dataBindings: [{ id: "items", method: "dashboard-valid.items", description: "List items" }],

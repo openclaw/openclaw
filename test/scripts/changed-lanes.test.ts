@@ -48,34 +48,25 @@ import {
   delegationFailedBeforeRunning,
 } from "../../scripts/check-changed.mts";
 import { resolveOxfmtInvocation } from "../../scripts/format-docs.mts";
-import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "../helpers/temp-dir.js";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import {
+  cleanupTempDirs,
+  makeTempDir as makeTempRepoRoot,
+  useAutoCleanupTempDirTracker,
+} from "../helpers/temp-dir.js";
+import { createNestedGitEnv } from "../helpers/temp-repo.js";
 import { materializeNativeCompiler } from "./native-boundary-fixture.js";
+import { preparedScriptWrapperEnv } from "./prepared-script-wrapper.test-support.js";
 
 const tempDirs: string[] = [];
+const uiCompanionTempDirs = useAutoCleanupTempDirTracker(afterEach);
 const repoRoot = process.cwd();
+const testNodeExecPath = resolveTestNodeExecPath();
 const githubActivityHelper = ".agents/skills/openclaw-pr-maintainer/scripts/github-activity.sh";
+const releaseNotesHelper =
+  ".agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs";
 const tsxImport = pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href;
 type ExecFileSyncFailure = Error & { status?: number | null; stderr?: Buffer };
-const nestedGitEnvKeys = [
-  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-  "GIT_DIR",
-  "GIT_INDEX_FILE",
-  "GIT_OBJECT_DIRECTORY",
-  "GIT_QUARANTINE_PATH",
-  "GIT_WORK_TREE",
-] as const;
-
-function createNestedGitEnv(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    GIT_CONFIG_NOSYSTEM: "1",
-    GIT_TERMINAL_PROMPT: "0",
-  };
-  for (const key of nestedGitEnvKeys) {
-    delete env[key];
-  }
-  return env;
-}
 
 const git = (cwd: string, args: string[]) =>
   execFileSync("git", args, {
@@ -111,7 +102,7 @@ function parseChangedLaneOutput(output: string): ReturnType<typeof detectChanged
 
 function runChangedLanesCli(cwd: string, args: string[]) {
   return parseChangedLaneOutput(
-    execFileSync(process.execPath, [path.join(repoRoot, "scripts", "changed-lanes.mjs"), ...args], {
+    execFileSync(testNodeExecPath, [path.join(repoRoot, "scripts", "changed-lanes.mjs"), ...args], {
       cwd,
       encoding: "utf8",
       env: createNestedGitEnv(),
@@ -123,7 +114,7 @@ function runRepoScript(script: string, args: string[], env = createNestedGitEnv(
   const nodeArgs = script.endsWith(".mts")
     ? ["--import", "tsx", path.join(repoRoot, script), ...args]
     : [path.join(repoRoot, script), ...args];
-  return spawnSync(process.execPath, nodeArgs, {
+  return spawnSync(testNodeExecPath, nodeArgs, {
     cwd,
     encoding: "utf8",
     env,
@@ -137,6 +128,40 @@ function writeRepoFile(repoDir: string, filePath: string, contents: string): voi
 }
 
 const prettyJson = (value: unknown) => `${JSON.stringify(value, null, 2)}\n`;
+
+function syntheticCoreTestOwnerEnv(dir: string, env: NodeJS.ProcessEnv, recorderPath?: string) {
+  const ownerPath = path.join(dir, "compiler-owner.mjs");
+  writeFileSync(
+    ownerPath,
+    `${recorderPath ? `import recorder from ${JSON.stringify(pathToFileURL(recorderPath).href)};` : "const recorder = null;"}
+async function check(args) {
+  if (!recorder) return 0;
+  const finish = recorder.start("pnpm", args);
+  try {
+    await Promise.resolve();
+    return recorder.result("pnpm", args);
+  } finally {
+    finish();
+  }
+}
+export function createChangedCoreTestCheck() {
+  return {
+    checkBoundary: () => check(["lint:tmp:tsgo-core-boundary"]),
+    checkTypes: () => check(["tsgo:core:test"]),
+  };
+}
+`,
+  );
+  return preparedScriptWrapperEnv(
+    [
+      [
+        pathToFileURL(path.join(repoRoot, "scripts/run-tsgo-core-test-shards.mts")),
+        pathToFileURL(ownerPath),
+      ],
+    ],
+    env,
+  );
+}
 
 function createRootTestLintFixture() {
   const dir = makeTempRepoRoot(tempDirs, "openclaw-changed-root-lint-");
@@ -165,8 +190,8 @@ function createRootTestLintFixture() {
   })) {
     writeRepoFile(dir, file, source);
   }
-  materializeNativeCompiler(dir);
-  for (const name of ["@types/node", "vitest"]) {
+  mkdirSync(path.join(dir, "node_modules/.bin"), { recursive: true });
+  for (const name of ["@types/node", "vitest", "tsx"]) {
     const destination = path.join(dir, "node_modules", name);
     mkdirSync(path.dirname(destination), { recursive: true });
     symlinkSync(path.join(repoRoot, "node_modules", name), destination, "junction");
@@ -197,23 +222,25 @@ function createRootTestLintFixture() {
   }
   // Stub unrelated package gates at the executable boundary: real pnpm could
   // reconcile this partial install. The CLI and source-only lint wrapper stay real.
+  // The export audit is selected normally, but this fixture has only the lint graph.
+  writeRepoFile(dir, "scripts/check-deadcode-exports.mts", "export {};\n");
   const binDir = path.join(dir, "bin");
   for (const bin of ["pnpm", "corepack"]) {
     writeRepoFile(dir, `bin/${bin}`, "#!/bin/sh\nexit 0\n");
     chmodSync(path.join(binDir, bin), 0o755);
     writeRepoFile(dir, `bin/${bin}.cmd`, "@echo off\r\nexit /b 0\r\n");
   }
-  const env: NodeJS.ProcessEnv = {
+  const env = syntheticCoreTestOwnerEnv(dir, {
     ...createNestedGitEnv(),
     OXC_LOG: "debug",
     PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
-  };
+  });
   delete env.OPENCLAW_TESTBOX;
   delete env.OPENCLAW_OXLINT_SKIP_PREPARE;
   return {
     dir,
     run: (script: string, args: string[]) =>
-      spawnSync(process.execPath, [path.join(repoRoot, script), ...args], {
+      spawnSync(testNodeExecPath, [path.join(repoRoot, script), ...args], {
         cwd: dir,
         encoding: "utf8",
         env,
@@ -250,7 +277,7 @@ function runChangedFormatLaneWithRepoOxfmt(cwd: string, changedPaths: string[]) 
   });
 }
 
-// Keep the real gate and managed children; only the external check commands are synthetic.
+// Keep the real gate and managed children; check owners share one synthetic recorder.
 function runChangedCheckWithRecordedCommands(
   failingCommand: string | null,
   paths = ["src/gateway/server-runtime-state.ts"],
@@ -266,17 +293,25 @@ function runChangedCheckWithRecordedCommands(
     childPath,
     `
 const fs = require("node:fs");
-const bin = process.argv[2];
-const args = process.argv.slice(3);
 const events = ${JSON.stringify(eventsPath)};
 const active = ${JSON.stringify(path.join(dir, "active"))};
-const record = (event) => fs.appendFileSync(events, JSON.stringify({event, bin, args}) + "\\n");
-fs.mkdirSync(active);
-record("start");
-process.on("exit", () => { record("finish"); fs.rmdirSync(active); });
-if (bin === "pnpm" && args[0] === ${JSON.stringify(failingCommand)}) {
-  console.error("Synthetic check failure: " + args[0]);
-  process.exitCode = 23;
+exports.start = (bin, args) => {
+  const record = (event) => fs.appendFileSync(events, JSON.stringify({event, bin, args}) + "\\n");
+  fs.mkdirSync(active);
+  record("start");
+  return () => { record("finish"); fs.rmdirSync(active); };
+};
+exports.result = (bin, args) => {
+  if (bin === "pnpm" && args[0] === ${JSON.stringify(failingCommand)}) {
+    console.error("Synthetic check failure: " + args[0]);
+    return 23;
+  }
+  return 0;
+};
+if (require.main === module) {
+  const bin = process.argv[2], args = process.argv.slice(3);
+  process.on("exit", exports.start(bin, args));
+  process.exitCode = exports.result(bin, args);
 }
 `,
   );
@@ -285,25 +320,29 @@ if (bin === "pnpm" && args[0] === ${JSON.stringify(failingCommand)}) {
     const launcher = path.join(binDir, bin);
     writeFileSync(
       launcher,
-      `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(childPath)} ${bin} "$@"\n`,
+      `#!/bin/sh\nexec ${quote(testNodeExecPath)} ${quote(childPath)} ${bin} "$@"\n`,
     );
     chmodSync(launcher, 0o755);
     writeFileSync(
       `${launcher}.cmd`,
-      `@echo off\r\n"${process.execPath}" "${childPath}" ${bin} %*\r\n`,
+      `@echo off\r\n"${testNodeExecPath}" "${childPath}" ${bin} %*\r\n`,
     );
   }
   const result = runRepoScript(
     "scripts/check-changed.mjs",
     ["--", ...paths],
-    {
-      ...createNestedGitEnv(),
-      CI: "",
-      GITHUB_ACTIONS: "",
-      OPENCLAW_CHECK_CHANGED_REMOTE_CHILD: "1",
-      OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE: "",
-      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
-    },
+    syntheticCoreTestOwnerEnv(
+      dir,
+      {
+        ...createNestedGitEnv(),
+        CI: "",
+        GITHUB_ACTIONS: "",
+        OPENCLAW_CHECK_CHANGED_REMOTE_CHILD: "1",
+        OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE: "",
+        PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      },
+      childPath,
+    ),
     cwd,
   );
   const events: { event: string; bin: string; args: string[] }[] = readFileSync(eventsPath, "utf8")
@@ -355,7 +394,7 @@ function classifyPackageJsonChange(
   writeRepoFile(dir, "package.json", typeof after === "string" ? after : prettyJson(after));
 
   const output = execFileSync(
-    process.execPath,
+    testNodeExecPath,
     [path.join(repoRoot, "scripts", "changed-lanes.mjs"), "--json", "--base", "HEAD"],
     { cwd: dir, encoding: "utf8", env: createNestedGitEnv() },
   );
@@ -414,7 +453,7 @@ describe("scripts/changed-lanes", () => {
     mkdirSync(binDir, { recursive: true });
     writeFileSync(path.join(binDir, "node"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
 
-    const result = spawnSync(process.execPath, [path.join(repoRoot, "scripts/check-changed.mjs")], {
+    const result = spawnSync(testNodeExecPath, [path.join(repoRoot, "scripts/check-changed.mjs")], {
       cwd: dir,
       encoding: "utf8",
       env: {
@@ -445,7 +484,7 @@ describe("scripts/changed-lanes", () => {
     writeFileSync(path.join(binDir, "node"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
 
     const result = spawnSync(
-      process.execPath,
+      testNodeExecPath,
       [path.join(repoRoot, "scripts/check-changed.mjs"), "--", "CHANGELOG.md"],
       {
         cwd: dir,
@@ -657,42 +696,47 @@ describe("scripts/changed-lanes", () => {
     );
   });
 
-  it("keeps the hidden maintainer helper trio on tooling checks through both CLIs", () => {
-    const paths = [
-      githubActivityHelper,
-      ".agents/skills/openclaw-pr-maintainer/SKILL.md",
-      "test/scripts/github-activity-helper.test.ts",
-    ];
-    const lanes = runChangedLanesCli(repoRoot, ["--json", "--", ...paths]);
-    const result = runRepoScript("scripts/check-changed.mjs", ["--dry-run", "--", ...paths]);
+  it.each([githubActivityHelper, releaseNotesHelper])(
+    "keeps hidden helper %s on tooling checks through both CLIs",
+    (helper) => {
+      const paths = [
+        helper,
+        ".agents/skills/openclaw-pr-maintainer/SKILL.md",
+        "test/scripts/github-activity-helper.test.ts",
+      ];
+      const lanes = runChangedLanesCli(repoRoot, ["--json", "--", ...paths]);
+      const result = runRepoScript("scripts/check-changed.mjs", ["--dry-run", "--", ...paths]);
 
-    expectLanes(lanes.lanes, { docs: true, testRoot: true, tooling: true });
-    expect(lanes).toMatchObject({ extensionImpactFromCore: false, docsOnly: false });
-    expect(lanes.paths.toSorted()).toEqual(paths.toSorted());
-    expect(result.status).toBe(0);
-    expect(result.stderr).toContain("[check:changed:dry-run] lanes=testRoot, docs, tooling");
-    const commands = result.stderr
-      .split("\n")
-      .filter((line) => line.startsWith("[check:changed:dry-run] would run: "))
-      .map((line) => line.replace("[check:changed:dry-run] would run: ", ""));
-    expect(commands).toEqual([
-      "pnpm check:no-conflict-markers",
-      "pnpm check:changelog-attributions",
-      "pnpm check:doctor-deprecation-registry",
-      "pnpm lint:extensions:no-guarded-wildcard-reexports",
-      "pnpm lint:extensions:no-plugin-sdk-wildcard-reexports",
-      "pnpm dup:check:coverage",
-      "pnpm deps:pins:check",
-      `pnpm format:check --no-error-on-unmatched-pattern -- ${lanes.paths.join(" ")}`,
-      "pnpm deps:patches:check",
-      "node scripts/report-test-temp-creations.mjs --base origin/main --head HEAD",
-      "pnpm lint:tmp:tsgo-core-boundary",
-      "pnpm tsgo:test:root",
-      "pnpm check:coercion-helpers",
-      "pnpm lint:scripts",
-      "node scripts/run-oxlint.mjs --tsconfig test/tsconfig/tsconfig.test.root.json test/scripts/github-activity-helper.test.ts",
-    ]);
-  });
+      expectLanes(lanes.lanes, { docs: true, testRoot: true, tooling: true });
+      expect(lanes).toMatchObject({ extensionImpactFromCore: false, docsOnly: false });
+      expect(lanes.paths.toSorted()).toEqual(paths.toSorted());
+      expect(result.status).toBe(0);
+      expect(result.stderr).toContain("[check:changed:dry-run] lanes=testRoot, docs, tooling");
+      const commands = result.stderr
+        .split("\n")
+        .filter((line) => line.startsWith("[check:changed:dry-run] would run: "))
+        .map((line) => line.replace("[check:changed:dry-run] would run: ", ""));
+      expect(commands).toEqual([
+        "pnpm check:no-conflict-markers",
+        "pnpm check:line-cap-ratchet --base origin/main",
+        "pnpm check:changelog-attributions",
+        "pnpm check:doctor-deprecation-registry",
+        "pnpm lint:extensions:no-guarded-wildcard-reexports",
+        "pnpm lint:extensions:no-plugin-sdk-wildcard-reexports",
+        "pnpm dup:check:coverage",
+        "pnpm deps:pins:check",
+        `pnpm format:check --no-error-on-unmatched-pattern -- ${lanes.paths.join(" ")}`,
+        "pnpm deps:patches:check",
+        "node scripts/report-test-temp-creations.mjs --base origin/main --head HEAD",
+        "pnpm lint:tmp:tsgo-core-boundary",
+        "pnpm tsgo:test:root",
+        "pnpm check:coercion-helpers",
+        "node --import tsx scripts/check-deadcode-exports.mts",
+        "pnpm lint:scripts",
+        "node scripts/run-oxlint.mjs --tsconfig test/tsconfig/tsconfig.test.root.json test/scripts/github-activity-helper.test.ts",
+      ]);
+    },
+  );
 
   it("includes untracked worktree files in the default local diff", () => {
     const dir = makeTempRepoRoot(tempDirs, "openclaw-changed-lanes-");
@@ -835,6 +879,111 @@ describe("scripts/changed-lanes", () => {
     });
   });
 
+  it("compares a pending merge index with the explicit staged base through the CLI", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-changed-staged-base-");
+    git(dir, ["init", "-q", "--initial-branch=main"]);
+    writeRepoFile(dir, "README.md", "initial\n");
+    commitAll(dir, "initial");
+    const fork = git(dir, ["rev-parse", "HEAD"]);
+    writeRepoFile(dir, "docs/incoming.md", "incoming main\n");
+    commitAll(dir, "incoming main");
+    const base = git(dir, ["rev-parse", "HEAD"]);
+    git(dir, ["switch", "-q", "-c", "feature", fork]);
+    writeRepoFile(dir, "src/feature.test.ts", "export const feature = 1;\n");
+    commitAll(dir, "feature");
+    git(dir, [
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "user.name=Test User",
+      "merge",
+      "--no-commit",
+      "--no-ff",
+      "main",
+    ]);
+    writeRepoFile(dir, "src/unstaged.ts", "export const unstaged = 1;\n");
+
+    expect(runChangedLanesCli(dir, ["--json", "--staged"]).paths).toEqual(["docs/incoming.md"]);
+    expect(runChangedLanesCli(dir, ["--json", "--staged", "--base", base]).paths).toEqual([
+      "src/feature.test.ts",
+    ]);
+    const checked = runRepoScript(
+      "scripts/check-changed.mjs",
+      ["--dry-run", "--staged", `--base=${base}`],
+      createNestedGitEnv(),
+      dir,
+    );
+    expect(checked.status, checked.stderr).toBe(0);
+    expect(checked.stderr).toContain("-- src/feature.test.ts");
+    expect(checked.stderr).not.toContain("docs/incoming.md");
+    expect(checked.stderr).not.toContain("src/unstaged.ts");
+    for (const command of [
+      "check:line-cap-ratchet",
+      "check:max-lines-ratchet",
+      "check:assertion-safety",
+    ]) {
+      expect(checked.stderr).toContain(`${command} --staged --base ${base}`);
+    }
+    expect(checked.stderr).toContain(
+      `scripts/report-test-temp-creations.mjs --staged --base ${base}`,
+    );
+    const delegated = buildChangedCheckCrabboxArgs(["--staged", "--base", base], { cwd: dir });
+    expect(delegated.slice(delegated.indexOf("check:changed") + 1)).toEqual([
+      "--paths-from-git",
+      "--base",
+      base,
+      "--head",
+      "HEAD",
+      "--",
+      "src/feature.test.ts",
+    ]);
+  });
+
+  it("classifies staged package scripts against the explicit base instead of HEAD", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-changed-staged-package-base-");
+    git(dir, ["init", "-q", "--initial-branch=main"]);
+    writeRepoFile(
+      dir,
+      "package.json",
+      prettyJson({ dependencies: { fixture: "1" }, scripts: { check: "old" } }),
+    );
+    commitAll(dir, "initial");
+    const fork = git(dir, ["rev-parse", "HEAD"]);
+    writeRepoFile(
+      dir,
+      "package.json",
+      prettyJson({ dependencies: { fixture: "2" }, scripts: { check: "old" } }),
+    );
+    commitAll(dir, "incoming dependency");
+    const base = git(dir, ["rev-parse", "HEAD"]);
+    git(dir, ["switch", "-q", "-c", "feature", fork]);
+    writeRepoFile(
+      dir,
+      "package.json",
+      prettyJson({ dependencies: { fixture: "2" }, scripts: { check: "new" } }),
+    );
+    git(dir, ["add", "package.json"]);
+    // A worktree-only dependency change must not broaden index classification.
+    writeRepoFile(
+      dir,
+      "package.json",
+      prettyJson({ dependencies: { fixture: "3" }, scripts: { check: "new" } }),
+    );
+    const explicit = runChangedLanesCli(dir, ["--json", "--staged", `--base=${base}`]);
+    expect(explicit.paths).toEqual(["package.json"]);
+    expect(explicit.lanes.tooling).toBe(true);
+    expect(explicit.lanes.all).toBe(false);
+    expect(runChangedLanesCli(dir, ["--json", "--staged"]).lanes.releaseMetadata).toBe(true);
+  });
+
+  it("keeps staged discovery usable before the first commit", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-changed-staged-unborn-");
+    git(dir, ["init", "-q", "--initial-branch=main"]);
+    writeRepoFile(dir, "README.md", "initial\n");
+    git(dir, ["add", "README.md"]);
+    expect(runChangedLanesCli(dir, ["--json", "--staged"]).paths).toEqual(["README.md"]);
+  });
+
   it("includes staged added, modified, and deleted files in the changed format check", () => {
     const dir = makeTempRepoRoot(tempDirs, "openclaw-changed-lanes-staged-format-");
     git(dir, ["init", "-q", "--initial-branch=main"]);
@@ -906,6 +1055,7 @@ describe("scripts/changed-lanes", () => {
     "fails real changed-check lint for $name and passes after repair",
     ({ count, extension, otherPaths }) => {
       const { dir, run } = createRootTestLintFixture();
+      materializeNativeCompiler(dir);
       const targets = Array.from(
         { length: count },
         (_, index) => `test/root-lint-${index}.test.${extension}`,
@@ -974,6 +1124,7 @@ describe("scripts/changed-lanes", () => {
 
   it("discovers the canonical root test program and preserves ambient and source-alias types", () => {
     const { dir, run } = createRootTestLintFixture();
+    materializeNativeCompiler(dir);
     const sources = ["test/discovery.test.ts", "test/component.test.tsx"];
     const declarations = ["test/vitest/vitest.test-shards.d.mts", "test/vitest/common.d.cts"];
     const modules = ["test/plain.mts", "test/plain.cts"];
@@ -1130,7 +1281,17 @@ describe("scripts/changed-lanes", () => {
     // touches, so selection is by path; inspecting changed lines would miss it.
     { name: "import-only edit", changedPaths: ["src/agents/tool-surface-plan.ts"], expected: true },
     { name: "docs tree", changedPaths: ["docs/example.ts"], expected: false },
-    { name: "scripts tree", changedPaths: ["scripts/check-changed.mjs"], expected: false },
+    { name: "script entry", changedPaths: ["scripts/check-changed.mjs"], expected: true },
+    {
+      name: "script helper",
+      changedPaths: ["scripts/lib/budget-number-args.mts"],
+      expected: true,
+    },
+    {
+      name: "root test consumer",
+      changedPaths: ["test/scripts/test-perf-budget.test.ts"],
+      expected: true,
+    },
     // knip never reads these, so they must not pull in the scan.
     { name: "markdown under src", changedPaths: ["src/README.md"], expected: false },
     { name: "sql under src", changedPaths: ["src/state/schema.sql"], expected: false },
@@ -1159,7 +1320,9 @@ describe("scripts/changed-lanes", () => {
     "extensions/discord/package.json",
     "extensions/slack/security-contract-api.ts",
     "src/config/zod-schema.core.ts",
+    "src/channels/bundled-channel-ids.generated.ts",
     "src/channels/plugins/config-schema.ts",
+    "src/plugins/sdk-alias-normalization.ts",
     "scripts/load-channel-config-surface.ts",
   ])("routes %s through the bundled channel config metadata lane", (changedPath) => {
     const result = detectChangedLanesForPaths({ paths: [changedPath], base: "HEAD", staged: true });
@@ -1236,7 +1399,6 @@ describe("scripts/changed-lanes", () => {
       "src/config/schema.test.ts",
       "src/plugins/manifest-registry.test.ts",
       "extensions/whatsapp/src/monitor.ts",
-      "src/gateway/server-runtime-state.ts",
       "scripts/docs-list.js",
       "docs/ci.md",
     ].map((file) => ({ paths: [file], selected: false })),
@@ -1962,23 +2124,26 @@ describe("scripts/changed-lanes", () => {
     expect(shouldDelegateChangedCheckToCrabbox([], {}, { result })).toBe(false);
   });
 
-  it("adds the dead export scan only for production source changes", () => {
+  it.each([
+    ["core source", "src/config/config.ts"],
+    ["script consumer", "scripts/test-perf-budget.mts"],
+    ["root test consumer", "test/scripts/test-perf-budget.test.ts"],
+  ])("adds the dead export scan for %s changes", (_name, changedPath) => {
     const command = {
       name: "dead export scan (skip with OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE=1)",
       bin: "node",
       args: ["--import", "tsx", "scripts/check-deadcode-exports.mts"],
-      env: expect.any(Object),
     };
-    const sourceResult = detectChangedLanes(["src/config/config.ts"]);
-    const toolingResult = detectChangedLanes(["scripts/check-changed.mjs"]);
+    const sourceResult = detectChangedLanes([changedPath]);
+    const commands = (env = {}) =>
+      createChangedCheckPlan(sourceResult, { env }).commands.map(({ name, bin, args }) => ({
+        name,
+        bin,
+        args,
+      }));
 
-    expect(createChangedCheckPlan(sourceResult).commands).toContainEqual(command);
-    expect(createChangedCheckPlan(toolingResult).commands).not.toContainEqual(command);
-    expect(
-      createChangedCheckPlan(sourceResult, {
-        env: { OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE: "1" },
-      }).commands,
-    ).not.toContainEqual(command);
+    expect(commands()).toContainEqual(command);
+    expect(commands({ OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE: "1" })).not.toContainEqual(command);
   });
 
   it("keeps classified changed gates local", () => {
@@ -2051,7 +2216,75 @@ describe("scripts/changed-lanes", () => {
     ).toBe(false);
   });
 
-  it.each([
+  it.each([false, true])(
+    "selects consuming test graphs with UI CSS and docs companions (deleted UI test: %s)",
+    (deleted) => {
+      const dir = uiCompanionTempDirs.make("openclaw-ui-companion-checks-");
+      const testPath = "ui/src/e2e/fixture.e2e.test.ts";
+      const styles = ["ui/src/styles/chat/fixture-a.css", "ui/src/styles/chat/fixture-b.css"];
+      const docsPath = "docs/web/control-ui/fixture.md";
+      writeRepoFile(dir, testPath, "export {};\n");
+      for (const style of styles) {
+        writeRepoFile(dir, style, ".fixture { display: block; }\n");
+      }
+      writeRepoFile(dir, docsPath, "# Fixture\n");
+      if (deleted) {
+        unlinkSync(path.join(dir, testPath));
+      }
+
+      const changedPaths = [testPath, ...styles, docsPath];
+      const script = `
+        import { detectChangedLanes } from ${JSON.stringify(pathToFileURL(path.join(repoRoot, "scripts/changed-lanes.mts")).href)};
+        import { createChangedCheckPlan } from ${JSON.stringify(pathToFileURL(path.join(repoRoot, "scripts/check-changed.mts")).href)};
+        const result = detectChangedLanes(${JSON.stringify(changedPaths)});
+        const plan = createChangedCheckPlan(result, { env: { PATH: "/usr/bin" } });
+        console.log(JSON.stringify({
+          lanes: result.lanes,
+          extensionImpactFromCore: result.extensionImpactFromCore,
+          commands: plan.commands.map(({ name, args, coreTestCheck }) => ({ name, args, coreTestCheck })),
+        }));
+      `;
+      const output = execFileSync(
+        testNodeExecPath,
+        ["--import", tsxImport, "--input-type=module", "--eval", script],
+        { cwd: dir, encoding: "utf8", env: createNestedGitEnv() },
+      );
+      const plan = JSON.parse(output) as {
+        lanes: ReturnType<typeof createEmptyChangedLanes>;
+        extensionImpactFromCore: boolean;
+        commands: ReturnType<typeof createChangedCheckPlan>["commands"];
+      };
+      expectLanes(plan.lanes, { ui: true, coreTests: true, docs: true });
+      expect(plan.extensionImpactFromCore).toBe(false);
+      expect(plan.commands.flatMap((command) => command.coreTestCheck ?? [])).toEqual([
+        "checkBoundary",
+        "checkTypes",
+      ]);
+      const commands = plan.commands.map((command) => command.args[0]);
+      expect(commands).toContain("tsgo:ui");
+      expect(commands).toContain("tsgo:core:test");
+      expect(commands).not.toContain("tsgo:core");
+      expect(
+        plan.commands
+          .filter((command) => command.name.startsWith("lint UI changed style"))
+          .map((command) => command.args),
+      ).toEqual([
+        ["--import", "tsx", "scripts/run-stylelint.mts", ...(deleted ? [] : [testPath]), ...styles],
+      ]);
+    },
+  );
+
+  it.each<{
+    name: string;
+    path: string;
+    extraPaths?: string[];
+    expected: {
+      lanes: Partial<ReturnType<typeof createEmptyChangedLanes>>;
+      includes: string[];
+      excludes: string[];
+      coreTestChecks?: string[];
+    };
+  }>([
     ...[
       "src/agents/embedded-agent-runner/run/attempt-system-prompt.test.ts",
       "src/plugin-sdk/config-runtime.test.ts",
@@ -2067,6 +2300,19 @@ describe("scripts/changed-lanes", () => {
         coreTestChecks: ["checkBoundary", "checkTypes"],
       },
     })),
+    ...["ui/src/app.ts", "tsconfig.ui.json", "ui/src/e2e/chat-flow.test-support.ts"].map(
+      (companion) => ({
+        name: `selects consuming test graphs unless the companion is global: ${companion}`,
+        path: "ui/src/e2e/chat-composer-picker-layout.e2e.test.ts",
+        extraPaths: ["ui/src/styles/chat/composer.css", companion],
+        expected: {
+          lanes: { ui: true, coreTests: true },
+          includes: ["tsgo:ui", "tsgo:core:test"],
+          excludes: ["tsgo:core"],
+          coreTestChecks: companion === "tsconfig.ui.json" ? [] : ["checkBoundary", "checkTypes"],
+        },
+      }),
+    ),
     {
       name: "routes core test-only changes to core test lanes only",
       path: "packages/normalization-core/src/string-normalization.test-support.ts",
@@ -2074,6 +2320,7 @@ describe("scripts/changed-lanes", () => {
         lanes: { coreTests: true },
         includes: ["tsgo:core:test"],
         excludes: ["tsgo:core"],
+        coreTestChecks: ["checkBoundary", "checkTypes"],
       },
     },
     {
@@ -2112,15 +2359,16 @@ describe("scripts/changed-lanes", () => {
         excludes: ["tsgo:extensions"],
       },
     },
-  ])("$name: $path", ({ path: changedPath, expected }) => {
-    const result = detectChangedLanes([changedPath]);
+  ])("$name: $path", (testCase) => {
+    const { path: changedPath, expected } = testCase;
+    const result = detectChangedLanes([changedPath, ...(testCase.extraPaths ?? [])]);
     const plan = createChangedCheckPlan(result);
     const commands = plan.commands.map((command) => command.args[0]);
 
     expectLanes(result.lanes, expected.lanes);
     expect(result.extensionImpactFromCore).toBe(false);
     expect(plan.commands.flatMap((command) => command.coreTestCheck ?? [])).toEqual(
-      "coreTestChecks" in expected ? expected.coreTestChecks : [],
+      expected.coreTestChecks ?? [],
     );
     for (const command of expected.includes) {
       expect(commands).toContain(command);
@@ -2179,7 +2427,9 @@ describe("scripts/changed-lanes", () => {
     ".agents/skills/openclaw-pr-maintainer-extra/scripts/github-activity.sh",
     ".agents/config.json",
     ".agents/skills/autoreview/scripts/autoreview",
-    ".agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs",
+    `${releaseNotesHelper}.bak`,
+    `${releaseNotesHelper}/child.mjs`,
+    ".agents/skills/openclaw-changelog-update/scripts/unknown.mjs",
   ])("fails safe for %s even alongside the hidden maintainer helper", (changedPath) => {
     for (const paths of [[changedPath], [githubActivityHelper, changedPath]]) {
       const result = detectChangedLanes(paths);
@@ -2288,6 +2538,7 @@ describe("scripts/changed-lanes", () => {
     });
     expect(plan.commands.map((command) => command.name)).toEqual([
       "conflict markers",
+      "line-cap growth ratchet",
       "max-lines suppression ratchet",
       "assertion SAFETY comment ratchet",
       "changelog attributions",
@@ -2450,6 +2701,8 @@ describe("scripts/changed-lanes", () => {
   it("keeps release metadata commits off the full changed gate", () => {
     const result = detectChangedLanes([
       "CHANGELOG.md",
+      "CHANGELOG/2026.9.4.md",
+      "CHANGELOG/records/2026.9.4.md",
       "apps/android/CHANGELOG.md",
       "apps/android/Config/Version.properties",
       "apps/android/fastlane/metadata/android/en-US/release_notes.txt",
@@ -2485,6 +2738,7 @@ describe("scripts/changed-lanes", () => {
       "check:wrapper-shadowing",
       "deps:patches:check",
       "release-metadata:check",
+      "changelog:check",
       "android:version:check",
       "config:schema:check",
       "deps:root-ownership:check",
@@ -2502,6 +2756,13 @@ describe("scripts/changed-lanes", () => {
     expect(
       plan.commands.find((command) => command.args[0] === "release-metadata:check")?.args,
     ).toEqual(["release-metadata:check", "--base", "main", "--head", "feature"]);
+    const staged = createChangedCheckPlan(result, { staged: true, base: "main" });
+    expect(
+      staged.commands.find((command) => command.name === "release metadata guard")?.args,
+    ).toEqual(["release-metadata:check", "--staged", "--base", "main"]);
+    expect(plan.commands.find((command) => command.args[0] === "changelog:check")?.args).toEqual([
+      "changelog:check",
+    ]);
   });
 
   it("keeps docs plus changelog entries on the docs-only changed gate", () => {
@@ -2803,7 +3064,7 @@ describe("scripts/changed-lanes", () => {
     git(dir, ["add", "package.json"]);
     expect(
       execFileSync(
-        process.execPath,
+        testNodeExecPath,
         [
           "--import",
           tsxImport,
@@ -2830,7 +3091,7 @@ describe("scripts/changed-lanes", () => {
     let failure: ExecFileSyncFailure | undefined;
     try {
       execFileSync(
-        process.execPath,
+        testNodeExecPath,
         [
           "--import",
           tsxImport,
@@ -3103,19 +3364,22 @@ describe("scripts/changed-lanes", () => {
     expect(plan.commands.some((command) => command.args[0] === "test:macos:ci")).toBe(macosCi);
   });
 
-  it("routes appcast changes to appcast owner tests", () => {
-    const result = detectChangedLanes(["appcast.xml"]);
-    const plan = createChangedCheckPlan(result);
+  it.each(["appcast.xml", "appcast-arm64.xml", "appcast-x86_64.xml"])(
+    "routes %s changes to appcast owner tests",
+    (appcast) => {
+      const result = detectChangedLanes([appcast]);
+      const plan = createChangedCheckPlan(result);
 
-    expect(shouldRunAppcastOwnerTest(result.paths)).toBe(true);
-    expect(plan.commands).toContainEqual(
-      expect.objectContaining({
-        name: "appcast owner tests",
-        args: ["test:serial", "test/appcast.test.ts", "test/scripts/make-appcast.test.ts"],
-      }),
-    );
-    expect(plan.commands.map((command) => command.name)).not.toContain("macOS app CI tests");
-  });
+      expect(shouldRunAppcastOwnerTest(result.paths)).toBe(true);
+      expect(plan.commands).toContainEqual(
+        expect.objectContaining({
+          name: "appcast owner tests",
+          args: ["test:serial", "test/appcast.test.ts", "test/scripts/make-appcast.test.ts"],
+        }),
+      );
+      expect(plan.commands.map((command) => command.name)).not.toContain("macOS app CI tests");
+    },
+  );
 
   it.each<[string, NodeJS.Platform, boolean, boolean]>([
     ["apps/ios/Sources/RootTabs.swift", "darwin", true, false],
@@ -3206,21 +3470,24 @@ describe("scripts/changed-lanes", () => {
     }
   });
 
-  it.each(["apps/.i18n/native-source.json", "apps/web/index.ts", "appcast.xml"])(
-    "keeps non-native app assets out of native lint: %s",
-    (changedPath) => {
-      const plan = createChangedCheckPlan(detectChangedLanes([changedPath]), {
-        platform: "linux",
-        swiftlintAvailable: false,
-      });
+  it.each([
+    "apps/.i18n/native-source.json",
+    "apps/web/index.ts",
+    "appcast.xml",
+    "appcast-arm64.xml",
+    "appcast-x86_64.xml",
+  ])("keeps non-native app assets out of native lint: %s", (changedPath) => {
+    const plan = createChangedCheckPlan(detectChangedLanes([changedPath]), {
+      platform: "linux",
+      swiftlintAvailable: false,
+    });
 
-      expect(plan.commands.map((command) => command.args[0])).not.toContain("android:lint");
-      expect(plan.commands.map((command) => command.args[0])).not.toContain("lint:apps");
-      expect(plan.commands.map((command) => command.name)).not.toContain(
-        "lint apps (swiftlint unavailable on this host)",
-      );
-    },
-  );
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("android:lint");
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("lint:apps");
+    expect(plan.commands.map((command) => command.name)).not.toContain(
+      "lint apps (swiftlint unavailable on this host)",
+    );
+  });
 
   it("routes A2UI bundle source changes as extension changes", () => {
     const result = detectChangedLanes([
@@ -3292,6 +3559,15 @@ describe("scripts/changed-lanes", () => {
       expected: {
         worktree: ["check:max-lines-ratchet", "--base", "main"],
         staged: ["check:max-lines-ratchet", "--staged", "--base", "HEAD"],
+      },
+    },
+    {
+      name: "blocks line-cap growth with worktree and staged bases",
+      commandName: "line-cap growth ratchet",
+      worktreeOptions: { base: "main" },
+      expected: {
+        worktree: ["check:line-cap-ratchet", "--base", "main"],
+        staged: ["check:line-cap-ratchet", "--staged", "--base", "HEAD"],
       },
     },
     {

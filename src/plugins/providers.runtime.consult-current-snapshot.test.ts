@@ -11,10 +11,8 @@ import { createPluginRecord } from "./loader-records.js";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
-import {
-  bindPluginRuntimeArtifactSelection,
-  resolvePluginRuntimeArtifactSelection,
-} from "./plugin-runtime-artifact-selection.js";
+import { bindPluginRuntimeArtifactSelection } from "./plugin-runtime-artifact-binding.js";
+import { resolvePluginRuntimeArtifactSelection } from "./plugin-runtime-artifact-selection.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
 import { withPluginRuntimeGenerationScope } from "./runtime/generation-scope.js";

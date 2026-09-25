@@ -96,6 +96,39 @@ afterEach(async () => {
 
 describe("runtime-owned lane deadline handoff", () => {
   test.each([
+    { name: "bounded", kind: "bounded" },
+    { name: "unlimited", kind: "unlimited" },
+  ] as const)("publishes $name deadlines to nested session and global leases", async ({ kind }) => {
+    const { controller, createAttemptControls } = await createRunController();
+    const entered = createDeferred();
+    const finished = createDeferred();
+    const run = controller.enqueueSession(() =>
+      controller.enqueueGlobal(async () => {
+        entered.resolve();
+        await finished.promise;
+        return { meta: { durationMs: 1 } };
+      }),
+    );
+    const observed = run.catch((error: unknown) => error);
+    cleanups.push(async () => {
+      finished.resolve();
+      await observed;
+    });
+    await entered.promise;
+
+    const controls = createAttemptControls();
+    controls.onAttemptDeadlineChanged(
+      kind === "bounded" ? { kind, deadlineAtMs: Date.now() + RUNTIME_TIMEOUT_MS } : { kind },
+    );
+    await vi.advanceTimersByTimeAsync(1_000 + EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS + 1);
+
+    expect(controller.abortSignal.aborted).toBe(false);
+    expect(getCommandLaneSnapshot(GLOBAL_LANE).activeCount).toBe(1);
+    finished.resolve();
+    await expect(observed).resolves.toMatchObject({ meta: { durationMs: 1 } });
+  });
+
+  test.each([
     { name: "seeded bounded", kind: "bounded", initialTimeoutMs: RUNTIME_TIMEOUT_MS },
     { name: "seeded unlimited", kind: "unlimited", initialTimeoutMs: MAX_TIMER_TIMEOUT_MS },
     { name: "runtime bounded", kind: "bounded", initialTimeoutMs: undefined },
@@ -184,71 +217,68 @@ describe("runtime-owned lane deadline handoff", () => {
 
 describe("attempt control authority", () => {
   test.each([
-    { invalidation: "closed", pendingTimeout: true },
-    { invalidation: "superseded", pendingTimeout: true },
-    { invalidation: "revoked", pendingTimeout: false },
-    { invalidation: "replaced admission", pendingTimeout: false },
-    { invalidation: "rotated lifecycle", pendingTimeout: true },
-    { invalidation: "aborted input", pendingTimeout: false },
-  ] as const)(
-    "ignores retained controls after $invalidation",
-    async ({ invalidation, pendingTimeout }) => {
-      const { controller, admission, createAttemptControls, runId } = await createRunController();
-      const inputAbort = new AbortController();
-      const onAbort = vi.fn();
-      const controls = createAttemptControls({
-        initialTimeoutMs: RUNTIME_TIMEOUT_MS,
-        abortSignal: inputAbort.signal,
-        onAbort,
-      });
-      const { observed } = await holdLane(controller);
-      if (pendingTimeout) {
-        controls.onAttemptTimeout(new Error("old runtime timed out"));
-      }
-      switch (invalidation) {
-        case "closed":
-          controls.close();
-          createAttemptControls({ initialTimeoutMs: RUNTIME_TIMEOUT_MS });
-          break;
-        case "superseded":
-          createAttemptControls({ initialTimeoutMs: RUNTIME_TIMEOUT_MS });
-          break;
-        case "revoked":
-          admission.close();
-          break;
-        case "replaced admission": {
-          const replacement = prepareSystemAgentRunAdmission({}, runId, "main", "replacement-test");
-          cleanups.push(replacement.close);
-          await replacement.admit("embedded");
-          break;
-        }
-        case "rotated lifecycle":
-          rotateAgentEventLifecycleGeneration();
-          break;
-        case "aborted input":
-          inputAbort.abort();
-          break;
-      }
-      controls.onAttemptDeadlineChanged({ kind: "bounded", deadlineAtMs: Date.now() });
-      controls.onAttemptTimeout(new Error("late runtime timeout"));
-      controls.onAttemptAbort();
-      await vi.advanceTimersByTimeAsync(EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS + 1);
-      expect(onAbort).not.toHaveBeenCalled();
-      expect(controller.abortSignal.aborted).toBe(false);
-      expect(getCommandLaneSnapshot(GLOBAL_LANE).activeCount).toBe(1);
-
-      controls.onAttemptDeadlineChanged({ kind: "unlimited" });
-      if (invalidation === "closed" || invalidation === "superseded") {
-        // A late finalizer must not clear or refresh the successor's deadline.
+    ["closed", true],
+    ["superseded", true],
+    ["revoked", false],
+    ["replaced admission", false],
+    ["rotated lifecycle", true],
+    ["aborted input", false],
+  ] as const)("ignores retained controls after %s", async (invalidation, pendingTimeout) => {
+    const { controller, admission, createAttemptControls, runId } = await createRunController();
+    const inputAbort = new AbortController();
+    const onAbort = vi.fn();
+    const controls = createAttemptControls({
+      initialTimeoutMs: RUNTIME_TIMEOUT_MS,
+      abortSignal: inputAbort.signal,
+      onAbort,
+    });
+    const { observed } = await holdLane(controller);
+    if (pendingTimeout) {
+      controls.onAttemptTimeout(new Error("old runtime timed out"));
+    }
+    switch (invalidation) {
+      case "closed":
         controls.close();
+        createAttemptControls({ initialTimeoutMs: RUNTIME_TIMEOUT_MS });
+        break;
+      case "superseded":
+        createAttemptControls({ initialTimeoutMs: RUNTIME_TIMEOUT_MS });
+        break;
+      case "revoked":
+        admission.close();
+        break;
+      case "replaced admission": {
+        const replacement = prepareSystemAgentRunAdmission({}, runId, "main", "replacement-test");
+        cleanups.push(replacement.close);
+        await replacement.admit("embedded");
+        break;
       }
-      await vi.advanceTimersByTimeAsync(RUNTIME_TIMEOUT_MS - 2);
-      expect(getCommandLaneSnapshot(GLOBAL_LANE).activeCount).toBe(1);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(controller.abortSignal.aborted).toBe(true);
-      await expect(observed).resolves.toMatchObject({ name: "CommandLaneTaskTimeoutError" });
-    },
-  );
+      case "rotated lifecycle":
+        rotateAgentEventLifecycleGeneration();
+        break;
+      case "aborted input":
+        inputAbort.abort();
+        break;
+    }
+    controls.onAttemptDeadlineChanged({ kind: "bounded", deadlineAtMs: Date.now() });
+    controls.onAttemptTimeout(new Error("late runtime timeout"));
+    controls.onAttemptAbort();
+    await vi.advanceTimersByTimeAsync(EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS + 1);
+    expect(onAbort).not.toHaveBeenCalled();
+    expect(controller.abortSignal.aborted).toBe(false);
+    expect(getCommandLaneSnapshot(GLOBAL_LANE).activeCount).toBe(1);
+
+    controls.onAttemptDeadlineChanged({ kind: "unlimited" });
+    if (invalidation === "closed" || invalidation === "superseded") {
+      // A late finalizer must not clear or refresh the successor's deadline.
+      controls.close();
+    }
+    await vi.advanceTimersByTimeAsync(RUNTIME_TIMEOUT_MS - 2);
+    expect(getCommandLaneSnapshot(GLOBAL_LANE).activeCount).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(controller.abortSignal.aborted).toBe(true);
+    await expect(observed).resolves.toMatchObject({ name: "CommandLaneTaskTimeoutError" });
+  });
 });
 
 describe("attempt cancellation unwind", () => {

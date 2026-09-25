@@ -1,5 +1,17 @@
-import type { ModelAuthOrderSetResult } from "../../../../src/gateway/server-methods/models-auth-status.types.js";
+import type {
+  ModelAuthLogoutResult,
+  ModelAuthOrderSetResult,
+} from "../../../../src/gateway/server-methods/models-auth-status.types.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ModelsProbeResult } from "../../api/types.ts";
+import { t } from "../../i18n/index.ts";
+import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
+import { invalidateModelAuthStatusRequests } from "../../lib/model-auth-request-state.ts";
+import {
+  isMissingMethodError,
+  mergeProbeResults,
+  modelProviderErrorMessage,
+} from "./config-mutation.ts";
 import type { ModelProviderLogoutTarget } from "./data.ts";
 import type { ModelProvidersData } from "./load.ts";
 
@@ -21,20 +33,87 @@ type ProfileActionsControllerOptions = {
   canMutate: () => boolean;
   isBusy: (key: string) => boolean;
   setBusy: (key: string, value: boolean) => void;
-  clearProbe: (cardId: string) => void;
+  setProbeResult: (cardId: string, result: ModelsProbeResult | null) => void;
+  setProbeError: (cardId: string, message: string) => void;
   clearMessage: (cardId: string) => void;
   setError: (cardId: string, error: unknown) => void;
-  setLogoutSuccess: (cardId: string) => void;
+  setLogoutSuccess: (warning?: string) => void;
   cancelRefresh: () => void;
   refresh: () => Promise<void>;
+  getConfig: () => RuntimeConfigCapability;
   isCurrentClient: (client: GatewayBrowserClient, epoch: number) => boolean;
 };
 
 export class ModelProviderProfileActionsController {
+  private probeEpochs = new Map<string, number>();
+  private probeUnsupported = false;
   private readonly pendingOrders = new Map<string, PendingProfileOrder>();
   private readonly activeOrderProviders = new Set<string>();
 
   constructor(private readonly options: ProfileActionsControllerOptions) {}
+
+  get probeAvailable(): boolean {
+    return !this.probeUnsupported;
+  }
+
+  resetProbes(): void {
+    this.probeEpochs = new Map();
+    this.probeUnsupported = false;
+  }
+
+  clearProbe(cardId: string): void {
+    this.probeEpochs.set(cardId, (this.probeEpochs.get(cardId) ?? 0) + 1);
+    this.options.setBusy("probe:" + cardId, false);
+    this.options.setProbeResult(cardId, null);
+  }
+
+  async probe(cardId: string, providers: string[]) {
+    const client = this.options.getClient();
+    const key = `probe:${cardId}`;
+    if (!client || !this.options.canMutate() || this.options.isBusy(key) || this.probeUnsupported) {
+      return;
+    }
+    const clientEpoch = this.options.getClientEpoch();
+    const agentId = this.options.getAgentId();
+    const agentEpoch = this.options.getAgentEpoch();
+    const probeEpoch = (this.probeEpochs.get(cardId) ?? 0) + 1;
+    this.probeEpochs.set(cardId, probeEpoch);
+    const ownsProbe = () =>
+      this.options.isCurrentClient(client, clientEpoch) &&
+      this.options.getAgentEpoch() === agentEpoch &&
+      this.options.getAgentId() === agentId &&
+      this.probeEpochs.get(cardId) === probeEpoch;
+    this.options.setBusy(key, true);
+    this.options.clearMessage(cardId);
+    try {
+      const results: ModelsProbeResult[] = [];
+      for (const provider of providers) {
+        if (!ownsProbe()) {
+          return;
+        }
+        results.push(
+          await client.request<ModelsProbeResult>("models.probe", { provider, agentId }),
+        );
+      }
+      if (ownsProbe()) {
+        this.options.setProbeResult(cardId, mergeProbeResults(cardId, results));
+      }
+    } catch (error) {
+      if (!ownsProbe()) {
+        return;
+      }
+      if (isMissingMethodError(error)) {
+        this.probeUnsupported = true;
+        this.options.setProbeError(cardId, t("modelProviders.probe.unavailable"));
+      } else {
+        this.options.setProbeError(cardId, modelProviderErrorMessage(error));
+      }
+    } finally {
+      if (ownsProbe()) {
+        this.options.setBusy(key, false);
+      }
+    }
+  }
 
   resetOrders(): void {
     this.pendingOrders.clear();
@@ -72,30 +151,48 @@ export class ModelProviderProfileActionsController {
     const agentId = this.options.getAgentId();
     const agentEpoch = this.options.getAgentEpoch();
     const isCurrentScope = () => this.isCurrentScope(client, clientEpoch, agentEpoch, agentId);
-    this.options.clearProbe(cardId);
+    this.clearProbe(cardId);
     this.options.setBusy(key, true);
     this.options.clearMessage(cardId);
     try {
-      let logoutError: unknown;
-      try {
-        await client.request("models.authLogout", { ...target, agentId });
-      } catch (error) {
-        logoutError = error;
-      }
-      // A logout can change credentials before reporting failure. Refresh either
-      // outcome, but never update a different agent or a newer visit to this agent.
+      const result = await this.options.getConfig().runExternalMutation(
+        async (activeClient) => {
+          const receipt = await activeClient.request<ModelAuthLogoutResult>("models.authLogout", {
+            ...target,
+            agentId,
+          });
+          invalidateModelAuthStatusRequests(activeClient);
+          return receipt;
+        },
+        { canDispatch: () => isCurrentScope() && this.options.canMutate() },
+      );
       if (!isCurrentScope()) {
         return;
       }
-      await this.options.refresh();
-      if (!isCurrentScope()) {
+      if (!result.ok) {
+        await this.options.refresh();
+        if (isCurrentScope()) {
+          this.options.setError(cardId, result.error);
+        }
         return;
       }
-      if (logoutError) {
-        this.options.setError(cardId, logoutError);
-        return;
+      const warnings = result.value.warning ? [result.value.warning] : [];
+      if (!result.refresh.ok) {
+        warnings.push(result.refresh.error);
+      } else {
+        try {
+          await this.options.refresh();
+          const warning = this.options.getData()?.error;
+          if (warning) {
+            warnings.push(warning);
+          }
+        } catch (error) {
+          warnings.push(modelProviderErrorMessage(error));
+        }
       }
-      this.options.setLogoutSuccess(cardId);
+      if (isCurrentScope()) {
+        this.options.setLogoutSuccess(warnings.join(" ") || undefined);
+      }
     } catch (error) {
       if (isCurrentScope()) {
         this.options.setError(cardId, error);
@@ -132,6 +229,7 @@ export class ModelProviderProfileActionsController {
             ...(pending.profileIds ? { profileIds: pending.profileIds } : {}),
             agentId,
           });
+          invalidateModelAuthStatusRequests(client);
           if (!this.isCurrentScope(client, clientEpoch, agentEpoch, agentId)) {
             return;
           }

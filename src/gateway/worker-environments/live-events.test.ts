@@ -1,19 +1,15 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { Value } from "typebox/value";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  FAILOVER_REASONS,
-  type FailoverReason,
-} from "../../../packages/gateway-protocol/src/failover-reasons.js";
-import {
-  type WorkerLiveEventErrorDetails as ErrorDetails,
-  type WorkerLiveEventParams as Params,
-  WorkerLiveEventParamsSchema,
+import { setImmediate } from "node:timers/promises";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type {
+  WorkerLiveEventErrorDetails as ErrorDetails,
+  WorkerLiveEventParams as Params,
 } from "../../../packages/gateway-protocol/src/schema.js";
+import { drainStoreWriterQueuesForTest } from "../../../test/helpers/promise.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import * as sessions from "../../config/sessions/session-accessor.js";
-import type { OpenClawConfig as Config } from "../../config/types.openclaw.js";
 import {
   emitAgentEvent,
   getAgentEventLifecycleGeneration,
@@ -30,129 +26,86 @@ import {
   sweepStaleRunContexts,
 } from "../../infra/agent-run-registry.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-admission.js";
 import { loadSqliteTrajectoryRuntimeEventRowsSync } from "../../trajectory/runtime-store.sqlite.js";
 import type { WorkerConnectionIdentity as Identity } from "./connection-identity.js";
+import * as liveProjection from "./live-event-projection.js";
 import {
   createWorkerLiveEventReceiver,
   type WorkerLiveEventReceiver as Receiver,
 } from "./live-events.js";
-
-const SID = "session-worker-live";
-const KEY = "agent:main:worker-live";
-const EPOCH = 7;
-const RUN = "run-worker-live";
-const LOCAL = { agentId: "main", sessionId: SID, sessionKey: KEY };
-const ID: Identity = {
-  environmentId: "environment-live",
-  credentialHash: ["credential", "hash", "live"].join("-"),
-  bundleHash: "b".repeat(64),
-  sessionId: SID,
-  runId: RUN,
-  turnClaim: {
-    sessionId: SID,
-    claimId: "claim-worker-live",
-    runId: RUN,
-    placementGeneration: 4,
-    owner: { kind: "worker", environmentId: "environment-live", ownerEpoch: EPOCH },
-  },
-  ownerEpoch: EPOCH,
-  rpcSetVersion: 1,
-  protocolFeatures: ["worker-live-event-v1"],
-  credentialExpiresAtMs: 10_000,
-};
-
-const msg = (seq: number, delta = "hello", ack = 0, runId = RUN, epoch = EPOCH): Params => ({
-  runEpoch: epoch,
-  lastAckedSeq: ack,
-  seq,
-  runId,
-  event: { kind: "assistant", payload: { text: delta, delta } },
-});
-
-function live(seq: number, event: Params["event"], runId = RUN): Params {
-  return { runEpoch: EPOCH, lastAckedSeq: seq - 1, seq, runId, event };
-}
-
-const binding = ({ environmentId, ownerEpoch: runEpoch, sessionId }: Identity = ID) => ({
-  environmentId,
-  runEpoch,
-  sessionId: sessionId ?? SID,
-});
-
-type WireEvent = Params["event"];
-type Payload<K extends WireEvent["kind"]> = Extract<WireEvent, { kind: K }>["payload"];
-const tool = (payload: Payload<"tool">): WireEvent => ({ kind: "tool", payload });
-const approval = (payload: Payload<"approval">): WireEvent => ({ kind: "approval", payload });
-const lifecycle = (payload: Payload<"lifecycle">): WireEvent => ({ kind: "lifecycle", payload });
-
-const validateLiveProtocolEvent = (event: unknown) =>
-  Value.Check(WorkerLiveEventParamsSchema, {
-    runEpoch: EPOCH,
-    lastAckedSeq: 0,
-    seq: 1,
-    runId: RUN,
-    event,
-  });
-const fallbackEvent = (reason: FailoverReason) => ({
-  kind: "lifecycle",
-  payload: {
-    phase: "fallback",
-    selectedProvider: "p",
-    selectedModel: "m",
-    activeProvider: "q",
-    activeModel: "n",
-    reasonSummary: "x",
-    attemptSummaries: ["x"],
-    attempts: [{ provider: "p", model: "m", error: "x", reason }],
-  },
-});
-const fallbackStepEvent = (reason: string) => ({
-  kind: "lifecycle",
-  payload: {
-    phase: "fallback_step",
-    fallbackStepType: "fallback_step",
-    fallbackStepFromModel: "p/m",
-    fallbackStepFromFailureReason: reason,
-    fallbackStepFinalOutcome: "chain_exhausted",
-  },
-});
-
-describe("worker live protocol conformance", () => {
-  it("accepts every core failover reason in live fallback schemas", () => {
-    for (const reason of FAILOVER_REASONS) {
-      expect(validateLiveProtocolEvent(fallbackEvent(reason))).toBe(true);
-      expect(validateLiveProtocolEvent(fallbackStepEvent(reason))).toBe(true);
-    }
-
-    expect(validateLiveProtocolEvent(fallbackStepEvent("not-a-reason"))).toBe(false);
-  });
-});
+import {
+  SID,
+  KEY,
+  EPOCH,
+  RUN,
+  LOCAL,
+  ID,
+  msg,
+  live,
+  tool,
+  approval,
+  lifecycle,
+  farmIdentity,
+  farmEvent,
+  captureWorkerTranscriptSource,
+  holdWorkerTranscriptWriter,
+  seedWorkerLiveSession,
+  type WireEvent,
+} from "./live-events.test-support.js";
+import type { WorkerTurnTranscriptSource } from "./placement-turn-claim-events.js";
+import * as workerRunOwner from "./worker-turn-run-owner.js";
 
 describe("worker live events", () => {
   let root: string;
   let store: string;
-  let cfg: Config;
+  const sources = new Map<string, WorkerTurnTranscriptSource>();
   let rx: Receiver;
   let events: Event[];
   let unsubscribe: (() => void) | undefined;
+  let durableAckedSeq = 0;
+  const readAckedSeq = () => durableAckedSeq;
 
-  const ack = (request: Params, ackedSeq = request.seq, id = ID) => {
-    expect(rx.apply({ identity: id, request })).toEqual({ ok: true, result: { ackedSeq } });
+  const captureSource = (sessionId = SID, sessionKey = KEY) => {
+    const source = captureWorkerTranscriptSource({
+      agentId: "main",
+      sessionId,
+      sessionKey,
+      storePath: store,
+    });
+    if (!source.sessionTarget.expectedLifecycleRevision) {
+      throw new Error("expected admitted live-event session");
+    }
+    sources.set(sessionId, source);
+    return source;
   };
-  const fail = (request: Params, reason: ErrorDetails["reason"], id = ID) => {
+  const sourceFor = (identity: Identity = ID) => {
+    const source = identity.sessionId && sources.get(identity.sessionId);
+    if (!source) {
+      throw new Error("expected captured worker source");
+    }
+    return source;
+  };
+
+  const ack = async (request: Params, ackedSeq = request.seq, id = ID) => {
+    expect(await rx.apply({ identity: id, request, source: sourceFor(id), readAckedSeq })).toEqual({
+      ok: true,
+      result: { ackedSeq },
+    });
+  };
+  const fail = async (request: Params, reason: ErrorDetails["reason"], id = ID) => {
     const details: ErrorDetails =
-      reason === "resync-required" ? { reason, ackedSeq: 0, expectedSeq: 1 } : { reason };
-    expect(rx.apply({ identity: id, request })).toEqual({ ok: false, details });
+      reason === "resync-required"
+        ? { reason, ackedSeq: durableAckedSeq, expectedSeq: durableAckedSeq + 1 }
+        : { reason };
+    expect(await rx.apply({ identity: id, request, source: sourceFor(id), readAckedSeq })).toEqual({
+      ok: false,
+      details,
+    });
   };
   const start = (overrides: Partial<Parameters<typeof createWorkerLiveEventReceiver>[0]> = {}) => {
     rx?.clear();
-    rx = createWorkerLiveEventReceiver({
-      getConfig: () => cfg,
-      startupBindings: [binding()],
-      startupOwners: new Map([[ID.environmentId, EPOCH]]),
-      ...overrides,
-    });
-    rx.start();
+    rx = createWorkerLiveEventReceiver(overrides);
   };
   const target = { canonicalKey: KEY, storeKeys: [KEY] };
   const remove = () =>
@@ -166,21 +119,23 @@ describe("worker live events", () => {
   const create = (updatedAt = 20) =>
     sessions.upsertSessionEntryCore(
       { agentId: "main", sessionKey: KEY, storePath: store },
-      { sessionId: SID, updatedAt },
+      {
+        sessionId: SID,
+        updatedAt,
+        lifecycleRevision: `live-lifecycle-${updatedAt}`,
+        activeWriterRunId: RUN,
+      },
     );
   const deltas = () => events.map((event) => event.data.delta);
 
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-worker-live-"));
     store = path.join(root, "agents", "main", "sessions", "sessions.json");
-    cfg = {
-      agents: { list: [{ id: "main", default: true }] },
-      session: {
-        mainKey: "main",
-        store: path.join(root, "agents", "{agentId}", "sessions", "sessions.json"),
-      },
-    };
+    sources.clear();
+    durableAckedSeq = 0;
     await create(10);
+    captureSource();
+    setRuntimeConfigSnapshot({ session: { store } });
     start();
     events = [];
     unsubscribe = onAgentRuntimeEvent((event) => events.push(event));
@@ -188,7 +143,9 @@ describe("worker live events", () => {
 
   afterEach(async () => {
     unsubscribe?.();
-    rx.clear();
+    rx?.clear();
+    clearRuntimeConfigSnapshot();
+    await drainStoreWriterQueuesForTest(SQLITE_SESSION_WRITER_QUEUES, "live receiver test cleanup");
     closeOpenClawAgentDatabasesForTest();
     await fs.rm(root, { recursive: true, force: true });
   });
@@ -202,8 +159,8 @@ describe("worker live events", () => {
         event.data.result = { status: "live-consumer-mutated" };
       }
     });
-    ack(live(1, lifecycle({ phase: "start", startedAt: 100 })));
-    ack(
+    await ack(live(1, lifecycle({ phase: "start", startedAt: 100 })));
+    await ack(
       live(
         2,
         tool({
@@ -214,7 +171,7 @@ describe("worker live events", () => {
         }),
       ),
     );
-    ack(
+    await ack(
       live(
         3,
         tool({
@@ -227,9 +184,8 @@ describe("worker live events", () => {
       ),
     );
     const terminal = live(4, lifecycle({ phase: "end", startedAt: 100, endedAt: 200 }));
-    ack(terminal);
-    ack(terminal);
-    await Promise.resolve();
+    await ack(terminal);
+    await ack(terminal);
 
     const rows = loadSqliteTrajectoryRuntimeEventRowsSync({
       agentId: "main",
@@ -289,9 +245,8 @@ describe("worker live events", () => {
       "interrupted",
     ],
   ])("persists stop reasons for %s", async (_name, terminal, stopReason, status) => {
-    ack(live(1, lifecycle({ phase: "start", startedAt: 100 })));
-    ack(live(2, terminal));
-    await Promise.resolve();
+    await ack(live(1, lifecycle({ phase: "start", startedAt: 100 })));
+    await ack(live(2, terminal));
 
     const rows = loadSqliteTrajectoryRuntimeEventRowsSync({
       agentId: "main",
@@ -305,7 +260,7 @@ describe("worker live events", () => {
     expect(JSON.stringify(rows)).not.toContain(lifecycleCredential);
   });
 
-  it("maps and sanitizes kinds", () => {
+  it("maps and sanitizes kinds", async () => {
     const credential = ["fixture", "credential", "value"].join("-");
     const output = (char: string, status: string) => ({
       content: [{ type: "image", bytes: 6, omitted: true }],
@@ -340,63 +295,116 @@ describe("worker live events", () => {
       }),
     ];
 
-    variants.forEach((event, index) => {
-      ack(live(index + 1, event, `run-map-${index}`));
-    });
-    expect(events.map((event) => event.stream)).toEqual(variants.map((event) => event.kind));
+    for (const [index, event] of variants.entries()) {
+      await ack(live(index + 1, event, `run-map-${index}`));
+    }
+    const rawEvents = events.filter((event) => event.stream !== "item");
+    expect(rawEvents.map((event) => event.stream)).toEqual(variants.map((event) => event.kind));
+    expect(events.filter((event) => event.stream === "item").map((event) => event.data)).toEqual([
+      expect.objectContaining({ itemId: "tool:call", phase: "start", status: "running" }),
+      expect.objectContaining({ itemId: "tool:call", phase: "update", status: "running" }),
+      expect.objectContaining({ itemId: "tool:call", phase: "end", status: "completed" }),
+    ]);
     const capped = (char: string) => `${char.repeat(8000)}\n...(live output truncated)...`;
-    expect(events[4]?.data).toMatchObject({
+    expect(rawEvents[4]?.data).toMatchObject({
       name: "exec",
       result: { content: [{ bytes: 6, omitted: true }], details: { aggregated: capped("r") } },
     });
-    expect(events[8]?.data).toMatchObject({
+    expect(rawEvents[8]?.data).toMatchObject({
       fallbackStepFromFailureReason: "tls_certificate",
     });
     expect(JSON.stringify(events)).not.toContain(credential);
   });
 
-  it("replays an unacked tail once", () => {
-    ack(msg(2, " world"), 0);
-    ack(msg(1), 2, { ...ID });
-    ack(msg(1), 2);
-    ack(msg(2, " world"), 2);
+  it("settles accepted writes before returning a synchronous diagnostic failure", async () => {
+    const failure = new Error("synthetic diagnostic failure");
+    const diagnostic = vi.spyOn(workerRunOwner, "captureWorkerTurnLiveEventOwner").mockReturnValue({
+      record: () => {
+        throw failure;
+      },
+      isCancelled: () => false,
+    });
+    const writer = holdWorkerTranscriptWriter(store);
+    await writer.entered;
+    let settled = false;
+    const result = rx
+      .apply({
+        readAckedSeq,
+        identity: ID,
+        source: sourceFor(),
+        request: live(1, lifecycle({ phase: "start", startedAt: 100 })),
+      })
+      .then(
+        (value) => {
+          settled = true;
+          return value;
+        },
+        (error: unknown) => {
+          settled = true;
+          return error;
+        },
+      );
+    try {
+      await setImmediate();
+      expect(events.map((event) => event.data.phase)).toEqual(["start"]);
+      expect(settled).toBe(false);
+      writer.release();
+      await writer.done;
+      expect(await result).toBe(failure);
+      expect(
+        loadSqliteTrajectoryRuntimeEventRowsSync({
+          agentId: "main",
+          sessionId: SID,
+          storePath: store,
+        }).map((row) => row.event.type),
+      ).toEqual(["session.started"]);
+    } finally {
+      writer.release();
+      await writer.done;
+      await result;
+      diagnostic.mockRestore();
+    }
+  });
+
+  it("replays an unacked tail once", async () => {
+    await ack(msg(2, " world"), 0);
+    await ack(msg(1), 2, { ...ID });
+    await ack(msg(1), 2);
+    await ack(msg(2, " world"), 2);
     expect(deltas()).toEqual(["hello", " world"]);
   });
 
   it.each([
     ["sequence", { windowSize: 2 }, msg(3)],
     ["bytes", { maxPendingBytes: 1 }, msg(2, "buffered")],
-  ])("resyncs an out-of-window %s gap", (_name, options, request) => {
+  ])("resyncs an out-of-window %s gap", async (_name, options, request) => {
     start(options);
-    fail(request, "resync-required");
+    await fail(request, "resync-required");
   });
 
-  it("uses startup ACK once", async () => {
-    ack(msg(6, "before", 5));
-    await remove();
-    await create(30);
-    fail(msg(8, "stale", 7), "resync-required");
-    ack(msg(1, "fresh"));
+  it("restores the durable ACK when recreating a window", async () => {
+    durableAckedSeq = 5;
+    await ack(msg(6, "before", 5));
+    rx.clear();
+    await fail(msg(8, "stale", 7), "resync-required");
+    await ack(msg(6, "fresh", 5));
   });
 
-  it("does not seed ACK for a freshly attached startup owner", () => {
-    start({ startupBindings: [] });
-    expect(rx.bindSession(binding())).toBe(true);
-    fail(msg(6, "stale", 5), "resync-required");
-    ack(msg(1));
-  });
-
-  it("rebinds unresolved startup", async () => {
+  it("does not revive a missing startup source from a replacement row", async () => {
     await remove();
     start();
-    fail(msg(1), "session-not-attached");
+    await fail(msg(1), "invalid-event");
     await create();
-    fail(msg(6, "stale", 5), "resync-required");
-    ack(msg(1));
+    await fail(msg(1), "invalid-event");
+    expect(events).toEqual([]);
+    captureSource();
+    start();
+    await fail(msg(6, "stale", 5), "resync-required");
+    await ack(msg(1));
   });
 
-  it("rotates owners", () => {
-    ack(msg(1, "first"));
+  it("rotates owners", async () => {
+    await ack(msg(1, "first"));
     const credentialHash = ["rotated", "credential", "hash"].join("-");
     rx.rotateCredential({
       credentialHash,
@@ -406,20 +414,19 @@ describe("worker live events", () => {
       sessionId: SID,
     });
     const rotated = { ...ID, credentialHash };
-    ack(msg(2, "second", 1), 2, rotated);
-    fail(msg(3, "late", 2), "epoch-mismatch");
+    await ack(msg(2, "second", 1), 2, rotated);
+    await fail(msg(3, "late", 2), "epoch-mismatch");
     const next = { ...rotated, ownerEpoch: EPOCH + 1 };
-    rx.bindSession(binding(next));
-    fail(msg(2, "skip", 1, RUN, next.ownerEpoch), "resync-required", next);
-    ack(msg(1, "new", 0, RUN, next.ownerEpoch), 1, next);
-    fail(msg(2, "late", 1), "epoch-mismatch", rotated);
-    ack(msg(2, "current", 1, RUN, next.ownerEpoch), 2, next);
+    await fail(msg(2, "skip", 1, RUN, next.ownerEpoch), "resync-required", next);
+    await ack(msg(1, "new", 0, RUN, next.ownerEpoch), 1, next);
+    await fail(msg(2, "late", 1), "epoch-mismatch", rotated);
+    await ack(msg(2, "current", 1, RUN, next.ownerEpoch), 2, next);
     expect(deltas()).toEqual(["first", "second", "new", "current"]);
   });
 
-  it("retires completed process fences when a new turn reuses its durable run id", () => {
-    ack(live(1, lifecycle({ phase: "start", startedAt: 100 })));
-    ack(live(2, lifecycle({ phase: "end", startedAt: 100, endedAt: 200 })));
+  it("retires completed process fences when a new turn reuses its durable run id", async () => {
+    await ack(live(1, lifecycle({ phase: "start", startedAt: 100 })));
+    await ack(live(2, lifecycle({ phase: "end", startedAt: 100, endedAt: 200 })));
     const credentialHash = ["next", "process", "credential"].join("-");
 
     expect(
@@ -435,13 +442,42 @@ describe("worker live events", () => {
     ).toBe(true);
 
     const nextProcess = { ...ID, credentialHash };
-    ack(live(3, lifecycle({ phase: "start", startedAt: 300 })), 3, nextProcess);
+    await ack(live(3, lifecycle({ phase: "start", startedAt: 300 })), 3, nextProcess);
     expect(events.map((event) => event.data.phase)).toEqual(["start", "end", "start"]);
   });
 
-  it("rewinds cancelled preview ACKs before delivering the replacement turn terminal", () => {
-    ack(msg(1, "cancelled preview"));
-    ack(msg(2, "another cancelled preview", 1));
+  it("ACKs an exact cancelled finishing event without consulting the retired source", async () => {
+    await remove();
+    const source = sourceFor();
+    const receipt = vi.spyOn(source, "receiptAuthority");
+    const record = vi.fn();
+    const owner = vi.spyOn(workerRunOwner, "captureWorkerTurnLiveEventOwner").mockReturnValue({
+      isCancelled: () => true,
+      record,
+    });
+    try {
+      await fail(msg(1, "late"), "invalid-event");
+      await ack(live(1, lifecycle({ phase: "finishing", aborted: true, endedAt: 200 })));
+      expect(receipt).not.toHaveBeenCalled();
+      expect(record).not.toHaveBeenCalled();
+      expect(events).toEqual([]);
+      expect(getAgentRunContext(RUN)).toBeUndefined();
+      expect(
+        loadSqliteTrajectoryRuntimeEventRowsSync({
+          agentId: "main",
+          sessionId: SID,
+          storePath: store,
+        }),
+      ).toEqual([]);
+    } finally {
+      receipt.mockRestore();
+      owner.mockRestore();
+    }
+  });
+
+  it("rewinds cancelled preview ACKs before delivering the replacement turn terminal", async () => {
+    await ack(msg(1, "cancelled preview"));
+    await ack(msg(2, "another cancelled preview", 1));
     const credentialHash = "replacement-process-credential";
     const runId = "replacement-worker-run";
 
@@ -458,8 +494,8 @@ describe("worker live events", () => {
     ).toBe(true);
 
     const replacement = { ...ID, credentialHash, runId };
-    ack(live(1, lifecycle({ phase: "start", startedAt: 300 }), runId), 1, replacement);
-    ack(
+    await ack(live(1, lifecycle({ phase: "start", startedAt: 300 }), runId), 1, replacement);
+    await ack(
       live(2, lifecycle({ phase: "finishing", startedAt: 300, endedAt: 400 }), runId),
       2,
       replacement,
@@ -467,19 +503,19 @@ describe("worker live events", () => {
     expect(events.slice(-2).map((event) => event.data.phase)).toEqual(["start", "finishing"]);
   });
 
-  it("ACKs before buffered failure", () => {
+  it("ACKs before buffered failure", async () => {
     const first = msg(1, "first", 0, "run-prefix");
     const second = msg(2, "second", 0, "run-buffered");
     claimAgentRunContext(second.runId, { sessionKey: KEY });
-    ack(second, 0);
-    ack(first);
-    fail(second, "invalid-event");
+    await ack(second, 0);
+    await ack(first);
+    await fail(second, "invalid-event");
     clearAgentRunContext(second.runId);
-    ack(second);
+    await ack(second);
     expect(deltas()).toEqual(["first", "second"]);
   });
 
-  it("retains a buffered capacity tail until the active run releases", () => {
+  it("retains a buffered capacity tail until the active run releases", async () => {
     start({ maxActiveRuns: 1 });
     const first = msg(1, "first", 0, "run-prefix");
     const second = msg(2, "second", 0, "run-buffered");
@@ -489,23 +525,23 @@ describe("worker live events", () => {
       lastAckedSeq: 1,
     };
 
-    ack(second, 0);
-    ack(first);
+    await ack(second, 0);
+    await ack(first);
     expect(getAgentRunContext(first.runId)).toBeDefined();
     expect(getAgentRunContext(second.runId)).toBeUndefined();
     expect(events.map((event) => event.runId)).toEqual([first.runId]);
 
-    ack(retry, 1);
+    await ack(retry, 1);
     expect(getAgentRunContext(first.runId)).toBeDefined();
     expect(events.map((event) => event.runId)).toEqual([first.runId]);
 
-    ack(terminal, 1);
+    await ack(terminal, 1);
     expect(getAgentRunContext(first.runId)).toBeDefined();
     expect(getAgentRunContext(second.runId)).toBeUndefined();
     expect(events.map((event) => event.runId)).toEqual([first.runId]);
 
-    ack(retry, 3);
-    ack(terminal, 3);
+    await ack(retry, 3);
+    await ack(terminal, 3);
     expect(events.map((event) => [event.runId, event.stream])).toEqual([
       [first.runId, "assistant"],
       [second.runId, "assistant"],
@@ -514,7 +550,7 @@ describe("worker live events", () => {
     expect(deltas()).toEqual(["first", "second", undefined]);
   });
 
-  it("does not borrow capacity past another new run", () => {
+  it("does not borrow capacity past another new run", async () => {
     start({ maxActiveRuns: 1 });
     const first = msg(1, "first", 0, "run-prefix");
     const second = msg(2, "second", 0, "run-buffered");
@@ -524,18 +560,18 @@ describe("worker live events", () => {
       lastAckedSeq: 0,
     };
 
-    ack(second, 0);
-    ack(third, 0);
-    ack(terminal, 0);
-    ack(first);
-    ack(msg(2, "replacement", 1, second.runId), 1);
+    await ack(second, 0);
+    await ack(third, 0);
+    await ack(terminal, 0);
+    await ack(first);
+    await ack(msg(2, "replacement", 1, second.runId), 1);
 
     expect(events.map((event) => event.runId)).toEqual([first.runId]);
     expect(getAgentRunContext(second.runId)).toBeUndefined();
     expect(getAgentRunContext(third.runId)).toBeUndefined();
   });
 
-  it("bounds a retained capacity tail with normal resync", () => {
+  it("bounds a retained capacity tail with normal resync", async () => {
     const first = msg(1, "first", 0, "run-prefix");
     const second = msg(2, "second", 0, "run-buffered");
     start({
@@ -543,11 +579,13 @@ describe("worker live events", () => {
       maxPendingBytes: Buffer.byteLength(JSON.stringify(second.event), "utf8"),
     });
 
-    ack(second, 0);
-    ack(first);
+    await ack(second, 0);
+    await ack(first);
     expect(
-      rx.apply({
+      await rx.apply({
+        readAckedSeq,
         identity: ID,
+        source: sourceFor(),
         request: msg(3, "overflow", 1, "run-overflow"),
       }),
     ).toEqual({
@@ -555,129 +593,201 @@ describe("worker live events", () => {
       details: { reason: "resync-required", ackedSeq: 1, expectedSeq: 2 },
     });
 
-    fail(msg(2, "blocked", 1, second.runId), "capacity-exceeded");
-    fail(msg(2, "stale", 1, second.runId), "resync-required");
-    ack(msg(1, "fresh", 0, second.runId));
+    await fail(msg(2, "blocked", 1, second.runId), "capacity-exceeded");
+    await fail(msg(2, "stale", 1, second.runId), "resync-required");
+    await ack(msg(1, "fresh", 0, second.runId));
     expect(deltas()).toEqual(["first", "fresh"]);
   });
 
-  it("clears speculative pending events on in-window resync", () => {
+  it("clears speculative pending events on in-window resync", async () => {
     start({ windowSize: 2 });
-    ack(msg(2, "stale"), 0);
-    fail(msg(3, "gap"), "resync-required");
+    await ack(msg(2, "stale"), 0);
+    await fail(msg(3, "gap"), "resync-required");
 
-    ack(msg(1, "first"));
-    ack(msg(2, "fresh", 1));
+    await ack(msg(1, "first"));
+    await ack(msg(2, "fresh", 1));
 
     expect(deltas()).toEqual(["first", "fresh"]);
   });
 
-  it("resets after capacity failure", () => {
+  it("resets after capacity failure", async () => {
     start({ maxActiveRuns: 1 });
-    ack(msg(1, "active", 0, "run-active"));
-    fail(msg(2, "overlap", 1, "run-overlap"), "capacity-exceeded");
-    fail(msg(2, "stale", 1, "run-overlap"), "resync-required");
-    ack(msg(1, "fresh", 0, "run-overlap"));
+    await ack(msg(1, "active", 0, "run-active"));
+    await fail(msg(2, "overlap", 1, "run-overlap"), "capacity-exceeded");
+    await fail(msg(2, "stale", 1, "run-overlap"), "resync-required");
+    await ack(msg(1, "fresh", 0, "run-overlap"));
   });
 
-  it("does not reserve a pending terminal for an unbuffered head", () => {
+  it("does not reserve a pending terminal for an unbuffered head", async () => {
     start({ maxActiveRuns: 1 });
     const activeRunId = "run-active";
-    ack(msg(1, "active", 0, activeRunId));
-    ack(
+    await ack(msg(1, "active", 0, activeRunId));
+    await ack(
       {
         ...live(3, lifecycle({ phase: "end", endedAt: 200 }), activeRunId),
         lastAckedSeq: 1,
       },
       1,
     );
-    fail(msg(2, "overlap", 1, "run-overlap"), "capacity-exceeded");
-    fail(msg(2, "stale", 1, "run-overlap"), "resync-required");
-    ack(msg(1, "fresh", 0, "run-overlap"));
+    await fail(msg(2, "overlap", 1, "run-overlap"), "capacity-exceeded");
+    await fail(msg(2, "stale", 1, "run-overlap"), "resync-required");
+    await ack(msg(1, "fresh", 0, "run-overlap"));
   });
 
-  it.each([RUN, "run-sibling"])("resyncs after a swept context before %s", (runId) => {
-    ack(msg(1, "before"));
+  it.each([RUN, "run-sibling"])("resyncs after a swept context before %s", async (runId) => {
+    await ack(msg(1, "before"));
     expect(getAgentRunContext(RUN)).toBeDefined();
     sweepStaleRunContexts(-1);
     expect(getAgentRunContext(RUN)).toBeUndefined();
-    fail(msg(2, "stale", 1, runId), "resync-required");
-    ack(msg(1, "fresh", 0, runId));
+    await fail(msg(2, "stale", 1, runId), "resync-required");
+    await ack(msg(1, "fresh", 0, runId));
     expect(deltas()).toEqual(["before", "fresh"]);
   });
 
-  it("survives config suspension", () => {
-    const valid = cfg;
-    ack(msg(1, "before"));
-    ack(msg(3, "third", 1), 1);
-    cfg = {
-      ...cfg,
-      session: { ...cfg.session, store: path.join(root, "missing", "{agentId}", "sessions.json") },
-    };
-    rx.rebindAll(cfg);
-    fail(msg(2, "suspended", 1), "session-not-attached");
-    cfg = valid;
-    rx.rebindAll(cfg);
-    ack(msg(2, "after", 1), 3);
-    expect(deltas()).toEqual(["before", "after", "third"]);
-    expect(events.map((event) => event.seq)).toEqual([1, 2, 3]);
+  it("keeps buffered and new trajectory writes on the admitted store after config changes", async () => {
+    await ack(live(1, lifecycle({ phase: "start", startedAt: 100 })));
+    await ack({ ...live(3, lifecycle({ phase: "end", endedAt: 200 })), lastAckedSeq: 1 }, 1);
+    const replacementStore = path.join(root, "replacement.sqlite");
+    await sessions.upsertSessionEntryCore(
+      { agentId: "main", sessionKey: KEY, storePath: replacementStore },
+      { sessionId: SID, updatedAt: 20 },
+    );
+    setRuntimeConfigSnapshot({ session: { store: replacementStore } });
+    await ack(live(2, tool({ phase: "start", name: "read", toolCallId: "read-a", args: {} })), 3);
+
+    expect(
+      events.filter((event) => event.stream !== "item").map((event) => event.data.phase),
+    ).toEqual(["start", "start", "end"]);
+    expect(
+      loadSqliteTrajectoryRuntimeEventRowsSync({
+        agentId: "main",
+        sessionId: SID,
+        storePath: store,
+      }).map((row) => row.event.type),
+    ).toEqual(["session.started", "tool.call", "model.completed", "session.ended"]);
+    expect(
+      loadSqliteTrajectoryRuntimeEventRowsSync({
+        agentId: "main",
+        sessionId: SID,
+        storePath: replacementStore,
+      }),
+    ).toEqual([]);
   });
 
   it("fences a committed reset", async () => {
-    ack(msg(1, "before"));
+    await ack(msg(1, "before"));
     await sessions.resetSessionEntryLifecycle({
       agentId: "main",
       buildNextEntry: () => ({ sessionId: `${SID}-replacement`, updatedAt: 20 }),
       storePath: store,
       target,
     });
-    fail(msg(2, "after", 1), "session-not-attached");
+    await fail(msg(2, "after", 1), "invalid-event");
   });
 
   it("restarts after deletion", async () => {
-    ack(msg(1, "before"));
-    ack(msg(3, "buffered", 1), 1);
+    await ack(msg(1, "before"));
+    await ack(msg(3, "buffered", 1), 1);
     await remove();
-    fail(msg(2, "after", 1), "session-not-attached");
+    await fail(msg(2, "after", 1), "invalid-event");
     await create(30);
-    ack(msg(1, "fresh"));
+    await fail(msg(2, "replacement", 1), "invalid-event");
+    captureSource();
+    start();
+    await ack(msg(1, "fresh"));
     expect(deltas()).toEqual(["before", "fresh"]);
   });
 
-  it("fences terminal runs", () => {
-    ack(
+  it("fences terminal runs", async () => {
+    await ack(
       live(1, { kind: "lifecycle", payload: { phase: "error", endedAt: 100, error: "retryable" } }),
     );
-    ack(msg(2, "recovered", 1));
+    await ack(msg(2, "recovered", 1));
     const end = events[0];
     clearAgentRunContext(RUN, end?.lifecycleGeneration, end?.contextClaimId);
-    fail(msg(3, "released", 2), "invalid-event");
+    await fail(msg(3, "released", 2), "invalid-event");
 
     start({ windowSize: 2 });
-    ack(live(1, { kind: "lifecycle", payload: { phase: "end", endedAt: 200 } }));
-    ack(msg(2, "other", 1, "run-other"));
-    fail(msg(3, "late", 2), "invalid-event");
+    await ack(live(1, { kind: "lifecycle", payload: { phase: "end", endedAt: 200 } }));
+    await ack(msg(2, "other", 1, "run-other"));
+    await fail(msg(3, "late", 2), "invalid-event");
   });
 
-  it("retains a terminal fence while its run remains claimed", () => {
+  it("retains a terminal fence while its run remains claimed", async () => {
     start({ windowSize: 2 });
-    ack(live(1, { kind: "lifecycle", payload: { phase: "end", endedAt: 200 } }));
-    ack(msg(2, "other-first", 1, "run-other"));
-    ack(msg(3, "other-second", 2, "run-other"));
+    await ack(live(1, { kind: "lifecycle", payload: { phase: "end", endedAt: 200 } }));
+    await ack(msg(2, "other-first", 1, "run-other"));
+    await ack(msg(3, "other-second", 2, "run-other"));
 
-    fail(msg(4, "late", 3), "invalid-event");
+    await fail(msg(4, "late", 3), "invalid-event");
     expect(events.filter((event) => event.runId === RUN)).toHaveLength(1);
   });
 
-  it("clears on detach", () => {
-    ack(msg(1, "delivered"));
-    ack(msg(3, "buffered", 1), 1);
-    rx.clearEnvironment(ID.environmentId);
-    expect(getAgentRunContext(RUN)).toBeUndefined();
-    fail(msg(1, "pending", 0, "run-pending"), "invalid-event");
+  it.each([
+    ["item", false],
+    ["item", true],
+    ["tool", false],
+    ["tool", true],
+  ] as const)(
+    "stops publication after %s detaches the worker (shared: %s)",
+    async (stream, shared) => {
+      if (shared) {
+        claimAgentRunContext(RUN, {
+          ...LOCAL,
+          isControlUiVisible: true,
+          lifecycleGeneration: getAgentEventLifecycleGeneration(),
+        });
+      }
+      const diagnostic = vi.fn();
+      const recorder = vi
+        .spyOn(workerRunOwner, "captureWorkerTurnLiveEventOwner")
+        .mockReturnValue({ record: diagnostic, isCancelled: () => false });
+      const stop = onAgentRuntimeEvent((event) => {
+        if (event.runId === RUN && event.stream === stream) {
+          rx.clearEnvironment(ID.environmentId, EPOCH);
+        }
+      });
+      try {
+        await fail(
+          live(
+            1,
+            tool({ phase: "start", name: "read", toolCallId: "revoked", args: { path: "file" } }),
+          ),
+          "invalid-event",
+        );
+        expect(events.map((event) => event.stream)).toEqual(
+          stream === "item" ? ["item"] : ["item", "tool"],
+        );
+        expect(diagnostic).not.toHaveBeenCalled();
+        expect(
+          loadSqliteTrajectoryRuntimeEventRowsSync({
+            agentId: "main",
+            sessionId: SID,
+            storePath: store,
+          }),
+        ).toEqual([]);
+      } finally {
+        stop();
+        recorder.mockRestore();
+      }
+    },
+  );
+
+  it("fences an environment detached before its first live event", async () => {
+    rx.clearEnvironment(ID.environmentId, EPOCH);
+    await fail(msg(1), "invalid-event");
+    expect(events).toEqual([]);
   });
 
-  it("adopts a compatible pre-registered gateway run context", () => {
+  it("clears on detach", async () => {
+    await ack(msg(1, "delivered"));
+    await ack(msg(3, "buffered", 1), 1);
+    rx.clearEnvironment(ID.environmentId, EPOCH);
+    expect(getAgentRunContext(RUN)).toBeUndefined();
+    await fail(msg(1, "pending", 0, "run-pending"), "invalid-event");
+  });
+
+  it("adopts a compatible pre-registered gateway run context", async () => {
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     claimAgentRunContext(RUN, {
       ...LOCAL,
@@ -685,7 +795,7 @@ describe("worker live events", () => {
       lifecycleGeneration,
     });
 
-    ack(msg(1, "worker"));
+    await ack(msg(1, "worker"));
 
     expect(getAgentRunContext(RUN)).toMatchObject({
       ...LOCAL,
@@ -698,15 +808,15 @@ describe("worker live events", () => {
 
   it.each(["terminal process turnover", "detach"])(
     "clears an ownerless Gateway run context on %s",
-    (settledBy) => {
+    async (settledBy) => {
       claimAgentRunContext(RUN, {
         ...LOCAL,
         lifecycleGeneration: getAgentEventLifecycleGeneration(),
       });
 
-      ack(msg(1, "worker"));
+      await ack(msg(1, "worker"));
       if (settledBy === "terminal process turnover") {
-        ack(live(2, lifecycle({ phase: "end", startedAt: 100, endedAt: 200 })));
+        await ack(live(2, lifecycle({ phase: "end", startedAt: 100, endedAt: 200 })));
         expect(
           rx.rotateCredential({
             ackedSeq: 2,
@@ -719,7 +829,7 @@ describe("worker live events", () => {
           }),
         ).toBe(true);
       } else {
-        rx.clearEnvironment(ID.environmentId);
+        rx.clearEnvironment(ID.environmentId, EPOCH);
       }
 
       expect(getAgentRunContext(RUN)).toBeUndefined();
@@ -729,7 +839,7 @@ describe("worker live events", () => {
     },
   );
 
-  it("joins a visible dispatch-owned run context without blocking its terminal", () => {
+  it("joins a visible dispatch-owned run context without blocking its terminal", async () => {
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     // A worker-routed turn keeps its dispatch-owned Control UI visibility. The
     // gateway claims the run context (isControlUiVisible: true for a visible
@@ -741,9 +851,9 @@ describe("worker live events", () => {
       lifecycleGeneration,
     });
 
-    ack(live(1, lifecycle({ phase: "start", startedAt: 100 })));
-    ack(msg(2, "worker", 1));
-    ack(live(3, lifecycle({ phase: "finishing", startedAt: 100, endedAt: 200 })));
+    await ack(live(1, lifecycle({ phase: "start", startedAt: 100 })));
+    await ack(msg(2, "worker", 1));
+    await ack(live(3, lifecycle({ phase: "finishing", startedAt: 100, endedAt: 200 })));
 
     expect(getAgentRunContext(RUN)).toMatchObject({
       ...LOCAL,
@@ -776,7 +886,7 @@ describe("worker live events", () => {
     ).toBeUndefined();
   });
 
-  it("shares a compatible non-exclusive Gateway run owner", () => {
+  it("shares a compatible non-exclusive Gateway run owner", async () => {
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const gatewayClaim = claimAgentRunContext(
       RUN,
@@ -790,7 +900,7 @@ describe("worker live events", () => {
     );
     expect(gatewayClaim).toBeDefined();
 
-    ack(live(1, lifecycle({ phase: "start", startedAt: 100 })));
+    await ack(live(1, lifecycle({ phase: "start", startedAt: 100 })));
 
     expect(getAgentRunContext(RUN)).toMatchObject({
       ...LOCAL,
@@ -806,46 +916,15 @@ describe("worker live events", () => {
     releaseAgentRunContext(RUN, gatewayClaim);
   });
 
-  const farmIdentity = (n: number): Identity => ({
-    ...ID,
-    environmentId: `environment-farm-${n}`,
-    sessionId: `session-farm-${n}`,
-    runId: `run-farm-${n}`,
-    turnClaim: {
-      sessionId: `session-farm-${n}`,
-      claimId: `claim-farm-${n}`,
-      runId: `run-farm-${n}`,
-      placementGeneration: 4,
-      owner: { kind: "worker", environmentId: `environment-farm-${n}`, ownerEpoch: EPOCH },
-    },
-  });
-  const farmSession = (n: number, updatedAt = 20) =>
-    sessions.upsertSessionEntryCore(
-      { agentId: "main", sessionKey: `agent:main:farm-${n}`, storePath: store },
-      { sessionId: `session-farm-${n}`, updatedAt },
-    );
-  const farmStart = (count: number, maxSessions: number) => {
-    start({
-      maxSessions,
-      startupBindings: Array.from({ length: count }, (_, i) => binding(farmIdentity(i + 1))),
-      startupOwners: new Map(
-        Array.from({ length: count }, (_, i) => [`environment-farm-${i + 1}`, EPOCH]),
-      ),
-    });
+  const farmSession = async (n: number, updatedAt = 20) => {
+    const source = await seedWorkerLiveSession(store, n, updatedAt);
+    sources.set(source.sessionTarget.sessionId, source);
   };
-  const farmEvent = (n: number, seq: number, event: Params["event"]): Params => ({
-    runEpoch: EPOCH,
-    lastAckedSeq: seq - 1,
-    seq,
-    runId: `run-farm-${n}`,
-    event,
-  });
-
   it("evicts the oldest quiescent window instead of rejecting new sessions at the cap", async () => {
     await Promise.all([farmSession(1), farmSession(2), farmSession(3)]);
-    farmStart(3, 2);
+    start({ maxSessions: 2 });
     for (const n of [1, 2]) {
-      ack(
+      await ack(
         farmEvent(n, 1, { kind: "assistant", payload: { text: "hi", delta: "hi" } }),
         1,
         farmIdentity(n),
@@ -858,31 +937,100 @@ describe("worker live events", () => {
     }
     // Both existing windows are quiescent per the run-context registry; the
     // third session evicts the oldest instead of failing with capacity-exceeded.
-    ack(
+    await ack(
       farmEvent(3, 1, { kind: "assistant", payload: { text: "new", delta: "new" } }),
       1,
       farmIdentity(3),
     );
+    durableAckedSeq = 1;
+    await ack(
+      farmEvent(1, 2, { kind: "assistant", payload: { text: "resumed", delta: "resumed" } }),
+      2,
+      farmIdentity(1),
+    );
+  });
+
+  it("retains a quiescent window through acknowledgment validation", async () => {
+    await Promise.all([farmSession(1), farmSession(2)]);
+    start({ maxSessions: 1 });
+    const writes: Promise<void>[] = [];
+    const record = liveProjection.recordWorkerLiveTrajectoryEvent;
+    const projection = vi
+      .spyOn(liveProjection, "recordWorkerLiveTrajectoryEvent")
+      .mockImplementation((...params) => {
+        const write = record(...params);
+        if (write) {
+          writes.push(write);
+        }
+        return write;
+      });
+    const writer = holdWorkerTranscriptWriter(store);
+    await writer.entered;
+    const terminal = rx.apply({
+      readAckedSeq,
+      identity: farmIdentity(1),
+      source: sourceFor(farmIdentity(1)),
+      request: farmEvent(1, 1, lifecycle({ phase: "end", endedAt: 200 })),
+    });
+    let competing: ReturnType<typeof rx.apply> | undefined;
+    try {
+      for (const claimId of getAgentRunContextOwnership("run-farm-1")?.claimIds ?? []) {
+        releaseAgentRunContext("run-farm-1", claimId);
+      }
+      expect(getAgentRunContext("run-farm-1")).toBeUndefined();
+      const next = farmEvent(2, 1, { kind: "assistant", payload: { text: "next", delta: "next" } });
+      await fail(next, "capacity-exceeded", farmIdentity(2));
+      expect(events.map((event) => event.runId)).toEqual(["run-farm-1"]);
+
+      const write = writes.at(-1);
+      if (!write) {
+        throw new Error("expected an accepted terminal trajectory write");
+      }
+      // Registered after apply's Promise.all reaction, this runs after the
+      // write settles but before apply resumes ACK validation.
+      competing = write.then(() =>
+        rx.apply({
+          identity: farmIdentity(2),
+          request: next,
+          source: sourceFor(farmIdentity(2)),
+          readAckedSeq,
+        }),
+      );
+
+      writer.release();
+      await writer.done;
+      const [terminalResult, competingResult] = await Promise.all([terminal, competing]);
+      expect.soft(competingResult).toEqual({ ok: false, details: { reason: "capacity-exceeded" } });
+      expect(terminalResult).toEqual({ ok: true, result: { ackedSeq: 1 } });
+      await ack(next, 1, farmIdentity(2));
+      expect(events.map((event) => event.runId)).toEqual(["run-farm-1", "run-farm-2"]);
+    } finally {
+      writer.release();
+      await writer.done;
+      await terminal;
+      await competing;
+      projection.mockRestore();
+    }
   });
 
   it("rejects a new session only when every window has an active run", async () => {
     await Promise.all([farmSession(1), farmSession(2), farmSession(3)]);
-    farmStart(3, 2);
+    start({ maxSessions: 2 });
     for (const n of [1, 2]) {
-      ack(
+      await ack(
         farmEvent(n, 1, { kind: "assistant", payload: { text: "hi", delta: "hi" } }),
         1,
         farmIdentity(n),
       );
     }
-    fail(
+    await fail(
       farmEvent(3, 1, { kind: "assistant", payload: { text: "new", delta: "new" } }),
       "capacity-exceeded",
       farmIdentity(3),
     );
   });
 
-  it("rejects a compatible context held by an exclusive Gateway owner", () => {
+  it("rejects a compatible context held by an exclusive Gateway owner", async () => {
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const gatewayClaim = claimAgentRunContext(
       RUN,
@@ -891,13 +1039,13 @@ describe("worker live events", () => {
     );
     expect(gatewayClaim).toBeDefined();
 
-    fail(msg(1, "blocked"), "invalid-event");
+    await fail(msg(1, "blocked"), "invalid-event");
     expect(events).toEqual([]);
 
     releaseAgentRunContext(RUN, gatewayClaim);
   });
 
-  it("rejects pre-registered gateway run contexts with mismatched identity", () => {
+  it("rejects pre-registered gateway run contexts with mismatched identity", async () => {
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const mismatches: Array<{
       context: Parameters<typeof claimAgentRunContext>[1];
@@ -916,15 +1064,15 @@ describe("worker live events", () => {
         lifecycleGeneration,
         ...mismatch.context,
       });
-      fail(msg(1, "blocked", 0, runId), "invalid-event");
+      await fail(msg(1, "blocked", 0, runId), "invalid-event");
       clearAgentRunContext(runId);
     }
     expect(events).toEqual([]);
   });
 
-  it("keeps a claimed run id exclusive against a later untracked local claim", () => {
+  it("keeps a claimed run id exclusive against a later untracked local claim", async () => {
     const worker = "run-worker-first";
-    ack(msg(1, "worker", 0, worker));
+    await ack(msg(1, "worker", 0, worker));
     // A same-identity untracked claim cannot hijack a run live events already own.
     claimAgentRunContext(worker, LOCAL);
     clearAgentRunContext(worker);
@@ -933,7 +1081,7 @@ describe("worker live events", () => {
       stream: "assistant",
       data: { text: "local", delta: "local" },
     });
-    ack(msg(2, "again", 1, worker));
+    await ack(msg(2, "again", 1, worker));
     expect(deltas()).toEqual(["worker", "again"]);
   });
 });

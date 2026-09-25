@@ -127,4 +127,35 @@ describe("resolveConfiguredProviderFallback", () => {
       }),
     ).toBeNull();
   });
+
+  it.each([
+    { nextModel: "larger", expected: { provider: "local-provider", model: "larger" } },
+    { nextModel: undefined, expected: { provider: "second", model: "local-good" } },
+  ])("keeps eligible model order after excluding a utility row: $nextModel", (scenario) => {
+    expect(
+      resolveConfiguredProviderFallback({
+        cfg: configuredProviders({
+          " Local-Provider ": configuredProvider("http://127.0.0.1:9191/v1", [
+            configuredModel("small", "Small"),
+            ...(scenario.nextModel ? [configuredModel(scenario.nextModel, "Larger")] : []),
+          ]),
+          second: localProvider,
+        }),
+        defaultProvider: "openai",
+        defaultModel: "missing-default-model",
+        excludedModel: { provider: "local-provider", model: "small" },
+      }),
+    ).toEqual(scenario.expected);
+  });
+
+  it("returns no implicit provider when its only model is reserved for utility use", () => {
+    expect(
+      resolveConfiguredProviderFallback({
+        cfg: configuredProviders({ "local-provider": localProvider }),
+        defaultProvider: "openai",
+        defaultModel: "missing-default-model",
+        excludedModel: { provider: "local-provider", model: "local-good" },
+      }),
+    ).toBeNull();
+  });
 });

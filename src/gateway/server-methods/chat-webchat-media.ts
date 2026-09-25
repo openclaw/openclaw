@@ -1,12 +1,12 @@
 // Webchat media helpers translate reply payload media into assistant content
 // blocks that the control UI can render without unsafe file exposure.
 import path from "node:path";
+import { assertNoWindowsNetworkPath, safeFileURLToPath } from "@openclaw/fs-safe/advanced";
 import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { isAudioFileName, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { openLocalFileSafely } from "../../infra/fs-safe.js";
-import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../../infra/local-file-access.js";
 import { assertLocalMediaAllowed, LocalMediaAccessError } from "../../media/local-media-access.js";
 import { resolveSendableOutboundReplyParts } from "../../plugin-sdk/reply-payload.js";
 import { sanitizeReplyDirectiveId } from "../../utils/directive-tags.js";
@@ -27,6 +27,7 @@ const ALLOWED_WEBCHAT_DATA_IMAGE_MEDIA_TYPES = new Set([
 ]);
 
 type WebchatAudioEmbeddingOptions = {
+  assertCurrent?: () => void;
   localRoots?: readonly string[];
   onLocalAudioAccessDenied?: (err: LocalMediaAccessError) => void;
 };
@@ -93,9 +94,12 @@ async function readLocalAudioContentBlockForEmbedding(
   }
   let opened: Awaited<ReturnType<typeof openLocalFileSafely>> | undefined;
   try {
+    options?.assertCurrent?.();
     await assertLocalMediaAllowed(resolved, options?.localRoots);
+    options?.assertCurrent?.();
     opened = await openLocalFileSafely({ filePath: resolved });
     await assertLocalMediaAllowed(opened.realPath, options?.localRoots);
+    options?.assertCurrent?.();
     if (opened.stat.size > MAX_WEBCHAT_AUDIO_BYTES) {
       return null;
     }

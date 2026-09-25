@@ -31,6 +31,29 @@ describe("draftCloudProfileSupportsExecutionMode", () => {
 });
 
 describe("readDraftCloudProfiles", () => {
+  it("projects only bounded display identity and never guesses from a profile name", () => {
+    expect(
+      readDraftCloudProfiles([
+        {
+          id: "production",
+          providerId: "crabbox",
+          providerDisplayId: "aws",
+          settings: { provider: "azure" },
+        },
+        { id: "aws", providerId: "crabbox", providerDisplayId: "azure" },
+      ]),
+    ).toEqual([
+      { id: "aws", providerId: "crabbox", providerDisplayId: "azure", trust: undefined },
+      { id: "production", providerId: "crabbox", providerDisplayId: "aws", trust: undefined },
+    ]);
+    for (const providerDisplayId of [undefined, "", " aws", "aws\n", "a".repeat(65), {}, 42]) {
+      const [profile] = readDraftCloudProfiles([
+        { id: "aws", providerId: "crabbox", providerDisplayId },
+      ]);
+      expect(profile).not.toHaveProperty("providerDisplayId");
+    }
+  });
+
   it("keeps same-class choices distinct per OS and bounds catalogs", () => {
     const [profile] = readDraftCloudProfiles([
       {
@@ -38,7 +61,11 @@ describe("readDraftCloudProfiles", () => {
         providerId: "crabbox",
         operatingSystems: [
           { id: "linux", label: "Linux", default: true },
-          { id: "windows/wsl2", label: "Windows (WSL2)" },
+          {
+            id: "windows/wsl2",
+            label: "Windows (WSL2)",
+            disabledReason: "Upgrade the worker provider.",
+          },
           { id: "linux", label: "Duplicate" },
         ],
         machines: [
@@ -54,7 +81,11 @@ describe("readDraftCloudProfiles", () => {
     ]);
     expect(profile?.operatingSystems).toEqual([
       { id: "linux", label: "Linux", default: true },
-      { id: "windows/wsl2", label: "Windows (WSL2)" },
+      {
+        id: "windows/wsl2",
+        label: "Windows (WSL2)",
+        disabledReason: "Upgrade the worker provider.",
+      },
     ]);
     expect(profile?.machines?.slice(0, 2)).toEqual([
       { id: "tiny", label: "Tiny Linux", os: "linux" },

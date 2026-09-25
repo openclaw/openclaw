@@ -95,6 +95,7 @@ describe("update cli option collisions", () => {
     ),
     ["--no-restart"],
     ["--accept-capabilities"],
+    ["--reapply-local-overrides"],
   ])("rejects unrelated inherited cleanup option %s", async (...flags) => {
     await runRegisteredCli({ register: registerUpdateCli, argv: ["update", ...flags, "cleanup"] });
     expect(mocks.updateCleanupCommand).not.toHaveBeenCalled();
@@ -110,6 +111,7 @@ describe("update cli option collisions", () => {
     "--no-restart",
     "--accept-capabilities",
     "--version",
+    "--reapply-local-overrides",
   ])("rejects update-only or version option %s after cleanup", async (flag) => {
     const program = new Command().exitOverride().configureOutput({ writeErr: () => {} });
     registerUpdateCli(program);
@@ -122,6 +124,33 @@ describe("update cli option collisions", () => {
     expect(mocks.updateCleanupCommand).not.toHaveBeenCalled();
     expect(updateCommand).not.toHaveBeenCalled();
   });
+
+  it("dispatches explicit replay consent to the update owner", async () => {
+    await runRegisteredCli({
+      register: registerUpdateCli,
+      argv: ["update", "--reapply-local-overrides"],
+    });
+    expect(updateCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ reapplyLocalOverrides: true }),
+    );
+  });
+
+  it.each(["status", "wizard", "repair", "finalize"])(
+    "rejects replay consent on the %s leaf",
+    async (leaf) => {
+      await runRegisteredCli({
+        register: registerUpdateCli,
+        argv: ["update", "--reapply-local-overrides", leaf],
+      });
+      expect(defaultRuntime.error).toHaveBeenCalledWith(
+        expect.stringContaining("--reapply-local-overrides is not supported"),
+      );
+      expect(updateCommand).not.toHaveBeenCalled();
+      expect(updateFinalizeCommand).not.toHaveBeenCalled();
+      expect(updateWizardCommand).not.toHaveBeenCalled();
+      expect(updateStatusCommand).not.toHaveBeenCalled();
+    },
+  );
 
   it("dispatches cleanup after the parent option delimiter", async () => {
     await runRegisteredCli({ register: registerUpdateCli, argv: ["update", "--", "cleanup"] });

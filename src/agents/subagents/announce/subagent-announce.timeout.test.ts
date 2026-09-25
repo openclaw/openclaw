@@ -103,7 +103,12 @@ vi.mock("./subagent-announce-delivery.js", () => ({
     targetRequesterSessionKey: string;
     triggerMessage: string;
     requesterIsSubagent?: boolean;
-    requesterOrigin?: { channel?: string; to?: string; accountId?: string; threadId?: string };
+    completionDirectOrigin?: {
+      channel?: string;
+      to?: string;
+      accountId?: string;
+      threadId?: string;
+    };
     requesterSessionOrigin?: { provider?: string; channel?: string };
     bestEffortDeliver?: boolean;
     directIdempotencyKey?: string;
@@ -124,10 +129,10 @@ vi.mock("./subagent-announce-delivery.js", () => ({
         ...(params.requesterIsSubagent
           ? {}
           : {
-              channel: params.requesterOrigin?.channel,
-              to: params.requesterOrigin?.to,
-              accountId: params.requesterOrigin?.accountId,
-              threadId: params.requesterOrigin?.threadId,
+              channel: params.completionDirectOrigin?.channel,
+              to: params.completionDirectOrigin?.to,
+              accountId: params.completionDirectOrigin?.accountId,
+              threadId: params.completionDirectOrigin?.threadId,
             }),
       },
     });
@@ -167,7 +172,7 @@ vi.mock("./subagent-announce-delivery.js", () => ({
   runAnnounceDeliveryWithRetry: async <T>(params: { run: () => Promise<T> }) => await params.run(),
 }));
 vi.mock("./subagent-announce.runtime.js", () => ({
-  callGateway: createGatewayCallModuleMock().callGateway,
+  callSubagentLifecycleGateway: createGatewayCallModuleMock().callGateway,
   dispatchGatewayMethodInProcess: async (
     method: string,
     params: Record<string, unknown>,
@@ -493,23 +498,30 @@ describe("subagent announce timeout config", () => {
     expect(internalEvents[0]?.result).not.toContain("private tool output");
   });
 
-  it("keeps authoritative visible timeout output without transcript inference", async () => {
-    chatHistoryMessages = [
-      { role: "assistant", content: [{ type: "text", text: "stale transcript output" }] },
-    ];
+  it.each(["authoritative progress", "(no output)"])(
+    "keeps authoritative visible timeout output %s without transcript inference",
+    async (text) => {
+      chatHistoryMessages = [
+        { role: "assistant", content: [{ type: "text", text: "stale transcript output" }] },
+      ];
 
-    await runAnnounceFlowForTest("run-timeout-visible-terminal", {
-      outcome: { status: "timeout" },
-      roundOneReply: undefined,
-      terminalReply: { disposition: "visible", text: "authoritative progress" },
-    });
+      await runAnnounceFlowForTest("run-timeout-visible-terminal", {
+        outcome: { status: "timeout" },
+        roundOneReply: undefined,
+        terminalReply: { disposition: "visible", text },
+      });
 
-    const directAgentCall = findFinalDirectAgentCall();
-    const internalEvents =
-      (directAgentCall?.params?.internalEvents as Array<{ result?: string }>) ?? [];
-    expect(internalEvents[0]?.result).toBe("authoritative progress");
-    expect(gatewayCalls.some((call) => call.method === "chat.history")).toBe(false);
-  });
+      const directAgentCall = findFinalDirectAgentCall();
+      const internalEvents =
+        (directAgentCall?.params?.internalEvents as Array<{
+          result?: string;
+          noVisibleResult?: boolean;
+        }>) ?? [];
+      expect(internalEvents[0]?.result).toBe(text);
+      expect(internalEvents[0]?.noVisibleResult).toBeUndefined();
+      expect(gatewayCalls.some((call) => call.method === "chat.history")).toBe(false);
+    },
+  );
 
   it("keeps authoritative silence on timeout without transcript inference", async () => {
     chatHistoryMessages = [
@@ -523,6 +535,28 @@ describe("subagent announce timeout config", () => {
     });
 
     expect(findFinalDirectAgentCall()).toBeUndefined();
+    expect(gatewayCalls.some((call) => call.method === "chat.history")).toBe(false);
+  });
+
+  it("keeps authoritative empty success intentional without transcript inference", async () => {
+    chatHistoryMessages = [
+      { role: "assistant", content: [{ type: "text", text: "stale transcript output" }] },
+    ];
+
+    await runAnnounceFlowForTest("run-ok-empty-terminal", {
+      outcome: { status: "ok" },
+      roundOneReply: undefined,
+      terminalReply: { disposition: "empty" },
+    });
+
+    const directAgentCall = findFinalDirectAgentCall();
+    const internalEvents =
+      (directAgentCall?.params?.internalEvents as Array<{
+        result?: string;
+        noVisibleResult?: boolean;
+      }>) ?? [];
+    expect(internalEvents[0]?.result).toBe("(no output)");
+    expect(internalEvents[0]?.noVisibleResult).toBe(true);
     expect(gatewayCalls.some((call) => call.method === "chat.history")).toBe(false);
   });
 
@@ -561,10 +595,12 @@ describe("subagent announce timeout config", () => {
         result?: string;
         status?: string;
         statusLabel?: string;
+        noVisibleResult?: boolean;
       }>) ?? [];
     expect(internalEvents[0]?.status).toBe("error");
     expect(internalEvents[0]?.statusLabel).toContain("All models failed");
     expect(internalEvents[0]?.result).toBe("(no output)");
+    expect(internalEvents[0]?.noVisibleResult).toBe(true);
     expect(directAgentCall?.params?.message).not.toContain("stale");
     expect(directAgentCall?.params?.message).not.toContain("older fallback");
   });

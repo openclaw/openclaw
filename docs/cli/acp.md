@@ -77,6 +77,8 @@ openclaw acp --session agent:main:main --reset-session
 
 Use the built-in ACP client to sanity-check the bridge without an IDE. It spawns the ACP bridge and lets you type prompts interactively.
 
+After a session is established, an unexpected server signal exit makes the client exit with status `1`. An explicit `exit` or `quit` remains successful when it stops the server by signal. Numeric server exit codes are propagated, including a nonzero code returned during an explicit quit. Closing interactive input, including Ctrl-D at an empty prompt, uses the same client-owned shutdown path; it does not wait for an in-flight response to finish.
+
 ```bash
 openclaw acp client
 
@@ -176,9 +178,15 @@ If you want ACPX-backed sessions to see OpenClaw plugin tools or selected built-
 
 If you want a coding agent such as Codex or Claude Code to talk to your OpenClaw bot over ACP, use `acpx` with its built-in `openclaw` target.
 
+`acpx` here is the separate `acpx` CLI from npm, installed on the machine that
+runs the coding agent. It is not the same thing as the `@openclaw/acpx` OpenClaw
+plugin described in [ACP Agents](/tools/acp-agents-setup#plugin-setup-for-acpx-backend),
+which embeds the ACP runtime in the Gateway and installs no `acpx` binary.
+
 Typical flow:
 
-1. Run the Gateway and make sure the ACP bridge can reach it.
+1. Install the `acpx` CLI on the coding agent's machine and run the Gateway,
+   making sure the ACP bridge can reach it.
 2. Point `acpx openclaw` at `openclaw acp`.
 3. Target the OpenClaw session key you want the coding agent to use.
 

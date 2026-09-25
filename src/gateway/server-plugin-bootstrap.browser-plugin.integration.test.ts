@@ -5,8 +5,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createBundledBrowserPluginFixture } from "../../test/helpers/browser-bundled-plugin-fixture.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { clearPluginLoaderCache } from "../plugins/loader.test-fixtures.js";
-import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
-import { loadGatewayStartupPlugins } from "./server-plugin-bootstrap.js";
+import {
+  disposePluginRegistryInstances,
+  resetPluginRuntimeStateForTest,
+} from "../plugins/runtime.js";
+import { prepareGatewayPluginLoad } from "./server-plugin-bootstrap.js";
 
 function resetPluginState() {
   clearPluginLoaderCache();
@@ -22,7 +25,8 @@ function createTestLog() {
   };
 }
 
-describe("loadGatewayStartupPlugins browser plugin integration", () => {
+describe("prepareGatewayPluginLoad browser plugin integration", () => {
+  let candidate: ReturnType<typeof prepareGatewayPluginLoad> | undefined;
   let bundledFixture: ReturnType<typeof createBundledBrowserPluginFixture> | null = null;
 
   beforeEach(() => {
@@ -31,15 +35,24 @@ describe("loadGatewayStartupPlugins browser plugin integration", () => {
     resetPluginState();
   });
 
-  afterEach(() => {
-    resetPluginState();
-    vi.unstubAllEnvs();
-    bundledFixture?.cleanup();
-    bundledFixture = null;
+  afterEach(async () => {
+    try {
+      candidate?.retireGatewayRuntimeBindings();
+      if (candidate) {
+        await disposePluginRegistryInstances(candidate.pluginRegistry);
+      }
+    } finally {
+      candidate = undefined;
+      resetPluginState();
+      vi.unstubAllEnvs();
+      bundledFixture?.cleanup();
+      bundledFixture = null;
+    }
   });
 
   it("adds browser.request and the browser control service from the bundled plugin", () => {
-    const loaded = loadGatewayStartupPlugins({
+    const loaded = (candidate = prepareGatewayPluginLoad({
+      loadIntent: "startup",
       cfg: {
         plugins: {
           allow: ["browser"],
@@ -51,7 +64,7 @@ describe("loadGatewayStartupPlugins browser plugin integration", () => {
       baseMethods: [],
       pluginIds: ["browser"],
       logDiagnostics: false,
-    });
+    }));
 
     expect(loaded.gatewayMethods).toContain("browser.request");
     expect(

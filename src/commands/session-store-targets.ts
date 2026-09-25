@@ -117,11 +117,12 @@ export function resolveCommandSessionStoreTargets(params: {
       },
     ];
   } catch (error) {
-    const message = formatErrorMessage(
-      error instanceof AgentSelectionRequiredError
-        ? new AgentSelectionRequiredError(error.agentIds, SESSION_STORE_SELECTION_CONTEXT)
-        : error,
-    );
+    // The shared CLI failure owner already treats agent selection as an operator
+    // error; only the session-store surface wording is added here.
+    if (error instanceof AgentSelectionRequiredError) {
+      throw new AgentSelectionRequiredError(error.agentIds, SESSION_STORE_SELECTION_CONTEXT);
+    }
+    const message = formatErrorMessage(error);
     throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
   }
 }

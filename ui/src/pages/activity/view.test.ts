@@ -157,7 +157,7 @@ describe("renderActivity", () => {
     );
   });
 
-  it("exposes the activity stream as a named list", async () => {
+  it("groups the named activity stream without overriding native disclosure semantics", async () => {
     await i18n.setLocale("en");
     const container = document.createElement("div");
     document.body.append(container);
@@ -165,9 +165,12 @@ describe("renderActivity", () => {
     render(renderActivity(createProps()), container);
 
     const stream = container.querySelector(".activity-stream");
-    expect(stream?.getAttribute("role")).toBe("list");
+    expect(stream?.getAttribute("role")).toBe("group");
     expect(stream?.getAttribute("aria-label")).toBe("Agent activity entries");
-    expect(container.querySelector(".activity-entry")?.getAttribute("role")).toBe("listitem");
+    const entry = container.querySelector(".activity-entry");
+    expect(entry?.tagName).toBe("DETAILS");
+    expect(entry?.hasAttribute("role")).toBe(false);
+    expect(entry?.querySelector("summary")).not.toBeNull();
   });
 
   it("keeps primary live filters visible and moves the tool picker into the filter disclosure", async () => {

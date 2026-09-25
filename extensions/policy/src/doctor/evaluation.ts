@@ -17,6 +17,7 @@ import { dataHandlingFindings, secretAuthProvenanceFindings } from "./data-auth-
 import { execApprovalsFindings } from "./exec-approval-findings.js";
 import { ingressFindings } from "./ingress-findings.js";
 import { SUPPORTED_TOOL_METADATA } from "./policy-constants.js";
+import { policyEvidenceFinding } from "./policy-evidence-finding.js";
 import {
   execApprovalsDisplayName,
   parsePolicyFile,
@@ -351,19 +352,14 @@ function channelFindings(
       return [];
     }
     return [
-      {
+      policyEvidenceFinding(channel, {
         checkId: CHECK_IDS.policyDeniedChannelProvider,
-        severity: "error",
         message: `Channel '${channel.id}' uses denied provider '${channel.provider}'.`,
-        source: "policy",
-        path: "openclaw config",
-        ocPath: channel.source,
-        target: channel.source,
         requirement: rule.requirement,
         fixHint:
           rule.reason ??
           "Disable this channel, remove it from config, or update the policy deny rule.",
-      },
+      }),
     ];
   });
 }

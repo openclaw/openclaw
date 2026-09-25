@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { showInputDialog } from "../../components/input-dialog.ts";
 import { t } from "../../i18n/index.ts";
-import { createInitialDevicesState } from "../../lib/nodes/index.ts";
+import { createInitialDevicesState } from "../../lib/nodes/page-operations.ts";
 import { DevicesDialogController, type DevicesDialogHost } from "./devices-dialogs.ts";
 
 vi.mock("../../components/input-dialog.ts", () => ({ showInputDialog: vi.fn() }));

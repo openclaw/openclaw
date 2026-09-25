@@ -64,18 +64,12 @@ describe("statusSummaryRuntime configured model normalization", () => {
 
   it("skips manifest and plugin model normalization for providerless persisted session models", async () => {
     const { statusSummaryRuntime } = await import("../status/summary.runtime.js");
-    const cfg = {
-      agents: {
-        defaults: {
-          model: { primary: "anthropic/claude-sonnet-4-6" },
-        },
-      },
-    } as never;
+    const configured = { provider: "anthropic", model: "claude-sonnet-4-6" };
 
     normalizeProviderModelIdWithRuntimeMock.mockReturnValue("runtime-normalized-opus");
 
     expect(
-      statusSummaryRuntime.resolveSessionModelRef(cfg, {
+      statusSummaryRuntime.resolveSessionModelRef(configured, {
         model: "opus-4.6",
       }),
     ).toEqual({
@@ -84,7 +78,7 @@ describe("statusSummaryRuntime configured model normalization", () => {
     });
 
     expect(
-      statusSummaryRuntime.resolveSessionModelRef(cfg, {
+      statusSummaryRuntime.resolveSessionModelRef(configured, {
         model: "fallback-runtime-model",
         modelOverride: "opus-4.6",
       }),

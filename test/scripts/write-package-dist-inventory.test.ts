@@ -1,16 +1,24 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
-import { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "../../scripts/lib/package-dist-inventory-contract.mts";
+import {
+  PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH,
+  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+} from "../../scripts/lib/package-dist-inventory-contract.mts";
 import { PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH } from "../../scripts/lib/package-lifecycle-marker.mjs";
+import { scriptProcessEntrypoints } from "../../scripts/script-process-runtime.test-support.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
 import { withTempDirSync } from "../../src/test-helpers/temp-dir.js";
 
 const repoRoot = fs.realpathSync(fileURLToPath(new URL("../..", import.meta.url)));
-const writerPath = path.join(repoRoot, "scripts/write-package-dist-inventory.ts");
-const loaderUrl = pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href;
+const writerUrl = resolveRuntimeWorkerUrl(scriptProcessEntrypoints.packageDistInventory);
+const writerPath = fileURLToPath(writerUrl);
+const writerRoot = path.resolve(path.dirname(writerPath), "..");
 
 function withPackageFixture(run: (packageRoot: string) => void) {
   withTempDirSync({ prefix: "openclaw-path-alias-inventory-" }, (packageRoot) => {
@@ -22,18 +30,22 @@ function withPackageFixture(run: (packageRoot: string) => void) {
 }
 
 function runNode(packageRoot: string, args: string[]) {
-  const result = spawnSync(process.execPath, ["--import", loaderUrl, ...args], {
-    cwd: packageRoot,
-    encoding: "utf8",
-    timeout: 30_000,
-    env: {
-      ...process.env,
-      // The tiny cwd fixture still uses the real source closure's workspace aliases.
-      TSX_TSCONFIG_PATH: path.join(repoRoot, "tsconfig.json"),
-      TSX_DISABLE_CACHE: "1",
-      pm_exec_path: writerPath,
+  const result = spawnSync(
+    process.execPath,
+    [...resolveRuntimeWorkerArgv(writerUrl).slice(0, -1), ...args],
+    {
+      cwd: packageRoot,
+      encoding: "utf8",
+      timeout: 30_000,
+      env: {
+        ...process.env,
+        // Source fallback resolves workspace aliases independently of the fixture cwd.
+        TSX_TSCONFIG_PATH: path.join(repoRoot, "tsconfig.json"),
+        TSX_DISABLE_CACHE: "1",
+        pm_exec_path: writerPath,
+      },
     },
-  });
+  );
   expect(result.error).toBeUndefined();
   expect(result.status, result.stderr).toBe(0);
 }
@@ -44,8 +56,8 @@ describe("write-package-dist-inventory direct entry", () => {
       let scriptPath = writerPath;
       if (entry === "directory alias") {
         const sourceAlias = path.join(packageRoot, "source-alias");
-        fs.symlinkSync(repoRoot, sourceAlias, process.platform === "win32" ? "junction" : "dir");
-        scriptPath = path.join(sourceAlias, "scripts/write-package-dist-inventory.ts");
+        fs.symlinkSync(writerRoot, sourceAlias, process.platform === "win32" ? "junction" : "dir");
+        scriptPath = path.join(sourceAlias, "scripts", path.basename(writerPath));
       }
 
       runNode(packageRoot, [scriptPath]);
@@ -54,12 +66,16 @@ describe("write-package-dist-inventory direct entry", () => {
         JSON.parse(
           fs.readFileSync(path.join(packageRoot, PACKAGE_DIST_INVENTORY_RELATIVE_PATH), "utf8"),
         ),
-      ).toEqual(["dist/entry.js"]);
+      ).toEqual(["dist/entry.js", PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH]);
       expect(
         fs.readFileSync(path.join(packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH), "utf8"),
       ).toBe("pending\n");
-      expect(fs.readdirSync(path.join(packageRoot, "dist")).sort()).toEqual(
-        ["entry.js", path.basename(PACKAGE_DIST_INVENTORY_RELATIVE_PATH)].sort(),
+      expect(fs.readdirSync(path.join(packageRoot, "dist")).toSorted()).toEqual(
+        [
+          "entry.js",
+          path.basename(PACKAGE_DIST_INVENTORY_RELATIVE_PATH),
+          path.basename(PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH),
+        ].toSorted(),
       );
     });
   });

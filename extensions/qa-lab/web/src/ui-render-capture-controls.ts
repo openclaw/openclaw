@@ -2,6 +2,24 @@ import type { CaptureViewModel } from "./ui-render-capture-model.js";
 import { esc } from "./ui-render-utils.js";
 import type { CaptureQueryPreset } from "./ui-types.js";
 
+function renderCaptureFilter(
+  label: string,
+  id: string,
+  values: string[],
+  selected: string[],
+): string {
+  return `<label>${label}
+      <select id="capture-${id}-filter" multiple size="${Math.min(6, Math.max(3, values.length || 3))}">
+        ${values
+          .map(
+            (value) =>
+              `<option value="${esc(value)}"${selected.includes(value) ? " selected" : ""}>${esc(value)}</option>`,
+          )
+          .join("")}
+      </select>
+    </label>`;
+}
+
 export function renderCaptureControls(model: CaptureViewModel): string {
   const {
     state,
@@ -158,42 +176,9 @@ export function renderCaptureControls(model: CaptureViewModel): string {
           .join("")}
       </select>
     </label>
-    <label>Kind
-      <select id="capture-kind-filter" multiple size="${Math.min(6, Math.max(3, availableKinds.length || 3))}">
-        ${availableKinds
-          .map(
-            (kind) =>
-              `<option value="${esc(kind)}"${
-                state.captureKindFilter.includes(kind) ? " selected" : ""
-              }>${esc(kind)}</option>`,
-          )
-          .join("")}
-      </select>
-    </label>
-    <label>Provider
-      <select id="capture-provider-filter" multiple size="${Math.min(6, Math.max(3, availableProviders.length || 3))}">
-        ${availableProviders
-          .map(
-            (provider) =>
-              `<option value="${esc(provider)}"${
-                state.captureProviderFilter.includes(provider) ? " selected" : ""
-              }>${esc(provider)}</option>`,
-          )
-          .join("")}
-      </select>
-    </label>
-    <label>Host
-      <select id="capture-host-filter" multiple size="${Math.min(6, Math.max(3, availableHosts.length || 3))}">
-        ${availableHosts
-          .map(
-            (host) =>
-              `<option value="${esc(host)}"${
-                state.captureHostFilter.includes(host) ? " selected" : ""
-              }>${esc(host)}</option>`,
-          )
-          .join("")}
-      </select>
-    </label>
+    ${renderCaptureFilter("Kind", "kind", availableKinds, state.captureKindFilter)}
+    ${renderCaptureFilter("Provider", "provider", availableProviders, state.captureProviderFilter)}
+    ${renderCaptureFilter("Host", "host", availableHosts, state.captureHostFilter)}
     <label>View
       <select id="capture-view-mode">
         <option value="list"${state.captureViewMode === "list" ? " selected" : ""}>list</option>

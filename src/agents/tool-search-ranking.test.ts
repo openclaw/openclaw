@@ -34,11 +34,11 @@ const CATALOG = [
   }),
 ];
 
-function runtime(): ToolSearchRuntime {
+function runtime(catalog = CATALOG): ToolSearchRuntime {
   const ctx = {
     catalogRef: {
       current: {
-        entries: CATALOG,
+        entries: catalog,
         counterScope: "scope-1",
         searchCount: 0,
         describeCount: 0,
@@ -258,6 +258,33 @@ describe("untrusted schemas", () => {
 });
 
 describe("ToolSearchRuntime.search", () => {
+  it.each(["listURL", "listUrl"])("prefers the exact catalog ID spelling for %s", async (name) => {
+    const search = runtime(
+      ["listURL", "listUrl"].map((toolName) =>
+        entry({
+          id: `mcp:accounting:${toolName}`,
+          name: toolName,
+          source: "mcp",
+          description: "Find overdue invoices",
+        }),
+      ),
+    );
+    expect(
+      (await search.search(`mcp:accounting:${name}`, { limit: 1 })).map((hit) => hit.id),
+    ).toEqual([`mcp:accounting:${name}`]);
+  });
+
+  it("preserves ranked exact-match order when the limit excludes other exact matches", async () => {
+    const search = runtime([
+      entry({ id: "z", name: "harvest", description: "Collect records" }),
+      entry({ id: "a", name: "harvest", description: "Collect records" }),
+      entry({ id: "m", name: "HARVEST", description: "Collect records" }),
+      entry({ name: "records", description: "harvest" }),
+    ]);
+
+    expect((await search.search("harvest", { limit: 2 })).map((hit) => hit.id)).toEqual(["a", "m"]);
+  });
+
   it.each([
     {
       query: "scheduling",

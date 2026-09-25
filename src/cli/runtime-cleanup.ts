@@ -3,31 +3,39 @@ import type { CliHarnessCleanup } from "./runtime-cleanup-scope.js";
 // Match Gateway's harness/MCP shutdown grace; local-provider TERM/KILL already
 // consumes at most two 2-second waits. Keep command teardown bounded independently.
 const DISPOSER_TIMEOUT_MS = 5_000;
-const pendingDisposers = new Map<symbol, string>();
+const pendingDisposers = new Map<symbol, { name: string; operation: Promise<void> }>();
 
 export function getPendingCliDisposers(): string[] {
-  return [...pendingDisposers.values()];
+  return [...pendingDisposers.values()].map(({ name }) => name);
+}
+
+/** Automatic process exit must join cleanup that outlived its reporting grace. */
+export async function waitForPendingCliDisposers(): Promise<void> {
+  while (pendingDisposers.size > 0) {
+    await Promise.allSettled([...pendingDisposers.values()].map(({ operation }) => operation));
+  }
 }
 
 export async function runCliDisposer(
   name: string,
   dispose: () => Promise<void>,
   runCleanup?: (dispose: () => Promise<void>) => Promise<void>,
+  timeoutMs = DISPOSER_TIMEOUT_MS,
 ): Promise<void> {
   const token = Symbol(name);
-  pendingDisposers.set(token, name);
   let timer: ReturnType<typeof setTimeout> | undefined;
   const operation = Promise.resolve()
     .then(() => (runCleanup ? runCleanup(dispose) : dispose()))
     .finally(() => pendingDisposers.delete(token));
+  pendingDisposers.set(token, { name, operation });
   try {
     await Promise.race([
       operation,
       new Promise<void>((resolve) => {
         timer = setTimeout(() => {
-          console.error(`CLI cleanup timed out: ${name} after ${DISPOSER_TIMEOUT_MS}ms`);
+          console.error(`CLI cleanup timed out: ${name} after ${timeoutMs}ms`);
           resolve();
-        }, DISPOSER_TIMEOUT_MS);
+        }, timeoutMs);
       }),
     ]);
   } catch {
@@ -100,6 +108,16 @@ export async function closeCliResources(cleanup?: CliHarnessCleanup): Promise<vo
           await import("../plugins/memory-runtime.js");
         await closeActiveMemorySearchManagersCore();
       }
+    },
+    "agent-databases": async () => {
+      const { hasOpenClawAgentDatabaseAsyncResources } =
+        await import("../state/openclaw-agent-db-resources.js");
+      if (!hasOpenClawAgentDatabaseAsyncResources()) {
+        return;
+      }
+      const { closeOpenClawAgentDatabasesAsync } =
+        await import("../state/openclaw-agent-db-lifecycle.js");
+      await closeOpenClawAgentDatabasesAsync();
     },
   };
   for (const [name, finalize] of Object.entries(finalizers)) {

@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { TerminalBackend } from "./backend.js";
 import { composeTerminalIntroBanner } from "./intro-banner.js";
 import { TerminalSessionManager } from "./session-manager.js";
@@ -374,10 +375,7 @@ describe("TerminalSessionManager", () => {
     const emit = vi.fn();
     const livePty = makeFakePty();
     const pendingPty = makeFakePty();
-    let releasePending: (() => void) | undefined;
-    const pendingGate = new Promise<void>((resolve) => {
-      releasePending = resolve;
-    });
+    const { promise: pendingGate, resolve: releasePending } = createDeferred();
     const manager = new TerminalSessionManager({
       emit,
       spawn: async (request) => {
@@ -470,10 +468,7 @@ describe("TerminalSessionManager", () => {
   ])("kills a pending open when its connection $label and disconnects", async ({ request }) => {
     const emit = vi.fn();
     const fake = makeFakePty();
-    let release: (() => void) | undefined;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
+    const { promise: gate, resolve: release } = createDeferred();
     const manager = new TerminalSessionManager({
       emit,
       spawn: async () => {
@@ -497,10 +492,7 @@ describe("TerminalSessionManager", () => {
 
   it("enforces the cap against concurrent opens racing on the async spawn", async () => {
     // Spawn resolves on a later tick so both opens await it before either registers.
-    let release: (() => void) | undefined;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
+    const { promise: gate, resolve: release } = createDeferred();
     const manager = new TerminalSessionManager({
       emit: vi.fn(),
       spawn: async () => {

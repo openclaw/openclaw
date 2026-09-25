@@ -232,7 +232,10 @@ export function buildPluginCapabilitySummary(params: {
   };
 }
 
-export type PluginCapabilityConsentReview = Omit<PluginsInspectResult, "ok" | "plugin"> & {
+export type PluginCapabilityConsentReview = Omit<
+  PluginsInspectResult,
+  "ok" | "plugin" | "components" | "catalog"
+> & {
   pluginId: string;
   name: string;
   version?: string;

@@ -83,12 +83,14 @@ describe("Ollama paired-node Gateway inference", () => {
           },
         });
 
+        const gatewayEntryArgs =
+          process.env.OPENCLAW_E2E_USE_PREBUILT_DIST === "1"
+            ? ["dist/entry.js"]
+            : ["--import", "tsx", "src/entry.ts"];
         gateway = spawn(
           process.execPath,
           [
-            "--import",
-            "tsx",
-            "src/entry.ts",
+            ...gatewayEntryArgs,
             "gateway",
             "--port",
             String(gatewayPort),

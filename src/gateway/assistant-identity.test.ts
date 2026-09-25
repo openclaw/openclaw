@@ -38,7 +38,7 @@ describe("resolveAssistantIdentity", () => {
     { name: "implicit main", cfg: {}, expected: "main" },
     { name: "sole agent", cfg: { agents: { entries: { research: {} } } }, expected: "research" },
     {
-      name: "first explicit roster entry, not the ambient system owner",
+      name: "recorded explicit default owner",
       cfg: {
         agents: {
           ownership: "explicit",
@@ -46,15 +46,28 @@ describe("resolveAssistantIdentity", () => {
           defaults: { systemAgent: { agentId: "research" } },
         },
       },
+      expected: "research",
+    },
+    {
+      name: "first entry for ownerless presentation",
+      cfg: { agents: { ownership: "explicit", entries: { ops: {}, research: {} } } },
       expected: "ops",
     },
     {
       name: "retained legacy owner",
       cfg: retainLegacyDefaultAgentId(
-        { agents: { ownership: "explicit", entries: { ops: {}, research: {} } } },
+        { agents: { entries: { ops: {}, research: {} } } },
         "research",
       ),
       expected: "research",
+    },
+    {
+      name: "first entry for undesignated explicit presentation despite provenance",
+      cfg: retainLegacyDefaultAgentId(
+        { agents: { ownership: "explicit", entries: { ops: {}, research: {} } } },
+        "research",
+      ),
+      expected: "ops",
     },
     {
       name: "normalized explicit selection",

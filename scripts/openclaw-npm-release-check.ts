@@ -112,6 +112,11 @@ function isNodeModulesPackageRoot(segments: string[], index: number): boolean {
 
 function pathContainsPackedTestCargo(packedPath: string): boolean {
   const normalizedPath = normalizePackedPath(packedPath);
+  // Root docs ship Markdown reference material; topic directories such as
+  // "test" are not runtime test cargo. Dependency fixtures remain disallowed.
+  if (normalizedPath.startsWith("docs/") && normalizedPath.endsWith(".md")) {
+    return false;
+  }
   if (PACKED_TEST_CARGO_FILE_RE.test(normalizedPath)) {
     return true;
   }

@@ -1,15 +1,23 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { pathToFileURL } from "node:url";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import {
+  cleanupOwnedKeychain,
+  createOwnedKeychain,
+  probeOwnedKeychain,
+} from "../../.github/actions/ios-signing-keychain/keychain.mjs";
 import { verifyAndroidReleaseSource } from "../../apps/android/scripts/build-release-artifacts.ts";
 import {
   mobileReleasePlanDigest,
   writeMobileReleaseIntent,
 } from "../../scripts/mobile-release-intent.mjs";
 import { applyMobileReleasePlan, planMobileRelease } from "../../scripts/mobile-release-version.ts";
-import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import { cleanupTempDirs, makeTempDir, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { runVitestShutdownCommand } from "../helpers/vitest-shutdown-command.js";
 
 const REPOSITORY = "openclaw/openclaw";
 const TARGET_REF = "release/2026.9.2-mobile";
@@ -17,6 +25,7 @@ const OTHER_SHA = "c".repeat(40);
 const RECEIPT_ARTIFACT_DIGEST = `sha256:${"d".repeat(64)}`;
 const INTENT_ARTIFACT_DIGEST = `sha256:${"e".repeat(64)}`;
 const BUILD_TIMESTAMP = "2026-09-02T06:00:00.000Z";
+const testNodeExecPath = resolveTestNodeExecPath();
 const RELEASE_PATHS = [
   "apps/mobile/version.json",
   "apps/android/version.json",
@@ -31,10 +40,15 @@ const TOOLING_FILES = [
   "scripts/lib/direct-run.mjs",
   "scripts/lib/ios-release-plan.ts",
   "scripts/lib/ios-version.ts",
+  "scripts/lib/mobile-changelog.ts",
   "scripts/lib/mobile-version.ts",
   "scripts/lib/release-version.mjs",
 ] as const;
 const tempRoots = useAutoCleanupTempDirTracker(afterEach);
+const repositoryTemplateRoots = useAutoCleanupTempDirTracker(afterAll);
+const repositoryTemplates = new Map<string, ReturnType<typeof createFixtureRepositories>>();
+const joinedObservationRoots: string[] = [];
+afterEach(() => cleanupTempDirs(joinedObservationRoots));
 
 type Platform = "ios" | "android";
 
@@ -109,6 +123,15 @@ function commit(repository: string, message: string): string {
 function emptyCommit(repository: string, message: string): string {
   git(repository, "commit", "--allow-empty", "-m", message);
   return git(repository, "rev-parse", "HEAD");
+}
+
+function extractKvmFunction(source: string): string {
+  const start = source.indexOf("verify_kvm_acceleration() {");
+  const end = source.indexOf('\n\ntest "$RUNNER_OS/$RUNNER_ARCH"', start);
+  if (start < 0 || end <= start) {
+    throw new Error("missing bounded KVM acceleration function");
+  }
+  return source.slice(start, end);
 }
 
 function writeBaseReleaseFiles(repository: string): void {
@@ -201,7 +224,7 @@ if (gitArgs[0] === "remote" && gitArgs[1] === "get-url") {
 if (gitArgs[0] === "fetch" && !${JSON.stringify(realFetch)}) {
   process.exit(0);
 }
-if (gitArgs[0] === "archive" && process.env.GIT_ARCHIVE_MODE) {
+if (gitArgs.includes("archive") && process.env.GIT_ARCHIVE_MODE) {
   const outputArgument = gitArgs.find((value) => value.startsWith("--output="));
   if (!outputArgument) {
     console.error("archive test mode requires disk-backed output");
@@ -222,6 +245,10 @@ if (gitArgs[0] === "archive" && process.env.GIT_ARCHIVE_MODE) {
   process.exit(76);
 }
 const result = spawnSync("/usr/bin/git", args, { stdio: "inherit" });
+if (result.status === 0 && gitArgs.includes("archive") && process.env.GIT_ARCHIVE_CAPTURE) {
+  const outputArgument = gitArgs.find((value) => value.startsWith("--output="));
+  fs.copyFileSync(outputArgument.slice("--output=".length), process.env.GIT_ARCHIVE_CAPTURE);
+}
 process.exit(result.status ?? 1);
 `,
     { mode: 0o755 },
@@ -439,22 +466,12 @@ if (endpoint.includes("/collaborators/")) {
   );
 }
 
-function createFixture(options: FixtureOptions = {}): Fixture {
+function createFixtureRepositories(root: string, options: FixtureOptions) {
   const platform = options.platform ?? "ios";
-  const root = tempRoots.make("openclaw-mobile-release-authority-");
   const source = path.join(root, "source");
   const trusted = path.join(root, "trusted");
   const workspace = path.join(root, "workspace");
-  const runnerTemp = path.join(root, "runner");
-  const stateDir = path.join(root, "state");
-  const binDir = path.join(root, "bin");
-  const outputPath = path.join(root, "output");
   fs.mkdirSync(source);
-  fs.mkdirSync(runnerTemp);
-  fs.mkdirSync(stateDir);
-  fs.mkdirSync(binDir);
-  fs.writeFileSync(outputPath, "");
-
   git(source, "init", "-b", "main");
   git(source, "config", "user.email", "ci@example.invalid");
   git(source, "config", "user.name", "Mobile Release Test");
@@ -520,6 +537,64 @@ function createFixture(options: FixtureOptions = {}): Fixture {
     workspace,
   );
   git(workspace, "checkout", "--detach", targetSha);
+
+  return { source, trusted, workspace, baseSha, targetSha };
+}
+
+function prepareFixtureRepositories(root: string, options: FixtureOptions) {
+  if (
+    options.mutateBase ||
+    options.beforeCandidate ||
+    options.buildCandidate ||
+    options.mutateCandidate
+  ) {
+    return createFixtureRepositories(root, options);
+  }
+  const key = JSON.stringify([
+    options.platform ?? "ios",
+    options.baseState ?? null,
+    options.emptyCandidate ?? false,
+    options.realFetch ?? false,
+  ]);
+  let template = repositoryTemplates.get(key);
+  if (!template) {
+    template = createFixtureRepositories(
+      repositoryTemplateRoots.make("openclaw-mobile-release-repositories-"),
+      options,
+    );
+    git(template.source, "repack", "-ad");
+    repositoryTemplates.set(key, template);
+  }
+  const source = path.join(root, "source");
+  const trusted = path.join(root, "trusted");
+  const workspace = path.join(root, "workspace");
+  // Ref, index, and object mutations stay private, including cold partial-clone faults.
+  const copyOptions = { recursive: true, mode: fs.constants.COPYFILE_FICLONE };
+  fs.cpSync(template.source, source, copyOptions);
+  fs.cpSync(template.trusted, trusted, copyOptions);
+  fs.cpSync(template.workspace, workspace, copyOptions);
+  for (const repository of [trusted, workspace]) {
+    git(repository, "remote", "set-url", "origin", source);
+  }
+  return { ...template, source, trusted, workspace };
+}
+
+function createFixture(options: FixtureOptions = {}): Fixture {
+  const platform = options.platform ?? "ios";
+  const root = tempRoots.make("openclaw-mobile-release-authority-");
+  const runnerTemp = path.join(root, "runner");
+  const stateDir = path.join(root, "state");
+  const binDir = path.join(root, "bin");
+  const outputPath = path.join(root, "output");
+  fs.mkdirSync(runnerTemp);
+  fs.mkdirSync(stateDir);
+  fs.mkdirSync(binDir);
+  fs.writeFileSync(outputPath, "");
+
+  const { source, trusted, workspace, baseSha, targetSha } = prepareFixtureRepositories(
+    root,
+    options,
+  );
 
   writeGitShim(binDir, options.realFetch === true);
   writeGhShim(binDir);
@@ -631,6 +706,12 @@ function advanceObservedMain(fixture: Fixture, fromSha: string, branch: string):
 
 function runAuthority(fixture: Fixture, phase: string, overrides: NodeJS.ProcessEnv = {}) {
   fs.writeFileSync(fixture.outputPath, "");
+  if (overrides.MOBILE_OPERATION === "inspect" && phase === "inspect") {
+    const candidatePath = path.join(fixture.trusted, ".ios-inspection-candidate");
+    if (!fs.existsSync(candidatePath)) {
+      fs.cpSync(fixture.workspace, candidatePath, { recursive: true });
+    }
+  }
   return spawnSync(process.execPath, ["--experimental-strip-types", fixture.scriptPath, phase], {
     encoding: "utf8",
     env: { ...fixture.env, ...overrides },
@@ -676,6 +757,94 @@ function archiveSpoolPath(fixture: Fixture): string {
     throw new Error("git archive did not use disk-backed output");
   }
   return output.slice("--output=".length);
+}
+
+function writeArchiveFixture(repository: string): void {
+  writeFile(repository, "unneeded/promised.txt", "unrelated promised blob\n");
+  for (const [file, prefix, pattern] of [
+    [".gitattributes", "root", "scripts/fixtures"],
+    ["scripts/.gitattributes", "nested", "fixtures"],
+  ] as const) {
+    writeFile(
+      repository,
+      file,
+      `${pattern}/${prefix}-ignored.txt export-ignore\n` +
+        `${pattern}/${prefix}-subst.txt export-subst\n` +
+        `${pattern}/${prefix}-crlf.txt text eol=crlf\n`,
+    );
+    writeFile(repository, `scripts/fixtures/${prefix}-ignored.txt`, `${prefix} ignored\n`);
+    writeFile(repository, `scripts/fixtures/${prefix}-subst.txt`, "$Format:%H %ct$\n");
+    writeFile(repository, `scripts/fixtures/${prefix}-crlf.txt`, "first\nsecond\n");
+  }
+  writeFile(repository, "scripts/fixtures/keep.txt", "required archive resource\n");
+  writeFile(repository, "scripts/fixtures/executable.sh", "#!/bin/sh\nexit 0\n");
+  fs.chmodSync(path.join(repository, "scripts/fixtures/executable.sh"), 0o755);
+  fs.symlinkSync("keep.txt", path.join(repository, "scripts/fixtures/keep-link"));
+}
+
+function useColdPartialClone(fixture: Fixture, missingPath?: string): void {
+  const previousTrusted = fixture.trusted;
+  const workflowSha = git(previousTrusted, "rev-parse", "HEAD");
+  const trusted = path.join(path.dirname(previousTrusted), "trusted-partial");
+  git(fixture.source, "config", "uploadpack.allowFilter", "true");
+  git(
+    path.dirname(trusted),
+    "clone",
+    "--filter=blob:none",
+    "--no-checkout",
+    pathToFileURL(fixture.source).href,
+    trusted,
+  );
+  git(trusted, "update-ref", "--no-deref", "HEAD", workflowSha);
+  git(trusted, "update-ref", "refs/remotes/origin/mobile-authority-target", fixture.targetSha);
+
+  // Populate only the authority inputs, never warming the unrelated promised blob
+  // through a full checkout or a preceding archive in this clone.
+  const blobs = new Set<string>();
+  for (const ref of new Set([fixture.baseSha, fixture.targetSha, workflowSha])) {
+    for (const entry of git(trusted, "ls-tree", "-r", ref).split("\n")) {
+      const [metadata, file] = entry.split("\t");
+      const blob = metadata?.split(" ")[2];
+      if (!blob || !file) {
+        throw new Error(`Malformed fixture tree entry: ${entry}`);
+      }
+      if (file !== "unneeded/promised.txt" && file !== missingPath) {
+        blobs.add(blob);
+      }
+    }
+  }
+  for (const blob of blobs) {
+    git(trusted, "cat-file", "blob", blob);
+  }
+  // The CLI needs these checked-out modules; archive contents still come only
+  // from Git objects. Keep HEAD independent of the receipt's Tooling SHA.
+  for (const file of [
+    ".github/actions/mobile-release-authority/authority.mjs",
+    "scripts/mobile-release-intent.mjs",
+  ]) {
+    writeFile(trusted, file, fs.readFileSync(path.join(previousTrusted, file), "utf8"));
+  }
+  fixture.trusted = trusted;
+  fixture.actionPath = path.join(trusted, ".github/actions/mobile-release-authority");
+  fixture.scriptPath = path.join(fixture.actionPath, "authority.mjs");
+  fixture.env.MOBILE_ACTION_PATH = fixture.actionPath;
+  fs.writeFileSync(fixture.gitLog, "");
+  expect(git(trusted, "config", "--get", "remote.origin.promisor")).toBe("true");
+  expect(git(trusted, "config", "--get", "remote.origin.partialclonefilter")).toBe("blob:none");
+}
+
+function hasLocalBlob(fixture: Fixture, file: string): boolean {
+  const oid = git(fixture.source, "rev-parse", `${fixture.baseSha}:${file}`);
+  const result = spawnSync(
+    "/usr/bin/git",
+    ["-C", fixture.trusted, "--no-lazy-fetch", "cat-file", "-e", oid],
+    {
+      encoding: "utf8",
+      env: { ...process.env, GIT_NO_LAZY_FETCH: "1" },
+    },
+  );
+  expect([0, 1], result.stderr).toContain(result.status);
+  return result.status === 0;
 }
 
 function resetState(fixture: Fixture): void {
@@ -752,8 +921,11 @@ function recordOverrides(fixture: Fixture, outputs: Record<string, string>): Nod
 function prepareRecoveryOverrides(
   fixture: Fixture,
   outputs: Record<string, string>,
+  mutate?: (repository: string) => void,
 ): NodeJS.ProcessEnv {
   git(fixture.source, "checkout", "-b", "trusted-main-after-upload", fixture.baseSha);
+  mutate?.(fixture.source);
+  git(fixture.source, "add", "-A");
   git(fixture.source, "commit", "--allow-empty", "-m", "advance trusted main after upload");
   const recoveryWorkflowSha = git(fixture.source, "rev-parse", "HEAD");
   git(fixture.trusted, "fetch", "origin", recoveryWorkflowSha);
@@ -780,6 +952,78 @@ function expectOnlyAttemptOneLifecycleReads(
 }
 
 describe("mobile release authority", () => {
+  it("validates inspection without publication receipts, intents, attestations, or ref writes", () => {
+    const fixture = createFixture();
+    const result = runAuthority(fixture, "inspect", { MOBILE_OPERATION: "inspect" });
+    expect(result.status, result.stderr).toBe(0);
+    expect(readOutputs(fixture.outputPath)).toEqual({
+      inspection_validated: "true",
+      ios_app_store_version: "2026.9.20",
+    });
+    expect(fs.existsSync(path.join(fixture.runnerTemp, "mobile-release-ref-ios"))).toBe(false);
+    expect(fs.existsSync(path.join(fixture.runnerTemp, "mobile-release-intent-ios"))).toBe(false);
+    expect(
+      readGhTrace(fixture.ghLog).every(
+        ({ args }) =>
+          args[0] === "api" && !args.includes("POST") && !args[1]?.includes("/artifacts"),
+      ),
+    ).toBe(true);
+  });
+
+  it.each([
+    [
+      "cancelled",
+      { GH_CURRENT_STATUSES: "in_progress,completed", GH_CURRENT_CONCLUSIONS: 'null,"cancelled"' },
+    ],
+    ["rerun", { GH_CURRENT_ATTEMPTS: "1,2" }],
+    ["revoked actor", { GH_PERMISSIONS: "write,read" }],
+    ["moved candidate", { GH_TARGET_REFS: OTHER_SHA }],
+    ["wrong tooling", { MOBILE_WORKFLOW_SHA: OTHER_SHA }],
+    ["recovery", { MOBILE_RECOVERY: "true" }],
+    ["foreign run", { MOBILE_AUTHORITY_RUN_ID: "999" }],
+  ])("rejects inspection with %s before returning credential admission", (_label, overrides) => {
+    const fixture = createFixture();
+    const result = runAuthority(fixture, "inspect", { MOBILE_OPERATION: "inspect", ...overrides });
+    expect(result.status).toBe(1);
+    expect(readOutputs(fixture.outputPath)).toEqual({});
+    expect(readGhTrace(fixture.ghLog).some(({ args }) => args.includes("POST"))).toBe(false);
+  });
+
+  it("rejects dirty trusted tooling during inspection before admission", () => {
+    const fixture = createFixture();
+    fs.appendFileSync(
+      path.join(fixture.trusted, "scripts/lib/ios-release-plan.ts"),
+      "\n// unexpected tooling mutation\n",
+    );
+    const result = runAuthority(fixture, "inspect", { MOBILE_OPERATION: "inspect" });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Trusted inspection tooling has tracked changes");
+    expect(readOutputs(fixture.outputPath)).toEqual({});
+    expect(readGhTrace(fixture.ghLog)).toEqual([]);
+  });
+
+  it("rejects dirty candidate data during inspection", () => {
+    const fixture = createFixture();
+    const candidatePath = path.join(fixture.trusted, ".ios-inspection-candidate");
+    fs.cpSync(fixture.workspace, candidatePath, { recursive: true });
+    fs.writeFileSync(path.join(candidatePath, "apps/ios/CHANGELOG.md"), "dirty\n");
+    const result = runAuthority(fixture, "inspect", { MOBILE_OPERATION: "inspect" });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("tracked changes");
+    expect(readOutputs(fixture.outputPath)).toEqual({});
+  });
+
+  it.each(["authorize", "revalidate", "validate-record", "record"])(
+    "inspection cannot enter %s",
+    (phase) => {
+      const fixture = createFixture();
+      const result = runAuthority(fixture, phase, { MOBILE_OPERATION: "inspect" });
+      expect(result.status).toBe(1);
+      expect(readOutputs(fixture.outputPath)).toEqual({});
+      expect(readGhTrace(fixture.ghLog)).toEqual([]);
+    },
+  );
+
   it("authorizes an exact five-file release candidate and emits an attested v2 receipt", () => {
     const fixture = createFixture();
     const outputs = authorize(fixture);
@@ -1019,6 +1263,142 @@ describe("mobile release authority", () => {
     expect(fs.existsSync(path.dirname(spool))).toBe(true);
     expect(fs.existsSync(spool)).toBe(false);
   });
+
+  it.each([
+    ["authorization", false, undefined],
+    ["recovery with different HEAD attributes", true, undefined],
+    ["authorization with a lazy required resource", false, "scripts/fixtures/keep.txt"],
+  ] as const)(
+    "preserves the complete cold partial-clone archive during %s without unrelated fetches",
+    (_label, recovery, missingPath) => {
+      const fixture = createFixture({ mutateBase: writeArchiveFixture });
+      let overrides: NodeJS.ProcessEnv = {};
+      if (recovery) {
+        const outputs = authorize(fixture);
+        signIntentFile(fixture, outputs);
+        overrides = prepareRecoveryOverrides(fixture, outputs, (repository) => {
+          writeFile(
+            repository,
+            ".gitattributes",
+            "scripts/fixtures/root-subst.txt export-ignore\n",
+          );
+          writeFile(
+            repository,
+            "scripts/.gitattributes",
+            "fixtures/nested-subst.txt export-ignore\n",
+          );
+        });
+        resetState(fixture);
+      }
+      const expected = path.join(fixture.runnerTemp, "expected.tar");
+      git(
+        fixture.source,
+        "archive",
+        "--format=tar",
+        `--output=${expected}`,
+        fixture.baseSha,
+        "--",
+        "scripts",
+      );
+      useColdPartialClone(fixture, missingPath);
+      // Neither unstaged attributes nor an inherited attribute source may replace
+      // the selected immutable Tooling SHA, including record-only recovery.
+      writeFile(fixture.trusted, ".gitattributes", "scripts export-ignore\n");
+      writeFile(fixture.trusted, "scripts/.gitattributes", "* export-ignore\n");
+      const head = git(fixture.trusted, "rev-parse", "HEAD");
+      expect(head === fixture.baseSha).toBe(!recovery);
+      expect(hasLocalBlob(fixture, "unneeded/promised.txt")).toBe(false);
+      if (missingPath) {
+        expect(hasLocalBlob(fixture, missingPath)).toBe(false);
+      }
+      const captured = path.join(fixture.runnerTemp, "actual.tar");
+      const trace = path.join(fixture.runnerTemp, "archive-events.jsonl");
+      const result = runAuthority(fixture, recovery ? "validate-record" : "authorize", {
+        ...overrides,
+        GIT_ARCHIVE_CAPTURE: captured,
+        GIT_ATTR_SOURCE: head,
+        GIT_NO_LAZY_FETCH: undefined,
+        GIT_TRACE2_EVENT: trace,
+      });
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(fs.readFileSync(captured).equals(fs.readFileSync(expected))).toBe(true);
+      expect(hasLocalBlob(fixture, "unneeded/promised.txt")).toBe(false);
+      const fetches = fs
+        .readFileSync(trace, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { event: string; argv?: string[] })
+        .filter((event) => event.event === "child_start" && event.argv?.includes("fetch"));
+      expect(fetches).toHaveLength(missingPath ? 1 : 0);
+      if (missingPath) {
+        expect(hasLocalBlob(fixture, missingPath)).toBe(true);
+      }
+      const spool = archiveSpoolPath(fixture);
+      expect(fs.existsSync(spool)).toBe(false);
+      const extracted = path.dirname(spool);
+      for (const prefix of ["root", "nested"]) {
+        expect(fs.existsSync(path.join(extracted, `scripts/fixtures/${prefix}-ignored.txt`))).toBe(
+          false,
+        );
+        expect(
+          fs.readFileSync(path.join(extracted, `scripts/fixtures/${prefix}-subst.txt`), "utf8"),
+        ).toBe(
+          `${fixture.baseSha} ${git(fixture.source, "show", "-s", "--format=%ct", fixture.baseSha)}\n`,
+        );
+        expect(
+          fs.readFileSync(path.join(extracted, `scripts/fixtures/${prefix}-crlf.txt`), "utf8"),
+        ).toBe("first\r\nsecond\r\n");
+      }
+      expect(fs.readFileSync(path.join(extracted, "scripts/fixtures/keep.txt"), "utf8")).toBe(
+        "required archive resource\n",
+      );
+      expect(fs.statSync(path.join(extracted, "scripts/fixtures/executable.sh")).mode & 0o111).toBe(
+        0o111,
+      );
+      expect(fs.readlinkSync(path.join(extracted, "scripts/fixtures/keep-link"))).toBe("keep.txt");
+      const commitId = spawnSync("/usr/bin/git", ["get-tar-commit-id"], {
+        encoding: "utf8",
+        input: fs.readFileSync(captured),
+      });
+      expect(commitId.status, commitId.stderr).toBe(0);
+      expect(commitId.stdout.trim()).toBe(fixture.baseSha);
+    },
+  );
+
+  it.each([".gitattributes", "scripts/.gitattributes", "scripts/fixtures/keep.txt"])(
+    "refuses an incomplete scripts export when promised %s is unavailable",
+    (missingPath) => {
+      const fixture = createFixture({ mutateBase: writeArchiveFixture });
+      useColdPartialClone(fixture, missingPath);
+      expect(hasLocalBlob(fixture, missingPath)).toBe(false);
+      expect(hasLocalBlob(fixture, "unneeded/promised.txt")).toBe(false);
+      git(
+        fixture.trusted,
+        "remote",
+        "set-url",
+        "origin",
+        path.join(fixture.runnerTemp, "absent-origin"),
+      );
+      const captured = path.join(fixture.runnerTemp, "incomplete.tar");
+
+      const result = runAuthority(fixture, "authorize", {
+        GIT_ARCHIVE_CAPTURE: captured,
+        GIT_NO_LAZY_FETCH: undefined,
+      });
+
+      expect(result.status).toBe(1);
+      const oid = git(fixture.source, "rev-parse", `${fixture.baseSha}:${missingPath}`);
+      expect(result.stderr).toContain(`could not fetch ${oid} from promisor remote`);
+      expect(fs.readFileSync(fixture.outputPath, "utf8")).toBe("");
+      expect(fs.existsSync(path.join(fixture.runnerTemp, "mobile-release-ref-ios"))).toBe(false);
+      expect(fs.existsSync(captured)).toBe(false);
+      const spool = archiveSpoolPath(fixture);
+      expect(fs.existsSync(spool)).toBe(false);
+      expect(fs.existsSync(path.join(path.dirname(spool), "scripts"))).toBe(false);
+      expect(hasLocalBlob(fixture, "unneeded/promised.txt")).toBe(false);
+    },
+  );
 
   it.each([
     ["partial Git archive", "partial-failure"],
@@ -1589,6 +1969,26 @@ describe("mobile release authority", () => {
     expect(fs.existsSync(path.join(fixture.stateDir, "release-ref"))).toBe(false);
   });
 
+  it("record-only rejects a missing original intent before token or ref writing", () => {
+    const fixture = createFixture();
+    const outputs = authorize(fixture);
+    const recovery = prepareRecoveryOverrides(fixture, outputs);
+    resetState(fixture);
+    const result = runAuthority(fixture, "resolve-artifacts", {
+      ...recovery,
+      MOBILE_INTENT_ARTIFACT_DIGEST: "",
+      MOBILE_INTENT_ARTIFACT_ID: "",
+      MOBILE_INTENT_ARTIFACT_NAME: "",
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "Expected exactly one unexpired mobile-release-intent-ios-123-1 artifact",
+    );
+    expect(readOutputs(fixture.outputPath)).toEqual({});
+    expect(fs.existsSync(path.join(fixture.runnerTemp, "mobile-release-intent-ios"))).toBe(false);
+    expect(readGhTrace(fixture.ghLog).some(({ args }) => args.includes("POST"))).toBe(false);
+  });
+
   it("records exact iOS and Android intents and handles an identical create race idempotently", () => {
     for (const platform of ["ios", "android"] as const) {
       const fixture = createFixture({ platform });
@@ -1749,7 +2149,7 @@ describe("mobile release authority", () => {
     expect(source).not.toContain("extraheader");
   });
 
-  it("keeps the Android emulator diagnostic manual, exact-SHA-bound, and secretless", () => {
+  it("keeps the Android emulator diagnostic manual, exact-SHA-bound, and secretless", async () => {
     const file = ".github/workflows/android-emulator-diagnostic.yml";
     const source = fs.readFileSync(file, "utf8");
     const workflow = parse(source) as {
@@ -1796,6 +2196,7 @@ describe("mobile release authority", () => {
         };
       };
       permissions: Record<string, string>;
+      "run-name": string;
     };
     const validationJob = workflow.jobs["validate-target"];
     const validationSteps = validationJob.steps;
@@ -1821,6 +2222,10 @@ describe("mobile release authority", () => {
       (step) => step.name === "Checkout trusted Android tooling",
     );
     const setupIndex = steps.findIndex((step) => step.name === "Setup Android toolchain");
+    const toolingIndex = steps.findIndex(
+      (step) => step.name === "Prepare trusted Linux Android tooling",
+    );
+    const kvmIndex = steps.findIndex((step) => step.name === "Verify Linux KVM acceleration");
     const diagnosticIndex = steps.findIndex(
       (step) => step.name === "Run phone emulator diagnostic",
     );
@@ -1829,6 +2234,9 @@ describe("mobile release authority", () => {
     );
 
     expect(workflow.name).toBe("Android Emulator Diagnostic");
+    expect(workflow["run-name"]).toBe(
+      "Android emulator diagnostic instrumented (${{ inputs.target_sha }})",
+    );
     expect(Object.keys(workflow.on)).toEqual(["workflow_dispatch"]);
     expect(workflow.on.workflow_dispatch.inputs.target_sha).toEqual({
       description: "Exact lowercase 40-character commit SHA to diagnose",
@@ -1842,7 +2250,7 @@ describe("mobile release authority", () => {
     expect(validationJob["timeout-minutes"]).toBe(5);
     expect(job.permissions).toEqual({ contents: "read" });
     expect(job.needs).toBe("validate-target");
-    expect(job["runs-on"]).toBe("macos-26-intel");
+    expect(job["runs-on"]).toBe("ubuntu-24.04");
     expect(job["timeout-minutes"]).toBe(25);
     expect(job.env).toEqual({
       ANDROID_SCREENSHOT_EMULATOR_TIMEOUT_SECONDS: "180",
@@ -1859,7 +2267,9 @@ describe("mobile release authority", () => {
     expect(initializeIndex).toBe(0);
     expect(trustedCheckoutIndex).toBe(initializeIndex + 1);
     expect(setupIndex).toBe(trustedCheckoutIndex + 1);
-    expect(diagnosticIndex).toBe(setupIndex + 1);
+    expect(toolingIndex).toBe(setupIndex + 1);
+    expect(kvmIndex).toBe(toolingIndex + 1);
+    expect(diagnosticIndex).toBe(kvmIndex + 1);
     expect(artifactIndex).toBe(diagnosticIndex + 1);
     expect(validationSteps[validateIndex]?.env).toEqual({
       TARGET_SHA: "${{ inputs.target_sha }}",
@@ -1876,6 +2286,16 @@ describe("mobile release authority", () => {
     expect(steps[initializeIndex]?.run).toContain(
       'echo "DIAGNOSTIC_DIR=$DIAGNOSTIC_DIR" >>"$GITHUB_ENV"',
     );
+    expect(steps[initializeIndex]?.run).toContain(
+      "printf 'host_cpu=%s\\n' \"$(awk -F: '/^model name/",
+    );
+    expect(steps[initializeIndex]?.run).toContain(
+      "printf 'host_logical_cpus=%s\\n' \"$(getconf _NPROCESSORS_ONLN)\"",
+    );
+    expect(steps[initializeIndex]?.run).toContain(
+      "printf 'host_memory_bytes=%s\\n' \"$(awk '/^MemTotal:/",
+    );
+    expect(steps[initializeIndex]?.run).toContain("cat /etc/os-release");
     expect(validationSteps[validationTrustedCheckoutIndex]).toMatchObject({
       uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
       with: {
@@ -1907,7 +2327,8 @@ describe("mobile release authority", () => {
         ref: "${{ github.workflow_sha }}",
         "fetch-depth": 1,
         "persist-credentials": false,
-        "sparse-checkout": ".github/actions/setup-android-toolchain",
+        "sparse-checkout":
+          ".github/actions/setup-android-toolchain\nscripts/android-sips-linux.sh\n",
         path: ".mobile-release-tooling",
       },
     });
@@ -1919,6 +2340,115 @@ describe("mobile release authority", () => {
       },
     });
     expect(JSON.stringify(steps)).not.toContain("candidate/");
+
+    const tooling = steps[toolingIndex]?.run ?? "";
+    expect(tooling).toContain('apt_source="/etc/apt/sources.list.d/ubuntu.sources"');
+    expect(tooling).toContain(
+      'apt_source_parts="$RUNNER_TEMP/openclaw-android-apt-sourceparts-disabled"',
+    );
+    expect(tooling).toContain('test -s "$apt_source"');
+    expect(tooling).toContain('[[ -e "$apt_source_parts" || -L "$apt_source_parts" ]]');
+    expect(tooling).toContain('/usr/bin/apt-get "${apt_options[@]}" update');
+    expect(tooling).toMatch(
+      /\/usr\/bin\/apt-get "\$\{apt_options\[@\]\}" install \\\n\s+-y --no-install-recommends acl imagemagick/u,
+    );
+    expect(tooling).toContain(
+      'test "$(git -C "$trusted_root" rev-parse HEAD)" = "$GITHUB_WORKFLOW_SHA"',
+    );
+    expect(tooling).toContain('adapter_path="scripts/android-sips-linux.sh"');
+    expect(tooling).toContain('git -C "$trusted_root" cat-file blob "$adapter_oid" >"$adapter"');
+    expect(tooling).toContain('cmp -s "$trusted_root/$adapter_path" "$adapter"');
+    expect(tooling).toContain('"$adapter" -s format jpeg -s formatOptions best');
+    expect(tooling).toContain("for dimensions in 1440x2560 454x454; do");
+    expect(tooling).toContain(
+      '"$smoke_dir/input-${dimensions}.png" --out "$smoke_dir/output-${dimensions}.jpg"',
+    );
+    expect(tooling).not.toContain("candidate/");
+
+    const kvm = steps[kvmIndex]?.run ?? "";
+    expect(kvm).toContain("verify_kvm_acceleration() {");
+    expect(kvm).toMatch(
+      /\/usr\/bin\/timeout --signal=TERM --kill-after=2s 15s \\\n\s+emulator -accel-check/u,
+    );
+    expect(kvm).not.toContain("--foreground");
+    expect(kvm).toContain("test -c /dev/kvm");
+    expect(kvm).toContain('/usr/bin/sudo /usr/bin/setfacl -m "u:${current_user}:rw" /dev/kvm');
+    expect(kvm).toContain(
+      '\'test -c "$KVM_DEVICE" && test -r "$KVM_DEVICE" && test -w "$KVM_DEVICE"\'',
+    );
+    expect(kvm).toContain("grep -Eiq '\\bKVM\\b.*\\b(available|usable)\\b'");
+    expect(kvm).not.toContain("chmod 666");
+    expect(kvm).not.toContain("-accel off");
+
+    const runKvmFixture = (emulatorSource: string, timeoutMode = "run") => {
+      const root = tempRoots.make("openclaw-android-kvm-");
+      const bin = path.join(root, "bin");
+      const output = path.join(root, "kvm.txt");
+      const sentinel = path.join(root, "sentinel");
+      fs.mkdirSync(bin);
+      const timeout = path.join(bin, "timeout");
+      fs.writeFileSync(
+        timeout,
+        [
+          "#!/bin/bash",
+          "set -euo pipefail",
+          'if [[ "${KVM_TIMEOUT_MODE:-run}" == "timeout" ]]; then exit 124; fi',
+          "shift 3",
+          'exec "$@"',
+          "",
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+      fs.writeFileSync(path.join(bin, "emulator"), emulatorSource, { mode: 0o755 });
+      const kvmFunction = extractKvmFunction(kvm).replace(
+        "/usr/bin/timeout",
+        '"$TEST_TIMEOUT_BIN"',
+      );
+      const result = spawnSync(
+        "/bin/bash",
+        [
+          "-c",
+          [
+            "set -euo pipefail",
+            kvmFunction,
+            'verify_kvm_acceleration "$KVM_OUTPUT"',
+            'printf "boot-or-signing\\n" >"$KVM_SENTINEL"',
+          ].join("\n"),
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            KVM_OUTPUT: output,
+            KVM_SENTINEL: sentinel,
+            KVM_TIMEOUT_MODE: timeoutMode,
+            PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+            TEST_TIMEOUT_BIN: timeout,
+          },
+          timeout: 5_000,
+        },
+      );
+      return { output: fs.readFileSync(output, "utf8"), result, sentinel };
+    };
+
+    const usableKvm = runKvmFixture(
+      "#!/bin/bash\nprintf 'KVM (version 12) is installed and usable.\\n'\n",
+    );
+    expect(usableKvm.result.status, usableKvm.result.stderr).toBe(0);
+    expect(fs.readFileSync(usableKvm.sentinel, "utf8")).toBe("boot-or-signing\n");
+
+    const unavailableKvm = runKvmFixture(
+      "#!/bin/bash\nprintf 'acceleration unavailable\\n'\nexit 7\n",
+    );
+    expect(unavailableKvm.result.status).not.toBe(0);
+    expect(unavailableKvm.output).toContain("exit_status=7");
+    expect(fs.existsSync(unavailableKvm.sentinel)).toBe(false);
+
+    const timedOutKvm = runKvmFixture("#!/bin/bash\nexit 99\n", "timeout");
+    expect(timedOutKvm.result.status).not.toBe(0);
+    expect(timedOutKvm.output).toContain("exit_status=124");
+    expect(timedOutKvm.output).toContain("timed_out=true");
+    expect(fs.existsSync(timedOutKvm.sentinel)).toBe(false);
 
     const parityScript = validationSteps[parityIndex]?.run ?? "";
     expect(parityScript).toContain("git -C .mobile-release-tooling ls-tree");
@@ -1988,8 +2518,497 @@ describe("mobile release authority", () => {
       'printf \'no\\n\' | avdmanager create avd --force --name "$AVD_NAME" --package "$SYSTEM_IMAGE" --device "$DEVICE_PROFILE"',
     );
     expect(diagnostic).toContain(
-      'emulator_args=(-avd "$AVD_NAME" -no-window -no-audio -no-boot-anim)',
+      'emulator_args=(-avd "$AVD_NAME" -no-window -no-audio -no-boot-anim -verbose -show-kernel)',
     );
+    expect(diagnostic).toContain("capture_accel_check() {");
+    expect(diagnostic).toContain("accel_check_timeout_seconds=10");
+    expect(diagnostic).toContain('emulator -accel-check >"$accel_raw" 2>&1 &');
+    expect(diagnostic).toContain(
+      'head -c 16384 "$accel_raw" >"$DIAGNOSTIC_DIR/emulator-accel-check.txt"',
+    );
+    expect(diagnostic).toContain(
+      'printf \'exit_status=%s\\n\' "$accel_status" >>"$DIAGNOSTIC_DIR/emulator-accel-check.txt"',
+    );
+    expect(diagnostic).toContain(
+      'printf \'timed_out=%s\\n\' "$accel_timed_out" >>"$DIAGNOSTIC_DIR/emulator-accel-check.txt"',
+    );
+    expect(diagnostic).toContain("sample_owned_qemu() {");
+    expect(diagnostic).toContain(
+      'printf \'\\n[%s] owned_emulator_pid=%s\\n\' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$emulator_pid"',
+    );
+    expect(diagnostic).toContain(
+      'ps -p "$emulator_pid" -o pid=,ppid=,%cpu=,rss=,stat=,etime=,command=',
+    );
+    expect(diagnostic).toContain('>>"$DIAGNOSTIC_DIR/owned-qemu-samples.log" 2>&1');
+    expect(diagnostic.match(/\bsample_owned_qemu\b/gu)).toHaveLength(5);
+
+    const accelFunctionStart = diagnostic.indexOf("capture_accel_check() {");
+    const accelFunctionEnd = diagnostic.indexOf("\n\nsample_owned_qemu()", accelFunctionStart);
+    expect(accelFunctionStart).toBeGreaterThanOrEqual(0);
+    expect(accelFunctionEnd).toBeGreaterThan(accelFunctionStart);
+    const accelFunction = diagnostic
+      .slice(accelFunctionStart, accelFunctionEnd)
+      .replace("accel_check_timeout_seconds=10", "accel_check_timeout_seconds=3");
+    const runAccelCheck = (emulatorSource: string) => {
+      const root = tempRoots.make("openclaw-android-emulator-accel-check-");
+      const bin = path.join(root, "bin");
+      const diagnosticDir = path.join(root, "diagnostic");
+      fs.mkdirSync(bin);
+      fs.mkdirSync(diagnosticDir);
+      fs.writeFileSync(path.join(bin, "emulator"), emulatorSource, { mode: 0o755 });
+      const result = spawnSync(
+        "/bin/bash",
+        ["-c", `set -euo pipefail\n${accelFunction}\ncapture_accel_check\n`],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            DIAGNOSTIC_DIR: diagnosticDir,
+            PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+          },
+          timeout: 7_000,
+        },
+      );
+      return {
+        output: fs.readFileSync(path.join(diagnosticDir, "emulator-accel-check.txt"), "utf8"),
+        result,
+      };
+    };
+
+    const nonzeroAccel = runAccelCheck("#!/bin/bash\nprintf 'unavailable\\n'\nexit 7\n");
+    expect(nonzeroAccel.result.status, nonzeroAccel.result.stderr).toBe(0);
+    expect(nonzeroAccel.output).toContain("unavailable");
+    expect(nonzeroAccel.output).toContain("exit_status=7");
+    expect(nonzeroAccel.output).toContain("timed_out=false");
+
+    const timedOutAccel = runAccelCheck("#!/bin/bash\nexec sleep 30\n");
+    expect(timedOutAccel.result.status, timedOutAccel.result.stderr).toBe(0);
+    expect(timedOutAccel.output).toContain("exit_status=124");
+    expect(timedOutAccel.output).toContain("timed_out=true");
+
+    expect(diagnostic).toContain("observe_after_readiness_timeout() {");
+    expect(diagnostic).toContain("final_cold_boot_observation_seconds=900");
+    expect(diagnostic).toContain("probe_timeout_seconds=5");
+    expect(diagnostic).toContain("final_snapshot_lead_seconds=15");
+    expect(diagnostic).toContain("snapshot_properties_max_bytes=65536");
+    expect(diagnostic).toContain("snapshot_logcat_max_bytes=262144");
+    expect(diagnostic).toContain("capture_cold_boot_snapshot() {");
+    expect(diagnostic).toContain(
+      "emulator_observation_deadline=$((emulator_launch_seconds + final_cold_boot_observation_seconds))",
+    );
+    expect(diagnostic).not.toContain("post_deadline_observation_seconds");
+    expect(diagnostic).toContain("fail_after_readiness_timeout() {");
+    const observationFunctionStart = diagnostic.indexOf("run_bounded_probe() {");
+    const observationFunctionEnd = diagnostic.indexOf(
+      "\n\nfail_after_readiness_timeout()",
+      observationFunctionStart,
+    );
+    const failureFunctionEnd = diagnostic.indexOf("\n\ncleanup()", observationFunctionEnd);
+    expect(observationFunctionStart).toBeGreaterThanOrEqual(0);
+    expect(observationFunctionEnd).toBeGreaterThan(observationFunctionStart);
+    expect(failureFunctionEnd).toBeGreaterThan(observationFunctionEnd);
+    const observationFunctions = diagnostic
+      .slice(observationFunctionStart, failureFunctionEnd)
+      .replace("observation_poll_seconds=2", "observation_poll_seconds=1")
+      .replace("final_snapshot_lead_seconds=15", "final_snapshot_lead_seconds=4")
+      .replace("snapshot_properties_max_bytes=65536", "snapshot_properties_max_bytes=64")
+      .replace("snapshot_logcat_max_bytes=262144", "snapshot_logcat_max_bytes=128");
+    const runPostDeadlineObservation = async (
+      adbSource: string,
+      options: {
+        deadlineSeconds?: number;
+        functions?: string;
+        initialSerial?: string;
+        preObservationDelaySeconds?: number;
+      } = {},
+    ) => {
+      const root = makeTempDir([], "openclaw-android-emulator-post-deadline-");
+      const bin = path.join(root, "bin");
+      const diagnosticDir = path.join(root, "diagnostic");
+      const clockPath = path.join(root, "observation-clock.txt");
+      const deadlineSeconds = options.deadlineSeconds ?? 12;
+      const functions = options.functions ?? observationFunctions;
+      const preObservationDelaySeconds = options.preObservationDelaySeconds ?? 0;
+      fs.mkdirSync(bin);
+      fs.mkdirSync(diagnosticDir);
+      fs.writeFileSync(path.join(bin, "adb"), adbSource, { mode: 0o755 });
+      const startedAt = Date.now();
+      const result = await runVitestShutdownCommand({
+        bin: "/bin/bash",
+        args: [
+          "-c",
+          [
+            "set -euo pipefail",
+            // Observation waits use a clock; the timeout and cleanup probes below use real time.
+            "unset SECONDS",
+            "SECONDS=0",
+            "sleep() {",
+            '  if [[ -n "${probe_pid:-}" ]]; then',
+            // Join the short-lived adb fixture without racing its output or exit status.
+            '    wait "$probe_pid" 2>/dev/null || :',
+            "  else",
+            "    SECONDS=$((SECONDS + $1))",
+            "  fi",
+            "}",
+            `trap 'printf "%s\\n" "$SECONDS" >"$OBSERVATION_CLOCK_FILE"' EXIT`,
+            "sample_owned_qemu() { :; }",
+            functions,
+            "readiness_failure_latched=0",
+            "emulator_pid=$$",
+            "final_cold_boot_observation_seconds=900",
+            `emulator_observation_deadline=$((SECONDS + ${deadlineSeconds}))`,
+            'export AVD_NAME="OpenClaw_Screenshots_API36"',
+            `sleep ${preObservationDelaySeconds}`,
+            'fail_after_readiness_timeout "latched readiness failure" "${INITIAL_SERIAL:-}"',
+          ].join("\n"),
+        ],
+        env: {
+          ...process.env,
+          DIAGNOSTIC_DIR: diagnosticDir,
+          INITIAL_SERIAL: options.initialSerial ?? "",
+          OBSERVATION_CLOCK_FILE: clockPath,
+          PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+        },
+        timeoutMs: 20_000,
+        maxBytes: 1024 * 1024,
+      }).catch((error: unknown) => {
+        throw new Error(`Android observation failed; fixture retained at ${root}`, {
+          cause: error,
+        });
+      });
+      // A rejected managed join leaves this root outside automatic cleanup.
+      joinedObservationRoots.push(root);
+      const snapshotsRoot = path.join(diagnosticDir, "cold-boot-snapshots");
+      return {
+        durationMs: Date.now() - startedAt,
+        elapsedSeconds: Number(fs.readFileSync(clockPath, "utf8").trim()),
+        observations: fs.readFileSync(
+          path.join(diagnosticDir, "post-deadline-observations.log"),
+          "utf8",
+        ),
+        result: { ...result, status: result.code },
+        snapshots: fs.existsSync(snapshotsRoot) ? fs.readdirSync(snapshotsRoot).toSorted() : [],
+        snapshotsRoot,
+      };
+    };
+
+    const lateReady = await runPostDeadlineObservation(`#!/bin/bash
+set -euo pipefail
+if [[ "\${1:-}" == "devices" ]]; then
+  printf 'List of devices attached\\nemulator-5554\\tdevice product:sdk model:sdk\\n'
+elif [[ "\${1:-}" == "-s" && "\${3:-}" == "shell" ]]; then
+  printf '1\\n'
+elif [[ "\${1:-}" == "-s" && "\${3:-}" == "emu" ]]; then
+  printf '%s\\nOK\\n' "\${AVD_NAME:?}"
+fi
+`);
+    expect(lateReady.result.status).toBe(1);
+    expect(lateReady.result.stderr).toContain("::error::latched readiness failure");
+    expect(lateReady.observations).toContain("late_adb_online_at=");
+    expect(lateReady.observations).toContain("late_boot_completed_at=");
+    expect(lateReady.observations).toContain("observation_stop=late-boot-completed");
+    expect(lateReady.snapshots).toEqual(["first-online"]);
+    expect(
+      fs.readFileSync(
+        path.join(lateReady.snapshotsRoot, "first-online", "boot-properties.txt"),
+        "utf8",
+      ),
+    ).toContain("probe_exit_status=0");
+
+    const lateReadyNearCeilingFunctions = observationFunctions.replace(
+      "final_snapshot_lead_seconds=4",
+      "final_snapshot_lead_seconds=60",
+    );
+    const lateReadyNearCeiling = await runPostDeadlineObservation(
+      `#!/bin/bash
+set -euo pipefail
+if [[ "\${1:-}" == "devices" ]]; then
+  printf 'List of devices attached\\nemulator-5554\\tdevice product:sdk model:sdk\\n'
+elif [[ "\${1:-}" == "-s" && "\${3:-}" == "shell" ]]; then
+  printf '1\\n'
+elif [[ "\${1:-}" == "-s" && "\${3:-}" == "emu" ]]; then
+  printf '%s\\nOK\\n' "\${AVD_NAME:?}"
+fi
+`,
+      { functions: lateReadyNearCeilingFunctions },
+    );
+    expect(lateReadyNearCeiling.result.status).toBe(1);
+    expect(lateReadyNearCeiling.observations).toContain("late_boot_completed_at=");
+    expect(lateReadyNearCeiling.observations).toContain("observation_stop=late-boot-completed");
+    expect(lateReadyNearCeiling.snapshots).toEqual(["first-online"]);
+
+    const [failedBootProbeResult, boundedSnapshotsResult] = await Promise.allSettled([
+      runPostDeadlineObservation(
+        `#!/bin/bash
+set -euo pipefail
+if [[ "\${1:-}" == "devices" ]]; then
+  printf 'List of devices attached\\nemulator-5554\\tdevice product:sdk model:sdk\\n'
+elif [[ "\${1:-}" == "-s" && "\${3:-}" == "emu" ]]; then
+  printf '%s\\nOK\\n' "\${AVD_NAME:?}"
+elif [[ "\${1:-}" == "-s" && "\${3:-}" == "shell" && "\${5:-}" == "sys.boot_completed" ]]; then
+  exit 7
+elif [[ "\${1:-}" == "-s" && "\${3:-}" == "shell" ]]; then
+  printf '[init.svc.example]: [running]\\n'
+elif [[ "\${1:-}" == "-s" && "\${3:-}" == "logcat" ]]; then
+  printf 'system crash evidence line\\n'
+fi
+`,
+        { functions: lateReadyNearCeilingFunctions },
+      ),
+      runPostDeadlineObservation(`#!/bin/bash
+set -euo pipefail
+if [[ "\${1:-}" == "devices" ]]; then
+  printf 'List of devices attached\\nemulator-5554\\tdevice product:sdk model:sdk\\n'
+elif [[ "\${1:-}" == "-s" && "\${3:-}" == "emu" ]]; then
+  printf '%s\\nOK\\n' "\${AVD_NAME:?}"
+elif [[ "\${1:-}" == "-s" && "\${3:-}" == "shell" && "\${5:-}" == "sys.boot_completed" ]]; then
+  printf '\\n'
+elif [[ "\${1:-}" == "-s" && "\${3:-}" == "shell" ]]; then
+  for _ in {1..40}; do printf '[init.svc.example]: [running]\\n'; done
+elif [[ "\${1:-}" == "-s" && "\${3:-}" == "logcat" ]]; then
+  for _ in {1..40}; do printf 'system crash evidence line\\n'; done
+fi
+`),
+    ]);
+    if (
+      failedBootProbeResult.status === "rejected" &&
+      boundedSnapshotsResult.status === "rejected"
+    ) {
+      throw new AggregateError(
+        [failedBootProbeResult.reason, boundedSnapshotsResult.reason],
+        "Android observation scenarios failed",
+      );
+    }
+    if (failedBootProbeResult.status === "rejected") {
+      throw failedBootProbeResult.reason;
+    }
+    if (boundedSnapshotsResult.status === "rejected") {
+      throw boundedSnapshotsResult.reason;
+    }
+    const failedBootProbeNearCeiling = failedBootProbeResult.value;
+    const boundedSnapshots = boundedSnapshotsResult.value;
+    expect(failedBootProbeNearCeiling.result.status).toBe(1);
+    expect(failedBootProbeNearCeiling.elapsedSeconds).toBe(12);
+    expect(failedBootProbeNearCeiling.observations).toContain("boot_status=7");
+    expect(failedBootProbeNearCeiling.snapshots).toEqual(["first-online", "near-ceiling"]);
+
+    const unrelatedDevice = await runPostDeadlineObservation(`#!/bin/bash
+set -euo pipefail
+if [[ "\${1:-}" == "devices" ]]; then
+  printf 'List of devices attached\\nemulator-5554\\tdevice product:sdk model:sdk\\n'
+elif [[ "\${1:-}" == "-s" && "\${3:-}" == "emu" ]]; then
+  printf 'Another_AVD\\nOK\\n'
+elif [[ "\${1:-}" == "-s" && "\${3:-}" == "shell" ]]; then
+  printf '1\\n'
+fi
+`);
+    expect(unrelatedDevice.result.status).toBe(1);
+    expect(unrelatedDevice.observations).toContain("observation_stop=unexpected-avd");
+    expect(unrelatedDevice.observations).not.toContain("late_adb_online_at=");
+    expect(unrelatedDevice.observations).not.toContain("late_boot_completed_at=");
+    expect(unrelatedDevice.snapshots).toEqual([]);
+
+    const changedDevice = await runPostDeadlineObservation(
+      `#!/bin/bash
+set -euo pipefail
+if [[ "\${1:-}" == "devices" ]]; then
+  printf 'List of devices attached\\nemulator-5556\\tdevice product:sdk model:sdk\\n'
+fi
+`,
+      { initialSerial: "emulator-5554" },
+    );
+    expect(changedDevice.result.status).toBe(1);
+    expect(changedDevice.observations).toContain("observation_stop=unexpected-device-change");
+    expect(changedDevice.snapshots).toEqual([]);
+
+    const capped = await runPostDeadlineObservation(
+      `#!/bin/bash
+set -euo pipefail
+if [[ "\${1:-}" == "devices" ]]; then
+  printf 'List of devices attached\\n\\n'
+fi
+`,
+      { deadlineSeconds: 2 },
+    );
+    expect(capped.result.status).toBe(1);
+    expect(capped.elapsedSeconds).toBe(2);
+    expect(capped.result.stderr).toContain("::error::latched readiness failure");
+    expect(capped.observations).toContain("observation_cap_seconds=900");
+    expect(capped.observations).toContain("observation_stop=observation-cap-reached");
+
+    const absoluteCap = await runPostDeadlineObservation(
+      `#!/bin/bash
+set -euo pipefail
+if [[ "\${1:-}" == "devices" ]]; then
+  printf 'List of devices attached\\n\\n'
+fi
+`,
+      { deadlineSeconds: 3, preObservationDelaySeconds: 2 },
+    );
+    expect(absoluteCap.result.status).toBe(1);
+    expect(absoluteCap.elapsedSeconds).toBe(3);
+    expect(absoluteCap.durationMs).toBeLessThan(5_000);
+    expect(absoluteCap.observations).toContain("observation_stop=observation-cap-reached");
+
+    expect(boundedSnapshots.result.status).toBe(1);
+    expect(boundedSnapshots.elapsedSeconds).toBe(12);
+    expect(boundedSnapshots.observations).toContain("observation_stop=observation-cap-reached");
+    expect(boundedSnapshots.snapshots).toEqual(["first-online", "near-ceiling"]);
+    for (const snapshot of boundedSnapshots.snapshots) {
+      const properties = fs.readFileSync(
+        path.join(boundedSnapshots.snapshotsRoot, snapshot, "boot-properties.txt"),
+        "utf8",
+      );
+      const logcat = fs.readFileSync(
+        path.join(boundedSnapshots.snapshotsRoot, snapshot, "system-crash-logcat.txt"),
+        "utf8",
+      );
+      expect(properties).toContain("output_truncated=true");
+      expect(properties).toContain("retained_bytes=64");
+      expect(logcat).toContain("output_truncated=true");
+      expect(logcat).toContain("retained_bytes=128");
+    }
+
+    const probeFunctionEnd = observationFunctions.indexOf("\n\nobserve_after_readiness_timeout()");
+    expect(probeFunctionEnd).toBeGreaterThan(0);
+    const probeFunction = observationFunctions.slice(0, probeFunctionEnd);
+    const fastProbeStartedAt = Date.now();
+    const fastProbe = spawnSync(
+      "/bin/bash",
+      [
+        "-c",
+        [
+          "set -euo pipefail",
+          probeFunction,
+          'run_bounded_probe "$PROBE_OUTPUT" "$((SECONDS + 10))" /usr/bin/true',
+          'printf "status=%s timed_out=%s\\n" "$probe_status" "$probe_timed_out"',
+        ].join("\n"),
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          PROBE_OUTPUT: path.join(tempRoots.make("openclaw-android-probe-fast-"), "probe.txt"),
+        },
+        timeout: 2_000,
+      },
+    );
+    expect(fastProbe.status, fastProbe.stderr).toBe(0);
+    expect(fastProbe.stdout).toBe("status=0 timed_out=false\n");
+    expect(Date.now() - fastProbeStartedAt).toBeLessThan(2_000);
+
+    const probeTimeoutRoot = tempRoots.make("openclaw-android-probe-timeout-");
+    const probePidFile = path.join(probeTimeoutRoot, "probe.pid");
+    const probeTimeout = spawnSync(
+      "/bin/bash",
+      [
+        "-c",
+        [
+          "set -euo pipefail",
+          "unset SECONDS",
+          "SECONDS=0",
+          'mkfifo "$PROBE_READY_FILE"',
+          'exec 3<>"$PROBE_READY_FILE"',
+          // Expire only after the child has installed its TERM trap and recorded its PID.
+          "sleep() {",
+          "  read -r ready <&3",
+          '  [[ "$ready" == ready ]]',
+          "  SECONDS=1",
+          "}",
+          probeFunction,
+          'run_bounded_probe "$PROBE_OUTPUT" "$((SECONDS + 1))" /bin/bash -c ' +
+            '\'trap "" TERM; printf "%s\\n" "$$" >"$PROBE_PID_FILE"; printf "ready\\n" >&3; exec sleep 30\'',
+          'printf "status=%s timed_out=%s\\n" "$probe_status" "$probe_timed_out"',
+        ].join("\n"),
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          PROBE_OUTPUT: path.join(probeTimeoutRoot, "probe.txt"),
+          PROBE_PID_FILE: probePidFile,
+          PROBE_READY_FILE: path.join(probeTimeoutRoot, "probe.ready"),
+        },
+        timeout: 5_000,
+      },
+    );
+    expect(probeTimeout.status, probeTimeout.stderr).toBe(0);
+    expect(probeTimeout.stdout).toBe("status=124 timed_out=true\n");
+    const probePid = Number.parseInt(fs.readFileSync(probePidFile, "utf8").trim(), 10);
+    expect(() => process.kill(probePid, 0)).toThrow();
+
+    const cleanupFunctionStart = diagnostic.indexOf("cleanup() {");
+    const cleanupFunctionEnd = diagnostic.indexOf("\ntrap cleanup EXIT", cleanupFunctionStart);
+    expect(cleanupFunctionStart).toBeGreaterThan(failureFunctionEnd);
+    expect(cleanupFunctionEnd).toBeGreaterThan(cleanupFunctionStart);
+    const cleanupFunction = diagnostic.slice(cleanupFunctionStart, cleanupFunctionEnd);
+    const hangingRoot = tempRoots.make("openclaw-android-emulator-hanging-adb-");
+    const hangingBin = path.join(hangingRoot, "bin");
+    const hangingDiagnosticDir = path.join(hangingRoot, "diagnostic");
+    const adbPidFile = path.join(hangingRoot, "adb.pid");
+    const emulatorPidFile = path.join(hangingRoot, "emulator.pid");
+    fs.mkdirSync(hangingBin);
+    fs.mkdirSync(hangingDiagnosticDir);
+    fs.writeFileSync(
+      path.join(hangingBin, "adb"),
+      '#!/bin/bash\nset -euo pipefail\nprintf \'%s\\n\' "$$" >"$ADB_PID_FILE"\nexec sleep 30\n',
+      { mode: 0o755 },
+    );
+    fs.writeFileSync(
+      path.join(hangingBin, "avdmanager"),
+      "#!/bin/bash\nset -euo pipefail\nprintf 'cleanup\\n' >>\"$CLEANUP_TRACE\"\n",
+      { mode: 0o755 },
+    );
+    fs.writeFileSync(path.join(hangingBin, "ps"), "#!/bin/bash\nexit 0\n", { mode: 0o755 });
+    const hangingResult = spawnSync(
+      "/bin/bash",
+      [
+        "-c",
+        [
+          "set -euo pipefail",
+          "sample_owned_qemu() { :; }",
+          observationFunctions,
+          cleanupFunction,
+          "readiness_failure_latched=0",
+          "adb_started=1",
+          "final_cold_boot_observation_seconds=900",
+          "emulator_observation_deadline=$((SECONDS + 3))",
+          'export AVD_NAME="OpenClaw_Screenshots_API36"',
+          "sleep 30 &",
+          "emulator_pid=$!",
+          'printf "%s\\n" "$emulator_pid" >"$EMULATOR_PID_FILE"',
+          "trap cleanup EXIT",
+          'fail_after_readiness_timeout "latched readiness failure" ""',
+        ].join("\n"),
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          ADB_PID_FILE: adbPidFile,
+          CLEANUP_TRACE: path.join(hangingRoot, "cleanup.trace"),
+          DIAGNOSTIC_DIR: hangingDiagnosticDir,
+          EMULATOR_PID_FILE: emulatorPidFile,
+          PATH: `${hangingBin}${path.delimiter}${process.env.PATH ?? ""}`,
+        },
+        timeout: 10_000,
+      },
+    );
+    expect(hangingResult.status, hangingResult.stderr).toBe(1);
+    const hangingObservations = fs.readFileSync(
+      path.join(hangingDiagnosticDir, "post-deadline-observations.log"),
+      "utf8",
+    );
+    expect(hangingObservations).toContain("adb_timed_out=true");
+    expect(hangingObservations).toContain("observation_stop=observation-cap-reached");
+    expect(fs.readFileSync(path.join(hangingRoot, "cleanup.trace"), "utf8")).toBe("cleanup\n");
+    expect(fs.readFileSync(path.join(hangingDiagnosticDir, "cleanup.log"), "utf8")).toContain(
+      "adb_kill_server_skipped_after_latched_timeout=true",
+    );
+    for (const pidFile of [adbPidFile, emulatorPidFile]) {
+      const pid = Number.parseInt(fs.readFileSync(pidFile, "utf8").trim(), 10);
+      expect(() => process.kill(pid, 0)).toThrow();
+    }
     expect(diagnostic).toContain(
       "device_deadline=$((SECONDS + ANDROID_SCREENSHOT_EMULATOR_TIMEOUT_SECONDS))",
     );
@@ -2002,6 +3021,13 @@ describe("mobile release authority", () => {
     expect(diagnostic).toContain('ps -p "$emulator_pid"');
     expect(diagnostic).toContain('kill "$emulator_pid"');
     expect(diagnostic).toContain("adb kill-server");
+    expect(diagnostic).toContain("trap cleanup EXIT");
+    expect(diagnostic).toMatch(
+      /fail_after_readiness_timeout \\\n\s+"Timed out waiting for exactly one Android emulator device" ""/u,
+    );
+    expect(diagnostic).toMatch(
+      /fail_after_readiness_timeout \\\n\s+"Timed out waiting for Android emulator boot completion" "\$serial"/u,
+    );
     expect(steps[artifactIndex]).toMatchObject({
       if: "always()",
       uses: "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
@@ -2017,6 +3043,322 @@ describe("mobile release authority", () => {
     expect(source).not.toMatch(/apps-signing|MATCH_PASSWORD|GOOGLE_PLAY|upload-and-record/iu);
   });
 
+  it("generates two-axis varied-color Android conversion smoke inputs", () => {
+    const workflow = parse(
+      fs.readFileSync(".github/workflows/android-emulator-diagnostic.yml", "utf8"),
+    ) as {
+      jobs: Record<string, { steps?: Array<{ name: string; run?: string }> }>;
+    };
+    const tooling = Object.values(workflow.jobs)
+      .flatMap((job) => job.steps ?? [])
+      .find((step) => step.name === "Prepare trusted Linux Android tooling")?.run;
+
+    expect(tooling).toMatch(
+      /width="\$\{dimensions%x\*\}"\n\s+height="\$\{dimensions#\*x\}"\n\s+\/usr\/bin\/convert \\\n\s+\\\( -size "\$dimensions" 'gradient:#000000-#ff0000' \\\) \\\n\s+\\\( -size "\$\{height\}x\$\{width\}" 'gradient:#000000-#00ff00' -transpose \\\) \\\n\s+-compose plus -composite \\\n\s+-alpha set -channel A -evaluate set 60% \+channel/u,
+    );
+    expect(tooling).not.toContain("'xc:");
+    expect(tooling).toMatch(
+      /\/usr\/bin\/identify \+ping \\\n\s+-format 'format=%m width=%w height=%h colorspace=%\[colorspace\] type=%\[type\] channels=%\[channels\] quality=%Q\\n'/u,
+    );
+    expect(tooling).not.toContain("/usr/bin/identify -ping");
+  });
+
+  it("fully decodes Android JPEGs before enforcing true-color metadata", () => {
+    const adapter = fs.readFileSync("scripts/android-sips-linux.sh", "utf8");
+
+    expect(adapter).toContain(
+      "\"$identify_bin\" +ping -format '%m|%w|%h|%[colorspace]|%[type]|%[channels]|%Q'",
+    );
+    expect(adapter).not.toContain(
+      "\"$identify_bin\" -ping -format '%m|%w|%h|%[colorspace]|%[type]|%[channels]|%Q'",
+    );
+    expect(adapter).toContain('[[ "$output_type" == "TrueColor" ]]');
+  });
+
+  it("isolates Ubuntu APT sources before Android tooling setup", () => {
+    const workflowFiles = [
+      ".github/workflows/android-emulator-diagnostic.yml",
+      ".github/workflows/android-beta-release.yml",
+    ] as const;
+
+    const readToolingBody = (file: string): string => {
+      const workflow = parse(fs.readFileSync(file, "utf8")) as {
+        jobs: Record<string, { steps?: Array<{ name: string; run?: string }> }>;
+      };
+      const matches = Object.values(workflow.jobs)
+        .flatMap((job) => job.steps ?? [])
+        .filter((step) => step.name === "Prepare trusted Linux Android tooling");
+      if (matches.length !== 1 || !matches[0]?.run) {
+        throw new Error(`${file}: missing unique Linux Android tooling step`);
+      }
+      return matches[0].run;
+    };
+
+    const diagnosticTooling = readToolingBody(".github/workflows/android-emulator-diagnostic.yml");
+    expect(diagnosticTooling).toMatch(
+      /width="\$\{dimensions%x\*\}"\n\s+height="\$\{dimensions#\*x\}"\n\s+\/usr\/bin\/convert \\\n\s+\\\( -size "\$dimensions" 'gradient:#000000-#ff0000' \\\) \\\n\s+\\\( -size "\$\{height\}x\$\{width\}" 'gradient:#000000-#00ff00' -transpose \\\) \\\n\s+-compose plus -composite \\\n\s+-alpha set -channel A -evaluate set 60% \+channel \\\n\s+"\$smoke_dir\/input-\$\{dimensions\}\.png"/u,
+    );
+    expect(diagnosticTooling).not.toContain("gradient:rgba(");
+
+    const pathExists = (target: string): boolean => {
+      try {
+        fs.lstatSync(target);
+        return true;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          return false;
+        }
+        throw error;
+      }
+    };
+
+    const runToolingFixture = (
+      file: string,
+      options: {
+        broadSource?: boolean;
+        sourceState?: "empty" | "missing" | "nonempty";
+        sourcePartsState?: "absent" | "directory" | "symlink";
+        updateExit?: number;
+      } = {},
+    ) => {
+      const root = tempRoots.make("openclaw-android-apt-source-");
+      const bin = path.join(root, "bin");
+      const runnerTemp = path.join(root, "runner-temp");
+      const diagnosticDir = path.join(root, "diagnostic");
+      const aptSource = path.join(root, "ubuntu.sources");
+      const aptSourceParts = path.join(runnerTemp, "openclaw-android-apt-sourceparts-disabled");
+      const aptLog = path.join(root, "apt.log");
+      const installSentinel = path.join(root, "install-ran");
+      const adapterSentinel = path.join(root, "adapter-ran");
+      const kvmSentinel = path.join(root, "kvm-ran");
+      const adapterSource = [
+        "#!/bin/bash",
+        "set -euo pipefail",
+        'output=""',
+        "while (( $# > 0 )); do",
+        '  if [[ "$1" == "--out" ]]; then output="$2"; shift 2; else shift; fi',
+        "done",
+        'test -n "$output"',
+        'printf "jpeg\\n" >"$output"',
+        'printf "adapter\\n" >"$ADAPTER_SENTINEL"',
+        "",
+      ].join("\n");
+      fs.mkdirSync(bin);
+      fs.mkdirSync(runnerTemp);
+      fs.mkdirSync(diagnosticDir);
+      if ((options.sourceState ?? "nonempty") !== "missing") {
+        fs.writeFileSync(
+          aptSource,
+          options.sourceState === "empty" ? "" : "Types: deb\nURIs: fixture.invalid\n",
+        );
+      }
+      if (options.sourcePartsState === "directory") {
+        fs.mkdirSync(aptSourceParts);
+      } else if (options.sourcePartsState === "symlink") {
+        fs.symlinkSync(path.join(root, "missing-sourceparts"), aptSourceParts);
+      }
+
+      const writeExecutable = (name: string, source: string): string => {
+        const executable = path.join(bin, name);
+        fs.writeFileSync(executable, source, { mode: 0o755 });
+        return executable;
+      };
+      const timeout = writeExecutable(
+        "timeout",
+        [
+          "#!/bin/bash",
+          "set -euo pipefail",
+          "while (( $# > 0 )); do",
+          '  case "$1" in',
+          "    --signal=*|--kill-after=*) shift ;;",
+          "    300s) shift; break ;;",
+          "    *) exit 91 ;;",
+          "  esac",
+          "done",
+          'exec "$@"',
+          "",
+        ].join("\n"),
+      );
+      const sudo = writeExecutable(
+        "sudo",
+        [
+          "#!/bin/bash",
+          "set -euo pipefail",
+          'test "$1" = "env"',
+          "shift",
+          'while (( $# > 0 )) && [[ "$1" == *=* ]]; do export "$1"; shift; done',
+          'exec "$@"',
+          "",
+        ].join("\n"),
+      );
+      const aptGet = writeExecutable(
+        "apt-get",
+        [
+          "#!/bin/bash",
+          "set -euo pipefail",
+          'printf "%s\\n" "$*" >>"$APT_LOG"',
+          'if (( $# < 5 )) || [[ "$1" != "-o" || "$2" != "Dir::Etc::sourcelist=$APT_SOURCE" ||',
+          '  "$3" != "-o" || "$4" != "Dir::Etc::sourceparts=$APT_SOURCE_PARTS" ]]; then',
+          "  exit 100",
+          "fi",
+          'if [[ "$5" == "update" ]]; then exit "${APT_UPDATE_EXIT:-0}"; fi',
+          'test "$5" = "install"',
+          'test "$6" = "-y"',
+          'test "$7" = "--no-install-recommends"',
+          'test "$8" = "acl"',
+          'test "$9" = "imagemagick"',
+          'printf "install\\n" >"$INSTALL_SENTINEL"',
+          "",
+        ].join("\n"),
+      );
+      const convert = writeExecutable(
+        "convert",
+        [
+          "#!/bin/bash",
+          "set -euo pipefail",
+          'output="${!#}"',
+          'printf "png\\n" >"$output"',
+          "",
+        ].join("\n"),
+      );
+      const identify = writeExecutable(
+        "identify",
+        [
+          "#!/bin/bash",
+          "set -euo pipefail",
+          "printf 'format=JPEG width=1 height=1 colorspace=sRGB type=TrueColor channels=3.0 quality=95\\n'",
+          "",
+        ].join("\n"),
+      );
+      writeExecutable(
+        "git",
+        [
+          "#!/bin/bash",
+          "set -euo pipefail",
+          'test "$1" = "-C"',
+          "shift 2",
+          'case "$1 $2" in',
+          '  "rev-parse HEAD") printf "%s\\n" "$GITHUB_WORKFLOW_SHA" ;;',
+          '  "ls-tree HEAD") printf "100755 blob fixtureoid scripts/android-sips-linux.sh\\n" ;;',
+          '  "cat-file blob")',
+          '    printf "adapter\\n" >"$ADAPTER_SENTINEL"',
+          '    cat "$ADAPTER_SOURCE"',
+          "    ;;",
+          "  *) exit 92 ;;",
+          "esac",
+          "",
+        ].join("\n"),
+      );
+
+      for (const trustedRoot of [
+        path.join(root, ".mobile-release-tooling"),
+        path.join(root, "apps/android/build/mobile-release-ci/authority"),
+      ]) {
+        writeFile(trustedRoot, "scripts/android-sips-linux.sh", adapterSource);
+        fs.chmodSync(path.join(trustedRoot, "scripts/android-sips-linux.sh"), 0o755);
+      }
+      fs.writeFileSync(path.join(root, "adapter-source.sh"), adapterSource, { mode: 0o755 });
+
+      let body = readToolingBody(file);
+      if (options.broadSource) {
+        body = body
+          .replace('/usr/bin/apt-get "${apt_options[@]}" update', "/usr/bin/apt-get update")
+          .replace('/usr/bin/apt-get "${apt_options[@]}" install', "/usr/bin/apt-get install");
+      }
+      body = body
+        .replaceAll("/usr/bin/timeout", timeout)
+        .replaceAll("/usr/bin/sudo", sudo)
+        .replaceAll("/usr/bin/apt-get", aptGet)
+        .replaceAll("/usr/bin/convert", convert)
+        .replaceAll("/usr/bin/identify", identify)
+        .replaceAll("/etc/apt/sources.list.d/ubuntu.sources", aptSource);
+
+      const result = spawnSync(
+        "/bin/bash",
+        ["-c", [body, 'printf "kvm\\n" >"$KVM_SENTINEL"'].join("\n")],
+        {
+          cwd: root,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            ADAPTER_SENTINEL: adapterSentinel,
+            ADAPTER_SOURCE: path.join(root, "adapter-source.sh"),
+            APT_LOG: aptLog,
+            APT_SOURCE: aptSource,
+            APT_SOURCE_PARTS: aptSourceParts,
+            APT_UPDATE_EXIT: String(options.updateExit ?? 0),
+            DIAGNOSTIC_DIR: diagnosticDir,
+            GITHUB_WORKFLOW_SHA: "a".repeat(40),
+            INSTALL_SENTINEL: installSentinel,
+            KVM_SENTINEL: kvmSentinel,
+            PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+            RUNNER_ARCH: "X64",
+            RUNNER_OS: "Linux",
+            RUNNER_TEMP: runnerTemp,
+          },
+          timeout: 5_000,
+        },
+      );
+      return {
+        adapterSentinel,
+        aptSource,
+        aptSourceParts,
+        calls: fs.existsSync(aptLog)
+          ? fs.readFileSync(aptLog, "utf8").trim().split("\n").filter(Boolean)
+          : [],
+        installSentinel,
+        kvmSentinel,
+        result,
+      };
+    };
+
+    for (const file of workflowFiles) {
+      const broad = runToolingFixture(file, { broadSource: true });
+      expect(broad.result.status, `${file}: broad source should fail`).toBe(100);
+      expect(fs.existsSync(broad.installSentinel)).toBe(false);
+      expect(fs.existsSync(broad.adapterSentinel)).toBe(false);
+      expect(fs.existsSync(broad.kvmSentinel)).toBe(false);
+
+      const restricted = runToolingFixture(file);
+      expect(
+        restricted.result.status,
+        `${file}: signal=${restricted.result.signal ?? "none"}\n${restricted.result.stderr}`,
+      ).toBe(0);
+      expect(restricted.calls).toEqual([
+        `-o Dir::Etc::sourcelist=${restricted.aptSource} -o Dir::Etc::sourceparts=${restricted.aptSourceParts} update`,
+        `-o Dir::Etc::sourcelist=${restricted.aptSource} -o Dir::Etc::sourceparts=${restricted.aptSourceParts} install -y --no-install-recommends acl imagemagick`,
+      ]);
+      expect(pathExists(restricted.aptSourceParts)).toBe(false);
+      expect(fs.existsSync(restricted.installSentinel)).toBe(true);
+      expect(fs.existsSync(restricted.adapterSentinel)).toBe(true);
+      expect(fs.existsSync(restricted.kvmSentinel)).toBe(true);
+
+      const failedUpdate = runToolingFixture(file, { updateExit: 100 });
+      expect(failedUpdate.result.status).toBe(100);
+      expect(failedUpdate.calls).toHaveLength(1);
+      expect(fs.existsSync(failedUpdate.installSentinel)).toBe(false);
+      expect(fs.existsSync(failedUpdate.adapterSentinel)).toBe(false);
+      expect(fs.existsSync(failedUpdate.kvmSentinel)).toBe(false);
+
+      for (const sourceState of ["missing", "empty"] as const) {
+        const guarded = runToolingFixture(file, { sourceState });
+        expect(guarded.result.status, `${file}: ${sourceState} source`).not.toBe(0);
+        expect(guarded.calls).toEqual([]);
+        expect(fs.existsSync(guarded.adapterSentinel)).toBe(false);
+        expect(fs.existsSync(guarded.kvmSentinel)).toBe(false);
+      }
+
+      for (const sourcePartsState of ["directory", "symlink"] as const) {
+        const guarded = runToolingFixture(file, { sourcePartsState });
+        expect(guarded.result.status, `${file}: ${sourcePartsState} source parts`).not.toBe(0);
+        expect(guarded.calls).toEqual([]);
+        expect(pathExists(guarded.aptSourceParts)).toBe(true);
+        expect(fs.existsSync(guarded.adapterSentinel)).toBe(false);
+        expect(fs.existsSync(guarded.kvmSentinel)).toBe(false);
+      }
+    }
+  });
+
   it("keeps upload and recovery credentials inside one protected platform boundary", () => {
     const workflows = [
       {
@@ -2025,7 +3367,7 @@ describe("mobile release authority", () => {
         file: ".github/workflows/ios-beta-release.yml",
         name: "iOS Beta Release",
         platform: "ios",
-        releaseRunner: "macos-26",
+        releaseRunner: "xcode-27",
         signingCheckoutName: "Checkout encrypted iOS signing assets",
         signingCheckoutRevalidateName:
           "Revalidate release authority immediately before iOS signing checkout",
@@ -2039,7 +3381,7 @@ describe("mobile release authority", () => {
         file: ".github/workflows/android-beta-release.yml",
         name: "Android Beta Release",
         platform: "android",
-        releaseRunner: "macos-26-intel",
+        releaseRunner: "ubuntu-24.04",
         signingCheckoutName: "Checkout encrypted Android signing assets",
         signingCheckoutRevalidateName:
           "Revalidate release authority immediately before Android signing checkout",
@@ -2049,6 +3391,8 @@ describe("mobile release authority", () => {
         setupBeforeSigning: [
           "Setup Node environment",
           "Setup Android toolchain",
+          "Prepare trusted Linux Android tooling",
+          "Verify Linux KVM acceleration",
           "Setup Ruby",
           "Install locked Fastlane bundle",
         ],
@@ -2093,7 +3437,11 @@ describe("mobile release authority", () => {
       };
       expect(workflow.name).toBe(name);
       expect(Object.keys(workflow.on)).toEqual(["workflow_dispatch"]);
-      expect(Object.keys(workflow.jobs)).toEqual(["authorize", "release", "recover-record"]);
+      expect(Object.keys(workflow.jobs)).toEqual(
+        platform === "ios"
+          ? ["authorize", "release", "recover-record", "inspect"]
+          : ["authorize", "release", "recover-record"],
+      );
       expect(workflow.jobs.authorize?.environment).toBeUndefined();
       expect(workflow.jobs.release?.environment).toBe(environment);
       expect(workflow.jobs["recover-record"]?.environment).toBe(environment);
@@ -2238,31 +3586,83 @@ describe("mobile release authority", () => {
       expect(release.steps[recordIndex]?.with?.operation).toBe("record");
 
       if (platform === "android") {
+        const nodeEnvironmentIndex = release.steps.findIndex(
+          (step) => step.name === "Setup Node environment",
+        );
         const androidSetupIndex = release.steps.findIndex(
           (step) => step.name === "Setup Android toolchain",
         );
-        const accelerationCheckIndex = release.steps.findIndex(
-          (step) => step.name === "Verify Android emulator acceleration",
+        const toolingIndex = release.steps.findIndex(
+          (step) => step.name === "Prepare trusted Linux Android tooling",
         );
+        const accelerationCheckIndex = release.steps.findIndex(
+          (step) => step.name === "Verify Linux KVM acceleration",
+        );
+        const toolingStep = release.steps[toolingIndex];
+        const accelerationStep = release.steps[accelerationCheckIndex];
         const rubyStep = release.steps.find((step) => step.name === "Setup Ruby");
         const bundleStep = release.steps.find(
           (step) => step.name === "Install locked Fastlane bundle",
         );
+        const uploadStep = release.steps.find((step) => step.name === "Upload Android beta");
+        expect(toolingIndex).toBeGreaterThanOrEqual(0);
+        expect(toolingIndex).toBeLessThan(nodeEnvironmentIndex);
+        expect(androidSetupIndex).toBe(nodeEnvironmentIndex + 1);
         expect(androidSetupIndex).toBeGreaterThanOrEqual(0);
         expect(accelerationCheckIndex).toBe(androidSetupIndex + 1);
         expect(accelerationCheckIndex).toBeLessThan(signingRevalidateIndex);
-        expect(release.steps[accelerationCheckIndex]?.run?.trim()).toBe("emulator -accel-check");
-        expect(release.steps[accelerationCheckIndex]?.if).toBeUndefined();
-        expect(release.steps[accelerationCheckIndex]?.["continue-on-error"]).toBeUndefined();
+        expect(toolingStep?.run).toContain('apt_source="/etc/apt/sources.list.d/ubuntu.sources"');
+        expect(toolingStep?.run).toContain(
+          'apt_source_parts="$RUNNER_TEMP/openclaw-android-apt-sourceparts-disabled"',
+        );
+        expect(toolingStep?.run).toContain('test -s "$apt_source"');
+        expect(toolingStep?.run).toContain(
+          '[[ -e "$apt_source_parts" || -L "$apt_source_parts" ]]',
+        );
+        expect(toolingStep?.run).toContain('/usr/bin/apt-get "${apt_options[@]}" update');
+        expect(toolingStep?.run).toMatch(
+          /\/usr\/bin\/apt-get "\$\{apt_options\[@\]\}" install \\\n\s+-y --no-install-recommends acl imagemagick/u,
+        );
+        expect(toolingStep?.run).toContain(
+          'trusted_root="apps/android/build/mobile-release-ci/authority"',
+        );
+        expect(toolingStep?.run).toContain(
+          'test "$(git -C "$trusted_root" rev-parse HEAD)" = "$GITHUB_WORKFLOW_SHA"',
+        );
+        expect(toolingStep?.run).toContain(
+          'git -C "$trusted_root" cat-file blob "$adapter_oid" >"$adapter"',
+        );
+        expect(toolingStep?.run).toContain('cmp -s "$trusted_root/$adapter_path" "$adapter"');
+        expect(toolingStep?.run).not.toContain("$GITHUB_ENV");
+        expect(accelerationStep?.run).toContain("verify_kvm_acceleration() {");
+        expect(extractKvmFunction(accelerationStep?.run ?? "")).toBe(
+          extractKvmFunction(
+            (
+              parse(
+                fs.readFileSync(".github/workflows/android-emulator-diagnostic.yml", "utf8"),
+              ) as {
+                jobs: { diagnose: { steps: Array<{ name: string; run?: string }> } };
+              }
+            ).jobs.diagnose.steps.find((step) => step.name === "Verify Linux KVM acceleration")
+              ?.run ?? "",
+          ),
+        );
+        expect(accelerationStep?.if).toBeUndefined();
+        expect(accelerationStep?.["continue-on-error"]).toBeUndefined();
+        expect(uploadStep?.env).toMatchObject({
+          SIPS: "${{ runner.temp }}/openclaw-android-tools/android-sips-linux.sh",
+        });
+        expect(uploadStep?.env).not.toHaveProperty("OPENCLAW_ANDROID_IMAGEMAGICK_CONVERT");
+        expect(uploadStep?.env).not.toHaveProperty("OPENCLAW_ANDROID_IMAGEMAGICK_IDENTIFY");
         expect(rubyStep?.with).toMatchObject({
           "bundler-cache": false,
           "ruby-version": "3.4.10",
           "working-directory": "apps/android",
-          bundler: "2.6.9",
+          bundler: "4.0.21",
         });
-        expect(bundleStep?.run).toContain("bundle _2.6.9_ install --jobs 4 --retry 3");
-        expect(bundleStep?.run).toContain("bundle _2.6.9_ check");
-        expect(bundleStep?.run).toContain("bundle _2.6.9_ exec ruby");
+        expect(bundleStep?.run).toContain("bundle _4.0.21_ install --jobs 4 --retry 3");
+        expect(bundleStep?.run).toContain("bundle _4.0.21_ check");
+        expect(bundleStep?.run).toContain("bundle _4.0.21_ exec ruby");
         expect(source).not.toContain("gem install fastlane");
       }
 
@@ -2281,6 +3681,11 @@ describe("mobile release authority", () => {
                 jobName: "release",
                 secret: "GH_APP_PRIVATE_KEY",
                 stepName: "Create apps-signing read token",
+              },
+              {
+                jobName: "release",
+                secret: "MATCH_PASSWORD",
+                stepName: "Validate readonly iOS signing key access",
               },
               {
                 jobName: "release",
@@ -2436,7 +3841,7 @@ describe("mobile release authority", () => {
     }
   });
 
-  it("passes protected iOS release inputs only to the iOS upload step", () => {
+  it("passes protected iOS group policy only to upload and inspection, and screenshot inputs only to upload", () => {
     const source = fs.readFileSync(".github/workflows/ios-beta-release.yml", "utf8");
     const project = parse(fs.readFileSync("apps/ios/project.yml", "utf8")) as {
       name?: string;
@@ -2469,13 +3874,19 @@ describe("mobile release authority", () => {
     );
 
     expect(source).not.toContain("secrets.TESTFLIGHT_INTERNAL_GROUP");
-    expect(source.match(/\$\{\{ vars\.TESTFLIGHT_INTERNAL_GROUP \}\}/gu)).toHaveLength(1);
+    expect(source.match(/\$\{\{ vars\.TESTFLIGHT_INTERNAL_GROUP \}\}/gu)).toHaveLength(2);
     expect(workflow.jobs.release?.environment).toBe("ios-beta-release");
     expect(placements).toEqual([
       {
         envName: "TESTFLIGHT_INTERNAL_GROUP",
         jobName: "release",
         runsUpload: true,
+        value: "${{ vars.TESTFLIGHT_INTERNAL_GROUP }}",
+      },
+      {
+        envName: "TESTFLIGHT_INTERNAL_GROUP",
+        jobName: "inspect",
+        runsUpload: false,
         value: "${{ vars.TESTFLIGHT_INTERNAL_GROUP }}",
       },
     ]);
@@ -2510,6 +3921,647 @@ describe("mobile release authority", () => {
     ]);
   });
 
+  it("runs the iOS signing proof through the prepared Fastlane environment", () => {
+    const source = fs.readFileSync(".github/workflows/ios-beta-release.yml", "utf8");
+    const workflow = parse(source) as {
+      jobs: {
+        release: {
+          steps: Array<{
+            env?: Record<string, string>;
+            name: string;
+            run?: string;
+            uses?: string;
+            with?: Record<string, unknown>;
+          }>;
+        };
+      };
+    };
+    const releaseSteps = workflow.jobs.release.steps;
+    const createIndex = releaseSteps.findIndex(
+      (step) => step.name === "Create job-owned iOS signing keychain",
+    );
+    const sinkCheckoutIndex = releaseSteps.findIndex(
+      (step) => step.name === "Refresh trusted authority before store access",
+    );
+    const signingRevalidateIndex = releaseSteps.findIndex(
+      (step) => step.name === "Revalidate release authority immediately before signing proof",
+    );
+    const signingProofIndex = releaseSteps.findIndex(
+      (step) => step.name === "Validate readonly iOS signing key access",
+    );
+    const uploadRevalidateIndex = releaseSteps.findIndex(
+      (step) => step.name === "Revalidate release authority immediately before upload",
+    );
+    const uploadIndex = releaseSteps.findIndex(
+      (step) => step.name === "Upload and distribute iOS beta",
+    );
+
+    expect(createIndex).toBeGreaterThan(-1);
+    expect(releaseSteps[createIndex]?.uses).toBe(
+      "./apps/ios/build/mobile-release-ci/authority/.github/actions/ios-signing-keychain",
+    );
+    expect(sinkCheckoutIndex).toBeGreaterThan(createIndex);
+    expect(signingRevalidateIndex).toBe(sinkCheckoutIndex + 1);
+    expect(signingProofIndex).toBe(signingRevalidateIndex + 1);
+    expect(uploadRevalidateIndex).toBe(signingProofIndex + 1);
+    expect(uploadIndex).toBe(uploadRevalidateIndex + 1);
+    expect(releaseSteps[signingProofIndex]?.env).toEqual({
+      MATCH_PASSWORD: "${{ secrets.MATCH_PASSWORD }}",
+    });
+    const signingProof = releaseSteps[signingProofIndex]?.run;
+    expect(signingProof).toBeTruthy();
+    const fixtureRoot = tempRoots.make("openclaw-ios-signing-proof-");
+    const workspace = path.join(fixtureRoot, "workspace");
+    const home = path.join(fixtureRoot, "home");
+    const preparedBin = path.join(fixtureRoot, "prepared-bin");
+    const loginBin = path.join(fixtureRoot, "login-bin");
+    const eventsPath = path.join(fixtureRoot, "events");
+    for (const directory of [
+      home,
+      preparedBin,
+      loginBin,
+      path.join(workspace, "scripts/lib"),
+      path.join(workspace, "apps/ios"),
+    ]) {
+      fs.mkdirSync(directory, { recursive: true });
+    }
+    fs.copyFileSync(
+      "scripts/lib/ios-fastlane.sh",
+      path.join(workspace, "scripts/lib/ios-fastlane.sh"),
+    );
+    fs.copyFileSync("apps/ios/Gemfile", path.join(workspace, "apps/ios/Gemfile"));
+    fs.writeFileSync(
+      path.join(home, ".bash_profile"),
+      'export PATH="$FIXTURE_LOGIN_BIN:/usr/bin:/bin"\n',
+    );
+    fs.writeFileSync(
+      path.join(preparedBin, "pnpm"),
+      [
+        "#!/bin/bash",
+        'printf "pnpm:%s\\n" "$*" >>"$FIXTURE_EVENTS"',
+        "exec /bin/bash -lc 'source ./scripts/lib/ios-fastlane.sh && cd apps/ios && run_ios_fastlane ios signing_check'",
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    fs.writeFileSync(
+      path.join(loginBin, "bundle"),
+      ["#!/bin/bash", 'printf "login-bundle:%s\\n" "$*" >>"$FIXTURE_EVENTS"', "exit 42", ""].join(
+        "\n",
+      ),
+      { mode: 0o755 },
+    );
+    fs.writeFileSync(
+      path.join(preparedBin, "bundle"),
+      [
+        "#!/bin/bash",
+        "set -euo pipefail",
+        '[[ "$BUNDLE_GEMFILE" == "$FIXTURE_WORKSPACE/apps/ios/Gemfile" ]]',
+        '[[ "$PWD" == "$FIXTURE_WORKSPACE/apps/ios" ]]',
+        'printf "bundle:%s\\n" "$*" >>"$FIXTURE_EVENTS"',
+        'if [[ "$2" == "check" ]]; then',
+        '  [[ "${FIXTURE_FAIL_CHECK:-0}" != "1" ]] || exit 42',
+        'elif [[ "$2" != "exec" || "$3" != "fastlane" || "$4" != "ios" || "$5" != "signing_check" ]]; then',
+        "  exit 43",
+        "fi",
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    fs.writeFileSync(
+      path.join(preparedBin, "node"),
+      [
+        "#!/bin/bash",
+        "set -euo pipefail",
+        '[[ "$PWD" == "$FIXTURE_WORKSPACE" ]]',
+        '[[ "$*" == "apps/ios/build/mobile-release-ci/authority/.github/actions/ios-signing-keychain/keychain.mjs probe" ]]',
+        'printf "probe:root-cwd\\n" >>"$FIXTURE_EVENTS"',
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+
+    const runSigningProof = (extraEnv: NodeJS.ProcessEnv = {}) => {
+      fs.writeFileSync(eventsPath, "");
+      const result = spawnSync("/bin/bash", ["--noprofile", "--norc", "-c", signingProof ?? ""], {
+        cwd: workspace,
+        encoding: "utf8",
+        env: {
+          FIXTURE_EVENTS: eventsPath,
+          FIXTURE_LOGIN_BIN: loginBin,
+          FIXTURE_WORKSPACE: workspace,
+          HOME: home,
+          MATCH_PASSWORD: "fixture-password",
+          PATH: `${preparedBin}:/usr/bin:/bin`,
+          ...extraEnv,
+        },
+        timeout: 5_000,
+      });
+      return {
+        events: fs.readFileSync(eventsPath, "utf8").trim().split("\n").filter(Boolean),
+        result,
+      };
+    };
+
+    const prepared = runSigningProof();
+    expect(prepared.result.status, prepared.result.stderr).toBe(0);
+    expect(prepared.events).toEqual([
+      "bundle:_4.0.21_ check",
+      "bundle:_4.0.21_ exec fastlane ios signing_check",
+      "probe:root-cwd",
+    ]);
+    expect(signingProof).toContain("source ./scripts/lib/ios-fastlane.sh");
+    expect(signingProof).toContain("(cd apps/ios && run_ios_fastlane ios signing_check)");
+
+    const failedCheck = runSigningProof({ FIXTURE_FAIL_CHECK: "1" });
+    expect(failedCheck.result.status).not.toBe(0);
+    expect(failedCheck.events).toEqual(["bundle:_4.0.21_ check"]);
+
+    const authorityCheckout = releaseSteps.find(
+      (step) => step.name === "Checkout trusted mobile release authority",
+    );
+    expect(authorityCheckout?.with?.["sparse-checkout"]).toContain(
+      ".github/actions/ios-signing-keychain",
+    );
+    const action = parse(
+      fs.readFileSync(".github/actions/ios-signing-keychain/action.yml", "utf8"),
+    ) as {
+      runs: {
+        main: string;
+        post: string;
+        "post-if": string;
+        using: string;
+      };
+    };
+    expect(action.runs).toEqual({
+      using: "node24",
+      main: "keychain.mjs",
+      post: "post.mjs",
+      "post-if": "always()",
+    });
+  });
+
+  it("keeps an absent-state iOS keychain post cleanup side-effect free", () => {
+    const runnerTemp = tempRoots.make("openclaw-ios-keychain-post-runner-");
+    const workspace = tempRoots.make("openclaw-ios-keychain-post-workspace-");
+    fs.mkdirSync(path.join(workspace, "apps/ios"), { recursive: true });
+    const fakeBin = path.join(runnerTemp, "bin");
+    const bundleMarker = path.join(runnerTemp, "bundle-called");
+    const environmentFile = path.join(runnerTemp, "environment");
+    const stateFile = path.join(runnerTemp, "state");
+    fs.mkdirSync(fakeBin);
+    fs.writeFileSync(path.join(fakeBin, "bundle"), '#!/bin/sh\n: > "$BUNDLE_MARKER"\nexit 99\n', {
+      mode: 0o700,
+    });
+
+    const result = spawnSync(process.execPath, [".github/actions/ios-signing-keychain/post.mjs"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        BUNDLE_MARKER: bundleMarker,
+        GITHUB_ENV: environmentFile,
+        GITHUB_STATE: stateFile,
+        GITHUB_WORKSPACE: workspace,
+        PATH: `${fakeBin}:/usr/bin:/bin`,
+        RUNNER_TEMP: runnerTemp,
+      },
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(fs.existsSync(bundleMarker)).toBe(false);
+    expect(fs.existsSync(environmentFile)).toBe(false);
+    expect(fs.existsSync(stateFile)).toBe(false);
+    expect(
+      fs
+        .readdirSync(runnerTemp)
+        .some((entry) => entry.startsWith("openclaw-ios-signing-keychain-")),
+    ).toBe(false);
+    const postSource = fs.readFileSync(".github/actions/ios-signing-keychain/post.mjs", "utf8");
+    expect(postSource).toContain('import { cleanupOwnedKeychain } from "./keychain.mjs";');
+    expect(postSource).not.toContain("createOwnedKeychain");
+  });
+
+  it("masks and owns both resolved iOS keychain filename forms through post cleanup", async () => {
+    const workspace = tempRoots.make("openclaw-ios-keychain-workspace-");
+    fs.mkdirSync(path.join(workspace, "apps/ios"), { recursive: true });
+    for (const filenameSuffix of ["", "-db"] as const) {
+      const runnerTemp = tempRoots.make(
+        `openclaw-ios-keychain-${filenameSuffix ? "database" : "requested"}-`,
+      );
+      const environmentFile = path.join(runnerTemp, "environment");
+      const stateFile = path.join(runnerTemp, "state");
+      const env = {
+        ...process.env,
+        GITHUB_ENV: environmentFile,
+        GITHUB_STATE: stateFile,
+        GITHUB_WORKSPACE: workspace,
+        RUNNER_TEMP: runnerTemp,
+      };
+      let actionOutput = "";
+      const output = {
+        write(value: string) {
+          actionOutput += value;
+          return true;
+        },
+      };
+      const commands: Array<{ args: string[]; executable: string }> = [];
+      const runCommand = async (
+        executable: string,
+        args: string[],
+        options: { env?: NodeJS.ProcessEnv },
+      ) => {
+        commands.push({ args, executable });
+        expect(executable).toBe("bundle");
+        if (args.includes("create_keychain")) {
+          const requestedPath = args.find((argument) => argument.startsWith("path:"))?.slice(5);
+          if (!requestedPath) {
+            throw new Error("Missing create_keychain path");
+          }
+          expect(fs.readFileSync(stateFile, "utf8")).toContain(`requested_path=${requestedPath}\n`);
+          const password = options.env?.KEYCHAIN_PASSWORD;
+          expect(password).toMatch(/^[a-f0-9]{64}$/u);
+          expect(args.join("\n")).not.toContain(password);
+          fs.writeFileSync(`${requestedPath}${filenameSuffix}`, "owned keychain\n");
+        } else if (args.includes("delete_keychain")) {
+          const keychainPath = args
+            .find((argument) => argument.startsWith("keychain_path:"))
+            ?.slice("keychain_path:".length);
+          if (!keychainPath) {
+            throw new Error("Missing delete_keychain path");
+          }
+          fs.unlinkSync(keychainPath);
+        } else {
+          throw new Error(`Unexpected Fastlane action: ${args.join(" ")}`);
+        }
+        return { stderr: "", stdout: "" };
+      };
+
+      const created = await createOwnedKeychain({ env, output, runCommand });
+      expect(created.resolvedPath).toBe(`${created.requestedPath}${filenameSuffix}`);
+      expect(fs.statSync(created.ownedRoot).mode & 0o777).toBe(0o700);
+      expect(actionOutput).toBe(`::add-mask::${created.password}\n`);
+      expect(fs.readFileSync(environmentFile, "utf8")).toBe(
+        `MATCH_KEYCHAIN_NAME=${created.resolvedPath}\n` +
+          `MATCH_KEYCHAIN_PASSWORD=${created.password}\n`,
+      );
+      const state = Object.fromEntries(
+        fs
+          .readFileSync(stateFile, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => line.split(/[=](.*)/su).slice(0, 2)),
+      );
+      expect(state.resolved_path).toBe(created.resolvedPath);
+      await cleanupOwnedKeychain({
+        env: {
+          ...env,
+          STATE_owned_root: state.owned_root,
+          STATE_requested_path: state.requested_path,
+          STATE_resolved_path: state.resolved_path,
+        },
+        runCommand,
+      });
+      expect(fs.existsSync(created.ownedRoot)).toBe(false);
+      expect(commands.map(({ args }) => args[4])).toEqual(["create_keychain", "delete_keychain"]);
+      expect(commands.at(-1)?.args).toContain(`keychain_path:${created.resolvedPath}`);
+    }
+
+    const source = fs.readFileSync(".github/actions/ios-signing-keychain/keychain.mjs", "utf8");
+    expect(source.indexOf("maskSecret(password, output)")).toBeLessThan(
+      source.indexOf(
+        'appendCommandValue(environmentFile, "MATCH_KEYCHAIN_PASSWORD", password, appendFile)',
+      ),
+    );
+    expect(source).toContain("default_keychain: false");
+    expect(source).toContain("lock_after_timeout: true");
+    expect(source).toContain("timeout: KEYCHAIN_LIFETIME_SECONDS");
+    expect(source).not.toContain("skip_set_partition_list");
+  });
+
+  it("cleans a partial iOS keychain create and refuses paths outside its ownership", async () => {
+    const workspace = tempRoots.make("openclaw-ios-keychain-partial-workspace-");
+    fs.mkdirSync(path.join(workspace, "apps/ios"), { recursive: true });
+    for (const filenameSuffix of ["", "-db"] as const) {
+      const runnerTemp = tempRoots.make(
+        `openclaw-ios-keychain-partial-${filenameSuffix ? "database" : "requested"}-`,
+      );
+      const environmentFile = path.join(runnerTemp, "environment");
+      const stateFile = path.join(runnerTemp, "state");
+      const env = {
+        ...process.env,
+        GITHUB_ENV: environmentFile,
+        GITHUB_STATE: stateFile,
+        GITHUB_WORKSPACE: workspace,
+        RUNNER_TEMP: runnerTemp,
+      };
+      const createCommand = async (_command: string, args: string[]) => {
+        const requestedPath = args.find((argument) => argument.startsWith("path:"))?.slice(5);
+        if (!requestedPath) {
+          throw new Error("Missing partial create path");
+        }
+        fs.writeFileSync(`${requestedPath}${filenameSuffix}`, "partial keychain\n");
+        throw new Error("partial create");
+      };
+
+      await expect(
+        createOwnedKeychain({
+          env,
+          output: { write: () => true },
+          runCommand: createCommand,
+        }),
+      ).rejects.toThrow("partial create");
+      expect(fs.existsSync(environmentFile)).toBe(false);
+      const state = Object.fromEntries(
+        fs
+          .readFileSync(stateFile, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => line.split(/[=](.*)/su).slice(0, 2)),
+      );
+      const partialPath = `${state.requested_path}${filenameSuffix}`;
+      expect(fs.existsSync(partialPath)).toBe(true);
+      await cleanupOwnedKeychain({
+        env: {
+          ...env,
+          STATE_owned_root: state.owned_root,
+          STATE_requested_path: state.requested_path,
+        },
+        runCommand: async (_command: string, args: string[]) => {
+          const keychainPath = args
+            .find((argument) => argument.startsWith("keychain_path:"))
+            ?.slice("keychain_path:".length);
+          expect(keychainPath).toBe(partialPath);
+          fs.unlinkSync(partialPath);
+          return { stderr: "", stdout: "" };
+        },
+      });
+      expect(fs.existsSync(state.owned_root)).toBe(false);
+    }
+
+    const runnerTemp = tempRoots.make("openclaw-ios-keychain-guard-runner-");
+    const env = {
+      ...process.env,
+      GITHUB_WORKSPACE: workspace,
+      RUNNER_TEMP: runnerTemp,
+    };
+    const outsidePath = path.join(runnerTemp, "outside.keychain-db");
+    fs.writeFileSync(outsidePath, "not owned\n");
+    const ownedRoot = fs.mkdtempSync(path.join(runnerTemp, "openclaw-ios-signing-keychain-"));
+    const requestedPath = path.join(ownedRoot, "signing.keychain");
+    let cleanupCalled = false;
+    await expect(
+      cleanupOwnedKeychain({
+        env: {
+          ...env,
+          STATE_owned_root: ownedRoot,
+          STATE_requested_path: requestedPath,
+          STATE_resolved_path: outsidePath,
+        },
+        runCommand: async () => {
+          cleanupCalled = true;
+          return { stderr: "", stdout: "" };
+        },
+      }),
+    ).rejects.toThrow("Unexpected owned keychain path");
+    expect(cleanupCalled).toBe(false);
+    expect(fs.existsSync(outsidePath)).toBe(true);
+
+    const ambiguousRoot = fs.mkdtempSync(path.join(runnerTemp, "openclaw-ios-signing-keychain-"));
+    const ambiguousRequestedPath = path.join(ambiguousRoot, "signing.keychain");
+    fs.writeFileSync(ambiguousRequestedPath, "requested keychain\n");
+    fs.writeFileSync(`${ambiguousRequestedPath}-db`, "database keychain\n");
+    await expect(
+      cleanupOwnedKeychain({
+        env: {
+          ...env,
+          STATE_owned_root: ambiguousRoot,
+          STATE_requested_path: ambiguousRequestedPath,
+        },
+        runCommand: async () => {
+          cleanupCalled = true;
+          return { stderr: "", stdout: "" };
+        },
+      }),
+    ).rejects.toThrow("Refusing ambiguous job-owned keychain cleanup");
+    expect(cleanupCalled).toBe(false);
+  });
+
+  it("binds both iOS keychain filename forms to the configured signing team", async () => {
+    const runnerTemp = tempRoots.make("openclaw-ios-keychain-probe-runner-");
+    const workspace = tempRoots.make("openclaw-ios-keychain-probe-workspace-");
+    writeFile(
+      workspace,
+      "apps/ios/Config/AppStoreSigning.json",
+      `${JSON.stringify({ teamId: "FWJYW4S8P8" }, null, 2)}\n`,
+    );
+    const identityHash = "A".repeat(40);
+    for (const keychainFilename of ["signing.keychain", "signing.keychain-db"] as const) {
+      const ownedRoot = fs.mkdtempSync(path.join(runnerTemp, "openclaw-ios-signing-keychain-"));
+      const keychainPath = path.join(ownedRoot, keychainFilename);
+      fs.writeFileSync(keychainPath, "owned keychain\n");
+      const calls: Array<{ args: string[]; executable: string; timeoutMs?: number }> = [];
+      const runCommand = async (
+        executable: string,
+        args: string[],
+        options: { timeoutMs?: number },
+      ) => {
+        calls.push({ args, executable, timeoutMs: options.timeoutMs });
+        if (executable === "/usr/bin/security") {
+          expect(args.at(-1)).toBe(keychainPath);
+          return {
+            stderr: "",
+            stdout: `  1) ${identityHash} "Apple Distribution: OpenClaw Foundation (FWJYW4S8P8)"\n`,
+          };
+        }
+        const probePath = args.at(-1);
+        expect(executable).toBe("/usr/bin/codesign");
+        expect(probePath).toBeTruthy();
+        expect(fs.readFileSync(probePath as string)).toEqual(fs.readFileSync("/usr/bin/true"));
+        if (args.includes("--force")) {
+          expect(args).toContain(keychainPath);
+        }
+        if (args.includes("--display")) {
+          return { stderr: "TeamIdentifier=FWJYW4S8P8\n", stdout: "" };
+        }
+        return { stderr: "", stdout: "" };
+      };
+
+      await expect(
+        probeOwnedKeychain({
+          env: {
+            ...process.env,
+            GITHUB_WORKSPACE: workspace,
+            MATCH_KEYCHAIN_NAME: keychainPath,
+            RUNNER_TEMP: runnerTemp,
+          },
+          runCommand,
+        }),
+      ).resolves.toEqual({
+        identity: "Apple Distribution: OpenClaw Foundation (FWJYW4S8P8)",
+        teamId: "FWJYW4S8P8",
+      });
+      expect(calls.map(({ executable }) => executable)).toEqual([
+        "/usr/bin/security",
+        "/usr/bin/codesign",
+        "/usr/bin/codesign",
+        "/usr/bin/codesign",
+      ]);
+      expect(calls.every(({ timeoutMs }) => timeoutMs !== undefined && timeoutMs <= 30_000)).toBe(
+        true,
+      );
+      expect(calls.some(({ executable, args }) => executable === args.at(-1))).toBe(false);
+      expect(
+        fs
+          .readdirSync(runnerTemp)
+          .some((entry) => entry.startsWith("openclaw-ios-codesign-probe-")),
+      ).toBe(false);
+    }
+
+    const wrongTeamRoot = fs.mkdtempSync(path.join(runnerTemp, "openclaw-ios-signing-keychain-"));
+    const wrongTeamPath = path.join(wrongTeamRoot, "signing.keychain");
+    fs.writeFileSync(wrongTeamPath, "owned keychain\n");
+    await expect(
+      probeOwnedKeychain({
+        env: {
+          ...process.env,
+          GITHUB_WORKSPACE: workspace,
+          MATCH_KEYCHAIN_NAME: wrongTeamPath,
+          RUNNER_TEMP: runnerTemp,
+        },
+        runCommand: async () => ({
+          stderr: "",
+          stdout: `  1) ${identityHash} "Apple Distribution: Other Team (AAAAAAAAAA)"\n`,
+        }),
+      }),
+    ).rejects.toThrow("Expected one Apple Distribution identity for team FWJYW4S8P8, found 0");
+
+    let unsafeCommandCount = 0;
+    const rejectUnsafeCommand = async () => {
+      unsafeCommandCount += 1;
+      return { stderr: "", stdout: "" };
+    };
+    const missingRoot = fs.mkdtempSync(path.join(runnerTemp, "openclaw-ios-signing-keychain-"));
+    await expect(
+      probeOwnedKeychain({
+        env: {
+          ...process.env,
+          GITHUB_WORKSPACE: workspace,
+          MATCH_KEYCHAIN_NAME: path.join(missingRoot, "signing.keychain"),
+          RUNNER_TEMP: runnerTemp,
+        },
+        runCommand: rejectUnsafeCommand,
+      }),
+    ).rejects.toThrow("Owned keychain is missing");
+    const symlinkRoot = fs.mkdtempSync(path.join(runnerTemp, "openclaw-ios-signing-keychain-"));
+    const symlinkTarget = path.join(runnerTemp, "foreign.keychain");
+    fs.writeFileSync(symlinkTarget, "foreign keychain\n");
+    fs.symlinkSync(symlinkTarget, path.join(symlinkRoot, "signing.keychain"));
+    await expect(
+      probeOwnedKeychain({
+        env: {
+          ...process.env,
+          GITHUB_WORKSPACE: workspace,
+          MATCH_KEYCHAIN_NAME: path.join(symlinkRoot, "signing.keychain"),
+          RUNNER_TEMP: runnerTemp,
+        },
+        runCommand: rejectUnsafeCommand,
+      }),
+    ).rejects.toThrow("Owned keychain path is not a regular file");
+    expect(unsafeCommandCount).toBe(0);
+  });
+
+  it("bounds owned child process trees", async () => {
+    const runnerTemp = tempRoots.make("openclaw-ios-keychain-process-runner-");
+    if (process.platform !== "win32") {
+      const exerciseOwnedProcessTree = async ({
+        expectedError,
+        grandchildSource,
+        maxOutputBytes,
+        name,
+        timeoutMs,
+      }: {
+        expectedError: string;
+        grandchildSource: string;
+        maxOutputBytes?: number;
+        name: string;
+        timeoutMs: number;
+      }) => {
+        const pidFile = path.join(runnerTemp, `${name}.pid`);
+        const parentSource = [
+          'const { spawn } = require("node:child_process");',
+          'const fs = require("node:fs");',
+          `const child = spawn(process.execPath, ["-e", ${JSON.stringify(grandchildSource)}], {`,
+          '  stdio: ["ignore", process.stdout, process.stderr],',
+          "});",
+          "fs.writeFileSync(process.env.PID_FILE, `${process.pid}\\n${child.pid}\\n`);",
+          'process.on("SIGTERM", () => {});',
+          "setInterval(() => {}, 1000);",
+        ].join("\n");
+        const runnerSource = `
+import fs from "node:fs";
+import { runBounded } from ${JSON.stringify(pathToFileURL(path.resolve(".github/actions/ios-signing-keychain/keychain.mjs")).href)};
+const startedAt = Date.now();
+let message = "";
+try {
+  await runBounded(process.execPath, ["-e", ${JSON.stringify(parentSource)}], {
+    env: { ...process.env, PID_FILE: ${JSON.stringify(pidFile)} },
+    maxOutputBytes: ${JSON.stringify(maxOutputBytes)},
+    terminateGraceMs: 200,
+    timeoutMs: ${timeoutMs},
+  });
+} catch (error) {
+  message = error instanceof Error ? error.message : String(error);
+}
+const processIds = fs.readFileSync(${JSON.stringify(pidFile)}, "utf8").trim().split("\\n").map(Number);
+let processGroupAlive = true;
+try { process.kill(-processIds[0], 0); } catch { processGroupAlive = false; }
+process.stdout.write(JSON.stringify({ elapsedMs: Date.now() - startedAt, message, processGroupAlive, processIds }));
+`;
+        const result = spawnSync(
+          testNodeExecPath,
+          ["--input-type=module", "--eval", runnerSource],
+          { cwd: process.cwd(), encoding: "utf8", env: process.env },
+        );
+        expect(result.status, result.stderr).toBe(0);
+        const outcome = JSON.parse(result.stdout) as {
+          elapsedMs: number;
+          message: string;
+          processGroupAlive: boolean;
+          processIds: number[];
+        };
+        expect(outcome.message).toContain(expectedError);
+        expect(outcome.elapsedMs).toBeLessThan(3_000);
+        const processIds = outcome.processIds;
+        expect(processIds).toHaveLength(2);
+        const processGroupId = processIds[0];
+        if (
+          typeof processGroupId !== "number" ||
+          !Number.isSafeInteger(processGroupId) ||
+          processGroupId <= 0
+        ) {
+          throw new Error(`Invalid owned process-group ID: ${processGroupId}`);
+        }
+        expect(outcome.processGroupAlive).toBe(false);
+      };
+
+      await exerciseOwnedProcessTree({
+        expectedError: "timed out after 1000ms",
+        grandchildSource: 'process.on("SIGTERM", () => {}); setTimeout(() => {}, 5000);',
+        name: "timeout-tree",
+        timeoutMs: 1_000,
+      });
+      await exerciseOwnedProcessTree({
+        expectedError: "exceeded the 4096-byte output limit",
+        grandchildSource:
+          'process.on("SIGTERM", () => {}); setInterval(() => process.stdout.write("x".repeat(2048)), 1);',
+        maxOutputBytes: 4096,
+        name: "output-cap-tree",
+        timeoutMs: 5_000,
+      });
+    }
+  });
+
   it("installs the pinned Watch Rust toolchain before iOS store access", () => {
     const source = fs.readFileSync(".github/workflows/ios-beta-release.yml", "utf8");
     const workflow = parse(source) as {
@@ -2524,7 +4576,7 @@ describe("mobile release authority", () => {
       };
     };
     const releaseSteps = workflow.jobs.release.steps;
-    const xcodeIndex = releaseSteps.findIndex((step) => step.name === "Select Xcode 26");
+    const xcodeIndex = releaseSteps.findIndex((step) => step.name === "Select Xcode 27");
     const rustIndex = releaseSteps.findIndex(
       (step) => step.name === "Install Watch Rust toolchain",
     );

@@ -110,57 +110,52 @@ const schemaMapKeywords = new Set([
   "properties",
 ]);
 
-function normalizeAnthropicJsonSchema(schema: unknown): unknown {
+/** Normalize the detached JSON projection and report tuple changes to enclosing schemas. */
+function normalizeAnthropicJsonSchema(schema: unknown): boolean {
   if (!isRecord(schema)) {
-    return schema;
+    return false;
   }
 
   let changed = false;
-  const normalized: Record<string, unknown> = { ...schema };
   for (const [key, value] of Object.entries(schema)) {
     if (schemaValueKeywords.has(key) && !Array.isArray(value)) {
-      const next = normalizeAnthropicJsonSchema(value);
-      normalized[key] = next;
-      changed ||= next !== value;
+      changed = normalizeAnthropicJsonSchema(value) || changed;
       continue;
     }
     if (schemaArrayKeywords.has(key) && Array.isArray(value)) {
-      const next = value.map(normalizeAnthropicJsonSchema);
-      normalized[key] = next;
-      changed ||= next.some((entry, index) => entry !== value[index]);
+      for (const entry of value) {
+        changed = normalizeAnthropicJsonSchema(entry) || changed;
+      }
       continue;
     }
     if (schemaMapKeywords.has(key) && isRecord(value)) {
-      const next = Object.fromEntries(
-        Object.entries(value).map(([entryKey, entryValue]) => [
-          entryKey,
-          normalizeAnthropicJsonSchema(entryValue),
-        ]),
-      );
-      normalized[key] = next;
-      changed ||= Object.entries(value).some(
-        ([entryKey, entryValue]) => next[entryKey] !== entryValue,
-      );
+      for (const entry of Object.values(value)) {
+        changed = normalizeAnthropicJsonSchema(entry) || changed;
+      }
     }
   }
 
   if (Array.isArray(schema.items)) {
-    normalized.prefixItems = schema.items.map(normalizeAnthropicJsonSchema);
+    for (const entry of schema.items) {
+      normalizeAnthropicJsonSchema(entry);
+    }
+    schema.prefixItems = schema.items;
     const additionalItems = schema.additionalItems;
     if (typeof additionalItems === "boolean" || isRecord(additionalItems)) {
-      normalized.items = normalizeAnthropicJsonSchema(additionalItems);
+      normalizeAnthropicJsonSchema(additionalItems);
+      schema.items = additionalItems;
     } else {
-      delete normalized.items;
+      delete schema.items;
     }
-    delete normalized.additionalItems;
+    delete schema.additionalItems;
     changed = true;
   }
 
   if (changed) {
     // Converted tuples use 2020-12 syntax, including inside referenced schema resources.
-    delete normalized.$schema;
+    delete schema.$schema;
   }
-  return changed ? normalized : schema;
+  return changed;
 }
 
 /** Snapshots direct/custom tool descriptors before Anthropic payload construction. */
@@ -188,11 +183,8 @@ export function projectAnthropicTools(
         unavailableOriginalNames.add(name);
         continue;
       }
-      const anthropicSchema = normalizeAnthropicJsonSchema(schemaProjection.schema);
-      if (!isRecord(anthropicSchema)) {
-        unavailableOriginalNames.add(name);
-        continue;
-      }
+      const anthropicSchema = schemaProjection.schema;
+      normalizeAnthropicJsonSchema(anthropicSchema);
       const properties = anthropicSchema.properties;
       const required = anthropicSchema.required;
       if (

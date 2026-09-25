@@ -165,6 +165,8 @@ export async function agentsSetIdentityCommand(
   const committed = await replaceConfigFile({
     ...writeSnapshot,
     sourceConfig: nextConfig,
+    // Replacing an avatar can intentionally shrink the configuration.
+    writeOptions: { ...writeSnapshot.writeOptions, allowConfigSizeDrop: true },
   });
 
   const committedEntry = expectDefined(

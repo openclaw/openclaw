@@ -23,6 +23,16 @@ function textMessage(role: AgentMessage["role"], text: string): AgentMessage {
   } as AgentMessage;
 }
 
+function senderAttributedTextMessage(
+  text: string,
+  sender: { senderId?: string; senderName?: string; senderUsername?: string },
+): AgentMessage {
+  return {
+    ...textMessage("user", text),
+    __openclaw: sender,
+  } as unknown as AgentMessage;
+}
+
 function summaryMessages(type: "compaction" | "branch_summary", summary: string): AgentMessage[] {
   const entry = { id: "summary", parentId: null, timestamp: "2026-01-01T00:00:00.000Z", summary };
   return buildSessionContext([
@@ -71,17 +81,18 @@ describe("projectContextEngineAssemblyForCodex", () => {
         maxRenderedContextChars: budget,
         prepareFileContext: async () => ({ text: "Prepared document page.", images: [page] }),
       });
+      const images = result.imageGroups?.flatMap((group) => group.images) ?? [];
       if (fits) {
-        expect(result.images).toEqual([page]);
+        expect(images).toEqual([page]);
         expect(result.promptText).not.toContain("images omitted");
       } else {
-        expect(result.images).toBeUndefined();
+        expect(result.imageGroups).toBeUndefined();
         expect(result.promptText).toContain("Attachment images omitted: context budget exceeded");
       }
       const range = result.promptContextRange!;
-      expect(
-        range.end - range.start + (result.images?.length ?? 0) * IMAGE_BLOCK_TOKENS * 4,
-      ).toBeLessThanOrEqual(budget);
+      expect(range.end - range.start + images.length * IMAGE_BLOCK_TOKENS * 4).toBeLessThanOrEqual(
+        budget,
+      );
     },
   );
 
@@ -98,13 +109,56 @@ describe("projectContextEngineAssemblyForCodex", () => {
       maxRenderedContextChars: budget,
       prepareFileContext: async (message) => ({ images: message === older ? [first] : [second] }),
     });
-    expect(result.images).toEqual([first, second]);
+    const groups = result.imageGroups ?? [];
+    expect(groups.map((group) => group.images)).toEqual([[first], [second]]);
+    expect(groups.map((group) => result.promptText.slice(group.start, group.end))).toEqual([
+      "[user]\n",
+      "[user]\n",
+    ]);
+    expect(groups[0]!.end).toBeLessThan(groups[1]!.start);
     expect(result.promptText).toContain("Compare the saved images.");
     const range = result.promptContextRange;
     const renderedChars = range ? range.end - range.start : 0;
-    expect(renderedChars + result.images!.length * IMAGE_BLOCK_TOKENS * 4).toBeLessThanOrEqual(
-      budget,
-    );
+    expect(renderedChars + groups.length * IMAGE_BLOCK_TOKENS * 4).toBeLessThanOrEqual(budget);
+  });
+
+  it("omits restored images when the context window cuts their owning message", async () => {
+    const image = { type: "image" as const, mimeType: "image/png", data: "historical-image" };
+    const historical = textMessage("user", `old screenshot ${"caption ".repeat(100)}`);
+    const current = textMessage("assistant", "recent answer");
+    const history = [historical, current];
+    const original = structuredClone(history);
+    const result = await projectContextEngineAssemblyForCodex({
+      assembledMessages: history,
+      originalHistoryMessages: history,
+      prompt: "What is next?",
+      maxRenderedContextChars: IMAGE_BLOCK_TOKENS * 4 + 100,
+      prepareFileContext: async () => ({ images: [image] }),
+    });
+
+    expect(result.promptText).toContain("recent answer");
+    expect(result.promptText).not.toContain("old screenshot");
+    expect(result.imageGroups).toBeUndefined();
+    expect(history).toEqual(original);
+  });
+
+  it("omits an image if the older-context truncation marker removes its source label", async () => {
+    const image = { type: "image" as const, mimeType: "image/png", data: "historical-image" };
+    const result = await projectContextEngineAssemblyForCodex({
+      assembledMessages: [
+        textMessage("assistant", "old context ".repeat(100)),
+        textMessage("user", "screenshot description survives"),
+      ],
+      originalHistoryMessages: [],
+      prompt: "Continue",
+      maxRenderedContextChars: IMAGE_BLOCK_TOKENS * 4 + 60,
+      prepareFileContext: async () => ({ images: [image] }),
+    });
+
+    expect(result.promptText).toContain("from older context]");
+    expect(result.promptText).toContain("survives");
+    expect(result.promptText).not.toContain("[user]");
+    expect(result.imageGroups).toBeUndefined();
   });
 
   it("retains document bytes when the saved caption duplicates the current prompt", async () => {
@@ -169,8 +223,38 @@ describe("projectContextEngineAssemblyForCodex", () => {
       originalHistoryMessages: [textMessage("user", "seed")],
       prompt: "next",
     });
-    expect(ordered.promptText).toContain("[user]\none\n\n[assistant]\ntwo\n\n[toolResult]\nthree");
+    expect(ordered.promptText).toContain(
+      "[user]\none\n\n[assistant]\ntwo\n\n[toolResult]\ntool result [content omitted]",
+    );
     expect(ordered.prePromptMessageCount).toBe(1);
+  });
+
+  it("preserves stable user provenance while leaving legacy user rows unattributed", async () => {
+    const result = await projectContextEngineAssemblyForCodex({
+      assembledMessages: [
+        senderAttributedTextMessage("Ada owns the deployment decision.", {
+          senderId: "ada-id",
+          senderName: "Ada",
+        }),
+        senderAttributedTextMessage("Bea owns the rollback decision.", {
+          senderId: "bea-id",
+          senderName: "Bea",
+        }),
+        senderAttributedTextMessage("A legacy note has no authenticated author.", {
+          senderName: "Ada",
+        }),
+      ],
+      originalHistoryMessages: [],
+      prompt: "Continue.",
+    });
+
+    expect(result.promptText).toContain(
+      '[user sender={"id":"ada-id","name":"Ada"}]\nAda owns the deployment decision.',
+    );
+    expect(result.promptText).toContain(
+      '[user sender={"id":"bea-id","name":"Bea"}]\nBea owns the rollback decision.',
+    );
+    expect(result.promptText).toContain("[user]\nA legacy note has no authenticated author.");
   });
 
   it("neutralizes explicit mention sigils in projected history but not the current request", async () => {
@@ -246,6 +330,9 @@ describe("projectContextEngineAssemblyForCodex", () => {
         } as unknown as AgentMessage,
         {
           role: "toolResult",
+          toolCallId: "call-1",
+          toolName: "exec",
+          isError: false,
           content: [{ type: "toolResult", toolUseId: "call-1", content: "API_KEY=sk-secret" }],
           timestamp: 2,
         } as unknown as AgentMessage,
@@ -281,11 +368,16 @@ describe("projectContextEngineAssemblyForCodex", () => {
         } as unknown as AgentMessage,
         {
           role: "toolResult",
+          toolCallId: "call-1",
+          toolName: "exec",
+          isError: false,
           content: [
             {
               type: "toolResult",
               toolUseId: "call-1",
               content: "OPENAI_API_KEY=sk-1234567890abcdef\nstatus ok",
+              password: 842761,
+              attemptsRemaining: 3,
             },
           ],
           timestamp: 2,
@@ -307,7 +399,47 @@ describe("projectContextEngineAssemblyForCodex", () => {
     expect(result.promptText).toContain("status ok");
     expect(result.promptText).not.toContain("cat .env");
     expect(result.promptText).not.toContain("sk-1234567890abcdef");
+    expect(result.promptText).not.toContain("842761");
+    expect(result.promptText).toContain('"attemptsRemaining": 3');
   });
+
+  it.each(["elide", "preserve"] as const)(
+    "applies %s to canonical tool results without exposing media bytes",
+    async (toolPayloadMode) => {
+      const message: AgentMessage = {
+        role: "toolResult",
+        toolCallId: "call-1",
+        toolName: "exec",
+        isError: false,
+        content: [
+          { type: "text", text: "OPENAI_API_KEY=sk-1234567890abcdef\nstatus ok" },
+          { type: "image", data: "private-image-bytes", mimeType: "image/png" },
+        ],
+        timestamp: 2,
+      };
+      const result = await projectContextEngineAssemblyForCodex({
+        assembledMessages: [message],
+        originalHistoryMessages: [],
+        prompt: "continue",
+        toolPayloadMode,
+      });
+
+      expect(result.promptText).toContain("tool result: call-1");
+      expect(result.promptText).not.toContain("sk-1234567890abcdef");
+      expect(result.promptText).not.toContain("private-image-bytes");
+      if (toolPayloadMode === "preserve") {
+        expect(result.promptText).toContain("status ok");
+        expect(result.promptText).toContain("tool result: call-1 (exec)");
+      } else {
+        expect(result.promptText).toContain("[content omitted]");
+        expect(result.promptText).not.toContain("status ok");
+      }
+      expect(message.content[0]).toEqual({
+        type: "text",
+        text: "OPENAI_API_KEY=sk-1234567890abcdef\nstatus ok",
+      });
+    },
+  );
 
   it.each(["assistant", "compaction", "branch_summary"] as const)(
     "bounds oversized %s context",
@@ -414,6 +546,88 @@ describe("projectContextEngineAssemblyForCodex", () => {
     expect(result.promptText).not.toContain("[truncated ");
   });
 
+  it.each(["unchanged", "history", "prefix", "hook", "preserved"] as const)(
+    "keeps images with complete historical source spans after fitting %s context",
+    (mode) => {
+      const before = mode === "prefix" ? "header ".repeat(100) : "history\n";
+      const older = `[user]\nold image owner ${"x".repeat(600)}😀`;
+      const recent = "[user]\nrecent image 😀";
+      const context = `${older}\n\n${recent}`;
+      const request = "\n</conversation_context>\n\nCurrent user request:\nvoice text";
+      const hook = mode === "hook" ? "\n\nhook context survives" : "";
+      const promptText = `${before}${context}${request}${hook}`;
+      const image = { type: "image" as const, mimeType: "image/png", data: "historical-image" };
+      const imageGroups = [
+        { start: before.length, end: before.length + older.length, images: [image] },
+        {
+          start: before.length + older.length + 2,
+          end: before.length + context.length,
+          images: [{ ...image, data: "recent-image" }],
+        },
+      ];
+      const originalGroups = structuredClone(imageGroups);
+      const maxChars = mode === "unchanged" ? promptText.length : 220;
+      const fitted = fitCodexProjectedContextForTurnStart({
+        promptText,
+        imageGroups,
+        ...(mode === "preserved"
+          ? { preservedRange: { start: before.length, end: promptText.length } }
+          : { contextRange: { start: before.length, end: before.length + context.length } }),
+        ...(mode === "hook"
+          ? {
+              requestRange: {
+                start: before.length + context.length,
+                end: before.length + context.length + request.length,
+              },
+            }
+          : {}),
+        maxChars,
+      });
+      const retained = mode === "unchanged" ? imageGroups : imageGroups.slice(1);
+
+      expect(fitted.promptText.length).toBeLessThanOrEqual(maxChars);
+      expect(fitted.imageGroups?.map((group) => group.images)).toEqual(
+        retained.map((group) => group.images),
+      );
+      expect(
+        fitted.imageGroups?.map((group) => fitted.promptText.slice(group.start, group.end)),
+      ).toEqual(retained.map((group) => promptText.slice(group.start, group.end)));
+      expect(fitted.promptText).toContain("Current user request:\nvoice text");
+      if (mode === "unchanged") {
+        expect(fitted).toEqual({ promptText, imageGroups });
+      } else {
+        expect(fitted.promptText).not.toContain("old image owner");
+      }
+      if (mode === "hook") {
+        expect(fitted.promptText).toContain(hook);
+      }
+      expect(imageGroups).toEqual(originalGroups);
+    },
+  );
+
+  it("drops historical images when a large current request displaces their context", () => {
+    const context = "[user]\nhistorical screenshot";
+    const request = `\nCurrent user request:\n${"x".repeat(500)}`;
+    const hook = "\nnew hook context";
+    const fitted = fitCodexProjectedContextForTurnStart({
+      promptText: `${context}${request}${hook}`,
+      contextRange: { start: 0, end: context.length },
+      requestRange: { start: context.length, end: context.length + request.length },
+      imageGroups: [
+        {
+          start: 0,
+          end: context.length,
+          images: [{ type: "image", mimeType: "image/png", data: "historical-image" }],
+        },
+      ],
+      maxChars: 200,
+    });
+
+    expect(fitted.promptText).not.toContain("historical screenshot");
+    expect(fitted.promptText.endsWith("x".repeat(100))).toBe(true);
+    expect(fitted.imageGroups).toBeUndefined();
+  });
+
   it.each(["assistant", "compaction", "branch_summary"] as const)(
     "fits projected %s context under the Codex turn input limit",
     async (type) => {
@@ -430,7 +644,7 @@ describe("projectContextEngineAssemblyForCodex", () => {
         maxRenderedContextChars: 1_000,
       });
 
-      const fitted = fitCodexProjectedContextForTurnStart({
+      const { promptText: fitted } = fitCodexProjectedContextForTurnStart({
         promptText: result.promptText,
         contextRange: result.promptContextRange,
         maxChars: 420,
@@ -457,7 +671,7 @@ describe("projectContextEngineAssemblyForCodex", () => {
     // before + after already exceed maxChars, so the context budget is non-positive.
     expect(before.length + after.length).toBeGreaterThan(maxChars);
 
-    const fitted = fitCodexProjectedContextForTurnStart({
+    const { promptText: fitted } = fitCodexProjectedContextForTurnStart({
       promptText,
       contextRange: { start: before.length, end: before.length + context.length },
       maxChars,
@@ -473,36 +687,51 @@ describe("projectContextEngineAssemblyForCodex", () => {
     expect(fitted).toContain("[truncated ");
   });
 
-  it("keeps the current request and fitting hook context after projecting history", async () => {
-    const before = "OpenClaw assembled context for this turn:\n<conversation_context>\n";
-    const context = `recent context ${"c".repeat(800)}`;
-    const request = "\n</conversation_context>\n\nCurrent user request:\nkeep this request";
-    const hookAppend = "\n\nhook context survives";
-    const promptText = `${before}${context}${request}${hookAppend}`;
-    const maxChars = 420;
+  it.each(
+    ["fits", "exact", "overflow"].flatMap((mode) =>
+      [false, true].map((withHook) => ({ mode, withHook })),
+    ),
+  )(
+    "preserves current context priorities when non-history text $mode the limit with hook $withHook",
+    ({ mode, withHook }) => {
+      const before = "OpenClaw assembled context for this turn:\n<conversation_context>\n";
+      const context = `recent context ${"c".repeat(800)} historical tail`;
+      const request = "\n</conversation_context>\n\nCurrent user request:\nkeep this request";
+      const hookAppend = withHook ? "\n\nhook context survives" : "";
+      const promptText = `${before}${context}${request}${hookAppend}`;
+      const currentChars = before.length + request.length + hookAppend.length;
+      const maxChars = mode === "fits" ? 420 : currentChars - (mode === "overflow" ? 1 : 0);
 
-    const fitted = fitCodexProjectedContextForTurnStart({
-      promptText,
-      contextRange: { start: before.length, end: before.length + context.length },
-      requestRange: {
-        start: before.length + context.length,
-        end: before.length + context.length + request.length,
-      },
-      maxChars,
-    });
+      const { promptText: fitted } = fitCodexProjectedContextForTurnStart({
+        promptText,
+        contextRange: { start: before.length, end: before.length + context.length },
+        requestRange: {
+          start: before.length + context.length,
+          end: before.length + context.length + request.length,
+        },
+        maxChars,
+      });
 
-    expect(fitted.length).toBeLessThanOrEqual(maxChars);
-    expect(fitted).toContain("[truncated ");
-    expect(fitted).toContain("Current user request:\nkeep this request");
-    expect(fitted).toContain("hook context survives");
-  });
+      expect(fitted.length).toBeLessThanOrEqual(maxChars);
+      expect(fitted).toContain("Current user request:\nkeep this request");
+      if (withHook) {
+        expect(fitted).toContain("hook context survives");
+      }
+      if (mode === "overflow") {
+        expect(fitted).not.toContain(before);
+        expect(fitted).toContain("tail");
+      } else {
+        expect(fitted).toContain(before);
+      }
+    },
+  );
 
   it("keeps the original input when a hook appends context without a projection", async () => {
     const prompt = "current prompt survives";
     const hookAppend = `\n\nhook context ${"h".repeat(800)}`;
     const maxChars = 420;
 
-    const fitted = fitCodexProjectedContextForTurnStart({
+    const { promptText: fitted } = fitCodexProjectedContextForTurnStart({
       promptText: `${prompt}${hookAppend}`,
       preservedRange: { start: 0, end: prompt.length },
       maxChars,
@@ -515,7 +744,7 @@ describe("projectContextEngineAssemblyForCodex", () => {
 
   it("bounds hook output for an empty original input", async () => {
     const maxChars = 420;
-    const fitted = fitCodexProjectedContextForTurnStart({
+    const { promptText: fitted } = fitCodexProjectedContextForTurnStart({
       promptText: `hook context ${"h".repeat(800)} hook tail`,
       preservedRange: { start: 0, end: 0 },
       maxChars,
@@ -536,7 +765,7 @@ describe("projectContextEngineAssemblyForCodex", () => {
     const promptText = `${before}${context}${after}`;
     expect(before.length + after.length).toBeGreaterThan(maxChars);
 
-    const fitted = fitCodexProjectedContextForTurnStart({
+    const { promptText: fitted } = fitCodexProjectedContextForTurnStart({
       promptText,
       contextRange: { start: before.length, end: before.length + context.length },
       // maxChars omitted -> defaults to CODEX_TURN_START_TEXT_INPUT_MAX_CHARS.
@@ -564,7 +793,11 @@ describe("projectContextEngineAssemblyForCodex", () => {
     // Sweep cap sizes around the cut so the test is not brittle to marker length;
     // at least one value lands the boundary inside the surrogate pair.
     for (let maxChars = 90; maxChars <= 140; maxChars += 1) {
-      const fitted = fitCodexProjectedContextForTurnStart({ promptText, contextRange, maxChars });
+      const { promptText: fitted } = fitCodexProjectedContextForTurnStart({
+        promptText,
+        contextRange,
+        maxChars,
+      });
       expect(fitted.length).toBeLessThanOrEqual(maxChars);
       // U+FFFD only appears when a lone surrogate is rendered, i.e. a split pair.
       expect(fitted).not.toContain("�");

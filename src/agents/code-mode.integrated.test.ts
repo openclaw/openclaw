@@ -1,6 +1,6 @@
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import * as worker from "./code-mode-worker.js";
+import * as worker from "./code-mode-executor.js";
 import { applyCodeModeCatalog, runCodeModeScriptHeadless } from "./code-mode.js";
 import {
   createCodeModeHarness,
@@ -48,74 +48,82 @@ describe("integrated public Code Mode", () => {
     },
   );
 
-  it("still enforces the actual checkpoint limit", async () => {
-    const { ctx, config, tools } = createCodeModeHarness();
-    applyCodeModeCatalog({ ...ctx, config, tools });
-    const result = resultDetails(
-      await tools[0]!.execute("checkpoint", {
-        code: "const heap = new Uint8Array(12 * 1024 * 1024); await yield_control(); return heap.length;",
-      }),
-    );
-    expect(result).toMatchObject({ status: "failed", code: "snapshot_limit_exceeded" });
-  });
-
   it.each([
-    {
-      label: "bad field",
-      code: "const x = await contract({count: 1}); return x.missing;",
-      unknown: false,
-    },
-    { label: "bad args", code: 'await contract({count: "bad"});', unknown: false },
-    {
-      label: "unknown output",
-      code: "const x = await contract({count: 1}); return x.count;",
-      unknown: true,
-    },
-  ])("preflight refuses $label before all effects", async ({ code, unknown }) => {
-    const target = pluginToolWithExecute("contract", "Contract", async () =>
-      jsonResult({ count: 1 }),
+    { language: "javascript" },
+    { language: "typescript" },
+    { typecheck: false },
+    { typecheck: true },
+  ])("rejects retired compiler options before effects: %j", async (retired) => {
+    const target = pluginToolWithExecute("effect", "Effect", async () => jsonResult("done"));
+    const { ctx, tools } = createCodeModeHarness();
+    applyCodeModeCatalog({ ...ctx, tools: [...tools, target] });
+
+    await expect(
+      tools[0]!.execute("retired-options", { code: "await effect();", ...retired }),
+    ).rejects.toThrow(
+      "Code Mode accepts JavaScript only. Remove language and typecheck; use API.read(...) for tool types.",
     );
-    target.parameters = Type.Object({ count: Type.Number() }, { additionalProperties: false });
-    if (!unknown) {
-      target.outputSchema = Type.Object({ count: Type.Number() }, { additionalProperties: false });
-    }
-    const { ctx, config, tools } = createCodeModeHarness();
-    applyCodeModeCatalog({ ...ctx, config, tools: [...tools, target] });
-    const result = resultDetails(
-      await tools[0]!.execute("preflight", {
-        code: "await contract({count: 1});\n" + code,
-        language: "typescript",
-        typecheck: true,
-      }),
-    );
-    expect(result, JSON.stringify(result)).toMatchObject({
-      status: "failed",
-      code: "invalid_input",
-      bridgeDispatchStarted: false,
-      failurePhase: "input",
-    });
-    expect(result.error).toContain("openclaw-code-mode:user.ts:2:");
     expect(target.execute).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])("allows valid typed composition (preflight=%s)", async (typecheck) => {
-    const target = pluginToolWithExecute("contract", "Contract", async () =>
-      jsonResult({ count: 7 }),
+  it.each([
+    "const value: number = 1; return value;",
+    "interface Value { count: number } return 1;",
+    "return { count: 1 } satisfies { count: number };",
+  ])("rejects TypeScript syntax before any effects: %s", async (code) => {
+    const target = pluginToolWithExecute("effect", "Effect", async () => jsonResult("done"));
+    const { ctx, tools } = createCodeModeHarness();
+    applyCodeModeCatalog({ ...ctx, tools: [...tools, target] });
+
+    const result = resultDetails(
+      await tools[0]!.execute("typescript-source", { code: "await effect();\n" + code }),
+    );
+    expect(result).toMatchObject({
+      status: "failed",
+      bridgeDispatchStarted: false,
+      error: expect.stringContaining("SyntaxError"),
+    });
+    expect(result.error).toMatch(/openclaw-code-mode:user\.js:2:\d+/);
+    expect(target.execute).not.toHaveBeenCalled();
+  });
+
+  it("composes JavaScript from API declarations and rejects invalid arguments at dispatch", async () => {
+    const target = pluginToolWithExecute("contract", "Contract", async (_id, input) =>
+      jsonResult({ count: (input as { count: number }).count + 6 }),
     );
     target.parameters = Type.Object({ count: Type.Number() }, { additionalProperties: false });
     target.outputSchema = Type.Object({ count: Type.Number() }, { additionalProperties: false });
-    const { ctx, config, tools } = createCodeModeHarness();
-    applyCodeModeCatalog({ ...ctx, config, tools: [...tools, target] });
-    const result = resultDetails(
-      await tools[0]!.execute("preflight", {
-        code: "const x = await contract({count: 1}); console.log(x.count); return x.count;",
-        language: "typescript",
-        typecheck,
+    const { ctx, tools } = createCodeModeHarness();
+    applyCodeModeCatalog({ ...ctx, tools: [...tools, target] });
+    const declared = resultDetails(
+      await tools[0]!.execute("read-contract", {
+        code: 'return await API.read("tools/contract.d.ts");',
       }),
     );
-    expect(result, JSON.stringify(result)).toMatchObject({ status: "completed", value: 7 });
-    expect(target.execute).toHaveBeenCalledOnce();
+    expect(declared).toMatchObject({
+      status: "completed",
+      value: { content: expect.stringContaining("count: number") },
+    });
+    expect(target.execute).not.toHaveBeenCalled();
+
+    const result = resultDetails(
+      await tools[0]!.execute("compose", {
+        code: `
+          const first = await contract({count: 1});
+          const second = await contract({count: first.count});
+          try { await contract({count: "bad"}); }
+          catch (error) { return { count: second.count, code: error.code }; }
+          throw new Error("invalid input was accepted");
+        `,
+      }),
+    );
+    expect(result, JSON.stringify(result)).toMatchObject({
+      status: "completed",
+      value: { count: 13, code: "input_contract" },
+    });
+    expect(target.execute).toHaveBeenCalledTimes(2);
   });
+
   it.each([false, true])(
     "refuses a new host effect after the boundary deadline (resume=%s)",
     async (resume) => {
@@ -125,19 +133,22 @@ describe("integrated public Code Mode", () => {
       const { ctx, config, tools } = createCodeModeHarness();
       applyCodeModeCatalog({ ...ctx, config, tools: [...tools, target] });
       const clock = vi.spyOn(performance, "now").mockReturnValue(0);
-      const original = worker.runCodeModeWorker;
-      const spy = vi.spyOn(worker, "runCodeModeWorker").mockImplementation(async (...args) => {
-        const inline = args[4];
+      const original = worker.runCodeModeExecutor;
+      const spy = vi.spyOn(worker, "runCodeModeExecutor").mockImplementation(async (...args) => {
+        const inline = args[1].inlineHost;
         if (!inline) {
           return await original(...args);
         }
-        return await original(args[0], args[1], args[2], args[3], {
-          ...inline,
-          onBoundary: async (boundary, context) => {
-            if (boundary.pendingRequests.some((request) => request.method === "callValue")) {
-              clock.mockReturnValue(100_000);
-            }
-            return await inline.onBoundary(boundary, context);
+        return await original(args[0], {
+          ...args[1],
+          inlineHost: {
+            ...inline,
+            onBoundary: async (boundary, context) => {
+              if (boundary.pendingRequests.some((request) => request.method === "callValue")) {
+                clock.mockReturnValue(100_000);
+              }
+              return await inline.onBoundary(boundary, context);
+            },
           },
         });
       });

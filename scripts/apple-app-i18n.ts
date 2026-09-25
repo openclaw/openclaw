@@ -724,26 +724,18 @@ async function readNativeTranslations(): Promise<NativeTranslationArtifact[]> {
   );
 }
 
-async function readIosCatalogBuild(): Promise<AppleCatalogBuild> {
+async function readAppleCatalogBuild(
+  catalogPath: string,
+  buildCatalog: typeof buildIosCatalog,
+): Promise<AppleCatalogBuild> {
   const existingCatalog = JSON.parse(
-    await readFile(path.join(ROOT, IOS_CATALOG_PATH), "utf8"),
+    await readFile(path.join(ROOT, catalogPath), "utf8"),
   ) as Catalog;
   const nativeSource = JSON.parse(
     await readFile(path.join(ROOT, NATIVE_SOURCE_PATH), "utf8"),
   ) as NativeSourceArtifact;
   const translations = await readNativeTranslations();
-  return buildIosCatalog(existingCatalog, nativeSource, translations);
-}
-
-async function readMacosCatalogBuild(): Promise<AppleCatalogBuild> {
-  const existingCatalog = JSON.parse(
-    await readFile(path.join(ROOT, MACOS_CATALOG_PATH), "utf8"),
-  ) as Catalog;
-  const nativeSource = JSON.parse(
-    await readFile(path.join(ROOT, NATIVE_SOURCE_PATH), "utf8"),
-  ) as NativeSourceArtifact;
-  const translations = await readNativeTranslations();
-  return buildMacosCatalog(existingCatalog, nativeSource, translations);
+  return buildCatalog(existingCatalog, nativeSource, translations);
 }
 
 function validateCatalog(pathName: string, catalog: Catalog): number {
@@ -822,7 +814,7 @@ async function syncIosInfoPlist(write: boolean): Promise<number> {
 }
 
 export async function syncIosCatalog(write: boolean): Promise<AppleCatalogBuild> {
-  const build = await readIosCatalogBuild();
+  const build = await readAppleCatalogBuild(IOS_CATALOG_PATH, buildIosCatalog);
   const catalogPath = path.join(ROOT, IOS_CATALOG_PATH);
   const expected = serializeAppleCatalog(build.catalog);
   const actual = await readFile(catalogPath, "utf8");
@@ -838,7 +830,7 @@ export async function syncIosCatalog(write: boolean): Promise<AppleCatalogBuild>
 }
 
 export async function syncMacosCatalog(write: boolean): Promise<AppleCatalogBuild> {
-  const build = await readMacosCatalogBuild();
+  const build = await readAppleCatalogBuild(MACOS_CATALOG_PATH, buildMacosCatalog);
   const catalogPath = path.join(ROOT, MACOS_CATALOG_PATH);
   const expected = serializeAppleCatalog(build.catalog);
   const actual = await readFile(catalogPath, "utf8");
@@ -896,7 +888,7 @@ export async function verifyAppleAppI18n() {
     }
   }
 
-  const macosBuild = await readMacosCatalogBuild();
+  const macosBuild = await readAppleCatalogBuild(MACOS_CATALOG_PATH, buildMacosCatalog);
   const macosKeys = validateCatalog(MACOS_CATALOG_PATH, macosBuild.catalog);
 
   process.stdout.write(`apple-app-i18n: sourceMacosKeys=${macosKeys}\n`);
@@ -930,7 +922,7 @@ export async function compileMacosLocalizations(outputDir: string) {
   // post-merge refresh. Package from the derived catalog so source changes
   // cannot ship stale localization coverage before that refresh lands.
   await verifyAppleAppI18n();
-  const catalog = (await readMacosCatalogBuild()).catalog;
+  const catalog = (await readAppleCatalogBuild(MACOS_CATALOG_PATH, buildMacosCatalog)).catalog;
   if (!catalog.strings) {
     throw new Error(`invalid Apple string catalog: ${MACOS_CATALOG_PATH}`);
   }

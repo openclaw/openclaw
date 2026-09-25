@@ -1,5 +1,6 @@
 {
   "id": "memory-core",
+  "categories": ["memory"],
   "doctorContract": {
     "stateMigrations": [
       { "id": "memory-core-host-events-jsonl-to-sqlite", "doctorOnly": true },
@@ -59,6 +60,20 @@
       "help": "Maximum fraction of prior MEMORY.md entries an accepted consolidation rewrite may remove."
     }
   },
+  "configGroups": [
+    {
+      "id": "memory-policy",
+      "title": "Memory policy",
+      "order": 10,
+      "properties": ["memoryPolicy"]
+    },
+    {
+      "id": "dreaming",
+      "title": "Dreaming",
+      "order": 20,
+      "properties": ["dreaming"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

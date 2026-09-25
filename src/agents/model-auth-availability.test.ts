@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretRef } from "../config/types.secrets.js";
 import type { ProviderModelRouteCandidate } from "../plugin-sdk/provider-model-types.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { createApiKeyCredential } from "./auth-profiles/credential-fixtures.test-support.js";
 import { createModelAuthAvailabilityResolver } from "./model-auth-availability.js";
 import {
   authStore,
@@ -51,17 +52,7 @@ describe("createModelAuthAvailabilityResolver", () => {
   });
 
   it("canonicalizes prepared runtime auth through provider aliases", () => {
-    const metadataSnapshot = {
-      index: {
-        plugins: [
-          {
-            pluginId: "external-cloud",
-            origin: "global",
-            enabled: true,
-            enabledByDefault: true,
-          },
-        ],
-      },
+    const metadataSnapshot = createPluginMetadataSnapshotFixture({
       plugins: [
         {
           id: "external-cloud",
@@ -69,7 +60,7 @@ describe("createModelAuthAvailabilityResolver", () => {
           providerAuthAliases: { "cloud-alias": "external-cloud" },
         },
       ],
-    } as unknown as PluginMetadataSnapshot;
+    });
     const resolver = createModelAuthAvailabilityResolver({
       cfg: {},
       authStore: authStore(),
@@ -102,8 +93,7 @@ describe("createModelAuthAvailabilityResolver", () => {
   });
 
   it("keeps prepared native-runtime authentication scoped to its exact owner", () => {
-    const metadataSnapshot = {
-      index: { plugins: [] },
+    const metadataSnapshot = createPluginMetadataSnapshotFixture({
       plugins: [
         {
           id: "anthropic",
@@ -111,7 +101,7 @@ describe("createModelAuthAvailabilityResolver", () => {
           providerAuthAliases: { "claude-cli": "anthropic" },
         },
       ],
-    } as unknown as PluginMetadataSnapshot;
+    });
     const resolver = createModelAuthAvailabilityResolver({
       cfg: {},
       authStore: authStore(),
@@ -165,66 +155,73 @@ describe("createModelAuthAvailabilityResolver", () => {
     },
   );
 
-  it("keeps successful harness auth scoped to the exact model route", () => {
-    const materialization = {
-      provider: "openai",
-      modelId: "gpt-5.4",
-      modelApi: "openai-chatgpt-responses",
-      modelBaseUrl: "https://chatgpt.com/backend-api/codex",
-      requestTransportOverrides: "none",
-      authMode: "oauth",
-      runtimeOwnerId: "codex",
-    } as const;
-    const store = authStore({
-      "openai:default": {
-        type: "api_key",
+  it.each([
+    ["gpt-5.4", "gpt-5.5"],
+    ["Model", "model"],
+    ["model", "Model"],
+  ])(
+    "keeps successful harness auth scoped to the exact model route %s",
+    (modelId, otherModelId) => {
+      const materialization = {
         provider: "openai",
-        keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-      },
-    });
+        modelId,
+        modelApi: "openai-chatgpt-responses",
+        modelBaseUrl: "https://chatgpt.com/backend-api/codex",
+        requestTransportOverrides: "none",
+        authMode: "oauth",
+        runtimeOwnerId: "codex",
+      } as const;
+      const store = authStore({
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+        },
+      });
 
-    expect(
-      evaluate({
-        store,
-        ref: { modelId: "gpt-5.4" },
-        preparedRuntimeAuthMaterializations: [materialization],
-      }),
-    ).toMatchObject({
-      availability: true,
-      evidence: "runtime",
-      selectedRoute: subscriptionRoute,
-    });
-    expect(
-      evaluate({
-        store,
-        ref: { modelId: "gpt-5.5" },
-        preparedRuntimeAuthMaterializations: [materialization],
-      }).availability,
-    ).not.toBe(true);
-    expect(
-      evaluate({
-        cfg: {
-          models: {
-            providers: {
-              openai: {
-                auth: "api-key",
-                apiKey: "configured-platform-key",
-                baseUrl: "https://api.openai.com/v1",
-                models: [],
+      expect(
+        evaluate({
+          store,
+          ref: { modelId },
+          preparedRuntimeAuthMaterializations: [materialization],
+        }),
+      ).toMatchObject({
+        availability: true,
+        evidence: "runtime",
+        selectedRoute: subscriptionRoute,
+      });
+      expect(
+        evaluate({
+          store,
+          ref: { modelId: otherModelId },
+          preparedRuntimeAuthMaterializations: [materialization],
+        }).availability,
+      ).not.toBe(true);
+      expect(
+        evaluate({
+          cfg: {
+            models: {
+              providers: {
+                openai: {
+                  auth: "api-key",
+                  apiKey: "configured-platform-key",
+                  baseUrl: "https://api.openai.com/v1",
+                  models: [],
+                },
               },
             },
           },
-        },
-        store,
-        ref: { modelId: "gpt-5.4" },
-        preparedRuntimeAuthMaterializations: [materialization],
-      }),
-    ).toMatchObject({
-      availability: true,
-      evidence: "provider-config",
-      selectedRoute: platformRoute,
-    });
-  });
+          store,
+          ref: { modelId },
+          preparedRuntimeAuthMaterializations: [materialization],
+        }),
+      ).toMatchObject({
+        availability: true,
+        evidence: "provider-config",
+        selectedRoute: platformRoute,
+      });
+    },
+  );
 
   it.each([
     { label: "matching", authProfileId: "openai:default", availability: true },
@@ -364,11 +361,7 @@ describe("createModelAuthAvailabilityResolver", () => {
   it("projects route-independent auth-order failures for indeterminate routes", () => {
     const resolution = { kind: "indeterminate" as const, defaultRuntimeId: "codex" };
     const cooldownStore = authStore({
-      "openai:cooldown": {
-        type: "api_key",
-        provider: "openai",
-        key: "platform-key",
-      },
+      "openai:cooldown": createApiKeyCredential("openai", "platform-key"),
     });
     cooldownStore.usageStats = {
       "openai:cooldown": { cooldownUntil: Date.now() + 60_000 },

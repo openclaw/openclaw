@@ -29,10 +29,10 @@ export function setupBrowserPanelTestCleanup(): void {
 
 export function createBrowserClient(
   handleRequest: (envelope: BrowserRequestEnvelope) => Promise<unknown>,
-  options: { screencast?: boolean } = {},
+  options: { screencast?: boolean; sessionScoped?: boolean } = {},
 ) {
   const request = vi.fn(async (method: string, params?: unknown) => {
-    if (method !== "browser.request") {
+    if (method !== (options.sessionScoped ? "browser.dashboard.request" : "browser.request")) {
       throw new Error(`Unexpected Gateway method: ${method}`);
     }
     const envelope = params as BrowserRequestEnvelope;
@@ -74,6 +74,7 @@ export class TestBrowserPanelHost implements BrowserPanelControllerHost {
   readonly renderRoot = document.createElement("div");
   readonly resourceBasePath = "";
   readonly authToken = null;
+  sessionKey = "";
   available = true;
   isConnected = true;
   open = true;

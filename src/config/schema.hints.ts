@@ -8,7 +8,6 @@ import type { ConfigUiHints } from "../shared/config-ui-hints-types.js";
 import { isKernelOwnedChannelConfigKey } from "./channel-config-keys.js";
 import { FIELD_HELP } from "./schema.help.js";
 import { FIELD_LABELS } from "./schema.labels.js";
-import { applyDerivedTags } from "./schema.tags.js";
 import { applyConfigTierHints } from "./schema.tiers.js";
 import { walkConfigSchema } from "./schema.walk.js";
 import { isSensitiveConfigPath } from "./sensitive-paths.js";
@@ -37,6 +36,7 @@ const GROUP_HINTS = [
   ["session", "Session", 90],
   ["cron", "Automations", 100],
   ["worktreeRoot", "Worktree Root", 105],
+  ["worktreeAcceleration", "Worktree Acceleration", 106],
   ["hooks", "Hooks", 110],
   ["ui", "UI", 120],
   ["browser", "Browser", 130],
@@ -92,12 +92,18 @@ const SECTION_DOCS_URLS = {
   cloudWorkers: "https://docs.openclaw.ai/gateway/cloud-workers",
   desktop: "https://docs.openclaw.ai/gateway/configuration",
   worktreeRoot: "https://docs.openclaw.ai/concepts/managed-worktrees",
+  worktreeAcceleration: "https://docs.openclaw.ai/concepts/managed-worktrees",
   proxy: "https://docs.openclaw.ai/security/network-proxy",
   transcripts: "https://docs.openclaw.ai/plugins/meeting-plugins",
   surfaces: "https://docs.openclaw.ai/concepts/messages",
 } as const satisfies Record<string, string>;
 
 const FIELD_PLACEHOLDERS: Record<string, string> = {
+  "plugins.entries.*.hooks.timeoutMs": "Automatic (per hook)",
+  "plugins.entries.*.hooks.timeouts.*": "Automatic (plugin or hook default)",
+  "gateway.cliAgents.enabled": "Default (enabled)",
+  "nodeHost.autoUpdate.enabled": "Default (enabled)",
+  "tools.loopDetection.enabled": "Default (post-compaction protection only)",
   "gateway.publicOrigin": "https://gateway.example.com",
   "gateway.remote.url": "ws://host:18789",
   "gateway.remote.tlsFingerprint": "sha256:ab12cd34…",
@@ -162,7 +168,7 @@ export function buildBaseHints(): ConfigUiHints {
     hints[runtimePath] = { ...hints[runtimePath], order: -2 };
     hints[codeModePath] = { ...hints[codeModePath], order: -1, placeholder: "Default" };
   }
-  return applyDerivedTags(applyConfigTierHints(hints));
+  return applyConfigTierHints(hints);
 }
 
 /** Mark sensitive config paths in a hint map without overwriting explicit sensitivity metadata. */

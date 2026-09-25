@@ -6,8 +6,13 @@ import type { AgentRouteBinding } from "../config/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson, defaultRuntime } from "../runtime.js";
 import {
+  evaluateAgentDatabaseAdmissions,
+  hasAgentDatabaseAdmissions,
+  recordAgentDatabaseAdmissions,
+} from "../state/agent-database-admission.js";
+import {
   listAgentProvenance,
-  readAgentProvenance,
+  readAgentProvenanceForDisplay,
   type AgentProvenance,
 } from "../state/agent-provenance.js";
 import { shortenHomePath } from "../utils.js";
@@ -30,7 +35,7 @@ type AgentsListOptions = {
 
 function formatSummaryHeader(summary: AgentSummary): string {
   const safe = sanitizeTerminalText;
-  const defaultTag = summary.isDefault ? " (default)" : "";
+  const defaultTag = `${summary.isDefault ? " (default)" : ""}${summary.status === "degraded" ? " (degraded)" : ""}`;
   return summary.name && summary.name !== summary.id
     ? `${safe(summary.id)}${defaultTag} (${safe(summary.name)})`
     : `${safe(summary.id)}${defaultTag}`;
@@ -56,6 +61,10 @@ function formatSummary(summary: AgentSummary) {
         : null;
 
   const lines = [`- ${header}`];
+  if (summary.admissionRefusal) {
+    lines.push(`  Refused: ${safe(summary.admissionRefusal.reason)}`);
+    lines.push(`  Repair: ${safe(summary.admissionRefusal.repairHint)}`);
+  }
   if (identityLine) {
     lines.push(`  Identity: ${identityLine}${identitySource ? ` (${identitySource})` : ""}`);
   }
@@ -131,11 +140,16 @@ export async function agentsListCommand(
     return;
   }
 
+  if (!hasAgentDatabaseAdmissions()) {
+    recordAgentDatabaseAdmissions(await evaluateAgentDatabaseAdmissions(cfg));
+  }
   const summaries = buildAgentSummaries(cfg);
-  const provenance = opts.tree ? listAgentProvenance() : [];
+  const provenance = opts.tree ? await listAgentProvenance() : [];
   if (opts.json) {
+    const records = await readAgentProvenanceForDisplay(summaries.map((summary) => summary.id));
+    const recordsById = new Map(records.map((record) => [record.agentId, record]));
     for (const summary of summaries) {
-      const record = readAgentProvenance(summary.id);
+      const record = recordsById.get(summary.id);
       if (record) {
         summary.createdVia = record.createdVia;
         summary.creatorAgentId = record.creatorAgentId;

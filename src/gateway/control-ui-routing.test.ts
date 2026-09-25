@@ -69,6 +69,8 @@ describe("isControlUiFocusDocumentPath", () => {
 describe("Control UI SPA fallback Accept routing", () => {
   it.each<[string, string, string, string, string | undefined, boolean]>([
     ["missing Accept header", "", "/chat", "GET", undefined, true],
+    ["plugin tab slug at root", "", "/reports", "GET", "text/html", true],
+    ["plugin tab slug under a base path", "/team", "/team/reports", "HEAD", "text/html", true],
     ["empty Accept header", "/openclaw", "/openclaw/chat", "HEAD", "  ", true],
     [
       "browser Accept header",
@@ -187,10 +189,16 @@ describe("classifyControlUiRequest", () => {
         { kind: "not-control-ui" as const },
       ],
       [
-        "keeps the plugin HTTP root outside the SPA catch-all",
+        "serves the marketplace document at the plugin root",
         "/plugins",
         "GET",
-        { kind: "not-control-ui" as const },
+        { kind: "serve" as const, spaFallback: true },
+      ],
+      [
+        "serves the marketplace document at the plugin root slash",
+        "/plugins/",
+        "GET",
+        { kind: "serve" as const, spaFallback: true },
       ],
       [
         "keeps API routes outside the SPA catch-all",
@@ -354,6 +362,42 @@ describe("classifyControlUiRequest", () => {
     });
   });
 
+  describe("plugin catalogue documents vs plugin HTTP", () => {
+    it.each([
+      {
+        name: "serves HTML GET for the catalogue root slash",
+        pathname: "/plugins/",
+        method: "GET",
+        accept: "text/html",
+        expected: { kind: "serve" as const, spaFallback: true },
+      },
+      {
+        name: "keeps JSON catalogue reads outside the SPA",
+        pathname: "/plugins",
+        method: "GET",
+        accept: "application/json",
+        expected: { kind: "not-control-ui" as const },
+      },
+      {
+        name: "keeps JSON catalogue slash reads outside the SPA",
+        pathname: "/plugins/",
+        method: "GET",
+        accept: "application/json",
+        expected: { kind: "not-control-ui" as const },
+      },
+    ])("$name", ({ pathname, method, accept, expected }) => {
+      expect(
+        classifyControlUiRequest({
+          basePath: "",
+          pathname,
+          search: "",
+          method,
+          accept,
+        }),
+      ).toEqual(expected);
+    });
+  });
+
   describe("basePath-mounted control ui", () => {
     it.each<[string, string, string, string, ReturnType<typeof classifyControlUiRequest>]>([
       [
@@ -368,6 +412,27 @@ describe("classifyControlUiRequest", () => {
         "/openclaw/chat",
         "",
         "HEAD",
+        { kind: "serve" as const, spaFallback: true },
+      ],
+      [
+        "serves the plugin catalogue under a configured basePath",
+        "/openclaw/plugins",
+        "",
+        "GET",
+        { kind: "serve" as const, spaFallback: true },
+      ],
+      [
+        "serves the plugin catalogue slash under a configured basePath",
+        "/openclaw/plugins/",
+        "",
+        "GET",
+        { kind: "serve" as const, spaFallback: true },
+      ],
+      [
+        "serves the plugin manager under a configured basePath",
+        "/openclaw/settings/plugins",
+        "",
+        "GET",
         { kind: "serve" as const, spaFallback: true },
       ],
       [

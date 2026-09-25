@@ -157,7 +157,7 @@ describe("bundled provider compatibility in installed plugin indexes", () => {
     const { candidate, env, stateDir } = createFixture();
     const config = { plugins: { allow: ["listed"] } };
     setMode(env, "compat");
-    const initial = await refreshPersistedInstalledPluginIndex({
+    const initial = refreshPersistedInstalledPluginIndex({
       reason: "manual",
       stateDir,
       candidates: [candidate],
@@ -167,7 +167,7 @@ describe("bundled provider compatibility in installed plugin indexes", () => {
     expect(initial.plugins[0]?.enabled).toBe(true);
 
     setMode(env, "allowlist");
-    const strict = await refreshPersistedInstalledPluginIndex({
+    const strict = refreshPersistedInstalledPluginIndex({
       reason: "policy-changed",
       stateDir,
       config,
@@ -177,7 +177,7 @@ describe("bundled provider compatibility in installed plugin indexes", () => {
     expect(strict.plugins[0]?.enabled).toBe(false);
 
     setMode(env, "compat");
-    const compatible = await refreshPersistedInstalledPluginIndex({
+    const compatible = refreshPersistedInstalledPluginIndex({
       reason: "policy-changed",
       stateDir,
       config,

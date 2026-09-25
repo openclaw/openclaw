@@ -1,140 +1,52 @@
-// Nostr tests cover doctor contract api plugin behavior.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import {
-  createPluginStateKeyedStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import type {
-  OpenKeyedStoreOptions,
-  PluginDoctorStateMigrationContext,
-} from "openclaw/plugin-sdk/runtime-doctor-migrations";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { afterEach, describe, expect, it } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
 
-function requireStateMigration(index: number) {
-  return expectDefined(stateMigrations[index], `Nostr state migration ${index}`);
-}
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function createDoctorContext(env: NodeJS.ProcessEnv): PluginDoctorStateMigrationContext {
-  return {
-    openPluginStateKeyedStore<T>(options: OpenKeyedStoreOptions) {
-      return createPluginStateKeyedStoreForTests<T>("nostr", {
-        ...options,
-        env: options.env ?? env,
-      });
-    },
-  };
-}
+describe.each([
+  { index: 0, namespace: "bus-state" },
+  { index: 1, namespace: "profile-state" },
+])("retired Nostr $namespace import", ({ index, namespace }) => {
+  it("leaves old files untouched and directs their owner through the bridge release", async () => {
+    const stateDir = tempDirs.make("openclaw-nostr-doctor-");
+    const params = {
+      config: {},
+      env: { OPENCLAW_STATE_DIR: stateDir },
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context: {
+        openPluginStateKeyedStore: () => {
+          throw new Error("Retired imports must not access plugin state");
+        },
+      },
+    };
+    const migration = expectDefined(stateMigrations[index], "Nostr migration");
+    await expect(migration.detectLegacyState(params)).resolves.toBeNull();
+    await expect(migration.migrateLegacyState(params)).resolves.toEqual({
+      changes: [],
+      warnings: [],
+    });
 
-describe("nostr doctor state migration", () => {
-  let stateDir = "";
-  let env: NodeJS.ProcessEnv;
-
-  beforeEach(async () => {
-    resetPluginStateStoreForTests();
-    stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-nostr-doctor-"));
-    env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-  });
-
-  afterEach(async () => {
-    resetPluginStateStoreForTests();
-    await fs.rm(stateDir, { recursive: true, force: true });
-  });
-
-  it("imports legacy bus and profile state into plugin state", async () => {
     const nostrDir = path.join(stateDir, "nostr");
-    const busPath = path.join(nostrDir, "bus-state-main.json");
-    const profilePath = path.join(nostrDir, "profile-state-main.json");
-    await fs.mkdir(nostrDir, { recursive: true });
-    await fs.writeFile(
-      busPath,
-      JSON.stringify({
-        version: 1,
-        lastProcessedAt: 1700,
-        gatewayStartedAt: 1600,
-      }),
-    );
-    await fs.writeFile(
-      profilePath,
-      JSON.stringify({
-        version: 1,
-        lastPublishedAt: 1800,
-        lastPublishedEventId: "event-1",
-        lastPublishResults: { "wss://relay.example": "ok", bad: "nope" },
-      }),
-    );
+    const sourceName = `${namespace}-main.json`;
+    const sourcePath = path.join(nostrDir, sourceName);
+    const source = "unparsed legacy bytes\n";
+    await fs.mkdir(nostrDir);
+    await fs.writeFile(sourcePath, source);
 
-    const context = createDoctorContext(env);
-    const busResult = await requireStateMigration(0).migrateLegacyState({
-      config: {},
-      env,
-      stateDir,
-      oauthDir: path.join(stateDir, "oauth"),
-      context,
+    expect(await migration.detectLegacyState(params)).not.toBeNull();
+    expect(await migration.migrateLegacyState(params)).toEqual({
+      changes: [],
+      warnings: [expect.stringContaining("2026.9.5")],
     });
-    const profileResult = await requireStateMigration(1).migrateLegacyState({
-      config: {},
-      env,
-      stateDir,
-      oauthDir: path.join(stateDir, "oauth"),
-      context,
-    });
+    await expect(fs.readFile(sourcePath, "utf8")).resolves.toBe(source);
+    await expect(fs.readdir(nostrDir)).resolves.toEqual([sourceName]);
 
-    expect(busResult.warnings).toEqual([]);
-    expect(profileResult.warnings).toEqual([]);
-    await expect(fs.access(busPath)).rejects.toThrow();
-    await expect(fs.access(profilePath)).rejects.toThrow();
-    await fs.access(`${busPath}.migrated`);
-    await fs.access(`${profilePath}.migrated`);
-    await expect(
-      context.openPluginStateKeyedStore({ namespace: "bus-state", maxEntries: 256 }).lookup("main"),
-    ).resolves.toEqual({
-      version: 2,
-      lastProcessedAt: 1700,
-      gatewayStartedAt: 1600,
-      recentEventIds: [],
-    });
-    await expect(
-      context
-        .openPluginStateKeyedStore({ namespace: "profile-state", maxEntries: 256 })
-        .lookup("main"),
-    ).resolves.toEqual({
-      version: 1,
-      lastPublishedAt: 1800,
-      lastPublishedEventId: "event-1",
-      lastPublishResults: { "wss://relay.example": "ok" },
-    });
-  });
-
-  it("preserves legacy account key bytes when importing state files", async () => {
-    const nostrDir = path.join(stateDir, "nostr");
-    const busPath = path.join(nostrDir, "bus-state-Team.A.json");
-    await fs.mkdir(nostrDir, { recursive: true });
-    await fs.writeFile(
-      busPath,
-      JSON.stringify({
-        version: 1,
-        lastProcessedAt: 1700,
-        gatewayStartedAt: 1600,
-      }),
-    );
-
-    const context = createDoctorContext(env);
-    await requireStateMigration(0).migrateLegacyState({
-      config: {},
-      env,
-      stateDir,
-      oauthDir: path.join(stateDir, "oauth"),
-      context,
-    });
-
-    const store = context.openPluginStateKeyedStore({ namespace: "bus-state", maxEntries: 256 });
-    await expect(store.lookup("Team.A")).resolves.toMatchObject({
-      lastProcessedAt: 1700,
-    });
-    await expect(store.lookup("team-a")).resolves.toBeUndefined();
+    await fs.rename(sourcePath, `${sourcePath}.migrated`);
+    await expect(migration.detectLegacyState(params)).resolves.toBeNull();
   });
 });

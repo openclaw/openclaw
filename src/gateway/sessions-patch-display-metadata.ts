@@ -1,4 +1,4 @@
-// Display-metadata mutations for sessions.patch: label, icon, color, category, boardFace.
+// Display-metadata mutations for sessions.patch.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionsPatchParams } from "../../packages/gateway-protocol/src/index.js";
 import {
@@ -17,6 +17,19 @@ export function applySessionsPatchDisplayMetadata(params: {
   isLabelInUse: (label: string) => boolean;
 }): string | undefined {
   const { patch, next } = params;
+
+  if ("autoLabel" in patch) {
+    if (patch.autoLabel === null) {
+      delete next.autoLabel;
+    } else if (patch.autoLabel !== undefined) {
+      const parsed = parseSessionLabel(patch.autoLabel);
+      if (!parsed.ok) {
+        return parsed.error;
+      }
+      // Device names are presentation metadata, not unique custom-label claims.
+      next.autoLabel = parsed.label;
+    }
+  }
 
   if ("label" in patch) {
     const raw = patch.label;
@@ -41,7 +54,7 @@ export function applySessionsPatchDisplayMetadata(params: {
     } else if (raw !== undefined) {
       const icon = normalizeSessionIconValue(raw);
       if (!icon) {
-        return `icon must be a single emoji or one of: ${SESSION_ICON_GLYPH_IDS.join(", ")}`;
+        return `icon must be a single emoji, a named icon (${SESSION_ICON_GLYPH_IDS.join(", ")}), or self-contained SVG markup/data URL up to 16 KiB`;
       }
       next.icon = icon;
     }
@@ -79,6 +92,14 @@ export function applySessionsPatchDisplayMetadata(params: {
 
   if ("boardFace" in patch && patch.boardFace !== undefined) {
     next.boardFace = patch.boardFace;
+  }
+
+  if ("boardPresentation" in patch) {
+    if (patch.boardPresentation === null) {
+      delete next.boardPresentation;
+    } else if (patch.boardPresentation !== undefined) {
+      next.boardPresentation = patch.boardPresentation;
+    }
   }
 
   return undefined;

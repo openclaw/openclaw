@@ -1,4 +1,3 @@
-// Slack plugin module implements external arg menu store behavior.
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,

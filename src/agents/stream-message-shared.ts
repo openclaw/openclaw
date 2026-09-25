@@ -3,7 +3,7 @@
  *
  * Centralizes zero-cost usage records and assistant message construction for simple stream transports.
  */
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";
 import type { AssistantMessage, StopReason, Usage } from "../llm/types.js";
 
 type StreamModelDescriptor = {
@@ -51,30 +51,6 @@ export function buildAssistantMessage(params: {
     usage: params.usage,
     timestamp: params.timestamp ?? Date.now(),
   };
-}
-
-// Legacy error content remains readable without replaying provider diagnostics.
-export const STREAM_ERROR_FALLBACK_TEXT = "[assistant turn failed before producing content]";
-
-export function isStreamErrorFallbackContent(content: unknown): boolean {
-  if (content == null) {
-    return true;
-  }
-  if (typeof content === "string") {
-    return !content.trim() || content.trim() === STREAM_ERROR_FALLBACK_TEXT;
-  }
-  return (
-    Array.isArray(content) &&
-    content.every((value) => {
-      const block = asOptionalRecord(value);
-      return (
-        block &&
-        (block.type === "text" || block.type === "input_text" || block.type === "output_text") &&
-        typeof block.text === "string" &&
-        isStreamErrorFallbackContent(block.text)
-      );
-    })
-  );
 }
 
 export function buildStreamErrorAssistantMessage(params: {

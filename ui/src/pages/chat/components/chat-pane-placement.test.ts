@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { render } from "lit";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import type { ApplicationPlacementStartupStatus } from "../../../app/session-placement-startup.ts";
 import { renderChatPanePlacement } from "./chat-pane-placement.ts";
@@ -52,6 +52,40 @@ function mount(
 }
 
 describe("chat pane device placement", () => {
+  it("presents active post-turn reconciliation as cloud file sync", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    containers.push(container);
+    const session = {
+      key: "agent:main:cloud-sync",
+      kind: "direct",
+      updatedAt: 0,
+      placement: {
+        state: "active",
+        workspaceResultReconciling: true,
+        generation: 2,
+        createdAtMs: 100_000,
+        updatedAtMs: 300_000,
+        stateChangedAtMs: 300_000,
+        environmentId: "worker:cloud",
+        activeOwnerEpoch: 1,
+        workerBundleHash: "a".repeat(64),
+        workspaceBaseManifestRef: "base-manifest",
+        remoteWorkspaceDir: "/worker/repo",
+      },
+    } satisfies GatewaySessionRow;
+
+    render(renderChatPanePlacement({ session }), container);
+
+    expect(container.querySelector(".chat-pane__placement-chip")?.textContent?.trim()).toBe(
+      "Cloud · syncing files",
+    );
+    expect(container.querySelector(".chat-pane__placement-note")?.textContent).toContain(
+      "Safely applying cloud edits",
+    );
+    expect(container.querySelector("openclaw-elapsed-time")).toBeNull();
+  });
+
   it.each(
     [
       {
@@ -111,6 +145,45 @@ describe("chat pane device placement", () => {
     },
   );
 
+  it.each(["local", undefined] as const)(
+    "offers worker dispatch for a repository-only session with %s placement",
+    (placementState) => {
+      const container = document.createElement("div");
+      document.body.append(container);
+      containers.push(container);
+      const onPlacementRecover = vi.fn();
+      const session: GatewaySessionRow = {
+        key: "agent:main:repository",
+        kind: "direct",
+        updatedAt: 0,
+        repositoryWorkspaceId: "repository-workspace-1",
+        ...(placementState
+          ? {
+              placement: {
+                state: placementState,
+                generation: 1,
+                createdAtMs: 1,
+                updatedAtMs: 1,
+                stateChangedAtMs: 1,
+              },
+            }
+          : {}),
+      };
+
+      render(renderChatPanePlacement({ session, onPlacementRecover }), container);
+
+      expect(container.querySelector(".chat-pane__placement-chip")?.textContent?.trim()).toBe(
+        "Worker required",
+      );
+      const dispatch = container.querySelector<HTMLElement>(".chat-pane__placement-recovery");
+      expect(container.querySelectorAll(".chat-pane__placement-recovery")).toHaveLength(1);
+      expect(dispatch?.textContent?.trim()).toBe("Choose worker…");
+      expect(container.querySelector(".chat-pane__placement-move")).toBeNull();
+      dispatch?.click();
+      expect(onPlacementRecover).toHaveBeenCalledOnce();
+    },
+  );
+
   it("offers restart without a redundant stop action after a failed worker is gone", () => {
     const container = document.createElement("div");
     document.body.append(container);
@@ -132,7 +205,7 @@ describe("chat pane device placement", () => {
 
     render(renderChatPanePlacement({ session }), container);
 
-    expect(container.querySelector(".chat-pane__placement-restart")?.textContent?.trim()).toBe(
+    expect(container.querySelector(".chat-pane__placement-recovery")?.textContent?.trim()).toBe(
       "Restart session…",
     );
     expect(container.querySelector(".chat-pane__placement-reclaim")).toBeNull();
@@ -159,7 +232,7 @@ describe("chat pane device placement", () => {
 
     render(renderChatPanePlacement({ session }), container);
 
-    expect(container.querySelector(".chat-pane__placement-restart")).toBeNull();
+    expect(container.querySelector(".chat-pane__placement-recovery")).toBeNull();
     expect(container.querySelector(".chat-pane__placement-reclaim")?.textContent?.trim()).toBe(
       "Stop worker…",
     );

@@ -3,14 +3,18 @@
 // baseline for working-tree stats, and whether new pushed work is provable
 // (the Create PR gate). Pure local-git reasoning; GitHub facts come in as
 // MergedPullHead records.
+import fs from "node:fs";
+import path from "node:path";
 import { runGit } from "../agents/worktrees/git.js";
-
-/** Lowercased merged-PR head, the base it merged into, and its merge commit. */
-export type MergedPullHead = { sha: string; baseRef?: string; mergeCommitSha?: string };
+import { requireGitCommandOutput } from "../infra/git-exec.js";
+import type { GitMergedPullHead as MergedPullHead } from "../infra/git-read-operations.js";
+import { readGitHead, readGitRefs, resolveGitRefsBase } from "../infra/git-root.js";
+import { canReadGitFilesystemRefs } from "../infra/git-worker-context.js";
 
 type BranchLanding = {
   /** origin/<branch> tip when the remote-tracking ref resolves. */
   pushedSha: string | null;
+  defaultSha: string | null;
   /** Newest known-published commit to diff the working tree against. */
   statsBase: string | null;
   /** At least one merged PR provably landed on the default branch. */
@@ -19,12 +23,108 @@ type BranchLanding = {
   provenNewPushedWork: boolean;
 };
 
+/** Only ordinary file-backed refs bypass Git; unusual discovery/layouts retain its semantics. */
+export function readCheckoutHead(root: string): { sha: string; branch?: string | null } | null {
+  if (!canReadGitFilesystemRefs()) {
+    return null;
+  }
+  try {
+    const head = readGitHead(root, { maxDepth: 1 });
+    if (
+      !head?.value ||
+      !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(head.value) ||
+      fs.lstatSync(head.headPath).isSymbolicLink()
+    ) {
+      return null;
+    }
+    // Git prints lowercase object IDs even when a ref file uses uppercase.
+    const sha = head.value.toLowerCase();
+    const refsBase = head.refsBase ?? resolveGitRefsBase(head.headPath);
+    if (
+      fs.existsSync(path.join(refsBase, "reftable")) ||
+      (head.ref !== null && !head.ref.startsWith("refs/heads/"))
+    ) {
+      return null;
+    }
+    const branch = head.ref?.slice("refs/heads/".length) ?? null;
+    // Git resolves these names through packed, per-worktree, or virtual ref scopes.
+    if (
+      branch !== null &&
+      /^(?:[A-Z_]+$|(?:refs|bisect|worktree|rewritten|main-worktree|worktrees)\/)/.test(branch)
+    ) {
+      return null;
+    }
+    const headAliases = [
+      "refs/HEAD",
+      "refs/tags/HEAD",
+      "refs/heads/HEAD",
+      "refs/remotes/HEAD",
+      "refs/remotes/HEAD/HEAD",
+    ];
+    const branchAliases =
+      branch === null
+        ? []
+        : [
+            `refs/${branch}`,
+            `refs/tags/${branch}`,
+            `refs/remotes/${branch}`,
+            `refs/remotes/${branch}/HEAD`,
+          ];
+    const aliases = readGitRefs(refsBase, [...headAliases, ...branchAliases]);
+    if (headAliases.some((ref) => aliases.get(ref) !== null)) {
+      return null;
+    }
+    if (branch === null) {
+      return { sha, branch };
+    }
+    // rev-parse uses a qualified name when another ref makes the short name ambiguous.
+    const ambiguous =
+      fs.existsSync(path.join(refsBase, branch)) ||
+      branchAliases.some((ref) => aliases.get(ref) !== null);
+    return { sha, ...(ambiguous ? {} : { branch }) };
+  } catch {
+    return null;
+  }
+}
+
 export async function gitOutput(cwd: string, args: string[]): Promise<string | null> {
   try {
     const result = await runGit(cwd, args);
     return result.code === 0 ? result.stdout.trim() || null : null;
   } catch {
     return null;
+  }
+}
+
+async function readRemoteRevisions(root: string, refs: string[]): Promise<Map<string, string>> {
+  try {
+    // These fields read stored IDs without loading or lazily fetching partial-clone objects.
+    const result = await runGit(
+      root,
+      ["for-each-ref", "--format=%(refname)%00%(objectname)", "--", ...refs],
+      { maxOutputBytes: 16 * 1024, terminateOnOutputLimit: true },
+    );
+    const output = requireGitCommandOutput("git for-each-ref", result);
+    const revisions = new Map<string, string>();
+    for (const line of output.trim().split("\n")) {
+      const separator = line.indexOf("\0");
+      const ref = line.slice(0, separator);
+      // Ref patterns also match descendants; only exact requested refs identify these tips.
+      if (separator > 0 && refs.includes(ref)) {
+        revisions.set(ref, line.slice(separator + 1));
+      }
+    }
+    return revisions;
+  } catch {
+    // A failed or oversized ref inventory must not hide independently readable tips.
+    const revisions = new Map<string, string>();
+    for (const ref of refs) {
+      const revision = await gitOutput(root, ["rev-parse", "--verify", "--quiet", ref]);
+      if (revision) {
+        revisions.set(ref, revision);
+      }
+    }
+    return revisions;
   }
 }
 
@@ -89,40 +189,43 @@ export async function resolveBranchLanding(
     mergedHeads: readonly MergedPullHead[];
   },
 ): Promise<BranchLanding> {
-  const pushedSha = await gitOutput(root, [
-    "rev-parse",
-    "--verify",
-    "--quiet",
-    `refs/remotes/origin/${params.branch}`,
+  const pushedRef = `refs/remotes/origin/${params.branch}`;
+  const defaultRef = params.defaultBranch ? `refs/remotes/origin/${params.defaultBranch}` : null;
+  const revisions = await readRemoteRevisions(root, [
+    pushedRef,
+    ...(defaultRef ? [defaultRef] : []),
   ]);
+  const pushedSha = revisions.get(pushedRef) ?? null;
+  const headSha =
+    readCheckoutHead(root)?.sha ??
+    (await gitOutput(root, ["rev-parse", "--verify", "--quiet", "HEAD"]));
+  const defaultSha = defaultRef ? (revisions.get(defaultRef) ?? null) : null;
   const possibleLandings = params.mergedHeads.filter(
     (head) =>
       head.baseRef === params.defaultBranch || Boolean(params.defaultBranch && head.mergeCommitSha),
   );
-  // Only possible landings consume HEAD; keep its read order for those records.
-  const headSha = possibleLandings.length ? await gitOutput(root, ["rev-parse", "HEAD"]) : null;
   // Only merges whose content reached this checkout's default branch prove
   // the tip landed there: a direct default-base merge, or a landing through
   // another branch (feature -> release -> main) whose merge commit is now
   // contained in the default branch. A PR merged into an unpropagated
   // release/staging branch must not hide Create PR. Filtered here, not in
   // the snapshot cache, because the cache key has no default branch.
-  const defaultRef = params.defaultBranch ? `refs/remotes/origin/${params.defaultBranch}` : null;
   const landedHeads: MergedPullHead[] = [];
   for (const head of possibleLandings) {
     if (head.baseRef === params.defaultBranch) {
       landedHeads.push(head);
     } else if (
-      defaultRef &&
+      defaultSha &&
       head.mergeCommitSha &&
-      (await isAncestor(root, head.mergeCommitSha, defaultRef))
+      (await isAncestor(root, head.mergeCommitSha, defaultSha))
     ) {
       landedHeads.push(head);
     }
   }
   // PRs may share a head; their distinct landing receipts still need individual checks below.
   const landedShas = new Set(landedHeads.map((head) => head.sha));
-  const mergeBase = defaultRef ? await gitOutput(root, ["merge-base", defaultRef, "HEAD"]) : null;
+  const mergeBase =
+    defaultSha && headSha ? await gitOutput(root, ["merge-base", defaultSha, headSha]) : null;
   // The stats base is the newest commit whose content is known-published:
   // the ordinary default-branch merge base, or a merged PR head related to
   // HEAD by ancestry (a HEAD trailing the merged tip is fully landed, so
@@ -166,6 +269,7 @@ export async function resolveBranchLanding(
   }
   return {
     pushedSha,
+    defaultSha,
     statsBase,
     hasLandedPullRequest: landedHeads.length > 0,
     provenNewPushedWork,

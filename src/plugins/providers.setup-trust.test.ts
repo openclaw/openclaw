@@ -170,6 +170,7 @@ describe("setup provider workspace trust", () => {
           label: "Setup Trust Provider",
           auth: [],
           pluginId: "setup-trusted-provider",
+          pluginRoot: path.join(workspaceDir, ".openclaw", "extensions", "setup-trusted-provider"),
         },
       ]);
     });

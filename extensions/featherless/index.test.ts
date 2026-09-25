@@ -93,28 +93,42 @@ describe("featherless provider plugin", () => {
     ]);
   });
 
-  it("resolves arbitrary Featherless model ids from conservative text defaults", async () => {
-    const provider = await registerSingleProviderPlugin(featherlessPlugin);
-    const resolved = provider.resolveDynamicModel?.(
-      createProviderDynamicModelContext({
-        provider: "featherless",
-        modelId: "moonshotai/Kimi-K2-Instruct",
-        models: [createDefaultRuntimeModel()],
-      }),
-    );
+  it.each(["default", "custom", "missing"] as const)(
+    "resolves arbitrary Featherless model ids with a %s template",
+    async (source) => {
+      const provider = await registerSingleProviderPlugin(featherlessPlugin);
+      const template = createDefaultRuntimeModel();
+      if (source === "custom") {
+        template.api = "openai-responses";
+        template.baseUrl = "https://models.example.test/v1";
+        template.headers = { "X-Route": "custom-template" };
+      }
+      const resolved = provider.resolveDynamicModel?.(
+        createProviderDynamicModelContext({
+          provider: "featherless",
+          modelId: "moonshotai/Kimi-K2-Instruct",
+          models: source === "missing" ? [] : [template],
+        }),
+      );
 
-    expect(resolved).toMatchObject({
-      id: "moonshotai/Kimi-K2-Instruct",
-      provider: "featherless",
-      api: "openai-completions",
-      baseUrl: FEATHERLESS_BASE_URL,
-      reasoning: false,
-      input: ["text"],
-      contextWindow: FEATHERLESS_DYNAMIC_CONTEXT_WINDOW,
-      maxTokens: FEATHERLESS_DYNAMIC_MAX_TOKENS,
-      compat: FEATHERLESS_DYNAMIC_COMPAT,
-    });
-  });
+      expect(resolved).toMatchObject({
+        id: "moonshotai/Kimi-K2-Instruct",
+        provider: "featherless",
+        api: source === "missing" ? "openai-completions" : template.api,
+        baseUrl: source === "missing" ? FEATHERLESS_BASE_URL : template.baseUrl,
+        reasoning: false,
+        input: ["text"],
+        contextWindow: FEATHERLESS_DYNAMIC_CONTEXT_WINDOW,
+        maxTokens: FEATHERLESS_DYNAMIC_MAX_TOKENS,
+        compat: FEATHERLESS_DYNAMIC_COMPAT,
+        cost:
+          source === "missing"
+            ? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+            : template.cost,
+      });
+      expect(resolved?.headers).toEqual(source === "missing" ? undefined : template.headers);
+    },
+  );
 
   it("applies provider compat to configured models without overriding explicit values", async () => {
     const provider = await registerSingleProviderPlugin(featherlessPlugin);

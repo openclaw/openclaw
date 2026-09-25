@@ -1,4 +1,5 @@
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
+import type { AgentTool } from "../../runtime/index.js";
 import type { prepareEmbeddedAttemptBootstrap } from "./attempt-bootstrap-prepare.js";
 import type { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
 import type { AttemptContextEngine } from "./attempt-context-engine-helpers.js";
@@ -37,9 +38,11 @@ export type EmbeddedAttemptExecutionPhaseInput = {
     bundleTools: Prepared<typeof prepareEmbeddedAttemptBundleTools>;
     sessionRuntime: Prepared<typeof prepareEmbeddedAttemptSessionRuntime>;
     systemPrompt: Prepared<typeof prepareEmbeddedAttemptSystemPrompt>;
-    toolBase: ReturnType<typeof prepareEmbeddedAttemptToolBase>;
+    toolBase: Prepared<typeof prepareEmbeddedAttemptToolBase>;
     toolCatalog: ReturnType<typeof prepareEmbeddedAttemptToolCatalog>;
-    promptToolPolicy: ReturnType<typeof createPromptBuildToolPolicy>;
+    promptToolPolicy: ReturnType<
+      typeof createPromptBuildToolPolicy<AgentTool, AgentTool, AgentTool>
+    >;
   };
   sessionLock: Pick<
     PreparedTranscriptLifecycle,

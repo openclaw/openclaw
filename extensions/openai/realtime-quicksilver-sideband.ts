@@ -1,6 +1,11 @@
-import { sleepWithAbort } from "openclaw/plugin-sdk/realtime-voice-provider";
-import type { ClientOptions, RawData } from "ws";
+import { sleepWithAbort, toErrorObject } from "openclaw/plugin-sdk/realtime-voice-provider";
+import type { RawData } from "ws";
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
+import type {
+  OpenAIQuicksilverSocket,
+  OpenAIQuicksilverSocketFactory,
+  QuicksilverMediaSocketFactory,
+} from "./realtime-quicksilver-socket.shared.js";
 import {
   openAIQuicksilverAuthHeaders,
   type OpenAIQuicksilverAuth,
@@ -13,33 +18,6 @@ const SIDEBAND_RETRY_BASE_MS = 200;
 const EARLY_FRAME_MAX = 32;
 const EARLY_FRAME_MAX_BYTES = 1024 * 1024;
 const SIDEBAND_MAX_PAYLOAD_BYTES = 16 * 1024 * 1024;
-
-export type OpenAIQuicksilverSocket = {
-  readonly readyState: number;
-  send(payload: string): void;
-  close(code?: number, reason?: string): void;
-  on(
-    event: "message",
-    listener: (data: RawData, isBinary: boolean) => void,
-  ): OpenAIQuicksilverSocket;
-  on(event: "error", listener: (error: Error) => void): OpenAIQuicksilverSocket;
-  on(event: "close", listener: (code: number, reason: Buffer) => void): OpenAIQuicksilverSocket;
-  once(event: "open", listener: () => void): OpenAIQuicksilverSocket;
-  once(event: "error", listener: (error: Error) => void): OpenAIQuicksilverSocket;
-  once(event: "close", listener: (code: number, reason: Buffer) => void): OpenAIQuicksilverSocket;
-  off(event: "open", listener: () => void): OpenAIQuicksilverSocket;
-  off(
-    event: "message",
-    listener: (data: RawData, isBinary: boolean) => void,
-  ): OpenAIQuicksilverSocket;
-  off(event: "error", listener: (error: Error) => void): OpenAIQuicksilverSocket;
-  off(event: "close", listener: (code: number, reason: Buffer) => void): OpenAIQuicksilverSocket;
-};
-
-export type OpenAIQuicksilverSocketFactory = (
-  url: string,
-  options: ClientOptions,
-) => OpenAIQuicksilverSocket;
 
 type OpenAIQuicksilverBufferedFrame = { data: RawData; isBinary: boolean };
 type OpenAIQuicksilverTerminalEvent =
@@ -146,7 +124,7 @@ export async function connectOpenAIQuicksilverSideband(
       throw params.signal.reason;
     }
     const socket = params.createSocket(params.url, {
-      headers: openAIQuicksilverAuthHeaders(params.auth, params.requestIds, runtime),
+      headers: openAIQuicksilverAuthHeaders(params.auth, params.requestIds, runtime, params.url),
       maxPayload: SIDEBAND_MAX_PAYLOAD_BYTES,
     });
     const bufferedFrames: OpenAIQuicksilverBufferedFrame[] = [];
@@ -213,4 +191,45 @@ export async function connectOpenAIQuicksilverSideband(
     }
   }
   throw lastError;
+}
+
+/** Default transport loading belongs to live connection admission, not cold catalogs. */
+export async function loadOpenAIQuicksilverMediaSocketFactory(
+  signal: AbortSignal,
+): Promise<QuicksilverMediaSocketFactory> {
+  return (
+    await waitForOpenAIQuicksilverConnectStep(import("./realtime-quicksilver-socket.js"), signal)
+  ).OpenAIQuicksilverWorkerSocket.create;
+}
+
+export function openAIQuicksilverConnectAbortError(signal: AbortSignal): Error {
+  return signal.reason instanceof Error
+    ? signal.reason
+    : new Error("GPT-Live gateway relay startup stopped", { cause: signal.reason });
+}
+
+export function waitForOpenAIQuicksilverConnectStep<T>(
+  promise: Promise<T>,
+  signal: AbortSignal,
+): Promise<T> {
+  if (signal.aborted) {
+    return Promise.reject(openAIQuicksilverConnectAbortError(signal));
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      signal.removeEventListener("abort", onAbort);
+      reject(openAIQuicksilverConnectAbortError(signal));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(toErrorObject(error, "OpenAI GPT-Live gateway relay failed"));
+      },
+    );
+  });
 }

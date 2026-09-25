@@ -140,7 +140,7 @@ describe("runEmbeddedAttempt tool-search catalog cleanup", () => {
                         id: "denied",
                         name: code ? "exec" : toolName,
                         arguments: code
-                          ? { code }
+                          ? { title: "Inspect the denied catalog action", code }
                           : toolName === "sessions_spawn"
                             ? { task: "inspect" }
                             : { ids: ["child"] },
@@ -237,39 +237,14 @@ describe("runEmbeddedAttempt tool-search catalog cleanup", () => {
   );
 
   it.each([
-    {
-      mode: "code-mode",
-      tools: { codeMode: { enabled: true } },
-      cancel: false,
-      timeout: false,
-    },
-    {
-      mode: "tool-search-tools",
-      tools: { toolSearch: { enabled: true, mode: "tools" } },
-      cancel: false,
-      timeout: false,
-    },
-    {
-      mode: "tool-search-directory",
-      tools: { toolSearch: { enabled: true, mode: "directory" } },
-      cancel: false,
-      timeout: false,
-    },
-    {
-      mode: "cancelled-code-mode",
-      tools: { codeMode: { enabled: true } },
-      cancel: true,
-      timeout: false,
-    },
-    {
-      mode: "timed-out-code-mode",
-      tools: { codeMode: { enabled: true } },
-      cancel: true,
-      timeout: true,
-    },
+    ["code-mode", { codeMode: { enabled: true } }, false, false],
+    ["tool-search-tools", { toolSearch: { enabled: true, mode: "tools" } }, false, false],
+    ["tool-search-directory", { toolSearch: { enabled: true, mode: "directory" } }, false, false],
+    ["cancelled-code-mode", { codeMode: { enabled: true } }, true, false],
+    ["timed-out-code-mode", { codeMode: { enabled: true } }, true, true],
   ] as const)(
-    "clears the $mode run catalog when preparation fails or is cancelled",
-    async ({ mode, tools, cancel, timeout }) => {
+    "clears the %s run catalog when preparation fails or is cancelled",
+    async (mode, tools, cancel, timeout) => {
       const runId = `run-catalog-diagnostics-${mode}`;
       const diagnosticsError = new Error(`failed ${mode} tool diagnostics`);
       if (timeout) {

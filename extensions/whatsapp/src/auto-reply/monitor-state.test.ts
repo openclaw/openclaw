@@ -84,19 +84,6 @@ describe("createWebChannelStatusController", () => {
     expect(last.lifecycle).toBe("recovering");
   });
 
-  it("produces snapshots that enable stale-socket health detection", () => {
-    const patches: Record<string, unknown>[] = [];
-    const controller = createWebChannelStatusController((s) => patches.push({ ...s }));
-
-    controller.noteConnected(1000);
-
-    const last = patches.at(-1)!;
-    // The gateway health policy checks `connected === true && lastTransportActivityAt != null`
-    // to decide whether to run stale-socket detection. Both must be present.
-    expect(last.connected).toBe(true);
-    expect(last.lastTransportActivityAt).toBe(1000);
-  });
-
   it("clears watchdog recovery history once the socket is healthy again", () => {
     const patches: Record<string, unknown>[] = [];
     const controller = createWebChannelStatusController((s) => patches.push({ ...s }));

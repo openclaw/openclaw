@@ -7,7 +7,7 @@ import {
   type LoadedLocalSkill,
   type LocalSkillLoadDiagnostic,
 } from "./local-loader.js";
-import type { PluginSkillRoot } from "./plugin-skills.js";
+import type { PluginSkillRoot } from "./plugin-skill-root.js";
 import { compactSkillPath } from "./skill-paths.js";
 import {
   canonicalSkillDirForSource,
@@ -90,17 +90,6 @@ function canonicalizeLoadedSkillRecord(
         ? { ...record.skill.sourceInfo, path: filePath, baseDir: canonicalBaseDir }
         : record.skill.sourceInfo,
     },
-  };
-}
-
-function setSyncSourceForPluginSkill(
-  record: LoadedSkillRecord,
-  syncSourceDir: string,
-): LoadedSkillRecord {
-  return {
-    ...record,
-    syncSourceDir,
-    syncDirName: path.basename(record.skill.baseDir),
   };
 }
 
@@ -198,7 +187,11 @@ export function loadGeneratedPluginSkillRecords(params: {
       rejectHardlinks: candidate.rejectHardlinks,
     });
     if (record) {
-      loadedSkills.push(setSyncSourceForPluginSkill(record, candidate.skillDirRealPath));
+      loadedSkills.push({
+        ...record,
+        syncSourceDir: candidate.skillDirRealPath,
+        syncDirName: path.basename(record.skill.baseDir),
+      });
     }
     if (loadedSkills.length >= maxSkillsLoadedPerSource) {
       break;

@@ -4,10 +4,8 @@ import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import {
-  readOpenClawDatabaseQuarantine,
-  recordOpenClawDatabaseQuarantine,
-} from "../state/openclaw-quarantine-store.js";
+import { recordOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.js";
+import { readPersistedQuarantineRow } from "../state/openclaw-quarantine-store.test-support.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabase,
@@ -250,7 +248,7 @@ describe("runDoctorStateSqliteCompact", () => {
 
     await runDoctorStateSqliteCompact({ env });
 
-    expect(readOpenClawDatabaseQuarantine(sqlitePath, { env })).toBeUndefined();
+    expect(readPersistedQuarantineRow(sqlitePath, { env })).toBeUndefined();
     expect(openOpenClawStateDatabase({ env }).db.isOpen).toBe(true);
   });
 
@@ -371,7 +369,7 @@ describe("runDoctorStateSqliteCompact", () => {
         /checkpoint remained busy/,
       );
       expect(readPragma(writer, "auto_vacuum")).toBe(0);
-      expect(readOpenClawDatabaseQuarantine(sqlitePath, { env })?.reason).toBe("busy checkpoint");
+      expect(readPersistedQuarantineRow(sqlitePath, { env })?.reason).toBe("busy checkpoint");
     } finally {
       reader.exec("ROLLBACK;");
       reader.close();

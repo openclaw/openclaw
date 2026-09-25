@@ -9,6 +9,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { getMemoryEmbeddingCommandSecretTargetIds } from "../command-secret-targets.js";
 import { collectOption } from "../program/helpers.js";
+import { prepareLocalCapabilityAccountSecrets } from "./local-account-secrets.js";
 import type { CapabilityEnvelope } from "./metadata.js";
 import { emitJsonOrText, formatEnvelopeForText, providerSummaryText } from "./output.js";
 import {
@@ -23,16 +24,11 @@ import {
 async function closeEmbeddingProviderWithRetry(provider: {
   close?: () => Promise<void> | void;
 }): Promise<void> {
-  let lastError: unknown;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      await provider.close?.();
-      return;
-    } catch (err) {
-      lastError = err;
-    }
+  try {
+    await provider.close?.();
+  } catch {
+    await provider.close?.();
   }
-  throw lastError;
 }
 
 async function runMemoryEmbeddingCreate(params: {
@@ -49,6 +45,7 @@ async function runMemoryEmbeddingCreate(params: {
   const requestedProvider =
     normalizeOptionalString(params.provider) || modelRef?.provider || "auto";
   const agentId = resolveCapabilityProviderAgentId(cfg, params.agent, "infer embedding create");
+  await prepareLocalCapabilityAccountSecrets({ cfg, agentId });
   const result = await createEmbeddingProvider({
     config: cfg,
     agentDir: resolveAgentDir(cfg, agentId),
@@ -60,29 +57,15 @@ async function runMemoryEmbeddingCreate(params: {
     throw new Error(result.providerUnavailableReason ?? "No embedding provider available.");
   }
   const provider = result.provider;
-  let embeddings: number[][] = [];
-  let operationError: unknown;
-  let operationFailed = false;
+  let embeddings: number[][];
   try {
     embeddings = await provider.embedBatch(params.texts, { inputType: "document" });
   } catch (err) {
-    operationError = err;
-    operationFailed = true;
+    // Cleanup failure must not replace the embedding error.
+    await closeEmbeddingProviderWithRetry(provider).catch(() => {});
+    throw err;
   }
-  let closeError: unknown;
-  let closeFailed = false;
-  try {
-    await closeEmbeddingProviderWithRetry(provider);
-  } catch (err) {
-    closeError = err;
-    closeFailed = true;
-  }
-  if (operationFailed) {
-    throw operationError;
-  }
-  if (closeFailed) {
-    throw closeError;
-  }
+  await closeEmbeddingProviderWithRetry(provider);
   return {
     ok: true,
     capability: "embedding.create",

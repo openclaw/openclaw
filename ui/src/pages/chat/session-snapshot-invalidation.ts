@@ -2,7 +2,10 @@ import {
   CHAT_SNAPSHOT_DB_NAME,
   deleteSessionSnapshotDatabaseRecord,
 } from "./session-snapshot-database.ts";
-import { publishSnapshotInvalidation } from "./session-snapshot-invalidation-events.ts";
+import {
+  publishSnapshotInvalidation,
+  type SessionSnapshotInvalidationReason,
+} from "./session-snapshot-invalidation-events.ts";
 
 function indexedDbFactory(): IDBFactory | null {
   try {
@@ -12,8 +15,11 @@ function indexedDbFactory(): IDBFactory | null {
   }
 }
 
-export async function deleteStoredChatSnapshot(sessionKey: string): Promise<void> {
-  await publishSnapshotInvalidation({ sessionKey });
+export async function deleteStoredChatSnapshot(
+  sessionKey: string,
+  reason?: SessionSnapshotInvalidationReason,
+): Promise<void> {
+  await publishSnapshotInvalidation({ sessionKey, ...(reason ? { reason } : {}) });
   await deleteSessionSnapshotDatabaseRecord(sessionKey);
 }
 

@@ -13,10 +13,11 @@ import { readConfigFileSnapshot } from "../config/io.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { withSynchronousArtifactPreservingStateSnapshot } from "../state/openclaw-state-db-readonly.js";
 import { shortenHomePath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
-function configuredWorkspaceDirs(cfg: OpenClawConfig): string[] {
+async function configuredWorkspaceDirs(cfg: OpenClawConfig): Promise<string[]> {
   return listWorkspaceStateDirs({
     cfg,
     env: process.env,
@@ -54,29 +55,32 @@ const REBIND_MESSAGES: Record<Exclude<WorkspaceAliasRebindOutcome, "rebound">, s
 };
 
 /** Read-only findings include failed inspection so health cannot report a false success. */
-export function collectRepointedWorkspaceAliasFindings(
+export async function collectRepointedWorkspaceAliasFindings(
   cfg: OpenClawConfig,
-): WorkspaceAliasFinding[] {
-  const findings: WorkspaceAliasFinding[] = [];
-  for (const workspaceDir of configuredWorkspaceDirs(cfg)) {
-    let message: string;
-    try {
-      const facts = detectRepointedWorkspaceAlias(workspaceDir);
-      if (!facts) {
-        continue;
+): Promise<WorkspaceAliasFinding[]> {
+  const workspaceDirs = await configuredWorkspaceDirs(cfg);
+  return withSynchronousArtifactPreservingStateSnapshot(() => {
+    const findings: WorkspaceAliasFinding[] = [];
+    for (const workspaceDir of workspaceDirs) {
+      let message: string;
+      try {
+        const facts = detectRepointedWorkspaceAlias(workspaceDir);
+        if (!facts) {
+          continue;
+        }
+        message = `${describeRepointedWorkspaceAlias(facts)} Incoming messages cannot use this workspace until it is repaired.`;
+      } catch (error) {
+        message = `Workspace alias inspection failed for ${shortenHomePath(workspaceDir)}: ${formatErrorMessage(error)}`;
       }
-      message = `${describeRepointedWorkspaceAlias(facts)} Incoming messages cannot use this workspace until it is repaired.`;
-    } catch (error) {
-      message = `Workspace alias inspection failed for ${shortenHomePath(workspaceDir)}: ${formatErrorMessage(error)}`;
+      findings.push({
+        checkId: WORKSPACE_ALIAS_CHECK_ID,
+        severity: "warning",
+        message,
+        fixHint: REPAIR_HINT,
+      });
     }
-    findings.push({
-      checkId: WORKSPACE_ALIAS_CHECK_ID,
-      severity: "warning",
-      message,
-      fixHint: REPAIR_HINT,
-    });
-  }
-  return findings;
+    return findings;
+  });
 }
 
 async function maybeRepairRepointedWorkspaceAliases(params: {
@@ -87,7 +91,7 @@ async function maybeRepairRepointedWorkspaceAliases(params: {
   if (!params.prompter.shouldRepair) {
     return;
   }
-  const workspaceDirs = configuredWorkspaceDirs(params.cfg);
+  const workspaceDirs = await configuredWorkspaceDirs(params.cfg);
   const configuration = await readConfigFileSnapshot();
   const verifyConfiguration = async () => {
     const current = await readConfigFileSnapshot();
@@ -155,12 +159,12 @@ export function createWorkspaceAliasMigrationRepair(
     return undefined;
   }
   return async (cfg) => {
-    if (collectRepointedWorkspaceAliasFindings(cfg).length === 0) {
+    if ((await collectRepointedWorkspaceAliasFindings(cfg)).length === 0) {
       return;
     }
     beforePrompt();
     await maybeRepairRepointedWorkspaceAliases({ cfg, prompter });
-    const unresolved = collectRepointedWorkspaceAliasFindings(cfg);
+    const unresolved = await collectRepointedWorkspaceAliasFindings(cfg);
     if (unresolved.length > 0) {
       throw new Error(
         unresolved.map((finding) => `${finding.message} ${finding.fixHint}`).join("\n"),

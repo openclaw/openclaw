@@ -9,6 +9,7 @@ import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import {
   installNativeAncestorTypes,
   materializeNativeCompiler,
+  overrideNativeFixtureExecutable,
   resolveNativeFixtureShortPath,
   writeNativeFixtureFile,
 } from "./native-boundary-fixture.js";
@@ -328,15 +329,17 @@ describe("native declaration preparation", () => {
           `#!/usr/bin/env node
 import fs from "node:fs";
 import { spawnSync } from "node:child_process";
-const result = spawnSync(${JSON.stringify(f.native)}, process.argv.slice(2), { stdio: "inherit" });
+const args = process.argv.slice(2);
+const result = spawnSync(${JSON.stringify(f.native)}, args, { stdio: "inherit" });
 if (result.status !== 0) process.exit(result.status ?? 1);
-if (fs.existsSync(${JSON.stringify(trigger)})) fs.appendFileSync(${JSON.stringify(source)}, "\\n");
+if (args.includes("--emitDeclarationOnly") && fs.existsSync(${JSON.stringify(trigger)})) fs.appendFileSync(${JSON.stringify(source)}, "\\n");
 `,
         );
         fs.chmodSync(launcher, 0o755);
         if (process.platform === "win32") {
           f.write("node_modules/.bin/tsgo.cmd", '@node "%~dp0tsgo" %*\r\n');
         }
+        overrideNativeFixtureExecutable(f.root, launcher);
         await f.run();
         expect(readArtifactRecord(f.recordPath)).toBeDefined();
         f.write(`${f.output}/orphan.d.ts`, "export interface Orphan {}\n");

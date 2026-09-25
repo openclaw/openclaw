@@ -15,6 +15,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { cloneChatAttachmentsForIndependentOwner } from "./attachment-payload-store.ts";
 import { clearChatHistory } from "./chat-history-actions.ts";
+import { isExpiredIncognitoSession } from "./chat-history-state.ts";
 import { createChatModelSetupBanner } from "./chat-model-setup.ts";
 import { ChatPaneRetainedPresentation } from "./chat-pane-retained-presentation.ts";
 import {
@@ -30,6 +31,7 @@ import { resolveChatPaneParentSession } from "./components/chat-pane-header.ts";
 /** Creates or resets a conversation while guarding its asynchronous ownership. */
 export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentation {
   protected recoveringSession = false;
+  protected creatingIncognitoSession = false;
 
   protected sessionDisabledBanner(params: {
     catalogDisabledReason: string | null | undefined;
@@ -65,6 +67,29 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
     if (params.catalogDisabledReason) {
       return undefined;
     }
+    if (this.state && isExpiredIncognitoSession(this.state)) {
+      const access = readSessionMethodAccess(this.context.gateway.snapshot, {
+        method: "sessions.create",
+        params: {
+          incognito: true,
+          agentId:
+            scopedAgentParamsForSession(this.state, this.state.sessionKey).agentId ??
+            resolveAgentIdFromSessionKey(this.state.sessionKey),
+        },
+      });
+      return {
+        kind: "composer-replacement" as const,
+        title: t("chat.incognitoExpiredTitle"),
+        text: t("chat.incognitoExpiredBody"),
+        tone: "neutral" as const,
+        actionLabel: t("chat.newIncognitoSession"),
+        busy: this.creatingIncognitoSession,
+        disabledReason: access.allowed ? undefined : access.reason,
+        onAction: () => {
+          void this.createSession();
+        },
+      };
+    }
     if (params.restartRecoveryTombstoned) {
       return this.restartRecoveryComposerBanner();
     }
@@ -87,7 +112,9 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
       };
     }
     return params.modelSetupRequired
-      ? createChatModelSetupBanner(() => this.context.navigate("model-setup"))
+      ? createChatModelSetupBanner(() =>
+          this.context.navigate("model-providers", { search: "?connect=1" }),
+        )
       : undefined;
   }
 
@@ -201,29 +228,36 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
 
   protected readonly createSession = async (): Promise<boolean> => {
     const state = this.state;
-    if (!state || !state.client || !state.connected) {
+    if (!state || !state.client || !state.connected || this.creatingIncognitoSession) {
       return false;
     }
     const context = this.context;
     const sessions = context.sessions;
     const client = state.client;
     const previousSessionKey = state.sessionKey;
-    const preservesBoard = this.resolveBoardView().hasBoard;
+    const expiredIncognito = isExpiredIncognitoSession(state);
+    const preservesBoard = !expiredIncognito && this.resolveBoardView().hasBoard;
     const createParams = {
-      currentSessionKey: previousSessionKey,
+      ...(expiredIncognito
+        ? { incognito: true as const }
+        : { currentSessionKey: previousSessionKey }),
       agentId:
         scopedAgentParamsForSession(state, previousSessionKey).agentId ??
         resolveAgentIdFromSessionKey(previousSessionKey),
     };
     const createRequestParams = {
-      ...resolveSessionCreateParams(createParams.currentSessionKey, createParams.agentId),
+      ...resolveSessionCreateParams(
+        expiredIncognito ? undefined : previousSessionKey,
+        createParams.agentId,
+      ),
+      ...(expiredIncognito ? { incognito: true } : {}),
     };
     const readCreateAccess = () =>
       readSessionMethodAccess(context.gateway.snapshot, {
         method: preservesBoard ? "sessions.reset" : "sessions.create",
         ...(preservesBoard
           ? { requiredScope: "operator.admin" as const }
-          : { params: createRequestParams }),
+          : { params: createRequestParams, sessionScope: true }),
       });
     const publishCreateAccessError = (reason: string) => {
       state.lastError = reason;
@@ -258,7 +292,7 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
       return false;
     }
     if (
-      !(await this.confirmConversationReset()) ||
+      (!expiredIncognito && !(await this.confirmConversationReset())) ||
       !isCurrent() ||
       !areUiSessionKeysEquivalent(state.sessionKey, previousSessionKey)
     ) {
@@ -280,38 +314,49 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
       const resetResult = await clearChatHistory(state);
       return resetResult !== "failed";
     }
-    const nextSessionKey = await sessions.create(createParams);
-    if (!isCurrent()) {
-      return false;
+    this.creatingIncognitoSession = expiredIncognito;
+    if (expiredIncognito) {
+      this.requestUpdate();
     }
-    if (
-      !nextSessionKey ||
-      state.sessionKey !== previousSessionKey ||
-      !canCreateChatSession(state)
-    ) {
-      if (!nextSessionKey) {
-        setChatError(
-          state,
-          state.sessionsError ??
-            (state.sessionsLoading
-              ? NEW_SESSION_LIST_LOADING_MESSAGE
-              : NEW_SESSION_CREATE_FAILED_MESSAGE),
-        );
-        state.requestUpdate?.();
+    try {
+      const nextSessionKey = await sessions.create(createParams);
+      if (!isCurrent()) {
+        return false;
       }
-      return false;
+      if (
+        !nextSessionKey ||
+        state.sessionKey !== previousSessionKey ||
+        !canCreateChatSession(state)
+      ) {
+        if (!nextSessionKey) {
+          setChatError(
+            state,
+            state.sessionsError ??
+              (state.sessionsLoading
+                ? NEW_SESSION_LIST_LOADING_MESSAGE
+                : NEW_SESSION_CREATE_FAILED_MESSAGE),
+          );
+          state.requestUpdate?.();
+        }
+        return false;
+      }
+      if (this.onPaneSessionChange?.(this.paneId, nextSessionKey) === false) {
+        return false;
+      }
+      preparePaneSessionHandoff(this.context, this.paneId, nextSessionKey, {
+        attachments: cloneChatAttachmentsForIndependentOwner(state.chatAttachments),
+        draft: state.chatMessage,
+        ...(state.chatMentions?.length
+          ? { mentions: state.chatMentions.map((mention) => ({ ...mention })) }
+          : {}),
+        ...(state.chatGoalDraftMode ? { goalMode: state.chatGoalDraftMode } : {}),
+      });
+      return true;
+    } finally {
+      this.creatingIncognitoSession = false;
+      if (expiredIncognito && isCurrent()) {
+        this.requestUpdate();
+      }
     }
-    if (this.onPaneSessionChange?.(this.paneId, nextSessionKey) === false) {
-      return false;
-    }
-    preparePaneSessionHandoff(this.context, this.paneId, nextSessionKey, {
-      attachments: cloneChatAttachmentsForIndependentOwner(state.chatAttachments),
-      draft: state.chatMessage,
-      ...(state.chatMentions?.length
-        ? { mentions: state.chatMentions.map((mention) => ({ ...mention })) }
-        : {}),
-      ...(state.chatGoalDraftMode ? { goalMode: state.chatGoalDraftMode } : {}),
-    });
-    return true;
   };
 }

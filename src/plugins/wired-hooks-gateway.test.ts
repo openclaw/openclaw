@@ -7,15 +7,15 @@
  */
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
-import { createHookRunnerWithRegistry } from "./hooks.test-fixtures.js";
 import type {
   PluginHookCronChangedEvent,
   PluginHookCronReconciledContext,
   PluginHookCronReconciledEvent,
   PluginHookGatewayContext,
-  PluginHookHandlerMap,
   PluginHookGatewayStopEvent,
-} from "./types.js";
+} from "./hook-gateway.types.js";
+import type { PluginHookHandlerMap } from "./hook-types.js";
+import { createHookRunnerWithRegistry } from "./hooks.test-fixtures.js";
 
 type PluginHookGatewayStartEvent = Parameters<PluginHookHandlerMap["gateway_start"]>[0];
 

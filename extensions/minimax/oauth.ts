@@ -6,6 +6,7 @@ import {
   resolveExpiresAtMsFromDurationOrEpoch,
   resolvePositiveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
 import { generatePkceVerifierChallenge, toFormUrlEncoded } from "openclaw/plugin-sdk/provider-auth";
 import {
   readProviderJsonResponse,
@@ -97,6 +98,7 @@ async function requestOAuthCode(params: {
   state: string;
   region: MiniMaxRegion;
   signal?: AbortSignal;
+  assertCurrent: () => void;
 }): Promise<MiniMaxOAuthAuthorization> {
   const endpoints = getOAuthEndpoints(params.region);
   const { response, release } = await fetchWithSsrFGuard({
@@ -118,6 +120,7 @@ async function requestOAuthCode(params: {
       }),
     },
     ...(params.signal ? { signal: params.signal } : {}),
+    beforeRequest: params.assertCurrent,
     timeoutMs: MINIMAX_OAUTH_FETCH_TIMEOUT_MS,
     policy: { allowedHostnames: [endpoints.hostname] },
     auditContext: "minimax.oauth.code",
@@ -156,6 +159,7 @@ async function pollOAuthToken(params: {
   verifier: string;
   region: MiniMaxRegion;
   signal?: AbortSignal;
+  assertCurrent: () => void;
 }): Promise<TokenResult> {
   const endpoints = getOAuthEndpoints(params.region);
   const { response, release } = await fetchWithSsrFGuard({
@@ -174,6 +178,7 @@ async function pollOAuthToken(params: {
       }),
     },
     ...(params.signal ? { signal: params.signal } : {}),
+    beforeRequest: params.assertCurrent,
     timeoutMs: MINIMAX_OAUTH_FETCH_TIMEOUT_MS,
     policy: { allowedHostnames: [endpoints.hostname] },
     auditContext: "minimax.oauth.token",
@@ -254,21 +259,31 @@ async function parseMiniMaxOAuthTokenResponse(response: Response): Promise<Token
 export async function loginMiniMaxPortalOAuth(params: {
   openUrl: (url: string) => Promise<void>;
   note: (message: string, title?: string) => Promise<void>;
+  deviceCode?: ProviderAuthContext["prompter"]["deviceCode"];
   progress: { update: (message: string) => void; stop: (message?: string) => void };
   region?: MiniMaxRegion;
   signal?: AbortSignal;
+  assertCurrent?: () => void;
 }): Promise<MiniMaxOAuthToken> {
   // Ensure env-based proxy dispatcher is active before any outbound fetch calls.
   // Without this, HTTP_PROXY/HTTPS_PROXY env vars are silently ignored (#51619).
   ensureGlobalUndiciEnvProxyDispatcher();
   const region = params.region ?? "global";
+  // Channel login authority can be revoked without aborting the signal, so check both
+  // before every request and after every await that can outlive that authority.
+  const assertCurrent = () => {
+    params.signal?.throwIfAborted();
+    params.assertCurrent?.();
+  };
   const { verifier, challenge, state } = generatePkce();
   const oauth = await requestOAuthCode({
     challenge,
     state,
     region,
     ...(params.signal ? { signal: params.signal } : {}),
+    assertCurrent,
   });
+  assertCurrent();
   const verificationUrl = oauth.verification_uri;
 
   const noteLines = [
@@ -281,7 +296,18 @@ export async function loginMiniMaxPortalOAuth(params: {
   } catch {
     // Fall back to manual copy/paste if browser open fails.
   }
-  await params.note(noteLines.join("\n"), "MiniMax OAuth");
+  assertCurrent();
+  if (params.deviceCode) {
+    await params.deviceCode({
+      title: "MiniMax OAuth",
+      code: oauth.user_code,
+      expiresInMinutes: Math.ceil((oauth.expired_in - Date.now()) / 60_000),
+      message: "Enter this one-time code to approve access.",
+    });
+  } else {
+    await params.note(noteLines.join("\n"), "MiniMax OAuth");
+  }
+  assertCurrent();
 
   let pollIntervalMs = resolvePositiveTimerTimeoutMs(oauth.interval, 2000);
   // The authorization endpoint returns an absolute millisecond deadline.
@@ -294,7 +320,9 @@ export async function loginMiniMaxPortalOAuth(params: {
       verifier,
       region,
       ...(params.signal ? { signal: params.signal } : {}),
+      assertCurrent,
     });
+    assertCurrent();
 
     if (result.status === "success") {
       return result.token;
@@ -309,6 +337,7 @@ export async function loginMiniMaxPortalOAuth(params: {
       break;
     }
     await waitForMiniMaxOAuthPoll(Math.min(pollIntervalMs, remainingMs), params.signal);
+    assertCurrent();
     pollIntervalMs = Math.max(pollIntervalMs, 2000);
   }
 

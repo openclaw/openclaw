@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveSessionEventAgentScope,
@@ -74,20 +75,26 @@ describe("requested session agent ownership", () => {
     });
   });
 
-  it("returns a typed selection error for an ownerless bare key", () => {
-    const cfg: OpenClawConfig = {
-      agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
-    };
+  it.each([undefined, "ops"])(
+    "rejects an ownerless bare key with provenance %s",
+    (retainedOwner) => {
+      const cfg = retainLegacyDefaultAgentId(
+        {
+          agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+        },
+        retainedOwner,
+      );
 
-    expect(tryResolveSessionCompatibilityOwnerAgentId(cfg, "global")).toBeUndefined();
-    expect(resolveRequestedSessionAgentId(cfg, "global")).toMatchObject({
-      ok: false,
-      error: {
-        code: "INVALID_REQUEST",
-        message: expect.stringContaining("has no explicit owner"),
-      },
-    });
-  });
+      expect(tryResolveSessionCompatibilityOwnerAgentId(cfg, "global")).toBeUndefined();
+      expect(resolveRequestedSessionAgentId(cfg, "global")).toMatchObject({
+        ok: false,
+        error: {
+          code: "INVALID_REQUEST",
+          message: expect.stringContaining("has no explicit owner"),
+        },
+      });
+    },
+  );
 
   it("returns typed ownership results for arbitrary bare keys before canonicalization", () => {
     const cfg: OpenClawConfig = {

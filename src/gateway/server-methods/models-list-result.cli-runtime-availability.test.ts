@@ -52,6 +52,7 @@ async function listClaudeCliModel(
     preparedAuthModes: params.authenticated ? { "claude-cli": "api_key" } : {},
     catalogComplete: true,
     view: "configured",
+    includeDefaultModels: false,
   });
 }
 

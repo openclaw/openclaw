@@ -376,6 +376,10 @@ export function createMeetingStatusPreludeSource(
   );
   const identityMatchedUrl = Boolean(expectedIdentity && currentIdentity === expectedIdentity);
   const identityVerifiedBeforeCall = identityMatchedUrl;
+  const previousRemoteCapture = window.__openclawMeetingRemoteAudio;
+  if (canMutateSession && allowSessionAdoption && previousRemoteCapture && previousRemoteCapture.sessionId !== sessionId) {
+    await previousRemoteCapture.stop();
+  }
   ${options.lifecycleSource}
   const micMuted = microphoneState === "off" ? true : microphoneState === "on" ? false : undefined;
   const cameraOff = cameraState === "off" ? true : cameraState === "on" ? false : undefined;

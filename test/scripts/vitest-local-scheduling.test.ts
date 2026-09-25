@@ -11,41 +11,235 @@ describe("vitest scheduling host snapshot", () => {
     // Vite bundles each project config on its own, so each project gets its own copy
     // of this module. Vitest refuses a run whose projects share sequence.groupOrder
     // but disagree on maxWorkers, so two module instances that resolve while the
-    // load average moves must still agree; without a process-wide snapshot they
-    // return 12 and 3.
+    // load average and process memory readings move must still agree.
     const host = os as unknown as Record<string, unknown>;
+    const store = globalThis as Record<PropertyKey, unknown>;
+    const snapshotKey = Symbol.for("openclaw.vitestSchedulingHostInfo");
+    const savedSnapshot = Object.getOwnPropertyDescriptor(store, snapshotKey);
     const saved = {
       availableParallelism: os.availableParallelism,
       totalmem: os.totalmem,
       freemem: os.freemem,
       loadavg: os.loadavg,
     };
-    host.availableParallelism = () => 16;
-    host.totalmem = () => 512 * 1024 ** 3;
-    host.freemem = () => 256 * 1024 ** 3;
+    const constrainedMemory = vi.spyOn(process, "constrainedMemory");
+    const availableMemory = vi.spyOn(process, "availableMemory");
     try {
+      delete store[snapshotKey];
+      host.availableParallelism = () => 16;
+      host.totalmem = () => 512 * 1024 ** 3;
+      host.freemem = () => 256 * 1024 ** 3;
       host.loadavg = () => [0, 0, 0];
+      constrainedMemory.mockReturnValue(32 * 1024 ** 3);
+      availableMemory.mockReturnValue(12 * 1024 ** 3);
       vi.resetModules();
       const first = await import("../../scripts/lib/vitest-local-scheduling.mts");
       const before = first.resolveLocalVitestScheduling({});
+      expect(before.maxWorkers).toBe(4);
       host.loadavg = () => [64, 64, 64];
+      constrainedMemory.mockReturnValue(2 * 1024 ** 3);
+      availableMemory.mockReturnValue(0);
       vi.resetModules();
       const second = await import("../../scripts/lib/vitest-local-scheduling.mts");
       const after = second.resolveLocalVitestScheduling({});
       // Guard against a vacuous pass: distinct instances, and the stub drives the reading.
       expect(second).not.toBe(first);
       expect(os.loadavg()[0]).toBe(64);
-      expect(after.maxWorkers).toBe(before.maxWorkers);
-      expect(after.throttledBySystem).toBe(before.throttledBySystem);
+      expect(second.detectVitestHostInfo()).toMatchObject({
+        constrainedMemoryBytes: 2 * 1024 ** 3,
+        availableMemoryBytes: 0,
+      });
+      expect(after).toEqual(before);
     } finally {
       Object.assign(host, saved);
+      constrainedMemory.mockRestore();
+      availableMemory.mockRestore();
+      if (savedSnapshot) {
+        Object.defineProperty(store, snapshotKey, savedSnapshot);
+      } else {
+        delete store[snapshotKey];
+      }
     }
   });
 });
 
 describe("local Vitest scheduling", () => {
   it.each([
+    [
+      "does not raise a single-core inferred budget under moderate load",
+      { cpuCount: 1, loadAverage1m: 0.75 },
+      {},
+      1,
+      false,
+    ],
+    [
+      "does not raise a four-core inferred budget under moderate load",
+      { cpuCount: 4, totalMemoryBytes: 16 * 1024 ** 3, loadAverage1m: 3 },
+      {},
+      1,
+      false,
+    ],
+    [
+      "caps total memory by the process constraint",
+      { constrainedMemoryBytes: 16 * 1024 ** 3 },
+      {},
+      2,
+      false,
+    ],
+    ["limits workers by process headroom", { availableMemoryBytes: 6 * 1024 ** 3 }, {}, 2, true],
+    [
+      "retains the tighter host headroom",
+      { freeMemoryBytes: 3 * 1024 ** 3, availableMemoryBytes: 12 * 1024 ** 3 },
+      {},
+      1,
+      true,
+    ],
+    [
+      "uses process headroom when host free memory is unknown",
+      { freeMemoryBytes: 0, availableMemoryBytes: 6 * 1024 ** 3 },
+      {},
+      2,
+      true,
+    ],
+    [
+      "treats a zero process constraint as unknown",
+      { constrainedMemoryBytes: 0, availableMemoryBytes: 12 * 1024 ** 3 },
+      {},
+      8,
+      false,
+    ],
+    ["serializes exhausted process headroom", { availableMemoryBytes: 0 }, {}, 1, true],
+    [
+      "keeps the CI headroom limit below the measured tier",
+      { cpuCount: 8, totalMemoryBytes: 31 * 1024 ** 3, availableMemoryBytes: 8 * 1024 ** 3 },
+      { CI: "true" },
+      2,
+      true,
+    ],
+    [
+      "keeps the critical CI headroom limit",
+      { cpuCount: 8, totalMemoryBytes: 31 * 1024 ** 3, availableMemoryBytes: 4 * 1024 ** 3 },
+      { CI: "true" },
+      1,
+      true,
+    ],
+    [
+      "uses constrained capacity for the CI tier",
+      { cpuCount: 8, constrainedMemoryBytes: 24 * 1024 ** 3 },
+      { CI: "true" },
+      6,
+      false,
+    ],
+    [
+      "does not raise exhausted headroom under moderate load",
+      { cpuCount: 2, loadAverage1m: 1.5, freeMemoryBytes: 0, availableMemoryBytes: 0 },
+      {},
+      1,
+      true,
+    ],
+    [
+      "does not raise a host memory cap under moderate load",
+      { cpuCount: 2, loadAverage1m: 1.5, freeMemoryBytes: 3 * 1024 ** 3 },
+      {},
+      1,
+      true,
+    ],
+    [
+      "retains a valid constraint when headroom is invalid",
+      { constrainedMemoryBytes: 16 * 1024 ** 3, availableMemoryBytes: Number.NaN },
+      {},
+      2,
+      false,
+    ],
+    [
+      "retains valid headroom when the constraint is invalid",
+      { constrainedMemoryBytes: Number.NaN, availableMemoryBytes: 6 * 1024 ** 3 },
+      {},
+      2,
+      true,
+    ],
+    [
+      "ignores negative constraints and infinite headroom",
+      { constrainedMemoryBytes: -1, availableMemoryBytes: Infinity },
+      {},
+      8,
+      false,
+    ],
+    [
+      "ignores infinite constraints and negative headroom",
+      { constrainedMemoryBytes: Infinity, availableMemoryBytes: -1 },
+      {},
+      8,
+      false,
+    ],
+    [
+      "keeps the host ceiling with an unconstrained uint64 reading",
+      { constrainedMemoryBytes: 2 ** 64 - 1 },
+      {},
+      8,
+      false,
+    ],
+    [
+      "lets throttle opt-out ignore headroom but retain the total ceiling",
+      { constrainedMemoryBytes: 16 * 1024 ** 3, availableMemoryBytes: 0 },
+      { OPENCLAW_VITEST_DISABLE_SYSTEM_THROTTLE: "1" },
+      2,
+      false,
+    ],
+    [
+      "honors an explicit worker override despite process pressure",
+      { constrainedMemoryBytes: 16 * 1024 ** 3, availableMemoryBytes: 0 },
+      { OPENCLAW_VITEST_MAX_WORKERS: "3" },
+      3,
+      false,
+    ],
+    [
+      "honors the legacy worker override despite process pressure",
+      { constrainedMemoryBytes: 16 * 1024 ** 3, availableMemoryBytes: 0 },
+      { OPENCLAW_TEST_WORKERS: "4" },
+      4,
+      false,
+    ],
+  ] as const)("%s", (_name, readings, env, maxWorkers, throttledBySystem) => {
+    const hostInfo = {
+      cpuCount: 16,
+      totalMemoryBytes: 128 * 1024 ** 3,
+      freeMemoryBytes: 32 * 1024 ** 3,
+      loadAverage1m: 0,
+      ...readings,
+    };
+    expect(resolveLocalVitestScheduling(env, hostInfo)).toEqual({
+      maxWorkers,
+      fileParallelism: maxWorkers > 1,
+      throttledBySystem,
+    });
+    expect(resolveLocalFullSuiteProfile(env, hostInfo)).toEqual({
+      shardParallelism: maxWorkers,
+      vitestMaxWorkers: 1,
+    });
+  });
+
+  it.each([
     ["uses a moderate cap on larger hosts", { RUNNER_OS: "macOS" }, 10, 64, 0, 6, false],
+    ["preserves interactive eight-core sizing", {}, 8, 31, 0, 4, false],
+    ["keeps CI below the measured six-worker memory floor", { CI: "true" }, 8, 23.99, 0, 4, false],
+    ["admits six CI workers at 24 GiB", { CI: "true" }, 8, 24, 0, 6, false],
+    ["keeps six CI workers below 28 GiB", { CI: "true" }, 8, 27.99, 0, 6, false],
+    ["admits eight CI workers at 28 GiB", { CI: "true" }, 8, 28, 0, 8, false],
+    ["uses eight workers on the measured CI host", { GITHUB_ACTIONS: "true" }, 8, 31, 0, 8, false],
+    [
+      "does not reduce CI workers when another CPU is available",
+      { CI: "true" },
+      9,
+      31,
+      0,
+      8,
+      false,
+    ],
+    ["keeps smaller CI hosts conservative", { CI: "true" }, 4, 31, 0, 2, false],
+    ["backs off the measured CI tier at half load", { CI: "true" }, 8, 31, 4, 7, false],
+    ["backs off the measured CI tier at three-quarter load", { CI: "true" }, 8, 31, 6, 5, true],
+    ["backs off the measured CI tier at full load", { CI: "true" }, 8, 31, 8, 2, true],
     [
       "honors OPENCLAW_VITEST_MAX_WORKERS",
       { OPENCLAW_VITEST_MAX_WORKERS: "2" },

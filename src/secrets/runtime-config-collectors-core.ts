@@ -13,6 +13,7 @@ import {
   resolveEffectiveMediaEntryCapabilities,
 } from "../media-understanding/entry-capabilities.js";
 import { buildMediaUnderstandingCapabilityRegistry } from "../media-understanding/provider-capability-registry.js";
+import { appendConfigPathSegment } from "../shared/dot-path.js";
 import { resolveVoiceModelRefs } from "../tts/voice-models.js";
 import { getPath } from "./path-utils.js";
 import { PROVIDER_REQUEST_SECRET_FIELD_GROUPS } from "./provider-request-secret-fields.js";
@@ -26,7 +27,6 @@ import {
 } from "./runtime-media-secret-owner.js";
 import {
   collectSecretInputAssignment,
-  collectRuntimeSecretInputAssignment,
   type SecretAssignmentOwner,
   type ResolverContext,
   type SecretDefaults,
@@ -59,6 +59,7 @@ function collectModelProviderAssignments(params: {
 }): void {
   for (const [providerId, provider] of Object.entries(params.providers)) {
     const providerIsActive = provider.enabled !== false;
+    const providerPath = appendConfigPathSegment("models.providers", providerId);
     const owner = {
       ownerKind: "provider",
       ownerId: normalizeOptionalLowercaseString(providerId) ?? providerId,
@@ -66,9 +67,9 @@ function collectModelProviderAssignments(params: {
       disposition: "isolate",
       contract: provider,
     } satisfies SecretAssignmentOwner;
-    collectRuntimeSecretInputAssignment({
+    collectSecretInputAssignment({
       value: provider.apiKey,
-      path: `models.providers.${providerId}.apiKey`,
+      path: `${providerPath}.apiKey`,
       expected: "string",
       defaults: params.defaults,
       context: params.context,
@@ -82,9 +83,9 @@ function collectModelProviderAssignments(params: {
     const headers = isRecord(provider.headers) ? provider.headers : undefined;
     if (headers) {
       for (const [headerKey, headerValue] of Object.entries(headers)) {
-        collectRuntimeSecretInputAssignment({
+        collectSecretInputAssignment({
           value: headerValue,
-          path: `models.providers.${providerId}.headers.${headerKey}`,
+          path: appendConfigPathSegment(`${providerPath}.headers`, headerKey),
           expected: "string",
           defaults: params.defaults,
           context: params.context,
@@ -102,7 +103,7 @@ function collectModelProviderAssignments(params: {
     if (request) {
       collectProviderRequestAssignments({
         request,
-        pathPrefix: `models.providers.${providerId}.request`,
+        pathPrefix: `${providerPath}.request`,
         defaults: params.defaults,
         context: params.context,
         active: providerIsActive,
@@ -119,9 +120,9 @@ function collectSkillAssignments(params: {
   context: ResolverContext;
 }): void {
   for (const [skillKey, entry] of Object.entries(params.entries)) {
-    collectRuntimeSecretInputAssignment({
+    collectSecretInputAssignment({
       value: entry.apiKey,
-      path: `skills.entries.${skillKey}.apiKey`,
+      path: `${appendConfigPathSegment("skills.entries", skillKey)}.apiKey`,
       expected: "string",
       defaults: params.defaults,
       context: params.context,
@@ -253,11 +254,11 @@ function collectTalkAssignments(params: {
       const isInherited = config === inheritedKey?.config;
       const destination = isInherited && selected ? selected.config : config;
       const normalized = normalizeOptionalLowercaseString(id);
-      collectRuntimeSecretInputAssignment({
+      collectSecretInputAssignment({
         value: config.apiKey,
         path: isInherited
-          ? `tts.providers.${id}.apiKey`
-          : `talk.${surface === "realtime" ? "realtime." : ""}providers.${id}.apiKey`,
+          ? `${appendConfigPathSegment("tts.providers", id)}.apiKey`
+          : `${appendConfigPathSegment(`talk.${surface === "realtime" ? "realtime." : ""}providers`, id)}.apiKey`,
         expected: "string",
         defaults: params.defaults,
         context: params.context,
@@ -302,62 +303,43 @@ function collectGatewayAssignments(params: {
       disposition: "fail-closed",
       contract: auth,
     } satisfies SecretAssignmentOwner;
-    collectRuntimeSecretInputAssignment({
-      value: auth.token,
-      path: "gateway.auth.token",
-      expected: "string",
-      defaults: params.defaults,
-      context: params.context,
-      active: gatewaySurfaceStates["gateway.auth.token"].active,
-      inactiveReason: gatewaySurfaceStates["gateway.auth.token"].reason,
-      owner: ingressAuthOwner,
-      apply: (value) => {
-        auth.token = value;
-      },
-    });
-    collectRuntimeSecretInputAssignment({
-      value: auth.password,
-      path: "gateway.auth.password",
-      expected: "string",
-      defaults: params.defaults,
-      context: params.context,
-      active: gatewaySurfaceStates["gateway.auth.password"].active,
-      inactiveReason: gatewaySurfaceStates["gateway.auth.password"].reason,
-      owner: ingressAuthOwner,
-      apply: (value) => {
-        auth.password = value;
-      },
-    });
+    for (const key of ["token", "password"] as const) {
+      const path = `gateway.auth.${key}` as const;
+      collectSecretInputAssignment({
+        value: auth[key],
+        path,
+        expected: "string",
+        defaults: params.defaults,
+        context: params.context,
+        active: gatewaySurfaceStates[path].active,
+        inactiveReason: gatewaySurfaceStates[path].reason,
+        owner: ingressAuthOwner,
+        apply: (value) => {
+          auth[key] = value;
+        },
+      });
+    }
   }
   if (remote) {
-    collectSecretInputAssignment({
-      value: remote.token,
-      path: "gateway.remote.token",
-      expected: "string",
-      defaults: params.defaults,
-      context: params.context,
-      active: gatewaySurfaceStates["gateway.remote.token"].active,
-      inactiveReason: gatewaySurfaceStates["gateway.remote.token"].reason,
-      apply: (value) => {
-        remote.token = value;
-      },
-    });
-    collectSecretInputAssignment({
-      value: remote.password,
-      path: "gateway.remote.password",
-      expected: "string",
-      defaults: params.defaults,
-      context: params.context,
-      active: gatewaySurfaceStates["gateway.remote.password"].active,
-      inactiveReason: gatewaySurfaceStates["gateway.remote.password"].reason,
-      apply: (value) => {
-        remote.password = value;
-      },
-    });
+    for (const key of ["token", "password"] as const) {
+      const path = `gateway.remote.${key}` as const;
+      collectSecretInputAssignment({
+        value: remote[key],
+        path,
+        expected: "string",
+        defaults: params.defaults,
+        context: params.context,
+        active: gatewaySurfaceStates[path].active,
+        inactiveReason: gatewaySurfaceStates[path].reason,
+        apply: (value) => {
+          remote[key] = value;
+        },
+      });
+    }
   }
   const controlUiGitHub = controlUi && isRecord(controlUi.github) ? controlUi.github : undefined;
   if (controlUiGitHub) {
-    collectRuntimeSecretInputAssignment({
+    collectSecretInputAssignment({
       value: controlUiGitHub.token,
       path: "gateway.controlUi.github.token",
       expected: "string",
@@ -393,9 +375,9 @@ function collectProviderRequestAssignments(params: {
     }
     const pathPrefix = `${params.pathPrefix}.${path.join(".")}`;
     const collect = (key: string, value: unknown) => {
-      collectRuntimeSecretInputAssignment({
+      collectSecretInputAssignment({
         value,
-        path: `${pathPrefix}.${key}`,
+        path: appendConfigPathSegment(pathPrefix, key),
         expected: "string",
         defaults: params.defaults,
         context: params.context,
@@ -462,7 +444,7 @@ function collectMediaRequestAssignments(params: {
           : "shared media model does not declare capabilities and none could be inferred from its provider.";
       collectProviderRequestAssignments({
         request: rawModel.request,
-        pathPrefix: `tools.media.models.${index}.request`,
+        pathPrefix: `tools.media.models[${index}].request`,
         defaults: params.defaults,
         context: params.context,
         active,
@@ -532,8 +514,8 @@ function collectAgentTtsAssignments(params: {
       tts: entry.tts,
       pathPrefix:
         source.kind === "entries"
-          ? `agents.entries.${source.key}.tts`
-          : `agents.list.${source.index}.tts`,
+          ? `${appendConfigPathSegment("agents.entries", source.key)}.tts`
+          : `agents.list[${source.index}].tts`,
       defaults: params.defaults,
       context: params.context,
     });
@@ -549,7 +531,7 @@ function collectCronAssignments(params: {
   if (!isRecord(cron)) {
     return;
   }
-  collectRuntimeSecretInputAssignment({
+  collectSecretInputAssignment({
     value: cron.webhookToken,
     path: "cron.webhookToken",
     expected: "string",

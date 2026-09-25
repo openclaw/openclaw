@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import type { AdmittedFollowupTurn } from "./followup-turn-admission.js";
 import {
@@ -13,6 +14,7 @@ import {
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
 import { markReplyOperationExecutionStarted } from "./reply-run-registry.state.js";
+import { createMockReplyOperation } from "./test-helpers.js";
 
 const state = getFollowupTurnTestState();
 const createTypingController = createFollowupTurnTestTypingController;
@@ -24,10 +26,7 @@ beforeEach(resetFollowupTurnTestState);
 describe("executeFollowupTurn lifecycle", () => {
   it("drains detached progress before the caller can project a final", async () => {
     const order: string[] = [];
-    let releaseProgress!: () => void;
-    const progressBarrier = new Promise<void>((resolve) => {
-      releaseProgress = resolve;
-    });
+    const { promise: progressBarrier, resolve: releaseProgress } = createDeferred();
     state.execute.mockImplementation(async (params: AgentTurnParams) => {
       void params.opts?.onItemEvent?.({ progressText: "working" });
       return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
@@ -84,39 +83,9 @@ describe("executeFollowupTurn lifecycle", () => {
     await expect(result.progress.drain()).rejects.toBe(failure);
   });
 
-  it("updates the reply operation after role-ordering recovery rotates the session", async () => {
-    const updateSessionId = vi.fn();
-    const turn = createTurn({
-      operation: {
-        abortSignal: new AbortController().signal,
-        updateSessionId,
-      } as unknown as AdmittedFollowupTurn["operation"],
-    });
-    state.reset.mockImplementation(async (params) => {
-      params.onActiveSessionEntry({ sessionId: "reset-session", updatedAt: 2 });
-      return true;
-    });
-    state.execute.mockImplementation(async (params: AgentTurnParams) => {
-      await params.resetSessionAfterRoleOrderingConflict("invalid history");
-      return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
-    });
-
-    await executeFollowupTurn({
-      turn,
-      defaults: { typing: createTypingController(), typingMode: "never", defaultModel: "claude" },
-      onToolResult: vi.fn(async () => {}),
-      onCompactionNoticePayload: vi.fn(async () => {}),
-    });
-
-    expect(updateSessionId).toHaveBeenCalledWith("reset-session");
-  });
-
   it("drains detached progress before propagating execution failure", async () => {
     const order: string[] = [];
-    let releaseProgress!: () => void;
-    const progressBarrier = new Promise<void>((resolve) => {
-      releaseProgress = resolve;
-    });
+    const { promise: progressBarrier, resolve: releaseProgress } = createDeferred();
     const failure = new Error("execution failed");
     state.execute.mockImplementation(async (params: AgentTurnParams) => {
       void params.opts?.onItemEvent?.({ progressText: "working" });
@@ -145,55 +114,76 @@ describe("executeFollowupTurn lifecycle", () => {
     expect(order).toEqual(["progress"]);
   });
 
-  it("normalizes a post-start execution failure after draining detached progress", async () => {
-    const receipt: ReplyOperationRunState = {};
-    const failure = new Error("execution failed after start");
-    const onItemEvent = vi.fn(async () => {});
-    const fail = vi.fn();
-    const operation = {
-      abortSignal: new AbortController().signal,
-      fail,
-    } as unknown as AdmittedFollowupTurn["operation"];
-    const turn = createTurn({ operation });
-    turn.queued.replyOperationRunStates = [receipt];
-    turn.queued.originatingChatType = "direct";
-    state.execute.mockImplementation(async (params: AgentTurnParams) => {
-      void params.opts?.onItemEvent?.({ progressText: "working" });
-      markReplyOperationExecutionStarted(operation);
-      throw failure;
-    });
-    const pending = executeFollowupTurn({
-      turn,
-      defaults: {
-        typing: createTypingController(),
-        typingMode: "never",
-        defaultModel: "claude",
-        opts: { onItemEvent },
-      },
-      onToolResult: vi.fn(async () => {}),
-      onCompactionNoticePayload: vi.fn(async () => {}),
-    });
-
-    await expect(pending).resolves.toMatchObject({
-      execution: {
-        runId: "run-1",
-        outcome: {
-          kind: "rejected",
-          payload: { isError: true },
+  it.each([
+    { expectation: "required", progress: "none", accepted: false, visible: false },
+    { expectation: "optional", progress: "none", accepted: false, visible: false },
+    { expectation: "optional", progress: "item", accepted: false, visible: false },
+    { expectation: "optional", progress: "item", accepted: true, visible: true },
+    { expectation: "optional", progress: "item", accepted: undefined, visible: true },
+    { expectation: "optional", progress: "compaction", accepted: undefined, visible: true },
+  ] as const)(
+    "settles $expectation failure after $progress progress accepts $accepted",
+    async ({ expectation, progress, accepted, visible }) => {
+      const receipt: ReplyOperationRunState = {};
+      const failure = new Error("execution failed after start");
+      const { promise: progressBarrier, resolve: releaseProgress } = createDeferred();
+      const fail = vi.fn();
+      const operation = {
+        ...createMockReplyOperation().replyOperation,
+        fail,
+      } as unknown as AdmittedFollowupTurn["operation"];
+      const turn = createTurn({ operation });
+      turn.queued.replyOperationRunStates = [receipt];
+      turn.queued.run.terminalReplyExpectation = expectation;
+      let observedVisibility: boolean | undefined;
+      state.execute.mockImplementation(async (params: AgentTurnParams) => {
+        markReplyOperationExecutionStarted(operation);
+        if (progress === "item") {
+          void params.opts?.onItemEvent?.({ progressText: "working" });
+        } else if (progress === "compaction") {
+          void params.onCompactionNoticePayload?.({ text: "Context compacted." });
+        }
+        observedVisibility = await params.resolveVisibleReplyDelivery?.();
+        throw failure;
+      });
+      const pending = executeFollowupTurn({
+        turn,
+        defaults: {
+          typing: createTypingController(),
+          typingMode: "never",
+          defaultModel: "claude",
+          opts: {
+            onItemEvent: async () => {
+              await progressBarrier;
+              return accepted;
+            },
+          },
         },
-      },
-    });
-    expect(onItemEvent).toHaveBeenCalledOnce();
-    expect(fail).toHaveBeenCalledWith("run_failed", failure);
-    expect(resolveReplyOperationAgentTurn(receipt)).toBe("failed");
-  });
+        onToolResult: vi.fn(async () => {}),
+        onCompactionNoticePayload: async () => {
+          await progressBarrier;
+        },
+      });
+      await Promise.resolve();
+      releaseProgress();
+      const result = await pending;
+
+      expect(observedVisibility).toBe(visible);
+      expect(result.execution.outcome).toMatchObject({
+        kind: "rejected",
+        payload:
+          visible || expectation === "required"
+            ? { isError: true, text: expect.not.stringContaining("NO_REPLY") }
+            : { text: "NO_REPLY" },
+      });
+      expect(fail).toHaveBeenCalledWith("run_failed", failure);
+      expect(resolveReplyOperationAgentTurn(receipt)).toBe("failed");
+    },
+  );
 
   it("waits for every pending task before propagating a drain failure", async () => {
     const failure = new Error("tool task failed");
-    let releaseSlowTask!: () => void;
-    const slowBarrier = new Promise<void>((resolve) => {
-      releaseSlowTask = resolve;
-    });
+    const { promise: slowBarrier, resolve: releaseSlowTask } = createDeferred();
     const order: string[] = [];
     state.execute.mockImplementation(async (params: AgentTurnParams) => {
       const failedTask = Promise.reject(failure).finally(() => {

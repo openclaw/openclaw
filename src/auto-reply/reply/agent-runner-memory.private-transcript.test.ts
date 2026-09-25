@@ -3,6 +3,10 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
+import {
+  getSessionMcpRuntimeManagerForTesting,
+  peekSessionMcpRuntime,
+} from "../../agents/agent-bundle-mcp-manager-api.js";
 import { waitForSessionMaintenance } from "../../agents/session-maintenance/coordinator.js";
 import { createSessionMaintenanceFollowup } from "../../agents/session-maintenance/run.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
@@ -20,7 +24,11 @@ import {
   timestampOptsFromConfig,
 } from "../../gateway/server-methods/agent-timestamp.js";
 import { createAbortError } from "../../infra/abort-signal.js";
-import { clearMemoryPluginState, registerMemoryCapability } from "../../plugins/memory-state.js";
+import {
+  onInternalDiagnosticEvent,
+  waitForDiagnosticEventsDrained,
+} from "../../infra/diagnostic-events.js";
+import { clearMemoryPluginState } from "../../plugins/memory-state.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -28,6 +36,7 @@ import { runMemoryFlushIfNeeded } from "./agent-runner-memory.js";
 import { runReplyAgent } from "./agent-runner.js";
 import {
   createTestFollowupRun,
+  installAgentRunnerMemoryFixture,
   isModelRuntimeContextCarrier,
 } from "./agent-runner.test-fixtures.js";
 import { createTypingController } from "./typing.js";
@@ -44,13 +53,61 @@ it.each(["completed", "interrupted"] as const)(
       const interrupted = new AbortController();
       const human = "Reply only FOREGROUND_READY. Preserve ünicode 🦞.\nThis is the human request.";
       const requests: ModelRequest[] = [];
+      const runtimeBudgets: number[] = [];
+      const privateSessionIds = new Set<string>();
+      let missingPrivateSessionId = false;
+      let completeFirstPrivateResponse: (() => void) | undefined;
+      const stopDiagnostics = onInternalDiagnosticEvent((event) => {
+        if (
+          event.type === "model.call.started" &&
+          event.model === "test-model" &&
+          event.contextTokenBudget !== undefined
+        ) {
+          runtimeBudgets.push(event.contextTokenBudget);
+          if (event.sessionId) {
+            privateSessionIds.add(event.sessionId);
+          } else {
+            missingPrivateSessionId = true;
+          }
+        }
+      });
       const server = createServer((request, response) => {
+        if (request.url === "/mcp" && request.method !== "POST") {
+          response.writeHead(request.method === "DELETE" ? 200 : 405).end();
+          return;
+        }
         let body = "";
         request.setEncoding("utf8");
         request.on("data", (chunk: string) => {
           body += chunk;
         });
         request.on("end", () => {
+          // Memory preparation reads the MCP catalog before inference. Keep a real
+          // server owned by the run without adding tools to its model request.
+          if (request.url === "/mcp") {
+            const message = JSON.parse(body) as {
+              id?: number;
+              method: string;
+              params?: { protocolVersion?: string };
+            };
+            let result;
+            if (message.method === "initialize") {
+              result = {
+                protocolVersion: message.params?.protocolVersion,
+                capabilities: { tools: {} },
+                serverInfo: { name: "memory-lifetime", version: "1" },
+              };
+            } else if (message.method === "tools/list") {
+              result = { tools: [] };
+            }
+            if (!result) {
+              response.writeHead(202).end();
+              return;
+            }
+            response.writeHead(200, { "content-type": "application/json" });
+            response.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
+            return;
+          }
           const modelRequest = JSON.parse(body) as ModelRequest;
           requests.push(modelRequest);
           const isHuman = text(
@@ -60,38 +117,47 @@ it.each(["completed", "interrupted"] as const)(
           ).endsWith(human);
           response.writeHead(200, { "content-type": "text/event-stream", connection: "close" });
           response.flushHeaders();
+          const completeResponse = () => {
+            response.write(
+              `data: ${JSON.stringify({
+                id: "private-memory-fixture",
+                object: "chat.completion.chunk",
+                created: 1,
+                model: "test-model",
+                choices: [
+                  {
+                    index: 0,
+                    delta: {
+                      role: "assistant",
+                      content: isHuman ? "FOREGROUND_READY" : "NO_REPLY",
+                    },
+                    finish_reason: null,
+                  },
+                ],
+              })}\n\n`,
+            );
+            response.write(
+              `data: ${JSON.stringify({
+                id: "private-memory-fixture",
+                object: "chat.completion.chunk",
+                created: 1,
+                model: "test-model",
+                choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+                usage: { prompt_tokens: 21_000, completion_tokens: 2, total_tokens: 21_002 },
+              })}\n\n`,
+            );
+            response.end("data: [DONE]\n\n");
+          };
           if (!isHuman) {
+            if (requests.length === 1 && outcome === "completed") {
+              completeFirstPrivateResponse = completeResponse;
+            }
             entered.resolve();
-            if (outcome === "interrupted" && requests.length === 1) {
+            if (requests.length === 1) {
               return;
             }
           }
-          response.write(
-            `data: ${JSON.stringify({
-              id: "private-memory-fixture",
-              object: "chat.completion.chunk",
-              created: 1,
-              model: "test-model",
-              choices: [
-                {
-                  index: 0,
-                  delta: { role: "assistant", content: isHuman ? "FOREGROUND_READY" : "NO_REPLY" },
-                  finish_reason: null,
-                },
-              ],
-            })}\n\n`,
-          );
-          response.write(
-            `data: ${JSON.stringify({
-              id: "private-memory-fixture",
-              object: "chat.completion.chunk",
-              created: 1,
-              model: "test-model",
-              choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-              usage: { prompt_tokens: 21_000, completion_tokens: 2, total_tokens: 21_002 },
-            })}\n\n`,
-          );
-          response.end("data: [DONE]\n\n");
+          completeResponse();
         });
       });
       await new Promise<void>((resolve) => {
@@ -112,11 +178,16 @@ it.each(["completed", "interrupted"] as const)(
           list: [{ id: "main", default: true, workspace: state.workspaceDir }],
           defaults: {
             workspace: state.workspaceDir,
-            model: { primary: "test-provider/test-model" },
+            model: { primary: "test-provider/owner-model" },
           },
         },
         session: { store: scope.storePath },
         tools: { profile: "coding" },
+        mcp: {
+          servers: {
+            fixture: { transport: "streamable-http", url: `http://127.0.0.1:${address.port}/mcp` },
+          },
+        },
         models: {
           providers: {
             "test-provider": {
@@ -125,12 +196,22 @@ it.each(["completed", "interrupted"] as const)(
               baseUrl: `http://127.0.0.1:${address.port}/v1`,
               models: [
                 {
+                  id: "owner-model",
+                  name: "Owner fixture",
+                  reasoning: false,
+                  input: ["text"],
+                  contextWindow: 128_000,
+                  contextTokens: 128_000,
+                  maxTokens: 8_192,
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                },
+                {
                   id: "test-model",
                   name: "Fixture",
                   reasoning: false,
                   input: ["text"],
-                  contextWindow: 32_768,
-                  contextTokens: 32_768,
+                  contextWindow: 1_000_000,
+                  contextTokens: 1_000_000,
                   maxTokens: 8_192,
                   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                 },
@@ -147,7 +228,7 @@ it.each(["completed", "interrupted"] as const)(
         await replaceSessionEntry(scope, {
           sessionId: scope.sessionId,
           updatedAt: Date.now(),
-          totalTokens: 21_000,
+          totalTokens: 120_000,
           totalTokensFresh: true,
           totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
         });
@@ -156,15 +237,15 @@ it.each(["completed", "interrupted"] as const)(
         transcript.appendMessage(
           makeAssistantMessageFixture({
             provider: "test-provider",
-            model: "test-model",
+            model: "owner-model",
             api: "openai-completions",
             content: [{ type: "text", text: "Cedar receipt saved." }],
             stopReason: "stop",
             errorMessage: undefined,
             usage: {
-              input: 21_000,
+              input: 120_000,
               output: 2,
-              totalTokens: 21_002,
+              totalTokens: 120_002,
               cacheRead: 0,
               cacheWrite: 0,
               cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
@@ -180,7 +261,7 @@ it.each(["completed", "interrupted"] as const)(
           workspaceDir: state.workspaceDir,
           config: cfg,
           provider: "test-provider",
-          model: "test-model",
+          model: "owner-model",
           messageProvider: "webchat",
           thinkLevel: "off",
           timeoutMs: 30_000,
@@ -192,19 +273,18 @@ it.each(["completed", "interrupted"] as const)(
           cfg,
           sessionKey: scope.sessionKey,
           provider: "test-provider",
-          model: "test-model",
+          model: "owner-model",
           auth: {},
         });
-        registerMemoryCapability("memory-core", {
-          flushPlanResolver: () => ({
-            softThresholdTokens: 4_000,
-            reserveTokensFloor: 8_192,
-            forceFlushTranscriptBytes: 2 * 1024 * 1024,
-            prompt: "Checkpoint durable notes. Reply NO_REPLY.",
-            systemPrompt: "Write durable notes only.",
-            relativePath: "memory/checkpoint.md",
-          }),
-        });
+        installAgentRunnerMemoryFixture(() => ({
+          softThresholdTokens: 4_000,
+          reserveTokensFloor: 8_192,
+          forceFlushTranscriptBytes: 2 * 1024 * 1024,
+          prompt: "Checkpoint durable notes. Reply NO_REPLY.",
+          systemPrompt: "Write durable notes only.",
+          relativePath: "memory/checkpoint.md",
+          model: "test-provider/test-model",
+        }));
         admission = await beginSessionWorkAdmission({
           scope: scope.storePath,
           identities: [scope.sessionKey, scope.sessionId],
@@ -219,7 +299,7 @@ it.each(["completed", "interrupted"] as const)(
             cfg,
             followupRun: maintenance,
             promptForEstimate: "",
-            defaultModel: "test-model",
+            defaultModel: "owner-model",
             resolvedVerboseLevel: "off",
             sessionEntry: entry,
             sessionStore: { [scope.sessionKey]: entry },
@@ -235,13 +315,35 @@ it.each(["completed", "interrupted"] as const)(
             throw new Error("Memory run ended before reaching inference");
           }),
         ]);
+        await waitForDiagnosticEventsDrained();
+        expect(missingPrivateSessionId).toBe(false);
+        const firstPrivateSessionIds = [...privateSessionIds];
+        expect(firstPrivateSessionIds.length).toBeGreaterThan(0);
+        for (const sessionId of firstPrivateSessionIds) {
+          expect(peekSessionMcpRuntime({ sessionId }) !== undefined).toBe(true);
+        }
         if (outcome === "interrupted") {
           interrupted.abort(new Error("next human turn"));
+        } else {
+          if (!completeFirstPrivateResponse) {
+            throw new Error("Private response was not held before completion");
+          }
+          completeFirstPrivateResponse();
+          completeFirstPrivateResponse = undefined;
         }
         expect((await flush).outcome).toBe(outcome === "interrupted" ? "failed" : "completed");
         admission.release();
         admission = undefined;
         expect(requests).toHaveLength(1);
+        expect(runtimeBudgets).toEqual([128_000]);
+        for (const sessionId of firstPrivateSessionIds) {
+          expect
+            .soft(
+              peekSessionMcpRuntime({ sessionId }) === undefined,
+              "completed private memory run must retire its acquired MCP runtime",
+            )
+            .toBe(true);
+        }
         expect.soft(await loadTranscriptEvents(scope)).toEqual(original);
         if (outcome === "interrupted") {
           expect.soft(loadSessionEntry(scope)?.memoryFlush).toBeUndefined();
@@ -268,7 +370,7 @@ it.each(["completed", "interrupted"] as const)(
           sessionStore: { [scope.sessionKey]: current },
           sessionKey: scope.sessionKey,
           storePath: scope.storePath,
-          defaultModel: "test-model",
+          defaultModel: "owner-model",
           resolvedVerboseLevel: "off",
           isNewSession: false,
           blockStreamingEnabled: false,
@@ -306,13 +408,34 @@ it.each(["completed", "interrupted"] as const)(
         );
         expect(prefix).toBeDefined();
         expect(nextUser).toBe(`${prefix}${human}`);
+        await waitForDiagnosticEventsDrained();
+        expect.soft(missingPrivateSessionId).toBe(false);
+        for (const sessionId of privateSessionIds) {
+          if (!firstPrivateSessionIds.includes(sessionId)) {
+            expect
+              .soft(
+                peekSessionMcpRuntime({ sessionId }) === undefined,
+                "later private memory run must retire before the human turn returns",
+              )
+              .toBe(true);
+          }
+        }
       } finally {
+        completeFirstPrivateResponse?.();
         interrupted.abort(createAbortError("fixture cleanup"));
         await flush?.catch(() => undefined);
         admission?.release();
         await waitForSessionMaintenance(scope.sessionKey);
+        // Retire fixture-owned leftovers after work settles, including failed setup or assertions.
+        const mcpManager = getSessionMcpRuntimeManagerForTesting();
+        for (const sessionId of mcpManager.listSessionIds()) {
+          if (mcpManager.peekSession({ sessionId })?.workspaceDir === state.workspaceDir) {
+            await mcpManager.disposeSession(sessionId);
+          }
+        }
         clearMemoryPluginState();
         clearRuntimeConfigSnapshot();
+        stopDiagnostics();
         server.closeAllConnections();
         await new Promise<void>((resolve, reject) => {
           server.close((error) => (error ? reject(error) : resolve()));

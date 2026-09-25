@@ -1,5 +1,6 @@
 {
   "id": "irc",
+  "categories": ["channels"],
   "name": "IRC",
   "description": "OpenClaw IRC channel plugin.",
   "doctorContract": {

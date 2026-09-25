@@ -1,10 +1,9 @@
 import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import JSON5 from "json5";
-import { rejectConfigNonFiniteNumbers, visitConfigValueTree } from "../config/io.read-helpers.js";
 import {
   coerceSecretRef,
   isValidEnvSecretRefId,
@@ -12,6 +11,7 @@ import {
   type SecretRef,
   type SecretRefSource,
 } from "../config/types.secrets.js";
+import { rejectConfigNonFiniteNumbers, visitConfigValueTree } from "../config/value-tree.js";
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
 import {
   formatExecSecretRefIdValidationMessage,
@@ -239,7 +239,7 @@ function buildProviderFromBuilder(opts: ConfigSetOptions): SecretProviderConfig 
     provider = {
       source: "exec",
       command,
-      ...(opts.providerArg?.length ? { args: opts.providerArg.map((entry) => entry.trim()) } : {}),
+      ...(opts.providerArg?.length ? { args: opts.providerArg } : {}),
       ...(timeoutMs !== undefined ? { timeoutMs } : {}),
       ...(noOutputTimeoutMs !== undefined ? { noOutputTimeoutMs } : {}),
       ...(maxOutputBytes !== undefined ? { maxOutputBytes } : {}),
@@ -478,7 +478,7 @@ async function readStdinText(): Promise<string> {
 }
 
 async function readConfigPatchInput(opts: ConfigPatchOptions): Promise<unknown> {
-  const file = normalizeOptionalString(opts.file);
+  const file = readNonBlankString(opts.file);
   const stdin = Boolean(opts.stdin);
   if (Boolean(file) === stdin) {
     throw configPatchModeError("provide exactly one of --file <path> or --stdin.");

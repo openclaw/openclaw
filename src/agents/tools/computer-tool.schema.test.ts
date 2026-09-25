@@ -1,7 +1,43 @@
-import { describe, expect, it } from "vitest";
-import { createComputerTool, readActionEnum, v2Descriptor } from "./computer-tool.test-helpers.js";
+import { beforeEach, describe, expect, it } from "vitest";
+import {
+  createComputerTool,
+  listNodesMock,
+  loadPairedComputerUseAvailabilityForSurface,
+  readActionEnum,
+  resetComputerToolMocks,
+  v2Descriptor,
+} from "./computer-tool.test-helpers.js";
+
+beforeEach(resetComputerToolMocks);
 
 describe("createComputerTool schema", () => {
+  it("loads paired capabilities only for an exposed ordinary paired surface", async () => {
+    const sessionTransport = {
+      resolveNode: async () => ({ nodeId: "session-desktop" }),
+      invoke: async () => undefined,
+    };
+
+    listNodesMock.mockResolvedValue([]);
+    await expect(
+      loadPairedComputerUseAvailabilityForSurface({
+        computerAllowed: true,
+        modelHasVision: true,
+      }),
+    ).resolves.toBeDefined();
+    expect(listNodesMock).toHaveBeenCalledTimes(1);
+
+    for (const params of [
+      { computerAllowed: false, modelHasVision: true },
+      { computerAllowed: true, modelHasVision: false },
+      { computerAllowed: true, modelHasVision: true, embeddedMode: true },
+      { computerAllowed: true, modelHasVision: true, computerTransport: sessionTransport },
+      { computerAllowed: true, modelHasVision: true, computerTransport: null },
+    ]) {
+      expect(await loadPairedComputerUseAvailabilityForSurface(params)).toBeUndefined();
+    }
+    expect(listNodesMock).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps an undeclared node on the exact v1 action list", () => {
     expect(readActionEnum(createComputerTool())).toEqual([
       "screenshot",
@@ -36,6 +72,20 @@ describe("createComputerTool schema", () => {
     expect(readActionEnum(tool)).toEqual(actions);
   });
 
+  it("keeps override-compatible v1 actions alongside prepared paired v2 actions", () => {
+    const tool = createComputerTool({
+      pairedNodeComputerUse: {
+        actions: ["screenshot", "list_windows"],
+        guidanceCapabilities: v2Descriptor(["screenshot", "list_windows"]),
+      },
+    });
+
+    expect(readActionEnum(tool)).toEqual(
+      expect.arrayContaining(["screenshot", "left_click", "list_windows", "wait"]),
+    );
+    expect(readActionEnum(tool)).not.toContain("launch_app");
+  });
+
   it("keeps model input free of native provider fields", () => {
     const schema = JSON.stringify(createComputerTool().parameters);
     for (const nativeField of [
@@ -50,6 +100,19 @@ describe("createComputerTool schema", () => {
     ]) {
       expect(schema).not.toContain(`"${nativeField}":`);
     }
+  });
+
+  it("does not describe held-key input when the selected session only supports taps", () => {
+    const tool = createComputerTool({
+      transport: {
+        computerUse: v2Descriptor(["screenshot", "key"]),
+        resolveNode: async () => ({ nodeId: "session-desktop" }),
+        invoke: async () => undefined,
+      },
+    });
+    expect(JSON.stringify(tool.parameters)).not.toContain("hold_key");
+    expect(readActionEnum(tool)).toContain("wait");
+    expect(JSON.stringify(createComputerTool().parameters)).toContain("hold_key");
   });
 
   it("publishes Codex-compatible fixed-size coordinate arrays", () => {

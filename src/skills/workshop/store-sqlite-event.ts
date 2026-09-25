@@ -10,11 +10,7 @@ import {
   parseSkillProposalEvaluation,
 } from "./store-record.js";
 import { parseJson } from "./store-sqlite-record.js";
-import {
-  openSkillWorkshopStore,
-  type SkillWorkshopDatabase,
-  type SkillWorkshopStoreOptions,
-} from "./store-sqlite-schema.js";
+import type { SkillWorkshopDatabase } from "./store-sqlite-schema.js";
 import type {
   SkillProposalEvent,
   SkillProposalEventActor,
@@ -81,23 +77,23 @@ export function appendSkillProposalEvent(
   return { ...event, sequence: inserted.sequence };
 }
 
-export function readStoredSkillProposalEvent(
+export function readStoredSkillProposalEventInDatabase(
+  database: DatabaseSync,
   eventId: string,
-  options: SkillWorkshopStoreOptions = {},
 ): SkillProposalEvent | null {
-  const { database, kysely } = openSkillWorkshopStore(options);
+  const kysely = getNodeSqliteKysely<SkillWorkshopDatabase>(database);
   const row = executeSqliteQueryTakeFirstSync(
-    database.db,
+    database,
     kysely.selectFrom("skill_workshop_proposal_events").selectAll().where("event_id", "=", eventId),
   );
   return row ? parseStoredSkillProposalEventRow(row) : null;
 }
 
-export function listStoredSkillProposalEvents(
-  input: SkillProposalEventsListInput,
-  options: SkillWorkshopStoreOptions = {},
+export function listStoredSkillProposalEventsInDatabase(
+  database: DatabaseSync,
+  input: Pick<SkillProposalEventsListInput, "agentId" | "proposalId" | "afterSequence" | "limit">,
 ): SkillProposalEventsListResult {
-  const { database, kysely } = openSkillWorkshopStore(options);
+  const kysely = getNodeSqliteKysely<SkillWorkshopDatabase>(database);
   const limit = Math.min(Math.max(input.limit ?? 100, 1), 200);
   let query = kysely
     .selectFrom("skill_workshop_proposal_events")
@@ -128,7 +124,7 @@ export function listStoredSkillProposalEvents(
     query = query.where("skill_workshop_proposals.owner_agent_id", "is not", null);
   }
   const rows = executeSqliteQuerySync(
-    database.db,
+    database,
     query.orderBy("skill_workshop_proposal_events.sequence", "asc").limit(limit + 1),
   ).rows;
   let hasMore = rows.length > limit;
@@ -154,6 +150,22 @@ export function listStoredSkillProposalEvents(
     events,
     ...(hasMore && events.length > 0 ? { nextSequence: events[events.length - 1]!.sequence } : {}),
   };
+}
+
+/** Reads apply provenance through the caller's existing connection without opening a writable store. */
+export function readAppliedSkillProposalEvents(database: DatabaseSync): SkillProposalEvent[] {
+  const kysely = getNodeSqliteKysely<SkillWorkshopDatabase>(database);
+  return executeSqliteQuerySync(
+    database,
+    kysely
+      .selectFrom("skill_workshop_proposal_events")
+      .selectAll()
+      .where("event_type", "=", "applied")
+      .orderBy("sequence", "asc"),
+  ).rows.flatMap((row) => {
+    const event = parseStoredSkillProposalEventRow(row);
+    return event ? [event] : [];
+  });
 }
 
 function parseStoredSkillProposalEventRow(

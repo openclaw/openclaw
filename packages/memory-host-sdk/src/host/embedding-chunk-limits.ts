@@ -14,7 +14,7 @@ import type { MemoryChunk } from "./internal.js";
  * non-text parts.
  */
 export function enforceEmbeddingMaxInputTokens(
-  provider: EmbeddingProvider,
+  provider: Pick<EmbeddingProvider, "id" | "maxInputTokens">,
   chunks: MemoryChunk[],
   hardMaxInputTokens?: number,
 ): MemoryChunk[] {

@@ -23,10 +23,15 @@ export function buildCliLiveSessionFingerprint(params: {
           resolvedSkills: (skillSnapshot.resolvedSkills ?? []).map((skill) => ({
             name: skill.name,
             description: skill.description,
+            contentHash: skill.contentHash,
             filePath: skill.filePath,
             sourceInfo: skill.sourceInfo,
           })),
-          version: skillSnapshot.version,
+          // Shipped Plugin SDK callers may omit prepared content identities; retain their version
+          // contract. Loaded snapshots use content identity, not watcher invalidation epochs.
+          version: skillSnapshot.resolvedSkills?.every((skill) => Boolean(skill.contentHash))
+            ? undefined
+            : skillSnapshot.version,
         }),
       )
     : undefined;

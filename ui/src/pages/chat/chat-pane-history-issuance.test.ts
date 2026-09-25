@@ -1,16 +1,23 @@
 /* @vitest-environment jsdom */
 
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import type { SessionCapability } from "../../lib/sessions/index.ts";
+import {
+  createGatewayHarness,
+  createTestSessionCapability,
+} from "../../lib/sessions/session-capability.test-support.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
 
 function createCanonicalRoutePane(request: ReturnType<typeof vi.fn>) {
   const client = { request } as unknown as GatewayBrowserClient;
-  const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+  const sessions = createTestSessionCapability(createGatewayHarness(client).gateway);
+  vi.spyOn(sessions, "listBranches").mockResolvedValue([]);
+  onTestFinished(() => sessions.dispose());
+  const { pane, state } = createTestChatPane({ client, sessions });
   const hello = {
     snapshot: {
       sessionDefaults: {
@@ -46,6 +53,26 @@ function assistantHistory(text: string) {
 }
 
 describe("chat pane history issuance across Gateway connection transitions", () => {
+  it("does not request the optional header platform while initial history is pending", async () => {
+    const history = createDeferred<ReturnType<typeof assistantHistory>>();
+    const request = vi.fn((method: string) =>
+      method === "chat.startup" ? history.promise : Promise.resolve({}),
+    );
+    const { pane, state, snapshot } = createCanonicalRoutePane(request);
+    pane.sessionKey = state.sessionKey;
+    state.loadAssistantIdentity = vi.fn(async () => undefined);
+    const hello = { ...snapshot.hello, features: { methods: ["system.info"], events: [] } };
+    pane.context.gateway.snapshot.hello = hello;
+    try {
+      pane.applyGatewaySnapshot({ ...snapshot, hello });
+      expect(request.mock.calls.some(([method]) => method === "chat.startup")).toBe(true);
+      expect(request.mock.calls.filter(([method]) => method === "system.info")).toEqual([]);
+    } finally {
+      history.resolve(assistantHistory("Selected transcript"));
+      await history.promise;
+    }
+  });
+
   it("issues a disconnected history request once when connection redirects the route", async () => {
     const request = vi.fn().mockResolvedValue(assistantHistory("Recovered transcript"));
     const { pane, state, snapshot } = createCanonicalRoutePane(request);
@@ -64,11 +91,15 @@ describe("chat pane history issuance across Gateway connection transitions", () 
     pane.applyGatewaySnapshot(snapshot);
 
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-    expect(request).toHaveBeenCalledWith("chat.history", {
-      sessionKey: "agent:main:current",
-      limit: 80,
-      maxBytes: 256 * 1024,
-    });
+    expect(request).toHaveBeenCalledWith(
+      "chat.history",
+      {
+        sessionKey: "agent:main:current",
+        limit: 80,
+        maxBytes: 256 * 1024,
+      },
+      { signal: expect.any(AbortSignal) },
+    );
     await vi.waitFor(() =>
       expect(state.chatMessages).toEqual([
         { role: "assistant", content: [{ type: "text", text: "Recovered transcript" }] },
@@ -102,11 +133,16 @@ describe("chat pane history issuance across Gateway connection transitions", () 
     pane.applyGatewaySnapshot(snapshot);
 
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
-    expect(request).toHaveBeenNthCalledWith(2, "chat.startup", {
-      sessionKey: state.sessionKey,
-      limit: 80,
-      maxBytes: 256 * 1024,
-    });
+    expect(request).toHaveBeenNthCalledWith(
+      2,
+      "chat.startup",
+      {
+        sessionKey: state.sessionKey,
+        limit: 80,
+        maxBytes: 256 * 1024,
+      },
+      { signal: expect.any(AbortSignal) },
+    );
     await vi.waitFor(() =>
       expect(state.chatMessages).toEqual([
         { role: "assistant", content: [{ type: "text", text: "Recovered after reconnect" }] },

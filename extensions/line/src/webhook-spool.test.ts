@@ -77,8 +77,7 @@ describe("LINE webhook spool", () => {
       const body = JSON.stringify(callback(createEvent({ webhookEventId: "event-ack-fail" })));
       const channelSecret = "test-channel-secret";
       const handler = createLineNodeWebhookHandler({
-        channelSecret,
-        bot: { handleWebhook: spool.accept },
+        getTargets: () => [{ channelSecret, bot: { handleWebhook: spool.accept } }],
         runtime: runtime(),
         readBody: async () => body,
       });
@@ -228,7 +227,7 @@ describe("LINE webhook spool", () => {
       let lateLifecycle: LineWebhookTurnAdoptionLifecycle | undefined;
       const firstDeliver = vi.fn(
         async (
-          _event: webhook.Event,
+          _events: readonly webhook.Event[],
           _destination: string,
           control: { turnAdoptionLifecycle: LineWebhookTurnAdoptionLifecycle },
         ) => {
@@ -305,11 +304,11 @@ describe("LINE webhook spool", () => {
       const spoolRuntime = runtime();
       const deliver = vi.fn(
         async (
-          event: webhook.Event,
+          events: readonly webhook.Event[],
           _destination: string,
           control: { turnAdoptionLifecycle: LineWebhookTurnAdoptionLifecycle },
         ) => {
-          if ((event as webhook.MessageEvent).message.id === "message-event-stop-deferred") {
+          if ((events[0] as webhook.MessageEvent).message.id === "message-event-stop-deferred") {
             deferredLifecycle = control.turnAdoptionLifecycle;
             control.turnAdoptionLifecycle.onDeferred();
             return;
@@ -512,8 +511,10 @@ describe("LINE webhook spool", () => {
         runtime: runtime(),
         queue,
         deliver: async (delivered, _destination, control) => {
-          if (delivered.type === "message" && delivered.message.type === "text") {
-            deliveredText.push(delivered.message.text);
+          for (const delivery of delivered) {
+            if (delivery.type === "message" && delivery.message.type === "text") {
+              deliveredText.push(delivery.message.text);
+            }
           }
           await control.turnAdoptionLifecycle.onAdopted();
         },

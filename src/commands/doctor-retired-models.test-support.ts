@@ -1,7 +1,11 @@
+import path from "node:path";
 import { afterEach, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -13,13 +17,20 @@ const retirementRules = vi.hoisted(() =>
     "retired-with-successor",
     "retired-without-successor",
     "retired-with-slash",
+    "retired-chain-to-retired",
+    "retired-incompat-chain",
+    "retired-global-parent",
+    "retired-runtime-parent",
+    "retired-route-child",
     "retired-global-without-successor",
     "retired-api-conditioned",
   ].map((model) => ({
     provider: "openai",
     model,
     when:
-      model === "retired-global-without-successor"
+      model === "retired-global-without-successor" ||
+      model === "retired-global-parent" ||
+      model === "retired-runtime-parent"
         ? undefined
         : {
             baseUrlHosts: ["chatgpt.com"],
@@ -30,7 +41,18 @@ const retirementRules = vi.hoisted(() =>
     retirement: model.includes("without-successor")
       ? {}
       : {
-          replacedBy: model === "retired-with-slash" ? "family/current-model" : "current-model",
+          replacedBy:
+            model === "retired-with-slash"
+              ? "family/current-model"
+              : model === "retired-chain-to-retired"
+                ? "retired-without-successor"
+                : model === "retired-incompat-chain"
+                  ? "CHAT-LATEST"
+                  : model === "retired-global-parent"
+                    ? "retired-route-child"
+                    : model === "retired-runtime-parent"
+                      ? "gpt-5.5"
+                      : "current-model",
         },
   })),
 );
@@ -91,6 +113,7 @@ vi.mock("../agents/openai-model-routes.js", async (importOriginal) => {
 const states: OpenClawTestState[] = [];
 afterEach(async () => {
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   for (const state of states.splice(0)) {
     await state.cleanup();
@@ -126,4 +149,48 @@ export async function createRetiredModelFixture(auth: "oauth" | "api-key" = "oau
     models: { providers: { openai: { baseUrl: "https://api.openai.com/v1", models: [] } } },
   };
   return { state, cfg };
+}
+
+export async function createNativeXaiRetirementFixture() {
+  vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.resolve("extensions"));
+  const { state } = await createRetiredModelFixture();
+  vi.stubEnv("XAI_API_KEY", undefined);
+  await state.writeAuthProfiles({
+    version: 1,
+    profiles: {
+      "xai:fixture": { provider: "xai", type: "api_key", key: "synthetic-xai-key" },
+    },
+  });
+  const cfg: OpenClawConfig = {
+    agents: {
+      entries: { main: {} },
+      defaults: {
+        workspace: state.workspaceDir,
+        model: { primary: "Grok", fallbacks: ["xai/grok-4.3"] },
+        models: { "xai/auto": { alias: "Grok", params: { temperature: 0.25 } } },
+        modelPolicy: { allow: ["xai/auto", "xai/grok-4.3"] },
+      },
+    },
+    auth: { order: { xai: ["xai:fixture"] } },
+    models: {
+      providers: {
+        xai: {
+          baseUrl: "https://api.x.ai/v1",
+          api: "openai-responses",
+          auth: "api-key",
+          models: [],
+        },
+      },
+    },
+    plugins: { allow: ["xai"], entries: { xai: { enabled: true } } },
+  };
+  const { repairStaleAgentModelRefs } =
+    await import("./doctor/shared/stale-agent-model-ref-repair.js");
+  const repair = (config: OpenClawConfig) =>
+    repairStaleAgentModelRefs(config, {
+      env: state.env,
+      pluginProviderIds: new Set(["xai"]),
+      persistedProviderIdsByAgentId: new Map(),
+    });
+  return { cfg, state, repair };
 }

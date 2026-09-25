@@ -4,25 +4,21 @@
  * Moves legacy single-account channel config into account-scoped config records.
  */
 import { getLoadedChannelPluginForRead } from "./registry-loaded.js";
+import type { ChannelSetupAdapter } from "./setup-adapter.types.js";
 import {
   collectSingleAccountPromotionEntries,
   isCommonSingleAccountPromotionKey,
   isSetupSingleAccountPromotionKey,
 } from "./setup-promotion-keys.js";
 
-type ChannelSectionBase = {
-  defaultAccount?: string;
-  accounts?: Record<string, Record<string, unknown>>;
-};
-
-export type ChannelSetupPromotionSurface = {
-  configPromotion?: "preserve-root";
-  singleAccountKeysToMove?: readonly string[];
-  namedAccountPromotionKeys?: readonly string[];
-  resolveSingleAccountPromotionTarget?: (params: {
-    channel: ChannelSectionBase;
-  }) => string | undefined;
-};
+export type ChannelSetupPromotionSurface = Pick<
+  ChannelSetupAdapter,
+  | "accountKeyPolicy"
+  | "configPromotion"
+  | "singleAccountKeysToMove"
+  | "namedAccountPromotionKeys"
+  | "resolveSingleAccountPromotionTarget"
+>;
 
 type SingleAccountPromotionParams = {
   channelKey: string;
@@ -81,23 +77,14 @@ function getLoadedChannelSetupPromotionSurface(
 export function resolveSingleAccountPromotion(
   params: SingleAccountPromotionParams,
 ): SingleAccountPromotion {
-  const callerSetupSurface =
-    params.setupSurface === undefined ? undefined : asPromotionSurface(params.setupSurface);
-  let discoveredSetupSurface: ChannelSetupPromotionSurface | null | undefined;
-  const resolveSetupSurface = () => {
-    if (callerSetupSurface !== undefined) {
-      return callerSetupSurface;
-    }
-    if (discoveredSetupSurface === undefined) {
-      discoveredSetupSurface =
-        getLoadedChannelSetupPromotionSurface(params.channelKey) ??
+  const setupSurface =
+    params.setupSurface === undefined
+      ? (getLoadedChannelSetupPromotionSurface(params.channelKey) ??
         params.resolveBundledSurface?.(params.channelKey) ??
-        null;
-    }
-    return discoveredSetupSurface;
-  };
+        null)
+      : asPromotionSurface(params.setupSurface);
   // Generic policy fields also belong to a preserved root identity.
-  if (resolveSetupSurface()?.configPromotion === "preserve-root") {
+  if (setupSurface?.configPromotion === "preserve-root") {
     return { kind: "preserve-root" };
   }
   const { entries, hasNamedAccounts } = collectSingleAccountPromotionEntries(params.channel);
@@ -115,14 +102,13 @@ export function resolveSingleAccountPromotion(
   const buildResult = (keysToMove: string[]): SingleAccountPromotion => ({
     kind: "promote",
     keysToMove,
-    shouldDeferPromotion: hasUncoveredRootKeys && !hasPromotionDeclarations(resolveSetupSurface()),
+    shouldDeferPromotion: hasUncoveredRootKeys && !hasPromotionDeclarations(setupSurface),
   });
 
   const keysToMove = entries.filter((key) => {
     if (isGenericPromotionKey(key)) {
       return true;
     }
-    const setupSurface = resolveSetupSurface();
     return hasPromotionDeclarations(setupSurface)
       ? Boolean(setupSurface?.singleAccountKeysToMove?.includes(key))
       : isLegacyPromotionKey(key);
@@ -133,7 +119,7 @@ export function resolveSingleAccountPromotion(
 
   // Once named accounts exist, only keys explicitly allowed for named-account
   // promotion should move. This avoids flattening root-only channel settings.
-  const namedAccountPromotionKeys = resolveSetupSurface()?.namedAccountPromotionKeys;
+  const namedAccountPromotionKeys = setupSurface?.namedAccountPromotionKeys;
   if (!namedAccountPromotionKeys) {
     return buildResult(keysToMove);
   }

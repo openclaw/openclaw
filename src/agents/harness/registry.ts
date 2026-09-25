@@ -3,7 +3,13 @@
  */
 import { retainCliRegistryHarnesses } from "../../cli/runtime-cleanup-scope.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { isPluginRegistryRetired } from "../../plugins/registry-lifecycle.js";
+import { runPluginCleanup } from "../../plugins/plugin-instance-scope.js";
+import { getPluginRegistryInspectionResources } from "../../plugins/registry-inspection-resources.js";
+import {
+  getPluginRegistryLifetime,
+  isPluginRegistryRetired,
+} from "../../plugins/registry-lifecycle.js";
+import type { PluginRegistry } from "../../plugins/registry-types.js";
 import {
   assertDirectPluginRegistrationReplacement,
   getPluginRegistryForContext,
@@ -29,8 +35,12 @@ function getAgentHarnesses() {
   if (!registry || isPluginRegistryRetired(registry)) {
     return [];
   }
-  retainCliRegistryHarnesses(registry, (harness) =>
-    withPluginRuntimeRegistryScope(registry, () => disposeAgentHarness(harness)),
+  retainCliRegistryHarnesses(
+    registry,
+    (harness) => withPluginRuntimeRegistryScope(registry, () => disposeAgentHarness(harness)),
+    () =>
+      getPluginRegistryInspectionResources(registry)?.retain().release ??
+      getPluginRegistryLifetime(registry)?.retain(),
   );
   return registry.agentHarnesses;
 }
@@ -127,30 +137,39 @@ export function clearAgentHarnesses(): void {
   getAgentHarnesses().length = 0;
 }
 
-/** Calls each registered harness session-reset hook without letting one failure stop the fan-out. */
+/** Resets each live harness owner once, retaining the caller's registry for direct hosts. */
 export async function resetRegisteredAgentHarnessSessions(
   params: AgentHarnessResetParams,
+  executionRegistries: readonly PluginRegistry[] = [],
 ): Promise<void> {
-  await Promise.all(
-    listRegisteredAgentHarnesses().map(async (entry) => {
-      if (!entry.harness.reset) {
-        return;
-      }
-      try {
-        await entry.harness.reset(params);
-      } catch (error) {
-        log.warn(`${entry.harness.label} session reset hook failed`, {
-          harnessId: entry.harness.id,
-          error,
-        });
-      }
-    }),
-  );
+  const current = getPluginRegistryForContext();
+  const registries = new Set([...executionRegistries, ...(current ? [current] : [])]);
+  const visited = new Set<AgentHarness>();
+  for (const registry of registries) {
+    await withPluginRuntimeRegistryScope(registry, async () => {
+      await Promise.all(
+        listRegisteredAgentHarnesses().map(async (entry) => {
+          if (!entry.harness.reset || visited.has(entry.harness)) {
+            return;
+          }
+          visited.add(entry.harness);
+          try {
+            await entry.harness.reset(params);
+          } catch (error) {
+            log.warn(`${entry.harness.label} session reset hook failed`, {
+              harnessId: entry.harness.id,
+              error,
+            });
+          }
+        }),
+      );
+    });
+  }
 }
 
 async function disposeAgentHarness(harness: AgentHarness): Promise<void> {
   try {
-    await harness.dispose?.();
+    await runPluginCleanup(harness, () => harness.dispose?.());
   } catch (error) {
     log.warn(`${harness.label} dispose hook failed`, { harnessId: harness.id, error });
   }

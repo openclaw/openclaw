@@ -24,6 +24,29 @@ function createConfiguredMSTeamsCfg(): OpenClawConfig {
   };
 }
 
+describe("msteamsPlugin.security.collectWarnings", () => {
+  it("records an intentional open groupPolicy as a non-blocking posture advisory", async () => {
+    const cfg = {
+      channels: {
+        msteams: {
+          groupPolicy: "open",
+        },
+      },
+    } as OpenClawConfig;
+    const account = msteamsPlugin.config.resolveAccount(cfg, "default");
+
+    expect(await msteamsPlugin.security?.collectWarnings?.({ cfg, account })).toEqual([
+      {
+        checkId: "channels.msteams.groups.open",
+        severity: "warn",
+        title: "MS Teams security warning",
+        detail:
+          'MS Teams groups: groupPolicy="open" allows any member to trigger (mention-gated). Set channels.msteams.groupPolicy="allowlist" + channels.msteams.groupAllowFrom to restrict senders.',
+      },
+    ]);
+  });
+});
+
 describe("msteamsPlugin", () => {
   afterEach(() => vi.unstubAllEnvs());
 

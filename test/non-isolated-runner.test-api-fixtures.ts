@@ -3,6 +3,37 @@ import path from "node:path";
 export function testApiLifecycleFixtureFiles(repoRoot: string): Record<string, string> {
   const sourcePath = (name: string) => JSON.stringify(path.join(repoRoot, "src", name));
   const files: Record<string, string> = {};
+  for (const generation of ["producer", "observer"]) {
+    files[`05-${generation === "producer" ? "c" : "d"}-task-registry.test.ts`] = `
+import { expect, it, vi } from "vitest";
+import { emitAgentEvent } from ${sourcePath("infra/agent-events.ts")};
+import { prepareTaskRegistryRead } from ${sourcePath("tasks/task-registry-read.ts")};
+import * as listenerState from ${sourcePath("tasks/task-registry-listener-state.ts")};
+import { configureInMemoryTaskStoresForTests, createTaskFixture } from ${sourcePath("tasks/task-registry.test-support.ts")};
+it("receives task events in the ${generation} file", async () => {
+  configureInMemoryTaskStoresForTests();
+  const runId = "runner-task-${generation}";
+  const task = createTaskFixture("cli", {
+    runId,
+    task: "Observe task events across file cleanup",
+    notifyPolicy: "silent",
+  });
+  emitAgentEvent({ runId, stream: "tool", data: { phase: "start", name: "read" } });
+  const read = await prepareTaskRegistryRead();
+  expect(read?.getTaskById(task.taskId)).toMatchObject({ toolUseCount: 1, lastToolName: "read" });
+  ${
+    generation === "producer"
+      ? `vi.spyOn(listenerState, "resetTaskRegistryListenerState").mockImplementation(() => {});
+  vi.spyOn(vi, "resetModules");
+  expect(vi.resetModules()).toBe(vi);
+  emitAgentEvent({ runId, stream: "tool", data: { phase: "start", name: "after-reset" } });
+  const afterReset = await prepareTaskRegistryRead();
+  expect(afterReset?.getTaskById(task.taskId)).toMatchObject({ toolUseCount: 2, lastToolName: "after-reset" });`
+      : ""
+  }
+});
+`;
+  }
   for (const [prefix, generation] of [
     ["09-d", "producer"],
     ["09-e", "observer"],
@@ -18,11 +49,13 @@ const remainingKeys = [
   "openclaw.diagnosticRunActivityTestApi",
 ].filter((key) => Object.hasOwn(globalThis, Symbol.for(key)));
 expect(remainingKeys, "completed-file test API publications").toEqual([]);
-expect(Object.hasOwn(globalThis, "openclawOpenAIResponsesTransportTestApi")).toBe(false);
 for (const key of [Symbol.for("fixture.foreignTestApi"), Symbol.for("openclaw.google.vertexAdcTestApi"), "openclaw.staleAuthOrderTestApi"]) {
   expect(Reflect.get(globalThis, key)).toBe("foreign");
   Reflect.deleteProperty(globalThis, key);
 }
+const { redactRegisteredSecretValues: redactPriorValues } = await import(${sourcePath("logging/secret-redaction-registry.ts")});
+const priorError = "Agent harness-owned session identity is locked and cannot be replaced or shared.";
+expect(redactPriorValues(priorError, () => "***")).toBe(priorError);
 `
         : "";
     files[`${prefix}-test-api-${generation}.test.ts`] = `
@@ -32,7 +65,6 @@ ${observeCleanup}
 const { createBeforeToolCallBlockedError } = await import(${sourcePath("agents/agent-tools.before-tool-call.test-support.ts")});
 const { isBeforeToolCallBlockedError } = await import(${sourcePath("agents/agent-tools.before-tool-call.wrapper.ts")});
 const { repairStaleConfiguredAuthOrders } = await import(${sourcePath("commands/doctor/shared/stale-auth-order.test-support.ts")});
-const { testing: responses } = await import(${sourcePath("agents/openai-transport-stream.test-support.ts")});
 const registry = await import(${sourcePath("agents/bash-process-registry.ts")});
 const { resetProcessRegistryForTests } = await import(${sourcePath("agents/bash-process-registry.test-support.ts")});
 const { createProcessSessionFixture } = await import(${sourcePath("agents/bash-process-registry.test-helpers.ts")});
@@ -48,14 +80,15 @@ expect(nativeCron.registerActiveCronTaskRun).toBe(native.register);
 const { resetDiagnosticRunActivityForTest, getDiagnosticSessionActivitySnapshot } = await import(${sourcePath("logging/diagnostic-run-activity.ts")});
 const { markDiagnosticToolStartedForTest } = await import(${sourcePath("logging/diagnostic-run-activity.test-support.ts")});
 const { resolveGlobalSingleton } = await import(${sourcePath("shared/global-singleton.ts")});
+const { registerSecretValueForRedaction, redactRegisteredSecretValues } = await import(${sourcePath("logging/secret-redaction-registry.ts")});
 describe("${generation} test API consumers", () => {
   async function verifyConsumers(message: string): Promise<void> {
+    registerSecretValueForRedaction("identity");
+    expect(redactRegisteredSecretValues("session identity is locked", () => "***")).toBe("session *** is locked");
     const blocked = createBeforeToolCallBlockedError(message);
     expect(blocked.message).toBe(message);
     expect(isBeforeToolCallBlockedError(blocked)).toBe(true);
     expect(isBeforeToolCallBlockedError(new Error(message))).toBe(false);
-    expect(responses.isInvalidEncryptedContentError({ code: "invalid_encrypted_content" })).toBe(true);
-    expect(responses.isInvalidEncryptedContentError(new Error("unrelated"))).toBe(false);
     registry.addSession(createProcessSessionFixture({ id: "captured", backgrounded: true }));
     replacement.addSession(createProcessSessionFixture({ id: "replacement", backgrounded: true }));
     try {

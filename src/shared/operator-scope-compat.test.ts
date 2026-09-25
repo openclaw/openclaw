@@ -1,12 +1,49 @@
 // Role scope checks preserve operator implications and role-prefix boundaries.
 import { describe, expect, it } from "vitest";
 import {
+  intersectOperatorScopes,
   resolveMissingRequestedScope,
   resolveScopeOutsideRequestedRoles,
   roleScopesAllow,
 } from "./operator-scope-compat.js";
 
 describe("roleScopesAllow", () => {
+  it.each([
+    ["operator.read", "operator.sessions.read", true],
+    ["operator.read", "operator.sessions.write", false],
+    ["operator.write", "operator.sessions.write", true],
+    ["operator.sessions.write", "operator.sessions.read", true],
+    ["operator.sessions.read", "operator.read", false],
+    ["operator.sessions.write", "operator.write", false],
+    ["operator.sessions.write", "operator.admin", false],
+    ["operator.sessions.write", "operator.approvals", false],
+  ])(
+    "checks grant %s against %s without broadening session authority",
+    (grant, requested, allowed) => {
+      expect(
+        roleScopesAllow({ role: "operator", requestedScopes: [requested], allowedScopes: [grant] }),
+      ).toBe(allowed);
+    },
+  );
+
+  it("derives an explicitly selected session ceiling from existing grants without inventing write access", () => {
+    expect(
+      intersectOperatorScopes(["operator.read", "operator.write"], ["operator.sessions.write"]),
+    ).toEqual(["operator.sessions.write"]);
+    expect(intersectOperatorScopes(["operator.admin"], ["operator.sessions.read"])).toEqual([
+      "operator.sessions.read",
+    ]);
+    expect(intersectOperatorScopes(["operator.read"], ["operator.sessions.write"])).toEqual([
+      "operator.sessions.read",
+    ]);
+    expect(intersectOperatorScopes(["operator.sessions.write"], ["operator.read"])).toEqual([
+      "operator.sessions.read",
+    ]);
+    expect(intersectOperatorScopes([], ["operator.sessions.write"])).toEqual([]);
+    expect(intersectOperatorScopes(["operator.write"], ["operator.write"])).toEqual([
+      "operator.write",
+    ]);
+  });
   it.each([
     { requestedScopes: [], allowedScopes: [] },
     { requestedScopes: ["", " \t"], allowedScopes: [] },
@@ -80,22 +117,21 @@ describe("roleScopesAllow", () => {
     ).toBe(false);
   });
 
-  it("treats operator.approvals/operator.pairing as satisfied by operator.admin", () => {
-    expect(
-      roleScopesAllow({
-        role: "operator",
-        requestedScopes: ["operator.approvals"],
-        allowedScopes: ["operator.admin"],
-      }),
-    ).toBe(true);
-    expect(
-      roleScopesAllow({
-        role: "operator",
-        requestedScopes: ["operator.pairing"],
-        allowedScopes: ["operator.admin"],
-      }),
-    ).toBe(true);
-  });
+  it.each(["operator.talk.secrets", "operator.approvals", "operator.pairing", "operator.future"])(
+    "requires an exact grant or admin for %s",
+    (requestedScope) => {
+      for (const allowedScopes of [[requestedScope], ["operator.admin"]]) {
+        expect(
+          roleScopesAllow({ role: "operator", requestedScopes: [requestedScope], allowedScopes }),
+        ).toBe(true);
+      }
+      for (const allowedScopes of [[], ["operator.write"]]) {
+        expect(
+          roleScopesAllow({ role: "operator", requestedScopes: [requestedScope], allowedScopes }),
+        ).toBe(false);
+      }
+    },
+  );
 
   it("does not treat operator.admin as satisfying non-operator scopes", () => {
     expect(
@@ -229,4 +265,33 @@ describe("roleScopesAllow", () => {
       );
     },
   );
+});
+
+describe("intersectOperatorScopes", () => {
+  it.each([
+    { grant: ["operator.write"], ceiling: ["operator.read"], expected: ["operator.read"] },
+    { grant: ["operator.admin"], ceiling: ["operator.write"], expected: ["operator.write"] },
+    { grant: ["operator.read"], ceiling: ["operator.write"], expected: ["operator.read"] },
+    { grant: ["operator.write"], ceiling: ["operator.talk"], expected: ["operator.talk"] },
+    { grant: [], ceiling: ["operator.admin"], expected: [] },
+    { grant: ["operator.admin"], ceiling: [], expected: [] },
+    {
+      grant: ["operator.write"],
+      ceiling: ["operator.approvals", "operator.talk.secrets"],
+      expected: [],
+    },
+    { grant: ["operator.future"], ceiling: ["operator.read", "operator.write"], expected: [] },
+    { grant: ["operator.future"], ceiling: ["operator.admin"], expected: ["operator.future"] },
+    { grant: ["node.exec"], ceiling: ["operator.admin"], expected: [] },
+  ])("narrows $grant to capabilities within $ceiling", ({ grant, ceiling, expected }) => {
+    expect(intersectOperatorScopes(grant, ceiling)).toEqual(expected);
+  });
+
+  it("preserves sufficient grants without expanding their implied scopes", () => {
+    const grant = ["operator.read", "operator.write"];
+    expect(intersectOperatorScopes(grant, ["operator.admin"])).toEqual(grant);
+    expect(
+      intersectOperatorScopes(["operator.write"], ["operator.write", "operator.read"]),
+    ).toEqual(["operator.write"]);
+  });
 });

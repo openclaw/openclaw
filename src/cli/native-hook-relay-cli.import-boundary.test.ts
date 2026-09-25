@@ -2,6 +2,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { findSourceImportBackedges } from "../../test/helpers/source-import-closure.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
 
@@ -28,29 +29,22 @@ describe("native hook relay CLI import boundary", () => {
     expect(generalCli).toBeGreaterThan(relayDispatch);
   });
 
-  it("keeps server, event, permission, and writable state owners out of the client", () => {
-    const clientGraph = [
-      "src/agents/harness/native-hook-relay-client.ts",
-      "src/agents/harness/native-hook-relay-client-store.ts",
-      "src/agents/harness/native-hook-relay-bridge-record.ts",
-      "src/agents/harness/native-hook-relay-constants.ts",
-      "src/agents/harness/native-hook-relay-response-codec.ts",
-      "src/state/openclaw-state-db-schema-version.ts",
-    ]
-      .map(readSource)
-      .join("\n");
-
-    for (const forbiddenImport of [
-      "native-hook-relay-bridge.js",
-      "native-hook-relay-events.js",
-      "native-hook-relay-permissions.js",
-      "native-hook-relay-state.js",
-      "native-hook-relay-store.js",
-      "openclaw-state-db.js",
-      "openclaw-state-db-maintenance.js",
-      "gateway/call.js",
-    ]) {
-      expect(clientGraph).not.toContain(forbiddenImport);
-    }
+  it.each([
+    "src/agents/harness/native-hook-relay-client.ts",
+    "src/agents/harness/native-hook-relay-client.worker.ts",
+  ])("keeps server and writable state owners out of %s", (entry) => {
+    expect(
+      findSourceImportBackedges(entry, [
+        "src/agents/harness/native-hook-relay-bridge.ts",
+        "src/agents/harness/native-hook-relay-events.ts",
+        "src/agents/harness/native-hook-relay-permissions.ts",
+        "src/agents/harness/native-hook-relay-state.ts",
+        "src/agents/harness/native-hook-relay-store.ts",
+        "src/state/openclaw-state-db.ts",
+        "src/state/openclaw-state-db-maintenance.ts",
+        "src/state/state-database-coordinator.ts",
+        "src/gateway/call.ts",
+      ]),
+    ).toEqual([]);
   });
 });

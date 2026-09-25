@@ -1,10 +1,21 @@
 import fs, { type BigIntStats } from "node:fs";
+import { sameFileIdentity, type FileIdentityStat } from "@openclaw/fs-safe/advanced";
 import {
   hashFileDescriptorSync,
   sameFileMutationFingerprint,
   type FileMutationFingerprint,
 } from "./file-descriptor.js";
-import { sameFileIdentity } from "./fs-safe-advanced.js";
+
+export function readSqliteIntegrityFileIdentity(
+  pathname: string,
+  expected?: FileIdentityStat,
+): FileIdentityStat & { size: bigint } {
+  const current = fs.statSync(pathname, { bigint: true });
+  if (!current.isFile() || (expected && !sameFileIdentity(expected, current))) {
+    throw new Error(`SQLite source changed during integrity admission: ${pathname}`);
+  }
+  return { dev: current.dev, ino: current.ino, size: current.size };
+}
 
 type SqliteFileFingerprint = FileMutationFingerprint & { sha256: string };
 

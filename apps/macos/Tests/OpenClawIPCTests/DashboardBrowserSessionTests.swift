@@ -64,7 +64,10 @@ struct DashboardBrowserSessionTests {
         #expect(cookie.isHTTPOnly)
         #expect(cookie.domain == "gateway.example")
         #expect(controller._testUserScripts.allSatisfy { !$0.source.contains("first-session") })
-        try controller.nativeBrowser.open(tabId: "mac-private", url: #require(URL(string: "about:blank")))
+        try controller.nativeBrowser.open(
+            tabId: "mac-private",
+            url: #require(URL(string: "about:blank")),
+            sessionKey: "")
         let readingStore = try #require(controller.nativeBrowser.webView(for: "mac-private"))
             .configuration.websiteDataStore
         #expect(readingStore !== store.dataStore)
@@ -248,7 +251,7 @@ struct DashboardBrowserSessionTests {
 
     @Test(arguments: [false, true])
     func `only browser sign-in profiles use an isolated website store`(_ browserSignIn: Bool) async throws {
-        let tls = try DashboardTLSFixture()
+        let tls = try await DashboardTLSFixture()
         let server = try await DashboardHTTPFixture.start(tlsIdentity: tls.identity)
         defer { server.stop() }
         let session = try GatewayBrowserSession(

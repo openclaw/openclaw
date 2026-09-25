@@ -1,4 +1,4 @@
-import fs, { existsSync } from "node:fs";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import {
   executeSqliteQuerySync,
@@ -7,9 +7,7 @@ import {
 } from "../infra/kysely-sync.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
-import { formatDoctorStateRepairFailure } from "../infra/state-repair-message.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -26,66 +24,41 @@ import {
   WorkspaceAliasRepointedError,
   type WorkspaceStateIdentity,
 } from "./workspace-state-identity.js";
+import {
+  assertCanonicalIntegerTimestamp,
+  assertCanonicalTimestamp,
+  isSafeWorkspaceAttestationFilename,
+  readWorkspaceStateSnapshotFromDatabase,
+  registerWorkspaceStateAliasIdentitiesInTransaction,
+  resolveWorkspaceIdentityFromDatabase,
+  SHA256_HEX_PATTERN,
+  WORKSPACE_ATTESTATION_RECENT_MS,
+  WORKSPACE_CONTENT_RELOCATION_MIGRATION_KIND,
+  WORKSPACE_LEGACY_STATE_MIGRATION_KIND,
+  WORKSPACE_SETUP_STATE_VERSION,
+  workspacePathEntryExists,
+  type WorkspaceAttestation,
+  type WorkspaceSetupState,
+  type WorkspaceStateDatabase,
+  type WorkspaceStateDatabaseHandle,
+  type WorkspaceStateSnapshot,
+} from "./workspace-state-store.kernel.js";
 
-export const WORKSPACE_SETUP_STATE_VERSION = 1 as const;
-export const WORKSPACE_ATTESTATION_RECENT_MS = 24 * 60 * 60 * 1000;
-export const WORKSPACE_LEGACY_STATE_MIGRATION_KIND = "legacy-workspace-setup-files";
-export const WORKSPACE_CONTENT_RELOCATION_MIGRATION_KIND = "workspace-content-relocation";
-const MAX_WORKSPACE_ATTESTATION_FILENAME_LENGTH = 255;
-const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/u;
-// Attested names are joined onto the workspace dir and read back, so keep the
-// accepted set closed rather than denying unsafe forms one at a time: a plain
-// ASCII markdown basename excludes separators, traversal, colons, NUL, and the
-// Win32 superscript/`CONIN$` device aliases in one rule.
-const SAFE_ATTESTATION_BASENAME = /^[A-Za-z0-9._-]+\.md$/u;
-// Win32 keeps these stems special even with an extension, so `NUL.md` names a
-// device rather than a workspace file; the charset above cannot catch them.
-const WINDOWS_RESERVED_DEVICE_STEMS = /^(?:con|prn|aux|nul|com[0-9]|lpt[0-9])$/iu;
+export {
+  isSafeWorkspaceAttestationFilename,
+  readWorkspaceStateSnapshotFromDatabase,
+  registerWorkspaceStateAliasIdentitiesInTransaction,
+  registerWorkspaceStateAliasesInTransaction,
+  WORKSPACE_ATTESTATION_RECENT_MS,
+  WORKSPACE_CONTENT_RELOCATION_MIGRATION_KIND,
+  WORKSPACE_LEGACY_STATE_MIGRATION_KIND,
+  WORKSPACE_SETUP_STATE_VERSION,
+  type WorkspaceAttestation,
+  type WorkspaceSetupState,
+  type WorkspaceStateSnapshot,
+} from "./workspace-state-store.kernel.js";
 
-export function isSafeWorkspaceAttestationFilename(filename: string): boolean {
-  return (
-    filename.length <= MAX_WORKSPACE_ATTESTATION_FILENAME_LENGTH &&
-    SAFE_ATTESTATION_BASENAME.test(filename) &&
-    !filename.startsWith(".") &&
-    !WINDOWS_RESERVED_DEVICE_STEMS.test(filename.split(".")[0] ?? "")
-  );
-}
-
-function isCanonicalIsoTimestamp(value: string): boolean {
-  const timestamp = new Date(value);
-  return Number.isFinite(timestamp.getTime()) && timestamp.toISOString() === value;
-}
-
-function assertCanonicalTimestamp(value: string | null, label: string): void {
-  if (value !== null && !isCanonicalIsoTimestamp(value)) {
-    throw new Error(`workspace ${label} timestamp is invalid`);
-  }
-}
-
-function assertCanonicalIntegerTimestamp(value: number, label: string): void {
-  if (!Number.isSafeInteger(value) || value < 0) {
-    throw new Error(`workspace ${label} timestamp is invalid`);
-  }
-}
-
-export type WorkspaceSetupState = {
-  version: typeof WORKSPACE_SETUP_STATE_VERSION;
-  bootstrapSeededAt?: string;
-  setupCompletedAt?: string;
-};
-
-export type WorkspaceAttestation = {
-  attestedAtMs: number;
-  generatedHashes: ReadonlyMap<string, string>;
-};
-
-export type WorkspaceStateSnapshot = {
-  identity: WorkspaceStateIdentity;
-  setupExists: boolean;
-  setupUpdatedAtMs?: number;
-  setup: WorkspaceSetupState;
-  attestation?: WorkspaceAttestation;
-};
+type WorkspaceStateOperationOptions = { assertCurrent?: () => void };
 
 type WorkspaceStateDeletionPlan = {
   cacheRoot: string;
@@ -94,250 +67,22 @@ type WorkspaceStateDeletionPlan = {
   pathEntryExisted: boolean;
 };
 
-type WorkspaceStateDatabase = Pick<
-  OpenClawStateKyselyDatabase,
-  | "workspace_setup_state"
-  | "workspace_path_aliases"
-  | "workspace_generated_bootstrap_hashes"
-  | "migration_runs"
-  | "migration_sources"
->;
-
-type WorkspaceStateDatabaseHandle = Pick<
-  ReturnType<typeof openOpenClawStateDatabase>,
-  "db" | "path"
->;
-
-function workspacePathEntryExists(workspaceDir: string): boolean {
-  try {
-    fs.lstatSync(path.resolve(resolveUserPath(workspaceDir)));
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-type WorkspaceIdentityResolution = {
-  identity: WorkspaceStateIdentity;
-  aliases: WorkspaceStateIdentity[];
-  missingAliasKeys: string[];
-};
-
-function resolveWorkspaceIdentityFromDatabase(params: {
-  workspaceDir: string;
-  database: WorkspaceStateDatabaseHandle;
-}): WorkspaceIdentityResolution {
-  const aliases = resolveWorkspaceStateAliases(params.workspaceDir);
-  const canonicalIdentity = aliases.at(-1)!;
-  const kysely = getNodeSqliteKysely<WorkspaceStateDatabase>(params.database.db);
-  const rows = executeSqliteQuerySync(
-    params.database.db,
-    kysely
-      .selectFrom("workspace_path_aliases")
-      .selectAll()
-      .where(
-        "alias_key",
-        "in",
-        aliases.map((alias) => alias.workspaceKey),
-      ),
-  ).rows;
-  const aliasesByKey = new Map(aliases.map((alias) => [alias.workspaceKey, alias]));
-  let storedIdentity: WorkspaceStateIdentity | undefined;
-  for (const row of rows) {
-    const alias = aliasesByKey.get(row.alias_key);
-    if (!alias || alias.workspacePath !== row.alias_path) {
-      throw new Error("workspace path alias key collision");
-    }
-    const rowIdentity = createWorkspaceStateIdentity(row.workspace_path);
-    if (rowIdentity.workspaceKey !== row.workspace_key) {
-      throw new Error("workspace path alias target is invalid");
-    }
-    // A repointed alias can also resolve to an already initialized workspace.
-    // Report the repairable alias failure before the two owners look like corruption.
-    if (
-      workspacePathEntryExists(params.workspaceDir) &&
-      rowIdentity.workspaceKey !== canonicalIdentity.workspaceKey
-    ) {
-      throw new WorkspaceAliasRepointedError({
-        aliasPath: aliases[0]!.workspacePath,
-        storedWorkspacePath: rowIdentity.workspacePath,
-        currentWorkspacePath: canonicalIdentity.workspacePath,
-      });
-    }
-    if (storedIdentity && storedIdentity.workspaceKey !== rowIdentity.workspaceKey) {
-      throw new Error("workspace path aliases resolve to conflicting state");
-    }
-    storedIdentity = rowIdentity;
-  }
-  const existingAliasKeys = new Set(rows.map((row) => row.alias_key));
-  return {
-    identity: storedIdentity ?? canonicalIdentity,
-    aliases,
-    missingAliasKeys: aliases
-      .map((alias) => alias.workspaceKey)
-      .filter((aliasKey) => !existingAliasKeys.has(aliasKey)),
-  };
-}
-
-export function registerWorkspaceStateAliasIdentitiesInTransaction(params: {
-  database: WorkspaceStateDatabaseHandle;
-  identity: WorkspaceStateIdentity;
-  aliases: readonly WorkspaceStateIdentity[];
-  updatedAtMs: number;
-}): void {
-  assertCanonicalIntegerTimestamp(params.updatedAtMs, "path alias update");
-  const kysely = getNodeSqliteKysely<WorkspaceStateDatabase>(params.database.db);
-  for (const alias of params.aliases) {
-    const existing = executeSqliteQueryTakeFirstSync(
-      params.database.db,
-      kysely
-        .selectFrom("workspace_path_aliases")
-        .selectAll()
-        .where("alias_key", "=", alias.workspaceKey),
-    );
-    if (existing) {
-      if (
-        existing.alias_path !== alias.workspacePath ||
-        existing.workspace_key !== params.identity.workspaceKey ||
-        existing.workspace_path !== params.identity.workspacePath
-      ) {
-        throw new Error("workspace path alias conflicts with canonical state");
-      }
-      continue;
-    }
-    executeSqliteQuerySync(
-      params.database.db,
-      kysely.insertInto("workspace_path_aliases").values({
-        alias_key: alias.workspaceKey,
-        alias_path: alias.workspacePath,
-        workspace_key: params.identity.workspaceKey,
-        workspace_path: params.identity.workspacePath,
-        updated_at_ms: params.updatedAtMs,
-      }),
-    );
-  }
-}
-
-export function registerWorkspaceStateAliasesInTransaction(params: {
-  database: WorkspaceStateDatabaseHandle;
-  workspaceDirs: readonly string[];
-  identity: WorkspaceStateIdentity;
-  updatedAtMs: number;
-}): void {
-  const aliases = new Map<string, WorkspaceStateIdentity>();
-  for (const workspaceDir of params.workspaceDirs) {
-    for (const alias of resolveWorkspaceStateAliases(workspaceDir)) {
-      aliases.set(alias.workspaceKey, alias);
-    }
-  }
-  registerWorkspaceStateAliasIdentitiesInTransaction({
-    database: params.database,
-    identity: params.identity,
-    aliases: [...aliases.values()],
-    updatedAtMs: params.updatedAtMs,
-  });
-}
-
-export function readWorkspaceStateSnapshotFromDatabase(params: {
-  identity: WorkspaceStateIdentity;
-  database: WorkspaceStateDatabaseHandle;
-}): WorkspaceStateSnapshot {
-  const identity = params.identity;
-  const kysely = getNodeSqliteKysely<WorkspaceStateDatabase>(params.database.db);
-  const setupRow = executeSqliteQueryTakeFirstSync(
-    params.database.db,
-    kysely
-      .selectFrom("workspace_setup_state")
-      .selectAll()
-      .where("workspace_key", "=", identity.workspaceKey),
-  );
-  // A NULL path marks a legacy orphan attestation; the first live access to a
-  // matching workspace adopts it, so only a differing recorded path collides.
-  if (setupRow?.workspace_path != null && setupRow.workspace_path !== identity.workspacePath) {
-    throw new Error("workspace state key collision");
-  }
-  if (setupRow?.version != null && setupRow.version !== WORKSPACE_SETUP_STATE_VERSION) {
-    throw new Error(
-      formatDoctorStateRepairFailure(
-        `unsupported workspace setup version ${setupRow.version} in ${params.database.path} for ${identity.workspacePath}`,
-        "Use a compatible OpenClaw build that supports this workspace version; preserve the database unchanged.",
-      ),
-    );
-  }
-  if (setupRow?.version != null) {
-    assertCanonicalTimestamp(setupRow.bootstrap_seeded_at, "bootstrap seeded");
-    assertCanonicalTimestamp(setupRow.setup_completed_at, "setup completed");
-    if (setupRow.updated_at == null) {
-      throw new Error("workspace setup update timestamp is invalid");
-    }
-    assertCanonicalIntegerTimestamp(setupRow.updated_at, "setup update");
-  }
-  const attestationPresent = setupRow?.attested_at_ms != null;
-  const generatedHashes = new Map<string, string>();
-  if (setupRow && attestationPresent) {
-    assertCanonicalIntegerTimestamp(setupRow.attested_at_ms!, "attestation");
-    const hashRows = executeSqliteQuerySync(
-      params.database.db,
-      kysely
-        .selectFrom("workspace_generated_bootstrap_hashes")
-        .select(["filename", "sha256"])
-        .where("workspace_key", "=", identity.workspaceKey)
-        .orderBy("filename", "asc"),
-    ).rows;
-    for (const row of hashRows) {
-      // Validate names structurally rather than against today's bootstrap set:
-      // retiring a seeded file must not make an existing attestation unreadable.
-      if (
-        !isSafeWorkspaceAttestationFilename(row.filename) ||
-        !SHA256_HEX_PATTERN.test(row.sha256)
-      ) {
-        throw new Error("workspace attestation hash row is invalid");
-      }
-      generatedHashes.set(row.filename, row.sha256);
-    }
-  }
-  const setupExists = setupRow?.version != null;
-  return {
-    identity,
-    setupExists,
-    ...(setupExists && setupRow?.updated_at != null
-      ? { setupUpdatedAtMs: setupRow.updated_at }
-      : {}),
-    setup: {
-      version: WORKSPACE_SETUP_STATE_VERSION,
-      ...(setupRow?.bootstrap_seeded_at ? { bootstrapSeededAt: setupRow.bootstrap_seeded_at } : {}),
-      ...(setupRow?.setup_completed_at ? { setupCompletedAt: setupRow.setup_completed_at } : {}),
-    },
-    ...(attestationPresent
-      ? {
-          attestation: {
-            attestedAtMs: setupRow!.attested_at_ms!,
-            generatedHashes,
-          },
-        }
-      : {}),
-  };
-}
-
-export function readWorkspaceStateSnapshot(
+export async function readWorkspaceStateSnapshot(
   workspaceDir: string,
-  options: OpenClawStateDatabaseOptions = {},
-): WorkspaceStateSnapshot {
+  options: OpenClawStateDatabaseOptions & WorkspaceStateOperationOptions = {},
+): Promise<WorkspaceStateSnapshot> {
   if (options.readOnly) {
-    const snapshot = withExistingOpenClawStateDatabaseReadOnly(
-      (database) =>
-        runSqliteDeferredTransactionSync(database.db, () => {
-          const resolution = resolveWorkspaceIdentityFromDatabase({ workspaceDir, database });
-          return readWorkspaceStateSnapshotFromDatabase({
-            identity: resolution.identity,
-            database,
-          });
-        }),
-      options,
-    );
+    const capturedWorkspaceDir = path.resolve(resolveUserPath(workspaceDir));
+    const reply = await executeExistingOpenClawStateRead(options, {
+      type: "workspace.snapshot",
+      workspaceDir: capturedWorkspaceDir,
+    });
+    if (reply && (!reply.ok || reply.type !== "workspace.snapshot")) {
+      throw new Error("Unexpected workspace state snapshot result");
+    }
     return (
-      snapshot ?? {
-        identity: resolveWorkspaceStateIdentity(workspaceDir),
+      reply?.snapshot ?? {
+        identity: resolveWorkspaceStateIdentity(capturedWorkspaceDir),
         setupExists: false,
         setup: { version: WORKSPACE_SETUP_STATE_VERSION },
       }
@@ -360,6 +105,7 @@ export function readWorkspaceStateSnapshot(
   // Register a newly observed configured spelling once state proves the target
   // identity. Later disappearance must still find the same safety evidence.
   return runOpenClawStateWriteTransaction((writeDatabase) => {
+    options.assertCurrent?.();
     const currentAliases = resolveWorkspaceStateAliases(workspaceDir);
     const currentCanonicalIdentity = currentAliases.at(-1)!;
     if (
@@ -394,12 +140,12 @@ export function readWorkspaceStateSnapshot(
   }, options);
 }
 
-export function mergeWorkspaceSetupState(
+export async function mergeWorkspaceSetupState(
   workspaceDir: string,
   next: Partial<Omit<WorkspaceSetupState, "version">>,
   nowMs = Date.now(),
-  options: OpenClawStateDatabaseOptions = {},
-): WorkspaceSetupState {
+  options: OpenClawStateDatabaseOptions & WorkspaceStateOperationOptions = {},
+): Promise<WorkspaceSetupState> {
   assertCanonicalIntegerTimestamp(nowMs, "setup update");
   if (next.bootstrapSeededAt) {
     assertCanonicalTimestamp(next.bootstrapSeededAt, "bootstrap seeded");
@@ -408,6 +154,7 @@ export function mergeWorkspaceSetupState(
     assertCanonicalTimestamp(next.setupCompletedAt, "setup completed");
   }
   return runOpenClawStateWriteTransaction((database) => {
+    options.assertCurrent?.();
     const resolution = resolveWorkspaceIdentityFromDatabase({ workspaceDir, database });
     const identity = resolution.identity;
     const snapshot = readWorkspaceStateSnapshotFromDatabase({ identity, database });
@@ -451,12 +198,14 @@ export function mergeWorkspaceSetupState(
   }, options);
 }
 
-export function replaceWorkspaceAttestation(params: {
-  workspaceDir: string;
-  attestedAtMs: number;
-  generatedHashes: ReadonlyMap<string, string>;
-  nowMs?: number;
-}): WorkspaceAttestation {
+export async function replaceWorkspaceAttestation(
+  params: {
+    workspaceDir: string;
+    attestedAtMs: number;
+    generatedHashes: ReadonlyMap<string, string>;
+    nowMs?: number;
+  } & WorkspaceStateOperationOptions,
+): Promise<WorkspaceAttestation> {
   assertCanonicalIntegerTimestamp(params.attestedAtMs, "attestation");
   if (params.nowMs !== undefined) {
     assertCanonicalIntegerTimestamp(params.nowMs, "attestation update");
@@ -470,6 +219,7 @@ export function replaceWorkspaceAttestation(params: {
     left.localeCompare(right),
   );
   return runOpenClawStateWriteTransaction((database) => {
+    params.assertCurrent?.();
     // Capture the comparison clock only after BEGIN IMMEDIATE acquires the
     // writer lock, so a newer committed row cannot look future-dated.
     const updatedAtMs = params.nowMs ?? Date.now();
@@ -634,12 +384,14 @@ export function retireWorkspaceRelocationAttestation(params: {
 }
 
 /** Clear expired state only when no concurrent writer refreshed the vanished workspace. */
-export function clearExpiredWorkspaceStateForVanishedWorkspace(
+export async function clearExpiredWorkspaceStateForVanishedWorkspace(
   workspaceDir: string,
   nowMs = Date.now(),
-): boolean {
+  options: WorkspaceStateOperationOptions = {},
+): Promise<boolean> {
   assertCanonicalIntegerTimestamp(nowMs, "workspace expiry check");
   return runOpenClawStateWriteTransaction((database) => {
+    options.assertCurrent?.();
     const resolution = resolveWorkspaceIdentityFromDatabase({ workspaceDir, database });
     const identity = resolution.identity;
     const snapshot = readWorkspaceStateSnapshotFromDatabase({ identity, database });
@@ -683,14 +435,19 @@ export function prepareWorkspaceStateDeletion(workspaceDir: string): WorkspaceSt
   };
 }
 
-export function deleteWorkspaceState(plan: WorkspaceStateDeletionPlan): void {
+export async function deleteWorkspaceState(
+  plan: WorkspaceStateDeletionPlan,
+  options: WorkspaceStateOperationOptions = {},
+): Promise<void> {
   // Delete-only cleanup must not recreate state after reset/uninstall removed
   // the canonical database successfully or partially.
   if (!existsSync(resolveOpenClawStateSqlitePath())) {
+    options.assertCurrent?.();
     retireWorkspaceFileCache(plan.cacheRoot);
     return;
   }
   runOpenClawStateWriteTransaction((database) => {
+    options.assertCurrent?.();
     const { lexicalAlias, currentCanonicalIdentity } = plan;
     const kysely = getNodeSqliteKysely<WorkspaceStateDatabase>(database.db);
     const storedAlias = executeSqliteQueryTakeFirstSync(

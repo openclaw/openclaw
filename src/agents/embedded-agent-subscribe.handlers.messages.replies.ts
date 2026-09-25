@@ -211,16 +211,32 @@ export function readPendingToolMediaReply(
 export function recordPendingAssistantReplyDirectives(
   state: Pick<EmbeddedAgentSubscribeState, "pendingAssistantReplyDirectives">,
   parsed: ReplyDirectiveParseResult | null | undefined,
+  audioDirectiveCounts?: { previous: number; current: number },
 ) {
-  if (!parsed || !hasReplyDirectiveMetadata(parsed)) {
+  if (!parsed) {
     return;
   }
   const current = state.pendingAssistantReplyDirectives;
+  // Closing an inline span can retract provisional tags. Keep only source
+  // occurrences after the first still-unconsumed voice directive's boundary.
+  const audioAsVoice = Boolean(
+    parsed.audioAsVoice ||
+    (current?.audioAsVoice &&
+      audioDirectiveCounts &&
+      audioDirectiveCounts.current > (current.audioDirectiveStart ?? 0)),
+  );
+  if (!audioAsVoice && !hasReplyDirectiveMetadata(parsed)) {
+    state.pendingAssistantReplyDirectives = undefined;
+    return;
+  }
   state.pendingAssistantReplyDirectives = {
-    audioAsVoice: current?.audioAsVoice || parsed.audioAsVoice || undefined,
-    replyToId: parsed.replyToId ?? current?.replyToId,
-    replyToTag: current?.replyToTag || parsed.replyToTag || undefined,
-    replyToCurrent: current?.replyToCurrent || parsed.replyToCurrent || undefined,
+    audioAsVoice: audioAsVoice || undefined,
+    ...(audioAsVoice && audioDirectiveCounts
+      ? { audioDirectiveStart: current?.audioDirectiveStart ?? audioDirectiveCounts.previous }
+      : {}),
+    replyToId: parsed.replyToId,
+    replyToTag: parsed.replyToTag || undefined,
+    replyToCurrent: parsed.replyToCurrent || undefined,
   };
 }
 

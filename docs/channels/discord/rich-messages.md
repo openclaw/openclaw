@@ -24,6 +24,8 @@ Supported blocks:
 
 By default, components are single use. Set `components.reusable=true` to allow buttons, selects, and forms to be used multiple times until they expire.
 
+Component sends, edits, and native command replies wait for callback registration to finish. Consuming a single-use choice finishes removal of its sibling callbacks before another interaction can resolve them. If persistence is unavailable, OpenClaw reports the failure and keeps the in-memory fallback for the current process.
+
 To restrict who can click a button, set `allowedUsers` on that button (Discord user IDs, tags, or `*`). Unmatched users receive an ephemeral denial.
 
 Component callbacks expire after 30 minutes by default. Set `channels.discord.agentComponents.ttlMs` to change the callback registry lifetime for the default account, or `channels.discord.accounts.<accountId>.agentComponents.ttlMs` per account. The value is milliseconds, must be a positive integer, and is capped at `86400000` (24 hours). Longer TTLs suit review/approval workflows that need buttons to stay usable, but they extend the window in which an old Discord message can still trigger an action. Prefer the shortest TTL that fits, and keep the default when stale callbacks would be surprising.

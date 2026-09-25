@@ -1,10 +1,13 @@
 /** Tests plugin node-host command registry loading, listing, and invocation. */
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import {
+  hasRegisteredNodeHostCommandActiveWork,
   invokeRegisteredNodeHostCommand,
+  isRegisteredNodeHostCommandDuplex,
   listRegisteredNodeHostCapsAndCommands,
   notifyRegisteredNodeHostCommandDisconnect,
   watchRegisteredNodeHostCommandAvailability,
@@ -17,6 +20,30 @@ afterEach(() => {
 });
 
 describe("plugin node-host registry", () => {
+  it("advertises optional duplex to unary nodes and forwards IO only when available", async () => {
+    const handle = vi.fn(async () => "{}");
+    const registry = createEmptyPluginRegistry();
+    registry.nodeHostCommands.push({
+      pluginId: "files",
+      source: "test",
+      command: { command: "file.fetch", cap: "file", duplex: "optional", handle },
+    });
+    setActivePluginRegistry(registry);
+    expect(
+      listRegisteredNodeHostCapsAndCommands(availabilityContext, { includeDuplex: false }).commands,
+    ).toEqual(["file.fetch"]);
+    expect(isRegisteredNodeHostCommandDuplex("file.fetch")).toBe(true);
+    await expect(invokeRegisteredNodeHostCommand("file.fetch", "{}")).resolves.toBe("{}");
+    expect(handle).toHaveBeenLastCalledWith("{}", undefined);
+    const io = {
+      signal: new AbortController().signal,
+      emitChunk: async () => {},
+      onInput: () => {},
+    };
+    await invokeRegisteredNodeHostCommand("file.fetch", "{}", io);
+    expect(handle).toHaveBeenLastCalledWith("{}", io);
+  });
+
   it("lists plugin-declared caps and commands", () => {
     const registry = createEmptyPluginRegistry();
     registry.nodeHostCommands = [
@@ -200,7 +227,7 @@ describe("plugin node-host registry", () => {
     });
   });
 
-  it("owns plugin availability watcher cleanup", () => {
+  it("owns plugin availability watcher cleanup", async () => {
     let notify: (() => void) | undefined;
     const cleanup = vi.fn();
     const onChange = vi.fn();
@@ -234,12 +261,85 @@ describe("plugin node-host registry", () => {
     });
     notify?.();
     expect(onChange).toHaveBeenCalledOnce();
-    stop();
+    await stop();
     expect(cleanup).toHaveBeenCalledOnce();
     expect(scopedRegistry).toHaveBeenCalledTimes(3);
     expect(scopedRegistry).toHaveBeenNthCalledWith(1, registry);
     expect(scopedRegistry).toHaveBeenNthCalledWith(2, registry);
     expect(scopedRegistry).toHaveBeenNthCalledWith(3, registry);
+  });
+
+  it("shares watcher stop with reentrant cleanup and fences late notifications", async () => {
+    const registry = createEmptyPluginRegistry();
+    const retiring = createDeferred();
+    const entered = createDeferred();
+    const onChange = vi.fn();
+    let notify: (() => void) | undefined;
+    let reentrant: unknown;
+    const cleanup = vi.fn(() => {
+      entered.resolve();
+      // Do not await the completion whose cleanup is currently executing.
+      if (cleanup.mock.calls.length === 1) {
+        reentrant = stop();
+      }
+      return retiring.promise;
+    });
+    registry.nodeHostCommands.push({
+      pluginId: "fixture",
+      source: "test",
+      command: {
+        command: "fixture.observe",
+        handle: async () => "{}",
+        watchAvailability: (_context, callback) => {
+          notify = callback;
+          return cleanup;
+        },
+      },
+    });
+    setActivePluginRegistry(registry);
+    const stop = watchRegisteredNodeHostCommandAvailability(availabilityContext, onChange);
+    notify?.();
+    const closing = stop();
+    try {
+      notify?.();
+      await entered.promise;
+      expect(reentrant).toBeInstanceOf(Promise);
+      expect(reentrant).toBe(closing);
+      expect(cleanup).toHaveBeenCalledOnce();
+      expect(onChange).toHaveBeenCalledOnce();
+      retiring.resolve();
+      await closing;
+    } finally {
+      retiring.resolve();
+      await Promise.allSettled([closing, reentrant]);
+    }
+  });
+
+  it("retries failed watcher cleanup without replaying successful siblings", async () => {
+    const registry = createEmptyPluginRegistry();
+    const failure = new Error("watcher retirement failed");
+    const successful = vi.fn(async () => {});
+    const retryable = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(failure)
+      .mockResolvedValue(undefined);
+    for (const [index, cleanup] of [successful, retryable].entries()) {
+      registry.nodeHostCommands.push({
+        pluginId: `fixture-${index}`,
+        source: "test",
+        command: {
+          command: `fixture.observe-${index}`,
+          handle: async () => "{}",
+          watchAvailability: () => cleanup,
+        },
+      });
+    }
+    setActivePluginRegistry(registry);
+    const stop = watchRegisteredNodeHostCommandAvailability(availabilityContext, vi.fn());
+    await expect(Promise.resolve(stop())).rejects.toBe(failure);
+    await stop();
+    expect(successful).toHaveBeenCalledOnce();
+    expect(retryable).toHaveBeenCalledTimes(2);
   });
 
   it("notifies each shared plugin disconnect owner once", async () => {
@@ -256,6 +356,64 @@ describe("plugin node-host registry", () => {
     await notifyRegisteredNodeHostCommandDisconnect();
 
     expect(onDisconnect).toHaveBeenCalledOnce();
+  });
+
+  it("retains plugin work after invocation and availability end until its owner cleans up", async () => {
+    let busy = false;
+    let available = true;
+    const registry = createEmptyPluginRegistry();
+    registry.nodeHostCommands = [
+      {
+        pluginId: "meeting",
+        pluginName: "Meeting",
+        source: "test",
+        command: {
+          command: "meeting.start",
+          isAvailable: () => available,
+          handle: async () => {
+            busy = true;
+            return "{}";
+          },
+          hasActiveWork: () => {
+            expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(registry);
+            return busy;
+          },
+          onDisconnect: () => {
+            busy = false;
+          },
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    expect(hasRegisteredNodeHostCommandActiveWork()).toBe(false);
+    await invokeRegisteredNodeHostCommand("meeting.start");
+    available = false;
+    expect(listRegisteredNodeHostCapsAndCommands(availabilityContext).commands).toEqual([]);
+    expect(hasRegisteredNodeHostCommandActiveWork()).toBe(true);
+    await notifyRegisteredNodeHostCommandDisconnect();
+    expect(hasRegisteredNodeHostCommandActiveWork()).toBe(false);
+  });
+
+  it("keeps uncertain plugin work busy when its owner query throws", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.nodeHostCommands = [
+      {
+        pluginId: "meeting",
+        pluginName: "Meeting",
+        source: "test",
+        command: {
+          command: "meeting.start",
+          handle: async () => "{}",
+          hasActiveWork: () => {
+            throw new Error("work state unavailable");
+          },
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    expect(hasRegisteredNodeHostCommandActiveWork()).toBe(true);
   });
 
   it("dispatches plugin-declared node-host commands", async () => {

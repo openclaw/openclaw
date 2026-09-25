@@ -1,6 +1,5 @@
 import type { ChildProcess } from "node:child_process";
 import { basename, dirname, resolve, win32 as pathWin32 } from "node:path";
-import { parsePermissiveBooleanToken } from "../arg-utils.mts";
 import { trimForSummary } from "./shared.ts";
 import { type CrossOsSuite, parseCrossOsSuiteFilter } from "./suite-filter.mjs";
 
@@ -62,7 +61,6 @@ export type GatewayHandle = {
   waitForClose: () => Promise<void>;
 };
 export type CommandResult = { exitCode: number; stdout: string; stderr: string };
-export type AgentTurnResult = CommandResult | { status: number; stdout: string; stderr: string };
 export type CommandOptions = {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
@@ -138,7 +136,6 @@ export const CROSS_OS_PROCESS_TREE_KILL_AFTER_MS = parsePositiveIntegerEnv(
   "OPENCLAW_CROSS_OS_PROCESS_TREE_KILL_AFTER_MS",
   15_000,
 );
-export const CROSS_OS_AGENT_TURN_OPTIONAL = resolveCrossOsAgentTurnOptional();
 
 const providerConfig = {
   openai: {
@@ -200,7 +197,7 @@ function shouldSeedProviderConfigModels(providerMeta: ProviderConfig) {
   );
 }
 
-export function buildReleaseProviderConfigOverride(providerMeta: ProviderConfig) {
+function buildReleaseProviderConfigOverride(providerMeta: ProviderConfig) {
   if (!shouldSeedProviderConfigModels(providerMeta)) {
     return null;
   }
@@ -212,6 +209,32 @@ export function buildReleaseProviderConfigOverride(providerMeta: ProviderConfig)
       ? { timeoutSeconds: providerMeta.timeoutSeconds }
       : {}),
   };
+}
+
+// Yield between awaited commands so failed setup does not inspect later configuration.
+export function* buildReleaseModelConfigCommands(providerMeta: ProviderConfig) {
+  yield ["models", "set", providerMeta.model];
+  const providerConfigOverride = buildReleaseProviderConfigOverride(providerMeta);
+  if (providerConfigOverride) {
+    yield [
+      "config",
+      "set",
+      `models.providers.${providerMeta.extensionId}`,
+      JSON.stringify(providerConfigOverride),
+      "--strict-json",
+      "--merge",
+    ];
+  }
+  yield [
+    "config",
+    "set",
+    "plugins.allow",
+    JSON.stringify(buildCrossOsReleaseSmokePluginAllowlist(providerMeta)),
+    "--strict-json",
+  ];
+  yield buildCrossOsReleaseSmokeMemorySlotConfigArgs();
+  yield ["config", "set", "agents.defaults.skipBootstrap", "true", "--strict-json"];
+  yield ["config", "set", "tools.profile", CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE];
 }
 
 export const PACKAGE_DIST_INVENTORY_RELATIVE_PATH = "dist/postinstall-inventory.json";
@@ -323,22 +346,6 @@ export function parsePositiveIntegerEnv(name: string, fallback: number, env = pr
   return value;
 }
 
-function parseBooleanEnv(name: string, fallback: boolean, env = process.env): boolean {
-  const raw = env[name]?.trim();
-  if (!raw) {
-    return fallback;
-  }
-  const parsed = parsePermissiveBooleanToken(raw);
-  if (parsed !== undefined) {
-    return parsed;
-  }
-  throw new Error(`${name} must be a boolean. Got: ${JSON.stringify(raw)}`);
-}
-
-export function resolveCrossOsAgentTurnOptional(env = process.env) {
-  return parseBooleanEnv("OPENCLAW_CROSS_OS_AGENT_TURN_OPTIONAL", false, env);
-}
-
 export function looksLikeReleaseVersionRef(ref: string) {
   const trimmed = normalizeRequestedRef(ref);
   return /^v?[0-9]{4}\.[0-9]+\.[0-9]+(?:-(?:[1-9][0-9]*)|[-.](?:alpha|beta|rc)[-.]?[0-9]+)?$/iu.test(
@@ -420,13 +427,30 @@ export function resolveRunnerMatrix(params: {
   const include = runners.flatMap((runner) =>
     suites
       .filter((suite) => suiteFilter.matches(runner.os_id, suite))
-      .map((suite) =>
-        Object.assign({}, runner, {
-          suite,
-          suite_label: formatSuiteLabel(suite),
-          lane: suite.includes(`upgrade`) || suite === `dev-update` ? `upgrade` : `fresh`,
-        }),
-      ),
+      .flatMap((suite) => {
+        // Windows packaged-fresh retains the validated version before the
+        // Node 24.19 libuv fs-event crash on Windows Server 2025 RUNNER~1 paths.
+        const node24Version =
+          runner.os_id === "windows" && suite === "packaged-fresh" ? "24.16.0" : "24.19.0";
+        const nodeVersions =
+          suite === "packaged-fresh" || suite === "packaged-upgrade"
+            ? [node24Version, "26.1.0"]
+            : [node24Version];
+        return nodeVersions.map((nodeVersion) =>
+          Object.assign({}, runner, {
+            artifact_name:
+              nodeVersion === node24Version
+                ? runner.artifact_name
+                : `${runner.artifact_name}-node${nodeVersion}`,
+            node_version: nodeVersion,
+            suite,
+            suite_label:
+              formatSuiteLabel(suite) +
+              (nodeVersion === node24Version ? "" : ` (Node ${nodeVersion})`),
+            lane: suite.includes(`upgrade`) || suite === `dev-update` ? `upgrade` : `fresh`,
+          }),
+        );
+      }),
   );
   if (include.length === 0) {
     throw new Error(

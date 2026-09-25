@@ -307,7 +307,8 @@ export async function agentsDeleteCommand(
       existingJournal ?? { agentId, agentDir, workspaceDir, sessionsDir, deleteFiles },
     );
     try {
-      prepareAgentDeleteDatabases(cfg, agentId, agentDir);
+      await prepareAgentDeleteDatabases(cfg, agentId, agentDir);
+      deletion.assertCurrent();
       const commitRoster = async () =>
         await withAgentExecApprovalsRemoved(agentId, async () => {
           deletion.assertCurrent();
@@ -393,7 +394,7 @@ export async function agentsDeleteCommand(
             quietRuntime.log(warning);
           }
           deletion.assertCurrent();
-          deleteWorkspaceState(statePlan);
+          await deleteWorkspaceState(statePlan, { assertCurrent: deletion.assertCurrent });
         } catch (error) {
           workspaceCleanupError = error instanceof Error ? error : new Error(String(error));
         }

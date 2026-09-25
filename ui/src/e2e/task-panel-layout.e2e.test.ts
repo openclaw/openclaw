@@ -1,12 +1,17 @@
 import type { Server as HttpServer } from "node:http";
+import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Locator, Page } from "playwright";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { buildBoardWidgetSandboxPath } from "../../../src/gateway/board-sandbox.js";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
-import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { dockChatSidePanel } from "./chat-side-panel.test-support.ts";
+import {
+  controlUiSessionUrl,
+  defaultControlUiFeatureMethods,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
+import { dockChatSidePanel, openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -77,6 +82,90 @@ suite.define(() => {
   afterAll(async () => {
     await new Promise<void>((resolve) => {
       sandbox?.close(() => resolve());
+    });
+  });
+
+  it("associates split-pane tabs with their own content after swapping Chat and Tasks", async () => {
+    await suite.withPage({ viewport: { width: 2200, height: 1000 } }, async ({ page }) => {
+      await installMockGateway(page, {
+        sessionKey,
+        featureMethods: [...defaultControlUiFeatureMethods, "tasks.list"],
+        methodResponses: { "tasks.list": { tasks: [] } },
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+      await openChatSidePanelType(page, "Tasks");
+      await page.getByRole("button", { name: "Open split view", exact: true }).click();
+      const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
+      await expect.poll(() => panes.count()).toBe(2);
+      for (const pane of await panes.all()) {
+        await pane.locator('.side-panel__header wa-tab[panel="tasks"]').waitFor();
+      }
+      const roots = await panes
+        .locator('.sidebar-region__primary, .side-panel__panel[data-panel-slot="tasks"]')
+        .elementHandles();
+      expect(roots).toHaveLength(4);
+      const targets = () =>
+        panes.evaluateAll((elements) =>
+          elements.map((pane) => {
+            const tab = pane.querySelector(".side-panel__header wa-tab[active]")!;
+            const target = document.getElementById(tab.getAttribute("aria-controls")!);
+            return {
+              tabId: tab.id,
+              targetId: target?.id,
+              withinPane: target?.closest("openclaw-chat-pane") === pane,
+              role: target?.getAttribute("role"),
+              label: target?.getAttribute("aria-label"),
+              hasComposer: Boolean(
+                target?.querySelector(".agent-chat__composer-combobox textarea"),
+              ),
+              taskPanel: target?.getAttribute("data-panel-slot") === "tasks",
+            };
+          }),
+        );
+      const original = await targets();
+      expect(await page.getByRole("region", { name: "Side panel", exact: true }).count()).toBe(0);
+      expect(new Set(original.map((target) => target.tabId)).size).toBe(2);
+      expect(new Set(original.map((target) => target.targetId)).size).toBe(2);
+      for (const target of original) {
+        expect(target).toMatchObject({
+          withinPane: true,
+          role: "region",
+          label: "Tasks",
+          hasComposer: false,
+          taskPanel: true,
+        });
+      }
+      for (const pane of await panes.all()) {
+        await pane.locator(".agent-chat__composer-combobox textarea").click();
+        await pane.locator(".chat-panel-swap").click();
+        await pane.locator('.sidebar-region__primary[data-region="side"]').waitFor();
+      }
+      const swapped = await targets();
+      expect(new Set(swapped.map((target) => target.targetId)).size).toBe(2);
+      for (const target of swapped) {
+        expect(target).toMatchObject({
+          withinPane: true,
+          role: "region",
+          label: "Chat",
+          hasComposer: true,
+          taskPanel: false,
+        });
+      }
+      for (const pane of await panes.all()) {
+        await pane.locator(".agent-chat__composer-combobox textarea").click();
+        await pane.locator(".chat-panel-swap").click();
+        await pane.locator('.sidebar-region__primary[data-region="main"]').waitFor();
+      }
+      expect(await targets()).toEqual(original);
+      for (const root of roots) {
+        expect(
+          await root.evaluate(
+            (element) =>
+              element instanceof HTMLElement && document.getElementById(element.id) === element,
+          ),
+        ).toBe(true);
+      }
     });
   });
 
@@ -171,6 +260,52 @@ suite.define(() => {
         expect(await page.getByRole("button", { name: "Layout", exact: true }).count()).toBe(1);
         await expectSwapLabel("Swap Chat and Dashboard");
         await expectPaneHeaderGeometry(page, "right");
+        // Side focus never swaps or reparents either live view.
+        const expand = sideHeader.locator(".side-panel__expand");
+        const dashboardTab = sideHeader.locator('wa-tab[panel="dashboard"]');
+        await page.screenshot({ path: path.join(suite.artifactDir, "side-before.png") });
+        for (const dock of ["right", "left", "bottom"] as const) {
+          await dockChatSidePanel(page, dock);
+          const priorSize = await dashboard.boundingBox();
+          await dashboardTab.click();
+          await chat.waitFor({ state: "hidden" });
+          expect(await expand.getAttribute("aria-label")).toBe("Restore split");
+          expect(await sideHeader.isVisible()).toBe(true);
+          expect(await dashboard.getAttribute("data-region")).toBe("side");
+          expect(await regionSize(dashboard)).toBeCloseTo(
+            await regionSize(page.locator(".sidebar-region")),
+            0,
+          );
+          await expectContinuity();
+          if (dock === "right") {
+            await page.screenshot({ path: path.join(suite.artifactDir, "side-expanded.png") });
+          }
+          await expand.focus();
+          await page.keyboard.press("Enter");
+          await chat.waitFor();
+          expect(await dashboard.boundingBox()).toEqual(priorSize);
+          await expectPaneHeaderGeometry(page, dock);
+          await expectContinuity();
+          if (dock === "right") {
+            await page.screenshot({ path: path.join(suite.artifactDir, "side-restored.png") });
+          }
+          await expand.click();
+          await chat.waitFor({ state: "hidden" });
+          await dashboardTab.focus();
+          await page.keyboard.press("Space");
+          await chat.waitFor();
+          await expectContinuity();
+        }
+        await dockChatSidePanel(page, "right");
+        await expectPaneHeaderGeometry(page, "right");
+        await expand.click();
+        await chat.waitFor({ state: "hidden" });
+        await sideHeader.getByRole("button", { name: "Close", exact: true }).click();
+        await chat.waitFor();
+        await dashboard.waitFor({ state: "hidden" });
+        await taskHeader.locator(".chat-side-panel-toggle").click();
+        await dashboard.waitFor();
+        await expectContinuity();
         await chat.evaluate((element) => {
           const initialWidth = element.getBoundingClientRect().width;
           element.parentElement!.addEventListener("openclaw-sidebar-geometry-commit", (event) => {
@@ -240,13 +375,38 @@ suite.define(() => {
           .locator(".side-panel-type-menu wa-dropdown-item")
           .filter({ hasText: "Terminal" })
           .click();
-        const terminal = page.locator("openclaw-terminal-panel");
+        const terminal = page.locator('[data-panel-slot="terminal"] openclaw-terminal-panel');
         await terminal.locator(".tp-host canvas").waitFor();
         await expect.poll(() => gateway.getRequests("terminal.open")).toHaveLength(1);
         await expectSwapLabel("Swap Dashboard and Terminal");
+        await sideHeader.getByRole("button", { name: "Expand Terminal", exact: true }).click();
+        await dashboard.waitFor({ state: "hidden" });
+        await terminal.waitFor();
+        await sideHeader.getByRole("button", { name: "Restore split", exact: true }).click();
+        await dashboard.waitFor();
+        expect(await gateway.getRequests("terminal.open")).toHaveLength(1);
         await swap.click();
         await page.locator('[data-panel-slot="terminal"][data-region="main"]').waitFor();
         await expectSwapLabel("Swap Terminal and Dashboard");
+        const chatTab = sideHeader.locator('wa-tab[panel="conversation"]');
+        await chatTab.click();
+        await chat.waitFor();
+        await chatTab.focus();
+        await page.keyboard.press("ArrowLeft");
+        await dashboard.waitFor();
+        expect(await terminal.isVisible()).toBe(true);
+        expect(await expand.getAttribute("aria-pressed")).toBe("false");
+        await page.keyboard.press("Enter");
+        await terminal.waitFor({ state: "hidden" });
+        await expand.click();
+        await terminal.waitFor();
+        await chatTab.click();
+        await dashboardTab.click();
+        await terminal.waitFor({ state: "hidden" });
+        await dashboard.waitFor();
+        await expand.click();
+        await terminal.waitFor();
+        expect(await terminal.locator(".tp-host canvas").count()).toBe(1);
         await dockChatSidePanel(page, "right");
         await taskHeader.getByRole("button", { name: "Focus", exact: true }).click();
         await taskHeader.getByRole("button", { name: "Restore split", exact: true }).click();
@@ -284,6 +444,17 @@ suite.define(() => {
         await taskHeader.getByRole("button", { name: "Focus", exact: true }).click();
         await taskHeader.getByRole("button", { name: "Restore split", exact: true }).click();
         await terminal.locator(".tp-host canvas").waitFor();
+        await swap.click();
+        await dashboardTab.waitFor();
+        const narrowSize = await dashboard.boundingBox();
+        await dashboardTab.click();
+        await terminal.waitFor({ state: "hidden" });
+        await expand.click({ trial: true });
+        expect(await expand.getAttribute("aria-label")).toBe("Restore split");
+        await expand.click();
+        await terminal.waitFor();
+        expect(await dashboard.boundingBox()).toEqual(narrowSize);
+        expect(await gateway.getRequests("terminal.open")).toHaveLength(1);
       },
     );
   }, 120_000);

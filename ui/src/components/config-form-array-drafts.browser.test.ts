@@ -2,7 +2,8 @@ import { render, type ReactiveElement } from "lit";
 import { describe, expect, it } from "vitest";
 import { updateConfigFormValue } from "../lib/config/config-draft-model.ts";
 import { createInitialConfigState } from "../lib/config/config-state-model.ts";
-import { analyzeConfigSchema, renderConfigForm, type JsonSchema } from "./config-form.ts";
+import { renderAnalyzedFormFixture } from "../test-helpers/config-form-fixtures.ts";
+import { analyzeConfigSchema, type JsonSchema } from "./config-form.ts";
 import baseStyles from "../styles/base.css?inline";
 
 function mountForm(properties: Record<string, JsonSchema>, values: Record<string, unknown>) {
@@ -20,21 +21,13 @@ function mountForm(properties: Record<string, JsonSchema>, values: Record<string
   container.style.cssText = "height: 100%; overflow: auto";
   document.body.append(container);
   const renderValue = () => {
-    render(
-      renderConfigForm({
-        schema: analysis.schema,
-        uiHints: {},
-        unsupportedPaths: analysis.unsupportedPaths,
-        value: state.configForm,
-        showAdvanced: true,
-        onShowAdvanced: () => {},
-        onPatch: (path, value) => {
-          updateConfigFormValue(state, path, value);
-          renderValue();
-        },
-      }),
-      container,
-    );
+    renderAnalyzedFormFixture(container, analysis, {
+      value: state.configForm,
+      onPatch: (path, value) => {
+        updateConfigFormValue(state, path, value);
+        renderValue();
+      },
+    });
   };
   renderValue();
   return {

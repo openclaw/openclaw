@@ -31,18 +31,86 @@ describe("parseSteerInput", () => {
       },
     });
   });
+
+  it.each([
+    [["--session", " primary ", "one", "two"], "primary", "one two"],
+    [["--session= primary ", "one", "two"], "primary", "one two"],
+    [["--session=--literal", "one"], "--literal", "one"],
+    [["--session=—target", "one"], "—target", "one"],
+    [
+      ["one", "--session", "first", "two", "--session=second", "—literal"],
+      "second",
+      "one two —literal",
+    ],
+  ])(
+    "consumes session values without changing instructions: %s",
+    (tokens, sessionToken, instruction) => {
+      expect(parseSteerInput(tokens)).toEqual({
+        ok: true,
+        value: { sessionToken, instruction },
+      });
+    },
+  );
+
+  it.each([
+    { tokens: ["--session"] },
+    { tokens: ["--session", "", "one"] },
+    { tokens: ["--session", "  ", "one"] },
+    { tokens: ["--session", "--next", "one"] },
+    { tokens: ["--session", "—next", "one"] },
+    { tokens: ["--session=", "one"] },
+    { tokens: ["--session=  ", "one"] },
+  ])("rejects missing session values: $tokens", ({ tokens }) => {
+    expect(parseSteerInput(tokens)).toEqual({
+      ok: false,
+      error:
+        "--session requires a value. Usage: /acp steer [--session <session-key|session-id|session-label>] <instruction>",
+    });
+  });
 });
 
 describe("parseSpawnInput", () => {
+  const params = { cfg: {}, ctx: {}, command: {} } as never;
+
+  it.each(["--mode", "--bind", "--thread", "--cwd", "--label"])(
+    "rejects missing values for %s in both option forms",
+    (flag) => {
+      for (const option of [flag, `${flag}=`]) {
+        expect(parseSpawnInput(params, ["codex", option])).toEqual({
+          ok: false,
+          error: expect.stringContaining(`${flag} requires a value. Usage: /acp spawn`),
+        });
+      }
+    },
+  );
+
+  it("preserves option values across mixed equals and separate forms", () => {
+    expect(
+      parseSpawnInput(params, [
+        "codex",
+        "--mode=ONESHOT",
+        "--thread",
+        "off",
+        "--bind=here",
+        "--cwd",
+        "/Workspace/Case",
+        "--label=Inbox",
+      ]),
+    ).toEqual({
+      ok: true,
+      value: {
+        agentId: "codex",
+        mode: "oneshot",
+        thread: "off",
+        bind: "here",
+        cwd: "/Workspace/Case",
+        label: "Inbox",
+      },
+    });
+  });
+
   it("rejects mixing --thread and --bind on the same spawn", () => {
-    const parsed = parseSpawnInput(
-      {
-        cfg: {},
-        ctx: {},
-        command: {},
-      } as never,
-      ["codex", "--thread", "here", "--bind", "here"],
-    );
+    const parsed = parseSpawnInput(params, ["codex", "--thread", "here", "--bind", "here"]);
 
     expect(parsed).toEqual({
       ok: false,

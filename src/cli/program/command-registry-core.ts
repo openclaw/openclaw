@@ -1,7 +1,6 @@
 // Core command registry that lazily imports command groups based on parsed argv.
 import type { Command } from "commander";
 import { resolveCliArgvInvocation } from "../argv-invocation.js";
-import { shouldRegisterPrimaryCommandOnly } from "../command-registration-policy.js";
 import {
   buildCommandGroupEntries,
   type CommandGroupDescriptorSpec,
@@ -12,6 +11,7 @@ import {
   getCoreCliCommandNamesCore,
 } from "./core-command-descriptors.js";
 import {
+  findCommandGroupEntry,
   registerCommandGroupByName,
   registerCommandGroups,
   type CommandGroupEntry,
@@ -50,8 +50,8 @@ const coreEntrySpecs: readonly CommandGroupDescriptorSpec<[ctx: ProgramContext]>
   ],
   [
     ["doctor", "triage", "dashboard", "reset", "uninstall"],
-    async (program) =>
-      (await import("./register.maintenance.js")).registerMaintenanceCommands(program),
+    async (program, ctx) =>
+      (await import("./register.maintenance.js")).registerMaintenanceCommands(program, ctx),
   ],
   [
     ["message"],
@@ -93,8 +93,15 @@ function resolveCoreCommandGroups(ctx: ProgramContext): CommandGroupEntry[] {
   return buildCommandGroupEntries(descriptors, visibleEntrySpecs, ctx);
 }
 
-export function getCoreCliCommandNames(): string[] {
-  return getCoreCliCommandNamesCore();
+export function getCoreCliCompletionGroups(ctx: ProgramContext): CommandGroupEntry[] {
+  const entries = resolveCoreCommandGroups(ctx);
+  // Keep separated visits: an intervening group affects Commander's final output order.
+  return getCoreCliCommandNamesCore()
+    .map((name) => findCommandGroupEntry(entries, name))
+    .filter(
+      (entry, index, groups): entry is CommandGroupEntry =>
+        entry !== undefined && entry !== groups[index - 1],
+    );
 }
 
 export async function registerCoreCliByName(
@@ -110,6 +117,6 @@ export function registerCoreCliCommands(program: Command, ctx: ProgramContext, a
   registerCommandGroups(program, resolveCoreCommandGroups(ctx), {
     eager: false,
     primary,
-    registerPrimaryOnly: Boolean(primary && shouldRegisterPrimaryCommandOnly(argv)),
+    registerPrimaryOnly: true,
   });
 }

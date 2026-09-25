@@ -24,8 +24,8 @@ vi.mock("jiti/static", () => ({
   }),
 }));
 
-vi.mock("../../config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../config.js")>();
+vi.mock("../../package-metadata.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../package-metadata.js")>();
   return { ...actual, isBunBinary: true };
 });
 

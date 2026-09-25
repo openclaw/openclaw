@@ -1,105 +1,160 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { z } from "zod";
+import {
+  nativeChromeExtensionSetupActionSchema,
+  nativeChromeExtensionSetupResultSchema,
+  type NativeChromeExtensionSetupAction,
+  type NativeChromeExtensionSetupResult,
+} from "./native-chrome-setup.ts";
 
-type PermissionId =
-  | "notifications"
-  | "accessibility"
-  | "screenRecording"
-  | "microphone"
-  | "camera"
-  | "speechRecognition"
-  | "location"
-  | "automation" // automation = Swift Capability.appleScript
-  | "contacts"
-  | "calendars"
-  | "reminders"
-  | "photos";
-type PermissionStatus = "granted" | "denied" | "notDetermined" | "unavailable" | "limited";
+const permissionIdSchema = z.enum([
+  "notifications",
+  "accessibility",
+  "screenRecording",
+  "microphone",
+  "camera",
+  "speechRecognition",
+  "location",
+  "contacts",
+  "calendars",
+  "reminders",
+  "photos",
+]);
+type PermissionId = z.infer<typeof permissionIdSchema>;
 
-export type NativeDeviceSettingsSnapshot = {
-  contract: 1;
-  device: {
-    platform: "macos" | "ios";
-    formFactor?: "phone" | "pad" | "desktop";
-    modelName?: string;
-    appVersion: string; // CFBundleShortVersionString
-    appBuild: string; // CFBundleVersion
-    profileName: string | null; // OPENCLAW_PROFILE name when active, else null
-  };
-  app?: {
-    appearance?: "system" | "light" | "dark";
-    notificationsEnabled?: boolean;
-    showDockIcon?: boolean;
-    iconStyle?: { selectedId: string; available: Array<{ id: string; name: string }> }; // advertised by hosts with Dock icon selection
-    iconAnimationsEnabled?: boolean;
-    launchAtLogin?: boolean;
-    launchAtLoginAvailable?: boolean; // false when SMAppService cannot be used (named profile, unbundled)
-    quickChatEnabled?: boolean;
-    quickChatShortcut?: string | null; // human display string, e.g. "⌥Space"; null when unset
-    debugPaneEnabled?: boolean;
-  };
-  capabilities?: {
-    canvasEnabled?: boolean;
-    cameraEnabled?: boolean;
-    keepAwakeEnabled?: boolean;
-    healthSummaryAvailable?: boolean;
-    healthSummaryEnabled?: boolean;
-    computerControlEnabled?: boolean;
-    computerControlProvider?: "peekaboo" | "cua";
-    cuaDriverBundled?: boolean;
-    peekabooBridgeEnabled?: boolean;
-    activeComputerPresenceEnabled?: boolean;
-  };
-  browser?: {
-    importAvailable: boolean; // app in local mode and a Chrome-family profile with cookies exists
-    cookieSync: {
-      available: boolean; // false unless app is in remote mode with an external CLI
-      enabled: boolean;
-      domains: string[];
-      targetProfile: string;
-      state: "off" | "idle" | "running" | "error";
-      detail: string | null; // human status line
-    };
-  };
-  permissions: {
-    entries: Array<{ id: PermissionId; status: PermissionStatus }>; // unique ids in host-published order
-    location: {
-      mode: "off" | "whileUsing" | "always";
-      precise: boolean;
-      preciseEditable?: boolean;
-    };
-  };
-  voice: {
-    supported: boolean; // voice wake runtime available on this device
-    wakeEnabled: boolean; // AppState.swabbleEnabled
-    wakeTriggersTalkMode?: boolean;
-    pushToTalkEnabled?: boolean;
-    talkPhaseSoundsEnabled?: boolean;
-    talkShiftToStopEnabled?: boolean;
-    realtimeRelayEnabled?: boolean;
-    triggerChime?: boolean;
-    sendChime?: boolean;
-    talkEnabled?: boolean;
-    talkButtonEnabled?: boolean;
-    talkBackgroundEnabled?: boolean;
-    speakerphoneEnabled?: boolean;
-    microphone?: { selectedId: string | null; devices: Array<{ id: string; name: string }> }; // null = System Default
-    locale?: {
-      primary: string;
-      additional: string[];
-      available: Array<{ id: string; name: string }>;
-    };
-  };
-  updates?: {
-    available: boolean; // Sparkle updater present and usable
-    automatic: boolean; // automaticallyChecksForUpdates (also drives automaticallyDownloadsUpdates, as today)
-    unavailableReason: string | null;
-  };
-};
+const namedDevicesSchema = z.array(z.object({ id: z.string(), name: z.string() }));
+const nativeDeviceSettingsSnapshotSchema = z.object({
+  contract: z.literal(1),
+  revision: z.number().int().nonnegative().optional(),
+  device: z.object({
+    platform: z.enum(["macos", "ios", "linux", "windows"]),
+    formFactor: z.enum(["phone", "pad", "desktop"]).optional(),
+    modelName: z.string().optional(),
+    appVersion: z.string(), // CFBundleShortVersionString
+    appBuild: z.string(), // CFBundleVersion
+    profileName: z.string().nullable(), // OPENCLAW_PROFILE name when active, else null
+  }),
+  app: z
+    .object({
+      appearance: z.enum(["system", "light", "dark"]).optional(),
+      notificationsEnabled: z.boolean().optional(),
+      showDockIcon: z.boolean().optional(),
+      nativeExperienceEnabled: z.boolean().optional(),
+      // Advertised by hosts with Dock icon selection.
+      iconStyle: z.object({ selectedId: z.string(), available: namedDevicesSchema }).optional(),
+      iconAnimationsEnabled: z.boolean().optional(),
+      launchAtLogin: z.boolean().optional(),
+      launchAtLoginAvailable: z.boolean().optional(), // false for named profiles or unbundled apps
+      quickChatEnabled: z.boolean().optional(),
+      quickChatShortcut: z.string().nullable().optional(), // human display string; null when unset
+      debugPaneEnabled: z.boolean().optional(),
+    })
+    .optional(),
+  capabilities: z
+    .object({
+      canvasEnabled: z.boolean().optional(),
+      cameraEnabled: z.boolean().optional(),
+      keepAwakeEnabled: z.boolean().optional(),
+      healthSummaryAvailable: z.boolean().optional(),
+      healthSummaryEnabled: z.boolean().optional(),
+      computerControlEnabled: z.boolean().optional(),
+      desktopSharingEnabled: z.boolean().optional(),
+      computerControlProvider: z.enum(["peekaboo", "cua"]).optional(),
+      cuaDriverBundled: z.boolean().optional(),
+      peekabooBridgeEnabled: z.boolean().optional(),
+      activeComputerPresenceEnabled: z.boolean().optional(),
+      unattendedDesktopEnabled: z.boolean().optional(),
+    })
+    .optional(),
+  desktopAvailability: z.object({ state: z.enum(["locked", "unlocked", "unknown"]) }).optional(),
+  desktopSharing: z
+    .object({
+      state: z.enum(["off", "starting", "running", "error"]),
+      detail: z.string().optional(),
+    })
+    .optional(),
+  browser: z
+    .object({
+      chromeSetupActions: z.array(nativeChromeExtensionSetupActionSchema).optional(),
+      importAvailable: z.boolean().optional(), // local mode with Chrome-family cookies available
+      cookieSync: z
+        .object({
+          available: z.boolean(), // remote mode with an external CLI
+          enabled: z.boolean(),
+          domains: z.array(z.string()),
+          targetProfile: z.string(),
+          state: z.enum(["off", "idle", "running", "error"]),
+          detail: z.string().nullable(), // human status line
+        })
+        .optional(),
+    })
+    .optional(),
+  permissions: z.object({
+    // Native hosts publish unique ids in display order; never sort or deduplicate them.
+    entries: z
+      .array(
+        z.object({
+          // v2026.9.5 native apps publish this retired entry. Accept only on input
+          // until the minimum supported app omits it; never expose a command or row.
+          id: permissionIdSchema.or(z.literal("automation")),
+          status: z.enum(["granted", "denied", "notDetermined", "unavailable", "limited"]),
+        }),
+      )
+      .refine((entries) => new Set(entries.map((entry) => entry.id)).size === entries.length)
+      .transform((entries) =>
+        entries.flatMap(({ id, status }) => (id === "automation" ? [] : [{ id, status }])),
+      ),
+    location: z
+      .object({
+        mode: z.enum(["off", "whileUsing", "always"]),
+        precise: z.boolean(),
+        preciseEditable: z.boolean().optional(),
+      })
+      .optional(),
+  }),
+  voice: z.object({
+    supported: z.boolean(), // voice wake runtime available on this device
+    wakeEnabled: z.boolean(), // AppState.swabbleEnabled
+    wakeTriggersTalkMode: z.boolean().optional(),
+    pushToTalkEnabled: z.boolean().optional(),
+    talkPhaseSoundsEnabled: z.boolean().optional(),
+    talkShiftToStopEnabled: z.boolean().optional(),
+    realtimeRelayEnabled: z.boolean().optional(),
+    triggerChime: z.boolean().optional(),
+    sendChime: z.boolean().optional(),
+    talkEnabled: z.boolean().optional(),
+    talkButtonEnabled: z.boolean().optional(),
+    talkBackgroundEnabled: z.boolean().optional(),
+    speakerphoneEnabled: z.boolean().optional(),
+    microphone: z
+      .object({
+        selectedId: z.string().nullable(), // null = System Default
+        devices: namedDevicesSchema,
+      })
+      .optional(),
+    locale: z
+      .object({
+        primary: z.string(),
+        additional: z.array(z.string()),
+        available: namedDevicesSchema,
+      })
+      .optional(),
+  }),
+  updates: z
+    .object({
+      available: z.boolean(), // Sparkle updater present and usable
+      automatic: z.boolean(), // drives automatic checks and downloads
+      unavailableReason: z.string().nullable(),
+    })
+    .optional(),
+});
+
+export type NativeDeviceSettingsSnapshot = z.infer<typeof nativeDeviceSettingsSnapshotSchema>;
 
 export type SettingKey =
   | "app.appearance"
   | "app.notificationsEnabled"
   | "app.showDockIcon"
+  | "app.nativeExperienceEnabled"
   | "app.iconStyle"
   | "app.iconAnimationsEnabled"
   | "app.launchAtLogin"
@@ -110,9 +165,11 @@ export type SettingKey =
   | "capabilities.keepAwakeEnabled"
   | "capabilities.healthSummaryEnabled"
   | "capabilities.computerControlEnabled"
+  | "capabilities.desktopSharingEnabled"
   | "capabilities.computerControlProvider"
   | "capabilities.peekabooBridgeEnabled"
   | "capabilities.activeComputerPresenceEnabled"
+  | "capabilities.unattendedDesktopEnabled"
   | "browser.cookieSync.enabled"
   | "browser.cookieSync.domains"
   | "browser.cookieSync.targetProfile"
@@ -154,13 +211,22 @@ type NativeDeviceSettingsMessage =
   | { type: "open-system-settings"; id: PermissionId }
   | { type: "open"; panel: NativePanel }
   | { type: "check-for-updates" }
+  | { type: "chrome-extension-setup"; action: NativeChromeExtensionSetupAction }
+  | { type: "chrome-extension-status" }
   | { type: "install-chrome-extension" };
 
-export type NativeChromeExtensionSetupResult = {
-  nativeHostRegistered: boolean;
-  installRequested: boolean;
-  discoveredProfiles: number;
-};
+const legacyChromeInstallResultSchema = z.object({
+  nativeHostRegistered: z.boolean(),
+  installRequested: z.boolean(),
+  // v2026.9.5 Mac apps can load newer Gateway UIs but omit this in setup replies.
+  // Keep optional until the minimum supported Mac app includes status discovery.
+  installedProfiles: z.number().int().nonnegative().optional(),
+  discoveredProfiles: z.number().int().nonnegative(),
+});
+export type LegacyChromeInstallResult = z.infer<typeof legacyChromeInstallResultSchema>;
+const legacyChromeStatusResultSchema = legacyChromeInstallResultSchema.required({
+  installedProfiles: true,
+});
 
 export type NativeDeviceSettingsCapability = {
   readonly snapshot: NativeDeviceSettingsSnapshot | null;
@@ -170,7 +236,12 @@ export type NativeDeviceSettingsCapability = {
   openSystemSettings(id: PermissionId): void;
   openPanel(panel: NativePanel): void;
   checkForUpdates(): void;
-  installChromeExtension(): Promise<NativeChromeExtensionSetupResult>;
+  setupChromeExtension(
+    action: NativeChromeExtensionSetupAction,
+  ): Promise<NativeChromeExtensionSetupResult>;
+  /** Released native contract-1 installation projection; not a second installer. */
+  installChromeExtension?(): Promise<LegacyChromeInstallResult>;
+  chromeExtensionStatus?(): Promise<LegacyChromeInstallResult>;
   refresh(): void;
   dispose(): void;
 };
@@ -180,180 +251,13 @@ type NativeDeviceSettingsWindow = Window & {
   webkit?: {
     messageHandlers?: {
       openclawDeviceSettings?: {
-        postMessage(message: NativeDeviceSettingsMessage): Promise<unknown>;
+        postMessage: (message: NativeDeviceSettingsMessage) => Promise<unknown>;
       };
     };
   };
 };
 
 const CHANGE_EVENT = "openclaw:native-device-settings-changed";
-const PERMISSION_IDS = [
-  "notifications",
-  "accessibility",
-  "screenRecording",
-  "microphone",
-  "camera",
-  "speechRecognition",
-  "location",
-  "automation",
-  "contacts",
-  "calendars",
-  "reminders",
-  "photos",
-] as const satisfies readonly PermissionId[];
-
-function nullableString(value: unknown): boolean {
-  return value === null || typeof value === "string";
-}
-
-function stringList(value: unknown): boolean {
-  return Array.isArray(value) && Array.from(value).every((entry) => typeof entry === "string");
-}
-
-function namedDevices(value: unknown): boolean {
-  return (
-    Array.isArray(value) &&
-    Array.from(value).every(
-      (entry) => isRecord(entry) && typeof entry.id === "string" && typeof entry.name === "string",
-    )
-  );
-}
-
-function optionalBooleans(value: Record<string, unknown>, keys: string[]): boolean {
-  return keys.every((key) => value[key] === undefined || typeof value[key] === "boolean");
-}
-
-function permissionEntries(value: unknown): boolean {
-  if (!Array.isArray(value)) {
-    return false;
-  }
-  const ids = new Set<string>();
-  return Array.from(value).every((entry) => {
-    if (
-      !isRecord(entry) ||
-      typeof entry.id !== "string" ||
-      !PERMISSION_IDS.some((id) => id === entry.id) ||
-      ids.has(entry.id) ||
-      typeof entry.status !== "string" ||
-      !["granted", "denied", "notDetermined", "unavailable", "limited"].includes(entry.status)
-    ) {
-      return false;
-    }
-    ids.add(entry.id);
-    return true;
-  });
-}
-
-function isSnapshot(value: unknown): value is NativeDeviceSettingsSnapshot {
-  if (!isRecord(value) || value.contract !== 1) {
-    return false;
-  }
-  const { device, app, capabilities, browser, permissions, voice, updates } = value;
-  if (
-    !isRecord(device) ||
-    (app !== undefined && !isRecord(app)) ||
-    (capabilities !== undefined && !isRecord(capabilities)) ||
-    (browser !== undefined && !isRecord(browser)) ||
-    !isRecord(permissions) ||
-    !isRecord(voice) ||
-    (updates !== undefined && !isRecord(updates))
-  ) {
-    return false;
-  }
-  const cookieSync = browser?.cookieSync;
-  const location = permissions.location;
-  const microphone = voice.microphone;
-  const locale = voice.locale;
-  if (!isRecord(location)) {
-    return false;
-  }
-  return (
-    (device.platform === "macos" || device.platform === "ios") &&
-    (device.formFactor === undefined ||
-      (typeof device.formFactor === "string" &&
-        ["phone", "pad", "desktop"].includes(device.formFactor))) &&
-    (device.modelName === undefined || typeof device.modelName === "string") &&
-    typeof device.appVersion === "string" &&
-    typeof device.appBuild === "string" &&
-    nullableString(device.profileName) &&
-    (app === undefined ||
-      (optionalBooleans(app, [
-        "notificationsEnabled",
-        "showDockIcon",
-        "iconAnimationsEnabled",
-        "launchAtLogin",
-        "launchAtLoginAvailable",
-        "quickChatEnabled",
-        "debugPaneEnabled",
-      ]) &&
-        (app.appearance === undefined ||
-          (typeof app.appearance === "string" &&
-            ["system", "light", "dark"].includes(app.appearance))) &&
-        (app.quickChatShortcut === undefined || nullableString(app.quickChatShortcut)) &&
-        (app.iconStyle === undefined ||
-          (isRecord(app.iconStyle) &&
-            typeof app.iconStyle.selectedId === "string" &&
-            namedDevices(app.iconStyle.available))))) &&
-    (capabilities === undefined ||
-      (optionalBooleans(capabilities, [
-        "canvasEnabled",
-        "cameraEnabled",
-        "keepAwakeEnabled",
-        "healthSummaryAvailable",
-        "healthSummaryEnabled",
-        "computerControlEnabled",
-        "cuaDriverBundled",
-        "peekabooBridgeEnabled",
-        "activeComputerPresenceEnabled",
-      ]) &&
-        (capabilities.computerControlProvider === undefined ||
-          capabilities.computerControlProvider === "peekaboo" ||
-          capabilities.computerControlProvider === "cua"))) &&
-    (browser === undefined ||
-      (typeof browser.importAvailable === "boolean" &&
-        isRecord(cookieSync) &&
-        typeof cookieSync.available === "boolean" &&
-        typeof cookieSync.enabled === "boolean" &&
-        stringList(cookieSync.domains) &&
-        typeof cookieSync.targetProfile === "string" &&
-        typeof cookieSync.state === "string" &&
-        ["off", "idle", "running", "error"].includes(cookieSync.state) &&
-        nullableString(cookieSync.detail))) &&
-    permissionEntries(permissions.entries) &&
-    typeof location.mode === "string" &&
-    ["off", "whileUsing", "always"].includes(location.mode) &&
-    typeof location.precise === "boolean" &&
-    optionalBooleans(location, ["preciseEditable"]) &&
-    typeof voice.supported === "boolean" &&
-    typeof voice.wakeEnabled === "boolean" &&
-    optionalBooleans(voice, [
-      "wakeTriggersTalkMode",
-      "pushToTalkEnabled",
-      "talkPhaseSoundsEnabled",
-      "talkShiftToStopEnabled",
-      "realtimeRelayEnabled",
-      "triggerChime",
-      "sendChime",
-      "talkEnabled",
-      "talkButtonEnabled",
-      "talkBackgroundEnabled",
-      "speakerphoneEnabled",
-    ]) &&
-    (microphone === undefined ||
-      (isRecord(microphone) &&
-        nullableString(microphone.selectedId) &&
-        namedDevices(microphone.devices))) &&
-    (locale === undefined ||
-      (isRecord(locale) &&
-        typeof locale.primary === "string" &&
-        stringList(locale.additional) &&
-        namedDevices(locale.available))) &&
-    (updates === undefined ||
-      (typeof updates.available === "boolean" &&
-        typeof updates.automatic === "boolean" &&
-        nullableString(updates.unavailableReason)))
-  );
-}
 
 export function createNativeDeviceSettingsCapability(): NativeDeviceSettingsCapability | null {
   if (typeof window === "undefined") {
@@ -365,21 +269,37 @@ export function createNativeDeviceSettingsCapability(): NativeDeviceSettingsCapa
   if (typeof handler?.postMessage !== "function") {
     return null;
   }
-  const post = handler.postMessage.bind(handler);
-  const initial = nativeWindow["__OPENCLAW_NATIVE_DEVICE_SETTINGS__"];
-  let snapshot = isSnapshot(initial) ? initial : null;
+  const postMessage = handler.postMessage;
+  const post = postMessage.bind(handler);
+  const initial = nativeDeviceSettingsSnapshotSchema.safeParse(
+    nativeWindow["__OPENCLAW_NATIVE_DEVICE_SETTINGS__"],
+  );
+  let snapshot = initial.success ? initial.data : null;
   let disposed = false;
+  const isCurrent = () =>
+    !disposed &&
+    nativeWindow.webkit?.messageHandlers?.openclawDeviceSettings === handler &&
+    handler.postMessage === postMessage;
   const listeners = new Set<(snapshot: NativeDeviceSettingsSnapshot) => void>();
+  const acceptSnapshot = (next: NativeDeviceSettingsSnapshot) => {
+    if (
+      snapshot?.revision !== undefined &&
+      (next.revision === undefined || next.revision <= snapshot.revision)
+    ) {
+      return false;
+    }
+    snapshot = next;
+    return true;
+  };
   const onChange = (event: Event) => {
     if (!(event instanceof CustomEvent)) {
       return;
     }
-    const next: unknown = event.detail;
-    if (!isSnapshot(next)) {
+    const next = nativeDeviceSettingsSnapshotSchema.safeParse(event.detail);
+    if (!next.success || !acceptSnapshot(next.data)) {
       return;
     }
-    snapshot = next;
-    listeners.forEach((listener) => listener(next));
+    listeners.forEach((listener) => listener(next.data));
   };
   const send = async (message: NativeDeviceSettingsMessage, onSettled?: () => void) => {
     try {
@@ -388,10 +308,11 @@ export function createNativeDeviceSettingsCapability(): NativeDeviceSettingsCapa
         return;
       }
       if (message.type === "set") {
-        if (!isSnapshot(reply)) {
+        const result = nativeDeviceSettingsSnapshotSchema.safeParse(reply);
+        if (!result.success) {
           throw new Error("Native settings returned an invalid edit result");
         }
-        snapshot = reply;
+        acceptSnapshot(result.data);
       }
     } catch (error) {
       console.warn("Native device settings request failed", error);
@@ -410,6 +331,23 @@ export function createNativeDeviceSettingsCapability(): NativeDeviceSettingsCapa
   window.addEventListener(CHANGE_EVENT, onChange);
   window.addEventListener("focus", refresh);
   refresh();
+  const legacyChromeRequest = async (
+    type: "chrome-extension-status" | "install-chrome-extension",
+  ) => {
+    if (!isCurrent() || snapshot?.device.platform !== "macos") {
+      throw new Error("Native device settings is unavailable");
+    }
+    const reply = await post({ type });
+    const schema =
+      type === "chrome-extension-status"
+        ? legacyChromeStatusResultSchema
+        : legacyChromeInstallResultSchema;
+    const result = schema.safeParse(reply);
+    if (!isCurrent() || snapshot?.device.platform !== "macos" || !result.success) {
+      throw new Error("Native Chrome setup returned an invalid result");
+    }
+    return result.data;
+  };
   return {
     get snapshot() {
       return snapshot;
@@ -423,28 +361,37 @@ export function createNativeDeviceSettingsCapability(): NativeDeviceSettingsCapa
     openSystemSettings: (id) => void send({ type: "open-system-settings", id }),
     openPanel: (panel) => void send({ type: "open", panel }),
     checkForUpdates: () => void send({ type: "check-for-updates" }),
-    async installChromeExtension() {
-      if (disposed) {
+    async setupChromeExtension(action) {
+      if (!isCurrent()) {
         throw new Error("Native device settings is unavailable");
       }
-      const reply = await post({ type: "install-chrome-extension" });
+      if (!snapshot?.browser?.chromeSetupActions?.includes(action)) {
+        throw new Error("This native host does not advertise that Chrome setup action");
+      }
+      const platform = snapshot.device.platform;
+      const targetPlatform = { macos: "darwin", linux: "linux", windows: "win32", ios: null }[
+        platform
+      ];
+      if (!targetPlatform) {
+        throw new Error("Native Chrome setup is unavailable on this device");
+      }
+      const validatedAction = nativeChromeExtensionSetupActionSchema.parse(action);
+      const reply = await post({ type: "chrome-extension-setup", action: validatedAction });
+      const result = nativeChromeExtensionSetupResultSchema.safeParse(reply);
       if (
-        disposed ||
-        !isRecord(reply) ||
-        typeof reply.nativeHostRegistered !== "boolean" ||
-        typeof reply.installRequested !== "boolean" ||
-        typeof reply.discoveredProfiles !== "number" ||
-        !Number.isSafeInteger(reply.discoveredProfiles) ||
-        reply.discoveredProfiles < 0
+        !isCurrent() ||
+        !snapshot?.browser?.chromeSetupActions?.includes(action) ||
+        !result.success ||
+        result.data.action !== action ||
+        snapshot.device.platform !== platform ||
+        result.data.target.platform !== targetPlatform
       ) {
         throw new Error("Native Chrome setup returned an invalid result");
       }
-      return {
-        nativeHostRegistered: reply.nativeHostRegistered,
-        installRequested: reply.installRequested,
-        discoveredProfiles: reply.discoveredProfiles,
-      };
+      return result.data;
     },
+    installChromeExtension: () => legacyChromeRequest("install-chrome-extension"),
+    chromeExtensionStatus: () => legacyChromeRequest("chrome-extension-status"),
     refresh,
     dispose() {
       disposed = true;

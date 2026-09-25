@@ -208,6 +208,16 @@ describe("tool-policy-pipeline", () => {
     ]);
   });
 
+  test("classifies pdf as an unavailable gated core tool, not a missing plugin", () => {
+    const warnings = runAllowlistWarningStep({
+      allow: ["pdf"],
+      label: "tools.allow",
+    });
+    expect(warnings).toEqual([
+      "tools: tools.allow allowlist contains unknown entries (pdf). These entries are shipped core tools but unavailable in the current runtime/provider/model/config.",
+    ]);
+  });
+
   test("still warns for explicit allowlists that mention unavailable gated core tools", () => {
     const warnings = runAllowlistWarningStep({
       allow: ["apply_patch"],

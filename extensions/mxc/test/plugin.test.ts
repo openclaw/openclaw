@@ -7,6 +7,7 @@ import { createPluginRegistryFixture } from "openclaw/plugin-sdk/plugin-test-con
 import {
   createEmptyPluginRegistry,
   createPluginRecord,
+  disposePluginRegistryInstances,
   getActivePluginRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
@@ -260,9 +261,9 @@ describe("registerMxcPlugin", () => {
       setActivePluginRegistry(createEmptyPluginRegistry());
       await expect.poll(readBackend).toEqual(original);
     } finally {
-      for (const { lifecycle } of registry.registry.runtimeLifecycles.toReversed()) {
-        await lifecycle.cleanup?.({ reason: "disable" });
-      }
+      await expect(disposePluginRegistryInstances(registry.registry)).resolves.toMatchObject({
+        failures: [],
+      });
       if (originalRegistry) {
         setActivePluginRegistry(originalRegistry);
       } else {

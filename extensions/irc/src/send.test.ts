@@ -1,4 +1,3 @@
-// Irc tests cover send plugin behavior.
 import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-outbound";
 import { createSendCfgThreadingRuntime } from "openclaw/plugin-sdk/channel-test-helpers";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -21,15 +20,10 @@ const hoisted = vi.hoisted(() => {
     convertMarkdownTables,
     stripMarkdown,
     record,
-    normalizeIrcMessagingTarget: vi.fn((value: string) => value.trim()),
     connectIrcClient: vi.fn(),
     buildIrcConnectOptions,
   };
 });
-
-vi.mock("./normalize.js", () => ({
-  normalizeIrcMessagingTarget: hoisted.normalizeIrcMessagingTarget,
-}));
 
 vi.mock("./client.js", () => ({
   connectIrcClient: hoisted.connectIrcClient,
@@ -45,14 +39,6 @@ vi.mock("./protocol.js", async () => {
     ...actual,
     makeIrcMessageId: () => "irc-msg-1",
   };
-});
-
-vi.mock("openclaw/plugin-sdk/plugin-config-runtime", async () => {
-  const original = (await vi.importActual("openclaw/plugin-sdk/plugin-config-runtime")) as Record<
-    string,
-    unknown
-  >;
-  return original;
 });
 
 vi.mock("openclaw/plugin-sdk/markdown-table-runtime", async () => {
@@ -88,19 +74,14 @@ function resetHoistedMocks() {
   hoisted.convertMarkdownTables.mockReset().mockImplementation((text: string) => text);
   hoisted.stripMarkdown.mockReset().mockImplementation((text: string) => text);
   hoisted.record.mockReset();
-  hoisted.normalizeIrcMessagingTarget
-    .mockReset()
-    .mockImplementation((value: string) => value.trim());
   hoisted.connectIrcClient.mockReset();
   hoisted.buildIrcConnectOptions.mockReset().mockReturnValue({});
 }
 
 afterAll(() => {
-  vi.doUnmock("./normalize.js");
   vi.doUnmock("./client.js");
   vi.doUnmock("./connect-options.js");
   vi.doUnmock("./protocol.js");
-  vi.doUnmock("openclaw/plugin-sdk/plugin-config-runtime");
   vi.doUnmock("openclaw/plugin-sdk/markdown-table-runtime");
   vi.doUnmock("openclaw/plugin-sdk/text-chunking");
   vi.resetModules();
@@ -139,7 +120,7 @@ describe("sendMessageIrc cfg threading", () => {
     });
 
     expect(hoisted.loadConfig).not.toHaveBeenCalled();
-    expect(client.sendPrivmsg).toHaveBeenCalledWith("#room", "hello");
+    expect(client.sendPrivmsg).toHaveBeenCalledWith("#room", "hello", undefined);
     expect(hoisted.record).toHaveBeenCalledWith({
       channel: "irc",
       accountId: "work",
@@ -206,6 +187,7 @@ describe("sendMessageIrc cfg threading", () => {
     expect(client.sendPrivmsg).toHaveBeenCalledWith(
       "#room",
       "Status\n- docs (https://example.com)",
+      undefined,
     );
   });
 
@@ -247,7 +229,7 @@ describe("sendMessageIrc cfg threading", () => {
     });
 
     expect(hoisted.loadConfig).not.toHaveBeenCalled();
-    expect(client.sendPrivmsg).toHaveBeenCalledWith("#room", "hello");
+    expect(client.sendPrivmsg).toHaveBeenCalledWith("#room", "hello", undefined);
     expect(result.target).toBe("#room");
     expect(result.messageId).toBeTypeOf("string");
     expect(result.messageId.length).toBeGreaterThan(0);
@@ -273,7 +255,7 @@ describe("sendMessageIrc cfg threading", () => {
       replyTo: "irc-parent-1",
     });
 
-    expect(client.sendPrivmsg).toHaveBeenCalledWith("#room", "hello\n\n[reply:irc-parent-1]");
+    expect(client.sendPrivmsg).toHaveBeenCalledWith("#room", "hello", "irc-parent-1");
     expect(result.receipt.sentAt).toBeTypeOf("number");
     expect(result.receipt.sentAt).toBeGreaterThan(0);
     expect({ ...result.receipt, sentAt: 123 }).toEqual({
@@ -370,7 +352,7 @@ describe("sendMessageIrc cfg threading", () => {
     expect(hoisted.connectIrcClient).toHaveBeenCalledOnce();
     expect(client.join).toHaveBeenCalledOnce();
     expect(client.sendPrivmsg.mock.calls).toEqual(
-      chunks.map((chunk) => ["#room", `${chunk}\n\n[reply:parent-1]`]),
+      chunks.map((chunk) => ["#room", chunk, "parent-1"]),
     );
     expect(client.quit).toHaveBeenCalledOnce();
     expect(onPlatformSendDispatch).toHaveBeenCalledTimes(chunks.length);
@@ -519,7 +501,7 @@ describe("sendMessageIrc cfg threading", () => {
           expect(result?.receipt.platformMessageIds).toEqual(["irc-msg-1"]);
           expect(result?.target).toEqual({ kind: "conversation", id: "#room" });
           expect(client.join).toHaveBeenCalledWith("#room");
-          expect(client.sendPrivmsg).toHaveBeenCalledWith("#room", "hello");
+          expect(client.sendPrivmsg).toHaveBeenCalledWith("#room", "hello", undefined);
         },
         media: async () => {
           const result = await ircMessageAdapter.send?.media?.({
@@ -533,6 +515,7 @@ describe("sendMessageIrc cfg threading", () => {
           expect(client.sendPrivmsg).toHaveBeenCalledWith(
             "#room",
             "image\n\nAttachment: https://example.com/image.png",
+            undefined,
           );
         },
         replyTo: async () => {
@@ -544,7 +527,7 @@ describe("sendMessageIrc cfg threading", () => {
           });
           expect(result?.receipt.replyToId).toBe("parent-1");
           expect(client.join).toHaveBeenCalledWith("#room");
-          expect(client.sendPrivmsg).toHaveBeenCalledWith("#room", "threaded\n\n[reply:parent-1]");
+          expect(client.sendPrivmsg).toHaveBeenCalledWith("#room", "threaded", "parent-1");
         },
       },
     });

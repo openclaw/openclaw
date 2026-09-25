@@ -77,7 +77,7 @@ async function mount(
       };
     }
     if (method === "config.set") {
-      return { hash: "two" };
+      return { config: JSON.parse((_params as { raw: string }).raw), hash: "two" };
     }
     return {};
   };

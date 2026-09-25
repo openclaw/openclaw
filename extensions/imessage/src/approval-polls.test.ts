@@ -38,7 +38,7 @@ const GROUP_CHAT_GUID = "iMessage;+;chat0000";
 function bind(overrides?: {
   optionDecisions?: ReadonlyArray<readonly [string, ExecApprovalReplyDecision]>;
   expiresAtMs?: number;
-}): boolean {
+}): Promise<boolean> {
   return iMessageApprovalPollTargets.register({
     accountId: "default",
     conversation: { handle: APPROVER },
@@ -162,7 +162,7 @@ describe("mapSentPollOptionsToDecisions", () => {
 
 describe("maybeResolveIMessageApprovalPollVote", () => {
   it("resolves a pending approval from an authorized vote", async () => {
-    expect(bind()).toBe(true);
+    expect(await bind()).toBe(true);
     const gatewayRuntime = { request: vi.fn() } as never;
 
     await expect(
@@ -185,7 +185,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
   });
 
   it("selects the transport actor from a multi-participant complete vote set", async () => {
-    expect(bind()).toBe(true);
+    expect(await bind()).toBe(true);
 
     await expect(
       maybeResolveIMessageApprovalPollVote({
@@ -224,7 +224,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
   });
 
   it("fails closed when a multi-participant set does not identify the transport actor", async () => {
-    expect(bind()).toBe(true);
+    expect(await bind()).toBe(true);
 
     await expect(
       maybeResolveIMessageApprovalPollVote({
@@ -256,7 +256,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
   });
 
   it("accepts a complete multi-record set for one participant alias", async () => {
-    expect(bind()).toBe(true);
+    expect(await bind()).toBe(true);
 
     await expect(
       maybeResolveIMessageApprovalPollVote({
@@ -290,7 +290,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
   });
 
   it("fails closed when the actor selected multiple approval decisions", async () => {
-    expect(bind()).toBe(true);
+    expect(await bind()).toBe(true);
 
     await expect(
       maybeResolveIMessageApprovalPollVote({
@@ -322,7 +322,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
   });
 
   it("authenticates paired-device self votes with destination_caller_id", async () => {
-    expect(bind()).toBe(true);
+    expect(await bind()).toBe(true);
 
     await expect(
       maybeResolveIMessageApprovalPollVote({
@@ -343,7 +343,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
   });
 
   it("does not trust destination_caller_id on received rows", async () => {
-    expect(bind()).toBe(true);
+    expect(await bind()).toBe(true);
 
     await expect(
       maybeResolveIMessageApprovalPollVote({
@@ -362,7 +362,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
   });
 
   it("rejects imsg's local-identity sender fallback on received rows", async () => {
-    expect(bind()).toBe(true);
+    expect(await bind()).toBe(true);
 
     await expect(
       maybeResolveIMessageApprovalPollVote({
@@ -381,7 +381,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
   });
 
   it("uses the option id when imsg reports the prompt GUID instead of the poll GUID", async () => {
-    iMessageApprovalPollTargets.register({
+    await iMessageApprovalPollTargets.register({
       accountId: "default",
       conversation: { handle: APPROVER },
       pollGuid: "bridge-reported-prompt-guid",
@@ -410,8 +410,8 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
   // A group poll is where authorization actually carries weight: the binding is
   // keyed by chat, so every member's vote finds it and only allowFrom stops
   // them. In a DM the handle-keyed lookup already scopes to the approver.
-  function bindGroup(): void {
-    iMessageApprovalPollTargets.register({
+  async function bindGroup(): Promise<void> {
+    await iMessageApprovalPollTargets.register({
       accountId: "default",
       conversation: { chatGuid: GROUP_CHAT_GUID },
       pollGuid: POLL_GUID,
@@ -434,7 +434,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
     // The vote payload's participant is attacker-shaped: imsg falls back to the
     // row sender only when it is absent, so a crafted envelope can claim an
     // allowlisted handle while being sent by someone else.
-    bindGroup();
+    await bindGroup();
 
     await expect(
       maybeResolveIMessageApprovalPollVote({
@@ -448,7 +448,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
   });
 
   it("denies a group vote from a member outside allowFrom", async () => {
-    bindGroup();
+    await bindGroup();
 
     await expect(
       maybeResolveIMessageApprovalPollVote({
@@ -462,7 +462,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
   });
 
   it("resolves a group vote from an approver", async () => {
-    bindGroup();
+    await bindGroup();
 
     await expect(
       maybeResolveIMessageApprovalPollVote({
@@ -479,7 +479,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
 
   it("authorizes an email sender when Apple reports another active-account alias", async () => {
     const emailCfg = { channels: { imessage: { allowFrom: ["person@example.com"] } } };
-    iMessageApprovalPollTargets.register({
+    await iMessageApprovalPollTargets.register({
       accountId: "default",
       conversation: { handle: "person@example.com" },
       pollGuid: POLL_GUID,
@@ -507,7 +507,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
   });
 
   it("requires explicit approvers", async () => {
-    bind();
+    await bind();
 
     await expect(
       maybeResolveIMessageApprovalPollVote({
@@ -521,7 +521,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
   });
 
   it("owns an un-vote without resolving it", async () => {
-    bind();
+    await bind();
 
     await expect(
       maybeResolveIMessageApprovalPollVote({
@@ -535,7 +535,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
   });
 
   it("ignores an option id that is not bound to a decision", async () => {
-    bind();
+    await bind();
 
     await expect(
       maybeResolveIMessageApprovalPollVote({
@@ -552,7 +552,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
     ["a non-vote poll", { kind: "created", options: [] }],
     ["a vote without a poll identity", { kind: "vote", vote: null }],
   ])("falls through on %s", async (_label, poll) => {
-    bind();
+    await bind();
 
     await expect(
       maybeResolveIMessageApprovalPollVote({
@@ -564,7 +564,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
   });
 
   it("owns an empty complete vote set as a deselection", async () => {
-    bind();
+    await bind();
 
     await expect(
       maybeResolveIMessageApprovalPollVote({
@@ -581,7 +581,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
   });
 
   it("fails closed on a malformed complete vote set for an owned poll", async () => {
-    bind();
+    await bind();
 
     await expect(
       maybeResolveIMessageApprovalPollVote({
@@ -602,7 +602,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
   });
 
   it("falls through for a poll it does not own so ordinary polls still render", async () => {
-    bind();
+    await bind();
 
     await expect(
       maybeResolveIMessageApprovalPollVote({
@@ -617,7 +617,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
   });
 
   it("swallows late votes after the approval resolved", async () => {
-    bind();
+    await bind();
     await maybeResolveIMessageApprovalPollVote({ cfg, accountId: "default", message: buildVote() });
     resolverMocks.resolveApprovalOverGateway.mockClear();
 
@@ -634,7 +634,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
     try {
       const expiringPollGuid = "poll-guid-natural-expiry";
       expect(
-        iMessageApprovalPollTargets.register({
+        await iMessageApprovalPollTargets.register({
           accountId: "default",
           conversation: { handle: APPROVER },
           pollGuid: expiringPollGuid,
@@ -662,7 +662,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
   it("swallows votes for a created poll that could not be bound", async () => {
     const orphanPollGuid = "poll-guid-orphaned";
     expect(
-      iMessageApprovalPollTargets.registerTombstone({
+      await iMessageApprovalPollTargets.registerTombstone({
         accountId: "default",
         conversation: { handle: APPROVER },
         pollGuid: orphanPollGuid,
@@ -681,7 +681,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
   });
 
   it("clears the binding when the approval is already gone", async () => {
-    bind();
+    await bind();
     resolverMocks.isApprovalNotFoundError.mockReturnValue(true);
     resolverMocks.resolveApprovalOverGateway.mockRejectedValue(new Error("not found"));
 
@@ -696,7 +696,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
   });
 
   it("retains the binding on a transient resolver error so a retry can land", async () => {
-    bind();
+    await bind();
     resolverMocks.resolveApprovalOverGateway.mockRejectedValueOnce(new Error("gateway 503"));
 
     await expect(
@@ -717,7 +717,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
     // GUIDs, so only the tests can collide here.
     const expiredPollGuid = "poll-guid-expired";
     expect(
-      iMessageApprovalPollTargets.register({
+      await iMessageApprovalPollTargets.register({
         accountId: "default",
         conversation: { handle: APPROVER },
         pollGuid: expiredPollGuid,
@@ -739,7 +739,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
   });
 
   it("matches a vote that arrives keyed by chat guid instead of handle", async () => {
-    iMessageApprovalPollTargets.register({
+    await iMessageApprovalPollTargets.register({
       accountId: "default",
       conversation: { chatGuid: "iMessage;-;+15551230000", handle: APPROVER },
       pollGuid: POLL_GUID,
@@ -763,8 +763,8 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
   });
 
   it("stops resolving after the target is unregistered", async () => {
-    bind();
-    iMessageApprovalPollTargets.unregister({
+    await bind();
+    await iMessageApprovalPollTargets.unregister({
       accountId: "default",
       conversation: { handle: APPROVER },
       pollGuid: POLL_GUID,

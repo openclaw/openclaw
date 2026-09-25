@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { ComputerUseCapabilityDescriptor } from "../plugins/computer-use-contract.js";
 import type { NodeHostClient } from "./client.js";
 import { NodeWorkerContainerContextMismatchError } from "./node-worker-container-lifecycle.js";
@@ -7,8 +8,9 @@ import { listRegisteredNodeHostCapsAndCommands } from "./plugin-node-host.js";
 import { prepareNodeHostRuntime } from "./runtime.js";
 
 const mocks = vi.hoisted(() => ({
-  closeWorkerSupervisor: vi.fn(async () => undefined),
+  closeWorkerSupervisor: vi.fn<() => Promise<void>>(async () => undefined),
   initializeWorkerSupervisor: vi.fn(async () => undefined),
+  handleInvoke: vi.fn(async () => undefined),
   resolveContainerEngine: vi.fn(async (_options?: { env?: NodeJS.ProcessEnv }) => ({
     id: "docker" as const,
     command: "docker",
@@ -17,7 +19,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../infra/path-env.js", () => ({ ensureOpenClawCliOnPath: vi.fn() }));
-vi.mock("./invoke.js", () => ({ handleInvoke: vi.fn(async () => undefined) }));
+vi.mock("./invoke.js", () => ({ handleInvoke: mocks.handleInvoke }));
 vi.mock("./mcp.js", () => ({
   startNodeHostMcpManager: vi.fn(async () => ({
     descriptors: [],
@@ -40,6 +42,8 @@ vi.mock("./node-worker-workspace.js", () => ({
 }));
 vi.mock("./plugin-node-host.js", () => ({
   ensureNodeHostPluginRegistry: vi.fn(async () => undefined),
+  hasRegisteredNodeHostCommandActiveWork: vi.fn(() => false),
+  notifyRegisteredNodeHostCommandDisconnect: vi.fn(async () => undefined),
   listRegisteredNodeHostCapsAndCommands: vi.fn(() => ({
     caps: [],
     commands: [],
@@ -274,32 +278,48 @@ describe("node-host worker manifest", () => {
 
     expect(createNodeWorkerSupervisor).toHaveBeenCalledOnce();
     expect(onRunnerCapacityChanged).not.toHaveBeenCalled();
+    await runtime.invoke({ id: "after-mismatch", nodeId: "node-1", command: "system.which" });
+    expect(await runtime.tryPauseForUpdate()).toBe(false);
     await runtime.close();
     expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce();
   });
 
-  it("disables a retrying container supervisor when a later attempt finds a context mismatch", async () => {
-    const mismatch = new NodeWorkerContainerContextMismatchError(
-      "node worker launch launch-1 belongs to a different docker engine or daemon; restore its original engine context before enabling worker hosting",
-    );
-    mocks.initializeWorkerSupervisor
-      .mockRejectedValueOnce(new Error("launch journal temporarily unavailable"))
-      .mockRejectedValueOnce(mismatch);
+  it.each([false, true])(
+    "keeps foreign container ownership busy when cleanup failure is %s",
+    async (closeFails) => {
+      const mismatch = new NodeWorkerContainerContextMismatchError(
+        "node worker launch launch-1 belongs to a different docker engine or daemon; restore its original engine context before enabling worker hosting",
+      );
+      mocks.initializeWorkerSupervisor
+        .mockRejectedValueOnce(new Error("launch journal temporarily unavailable"))
+        .mockRejectedValueOnce(mismatch);
+      const retired = createDeferred();
+      mocks.closeWorkerSupervisor.mockImplementationOnce(async () => await retired.promise);
 
-    const prepared = await prepareWorkerRuntime("container");
+      const prepared = await prepareWorkerRuntime("container");
 
-    expect(prepared.workerHostingEnabled).toBe(true);
-    const onWorkerHostingDisabled = vi.fn();
-    const runtime = prepared.start({ client, onWorkerHostingDisabled });
+      expect(prepared.workerHostingEnabled).toBe(true);
+      const onWorkerHostingDisabled = vi.fn();
+      const runtime = prepared.start({ client, onWorkerHostingDisabled });
 
-    await vi.waitFor(() =>
-      expect(onWorkerHostingDisabled).toHaveBeenCalledExactlyOnceWith(mismatch.message),
-    );
-    expect(mocks.initializeWorkerSupervisor).toHaveBeenCalledTimes(2);
-    expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce();
-    await runtime.close();
-    expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce();
-  });
+      await vi.waitFor(() =>
+        expect(onWorkerHostingDisabled).toHaveBeenCalledExactlyOnceWith(mismatch.message),
+      );
+      expect(mocks.initializeWorkerSupervisor).toHaveBeenCalledTimes(2);
+      expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce();
+      expect(await runtime.tryPauseForUpdate()).toBe(false);
+      if (closeFails) {
+        retired.reject(new Error("container cleanup failed"));
+      } else {
+        retired.resolve();
+      }
+      await runtime.invoke({ id: "after-retirement", nodeId: "node-1", command: "system.which" });
+      expect(mocks.handleInvoke).toHaveBeenCalledOnce();
+      expect(await runtime.tryPauseForUpdate()).toBe(false);
+      await runtime.close();
+      expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce();
+    },
+  );
 
   it("retries non-container reconciliation after a bounded delay before publishing capacity", async () => {
     vi.useFakeTimers();

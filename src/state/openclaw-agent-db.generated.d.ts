@@ -139,7 +139,7 @@ export interface HeartbeatOutcomes {
 
 export interface MemoryEmbeddingCache {
   dims: number | null;
-  embedding: string;
+  embedding: Uint8Array;
   hash: string;
   model: string;
   provider: string;
@@ -172,7 +172,8 @@ export interface MemoryIndexChunkRecallMetadata {
 }
 
 export interface MemoryIndexChunks {
-  embedding: string;
+  chunk_rowid: Generated<number>;
+  embedding: Uint8Array;
   end_line: number;
   hash: string;
   id: string;
@@ -232,6 +233,10 @@ export interface SchemaMeta {
   updated_at: number;
 }
 
+export interface SessionCanonicalValidationPending {
+  session_key: string;
+}
+
 export interface SessionConversations {
   conversation_id: string;
   first_seen_at: number;
@@ -250,7 +255,19 @@ export interface SessionGoalOperations {
   session_key: string;
 }
 
+export interface SessionInputCompletions {
+  completed_at: number;
+  idempotency_key: string;
+  outcome_json: string;
+  request_hash: string;
+  run_id: string;
+  session_id: string;
+  session_key: string;
+  succeeded: number;
+}
+
 export interface SessionKeyContract {
+  canonical_ready: string | null;
   id: Generated<number>;
   main_key: string;
   updated_at: number;
@@ -282,6 +299,7 @@ export interface SessionNodes {
   last_activity_at: number | null;
   last_interaction_at: number | null;
   last_read_at: number | null;
+  legacy_acp_migration_json: string | null;
   owner_actor_id: string | null;
   owner_actor_type: string | null;
   owner_assigned_at: number | null;
@@ -366,6 +384,20 @@ export interface SessionTranscriptArchives {
   session_key: string;
 }
 
+export interface SessionTranscriptColdArchives {
+  archive_blob: Uint8Array | null;
+  archive_bytes: number;
+  archive_name: string;
+  archive_sha256: string;
+  archived_at: number;
+  event_count: number;
+  generation: string;
+  last_seq: number;
+  raw_bytes: number;
+  session_id: string;
+  storage: string;
+}
+
 export interface SessionTranscriptFts {
   message_id: string | null;
   role: string | null;
@@ -402,6 +434,12 @@ export interface SessionTranscriptFtsIdx {
   pgno: string | null;
   segid: string;
   term: string;
+}
+
+export interface SessionTranscriptFtsRows {
+  id: Generated<number>;
+  message_id: string | null;
+  session_id: string;
 }
 
 export interface SessionTranscriptIndexState {
@@ -507,7 +545,10 @@ export interface TranscriptEventIdentities {
 
 export interface TranscriptEvents {
   created_at: number;
-  event_json: string;
+  event_json: string | null;
+  event_utf8_bytes: number | null;
+  event_zstd: Uint8Array | null;
+  navigation_json: string | null;
   seq: number;
   session_id: string;
 }
@@ -540,8 +581,10 @@ export interface DB {
   memory_session_tombstones: MemorySessionTombstones;
   message_tool_run_outcomes: MessageToolRunOutcomes;
   schema_meta: SchemaMeta;
+  session_canonical_validation_pending: SessionCanonicalValidationPending;
   session_conversations: SessionConversations;
   session_goal_operations: SessionGoalOperations;
+  session_input_completions: SessionInputCompletions;
   session_key_contract: SessionKeyContract;
   session_members: SessionMembers;
   session_nodes: SessionNodes;
@@ -551,12 +594,14 @@ export interface DB {
   session_suggestions: SessionSuggestions;
   session_transcript_active_events: SessionTranscriptActiveEvents;
   session_transcript_archives: SessionTranscriptArchives;
+  session_transcript_cold_archives: SessionTranscriptColdArchives;
   session_transcript_fts: SessionTranscriptFts;
   session_transcript_fts_config: SessionTranscriptFtsConfig;
   session_transcript_fts_content: SessionTranscriptFtsContent;
   session_transcript_fts_data: SessionTranscriptFtsData;
   session_transcript_fts_docsize: SessionTranscriptFtsDocsize;
   session_transcript_fts_idx: SessionTranscriptFtsIdx;
+  session_transcript_fts_rows: SessionTranscriptFtsRows;
   session_transcript_index_state: SessionTranscriptIndexState;
   session_windows: SessionWindows;
   standing_intents: StandingIntents;

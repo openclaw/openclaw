@@ -87,7 +87,7 @@ export async function runTuiCliAction(
           tlsFingerprint: opts.tlsFingerprint,
         }),
     session: resolved?.sessionKey ?? opts.session,
-    ...(resolved?.parsed.kind === "url" ? { agentId: resolved.parsed.agentId } : {}),
+    ...(resolved ? { agentId: resolved.agentId } : {}),
     deliver: Boolean(opts.deliver),
     thinking: opts.thinking,
     message: opts.message,

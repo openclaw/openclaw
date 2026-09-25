@@ -1,0 +1,1755 @@
+use futures_util::{future::poll_fn, Sink, SinkExt, StreamExt};
+use serde::Deserialize;
+use serde_json::{json, Value};
+use std::{
+    collections::{HashMap, VecDeque},
+    future::Future,
+    net::IpAddr,
+    pin::Pin,
+    sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc, Mutex as StdMutex,
+    },
+    time::Duration,
+};
+use thiserror::Error;
+use tokio::sync::{mpsc, oneshot, watch, Mutex, Notify, Semaphore};
+use tokio::time::Instant;
+use tokio_tungstenite::{
+    connect_async_tls_with_config,
+    tungstenite::{
+        client::IntoClientRequest,
+        http::{HeaderName, HeaderValue},
+        protocol::WebSocketConfig,
+        Error as TungsteniteError, Message,
+    },
+    Connector,
+};
+use url::{Host, Url};
+
+use crate::{
+    deferred_tls_config, pinned_tls_config, CapturedTlsCertificate, TlsCertificatePolicy,
+    TlsPeerCertificate, TlsTrust,
+};
+
+const DEFAULT_CHALLENGE_TIMEOUT: Duration = Duration::from_secs(15);
+const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const DEFAULT_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
+const DEFAULT_MAX_MESSAGE_BYTES: usize = 64 * 1024 * 1024;
+const DEFAULT_MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
+const DEFAULT_MAX_EVENT_BUFFER_BYTES: usize = 64 * 1024 * 1024;
+
+type DispatchGuard =
+    Box<dyn for<'a> FnOnce(&mut DispatchContext<'a>) -> Result<(), DispatchRejection> + Send>;
+
+#[derive(Clone, Debug)]
+pub struct GatewayClientConfig {
+    request: tokio_tungstenite::tungstenite::http::Request<()>,
+    tls_trust: TlsTrust,
+    tls_certificate_policy: Option<Arc<dyn TlsCertificatePolicy>>,
+    connect_timeout: Duration,
+    challenge_timeout: Duration,
+    request_timeout: Duration,
+    write_timeout: Duration,
+    max_message_bytes: usize,
+    max_frame_bytes: usize,
+    max_event_buffer_bytes: usize,
+    event_capacity: usize,
+    max_in_flight: usize,
+}
+
+impl GatewayClientConfig {
+    /// Build a client configuration for a secure remote or loopback Gateway URL.
+    pub fn new(gateway_url: impl AsRef<str>) -> Result<Self, ClientError> {
+        validate_gateway_url(gateway_url.as_ref())?;
+        let request = gateway_url
+            .as_ref()
+            .into_client_request()
+            .map_err(|error| ClientError::InvalidUrl(error.to_string()))?;
+        Ok(Self {
+            request,
+            tls_trust: TlsTrust::SystemRoots,
+            tls_certificate_policy: None,
+            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
+            challenge_timeout: DEFAULT_CHALLENGE_TIMEOUT,
+            request_timeout: DEFAULT_REQUEST_TIMEOUT,
+            write_timeout: DEFAULT_WRITE_TIMEOUT,
+            max_message_bytes: DEFAULT_MAX_MESSAGE_BYTES,
+            max_frame_bytes: DEFAULT_MAX_FRAME_BYTES,
+            max_event_buffer_bytes: DEFAULT_MAX_EVENT_BUFFER_BYTES,
+            event_capacity: 256,
+            max_in_flight: 64,
+        })
+    }
+
+    /// Add an HTTP header to the WebSocket upgrade request.
+    pub fn header(mut self, name: &str, value: &str) -> Result<Self, ClientError> {
+        let name = HeaderName::from_bytes(name.as_bytes())
+            .map_err(|error| ClientError::InvalidHeader(error.to_string()))?;
+        let value = HeaderValue::from_str(value)
+            .map_err(|error| ClientError::InvalidHeader(error.to_string()))?;
+        self.request.headers_mut().insert(name, value);
+        Ok(self)
+    }
+
+    #[must_use]
+    pub fn tls_trust(mut self, trust: TlsTrust) -> Self {
+        self.tls_trust = trust;
+        self
+    }
+
+    /// Replace built-in CA/pin trust with an asynchronous product-owned TLS policy.
+    /// The policy must approve the actual peer before the HTTP upgrade is written.
+    #[must_use]
+    pub fn tls_certificate_policy(mut self, policy: Arc<dyn TlsCertificatePolicy>) -> Self {
+        self.tls_certificate_policy = Some(policy);
+        self
+    }
+
+    #[must_use]
+    pub fn connect_timeout(mut self, timeout: Duration) -> Self {
+        self.connect_timeout = timeout;
+        self
+    }
+
+    #[must_use]
+    pub fn challenge_timeout(mut self, timeout: Duration) -> Self {
+        self.challenge_timeout = timeout;
+        self
+    }
+
+    #[must_use]
+    pub fn request_timeout(mut self, timeout: Duration) -> Self {
+        self.request_timeout = timeout;
+        self
+    }
+
+    #[must_use]
+    pub fn write_timeout(mut self, timeout: Duration) -> Self {
+        self.write_timeout = timeout;
+        self
+    }
+
+    #[must_use]
+    pub fn max_message_bytes(mut self, bytes: usize) -> Self {
+        self.max_message_bytes = bytes;
+        self
+    }
+
+    #[must_use]
+    pub fn max_frame_bytes(mut self, bytes: usize) -> Self {
+        self.max_frame_bytes = bytes;
+        self
+    }
+
+    #[must_use]
+    pub fn max_event_buffer_bytes(mut self, bytes: usize) -> Self {
+        self.max_event_buffer_bytes = bytes;
+        self
+    }
+
+    #[must_use]
+    pub fn event_capacity(mut self, capacity: usize) -> Self {
+        self.event_capacity = capacity;
+        self
+    }
+
+    #[must_use]
+    pub fn max_in_flight(mut self, maximum: usize) -> Self {
+        self.max_in_flight = maximum;
+        self
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct Event {
+    pub event: String,
+    #[serde(default)]
+    pub payload: Value,
+    #[serde(default)]
+    pub seq: Option<u64>,
+}
+
+/// Reason a request was rejected by an application-owned pre-dispatch guard.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DispatchRejection {
+    reason: String,
+}
+
+/// One-shot socket enqueue owned by the session task.
+///
+/// Application guards can hold their routing/ownership lock while calling
+/// [`Self::enqueue`], making validation and wire enqueue one atomic operation
+/// with respect to that lock.
+pub struct DispatchContext<'a> {
+    enqueue: &'a mut dyn FnMut(),
+    enqueued: bool,
+}
+
+impl DispatchContext<'_> {
+    pub fn enqueue(&mut self) {
+        if !self.enqueued {
+            (self.enqueue)();
+            self.enqueued = true;
+        }
+    }
+}
+
+impl DispatchRejection {
+    #[must_use]
+    pub fn new(reason: impl Into<String>) -> Self {
+        Self {
+            reason: reason.into(),
+        }
+    }
+
+    #[must_use]
+    pub fn reason(&self) -> &str {
+        &self.reason
+    }
+}
+
+/// Independent retained-event consumer that drains buffered events and then
+/// reports the session's terminal close reason.
+pub struct EventSubscription {
+    events: Arc<EventHub>,
+    cursor: u64,
+    closed: watch::Receiver<Option<SessionCloseCause>>,
+}
+
+impl EventSubscription {
+    pub async fn recv(&mut self) -> Result<Event, ClientError> {
+        self.events.recv(&mut self.cursor, &mut self.closed).await
+    }
+}
+
+struct EventHub {
+    state: StdMutex<EventHubState>,
+    notify: Notify,
+    capacity: usize,
+    max_bytes: usize,
+}
+
+#[derive(Default)]
+struct EventHubState {
+    frames: VecDeque<RetainedEvent>,
+    next_index: u64,
+    retained_bytes: usize,
+    closed: bool,
+}
+
+struct RetainedEvent {
+    index: u64,
+    raw: Arc<str>,
+}
+
+impl EventHub {
+    fn new(capacity: usize, max_bytes: usize) -> Self {
+        Self {
+            state: StdMutex::new(EventHubState::default()),
+            notify: Notify::new(),
+            capacity: capacity.max(1),
+            max_bytes: max_bytes.max(1),
+        }
+    }
+
+    fn initial_subscription(
+        self: &Arc<Self>,
+        closed: watch::Receiver<Option<SessionCloseCause>>,
+    ) -> EventSubscription {
+        EventSubscription {
+            events: Arc::clone(self),
+            cursor: 0,
+            closed,
+        }
+    }
+
+    fn subscribe(
+        self: &Arc<Self>,
+        closed: watch::Receiver<Option<SessionCloseCause>>,
+    ) -> EventSubscription {
+        let cursor = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .next_index;
+        EventSubscription {
+            events: Arc::clone(self),
+            cursor,
+            closed,
+        }
+    }
+
+    fn publish(&self, raw: Arc<str>) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let index = state.next_index;
+        state.next_index = state.next_index.wrapping_add(1);
+        if raw.len() > self.max_bytes {
+            drop(state);
+            self.notify.notify_waiters();
+            return;
+        }
+        while state.frames.len() >= self.capacity
+            || state.retained_bytes.saturating_add(raw.len()) > self.max_bytes
+        {
+            let Some(evicted) = state.frames.pop_front() else {
+                break;
+            };
+            state.retained_bytes = state.retained_bytes.saturating_sub(evicted.raw.len());
+        }
+        state.retained_bytes += raw.len();
+        state.frames.push_back(RetainedEvent { index, raw });
+        drop(state);
+        self.notify.notify_waiters();
+    }
+
+    fn close(&self) {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .closed = true;
+        self.notify.notify_waiters();
+    }
+
+    async fn recv(
+        &self,
+        cursor: &mut u64,
+        closed: &mut watch::Receiver<Option<SessionCloseCause>>,
+    ) -> Result<Event, ClientError> {
+        loop {
+            let notified = self.notify.notified();
+            let outcome = {
+                let state = self
+                    .state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let next = state.frames.iter().find(|frame| frame.index >= *cursor);
+                if let Some(frame) = next {
+                    if frame.index > *cursor {
+                        let lag = frame.index - *cursor;
+                        *cursor = frame.index;
+                        Some(Err(ClientError::EventLagged(lag)))
+                    } else {
+                        *cursor = cursor.wrapping_add(1);
+                        Some(parse_retained_event(&frame.raw))
+                    }
+                } else if *cursor < state.next_index {
+                    let lag = state.next_index - *cursor;
+                    *cursor = state.next_index;
+                    Some(Err(ClientError::EventLagged(lag)))
+                } else if state.closed {
+                    Some(Err(closed_event_error(closed)))
+                } else {
+                    None
+                }
+            };
+            if let Some(outcome) = outcome {
+                return outcome;
+            }
+            notified.await;
+        }
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum ClientError {
+    #[error("invalid Gateway URL: {0}")]
+    InvalidUrl(String),
+    #[error("invalid WebSocket request header: {0}")]
+    InvalidHeader(String),
+    #[error("plaintext WebSocket is allowed only for trusted local or private Gateways")]
+    InsecureRemoteGateway,
+    #[error("Gateway connection failed: {0}")]
+    Transport(String),
+    #[error("Gateway TLS connection failed: {0}")]
+    Tls(String),
+    #[error("Gateway connection timed out")]
+    ConnectTimeout,
+    #[error("Gateway connect challenge timed out")]
+    ChallengeTimeout,
+    #[error("Gateway connect challenge was invalid: {0}")]
+    InvalidChallenge(String),
+    #[error("connect parameter callback failed: {0}")]
+    ConnectParams(String),
+    #[error("Gateway rejected {method}: {code}: {message}")]
+    Gateway {
+        method: String,
+        code: String,
+        message: String,
+        details: Option<Value>,
+        retryable: Option<bool>,
+        retry_after_ms: Option<u64>,
+    },
+    #[error("Gateway request timed out: {0}")]
+    RequestTimeout(String),
+    #[error("Gateway request dispatch rejected: {0}")]
+    DispatchRejected(String),
+    #[error("Gateway write timed out: {0}")]
+    WriteTimeout(String),
+    #[error("Gateway session is closed: {0}")]
+    Closed(String),
+    #[error("Gateway frame was invalid: {0}")]
+    InvalidFrame(String),
+    #[error("event consumer fell behind by {0} events")]
+    EventLagged(u64),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ConnectChallenge {
+    pub nonce: String,
+    pub issued_at_ms: u64,
+}
+
+/// Identifies which bounded connect envelope a parameter callback must build.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConnectAttempt {
+    /// The caller's current protocol envelope.
+    Current,
+    /// The one allowed fallback selected by a structured Gateway rejection.
+    ProtocolFallback { expected_protocol: u32 },
+}
+
+pub struct GatewayClient;
+
+impl GatewayClient {
+    /// Connect after the Gateway supplies its nonce and signing timestamp.
+    pub async fn connect<F, Fut, E>(
+        config: GatewayClientConfig,
+        make_params: F,
+    ) -> Result<GatewaySession, ClientError>
+    where
+        F: FnOnce(ConnectChallenge) -> Fut,
+        Fut: Future<Output = Result<Value, E>>,
+        E: std::fmt::Display + Send + Sync + 'static,
+    {
+        connect_once(config, make_params).await
+    }
+
+    /// Connect with one bounded fallback for a structured protocol mismatch.
+    ///
+    /// A fallback is attempted only when the first `connect` response contains
+    /// the requested `details.expectedProtocol` and either
+    /// `details.code = "PROTOCOL_MISMATCH"` or a normalized protocol-mismatch
+    /// message. The replacement connection obtains a fresh challenge and
+    /// invokes `make_params` again.
+    pub async fn connect_with_protocol_fallback<F, Fut, E>(
+        config: GatewayClientConfig,
+        expected_protocol: u32,
+        mut make_params: F,
+    ) -> Result<GatewaySession, ClientError>
+    where
+        F: FnMut(ConnectChallenge, ConnectAttempt) -> Fut,
+        Fut: Future<Output = Result<Value, E>>,
+        E: std::fmt::Display + Send + Sync + 'static,
+    {
+        let first = Box::pin(connect_once(config.clone(), |challenge| {
+            make_params(challenge, ConnectAttempt::Current)
+        }))
+        .await;
+        match first {
+            Err(error) if is_expected_protocol_mismatch(&error, expected_protocol) => {
+                Box::pin(connect_once(config, |challenge| {
+                    make_params(
+                        challenge,
+                        ConnectAttempt::ProtocolFallback { expected_protocol },
+                    )
+                }))
+                .await
+            }
+            result => result,
+        }
+    }
+}
+
+fn is_expected_protocol_mismatch(error: &ClientError, expected_protocol: u32) -> bool {
+    let ClientError::Gateway {
+        method,
+        message,
+        details,
+        ..
+    } = error
+    else {
+        return false;
+    };
+    if method != "connect" {
+        return false;
+    }
+    let Some(details) = details.as_ref() else {
+        return false;
+    };
+    let matches_expected_protocol = details.get("expectedProtocol").and_then(Value::as_u64)
+        == Some(u64::from(expected_protocol));
+    let matches_mismatch = details.get("code").and_then(Value::as_str) == Some("PROTOCOL_MISMATCH")
+        || message.trim().to_lowercase().contains("protocol mismatch");
+    matches_expected_protocol && matches_mismatch
+}
+
+async fn connect_once<F, Fut, E>(
+    config: GatewayClientConfig,
+    make_params: F,
+) -> Result<GatewaySession, ClientError>
+where
+    F: FnOnce(ConnectChallenge) -> Fut,
+    Fut: Future<Output = Result<Value, E>>,
+    E: std::fmt::Display + Send + Sync + 'static,
+{
+    if matches!(config.tls_trust, TlsTrust::Pinned(_))
+        && config.request.uri().scheme_str() != Some("wss")
+    {
+        return Err(ClientError::Tls(
+            "Gateway TLS fingerprint requires a wss:// URL".into(),
+        ));
+    }
+    if config.tls_certificate_policy.is_some() && config.request.uri().scheme_str() != Some("wss") {
+        return Err(ClientError::InvalidUrl(
+            "Gateway TLS certificate policy requires a wss:// URL".into(),
+        ));
+    }
+    let websocket_config = WebSocketConfig::default()
+        .max_message_size(Some(config.max_message_bytes))
+        .max_frame_size(Some(config.max_frame_bytes));
+    let connector = match config.tls_trust {
+        TlsTrust::SystemRoots => None,
+        TlsTrust::Pinned(expected) => Some(Connector::Rustls(Arc::new(
+            pinned_tls_config(expected).map_err(ClientError::Transport)?,
+        ))),
+    };
+    let secure_endpoint = config.request.uri().scheme_str() == Some("wss");
+    let (mut socket, _) = tokio::time::timeout(config.connect_timeout, async {
+        if let Some(policy) = config.tls_certificate_policy {
+            connect_with_certificate_policy(config.request, websocket_config, policy).await
+        } else {
+            connect_async_tls_with_config(config.request, Some(websocket_config), false, connector)
+                .await
+                .map_err(|error| classify_connect_error(error, secure_endpoint))
+        }
+    })
+    .await
+    .map_err(|_| ClientError::ConnectTimeout)??;
+
+    let challenge = tokio::time::timeout(
+        config.challenge_timeout,
+        wait_for_challenge(&mut socket, config.write_timeout),
+    )
+    .await
+    .map_err(|_| ClientError::ChallengeTimeout)??;
+    let params = make_params(challenge)
+        .await
+        .map_err(|error| ClientError::ConnectParams(error.to_string()))?;
+
+    let connect_id = "rust-gateway-connect-1";
+    send_request(
+        &mut socket,
+        connect_id,
+        "connect",
+        params,
+        config.write_timeout,
+        None,
+    )
+    .await?;
+    let hello = tokio::time::timeout(
+        config.request_timeout,
+        wait_for_response(&mut socket, connect_id, "connect", config.write_timeout),
+    )
+    .await
+    .map_err(|_| ClientError::RequestTimeout("connect".into()))??;
+
+    // Keep requests and cancellations on one bounded, ordered stream so a
+    // timeout cannot overtake its request. Each request carries its
+    // semaphore permit through the session task, bounding queued and
+    // pending requests even if the caller drops its future.
+    // Keep one command slot available for cancellation when every RPC slot is
+    // occupied by a caller-owned request.
+    let command_capacity = config.max_in_flight.max(1).saturating_add(1);
+    let (command_tx, command_rx) = mpsc::channel(command_capacity);
+    let (control_tx, control_rx) = mpsc::channel(1);
+    let events = Arc::new(EventHub::new(
+        config.event_capacity,
+        config.max_event_buffer_bytes,
+    ));
+    let (activity_tx, activity_rx) = watch::channel(0_u64);
+    let (closed_tx, closed_rx) = watch::channel(None);
+    let (close_tx, close_rx) = watch::channel(false);
+    tokio::spawn(run_session(
+        socket,
+        SessionChannels {
+            commands: command_rx,
+            controls: control_rx,
+            events: Arc::clone(&events),
+            activity: activity_tx,
+            closed: closed_tx,
+            close: close_rx,
+        },
+        SessionLimits {
+            write_timeout: config.write_timeout,
+        },
+    ));
+
+    Ok(GatewaySession {
+        hello,
+        command_tx,
+        control_tx,
+        event_rx: Arc::new(Mutex::new(events.initial_subscription(closed_rx.clone()))),
+        events,
+        activity_rx,
+        closed_rx,
+        close_tx,
+        next_request_id: Arc::new(AtomicU64::new(1)),
+        request_timeout: config.request_timeout,
+        in_flight: Arc::new(Semaphore::new(config.max_in_flight.max(1))),
+        control_in_flight: Arc::new(Semaphore::new(1)),
+    })
+}
+
+async fn connect_with_certificate_policy(
+    request: tokio_tungstenite::tungstenite::http::Request<()>,
+    websocket_config: WebSocketConfig,
+    policy: Arc<dyn TlsCertificatePolicy>,
+) -> Result<
+    (
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+        tokio_tungstenite::tungstenite::handshake::client::Response,
+    ),
+    ClientError,
+> {
+    let host = request
+        .uri()
+        .host()
+        .ok_or_else(|| ClientError::InvalidUrl("missing host".into()))?
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_owned();
+    let port = request.uri().port_u16().unwrap_or(443);
+    let server_name = rustls::pki_types::ServerName::try_from(host.clone())
+        .map_err(|error| ClientError::Tls(error.to_string()))?;
+    let tcp = tokio::net::TcpStream::connect((host.as_str(), port))
+        .await
+        .map_err(|error| ClientError::Transport(error.to_string()))?;
+    let peer_addr = tcp
+        .peer_addr()
+        .map_err(|error| ClientError::Transport(error.to_string()))?;
+    let captured = Arc::new(StdMutex::new(CapturedTlsCertificate::default()));
+    let tls_config = deferred_tls_config(Arc::clone(&captured)).map_err(ClientError::Tls)?;
+    let stream = tokio_rustls::TlsConnector::from(Arc::new(tls_config))
+        .connect(server_name, tcp)
+        .await
+        .map_err(|error| ClientError::Tls(error.to_string()))?;
+    let evidence = std::mem::take(
+        &mut *captured
+            .lock()
+            .map_err(|_| ClientError::Tls("Gateway TLS evidence unavailable".into()))?,
+    );
+    if evidence.certificate_chain.is_empty() {
+        return Err(ClientError::Tls(
+            "Gateway TLS certificate unavailable".into(),
+        ));
+    }
+    policy
+        .verify(TlsPeerCertificate {
+            server_name: host,
+            port,
+            peer_addr,
+            certificate_chain: evidence.certificate_chain,
+            ocsp_response: evidence.ocsp_response,
+        })
+        .await
+        .map_err(ClientError::Tls)?;
+    // This is the first application write on this exact TLS stream. Dropping the enclosing
+    // connect future on policy rejection, timeout, or cancellation closes the connection.
+    tokio_tungstenite::client_async_with_config(
+        request,
+        tokio_tungstenite::MaybeTlsStream::Rustls(stream),
+        Some(websocket_config),
+    )
+    .await
+    .map_err(|error| classify_connect_error(error, true))
+}
+
+#[derive(Clone)]
+pub struct GatewaySession {
+    hello: Value,
+    command_tx: mpsc::Sender<SessionCommand>,
+    control_tx: mpsc::Sender<SessionControl>,
+    events: Arc<EventHub>,
+    event_rx: Arc<Mutex<EventSubscription>>,
+    activity_rx: watch::Receiver<u64>,
+    closed_rx: watch::Receiver<Option<SessionCloseCause>>,
+    close_tx: watch::Sender<bool>,
+    next_request_id: Arc<AtomicU64>,
+    request_timeout: Duration,
+    in_flight: Arc<Semaphore>,
+    control_in_flight: Arc<Semaphore>,
+}
+
+impl GatewaySession {
+    /// Send a WebSocket keepalive and wait for its matching pong.
+    /// This uses separately bounded control capacity and never consumes a Gateway RPC slot.
+    pub async fn ping(&self) -> Result<(), ClientError> {
+        let id = format!(
+            "rust-gateway-ping-{}",
+            self.next_request_id.fetch_add(1, Ordering::Relaxed)
+        );
+        let deadline = Instant::now() + self.request_timeout;
+        let permit =
+            tokio::time::timeout_at(deadline, self.control_in_flight.clone().acquire_owned())
+                .await
+                .map_err(|_| ClientError::RequestTimeout("ping".into()))?
+                .map_err(|_| ClientError::Closed("session retired".into()))?;
+        let (reply, response) = oneshot::channel();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let mut cancellation =
+            RequestCancellation::new(id.clone(), self.command_tx.clone(), cancelled.clone());
+        tokio::time::timeout_at(
+            deadline,
+            self.control_tx.send(SessionControl::Ping {
+                id,
+                reply,
+                permit,
+                deadline,
+                cancelled,
+            }),
+        )
+        .await
+        .map_err(|_| ClientError::RequestTimeout("ping".into()))?
+        .map_err(|_| self.closed_error())?;
+        let result = tokio::time::timeout_at(deadline, response)
+            .await
+            .map_err(|_| ClientError::RequestTimeout("ping".into()))?
+            .map_err(|_| self.closed_error())?;
+        cancellation.disarm();
+        result.map(|_| ())
+    }
+
+    #[must_use]
+    pub fn hello(&self) -> &Value {
+        &self.hello
+    }
+
+    #[must_use]
+    pub fn subscribe(&self) -> EventSubscription {
+        self.events.subscribe(self.closed_rx.clone())
+    }
+
+    #[must_use]
+    pub fn subscribe_transport_activity(&self) -> watch::Receiver<u64> {
+        self.activity_rx.clone()
+    }
+
+    pub async fn next_event(&self) -> Result<Event, ClientError> {
+        let mut events = self.event_rx.lock().await;
+        events.recv().await
+    }
+
+    pub async fn request(
+        &self,
+        method: impl Into<String>,
+        params: Value,
+    ) -> Result<Value, ClientError> {
+        self.request_inner(
+            method.into(),
+            params,
+            Some(Instant::now() + self.request_timeout),
+            None,
+        )
+        .await
+    }
+
+    /// Send a request before `deadline` if its application-owned guard still accepts dispatch.
+    ///
+    /// The guard runs synchronously in the session task after the socket becomes writable and
+    /// immediately before the request frame is handed to the WebSocket sink. It must not block.
+    pub async fn request_with_deadline<G>(
+        &self,
+        method: impl Into<String>,
+        params: Value,
+        deadline: Instant,
+        guard: G,
+    ) -> Result<Value, ClientError>
+    where
+        G: FnOnce() -> Result<(), DispatchRejection> + Send + 'static,
+    {
+        self.request_inner(
+            method.into(),
+            params,
+            Some(deadline),
+            Some(Box::new(move |dispatch| {
+                guard()?;
+                dispatch.enqueue();
+                Ok(())
+            })),
+        )
+        .await
+    }
+
+    /// Send a request before `deadline`, allowing an application-owned guard to
+    /// retain its authority lock through the WebSocket enqueue.
+    ///
+    /// The guard runs synchronously in the session task after the socket becomes
+    /// writable. It must call [`DispatchContext::enqueue`] exactly where the
+    /// request becomes authorized, return `Ok(())` immediately afterward, and
+    /// must not block. Rejecting after enqueue retires the session because the
+    /// frame can no longer be withdrawn from the WebSocket sink.
+    pub async fn request_with_dispatch_deadline<G>(
+        &self,
+        method: impl Into<String>,
+        params: Value,
+        deadline: Instant,
+        guard: G,
+    ) -> Result<Value, ClientError>
+    where
+        G: for<'a> FnOnce(&mut DispatchContext<'a>) -> Result<(), DispatchRejection>
+            + Send
+            + 'static,
+    {
+        self.request_inner(method.into(), params, Some(deadline), Some(Box::new(guard)))
+            .await
+    }
+
+    /// Send a request whose lifetime is owned by the caller instead of the default deadline.
+    /// Dropping the future retires its correlation and releases capacity. Socket writes remain bounded.
+    pub async fn request_until_cancelled(
+        &self,
+        method: impl Into<String>,
+        params: Value,
+    ) -> Result<Value, ClientError> {
+        self.request_inner(method.into(), params, None, None).await
+    }
+
+    async fn request_inner(
+        &self,
+        method: String,
+        params: Value,
+        deadline: Option<Instant>,
+        guard: Option<DispatchGuard>,
+    ) -> Result<Value, ClientError> {
+        if method.is_empty() {
+            return Err(ClientError::InvalidFrame(
+                "request method must not be empty".into(),
+            ));
+        }
+        let permit = before_deadline(deadline, self.in_flight.clone().acquire_owned())
+            .await
+            .map_err(|_| ClientError::RequestTimeout(method.clone()))?
+            .map_err(|_| self.closed_error())?;
+        let id = format!(
+            "rust-gateway-{}",
+            self.next_request_id.fetch_add(1, Ordering::Relaxed)
+        );
+        let (reply_tx, reply_rx) = oneshot::channel();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        before_deadline(
+            deadline,
+            self.command_tx.send(SessionCommand::Request {
+                id: id.clone(),
+                method: method.clone(),
+                params,
+                reply: reply_tx,
+                permit,
+                deadline,
+                cancelled: Arc::clone(&cancelled),
+                guard,
+            }),
+        )
+        .await
+        .map_err(|_| ClientError::RequestTimeout(method.clone()))?
+        .map_err(|_| self.closed_error())?;
+
+        let mut cancellation = RequestCancellation::new(id, self.command_tx.clone(), cancelled);
+        match before_deadline(deadline, reply_rx).await {
+            Ok(Ok(result)) => {
+                cancellation.disarm();
+                result
+            }
+            Ok(Err(_)) => {
+                cancellation.disarm();
+                Err(self.closed_error())
+            }
+            Err(_) => Err(ClientError::RequestTimeout(method)),
+        }
+    }
+
+    pub async fn close(&self) {
+        let _ = self.close_tx.send(true);
+    }
+
+    #[must_use]
+    pub fn is_closed(&self) -> bool {
+        self.closed_rx.borrow().is_some()
+    }
+
+    #[must_use]
+    pub fn is_retired(&self) -> bool {
+        *self.close_tx.borrow() || self.is_closed()
+    }
+
+    pub async fn wait_closed(&self) -> Result<(), ClientError> {
+        let mut closed = self.closed_rx.clone();
+        loop {
+            if let Some(reason) = closed.borrow().as_ref() {
+                return Err(reason.to_client_error());
+            }
+            if closed.changed().await.is_err() {
+                return Err(ClientError::Closed("session task ended".into()));
+            }
+        }
+    }
+
+    fn closed_error(&self) -> ClientError {
+        self.closed_rx.borrow().as_ref().map_or_else(
+            || ClientError::Closed("session task ended".into()),
+            SessionCloseCause::to_client_error,
+        )
+    }
+}
+
+async fn before_deadline<F: Future>(
+    deadline: Option<Instant>,
+    future: F,
+) -> Result<F::Output, tokio::time::error::Elapsed> {
+    match deadline {
+        Some(deadline) => tokio::time::timeout_at(deadline, future).await,
+        None => Ok(future.await),
+    }
+}
+
+fn parse_retained_event(event: &str) -> Result<Event, ClientError> {
+    serde_json::from_str(event).map_err(|error| ClientError::InvalidFrame(error.to_string()))
+}
+
+fn closed_event_error(closed: &watch::Receiver<Option<SessionCloseCause>>) -> ClientError {
+    closed.borrow().as_ref().map_or_else(
+        || ClientError::Closed("session task ended".into()),
+        SessionCloseCause::to_client_error,
+    )
+}
+
+struct RequestCancellation {
+    id: Option<String>,
+    commands: mpsc::Sender<SessionCommand>,
+    cancelled: Arc<AtomicBool>,
+}
+
+impl RequestCancellation {
+    fn new(id: String, commands: mpsc::Sender<SessionCommand>, cancelled: Arc<AtomicBool>) -> Self {
+        Self {
+            id: Some(id),
+            commands,
+            cancelled,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.id = None;
+    }
+}
+
+impl Drop for RequestCancellation {
+    fn drop(&mut self) {
+        if let Some(id) = self.id.take() {
+            self.cancelled.store(true, Ordering::Release);
+            let _ = self.commands.try_send(SessionCommand::CancelRequest { id });
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+enum SessionCloseCause {
+    Closed(String),
+    Transport(String),
+    WriteTimeout(String),
+}
+
+impl SessionCloseCause {
+    fn to_client_error(&self) -> ClientError {
+        match self {
+            Self::Closed(reason) => ClientError::Closed(reason.clone()),
+            Self::Transport(reason) => ClientError::Transport(reason.clone()),
+            Self::WriteTimeout(operation) => ClientError::WriteTimeout(operation.clone()),
+        }
+    }
+
+    fn pending_request_error(&self, method: &str) -> ClientError {
+        let suffix = format!("; request {method} did not complete");
+        match self {
+            Self::Closed(reason) => ClientError::Closed(format!("{reason}{suffix}")),
+            Self::Transport(reason) => ClientError::Transport(format!("{reason}{suffix}")),
+            Self::WriteTimeout(operation) => {
+                ClientError::WriteTimeout(format!("{operation}{suffix}"))
+            }
+        }
+    }
+}
+
+enum SessionCommand {
+    Request {
+        id: String,
+        method: String,
+        params: Value,
+        reply: oneshot::Sender<Result<Value, ClientError>>,
+        permit: tokio::sync::OwnedSemaphorePermit,
+        deadline: Option<Instant>,
+        cancelled: Arc<AtomicBool>,
+        guard: Option<DispatchGuard>,
+    },
+    CancelRequest {
+        id: String,
+    },
+}
+
+enum SessionControl {
+    Ping {
+        id: String,
+        reply: oneshot::Sender<Result<Value, ClientError>>,
+        permit: tokio::sync::OwnedSemaphorePermit,
+        deadline: Instant,
+        cancelled: Arc<AtomicBool>,
+    },
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type")]
+enum IncomingFrame {
+    #[serde(rename = "event")]
+    Event {
+        event: String,
+        #[serde(default)]
+        payload: Value,
+    },
+    #[serde(rename = "res")]
+    Response {
+        id: String,
+        ok: bool,
+        #[serde(default)]
+        payload: Value,
+        #[serde(default)]
+        error: Option<GatewayErrorShape>,
+    },
+}
+
+#[derive(Deserialize)]
+struct GatewayErrorShape {
+    #[serde(default)]
+    code: String,
+    #[serde(default)]
+    message: String,
+    #[serde(default)]
+    details: Option<Value>,
+    #[serde(default)]
+    retryable: Option<bool>,
+    #[serde(default, rename = "retryAfterMs")]
+    retry_after_ms: Option<u64>,
+}
+
+async fn wait_for_challenge<S>(
+    socket: &mut tokio_tungstenite::WebSocketStream<S>,
+    write_timeout: Duration,
+) -> Result<ConnectChallenge, ClientError>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    loop {
+        match next_frame(socket, write_timeout).await? {
+            IncomingFrame::Event { event, payload, .. } if event == "connect.challenge" => {
+                let nonce = payload
+                    .get("nonce")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| ClientError::InvalidChallenge("missing nonce".into()))?;
+                let issued_at_ms = payload
+                    .get("ts")
+                    .and_then(Value::as_u64)
+                    .ok_or_else(|| ClientError::InvalidChallenge("missing timestamp".into()))?;
+                return Ok(ConnectChallenge {
+                    nonce: nonce.into(),
+                    issued_at_ms,
+                });
+            }
+            IncomingFrame::Event { .. } | IncomingFrame::Response { .. } => {}
+        }
+    }
+}
+
+async fn wait_for_response<S>(
+    socket: &mut tokio_tungstenite::WebSocketStream<S>,
+    expected_id: &str,
+    method: &str,
+    write_timeout: Duration,
+) -> Result<Value, ClientError>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    loop {
+        if let IncomingFrame::Response {
+            id,
+            ok,
+            payload,
+            error,
+        } = next_frame(socket, write_timeout).await?
+        {
+            if id == expected_id {
+                return response_result(method, ok, payload, error);
+            }
+        }
+    }
+}
+
+async fn next_frame<S>(
+    socket: &mut tokio_tungstenite::WebSocketStream<S>,
+    write_timeout: Duration,
+) -> Result<IncomingFrame, ClientError>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    loop {
+        let message = socket
+            .next()
+            .await
+            .ok_or_else(|| ClientError::Closed("Gateway ended the WebSocket stream".into()))?
+            .map_err(|error| ClientError::Transport(error.to_string()))?;
+        match message {
+            Message::Text(text) => {
+                return serde_json::from_str(text.as_str())
+                    .map_err(|error| ClientError::InvalidFrame(error.to_string()));
+            }
+            Message::Ping(payload) => {
+                send_message(socket, Message::Pong(payload), write_timeout, "pong").await?
+            }
+            Message::Close(frame) => return Err(ClientError::Closed(format_close(frame.as_ref()))),
+            Message::Binary(_) | Message::Pong(_) | Message::Frame(_) => {}
+        }
+    }
+}
+
+async fn send_request<S>(
+    socket: &mut tokio_tungstenite::WebSocketStream<S>,
+    id: &str,
+    method: &str,
+    params: Value,
+    write_timeout: Duration,
+    guard: Option<DispatchGuard>,
+) -> Result<(), ClientError>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    let frame = json!({ "type": "req", "id": id, "method": method, "params": params });
+    send_message_guarded(
+        socket,
+        Message::Text(frame.to_string().into()),
+        write_timeout,
+        method,
+        guard,
+    )
+    .await
+}
+
+async fn send_message<S>(
+    socket: &mut tokio_tungstenite::WebSocketStream<S>,
+    message: Message,
+    timeout: Duration,
+    operation: &str,
+) -> Result<(), ClientError>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    send_message_guarded(socket, message, timeout, operation, None).await
+}
+
+async fn send_message_guarded<S>(
+    socket: &mut tokio_tungstenite::WebSocketStream<S>,
+    message: Message,
+    timeout: Duration,
+    operation: &str,
+    guard: Option<DispatchGuard>,
+) -> Result<(), ClientError>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    tokio::time::timeout(timeout, async {
+        poll_fn(|context| Pin::new(&mut *socket).poll_ready(context))
+            .await
+            .map_err(|error| ClientError::Transport(error.to_string()))?;
+        if let Some(guard) = guard {
+            let mut message = Some(message);
+            let mut enqueue_result = None;
+            let mut enqueue = || {
+                enqueue_result = Some(
+                    Pin::new(&mut *socket)
+                        .start_send(message.take().expect("dispatch frame already consumed"))
+                        .map_err(|error| ClientError::Transport(error.to_string())),
+                );
+            };
+            let (guard_result, enqueued) = {
+                let mut dispatch = DispatchContext {
+                    enqueue: &mut enqueue,
+                    enqueued: false,
+                };
+                let result = guard(&mut dispatch);
+                (result, dispatch.enqueued)
+            };
+            if let Err(rejection) = guard_result {
+                if !enqueued {
+                    return Err(ClientError::DispatchRejected(rejection.reason));
+                }
+                enqueue_result.expect("enqueued dispatch must record a result")?;
+                return Err(ClientError::Closed(format!(
+                    "dispatch guard rejected after enqueue: {}",
+                    rejection.reason
+                )));
+            }
+            if !enqueued {
+                return Err(ClientError::DispatchRejected(
+                    "dispatch guard did not enqueue the request".into(),
+                ));
+            }
+            enqueue_result.expect("enqueued dispatch must record a result")?;
+        } else {
+            Pin::new(&mut *socket)
+                .start_send(message)
+                .map_err(|error| ClientError::Transport(error.to_string()))?;
+        }
+        socket
+            .flush()
+            .await
+            .map_err(|error| ClientError::Transport(error.to_string()))
+    })
+    .await
+    .map_err(|_| ClientError::WriteTimeout(operation.into()))?
+}
+
+struct SessionChannels {
+    commands: mpsc::Receiver<SessionCommand>,
+    controls: mpsc::Receiver<SessionControl>,
+    events: Arc<EventHub>,
+    activity: watch::Sender<u64>,
+    closed: watch::Sender<Option<SessionCloseCause>>,
+    close: watch::Receiver<bool>,
+}
+
+#[derive(Clone, Copy)]
+struct SessionLimits {
+    write_timeout: Duration,
+}
+
+async fn run_session<S>(
+    mut socket: tokio_tungstenite::WebSocketStream<S>,
+    channels: SessionChannels,
+    limits: SessionLimits,
+) where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    let SessionChannels {
+        mut commands,
+        mut controls,
+        events,
+        activity,
+        closed,
+        mut close,
+    } = channels;
+    let SessionLimits { write_timeout } = limits;
+    let mut pending: HashMap<String, PendingRequest> = HashMap::new();
+    let close_reason = loop {
+        let cancelled_pending = pending
+            .iter()
+            .filter(|(_, request)| request.cancelled.load(Ordering::Acquire))
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+        for id in cancelled_pending {
+            pending.remove(&id);
+        }
+        let next_deadline = pending
+            .values()
+            .filter_map(|request: &PendingRequest| request.deadline)
+            .min();
+        let deadline = async move {
+            if let Some(deadline) = next_deadline {
+                tokio::time::sleep_until(deadline).await;
+            } else {
+                std::future::pending::<()>().await;
+            }
+        };
+        tokio::pin!(deadline);
+        tokio::select! {
+            changed = close.changed() => {
+                let _ = changed;
+                let _ = tokio::time::timeout(write_timeout, socket.close(None)).await;
+                break SessionCloseCause::Closed("closed by client".into());
+            }
+            () = &mut deadline => {
+                let now = Instant::now();
+                let expired = pending
+                    .iter()
+                    .filter(|(_, request)| request.deadline.is_some_and(|deadline| deadline <= now))
+                    .map(|(id, _)| id.clone())
+                    .collect::<Vec<_>>();
+                for id in expired {
+                    if let Some(request) = pending.remove(&id) {
+                        let _ = request.reply.send(Err(ClientError::RequestTimeout(
+                            request.method,
+                        )));
+                    }
+                }
+            }
+            Some(SessionControl::Ping { id, reply, permit, deadline, cancelled }) = controls.recv() => {
+                if cancelled.load(Ordering::Acquire) || deadline <= Instant::now() {
+                    let _ = reply.send(Err(ClientError::RequestTimeout("ping".into())));
+                    continue;
+                }
+                match send_message(&mut socket, Message::Ping(id.clone().into_bytes().into()), write_timeout, "ping").await {
+                    Ok(()) => {
+                        pending.insert(id, PendingRequest { method: "ping".into(), reply, _permit: permit, deadline: Some(deadline), cancelled });
+                    }
+                    Err(error) => {
+                        let reason = error.to_string();
+                        let _ = reply.send(Err(error));
+                        break SessionCloseCause::Transport(reason);
+                    }
+                }
+            }
+            command = commands.recv() => {
+                match command {
+                    Some(SessionCommand::Request { id, method, params, reply, permit, deadline, cancelled, guard }) => {
+                        if cancelled.load(Ordering::Acquire) {
+                            continue;
+                        }
+                        if deadline.is_some_and(|deadline| deadline <= Instant::now()) {
+                            let _ = reply.send(Err(ClientError::RequestTimeout(method)));
+                            continue;
+                        }
+                        let remaining = deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
+                        let request_deadline_wins = remaining.is_some_and(|remaining| remaining <= write_timeout);
+                        match send_request(
+                            &mut socket,
+                            &id,
+                            &method,
+                            params,
+                            remaining.map_or(write_timeout, |remaining| write_timeout.min(remaining)),
+                            guard,
+                        ).await {
+                            Ok(()) => {
+                                pending.insert(id, PendingRequest { method, reply, _permit: permit, deadline, cancelled });
+                            }
+                            Err(ClientError::WriteTimeout(operation)) => {
+                                let result = if request_deadline_wins {
+                                    Err(ClientError::RequestTimeout(method))
+                                } else {
+                                    Err(ClientError::WriteTimeout(operation.clone()))
+                                };
+                                let _ = reply.send(result);
+                                break SessionCloseCause::WriteTimeout(operation);
+                            }
+                            Err(error @ ClientError::DispatchRejected(_)) => {
+                                let _ = reply.send(Err(error));
+                            }
+                            Err(ClientError::Closed(reason)) => {
+                                let _ = reply.send(Err(ClientError::Closed(reason.clone())));
+                                break SessionCloseCause::Closed(reason);
+                            }
+                            Err(error) => {
+                                let reason = error.to_string();
+                                let _ = reply.send(Err(error));
+                                break SessionCloseCause::Transport(reason);
+                            }
+                        }
+                    }
+                    Some(SessionCommand::CancelRequest { id }) => {
+                        pending.remove(&id);
+                    }
+                    None => {
+                        let _ = tokio::time::timeout(write_timeout, socket.close(None)).await;
+                        break SessionCloseCause::Closed("closed by client".into());
+                    }
+                }
+            }
+            message = socket.next() => {
+                if matches!(&message, Some(Ok(_))) {
+                    activity.send_modify(|generation| *generation = generation.wrapping_add(1));
+                }
+                match message {
+                    Some(Ok(Message::Text(text))) => {
+                        match serde_json::from_str::<IncomingFrame>(text.as_str()) {
+                            Ok(IncomingFrame::Event { .. }) => {
+                                events.publish(Arc::from(text.as_str()));
+                            }
+                            Ok(IncomingFrame::Response { id, ok, payload, error }) => {
+                                if let Some(request) = pending.remove(&id) {
+                                    let _ = request.reply.send(response_result(
+                                        &request.method,
+                                        ok,
+                                        payload,
+                                        error,
+                                    ));
+                                }
+                            }
+                            // Match the authoritative TypeScript client: unknown text frames are
+                            // not responses or events, regardless of request timing.
+                            Err(_) => {}
+                        }
+                    }
+                    Some(Ok(Message::Ping(payload))) => {
+                        if let Err(error) = send_message(
+                            &mut socket,
+                            Message::Pong(payload),
+                            write_timeout,
+                            "pong",
+                        ).await {
+                            break session_close_cause(error);
+                        }
+                    }
+                    Some(Ok(Message::Close(frame))) => {
+                        break SessionCloseCause::Closed(format_close(frame.as_ref()));
+                    }
+                    Some(Ok(Message::Pong(payload))) => {
+                        if let Ok(id) = std::str::from_utf8(&payload) {
+                            if id.starts_with("rust-gateway-ping-") {
+                                if let Some(request) = pending.remove(id) {
+                                    let _ = request.reply.send(Ok(Value::Null));
+                                }
+                            }
+                        }
+                    }
+                    Some(Ok(Message::Binary(_) | Message::Frame(_))) => {}
+                    Some(Err(error)) => break SessionCloseCause::Transport(error.to_string()),
+                    None => break SessionCloseCause::Closed("Gateway ended the WebSocket stream".into()),
+                }
+            }
+        }
+    };
+
+    for (_, request) in pending {
+        let _ = request
+            .reply
+            .send(Err(close_reason.pending_request_error(&request.method)));
+    }
+    let _ = closed.send(Some(close_reason));
+    events.close();
+}
+
+struct PendingRequest {
+    method: String,
+    reply: oneshot::Sender<Result<Value, ClientError>>,
+    _permit: tokio::sync::OwnedSemaphorePermit,
+    deadline: Option<Instant>,
+    cancelled: Arc<AtomicBool>,
+}
+
+fn session_close_cause(error: ClientError) -> SessionCloseCause {
+    match error {
+        ClientError::Closed(reason) => SessionCloseCause::Closed(reason),
+        ClientError::WriteTimeout(operation) => SessionCloseCause::WriteTimeout(operation),
+        error => SessionCloseCause::Transport(error.to_string()),
+    }
+}
+
+fn response_result(
+    method: &str,
+    ok: bool,
+    payload: Value,
+    error: Option<GatewayErrorShape>,
+) -> Result<Value, ClientError> {
+    if ok {
+        return Ok(payload);
+    }
+    let mut error = error.unwrap_or(GatewayErrorShape {
+        code: "UNKNOWN".into(),
+        message: "Gateway rejected the request".into(),
+        details: None,
+        retryable: None,
+        retry_after_ms: None,
+    });
+    if error.code.is_empty() {
+        error.code = "UNKNOWN".into();
+    }
+    if error.message.is_empty() {
+        error.message = "Gateway rejected the request".into();
+    }
+    Err(ClientError::Gateway {
+        method: method.into(),
+        code: error.code,
+        message: error.message,
+        details: error.details,
+        retryable: error.retryable,
+        retry_after_ms: error.retry_after_ms,
+    })
+}
+
+fn classify_connect_error(error: TungsteniteError, secure_endpoint: bool) -> ClientError {
+    if matches!(error, TungsteniteError::Tls(_))
+        || secure_endpoint
+            && matches!(
+                &error,
+                TungsteniteError::Io(io_error)
+                    if io_error.kind() == std::io::ErrorKind::InvalidData
+            )
+        || error.to_string().contains(crate::TLS_PIN_MISMATCH_ERROR)
+    {
+        ClientError::Tls(error.to_string())
+    } else {
+        ClientError::Transport(error.to_string())
+    }
+}
+
+fn validate_gateway_url(value: &str) -> Result<(), ClientError> {
+    let url = Url::parse(value).map_err(|error| ClientError::InvalidUrl(error.to_string()))?;
+    match url.scheme() {
+        "wss" => Ok(()),
+        "ws" if is_trusted_plaintext_host(&url) => Ok(()),
+        "ws" => Err(ClientError::InsecureRemoteGateway),
+        scheme => Err(ClientError::InvalidUrl(format!(
+            "unsupported scheme {scheme}; expected ws or wss"
+        ))),
+    }
+}
+
+fn is_trusted_plaintext_host(url: &Url) -> bool {
+    match url.host() {
+        Some(Host::Ipv4(address)) => is_trusted_plaintext_address(&IpAddr::V4(address)),
+        Some(Host::Ipv6(address)) => is_trusted_plaintext_address(&IpAddr::V6(address)),
+        Some(Host::Domain(host)) => {
+            let host = host.to_ascii_lowercase();
+            host == "localhost" || host.ends_with(".local") || host.ends_with(".ts.net")
+        }
+        None => false,
+    }
+}
+
+fn is_trusted_plaintext_address(address: &IpAddr) -> bool {
+    match address {
+        IpAddr::V4(address) => {
+            let [first, second, _, _] = address.octets();
+            address.is_loopback()
+                || address.is_private()
+                || address.is_link_local()
+                || (first == 100 && (64..=127).contains(&second))
+        }
+        IpAddr::V6(address) => {
+            if let Some(address) = address.to_ipv4_mapped() {
+                return is_trusted_plaintext_address(&IpAddr::V4(address));
+            }
+            let first = address.segments()[0];
+            address.is_loopback() || first & 0xfe00 == 0xfc00 || first & 0xffc0 == 0xfe80
+        }
+    }
+}
+
+fn format_close(frame: Option<&tokio_tungstenite::tungstenite::protocol::CloseFrame>) -> String {
+    frame.map_or_else(
+        || "Gateway closed the WebSocket".into(),
+        |frame| {
+            format!(
+                "Gateway closed the WebSocket ({}): {}",
+                frame.code, frame.reason
+            )
+        },
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        pin::Pin,
+        task::{Context, Poll},
+    };
+    use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+    use tokio_tungstenite::tungstenite::protocol::Role;
+
+    struct StalledIo;
+
+    impl AsyncRead for StalledIo {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            _buf: &mut ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            Poll::Pending
+        }
+    }
+
+    impl AsyncWrite for StalledIo {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            _buf: &[u8],
+        ) -> Poll<std::io::Result<usize>> {
+            Poll::Pending
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Pending
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Pending
+        }
+    }
+
+    #[test]
+    fn protocol_fallback_matches_structured_code_or_normalized_message() {
+        let error = |message: &str, details: Value| ClientError::Gateway {
+            method: "connect".into(),
+            code: "INVALID_REQUEST".into(),
+            message: message.into(),
+            details: Some(details),
+            retryable: None,
+            retry_after_ms: None,
+        };
+
+        assert!(is_expected_protocol_mismatch(
+            &error(
+                "rejected",
+                json!({"code":"PROTOCOL_MISMATCH","expectedProtocol":3})
+            ),
+            3
+        ));
+        assert!(is_expected_protocol_mismatch(
+            &error(
+                "  Protocol Mismatch: expected v3  ",
+                json!({"expectedProtocol":3})
+            ),
+            3
+        ));
+        assert!(!is_expected_protocol_mismatch(
+            &error("protocol mismatch", json!({"expectedProtocol":4})),
+            3
+        ));
+    }
+
+    #[test]
+    fn secure_invalid_data_handshakes_are_tls_failures() {
+        let invalid_data = || {
+            TungsteniteError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "certificate validation failed",
+            ))
+        };
+        assert!(matches!(
+            classify_connect_error(invalid_data(), true),
+            ClientError::Tls(_)
+        ));
+        assert!(matches!(
+            classify_connect_error(invalid_data(), false),
+            ClientError::Transport(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn event_hub_evicts_by_count_and_aggregate_bytes() {
+        let (_closed_tx, closed_rx) = watch::channel(None);
+        let events = Arc::new(EventHub::new(3, 9));
+        let mut subscription = events.initial_subscription(closed_rx);
+        events.publish(Arc::from(r#"{"a":1}"#));
+        events.publish(Arc::from(r#"{"b":2}"#));
+        assert!(matches!(
+            subscription.recv().await,
+            Err(ClientError::EventLagged(1))
+        ));
+    }
+
+    #[tokio::test]
+    async fn stalled_writer_closes_session_and_releases_pending_request() {
+        let socket =
+            tokio_tungstenite::WebSocketStream::from_raw_socket(StalledIo, Role::Client, None)
+                .await;
+        let (command_tx, command_rx) = mpsc::channel(1);
+        let (_control_tx, control_rx) = mpsc::channel(1);
+        let events = Arc::new(EventHub::new(1, 1024));
+        let (activity_tx, _activity_rx) = watch::channel(0);
+        let (closed_tx, mut closed_rx) = watch::channel(None);
+        let mut event_rx = events.initial_subscription(closed_rx.clone());
+        let (_close_tx, close_rx) = watch::channel(false);
+        let task = tokio::spawn(run_session(
+            socket,
+            SessionChannels {
+                commands: command_rx,
+                controls: control_rx,
+                events,
+                activity: activity_tx,
+                closed: closed_tx,
+                close: close_rx,
+            },
+            SessionLimits {
+                write_timeout: Duration::from_millis(20),
+            },
+        ));
+
+        let permits = Arc::new(Semaphore::new(1));
+        let permit = permits.clone().acquire_owned().await.unwrap();
+        let (reply_tx, reply_rx) = oneshot::channel();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        command_tx
+            .send(SessionCommand::Request {
+                id: "stalled-request".into(),
+                method: "node.stalled".into(),
+                params: json!({}),
+                reply: reply_tx,
+                permit,
+                deadline: Some(Instant::now() + Duration::from_secs(1)),
+                cancelled,
+                guard: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(1), reply_rx)
+                .await
+                .expect("stalled write must be bounded")
+                .unwrap(),
+            Err(ClientError::WriteTimeout(operation)) if operation == "node.stalled"
+        ));
+        closed_rx.changed().await.unwrap();
+        assert!(matches!(
+            closed_rx.borrow().as_ref(),
+            Some(SessionCloseCause::WriteTimeout(operation)) if operation == "node.stalled"
+        ));
+        assert!(matches!(
+            event_rx.recv().await,
+            Err(ClientError::WriteTimeout(_))
+        ));
+        task.await.unwrap();
+        assert_eq!(permits.available_permits(), 1);
+    }
+
+    #[tokio::test]
+    async fn cancellation_state_survives_a_full_command_queue() {
+        let (commands, mut receiver) = mpsc::channel(1);
+        commands
+            .send(SessionCommand::CancelRequest {
+                id: "queue-filler".into(),
+            })
+            .await
+            .unwrap();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        drop(RequestCancellation::new(
+            "abandoned".into(),
+            commands,
+            Arc::clone(&cancelled),
+        ));
+
+        assert!(cancelled.load(Ordering::Acquire));
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(SessionCommand::CancelRequest { id }) if id == "queue-filler"
+        ));
+    }
+
+    #[test]
+    fn message_and_frame_limits_have_independent_tauri_compatible_defaults() {
+        let config = GatewayClientConfig::new("ws://127.0.0.1:18789").unwrap();
+        assert_eq!(config.max_message_bytes, 64 * 1024 * 1024);
+        assert_eq!(config.max_frame_bytes, 16 * 1024 * 1024);
+
+        let config = config
+            .max_message_bytes(32 * 1024 * 1024)
+            .max_frame_bytes(8 * 1024 * 1024);
+        assert_eq!(config.max_message_bytes, 32 * 1024 * 1024);
+        assert_eq!(config.max_frame_bytes, 8 * 1024 * 1024);
+    }
+}

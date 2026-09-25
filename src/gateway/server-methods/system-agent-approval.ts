@@ -57,7 +57,7 @@ async function retireSystemAgentProposal(
     if (pending?.proposalHash === proposalHash) {
       // Retire the exact local owner before closing its record; storage failure cannot retain it.
       session.pendingApproval = undefined;
-      manager?.forceDenyIfRuntimeAuthorityClosed(pending.id);
+      await manager?.forceDenyIfRuntimeAuthorityClosed(pending.id);
     }
   } finally {
     await session.engine.resolveOperatorApproval(null, proposalHash, undefined, "cancelled");
@@ -73,8 +73,8 @@ async function reconcileSystemAgentApproval(
   if (!pending) {
     return undefined;
   }
-  const closed = manager?.forceDenyIfRuntimeAuthorityClosed(pending.id);
-  const snapshot = manager?.getSnapshot(pending.id);
+  const closed = await manager?.forceDenyIfRuntimeAuthorityClosed(pending.id);
+  const snapshot = await manager?.getSnapshot(pending.id);
   if (
     !closed &&
     snapshot &&
@@ -165,7 +165,10 @@ export async function prepareDelegatedSystemAgentApproval(params: {
   await reconcileSystemAgentApproval(params.session, manager, runtimeApprovalAuthority);
   assertLiveApprovalAuthority();
 
-  return async (proposal) => {
+  return async function resolveProposal(
+    proposal: Parameters<DelegatedProposalResolver>[0],
+    corrective = false,
+  ): ReturnType<DelegatedProposalResolver> {
     const withProposalFailureCleanup = async <T>(resolve: () => Promise<T>): Promise<T> => {
       try {
         return await resolve();
@@ -205,6 +208,38 @@ export async function prepareDelegatedSystemAgentApproval(params: {
           terminalStatus,
         );
       };
+      const resolveCorrection = async (
+        reply: NonNullable<Awaited<ReturnType<typeof applyDecision>>>,
+      ): Promise<Awaited<ReturnType<DelegatedProposalResolver>> | undefined> => {
+        if (
+          proposal.operation.kind !== "config-set" &&
+          proposal.operation.kind !== "config-set-ref"
+        ) {
+          return undefined;
+        }
+        const correction = params.session.engine.getPendingOperatorProposal();
+        if (reply.applied === true || !correction) {
+          return undefined;
+        }
+        const active =
+          isAuthorityActive() && params.sessions.get(params.sessionId) === params.session;
+        if (corrective || !active) {
+          await retireSystemAgentProposal(params.session, manager, correction.hash);
+          const notice = active
+            ? "OpenClaw repair stopped after one corrective attempt. Check the current settings before making a new request."
+            : "OpenClaw correction cancelled because its approval authority ended. Check the current settings before making a new request.";
+          params.session.engine.noteAssistantMessage(notice);
+          return { kind: "completed", reply: { ...reply, text: `${reply.text}\n\n${notice}` } };
+        }
+        const resolution = await resolveProposal(correction, true);
+        const retainWriteReport = (result: typeof reply) => ({
+          ...result,
+          text: `${reply.text}\n\n${result.text}`,
+        });
+        return resolution.kind === "completed"
+          ? { kind: "completed", reply: retainWriteReport(resolution.reply) }
+          : { ...resolution, completion: resolution.completion.then(retainWriteReport) };
+      };
       // Only a fresh proposal belongs to this input. An existing operator request
       // stays bound to its original decision, even if this caller has Full Access.
       if (callerIdentity?.fullPermission === true) {
@@ -212,7 +247,7 @@ export async function prepareDelegatedSystemAgentApproval(params: {
         if (!reply) {
           throw new Error("OpenClaw change is no longer pending. Retry the request.");
         }
-        return { kind: "completed", reply };
+        return (await resolveCorrection(reply)) ?? { kind: "completed", reply };
       }
       if (!manager) {
         throw new Error("OpenClaw approval registry unavailable");
@@ -265,7 +300,7 @@ export async function prepareDelegatedSystemAgentApproval(params: {
       if (callerIdentity?.approvalSignals?.length) {
         record.approvalSignals = callerIdentity.approvalSignals;
       }
-      void manager.register(record, SYSTEM_AGENT_APPROVAL_TIMEOUT_MS);
+      await manager.register(record, SYSTEM_AGENT_APPROVAL_TIMEOUT_MS);
       const requestEvent = buildRequestedApprovalEvent(record, "system-agent");
       const publishApplicationResult = (
         decision: ExecApprovalDecision,
@@ -301,14 +336,14 @@ export async function prepareDelegatedSystemAgentApproval(params: {
         requireDeliveryRoute: false,
         afterDecision: async (decision) => {
           try {
-            const reply = await runWithGatewayIndependentRootWorkContinuation(
+            const { reply, correction } = await runWithGatewayIndependentRootWorkContinuation(
               () =>
                 runSystemAgentGatewayTask(async () => {
                   if (
                     params.sessions.get(params.sessionId) !== params.session ||
                     params.session.pendingApproval !== pendingApproval
                   ) {
-                    return cancelledReply;
+                    return { reply: cancelledReply, correction: undefined };
                   }
                   let historyStart = params.session.engine.historyLength();
                   const terminalStatus =
@@ -320,23 +355,30 @@ export async function prepareDelegatedSystemAgentApproval(params: {
                   params.session.pendingApproval = undefined;
                   try {
                     // Retire failures before releasing this task; a later run may propose the same hash.
-                    return (
+                    const appliedReply =
                       (await withProposalFailureCleanup(() =>
                         applyDecision(terminalStatus ? null : decision, terminalStatus),
-                      )) ?? cancelledReply
-                    );
+                      )) ?? cancelledReply;
+                    return {
+                      reply: appliedReply,
+                      correction: await resolveCorrection(appliedReply),
+                    };
                   } catch {
                     // Inference loss clears engine history; persist the failure from its new cursor.
                     historyStart = params.session.engine.historyLength();
                     params.session.engine.noteAssistantMessage(failedReply.text);
-                    return failedReply;
+                    return { reply: failedReply, correction: undefined };
                   } finally {
                     persistSystemAgentEngineHistory(params.session.engine, historyStart);
                   }
                 }),
               "system-agent:task",
             );
-            completion.resolve(reply);
+            completion.resolve(
+              correction?.kind === "approval"
+                ? correction.completion
+                : (correction?.reply ?? reply),
+            );
             if (decision) {
               const applicationStatus = reply?.applied === true ? "applied" : "not-applied";
               publishApplicationResult(decision, applicationStatus);

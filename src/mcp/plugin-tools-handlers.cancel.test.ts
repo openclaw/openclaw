@@ -4,11 +4,12 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Type } from "typebox";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { consumeTrackedToolExecutionStarted } from "../agents/agent-tools.before-tool-call.state.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
-import { trackAsyncWork } from "../shared/async-work-scope.js";
+import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
+import { getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createToolsMcpServer } from "./tools-stdio-server.js";
 
 describe("plugin tools MCP cancellation", () => {
@@ -81,9 +82,11 @@ describe("plugin tools MCP cancellation", () => {
     }
   });
 
-  it.each(["handler", "descendant"] as const)(
-    "joins native %s work before close releases its database and permits reconnect",
-    async (mode) => {
+  it.each(
+    ["handler", "descendant"].flatMap((mode) => [false, true].map((hosted) => ({ mode, hosted }))),
+  )(
+    "joins native $mode work before close and reconnect (SDK host: $hosted)",
+    async ({ mode, hosted }) => {
       let database = new DatabaseSync(":memory:");
       const started = createDeferred();
       const finish = createDeferred();
@@ -117,7 +120,8 @@ describe("plugin tools MCP cancellation", () => {
           return { content: [{ type: "text", text: "accepted" }], details: {} };
         },
       };
-      const server = createToolsMcpServer({ name: "native-drain", tools: [tool] });
+      const sdkResourceHost = hosted ? new LegacyPluginSdkResourceHost() : undefined;
+      const server = createToolsMcpServer({ name: "native-drain", tools: [tool], sdkResourceHost });
       const clients: Client[] = [];
       const connect = async () => {
         const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -196,6 +200,180 @@ describe("plugin tools MCP cancellation", () => {
         await siblingClose;
         await Promise.all(clients.map((client) => client.close()));
         await server.close();
+        await sdkResourceHost?.close();
+        if (database.isOpen) {
+          database.close();
+        }
+      }
+    },
+  );
+
+  it.each(
+    [false, true].flatMap((hosted) =>
+      ["send-pending", "response-completed"].map((phase) => ({ hosted, phase })),
+    ),
+  )(
+    "keeps late descendant cancellation during $phase (SDK host: $hosted)",
+    async ({ hosted, phase }) => {
+      const database = new DatabaseSync(":memory:");
+      const host = hosted ? new LegacyPluginSdkResourceHost() : undefined;
+      const lateListener = createDeferred();
+      const listening = createDeferred();
+      const finish = createDeferred();
+      const workAborted = createDeferred();
+      const responseEntered = createDeferred();
+      const releaseResponse = createDeferred();
+      const transportClosed = createDeferred();
+      const reads: unknown[] = [];
+      let requestSignal: AbortSignal | undefined;
+      let workSignal: AbortSignal | undefined;
+      let descendant: Promise<void> | undefined;
+      let descendantFinished = false;
+      let responseId: number | string | undefined;
+      let abortCount = 0;
+      let observedReason: unknown;
+      let closeFinished = false;
+      const tool: AnyAgentTool = {
+        name: "cached_native_work",
+        label: "Cached native work",
+        description: "Returns a cached result while accepted native work remains",
+        parameters: Type.Object({}),
+        execute: async (_id, _params, signal) => {
+          const ownerSignal = getAsyncWorkSignal();
+          if (!signal || !ownerSignal) {
+            throw new Error("Expected request and work signals");
+          }
+          requestSignal = signal;
+          workSignal = ownerSignal;
+          descendant = trackAsyncWork(async () => {
+            await lateListener.promise;
+            const observeAbort = () => {
+              abortCount++;
+              observedReason = signal.reason;
+            };
+            const observeWorkAbort = () => workAborted.resolve();
+            signal.addEventListener("abort", observeAbort, { once: true });
+            ownerSignal.addEventListener("abort", observeWorkAbort, { once: true });
+            if (signal.aborted) {
+              observeAbort();
+            }
+            if (ownerSignal.aborted) {
+              observeWorkAbort();
+            }
+            listening.resolve();
+            try {
+              await finish.promise;
+              if (phase === "response-completed") {
+                await workAborted.promise;
+              }
+              reads.push(database.prepare("SELECT 42 AS value").get());
+            } finally {
+              signal.removeEventListener("abort", observeAbort);
+              ownerSignal.removeEventListener("abort", observeWorkAbort);
+              descendantFinished = true;
+            }
+          });
+          void descendant.catch(() => {});
+          return { content: [{ type: "text", text: "cached result" }], details: {} };
+        },
+      };
+      const server = createToolsMcpServer({
+        name: "native-response-tail",
+        tools: [tool],
+        sdkResourceHost: host,
+      });
+      const client = new Client({ name: "native-response-client", version: "0.0.0" });
+      // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MCP Client exposes callback properties, not EventTarget.
+      client.onclose = () => transportClosed.resolve();
+      const [outbound, inbound] = InMemoryTransport.createLinkedPair();
+      const sendRequest = outbound.send.bind(outbound);
+      const requestSpy = vi.spyOn(outbound, "send").mockImplementation(async (message, options) => {
+        if ("method" in message && message.method === "tools/call" && "id" in message) {
+          responseId = message.id;
+        }
+        return await sendRequest(message, options);
+      });
+      const sendResponse = inbound.send.bind(inbound);
+      const responseSpy = vi.spyOn(inbound, "send").mockImplementation(async (message, options) => {
+        if ("result" in message && message.id === responseId) {
+          responseEntered.resolve();
+          if (phase === "send-pending") {
+            await releaseResponse.promise;
+          }
+        }
+        return await sendResponse(message, options);
+      });
+      let call: Promise<unknown> | undefined;
+      let closing: Promise<void> | undefined;
+      const reason = "cancel while response transport is pending";
+      try {
+        await Promise.all([server.connect(inbound), client.connect(outbound)]);
+        const controller = new AbortController();
+        call = client.callTool({ name: tool.name }, undefined, { signal: controller.signal }).then(
+          (result) => ({ result }),
+          (error: unknown) => ({ error }),
+        );
+        await Promise.race([
+          responseEntered.promise,
+          call.then(() => {
+            throw new Error("The call settled before response sending began");
+          }),
+        ]);
+        expect(descendantFinished).toBe(false);
+        if (phase === "response-completed") {
+          expect(await call).toMatchObject({ result: { content: [{ text: "cached result" }] } });
+          await client.ping();
+        }
+        expect(workSignal?.aborted).toBe(false);
+        lateListener.resolve();
+        await listening.promise;
+        if (phase === "send-pending") {
+          controller.abort(reason);
+        } else {
+          if (responseId === undefined) {
+            throw new Error("Expected the actual request ID");
+          }
+          await client.notification({
+            method: "notifications/cancelled",
+            params: { requestId: responseId, reason },
+          });
+        }
+        // A public ping reply follows the preceding cancellation notification.
+        await client.ping();
+        expect(abortCount).toBe(phase === "send-pending" ? 1 : 0);
+        expect(requestSignal?.aborted).toBe(phase === "send-pending");
+        expect(observedReason).toBe(phase === "send-pending" ? reason : undefined);
+        expect(workSignal?.aborted).toBe(false);
+        releaseResponse.resolve();
+        await call;
+        await client.ping();
+        closing = server.close().then(() => {
+          database.close();
+          closeFinished = true;
+        });
+        await transportClosed.promise;
+        await nextTurn();
+        expect(workSignal?.aborted).toBe(true);
+        expect(closeFinished).toBe(false);
+        expect(database.isOpen).toBe(true);
+        finish.resolve();
+        await descendant;
+        await closing;
+        expect(reads).toEqual([{ value: 42 }]);
+        expect(database.isOpen).toBe(false);
+      } finally {
+        lateListener.resolve();
+        finish.resolve();
+        workAborted.resolve();
+        releaseResponse.resolve();
+        await descendant;
+        await closing;
+        await server.close();
+        await client.close();
+        await call;
+        await host?.close();
+        requestSpy.mockRestore();
+        responseSpy.mockRestore();
         if (database.isOpen) {
           database.close();
         }

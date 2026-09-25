@@ -9,6 +9,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createBedrockAwsSdkConfig } from "./config-fixtures.test-support.js";
 import { createApiKeyCredential } from "./credential-fixtures.test-support.js";
 import {
   authStoreMocks,
@@ -112,26 +113,7 @@ describe("resolveSessionAuthProfileOverride", () => {
       const sessionStore = { "agent:main:main": sessionEntry };
 
       const resolved = await resolveSession({
-        cfg: {
-          models: {
-            providers: {
-              "amazon-bedrock": {
-                auth: "aws-sdk",
-                baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
-                api: "bedrock-converse-stream",
-                models: [],
-              },
-            },
-          },
-          auth: {
-            profiles: {
-              "amazon-bedrock:default": {
-                provider: "amazon-bedrock",
-                mode: "aws-sdk",
-              },
-            },
-          },
-        } as OpenClawConfig,
+        cfg: createBedrockAwsSdkConfig(),
         provider: "amazon-bedrock",
         agentDir,
         sessionEntry,
@@ -166,26 +148,7 @@ describe("resolveSessionAuthProfileOverride", () => {
       const sessionStore = { "agent:main:main": sessionEntry };
 
       const resolved = await resolveSession({
-        cfg: {
-          models: {
-            providers: {
-              "amazon-bedrock": {
-                auth: "aws-sdk",
-                baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
-                api: "bedrock-converse-stream",
-                models: [],
-              },
-            },
-          },
-          auth: {
-            profiles: {
-              "amazon-bedrock:default": {
-                provider: "amazon-bedrock",
-                mode: "aws-sdk",
-              },
-            },
-          },
-        } as OpenClawConfig,
+        cfg: createBedrockAwsSdkConfig(),
         provider: "amazon-bedrock",
         agentDir,
         sessionEntry,
@@ -419,6 +382,7 @@ describe("resolveSessionAuthProfileOverride", () => {
 
       await patchSessionEntryCore(scope, () => ({ label: "renamed", pinnedAt: undefined }));
       await clearSessionAuthProfileOverride({
+        agentId: "main",
         sessionEntry: sessionEntry!,
         sessionStore,
         sessionKey,
@@ -434,7 +398,7 @@ describe("resolveSessionAuthProfileOverride", () => {
     });
   });
 
-  it("rotates auth state without restoring concurrent session management fields", async () => {
+  it("rotates unavailable auth state without restoring concurrent session management fields", async () => {
     await withAuthState(async (state) => {
       const agentDir = state.agentDir();
       await fs.mkdir(agentDir, { recursive: true });
@@ -448,6 +412,9 @@ describe("resolveSessionAuthProfileOverride", () => {
           openai: [TEST_PRIMARY_PROFILE_ID, TEST_SECONDARY_PROFILE_ID],
         },
       });
+      authStoreMocks.isProfileInCooldown.mockImplementation(
+        (_store, profileId) => profileId === TEST_PRIMARY_PROFILE_ID,
+      );
 
       const sessionKey = "agent:main:main";
       const storePath = path.join(state.sessionsDir(), "sessions.json");
@@ -480,6 +447,7 @@ describe("resolveSessionAuthProfileOverride", () => {
       expect(persisted?.label).toBe("renamed");
       expect(persisted?.pinnedAt).toBeUndefined();
       expect(persisted?.authProfileOverride).toBe(TEST_SECONDARY_PROFILE_ID);
+      expect(persisted?.authProfileOverrideCompactionCount).toBe(1);
       expect(sessionStore[sessionKey]?.label).toBe("renamed");
       expect(sessionStore[sessionKey]?.pinnedAt).toBeUndefined();
     });

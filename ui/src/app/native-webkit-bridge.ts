@@ -4,7 +4,10 @@ export type WebKitHostMessages = {
   openclawNav: { type: "nav-state"; collapsed: boolean; width: number };
   openclawWindowDrag: { type: "window-drag" };
   openclawGateways:
-    | { type: "select" | "open-window" | "set-primary"; id: string }
+    | {
+        type: "select" | "open-window" | "set-primary" | "reconnect" | "reconnect-cancel";
+        id: string;
+      }
     | { type: "open-settings" };
   openclawNotifications:
     | { type: "status" | "request-permission" | "send-test" }

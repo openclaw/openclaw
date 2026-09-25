@@ -177,8 +177,7 @@ async function runSingleJobAndReadState(params: {
 }) {
   const job = await params.cron.add(params.job);
   const finishedPromise = params.waitForFinished?.(job.id) ?? params.finished.waitForOk(job.id);
-  vi.setSystemTime(new Date(job.state.nextRunAtMs! + 5));
-  await vi.runOnlyPendingTimersAsync();
+  await vi.advanceTimersByTimeAsync(job.state.nextRunAtMs! + 5 - Date.now());
   await finishedPromise;
 
   const jobs = await params.cron.list({ includeDisabled: true });

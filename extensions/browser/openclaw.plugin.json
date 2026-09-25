@@ -1,5 +1,6 @@
 {
   "id": "browser",
+  "categories": ["web"],
   "cliCommands": [
     {
       "name": "browser",

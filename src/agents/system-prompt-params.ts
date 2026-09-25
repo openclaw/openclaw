@@ -29,6 +29,7 @@ type RuntimeInfoInput = {
   sessionKey?: string;
   sessionId?: string;
   sessionUrl?: string;
+  gitCoauthorPrompt?: string;
   host: string;
   os: string;
   arch: string;
@@ -52,10 +53,11 @@ type SystemPromptRuntimeParams = {
 export function buildSystemPromptParams(params: {
   config?: OpenClawConfig;
   agentId?: string;
-  runtime: Omit<RuntimeInfoInput, "agentId" | "agentName" | "sessionUrl">;
+  runtime: Omit<RuntimeInfoInput, "agentId" | "agentName" | "sessionUrl" | "gitCoauthorPrompt">;
   workspaceDir?: string;
   cwd?: string;
   preparedRepoRoot?: string | null;
+  preparedGitCoauthorPrompt?: string | null;
 }): SystemPromptRuntimeParams {
   const repoRoot = Object.hasOwn(params, "preparedRepoRoot")
     ? (params.preparedRepoRoot ?? undefined)
@@ -81,13 +83,13 @@ export function buildSystemPromptParams(params: {
           ? resolveRuntimeAgentName(params.config, params.agentId)
           : undefined,
       ...params.runtime,
+      gitCoauthorPrompt: params.preparedGitCoauthorPrompt ?? undefined,
       // Published links must be externally usable and bounded before entering model context.
       sessionUrl:
         sessionUrl?.startsWith("https://") && sessionUrl.length <= MAX_RUNTIME_SESSION_URL_CHARS
           ? sessionUrl
           : undefined,
-      activeNode:
-        formatActiveNodeContextLabel(getCurrentActiveNodeContext()) ?? params.runtime.activeNode,
+      activeNode: formatActiveNodeContextLabel(getCurrentActiveNodeContext()),
       repoRoot,
     },
     userTimezone,

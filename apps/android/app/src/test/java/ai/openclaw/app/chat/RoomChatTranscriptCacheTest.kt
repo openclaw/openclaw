@@ -1,6 +1,9 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.ui.chat.ChatTimelineItem
+import ai.openclaw.app.ui.chat.buildTimeline
 import ai.openclaw.app.ui.chat.latestChatMessageUsage
+import ai.openclaw.app.ui.chat.prepareChatHistory
 import androidx.room3.Room
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -38,6 +41,42 @@ class RoomChatTranscriptCacheTest {
         }.asCoroutineDispatcher(),
       ).build()
   private val store = RoomChatTranscriptCache(database = database)
+
+  @Test
+  fun completedWorkKeepsExplicitAnswersAndUnresolvedErrorsAfterOfflineReload() =
+    runTest {
+      val controller =
+        createChatController { method, _ ->
+          if (method == "chat.history") {
+            """{"messages":[
+            {"role":"user","content":"Check the draft","timestamp":1000},
+            {"role":"assistant","content":"Checking","phase":"commentary","timestamp":2000},
+            {"role":"assistant","content":[{"type":"text","text":"Draft is ready","textSignature":"{\"v\":1,\"phase\":\"final_answer\"}"}],"timestamp":3000},
+            {"role":"assistant","content":"Finishing notes","phase":"commentary","timestamp":4000},
+            {"role":"assistant","content":"The follow-up failed","stopReason":"error","timestamp":5000}
+          ]}"""
+          } else {
+            emptyChatGatewayResponse(method)
+          }
+        }
+      controller.load("agent:main:dashboard:test")
+      advanceUntilIdle()
+      val live = controller.messages.value
+      saveTranscript(live)
+      for (history in listOf(live, loadTranscript())) {
+        val timeline =
+          prepareChatHistory(history, "agent:main:dashboard:test", "agent:main:main").buildTimeline(0, emptyList(), null)
+        assertEquals(
+          listOf("The follow-up failed", "Draft is ready", "Check the draft"),
+          timeline.items.filterIsInstance<ChatTimelineItem.Message>().map {
+            it.message.content
+              .first()
+              .text
+          },
+        )
+        assertEquals(1, timeline.items.filterIsInstance<ChatTimelineItem.WorkedSummary>().size)
+      }
+    }
 
   @After
   fun tearDown() {
@@ -133,11 +172,14 @@ class RoomChatTranscriptCacheTest {
       controller.load("main")
       advanceUntilIdle()
       assertEquals(2, controller.messages.value.size)
-      assertTrue(
+      assertEquals(
+        "read",
         controller.messages.value
           .last()
           .content
-          .isEmpty(),
+          .single()
+          .toolActivity
+          ?.name,
       )
       assertEquals(
         "entry-2",
@@ -153,6 +195,15 @@ class RoomChatTranscriptCacheTest {
       assertTrue(offline.messagesFromCache.value)
       assertEquals(null, latestChatMessageUsage(offline.messages.value))
       assertEquals(2, offline.messages.value.size)
+      assertEquals(
+        "read",
+        offline.messages.value
+          .last()
+          .content
+          .single()
+          .toolActivity
+          ?.name,
+      )
     }
 
   @Test
@@ -453,6 +504,8 @@ class RoomChatTranscriptCacheTest {
               model = "gpt-5.2",
               usage = usage,
               cost = cost,
+              runId = "run-1",
+              steerTargetRunId = "run-parent",
             ),
             message("Delivery copy").copy(
               role = "assistant",
@@ -477,6 +530,8 @@ class RoomChatTranscriptCacheTest {
       assertEquals("gpt-5.2", loaded[0].model)
       assertEquals(usage, loaded[0].usage)
       assertEquals(cost, loaded[0].cost)
+      assertEquals("run-1", loaded[0].runId)
+      assertEquals("run-parent", loaded[0].steerTargetRunId)
       assertEquals(ChatDeliveryMirror(kind = "channel-final"), loaded[1].deliveryMirror)
       assertTrue(loaded[2].content.isEmpty())
       assertEquals(ChatMessageUsage(input = 7_500, output = 450), loaded[2].usage)
@@ -547,13 +602,25 @@ class RoomChatTranscriptCacheTest {
     }
 
   @Test
-  fun transcriptRoundTripDropsInternalRoleRows() =
+  fun transcriptRoundTripKeepsBoundedToolRowsAndDropsInternalRoles() =
     runTest {
       saveTranscript(
         messages =
           listOf(
             message("hello", role = "user"),
-            message("private tool output", role = "toolResult"),
+            ChatMessage(
+              id = "tool-result",
+              role = "toolresult",
+              content =
+                listOf(
+                  ChatMessageContent(
+                    type = "toolResult",
+                    toolActivity = ChatToolActivity("call-1", "read", null, "bounded output", false),
+                  ),
+                ),
+              timestampMs = 2,
+            ),
+            message("private reasoning", role = "internal"),
             message("visible plugin notice", role = "custom"),
             message("reply", role = "assistant"),
           ),
@@ -561,8 +628,15 @@ class RoomChatTranscriptCacheTest {
 
       val loaded = loadTranscript()
 
-      assertEquals(listOf("hello", "visible plugin notice", "reply"), loaded.map { it.content.single().text })
-      assertEquals(listOf("user", "custom", "assistant"), loaded.map { it.role })
+      assertEquals(listOf("user", "toolresult", "custom", "assistant"), loaded.map { it.role })
+      assertEquals(
+        "bounded output",
+        loaded[1]
+          .content
+          .single()
+          .toolActivity
+          ?.result,
+      )
     }
 
   @Test

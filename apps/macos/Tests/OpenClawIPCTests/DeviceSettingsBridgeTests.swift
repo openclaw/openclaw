@@ -14,13 +14,16 @@ struct DeviceSettingsBridgeTests {
         ("voice.talkBackgroundEnabled", .talkBackgroundEnabled),
         ("voice.speakerphoneEnabled", .speakerphoneEnabled),
         ("app.showDockIcon", .showDockIcon),
+        ("app.nativeExperienceEnabled", .nativeExperienceEnabled),
         ("app.iconAnimationsEnabled", .iconAnimationsEnabled),
         ("app.launchAtLogin", .launchAtLogin),
         ("app.quickChatEnabled", .quickChatEnabled),
         ("app.debugPaneEnabled", .debugPaneEnabled),
         ("capabilities.canvasEnabled", .canvasEnabled),
         ("capabilities.cameraEnabled", .cameraEnabled),
+        ("capabilities.desktopSharingEnabled", .desktopSharingEnabled),
         ("capabilities.computerControlEnabled", .computerControlEnabled),
+        ("capabilities.unattendedDesktopEnabled", .unattendedDesktopEnabled),
         ("capabilities.peekabooBridgeEnabled", .peekabooBridgeEnabled),
         ("capabilities.activeComputerPresenceEnabled", .activeComputerPresenceEnabled),
         ("browser.cookieSync.enabled", .cookieSyncEnabled),
@@ -81,6 +84,14 @@ struct DeviceSettingsBridgeTests {
         }
     }
 
+    @Test func `native experience snapshot preserves both modes and absent host support`() throws {
+        for enabled in [nil, false, true] as [Bool?] {
+            let app = DeviceSettingsSnapshot.App(nativeExperienceEnabled: enabled)
+            let json = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(app)) as? [String: Any])
+            #expect(json["nativeExperienceEnabled"] as? Bool == enabled)
+        }
+    }
+
     @Test func `setters reject unknown keys wrong types and noncanonical enum values`() {
         let invalid: [(String, Any)] = [
             ("app.appearance", "automatic"),
@@ -131,8 +142,22 @@ struct DeviceSettingsBridgeTests {
     @Test func `action requests retain the closed panel and permission identities`() {
         #expect(DeviceSettingsRequest(body: ["type": "status"]) == .status)
         #expect(DeviceSettingsRequest(body: ["type": "check-for-updates"]) == .checkForUpdates)
+        for action in ChromeExtensionSetupAction.allCases {
+            #expect(DeviceSettingsRequest(body: [
+                "type": "chrome-extension-setup", "action": action.rawValue,
+            ]) == .chromeExtensionSetup(action))
+        }
         #expect(DeviceSettingsRequest(body: ["type": "install-chrome-extension"]) == .installChromeExtension)
-        #expect(DeviceSettingsRequest(body: ["type": "install-chrome-extension", "command": "other"]) == nil)
+        #expect(DeviceSettingsRequest(body: ["type": "chrome-extension-setup"]) == nil)
+        #expect(DeviceSettingsRequest(body: ["type": "chrome-extension-setup", "action": "pair"]) == nil)
+        for field in ["command", "profile", "url", "host"] {
+            #expect(DeviceSettingsRequest(body: [
+                "type": "install-chrome-extension", field: "other",
+            ]) == nil)
+            #expect(DeviceSettingsRequest(body: [
+                "type": "chrome-extension-setup", "action": "install", field: "other",
+            ]) == nil)
+        }
         let panels: [(String, DeviceSettingsPanel)] = [
             ("quick-chat-shortcut", .quickChatShortcut), ("microphone-test", .microphoneTest),
             ("browser-import", .browserImport), ("connection", .connection), ("gateways", .gateways), ("debug", .debug),
@@ -150,7 +175,6 @@ struct DeviceSettingsBridgeTests {
             ("camera", .camera, .camera),
             ("speechRecognition", .speechRecognition, .speechRecognition),
             ("location", .location, .location),
-            ("automation", .automation, .appleScript),
         ]
         #expect(DeviceSettingsPermission.macOSPermissions.map(\.rawValue) == permissions.map(\.0))
         for permission in [DeviceSettingsPermission.contacts, .calendars, .reminders, .photos] {
@@ -192,10 +216,12 @@ struct DeviceSettingsBridgeTests {
             #expect(try String(decoding: JSONEncoder().encode(mapped), as: UTF8.self) == "\"\(wire)\"")
         }
         #expect(DeviceSettingsPermissionStatus(.granted) == .granted)
-        #expect(DeviceSettingsPermissionStatus(.notGranted) == .denied)
+        #expect(DeviceSettingsPermissionStatus(.notGranted).rawValue == "notDetermined")
         #expect(DeviceSettingsPermissionStatus(.unknown) == .unavailable)
         #expect(DeviceSettingsPermissionStatus(nil) == .unavailable)
-        let statuses: [DeviceSettingsPermissionStatus] = [.granted, .denied, .notDetermined, .unavailable, .limited]
+        let statuses: [DeviceSettingsPermissionStatus] = [
+            .granted, .denied, .notDetermined, .unavailable, .limited,
+        ]
         let data = try JSONEncoder().encode(statuses)
         #expect(try JSONSerialization.jsonObject(with: data) as? [String] ==
             ["granted", "denied", "notDetermined", "unavailable", "limited"])

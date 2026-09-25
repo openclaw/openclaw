@@ -6,6 +6,7 @@ import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import { registerSessionMaintenancePreserveKeysProvider } from "../config/sessions/store-maintenance-preserve.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
 import {
@@ -17,19 +18,26 @@ import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { createGitHubPublicationRuntime } from "./github-publication-runtime.js";
-import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "./node-command-policy.js";
 import type { NodeWorkerSupervisorTransport } from "./node-registry-private.js";
 import { emitSessionsChanged } from "./server-methods/session-change-event.js";
 import type { WorkerPlacementSessionWorkCancellation } from "./server-worker-placement-cancel.js";
-import { createGatewayWorkerPlacementChangePublisher } from "./server-worker-placement-change-events.js";
+import {
+  createGatewayWorkerPlacementChangePublisher,
+  subscribeGatewayWorkerMachineShapeChanges,
+} from "./server-worker-placement-change-events.js";
 import { createGatewayWorkerDispatchAdmission } from "./server-worker-placement-dispatch-admission.js";
 import { createGatewayWorkerPlacementMoveBarrier } from "./server-worker-placement-move-barrier.js";
 import { createGatewayWorkerPlacementMoveDestinationResolver } from "./server-worker-placement-move-destination.js";
 import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-placement-reclaim.js";
-import { installWorkerPlacementReconcileGuard } from "./server-worker-placement-reconcile-guard.js";
+import {
+  createWorkerPlacementInitialRecovery,
+  installWorkerPlacementReconcileGuard,
+} from "./server-worker-placement-reconcile-guard.js";
+import { createWorkerRuntimeRefreshWaiter } from "./server-worker-placement-runtime-refresh.js";
 import { createWorkerPlacementSessionEvidenceResolver } from "./server-worker-placement-session-evidence.js";
 import {
   createWorkerPlacementNodeWorkspaceBindingResolver,
+  createWorkerWorkspaceRecoveryPreparer,
   loadWorkerPlacementSessionRuntimeModule,
   resolveWorkerPlacementSessionTarget,
   runWorkerPlacementSessionBarrier,
@@ -37,6 +45,7 @@ import {
 } from "./server-worker-placement-session-target.js";
 import { recoverGatewayWorkerPlacementWorkspaces } from "./server-worker-placement-workspace-recovery.js";
 import { materializeSessionRepositoryWorkspaceOnGateway } from "./session-repository-materialization.js";
+import { createDevicePlacementAuthority } from "./worker-environments/device-placement-eligibility.js";
 import {
   createNodeWorkspaceRetainCoordinator,
   type NodeWorkerBundleRetention,
@@ -56,7 +65,6 @@ import { isFailedWorkerPlacementEnvironmentGone } from "./worker-environments/se
 import type { WorkerSessionWorkspace } from "./worker-environments/session-workspace.js";
 import { createWorkerSessionTurnPlacementProvider } from "./worker-environments/worker-turn-launcher.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./worker-environments/workspace-operation-coordinator.js";
-import { createWorkerWorkspaceConflictTranscriptHandlers } from "./worker-workspace-conflict-transcript.js";
 
 const WORKER_PLACEMENT_RECONCILE_INTERVAL_MS = 60_000;
 
@@ -70,6 +78,7 @@ type WorkerPlacementSidecar = { stop: () => Promise<void> };
 
 export type GatewayWorkerPlacementRuntimeParams = {
   placements: WorkerSessionPlacementStore;
+  getCommittedRuntimeConfig: () => OpenClawConfig;
   environments: WorkerEnvironmentService;
   gatewayNamespace: string;
   nodeWorkerBundleRetention?: NodeWorkerBundleRetention;
@@ -88,10 +97,12 @@ export type GatewayWorkerPlacementRuntimeParams = {
 
 export function createGatewayGitHubPublicationRuntime(params: {
   placements: WorkerSessionPlacementStore;
+  getCommittedRuntimeConfig: () => OpenClawConfig;
   warn: (message: string) => void;
 }) {
   return createGitHubPublicationRuntime({
     placements: params.placements,
+    getCommittedRuntimeConfig: params.getCommittedRuntimeConfig,
     loadSessionRuntime: loadWorkerPlacementSessionRuntimeModule,
     warn: params.warn,
   });
@@ -106,22 +117,26 @@ export function createGatewayWorkerPlacementRuntime(
 ) {
   let nodeWorkerSupervisorTransport: NodeWorkerSupervisorTransport | undefined;
   let stopped = false;
+  const runtimeRefresh = createWorkerRuntimeRefreshWaiter({
+    environments: params.environments,
+    isStopping: () => stopped,
+  });
   const workspaceOperations = createWorkerWorkspaceOperationCoordinator();
   const {
     coordinator: githubPublication,
     prepareAcceptedWorkspacePublication,
     publishAcceptedWorkspace,
     reconcilePublications,
-  } = params.githubPublicationRuntime ??
-  createGatewayGitHubPublicationRuntime({ placements: params.placements, warn: params.warn });
+  } = params.githubPublicationRuntime ?? createGatewayGitHubPublicationRuntime(params);
   const diskSpace = createWorkerPlacementDiskSpaceMonitor({
     placements: params.placements,
     environments: params.environments,
     warn: params.warn,
   });
-  const workspaceConflictHandlers = createWorkerWorkspaceConflictTranscriptHandlers(
-    loadWorkerPlacementSessionRuntimeModule,
-  );
+  const withPreparedRecovery = createWorkerWorkspaceRecoveryPreparer({
+    loadSessionRuntime: loadWorkerPlacementSessionRuntimeModule,
+    getConfig: getRuntimeConfig,
+  });
   const nodeWorkspaceRetention = createNodeWorkspaceRetainCoordinator({
     bundleRetention: params.nodeWorkerBundleRetention,
     gatewayNamespace: params.gatewayNamespace,
@@ -213,7 +228,7 @@ export function createGatewayWorkerPlacementRuntime(
     resolveWorkspace,
   });
   const publishPlacementChanges = createGatewayWorkerPlacementChangePublisher(params);
-  const rawDispatchService = coordinateWorkerPlacementDispatch(
+  const dispatchService = coordinateWorkerPlacementDispatch(
     createWorkerPlacementDispatchService({
       placements: params.placements,
       environments: params.environments,
@@ -223,26 +238,8 @@ export function createGatewayWorkerPlacementRuntime(
         stopped || params.environments.isStopping() || getGatewayRestartDrainSignal().aborted,
       runnerAvailability,
       resolveDevicePlacementRequirement,
-      isCurrentNodePlacement: (node, requirement) => {
-        if (
-          nodeWorkerSupervisorTransport?.isCurrent(
-            node,
-            requirement.consumesWorkerSlot,
-            requirement.requiredNodeCommands,
-          ) !== true
-        ) {
-          return false;
-        }
-        const declaredCommands = [...node.commands];
-        const allowlist = resolveNodeCommandAllowlist(getRuntimeConfig(), {
-          commands: declaredCommands,
-          approvedCommands: declaredCommands,
-        });
-        return requirement.requiredNodeCommands.every(
-          (command) => isNodeCommandAllowed({ command, declaredCommands, allowlist }).ok,
-        );
-      },
-      ...workspaceConflictHandlers,
+      isCurrentNodePlacement: createDevicePlacementAuthority(() => nodeWorkerSupervisorTransport),
+      withPreparedRecovery,
       ...reclaimBarriers,
       runLocalBarrier: async ({
         sessionId,
@@ -356,34 +353,21 @@ export function createGatewayWorkerPlacementRuntime(
             return activate();
           },
         }),
-      runRecoveryBarrier: async ({
-        sessionId,
-        sessionKey,
-        agentId,
-        executionMode,
-        environmentId,
-        expectedGeneration,
-        signal,
-        run,
-      }) =>
+      runRecoveryBarrier: async ({ environmentId, expectedGeneration, run, ...identity }) =>
         await runWorkerPlacementSessionBarrier({
           sessionRuntime: await loadWorkerPlacementSessionRuntimeModule(),
           getConfig: getRuntimeConfig,
-          sessionId,
-          sessionKey,
-          agentId,
-          executionMode,
+          ...identity,
           action: "recovery",
-          signal,
           run: async (workspace) => {
-            const placement = params.placements.get(sessionId);
+            const placement = params.placements.get(identity.sessionId);
             if (
               placement?.state !== "provisioning" ||
               placement.generation !== expectedGeneration ||
               placement.environmentId !== environmentId
             ) {
               throw new WorkerDispatchTargetChangedError(
-                `Session ${sessionKey} placement changed before cloud worker recovery. Retry.`,
+                `Session ${identity.sessionKey} placement changed before cloud worker recovery. Retry.`,
               );
             }
             await run(workspace);
@@ -443,23 +427,22 @@ export function createGatewayWorkerPlacementRuntime(
         )?.gitAuthor,
     }),
     createGatewayWorkerDispatchAdmission(loadWorkerPlacementSessionRuntimeModule),
+    createWorkerPlacementInitialRecovery({
+      ...params,
+      isStopping: () =>
+        stopped || params.environments.isStopping() || getGatewayRestartDrainSignal().aborted,
+    }),
+    publishPlacementChanges,
   );
-  const dispatchService = {
-    ...rawDispatchService,
-    reconcile: (mode: Parameters<typeof rawDispatchService.reconcile>[0]) =>
-      publishPlacementChanges(() => rawDispatchService.reconcile(mode)),
-    reconcileActive: (environmentId?: string) =>
-      publishPlacementChanges(() => rawDispatchService.reconcileActive(environmentId)),
-  };
   const placementIdleSweep = createWorkerPlacementIdleSweep({
     placements: params.placements,
     environments: params.environments,
-    dispatch: rawDispatchService,
+    dispatch: dispatchService,
     getConfig: getRuntimeConfig,
     info: params.info ?? params.warn,
     warn: params.warn,
     isPlacementOperationInFlight: (sessionId) =>
-      rawDispatchService.isPlacementOperationInFlight(sessionId),
+      dispatchService.isPlacementOperationInFlight(sessionId),
     loadSessionRuntime: loadWorkerPlacementSessionRuntimeModule,
   });
   const sessionRetirement = createPlacementSessionRetirement({
@@ -473,8 +456,9 @@ export function createGatewayWorkerPlacementRuntime(
     environments: params.environments,
     placements: params.placements,
     resolveWorkspace,
-    reconcileActivePlacement: async (environmentId) =>
-      await dispatchService.reconcileActive(environmentId),
+    reconcileActivePlacement: async (id) => await dispatchService.reconcileActive(id),
+    waitForAdmissionNode: runtimeRefresh.wait,
+    waitForInitialPlacement: dispatchService.waitForInitialPlacement,
     redispatchReclaimed: createReclaimedPlacementRedispatch({
       environments: params.environments,
       dispatch: dispatchService.dispatch,
@@ -493,6 +477,7 @@ export function createGatewayWorkerPlacementRuntime(
       return null;
     }
     const uninstallPlacementAdmission = installSessionPlacementAdmissionProvider(admissionProvider);
+    const unsubscribeMachineShape = subscribeGatewayWorkerMachineShapeChanges(params);
     let placementReconcileInterval: ReturnType<typeof setInterval> | undefined;
     const placementReconcile = { current: undefined as Promise<void> | undefined };
     const diskSpaceSweep = { current: undefined as Promise<void> | undefined };
@@ -542,12 +527,12 @@ export function createGatewayWorkerPlacementRuntime(
       }
       return trackOperation(
         placementReconcile,
-        publishPlacementChanges(async () => {
-          await sessionRetirement.reconcile();
-          await rawDispatchService.reconcileActive();
+        (async () => {
+          await publishPlacementChanges(() => sessionRetirement.reconcile());
+          await dispatchService.reconcileActive();
           await reconcilePublications();
           void nodeWorkspaceRetention.schedule();
-        }),
+        })(),
         "Worker placement reconcile sweep failed",
       );
     };
@@ -588,7 +573,12 @@ export function createGatewayWorkerPlacementRuntime(
           void reconcileActivePlacements();
           return;
         }
-        void pending.then(reconcileActivePlacements, reconcileActivePlacements);
+        // The sweep owns reporting and settlement; returning it would create an
+        // unobserved rejecting promise for this best-effort event subscriber.
+        const resume = () => {
+          void reconcileActivePlacements();
+        };
+        void pending.then(resume, resume);
       }
     });
     let stopPromise: Promise<void> | undefined;
@@ -610,6 +600,7 @@ export function createGatewayWorkerPlacementRuntime(
         const currentStop = (async () => {
           await Promise.allSettled(
             [
+              unsubscribeMachineShape(),
               placementReconcile.current,
               diskSpaceSweep.current,
               placementIdleSuspend.current,
@@ -644,11 +635,10 @@ export function createGatewayWorkerPlacementRuntime(
             placements: params.placements,
             resolveWorkspace,
           }),
-        () =>
-          publishPlacementChanges(async () => {
-            await rawDispatchService.reconcile("startup");
-            await reconcilePublications();
-          }),
+        async () => {
+          await dispatchService.reconcile("startup");
+          await reconcilePublications();
+        },
       ]) {
         const current = reconcile();
         placementReconcile.current = current;
@@ -712,6 +702,7 @@ export function createGatewayWorkerPlacementRuntime(
       nodeWorkerSupervisorTransport = transport;
       nodeWorkspaceRetention.bindTransport(transport);
     },
+    bindNodeWorkerAvailability: runtimeRefresh.bind,
     scheduleNodeWorkspaceRetention: (nodeId?: string) => nodeWorkspaceRetention.schedule(nodeId),
     startRuntime,
   };

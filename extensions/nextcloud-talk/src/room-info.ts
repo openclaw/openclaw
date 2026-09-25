@@ -8,7 +8,6 @@ import {
 import { fetchWithSsrFGuard, type RuntimeEnv } from "../runtime-api.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 import { resolveNextcloudTalkApiCredentials } from "./api-credentials.js";
-import { releaseNextcloudTalkGuardedResponse } from "./guarded-response.js";
 
 const ROOM_CACHE_TTL_MS = 5 * 60 * 1000;
 const ROOM_CACHE_ERROR_TTL_MS = 30 * 1000;
@@ -119,6 +118,6 @@ export async function resolveNextcloudTalkRoomKind(params: {
       return fallback(error);
     }
   } finally {
-    await releaseNextcloudTalkGuardedResponse({ response, release });
+    await release();
   }
 }

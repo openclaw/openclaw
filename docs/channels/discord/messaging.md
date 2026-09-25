@@ -14,6 +14,7 @@ How inbound and outbound Discord messages are routed, formatted, acknowledged, a
 - Gateway owns the Discord connection.
 - Reply routing is deterministic: Discord inbound replies back to Discord.
 - Bot replies and thread-bound persona replies share Markdown formatting, including CommonMark bold and configured table conversion.
+- Both delivery paths reapply caller-supplied character limits after formatting and mention expansion.
 - Forwarded message snapshots reach the agent together with any accompanying caption. Forwarded text is not treated as a typed command; command classification uses only the sender’s own message text.
 - Discord guild/channel metadata is added to the model prompt as untrusted context, not as a user-visible reply prefix. If a model copies that envelope back, OpenClaw strips the copied metadata from outbound replies and from future replay context.
 - By default (`session.dmScope=main`), direct chats share the agent main session (`agent:main:main`).
@@ -48,7 +49,8 @@ How inbound and outbound Discord messages are routed, formatted, acknowledged, a
     - `all`: attaches it to every outbound message
     - `batched`: attaches it only when the inbound event was a debounced batch of multiple messages — useful when you want native replies mainly for ambiguous bursty chats, not every single-message turn
 
-    Message IDs are surfaced in context/history so agents can target specific messages.
+    Message IDs are surfaced in context/history so agents can target specific messages. Replies to bot messages, including automation alerts, retain the referenced text as untrusted context when context visibility allows it. The bot's own inbound events are still ignored, and referenced self-authored media is not downloaded again.
+    Chunked persona delivery receipts retain the reply target selected for each chunk.
 
   </Accordion>
 

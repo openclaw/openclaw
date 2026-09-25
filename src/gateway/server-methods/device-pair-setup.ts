@@ -88,6 +88,7 @@ export const devicePairSetupHandlers: GatewayRequestHandlers = {
         env: process.env,
         publicUrl,
         preferRemoteUrl: params.preferRemoteUrl === true,
+        useLocalGateway: config.gateway?.mode === "remote" && params.preferRemoteUrl !== true,
         localTlsFingerprint: context.gatewayTlsFingerprint,
         ...(params.joinUrl === true || params.bootstrapProfile
           ? {

@@ -167,7 +167,6 @@ describe("runSetupModelAuthStep", () => {
         agentId: "ops",
         agentDir: "/tmp/ops-agent",
         pendingAuthProfiles: [],
-        validateCatalog: false,
       });
     },
   );
@@ -415,7 +414,6 @@ describe("runSetupModelAuthStep", () => {
     expect(warnIfModelConfigLooksOff).toHaveBeenCalledWith(expect.anything(), expect.anything(), {
       agentId: "ops",
       agentDir: "/tmp/ops-agent",
-      validateCatalog: false,
     });
   });
 
@@ -450,7 +448,6 @@ describe("runSetupModelAuthStep", () => {
       agentId: "ops",
       agentDir: "/tmp/ops-agent",
       pendingAuthProfiles,
-      validateCatalog: false,
     });
     expect(persistAuthProfiles).not.toHaveBeenCalled();
   });

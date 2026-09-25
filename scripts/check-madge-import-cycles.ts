@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 // Check Madge Import Cycles script supports OpenClaw repository automation.
-import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import ts from "typescript";
+import * as ts from "typescript/unstable/ast";
 import {
   collectSourceFiles,
   collectStronglyConnectedComponents,
 } from "./lib/import-cycle-graph.ts";
+import { formatNativeTypeScriptDiagnostics } from "./lib/native-typescript-diagnostics.mts";
+import { createNativeTypeScriptProject } from "./lib/native-typescript.mts";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const scanRoots = ["src", "extensions", "ui"] as const;
@@ -19,75 +20,84 @@ function shouldSkipRepoPath(repoPath: string): boolean {
   return ignoredPathPartPattern.test(repoPath);
 }
 
-function loadCompilerOptions(): ts.CompilerOptions {
-  const configPath = path.join(repoRoot, "tsconfig.json");
-  const config = ts.readConfigFile(configPath, (filePath) => ts.sys.readFile(filePath));
-  if (config.error) {
-    throw new Error(ts.flattenDiagnosticMessageText(config.error.messageText, "\n"));
-  }
-  return ts.parseJsonConfigFileContent(config.config, ts.sys, repoRoot).options;
-}
-
-function collectStaticModuleSpecifiers(sourceFile: ts.SourceFile): string[] {
-  const specifiers: string[] = [];
+function collectStaticModuleSpecifiers(sourceFile: ts.SourceFile): ts.StringLiteral[] {
+  const specifiers: ts.StringLiteral[] = [];
   const visit = (node: ts.Node) => {
     if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
-      specifiers.push(node.moduleSpecifier.text);
+      specifiers.push(node.moduleSpecifier);
     } else if (
       ts.isExportDeclaration(node) &&
       node.moduleSpecifier &&
       ts.isStringLiteral(node.moduleSpecifier)
     ) {
-      specifiers.push(node.moduleSpecifier.text);
+      specifiers.push(node.moduleSpecifier);
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
   visit(sourceFile);
   return specifiers;
 }
 
 function createImportGraph(files: readonly string[]): Map<string, string[]> {
-  const compilerOptions = loadCompilerOptions();
-  const compilerHost = ts.createCompilerHost(compilerOptions, false);
-  const resolutionCache = ts.createModuleResolutionCache(
-    repoRoot,
-    (value) => value,
-    compilerOptions,
-  );
+  const configFileName = path.join(repoRoot, "tsconfig.madge-import-cycles.json");
   const absoluteToRepoPath = new Map(
     files.map((file): [string, string] => [path.resolve(repoRoot, file), file]),
   );
-  const graph = new Map<string, string[]>();
-
-  for (const file of files) {
-    const absoluteFile = path.join(repoRoot, file);
-    const sourceFile = ts.createSourceFile(
-      file,
-      readFileSync(absoluteFile, "utf8"),
-      ts.ScriptTarget.Latest,
-      false,
-    );
-    const imports = collectStaticModuleSpecifiers(sourceFile).flatMap((specifier) => {
-      const resolved = ts.resolveModuleName(
-        specifier,
-        absoluteFile,
-        compilerOptions,
-        compilerHost,
-        resolutionCache,
-      ).resolvedModule?.resolvedFileName;
-      if (!resolved) {
-        return [];
+  const session = createNativeTypeScriptProject({
+    cwd: repoRoot,
+    configFileName,
+    files: {
+      [configFileName]: JSON.stringify({
+        extends: "./tsconfig.json",
+        files: [...absoluteToRepoPath.keys()],
+        include: [],
+        exclude: [],
+      }),
+    },
+  });
+  try {
+    const { project } = session;
+    const diagnostics = project.program.getConfigFileParsingDiagnostics();
+    if (diagnostics.length) {
+      throw new Error(formatNativeTypeScriptDiagnostics(diagnostics));
+    }
+    const repoPaths = new Map<ts.Path, string>();
+    const importedPaths = new Map<string, ts.Path[]>();
+    for (const file of files) {
+      const absoluteFile = path.resolve(repoRoot, file);
+      const sourceFile = project.program.getSourceFile(absoluteFile);
+      if (!sourceFile) {
+        throw new Error(`Native TypeScript did not load import-cycle input ${file}`);
       }
-      const repoPath = absoluteToRepoPath.get(path.resolve(resolved));
-      return repoPath ? [repoPath] : [];
-    });
-    graph.set(
-      file,
-      imports.toSorted((left, right) => left.localeCompare(right)),
+      const repoPath = absoluteToRepoPath.get(path.resolve(sourceFile.fileName));
+      if (repoPath) {
+        repoPaths.set(sourceFile.path, repoPath);
+      }
+      const specifiers = collectStaticModuleSpecifiers(sourceFile);
+      const imports = project.checker.getSymbolAtLocation(specifiers).flatMap((symbol) => {
+        const declaration = symbol?.declarations.find(
+          (candidate) => candidate.kind === ts.SyntaxKind.SourceFile,
+        );
+        return declaration ? [declaration.path] : [];
+      });
+      importedPaths.set(file, imports);
+      // Keep graph edges across files, not every decoded importer and target AST.
+      session.api.clearSourceFileCache();
+    }
+    return new Map(
+      [...importedPaths].map(([file, imports]) => [
+        file,
+        imports
+          .flatMap((importedPath) => {
+            const repoPath = repoPaths.get(importedPath);
+            return repoPath ? [repoPath] : [];
+          })
+          .toSorted((left, right) => left.localeCompare(right)),
+      ]),
     );
+  } finally {
+    session.close();
   }
-
-  return graph;
 }
 
 function main(): number {

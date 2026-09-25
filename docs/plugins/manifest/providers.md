@@ -186,8 +186,8 @@ Use `providerRequest` for cheap request-compatibility metadata that generic requ
 
 Provider fields:
 
-| Field                 | Type         | What it means                                                                          |
-| --------------------- | ------------ | -------------------------------------------------------------------------------------- |
-| `family`              | `string`     | Provider family label used by generic request compatibility decisions and diagnostics. |
-| `compatibilityFamily` | `"moonshot"` | Optional provider-family compatibility bucket for shared request helpers.              |
-| `openAICompletions`   | `object`     | OpenAI-compatible completions request flags, currently `supportsStreamingUsage`.       |
+| Field                 | Type         | What it means                                                                           |
+| --------------------- | ------------ | --------------------------------------------------------------------------------------- |
+| `family`              | `string`     | Provider family label used by generic request compatibility decisions and diagnostics.  |
+| `compatibilityFamily` | `"moonshot"` | Optional provider-family compatibility bucket for shared request helpers.               |
+| `openAICompletions`   | `object`     | OpenAI-compatible completions request flags. `supportsStreamingUsage` is the only flag. |

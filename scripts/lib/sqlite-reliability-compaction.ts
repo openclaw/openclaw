@@ -14,7 +14,9 @@ import {
 import {
   assertReliabilityForcedExit,
   waitForReliabilityWorkerExit,
+  waitForReliabilityWorkerMessage,
 } from "./sqlite-reliability-process.js";
+import { resolveForwardedNodeCompilerArgs } from "./tsx-cli-shim.mjs";
 
 type CompactionTarget = {
   identity: SnapshotDatabaseIdentity;
@@ -54,46 +56,17 @@ async function waitForWorkerReady(params: {
   child: ChildProcess;
   readStderr: () => string;
 }): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      cleanup();
-      reject(
-        new Error(
-          `SQLite compaction worker did not become ready.${formatReliabilityStderr(params.readStderr())}`,
-        ),
-      );
-    }, 30_000);
-    const onMessage = (message: unknown) => {
-      if (
-        message &&
-        typeof message === "object" &&
-        (message as { kind?: unknown }).kind === "ready"
-      ) {
-        cleanup();
-        resolve();
-      }
-    };
-    const onError = (error: Error) => {
-      cleanup();
-      reject(error);
-    };
-    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
-      cleanup();
-      reject(
-        new Error(
-          `SQLite compaction worker exited before ready: code=${String(code)} signal=${String(signal)}.${formatReliabilityStderr(params.readStderr())}`,
-        ),
-      );
-    };
-    const cleanup = () => {
-      clearTimeout(timeout);
-      params.child.off("message", onMessage);
-      params.child.off("error", onError);
-      params.child.off("exit", onExit);
-    };
-    params.child.on("message", onMessage);
-    params.child.on("error", onError);
-    params.child.on("exit", onExit);
+  await waitForReliabilityWorkerMessage({
+    child: params.child,
+    matches: (message) =>
+      message !== null &&
+      typeof message === "object" &&
+      (message as { kind?: unknown }).kind === "ready",
+    timeoutMs: 30_000,
+    timeoutMessage: () =>
+      `SQLite compaction worker did not become ready.${formatReliabilityStderr(params.readStderr())}`,
+    exitMessage: (code, signal) =>
+      `SQLite compaction worker exited before ready: code=${String(code)} signal=${String(signal)}.${formatReliabilityStderr(params.readStderr())}`,
   });
 }
 
@@ -134,7 +107,7 @@ export async function runVacuumInterruptionProof(params: {
   let stderr = "";
   const child = fork(COMPACTION_WORKER_PATH, workerArgs(params.target), {
     env: params.env,
-    execArgv: ["--import", "tsx"],
+    execArgv: [...resolveForwardedNodeCompilerArgs(), "--import", "tsx"],
     serialization: "json",
     stdio: ["ignore", "ignore", "pipe", "ipc"],
   });

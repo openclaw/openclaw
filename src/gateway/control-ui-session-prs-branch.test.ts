@@ -3,16 +3,25 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { loadControlUiSessionPullRequests } from "./control-ui-session-prs.js";
+import * as worktreeGit from "../agents/worktrees/git.js";
+import { runGitReadOperation } from "../infra/git-read-cache.js";
+import { loadSessionPullRequestReferences } from "./control-ui-session-pr-references.js";
 import {
-  evictPullRequestCache,
+  createSessionPullRequestsFixture,
   githubJson,
   pullListItem,
   routedFetch,
   testGitContext as context,
 } from "./control-ui-session-prs.test-support.js";
+
+const { load: loadControlUiSessionPullRequests } = createSessionPullRequestsFixture();
+
+vi.mock("./control-ui-session-pr-references.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./control-ui-session-pr-references.js")>()),
+  loadSessionPullRequestReferences: vi.fn(async () => []),
+}));
 
 describe("session branch diff stats", () => {
   const execFileAsync = promisify(execFile);
@@ -145,12 +154,389 @@ describe("session branch diff stats", () => {
   });
 
   beforeEach(async () => {
+    vi.mocked(loadSessionPullRequestReferences).mockResolvedValue([]);
     root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-prs-")));
   });
 
   afterEach(async () => {
-    await evictPullRequestCache();
     await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it.each(["loose", "packed", "detached", "linked"])(
+    "reads %s HEAD metadata without subprocesses and preserves checkout context",
+    async (layout) => {
+      await initializeRepo();
+      await git("remote", "add", "origin", "https://github.com/openclaw/openclaw.git");
+      await trackRemote("main");
+      await git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+      let cwd = root;
+      if (layout === "linked") {
+        cwd = path.join(root, "linked");
+        await git("worktree", "add", "-b", "feature", cwd);
+      } else if (layout === "detached") {
+        await git("checkout", "--detach");
+      } else {
+        await git("checkout", "-b", "feature");
+        if (layout === "packed") {
+          await git("pack-refs", "--all", "--prune");
+        }
+      }
+      const reads = vi.spyOn(worktreeGit, "runGitBytes");
+      try {
+        await expect(
+          runGitReadOperation(
+            { type: "checkout.context", input: { root: cwd } },
+            { refresh: true },
+          ),
+        ).resolves.toEqual({
+          owner: "openclaw",
+          repo: "openclaw",
+          root: cwd,
+          branch: layout === "detached" ? null : "feature",
+          defaultBranch: "main",
+        });
+        expect(reads.mock.calls.filter(([, args]) => args[0] === "rev-parse")).toHaveLength(0);
+        await runGitReadOperation(
+          {
+            type: "pull-request.branch-facts",
+            input: { root: cwd, branch: "feature", defaultBranch: "main", mergedHeads: [] },
+          },
+          { refresh: true },
+        );
+        expect(reads.mock.calls.filter(([, args]) => args[0] === "rev-parse")).toHaveLength(0);
+      } finally {
+        reads.mockRestore();
+      }
+    },
+  );
+
+  it.each([
+    "HEAD tag",
+    "detached HEAD tag",
+    "worktree pseudoref",
+    "packed exact name",
+    "virtual worktree name",
+  ])("preserves Git discovery with an ambiguous %s", async (collision) => {
+    await initializeRepo();
+    await git("remote", "add", "origin", "https://github.com/openclaw/openclaw.git");
+    let cwd = root;
+    if (collision === "worktree pseudoref") {
+      cwd = path.join(root, "linked");
+      await git("worktree", "add", "-b", "ORIG_HEAD", cwd);
+      await gitIn(cwd, "update-ref", "ORIG_HEAD", "HEAD");
+    } else if (collision === "packed exact name") {
+      await git("pack-refs", "--all", "--prune");
+      await git("checkout", "-b", "refs/heads/main");
+    } else if (collision === "virtual worktree name") {
+      await git("checkout", "-b", "main-worktree/HEAD");
+    } else {
+      if (collision === "detached HEAD tag") {
+        await git("checkout", "--detach");
+      }
+      await git("update-ref", "refs/tags/HEAD", "HEAD");
+    }
+    const expectedBranch = await gitIn(cwd, "rev-parse", "--abbrev-ref", "HEAD").then(
+      (result) => result.stdout.trim(),
+      () => null,
+    );
+    await expect(
+      runGitReadOperation({ type: "checkout.context", input: { root: cwd } }, { refresh: true }),
+    ).resolves.toEqual(
+      expectedBranch
+        ? {
+            owner: "openclaw",
+            repo: "openclaw",
+            root: cwd,
+            branch: expectedBranch === "HEAD" ? null : expectedBranch,
+          }
+        : null,
+    );
+  });
+
+  it("keeps Git's ambiguous branch names and admission-time discovery overrides", async () => {
+    await initializeRepo();
+    await git("remote", "add", "origin", "https://github.com/openclaw/openclaw.git");
+    await git("checkout", "-b", "feature");
+    await git("tag", "feature");
+    const read = () =>
+      runGitReadOperation({ type: "checkout.context", input: { root } }, { refresh: true });
+    const expected = (await git("rev-parse", "--abbrev-ref", "HEAD")).stdout.trim();
+    expect((await read())?.branch).toBe(expected);
+    if (process.platform !== "win32") {
+      await git("config", "core.preferSymlinkRefs", "true");
+      await git("symbolic-ref", "HEAD", "refs/heads/feature");
+      expect((await read())?.branch).toBe(expected);
+    }
+    // Reuse the warm worker after its host environment changes.
+    const redirected = path.join(root, "redirected");
+    await fs.cp(templateRepo, redirected, { recursive: true });
+    await gitIn(redirected, "remote", "add", "origin", "https://github.com/example/redirected.git");
+    vi.stubEnv("GIT_DIR", path.join(redirected, ".git"));
+    try {
+      expect(await read()).toMatchObject({ owner: "example", repo: "redirected", branch: "main" });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("discovers GitHub identity locally and skips network for default, non-GitHub, and detached checkouts", async () => {
+    await initializeRepo();
+    await git("remote", "add", "origin", "https://github.com/openclaw/openclaw.git");
+    await trackRemote("main");
+    await git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+    const fetchImpl = routedFetch([]);
+    const load = () =>
+      loadControlUiSessionPullRequests(
+        { sessionKey: "agent:main:discovery", refresh: true },
+        { fetchImpl, resolveGitRoot: async () => root },
+      );
+    await expect(load()).resolves.toEqual({
+      pullRequests: [],
+      rateLimited: false,
+      repository: { owner: "openclaw", repo: "openclaw" },
+    });
+    await git("remote", "set-url", "origin", "https://gitlab.com/openclaw/openclaw.git");
+    await expect(load()).resolves.toEqual({ pullRequests: [], rateLimited: false });
+    await git("remote", "set-url", "origin", "https://github.com/openclaw/openclaw.git");
+    await git("checkout", "--detach");
+    await expect(load()).resolves.toEqual({
+      pullRequests: [],
+      rateLimited: false,
+      repository: { owner: "openclaw", repo: "openclaw" },
+    });
+    expect(fetchImpl.mock.calls).toHaveLength(0);
+  });
+
+  it("discovers referenced PRs from other worktrees while detached and after returning to main", async () => {
+    await initializeFeatureWork();
+    await git("remote", "add", "origin", "https://github.com/openclaw/openclaw.git");
+    await git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+    await git("checkout", "--detach");
+    vi.mocked(loadSessionPullRequestReferences).mockResolvedValue([42, 43]);
+    let failureStatus: number | undefined;
+    const fetchImpl = routedFetch([
+      {
+        match: "/pulls/42",
+        response: () =>
+          failureStatus
+            ? githubJson({ message: "GitHub unavailable" }, failureStatus)
+            : githubJson(
+                pullListItem({
+                  number: 42,
+                  state: "closed",
+                  merged_at: "2026-09-01T00:00:00Z",
+                  html_url: "https://github.com/openclaw/openclaw/pull/42",
+                  head: { ref: "feature/first", sha: "a".repeat(40) },
+                }),
+              ),
+      },
+      {
+        match: "/pulls/43",
+        response: () =>
+          githubJson(
+            pullListItem({
+              number: 43,
+              head: { ref: "feature/follow-up", sha: "b".repeat(40) },
+              html_url: "https://github.com/openclaw/openclaw/pull/43",
+              additions: 8,
+              deletions: 2,
+            }),
+          ),
+      },
+      {
+        match: "/check-runs",
+        response: () =>
+          githubJson({
+            total_count: 1,
+            check_runs: [{ status: "completed", conclusion: "success" }],
+          }),
+      },
+    ]);
+    const load = () =>
+      loadControlUiSessionPullRequests(
+        { sessionKey: "agent:main:references", refresh: true },
+        { fetchImpl, resolveGitRoot: async () => root },
+      );
+    const detached = await load();
+    expect(detached.pullRequests).toMatchObject([
+      {
+        number: 43,
+        branch: "feature/follow-up",
+        state: "open",
+        additions: 8,
+        checks: { state: "passing" },
+      },
+      { number: 42, branch: "feature/first", state: "merged" },
+    ]);
+    expect(detached.branch).toBeUndefined();
+    await git("checkout", "main");
+    expect(await load()).toEqual(detached);
+    expect(fetchImpl.mock.calls).toHaveLength(6);
+    failureStatus = 503;
+    expect(await load()).toEqual({ ...detached, status: "unavailable" });
+    failureStatus = 429;
+    expect(await load()).toEqual({ ...detached, rateLimited: true });
+    const callsAtBackoff = fetchImpl.mock.calls.length;
+    expect(await load()).toEqual({ ...detached, rateLimited: true });
+    expect(fetchImpl.mock.calls).toHaveLength(callsAtBackoff);
+  });
+
+  it("does not treat a referenced PR's merge as landing the working branch", async () => {
+    const head = await initializeFeatureHead({ trackFeature: true });
+    vi.mocked(loadSessionPullRequestReferences).mockResolvedValue([42]);
+    const fetchImpl = routedFetch([
+      { match: "/pulls?head=", response: () => githubJson([]) },
+      {
+        match: "/pulls/42",
+        response: () =>
+          githubJson(
+            mergedPull(head, {
+              number: 42,
+              head: { sha: head, ref: "other-branch" },
+            }),
+          ),
+      },
+      { match: "/repos/openclaw/openclaw", response: () => githubJson({ fork: false }) },
+    ]);
+    const result = await loadControlUiSessionPullRequests(
+      { sessionKey: "agent:main:other-branch", refresh: true },
+      {
+        fetchImpl,
+        resolveGitContext: async () => ({
+          ...context,
+          branch: "feature",
+          root,
+          defaultBranch: "main",
+        }),
+      },
+    );
+    expect(result.pullRequests).toMatchObject([
+      { number: 42, state: "merged", branch: "other-branch" },
+    ]);
+    expect(result.branch?.createUrl).toBe("https://github.com/openclaw/openclaw/pull/new/feature");
+  });
+
+  it("keeps publication available when a referenced fork PR has the same branch name", async () => {
+    await initializeFeatureWork({ trackFeature: true });
+    vi.mocked(loadSessionPullRequestReferences).mockResolvedValue([42]);
+    const fetchImpl = routedFetch([
+      { match: "/pulls?head=", response: () => githubJson([]) },
+      {
+        match: "/pulls/42",
+        response: () =>
+          githubJson(
+            pullListItem({
+              number: 42,
+              head: { ref: "feature", repo: { owner: { login: "contributor" }, name: "fork" } },
+            }),
+          ),
+      },
+      { match: "/repos/openclaw/openclaw", response: () => githubJson({ fork: false }) },
+    ]);
+    const load = () =>
+      loadControlUiSessionPullRequests(
+        { sessionKey: "agent:main:fork-reference", refresh: true },
+        {
+          fetchImpl,
+          resolveGitContext: async () => ({
+            ...context,
+            branch: "feature",
+            root,
+            defaultBranch: "main",
+          }),
+        },
+      );
+    const result = await load();
+    expect(result.pullRequests).toMatchObject([{ number: 42, state: "open", branch: "feature" }]);
+    expect(result.branch?.createUrl).toBe("https://github.com/openclaw/openclaw/pull/new/feature");
+    vi.mocked(loadSessionPullRequestReferences).mockRejectedValueOnce(new Error("indexing"));
+    const indexing = await load();
+    expect(indexing.branch).toEqual(result.branch);
+    expect(indexing.pullRequests).toEqual(result.pullRequests);
+    expect(indexing.status).toBeUndefined();
+  });
+
+  it("preserves proven branch PRs across unavailable references and new links during backoff", async () => {
+    await initializeFeatureWork({ trackFeature: true });
+    vi.mocked(loadSessionPullRequestReferences).mockResolvedValue([42]);
+    let hasPull = false;
+    let limited = false;
+    let referenceStatus = 503;
+    const fetchImpl = routedFetch([
+      {
+        match: "/pulls?head=",
+        response: () =>
+          limited
+            ? githubJson({}, 429)
+            : githubJson(hasPull ? [pullListItem({ head: { ref: "feature" } })] : []),
+      },
+      { match: "/pulls/103469", response: () => githubJson({ additions: 1, deletions: 0 }) },
+      { match: "/pulls/42", response: () => githubJson({}, hasPull ? referenceStatus : 404) },
+      { match: "/repos/openclaw/openclaw", response: () => githubJson({ fork: false }) },
+    ]);
+    const load = () =>
+      loadControlUiSessionPullRequests(
+        { sessionKey: "agent:main:changing-references", refresh: true },
+        {
+          fetchImpl,
+          resolveGitContext: async () => ({
+            ...context,
+            branch: "feature",
+            root,
+            defaultBranch: "main",
+          }),
+        },
+      );
+    expect((await load()).branch).toBeDefined();
+    hasPull = true;
+    const published = await load();
+    expect(published.pullRequests).toMatchObject([{ number: 103469, state: "open" }]);
+    expect(published.branch).toBeUndefined();
+    expect(published.status).toBe("unavailable");
+    expect(published.rateLimited).toBe(false);
+    vi.mocked(loadSessionPullRequestReferences).mockRejectedValueOnce(new Error("indexing"));
+    expect(await load()).toEqual(published);
+
+    referenceStatus = 404;
+    const recovered = await load();
+    expect(recovered.pullRequests).toEqual(published.pullRequests);
+    expect(recovered.branch).toBeUndefined();
+    expect(recovered.status).toBeUndefined();
+
+    limited = true;
+    vi.mocked(loadSessionPullRequestReferences).mockResolvedValue([43]);
+    const stale = await load();
+    expect(stale.pullRequests).toEqual(published.pullRequests);
+    expect(stale.rateLimited).toBe(true);
+    expect(stale.branch).toBeUndefined();
+    const callsAtBackoff = fetchImpl.mock.calls.length;
+    vi.mocked(loadSessionPullRequestReferences).mockResolvedValue([44]);
+    expect(await load()).toEqual(stale);
+    expect(fetchImpl.mock.calls).toHaveLength(callsAtBackoff);
+  });
+
+  it("reports unavailable reference discovery on default and detached checkouts", async () => {
+    await initializeRepo();
+    await git("remote", "add", "origin", "https://github.com/openclaw/openclaw.git");
+    await trackRemote("main");
+    await git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+    vi.mocked(loadSessionPullRequestReferences).mockRejectedValue(new Error("indexing"));
+    const fetchImpl = routedFetch([]);
+    const load = () =>
+      loadControlUiSessionPullRequests(
+        { sessionKey: "agent:main:no-reference-discovery", refresh: true },
+        { fetchImpl, resolveGitRoot: async () => root },
+      );
+    const unavailable = {
+      pullRequests: [],
+      rateLimited: false,
+      status: "unavailable",
+      repository: { owner: "openclaw", repo: "openclaw" },
+    };
+    expect(await load()).toEqual(unavailable);
+    await git("checkout", "--detach");
+    expect(await load()).toEqual(unavailable);
+    expect(fetchImpl.mock.calls).toHaveLength(0);
   });
 
   it("counts committed and uncommitted changes vs the origin default merge base", async () => {
@@ -191,14 +577,38 @@ describe("session branch diff stats", () => {
     expect(result.branch).toMatchObject({ additions: 3, deletions: 0 });
   });
 
-  it("omits the branch payload when the remote branch has nothing to compare", async () => {
-    await initializeFeatureBranch();
-    await trackRemote("feature");
-
-    const result = await loadBranchState();
-    // origin/feature == origin/main: GitHub would answer "nothing to compare".
-    expect(result.branch).toBeUndefined();
-  });
+  it.each(["none", "uncommitted", "unpushed"])(
+    "preserves %s local work at equal remote tips without recounting commits",
+    async (localWork) => {
+      await initializeFeatureBranch();
+      await trackRemote("feature");
+      if (localWork === "uncommitted") {
+        await appendFile("a.txt", "pending\n");
+      } else if (localWork === "unpushed") {
+        await appendCommit("a.txt", "pending\n", "local only");
+      }
+      const reads = vi.spyOn(worktreeGit, "runGitBytes");
+      try {
+        const result = await loadBranchState();
+        expect(result.branch).toEqual(
+          localWork === "none"
+            ? undefined
+            : {
+                owner: "openclaw",
+                repo: "openclaw",
+                branch: "feature",
+                additions: 1,
+                deletions: 0,
+                changedFiles: 1,
+              },
+        );
+        expect(reads).toHaveBeenCalled();
+        expect(reads.mock.calls.filter(([, args]) => args[0] === "rev-list")).toHaveLength(0);
+      } finally {
+        reads.mockRestore();
+      }
+    },
+  );
 
   it("reports local changes without createUrl until the branch exists on origin", async () => {
     await initializeFeatureBranch();
@@ -216,22 +626,26 @@ describe("session branch diff stats", () => {
     });
   });
 
-  it("reports uncommitted changes when the remote branch has nothing to compare", async () => {
-    await initializeFeatureBranch();
-    await trackRemote("feature");
-    await appendFile("a.txt", "pending\n");
-
-    const result = await loadBranchState();
-    // With equal remote refs, dirty work remains visible without a Create PR link.
-    expect(result.branch).toEqual({
-      owner: "openclaw",
-      repo: "openclaw",
-      branch: "feature",
-      additions: 1,
-      deletions: 0,
-      changedFiles: 1,
-    });
-  });
+  it.each(["missing object", "malformed ref"])(
+    "preserves unknown comparison behavior for equal remote tips with a %s",
+    async (problem) => {
+      await initializeFeatureBranch();
+      await trackRemote("feature");
+      const value = problem === "missing object" ? "1".repeat(40) : "not-an-object-id";
+      for (const branch of ["main", "feature"]) {
+        await fs.writeFile(
+          path.join(root, ".git", "refs", "remotes", "origin", branch),
+          `${value}\n`,
+        );
+      }
+      const result = await loadBranchState();
+      expect(result.branch?.createUrl).toBe(
+        problem === "missing object"
+          ? "https://github.com/openclaw/openclaw/pull/new/feature"
+          : undefined,
+      );
+    },
+  );
 
   it("drops the Create PR row once the pushed tip is a merged PR's head", async () => {
     const mergedHead = await initializeFeatureHead({ trackFeature: true });
@@ -291,18 +705,35 @@ describe("session branch diff stats", () => {
     expect(result.branch).toBeUndefined();
   });
 
-  it("suppresses the row when the local checkout trails the merged remote tip", async () => {
-    const staleHead = await initializeFeatureHead();
-    // This checkout's HEAD trails the final commit pushed and merged elsewhere.
-    await appendCommit("a.txt", "review fix\n", "review fix");
-    await trackRemote("feature");
-    const mergedHead = await resolveRevision("HEAD");
-    await git("reset", "--hard", staleHead);
+  it.each(["lowercase", "uppercase"])(
+    "suppresses the row when the local checkout trails the merged remote tip with %s ref text",
+    async (refCase) => {
+      const olderMergedHead = await initializeFeatureHead();
+      await appendCommit("a.txt", "second PR\n", "second PR");
+      const staleHead = await resolveRevision("HEAD");
+      // Four commits: default -> older merge -> local HEAD -> newer merge.
+      await appendCommit("a.txt", "review fix\n", "review fix");
+      await trackRemote("feature");
+      const mergedHead = await resolveRevision("HEAD");
+      await git("reset", "--hard", staleHead);
+      if (refCase === "uppercase") {
+        await fs.writeFile(
+          path.join(root, ".git", "refs", "heads", "feature"),
+          `${staleHead.toUpperCase()}\n`,
+        );
+      }
+      expect(await resolveRevision("HEAD")).toBe(staleHead);
 
-    const result = await loadBranchState({ pullRequests: [mergedPull(mergedHead)] });
-    // The clean, fully merged stale checkout must not replay a landed subset.
-    expect(result.branch).toBeUndefined();
-  });
+      const result = await loadBranchState({
+        pullRequests: [
+          mergedPull(olderMergedHead, { number: 1 }),
+          mergedPull(mergedHead, { number: 2 }),
+        ],
+      });
+      // The clean, fully merged stale checkout must not replay a landed subset.
+      expect(result.branch).toBeUndefined();
+    },
+  );
 
   it("restores Create PR for a branch rebased past the landing with new work", async () => {
     const mergedHead = await initializeFeatureHead({ trackMain: false });
@@ -471,16 +902,21 @@ describe("session branch diff stats", () => {
     });
   });
 
-  it("omits the branch payload when the default branch is unknown", async () => {
-    await initializeRepo();
-    await git("checkout", "-b", "feature");
-    await trackRemote("feature");
-
-    const result = await loadBranchState({
-      // No defaultBranch: origin/HEAD unresolvable in this checkout.
-      defaultBranch: null,
-    });
-    // Fail closed: without a default branch there is nothing to compare against.
-    expect(result.branch).toBeUndefined();
-  });
+  it.each([null, "main"])(
+    "handles a missing default tracking ref when the known default branch is %s",
+    async (defaultBranch) => {
+      await initializeRepo();
+      await git("checkout", "-b", "feature");
+      await trackRemote("feature");
+      const result = await loadBranchState({ defaultBranch });
+      if (defaultBranch) {
+        // An unavailable local comparison must not hide a known pushed branch.
+        expect(result.branch?.createUrl).toBe(
+          "https://github.com/openclaw/openclaw/pull/new/feature",
+        );
+      } else {
+        expect(result.branch).toBeUndefined();
+      }
+    },
+  );
 });

@@ -3,10 +3,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
+import JSZip from "jszip";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { withEnvOverride } from "../config/test-helpers.js";
 import type { CostUsageSummary } from "../infra/session-cost-usage.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { ExpectedCliError } from "./failure-output.js";
 import { registerGatewayCli } from "./gateway-cli.js";
 
@@ -626,7 +627,7 @@ describe("gateway-cli coverage", () => {
       fs.mkdirSync(bundleDir, { recursive: true });
       fs.writeFileSync(bundlePath, `${JSON.stringify(bundle, null, 2)}\n`, "utf8");
 
-      await withEnvOverride({ OPENCLAW_STATE_DIR: tempDir }, async () => {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: tempDir }, async () => {
         await runGatewayCommand([
           "gateway",
           "--port",
@@ -670,7 +671,7 @@ describe("gateway-cli coverage", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-cli-support-"));
     try {
       const outputPath = path.join(tempDir, "diagnostics.zip");
-      await withEnvOverride(
+      await withEnvAsync(
         { OPENCLAW_STATE_DIR: tempDir, OPENCLAW_TEST_FILE_LOG: undefined },
         async () => {
           await runGatewayCommand([...args, "--output", outputPath, "--json"]);
@@ -696,6 +697,83 @@ describe("gateway-cli coverage", () => {
     }
   });
 
+  it("gateway diagnostics export redacts namespaced paths in the ZIP across repeated exports", async () => {
+    const stateDir = tempDirs.make("openclaw-gateway-redaction-");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const logPath = path.join(stateDir, "input.log");
+    const userProfile = "C:\\Users\\support-user";
+    const cases = [
+      [
+        `mkdir '\\\\?\\${stateDir}${path.sep}agents'`,
+        `mkdir '$OPENCLAW_STATE_DIR${path.sep}agents'`,
+      ],
+      [
+        `failed at \\\\?\\${userProfile}\\Documents\\error.txt`,
+        "failed at ~\\Documents\\error.txt",
+      ],
+      [
+        "failed at \\\\?\\c:\\users\\support-user\\Documents\\error.txt",
+        "failed at ~\\Documents\\error.txt",
+      ],
+      [
+        `failed at \\\\.\\${userProfile}\\Documents\\error.txt`,
+        "failed at ~\\Documents\\error.txt",
+      ],
+      [`\\\\?\\${userProfile}\\Documents\\error.txt`, "~\\Documents\\error.txt"],
+      ["scanned \\\\?\\D:\\unrelated\\root", "scanned \\\\?\\D:\\unrelated\\root"],
+      ["\\\\?\\UNC\\server\\share\\config.json", "\\\\?\\UNC\\server\\share\\config.json"],
+      ["\\\\.\\pipe\\openclaw-gateway", "\\\\.\\pipe\\openclaw-gateway"],
+    ] as const;
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({ logging: { file: logPath }, plugins: { enabled: false } }),
+    );
+    fs.writeFileSync(logPath, cases.map(([msg]) => JSON.stringify({ msg })).join("\n") + "\n");
+    const expected = cases.map(([, msg]) => JSON.stringify({ msg })).join("\n") + "\n";
+
+    await withEnvAsync(
+      {
+        HOME: stateDir,
+        USERPROFILE: userProfile,
+        OPENCLAW_HOME: stateDir,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_TEST_FILE_LOG: "1",
+      },
+      async () => {
+        // A relative namespace suffix must not acquire the current home prefix.
+        const cwd = vi.spyOn(process, "cwd").mockReturnValue(userProfile);
+        try {
+          for (const filename of ["first.zip", "second.zip"]) {
+            const outputPath = path.join(stateDir, filename);
+            await runGatewayCommand([
+              "gateway",
+              "diagnostics",
+              "export",
+              "--output",
+              outputPath,
+              "--json",
+            ]);
+            const zip = await JSZip.loadAsync(fs.readFileSync(outputPath));
+            const logs = await zip.file("logs/openclaw-sanitized.jsonl")?.async("string");
+            expect(logs).toBe(expected);
+            if (logs === undefined) {
+              throw new Error("Diagnostics export is missing sanitized logs");
+            }
+            const config = await zip.file("config/shape.json")?.async("string");
+            expect(config).toContain('"parseOk": true');
+            expect(config).toContain(
+              `"path": ${JSON.stringify(`$OPENCLAW_STATE_DIR${path.sep}openclaw.json`)}`,
+            );
+            fs.writeFileSync(logPath, logs);
+          }
+        } finally {
+          cwd.mockRestore();
+        }
+      },
+    );
+  });
+
   it.each([
     ["--log-lines", "5000x"],
     ["--log-bytes", "1mb"],
@@ -718,7 +796,7 @@ describe("gateway-cli coverage", () => {
       callGateway.mockClear();
       const tempDir = tempDirs.make("openclaw-gateway-cli-empty-");
       const outputPath = path.join(tempDir, "diagnostics.zip");
-      await withEnvOverride(
+      await withEnvAsync(
         { OPENCLAW_STATE_DIR: tempDir, OPENCLAW_TEST_FILE_LOG: undefined },
         async () => {
           await expectGatewayExit([
@@ -792,6 +870,27 @@ describe("gateway-cli coverage", () => {
       }),
     );
   });
+
+  it.each([18789, 29443])(
+    "forwards the resolved Gateway port %i in discovery SSH tunnel hints",
+    async (port) => {
+      discoverGatewayBeacons.mockResolvedValueOnce([
+        {
+          instanceName: "Remote gateway",
+          host: "gateway.example",
+          port,
+          gatewayPort: 41111,
+          sshPort: 2222,
+        },
+      ]);
+
+      await runGatewayCommand(["gateway", "discover"]);
+
+      const output = runtimeLogs.join("\n");
+      expect(output).toContain(`ws://gateway.example:${port}`);
+      expect(output).toContain(`ssh -N -L 18789:127.0.0.1:${port} <user>@gateway.example -p 2222`);
+    },
+  );
 
   it("validates gateway discover timeout", async () => {
     discoverGatewayBeacons.mockClear();

@@ -1,4 +1,5 @@
 // Msteams tests cover setup surface plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMSTeamsSetupWizardBase, msteamsSetupAdapter } from "./setup-core.js";
@@ -46,7 +47,7 @@ describe("msteams setup surface", () => {
     normalizeSecretInputString.mockClear();
     hasConfiguredMSTeamsCredentials.mockReset();
     resolveMSTeamsCredentials.mockReset();
-    saveDelegatedTokens.mockReset();
+    saveDelegatedTokens.mockReset().mockResolvedValue(undefined);
     loginMSTeamsDelegated.mockReset();
   });
 
@@ -289,8 +290,14 @@ describe("msteams setup surface", () => {
       expect(oauthModuleState.loaded).toBe(true);
     });
     const progress = { update: vi.fn(), stop: vi.fn() };
+    const writing = createDeferred<void>();
+    const releaseWrite = createDeferred<void>();
+    saveDelegatedTokens.mockImplementationOnce(async () => {
+      writing.resolve();
+      await releaseWrite.promise;
+    });
 
-    await delegatedMsteamsSetupWizard.finalize?.({
+    const configured = delegatedMsteamsSetupWizard.finalize?.({
       cfg: { channels: { msteams: {} } },
       prompter: {
         confirm: vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(true),
@@ -301,6 +308,14 @@ describe("msteams setup surface", () => {
       options: { beforePersistentEffect },
     } as never);
 
+    try {
+      await writing.promise;
+      expect(progress.stop).not.toHaveBeenCalled();
+    } finally {
+      releaseWrite.resolve();
+      await configured;
+    }
+    expect(progress.stop).toHaveBeenCalledWith(expect.any(String));
     expect(beforePersistentEffect).toHaveBeenCalledTimes(2);
     expect(loginMSTeamsDelegated).toHaveBeenCalledTimes(1);
     expect(saveDelegatedTokens).toHaveBeenCalledWith(tokens);

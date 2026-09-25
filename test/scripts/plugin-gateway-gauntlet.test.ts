@@ -1,11 +1,11 @@
 // Plugin Gateway Gauntlet tests cover plugin gateway gauntlet script behavior.
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
+import { watch } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -15,7 +15,6 @@ import {
   parseArgs,
   parseTimedMetrics,
   runMeasuredCommand,
-  runMeasuredCommandLive,
 } from "../../scripts/check-plugin-gateway-gauntlet.mts";
 import {
   buildGauntletPrebuildEnv,
@@ -28,11 +27,15 @@ import {
   discoverBundledPluginManifests,
   selectPluginEntries,
 } from "../../scripts/lib/plugin-gateway-gauntlet.mts";
+import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { isProcessAlive } from "../helpers/process-wait.js";
 import { withTestTimeout } from "../helpers/promise.js";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
+import { toolingMtsEntrypoints } from "./tooling-mts-runtime.test-support.mts";
 
 const tsxImport = import.meta.resolve("tsx");
+const testNodeExecPath = resolveTestNodeExecPath();
 
 describe("plugin gateway gauntlet helpers", () => {
   let repoRoot: string;
@@ -687,7 +690,7 @@ describe("plugin gateway gauntlet helpers", () => {
 
   it("clamps oversized measured command timers before scheduling", async () => {
     const logDir = path.join(repoRoot, "logs");
-    const row = await runMeasuredCommandLive({
+    const row = await runMeasuredCommand({
       cwd: repoRoot,
       env: process.env,
       logDir,
@@ -705,68 +708,108 @@ describe("plugin gateway gauntlet helpers", () => {
     await expect(fs.readFile(row.logPath!, "utf8")).resolves.not.toContain("ETIMEDOUT");
   });
 
-  it.runIf(process.platform !== "win32")(
-    "kills timed-out measured command process groups when the leader exits first",
-    async () => {
-      const logDir = path.join(repoRoot, "logs");
-      const scriptPath = path.join(repoRoot, "leader-exits.mjs");
-      const grandchildPidPath = path.join(repoRoot, "grandchild.pid");
-      let grandchildPid = 0;
-      await fs.writeFile(
-        scriptPath,
-        `
+  it.runIf(process.platform !== "win32").each([
+    { label: "normal-leader-exits", normalExit: true },
+    { label: "timeout-leader-exits", normalExit: false },
+  ])("cleans measured process groups after $label", async ({ label, normalExit }) => {
+    const logDir = path.join(repoRoot, "logs");
+    const scriptPath = path.join(repoRoot, "leader-exits.mjs");
+    const grandchildPidPath = path.join(repoRoot, "grandchild.pid");
+    const readyPath = path.join(repoRoot, "grandchild.ready");
+    let grandchildPid = 0;
+    await fs.writeFile(
+      scriptPath,
+      `
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 
+const normalExit = process.argv[4] === "normal";
 const grandchild = spawn(process.execPath, [
   "-e",
-  "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);",
-], { stdio: "ignore" });
-// Publish the pid by rename so the reader never observes a created-but-unwritten
-// or partially written file.
+  "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); process.send('ready');",
+], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
+// Publish the PID atomically so failed startup still has an owned rescue target.
 fs.writeFileSync(process.argv[2] + ".tmp", String(grandchild.pid));
 fs.renameSync(process.argv[2] + ".tmp", process.argv[2]);
+grandchild.once("message", () => {
+  fs.writeFileSync(process.argv[3], "ready");
+  if (normalExit) process.exit(0);
+});
 process.on("SIGTERM", () => process.exit(0));
-setInterval(() => {}, 1000);
+if (!normalExit) setInterval(() => {}, 1000);
 `,
-        "utf8",
-      );
+      "utf8",
+    );
 
-      try {
-        const rowPromise = runMeasuredCommand({
-          cwd: repoRoot,
-          env: process.env,
-          logDir,
-          command: process.execPath,
-          args: [scriptPath, grandchildPidPath],
-          label: "timeout-leader-exits",
-          phase: "probe",
-          timeoutKillGraceMs: 25,
-          timeoutMs: 250,
-          timeMode: "none",
-        });
+    const rowPromise = runMeasuredCommand({
+      cwd: repoRoot,
+      env: process.env,
+      logDir,
+      command: process.execPath,
+      args: [scriptPath, grandchildPidPath, readyPath, normalExit ? "normal" : "timeout"],
+      label,
+      phase: "probe",
+      timeoutKillGraceMs: 25,
+      timeoutMs: normalExit ? 1000 : 250,
+      timeMode: "none",
+    });
+    // Observe early rejection while readiness is checked; the original is awaited below.
+    void rowPromise.catch(() => undefined);
 
+    await runQaGatewayFixture(
+      async () => {
         await waitFor(() =>
-          fs
-            .access(grandchildPidPath)
-            .then(() => true)
-            .catch(() => false),
+          fs.access(readyPath).then(
+            () => true,
+            () => false,
+          ),
         );
         grandchildPid = Number.parseInt(await fs.readFile(grandchildPidPath, "utf8"), 10);
-        expect(Number.isInteger(grandchildPid)).toBe(true);
-        expect(isProcessAlive(grandchildPid)).toBe(true);
+        expect(Number.isSafeInteger(grandchildPid) && grandchildPid > 1).toBe(true);
+        if (!normalExit) {
+          expect(isProcessAlive(grandchildPid)).toBe(true);
+        }
 
         const row = await rowPromise;
-        expect(row.timedOut).toBe(true);
-        expect(row.spawnError?.code).toBe("ETIMEDOUT");
-        await waitFor(() => !isProcessAlive(grandchildPid));
-      } finally {
-        if (grandchildPid && isProcessAlive(grandchildPid)) {
-          process.kill(grandchildPid, "SIGKILL");
+        expect(row.timedOut).toBe(!normalExit);
+        if (normalExit) {
+          expect(row.status).toBe(1);
         }
-      }
-    },
-  );
+        expect(row.spawnError?.code).toBe(
+          normalExit ? "EPROCESSGROUP_CLEANUP_FAILED" : "ETIMEDOUT",
+        );
+        await waitFor(() => !isProcessAlive(grandchildPid));
+      },
+      async () => {
+        if (!grandchildPid) {
+          try {
+            grandchildPid = Number.parseInt(await fs.readFile(grandchildPidPath, "utf8"), 10);
+          } catch (error) {
+            if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+              return;
+            }
+            throw error;
+          }
+        }
+        expect(Number.isSafeInteger(grandchildPid) && grandchildPid > 1).toBe(true);
+        if (isProcessAlive(grandchildPid)) {
+          try {
+            process.kill(grandchildPid, "SIGKILL");
+          } catch (error) {
+            if (
+              !(error && typeof error === "object" && "code" in error && error.code === "ESRCH")
+            ) {
+              throw error;
+            }
+          }
+        }
+        await waitFor(() => !isProcessAlive(grandchildPid));
+      },
+      async () => {
+        await rowPromise;
+      },
+    );
+  });
 
   it.runIf(process.platform !== "win32")(
     "lets timed-out measured command descendants drain during kill grace",
@@ -830,7 +873,7 @@ setInterval(() => {}, 1000);
 
   it("captures output from live measured commands", async () => {
     const logDir = path.join(repoRoot, "logs");
-    const row = await runMeasuredCommandLive({
+    const row = await runMeasuredCommand({
       cwd: repoRoot,
       env: process.env,
       logDir,
@@ -851,7 +894,7 @@ setInterval(() => {}, 1000);
     const logDir = path.join(repoRoot, "not-a-directory");
     await fs.writeFile(logDir, "blocks log directory creation", "utf8");
 
-    const row = await runMeasuredCommandLive({
+    const row = await runMeasuredCommand({
       cwd: repoRoot,
       env: process.env,
       logDir,
@@ -873,7 +916,7 @@ setInterval(() => {}, 1000);
     const logDir = path.join(repoRoot, "logs");
     const before = process.listenerCount("SIGTERM");
 
-    const row = await runMeasuredCommandLive({
+    const row = await runMeasuredCommand({
       cwd: repoRoot,
       env: process.env,
       logDir,
@@ -924,11 +967,11 @@ setInterval(() => {}, 1000);
       await fs.writeFile(
         harnessPath,
         `
-import { runMeasuredCommandLive } from ${JSON.stringify(
-          pathToFileURL(path.resolve("scripts/check-plugin-gateway-gauntlet.mts")).href,
+import { runMeasuredCommand } from ${JSON.stringify(
+          resolveRuntimeWorkerUrl(toolingMtsEntrypoints.pluginGatewayGauntlet).href,
         )};
 
-await runMeasuredCommandLive({
+await runMeasuredCommand({
   cwd: ${JSON.stringify(repoRoot)},
   env: process.env,
   logDir: ${JSON.stringify(logDir)},
@@ -946,7 +989,7 @@ await runMeasuredCommandLive({
         "utf8",
       );
 
-      const harness = spawn(process.execPath, ["--import", tsxImport, harnessPath], {
+      const harness = spawn(testNodeExecPath, ["--import", tsxImport, harnessPath], {
         cwd: repoRoot,
         stdio: ["ignore", "pipe", "pipe"],
       });
@@ -1018,12 +1061,12 @@ import { once } from "node:events";
 import fs from "node:fs";
 import { mock } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
-import { runMeasuredCommandLive } from ${JSON.stringify(
-          pathToFileURL(path.resolve("scripts/check-plugin-gateway-gauntlet.mts")).href,
+import { runMeasuredCommand } from ${JSON.stringify(
+          resolveRuntimeWorkerUrl(toolingMtsEntrypoints.pluginGatewayGauntlet).href,
         )};
 
 import { inspectManagedProcessGroup } from ${JSON.stringify(
-          pathToFileURL(path.resolve("scripts/lib/managed-child-process.mts")).href,
+          resolveRuntimeWorkerUrl(toolingMtsEntrypoints.managedChildProcess).href,
         )};
 
 const realDelay = delay;
@@ -1039,7 +1082,7 @@ const observeChild = ({ process: owned }) => {
 // Only the controller's policy clock is mocked; readiness, exit, and signals are native.
 mock.timers.enable({ apis: ["Date", "setTimeout"] });
 children.subscribe(observeChild);
-const promise = runMeasuredCommandLive({
+const promise = runMeasuredCommand({
   cwd: ${JSON.stringify(repoRoot)},
   env: process.env,
   logDir: ${JSON.stringify(logDir)},
@@ -1083,7 +1126,7 @@ try {
         "utf8",
       );
 
-      const harness = spawn(process.execPath, ["--import", tsxImport, harnessPath], {
+      const harness = spawn(testNodeExecPath, ["--import", tsxImport, harnessPath], {
         cwd: repoRoot,
         stdio: ["ignore", "pipe", "pipe"],
       });
@@ -1148,7 +1191,7 @@ try {
 
   it("bounds captured output from live measured commands", async () => {
     const logDir = path.join(repoRoot, "logs");
-    const row = await runMeasuredCommandLive({
+    const row = await runMeasuredCommand({
       cwd: repoRoot,
       env: process.env,
       logDir,
@@ -1175,7 +1218,7 @@ try {
       return true;
     });
 
-    const row = await runMeasuredCommandLive({
+    const row = await runMeasuredCommand({
       cwd: repoRoot,
       env: process.env,
       logDir,
@@ -1200,7 +1243,32 @@ try {
   it("force kills timed-out live measured process groups that ignore SIGTERM", async () => {
     const logDir = path.join(repoRoot, "logs");
     const markerPath = path.join(repoRoot, "timeout-marker.txt");
-    const row = await runMeasuredCommandLive({
+    const watcher = watch(repoRoot);
+    const ready = new Promise<void>((resolve, reject) => {
+      watcher.on("error", reject);
+      watcher.on("change", (_event, filename) => {
+        if (filename?.toString() === path.basename(markerPath)) {
+          resolve();
+        }
+      });
+    });
+    const scheduleTimeout = globalThis.setTimeout;
+    let fireDeadline: (() => void) | undefined;
+    // Drive only the policy deadline after the real child's signal handler is ready.
+    const timerSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementation((callback, ms, ...args) => {
+        const timer = scheduleTimeout(callback, ms, ...args);
+        if (ms === 100 && !fireDeadline) {
+          clearTimeout(timer);
+          fireDeadline = () => {
+            fireDeadline = undefined;
+            callback(...args);
+          };
+        }
+        return timer;
+      });
+    const command = runMeasuredCommand({
       cwd: repoRoot,
       env: process.env,
       logDir,
@@ -1210,8 +1278,8 @@ try {
         [
           "const fs = require('node:fs');",
           "const marker = process.argv[1];",
-          "fs.writeFileSync(marker, 'start\\n');",
           "process.on('SIGTERM', () => fs.appendFileSync(marker, 'term\\n'));",
+          "fs.writeFileSync(marker, 'start\\n');",
           "setInterval(() => fs.appendFileSync(marker, 'tick\\n'), 1);",
         ].join(""),
         markerPath,
@@ -1221,6 +1289,19 @@ try {
       timeoutMs: 100,
       timeoutKillGraceMs: 10,
     });
+    let row: Awaited<ReturnType<typeof runMeasuredCommand>>;
+    try {
+      await withTestTimeout(ready, 5_000, "measured process fixture did not become ready");
+      watcher.close();
+      timerSpy.mockRestore();
+      expectDefined(fireDeadline, "command deadline should be armed before readiness")();
+      row = await command;
+    } finally {
+      watcher.close();
+      timerSpy.mockRestore();
+      fireDeadline?.();
+      await command;
+    }
 
     expect(row.status).toBe(1);
     expect(row.timedOut).toBe(true);
@@ -1261,14 +1342,23 @@ try {
     const summary = JSON.parse(
       await fs.readFile(path.join(outputDir, "plugin-gateway-gauntlet-summary.json"), "utf8"),
     );
-    expect(summary.guardFailures).toEqual([
-      expect.objectContaining({
-        kind: "empty-run",
-      }),
-    ]);
-    expect(summary.isolatedRunRootPreserved).toBe(true);
-    await expect(fs.stat(summary.isolatedRunRoot)).resolves.toBeTruthy();
-    await fs.rm(summary.isolatedRunRoot, { recursive: true, force: true });
+    try {
+      expect(summary.guardFailures).toEqual([
+        expect.objectContaining({
+          kind: "empty-run",
+        }),
+      ]);
+      expect(summary.isolatedRunRootPreserved).toBe(true);
+      await expect(fs.stat(summary.isolatedRunRoot)).resolves.toBeTruthy();
+      const config = JSON.parse(
+        await fs.readFile(path.join(summary.isolatedRunRoot, "state", "openclaw.json"), "utf8"),
+      );
+      expect(config).toMatchObject({
+        logging: { file: path.join(summary.isolatedRunRoot, "logs", "openclaw.log") },
+      });
+    } finally {
+      await fs.rm(summary.isolatedRunRoot, { recursive: true, force: true });
+    }
   });
 
   it("rejects non-decimal gauntlet numeric options", () => {

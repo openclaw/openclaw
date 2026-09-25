@@ -11,6 +11,8 @@ import type {
   ShortTermRecallStore,
 } from "./short-term-promotion-types.js";
 
+const GENERIC_DAY_HEADING_RE =
+  /^(?:(?:mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday)(?:,\s+)?)?(?:(?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{4}[/-]\d{2}[/-]\d{2})$/i;
 const SHORT_TERM_PATH_RE = /(?:^|\/)memory\/(?:[^/]+\/)*(\d{4})-(\d{2})-(\d{2})(?:-[^/]+)?\.md$/;
 const DREAMING_MEMORY_PATH_RE = /(?:^|\/)memory\/dreaming\//;
 const SHORT_TERM_SESSION_CORPUS_RE =
@@ -56,6 +58,21 @@ export function toFiniteScore(value: unknown, fallback: number): number {
     return fallback;
   }
   return num;
+}
+
+export function isGenericDailyHeading(heading: string): boolean {
+  const normalized = heading.trim().replace(/\s+/g, " ");
+  if (!normalized) {
+    return true;
+  }
+  const lower = normalized.toLowerCase();
+  if (lower === "today" || lower === "yesterday" || lower === "tomorrow") {
+    return true;
+  }
+  if (lower === "morning" || lower === "afternoon" || lower === "evening" || lower === "night") {
+    return true;
+  }
+  return GENERIC_DAY_HEADING_RE.test(normalized);
 }
 
 export function normalizeSnippet(raw: string): string {
@@ -146,14 +163,10 @@ function hasDreamingNarrativeLead(snippet: string): boolean {
   if (/^(?:Candidate|Reflections?):/i.test(withoutPrefix)) {
     return true;
   }
-  // Managed dreaming blocks occasionally serialize recall metadata (status:/confidence:/
-  // evidence:/recalls:) inline before the Candidate or Reflections marker, so the
-  // start-of-string check misses shapes like "status: staged - Candidate: User: ...".
-  // The composite detector below still requires the full signal combination, so widening
-  // the lead check to anywhere in the first 200 chars closes the leak without creating
-  // false positives for ordinary durable notes that merely mention the word in prose.
+  // Serialized metadata can precede narrative markers; bound the scan to the lead.
+  // REM uses a Markdown heading instead of the staged block's colon marker.
   const head = truncateUtf16Safe(withoutPrefix, 200);
-  return /\b(?:Candidate|Reflections?):/i.test(head);
+  return /\b(?:Candidate|Reflections?):/i.test(head) || /#{1,6}\s+Reflections?\b/i.test(head);
 }
 
 export function isContaminatedDreamingSnippet(
@@ -183,7 +196,13 @@ export function isContaminatedDreamingSnippet(
   );
   const hasStatus = /\bstatus:\s*staged\b/i.test(snippet);
   const hasRecalls = /\brecalls:\s*\d+\b/i.test(snippet);
-  return hasNarrativeLead && hasConfidence && hasEvidence && hasStatus && hasRecalls;
+  const hasReflectionNote = /\bnote:\s*reflection\b/i.test(snippet);
+  return (
+    hasNarrativeLead &&
+    hasConfidence &&
+    hasEvidence &&
+    ((hasStatus && hasRecalls) || hasReflectionNote)
+  );
 }
 
 export function normalizeMemoryPath(rawPath: string): string {
@@ -336,6 +355,15 @@ export function normalizeShortTermRecallStore(raw: unknown, nowIso: string): Sho
       const queryHashes = Array.isArray(entry.queryHashes)
         ? normalizeDistinctStrings(entry.queryHashes, MAX_QUERY_HASHES)
         : [];
+      const storedUserQueryHashes = Array.isArray(entry.userQueryHashes)
+        ? normalizeDistinctStrings(entry.userQueryHashes, MAX_QUERY_HASHES)
+        : undefined;
+      // Legacy rows did not retain query provenance. Rows containing only recall
+      // signals are unambiguous, so preserve their earned diversity; mixed rows
+      // stay unqualified until fresh interactive recalls arrive.
+      const userQueryHashes =
+        storedUserQueryHashes ??
+        (dailyCount === 0 && groundedCount === 0 ? queryHashes : undefined);
       const recallDays = Array.isArray(entry.recallDays)
         ? entry.recallDays
             .map((recallDay) => (typeof recallDay === "string" ? normalizeIsoDay(recallDay) : null))
@@ -403,6 +431,7 @@ export function normalizeShortTermRecallStore(raw: unknown, nowIso: string): Sho
         firstRecalledAt,
         lastRecalledAt,
         queryHashes,
+        ...(userQueryHashes ? { userQueryHashes } : {}),
         recallDays: recallDays.slice(-MAX_RECALL_DAYS),
         conceptTags,
         ...(provenance ? { provenance } : {}),

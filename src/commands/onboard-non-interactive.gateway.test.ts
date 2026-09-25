@@ -1,12 +1,10 @@
 // Non-interactive gateway onboarding tests cover local/remote setup, daemon install, and config writes.
 // Gateway auth-token storage has its own suite in onboard-non-interactive.gateway-auth-token.test.ts.
-import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { makeTempWorkspace } from "../test-helpers/workspace.js";
-import { setTestEnvValue, withEnv, withEnvAsync } from "../test-utils/env.js";
+import { withEnv, withEnvAsync } from "../test-utils/env.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import {
   capturedReplaceConfigFileCalls,
@@ -17,7 +15,6 @@ import {
   getPseudoPort,
   healthCommandMock,
   installGatewayDaemonNonInteractiveMock,
-  loadGatewayOnboardModules,
   gatewayOnboardConfigSnapshotMock as readConfigFileSnapshotMock,
   readLastGatewayErrorLineMock,
   readTestConfig,
@@ -25,14 +22,13 @@ import {
   runNonInteractiveSetup,
   gatewayOnboardRuntime as runtime,
   testConfigStore,
+  useGatewayOnboardTestHarness,
 } from "./onboard-non-interactive.gateway.test-mocks.js";
 import {
   createOnboardGatewayTimeoutCapture,
   createOnboardJsonCaptureRuntime,
   createOnboardLocalDaemonOptions,
-  createOnboardStateDirHarness,
   expectOnboardLocalJsonSetupFailure,
-  prepareOnboardGatewayTestEnv,
   readOnboardFirstMockCall,
   runOnboardLocalDaemonSetup,
 } from "./onboard-non-interactive.test-helpers.js";
@@ -206,24 +202,7 @@ describe("logNonInteractiveOnboardingFailure", () => {
 });
 
 describe("onboard (non-interactive): gateway and remote auth", () => {
-  let envSnapshot: ReturnType<typeof prepareOnboardGatewayTestEnv>;
-  let tempHome: string | undefined;
-  const { withStateDir } = createOnboardStateDirHarness(() => tempHome);
-  beforeAll(async () => {
-    envSnapshot = prepareOnboardGatewayTestEnv();
-
-    tempHome = await makeTempWorkspace("openclaw-onboard-");
-    setTestEnvValue("HOME", tempHome);
-
-    await loadGatewayOnboardModules();
-  });
-
-  afterAll(async () => {
-    if (tempHome) {
-      await fs.rm(tempHome, { recursive: true, force: true });
-    }
-    envSnapshot.restore();
-  });
+  const { withStateDir } = useGatewayOnboardTestHarness("openclaw-onboard-");
 
   afterEach(async () => {
     gatewayReachableState.mock = undefined;
@@ -256,7 +235,8 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
             throw new Error(`exit:${code}`);
           },
         };
-        const message = "Config invalid. Run `openclaw doctor` to repair it, then re-run setup.";
+        const message =
+          "Config invalid. Run `openclaw doctor --fix` to apply supported repairs, then re-run setup.";
 
         await expect(
           runNonInteractiveSetup(

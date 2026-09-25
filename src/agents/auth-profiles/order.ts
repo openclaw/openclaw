@@ -19,6 +19,7 @@ import {
 } from "./credential-state.js";
 import { isPendingOAuthRefreshFence } from "./oauth-refresh-marker.js";
 import { dedupeProfileIds } from "./profile-list.js";
+import { isSetupCredentialAccessible } from "./setup-access.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 import {
   clearExpiredCooldowns,
@@ -62,6 +63,7 @@ function isProfileProviderCompatibleWithAuthProvider(params: {
   const providerKey = resolveProviderIdForAuth(params.provider, {
     config: params.cfg,
     ...params.authAliasLookupParams,
+    storedCredential: true,
   });
   return providerKey === params.providerAuthKey;
 }
@@ -139,6 +141,7 @@ export function isConfiguredAwsSdkAuthProfileForProvider(params: {
     resolveProviderIdForAuth(profileConfig.provider, {
       config: params.cfg,
       ...params.authAliasLookupParams,
+      storedCredential: true,
     }) !== providerAuthKey
   ) {
     return false;
@@ -174,6 +177,9 @@ export function resolveAuthProfileEligibility(params: {
       return { eligible: true, reasonCode: "ok" };
     }
     return { eligible: false, reasonCode: "profile_missing" };
+  }
+  if (!isSetupCredentialAccessible({ profileId: params.profileId, credential: cred })) {
+    return { eligible: false, reasonCode: "setup_inactive" };
   }
   if (
     !isProfileProviderCompatibleWithAuthProvider({

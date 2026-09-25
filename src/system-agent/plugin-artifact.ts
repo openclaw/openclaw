@@ -284,7 +284,7 @@ export async function executePluginArtifactActivation(
         verifyArtifactDigest(bytes, operation.sha256);
         return await withVerifiedArtifact(bytes, async ({ archivePath, review }) => {
           const { assertConfigWriteAllowedInCurrentMode } = await import("../config/config.js");
-          const { loadConfigForInstall } = await import("../cli/plugins-install-config.js");
+          const { loadConfigForInstall } = await import("../plugins/install-config.js");
           const { installManagedPluginSource } = await import("../plugins/management-install.js");
           assertConfigWriteAllowedInCurrentMode();
           const assertPersistentApply = () => {
@@ -303,8 +303,6 @@ export async function executePluginArtifactActivation(
           await assertArtifactConfigPublicationSupported();
           const snapshot = await loadConfigForInstall({
             rawSpec: archivePath,
-            normalizedSpec: archivePath,
-            resolvedPath: archivePath,
             installKind: "plugin",
           });
           const importPath = `${ARTIFACT_IMPORT_DIR}/${archiveName}`;
@@ -331,6 +329,7 @@ export async function executePluginArtifactActivation(
                 },
                 snapshot,
                 runtime,
+                applyRuntime: ctx.deps?.applyPluginRuntime,
                 acknowledgeCapabilities: { reviewToken: review.reviewToken },
                 beforePersistentApply: assertPersistentApply,
                 beforePersistentEffect: guard,
@@ -360,7 +359,7 @@ export async function executePluginArtifactActivation(
   });
   if (result.applied) {
     runtime.log(
-      "Artifact installed. After the Gateway restarts, inspect the plugin's Control UI activation status.",
+      "Artifact installed. Inspect the plugin's runtime and Control UI activation status.",
     );
   }
   return result;

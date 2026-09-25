@@ -1,6 +1,5 @@
 // Irc tests cover inbound.behavior plugin behavior.
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedIrcAccount } from "./accounts.js";
 import { handleIrcInbound } from "./inbound.js";
@@ -27,31 +26,33 @@ const {
 });
 
 function installIrcRuntime() {
-  setIrcRuntime({
-    channel: {
-      pairing: {
-        readAllowFromStore: readAllowFromStoreMock,
-        upsertPairingRequest: upsertPairingRequestMock,
+  setIrcRuntime(
+    createPluginRuntimeMock({
+      channel: {
+        pairing: {
+          readAllowFromStore: readAllowFromStoreMock,
+          upsertPairingRequest: upsertPairingRequestMock,
+        },
+        commands: {
+          shouldHandleTextCommands: shouldHandleTextCommandsMock,
+        },
+        text: {
+          hasControlCommand: hasControlCommandMock,
+        },
+        mentions: {
+          buildMentionRegexes: buildMentionRegexesMock,
+          matchesMentionPatterns: matchesMentionPatternsMock,
+        },
       },
-      commands: {
-        shouldHandleTextCommands: shouldHandleTextCommandsMock,
-      },
-      text: {
-        hasControlCommand: hasControlCommandMock,
-      },
-      mentions: {
-        buildMentionRegexes: buildMentionRegexesMock,
-        matchesMentionPatterns: matchesMentionPatternsMock,
-      },
-    },
-  } as never);
+    }),
+  );
 }
 
 function createRuntimeEnv() {
   return {
     log: vi.fn(),
     error: vi.fn(),
-  } as unknown as RuntimeEnv;
+  };
 }
 
 function createAccount(overrides?: Partial<ResolvedIrcAccount>): ResolvedIrcAccount {

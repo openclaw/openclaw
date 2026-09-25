@@ -35,7 +35,7 @@ Before connecting Gmail transport, merge a dedicated reader and hook policy into
       main: {},
       mail_reader: {
         workspace: "~/.openclaw/workspace-mail-reader",
-        model: "openai/gpt-5.6-sol",
+        model: "openai/gpt-6-astra",
         sandbox: {
           mode: "all",
           scope: "session",
@@ -178,7 +178,7 @@ These steps show the project, topic, publisher permission, and watch registratio
 {
   hooks: {
     gmail: {
-      model: "openai/gpt-5.6-sol",
+      model: "openai/gpt-6-astra",
       thinking: "high",
     },
   },

@@ -43,10 +43,7 @@ function createRateLimitTransport(
         return new Response("synthetic server failure", { status: 500 });
       }
     }
-    return new Response(JSON.stringify({ ok: true, ts: STREAM_TS }), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    });
+    return Response.json({ ok: true, ts: STREAM_TS });
   };
   return { fetch, requests };
 }
@@ -214,6 +211,34 @@ describe("Slack explicit rate-limit recovery", () => {
       expect(new URLSearchParams(bodies[1]).get("team_id")).toBe("TWORKSPACE");
     },
   );
+
+  it("revalidates direct-delivery authority before a refused write is retried", async () => {
+    let authorized = true;
+    let attempts = 0;
+    const client = createSlackWriteClient(
+      "synthetic-live-authority-fixture",
+      {
+        fetch: async () => {
+          attempts += 1;
+          authorized = false;
+          return new Response("rate limited", {
+            status: 429,
+            headers: { "retry-after": "0" },
+          });
+        },
+      },
+      () => {
+        if (!authorized) {
+          throw new Error("direct delivery is no longer active");
+        }
+      },
+    );
+
+    await expect(
+      client.apiCall("chat.postMessage", { channel: "CFIXTURE", text: "answer" }),
+    ).rejects.toThrow("direct delivery is no longer active");
+    expect(attempts).toBe(1);
+  });
 
   it.each([
     { header: "0", calls: 3 },

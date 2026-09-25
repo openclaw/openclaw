@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 // Covers extra-params stream wrapper composition across provider families.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model, SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
@@ -827,12 +828,12 @@ describe("applyExtraParamsToAgent", () => {
   it("fills MiMo V2.6 reasoning_content for unowned OpenAI-compatible proxy models", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "opencode",
-      applyModelId: "xiaomi/mimo-v2.6-pro",
+      applyModelId: "xiaomi/mimo-v2.6-flash",
       thinkingLevel: "high",
       model: {
         api: "openai-completions",
         provider: "opencode",
-        id: "xiaomi/mimo-v2.6-pro",
+        id: "xiaomi/mimo-v2.6-flash",
       } as Model<"openai-completions">,
       payload: {
         messages: [
@@ -876,10 +877,7 @@ describe("applyExtraParamsToAgent", () => {
       id: "xiaomi/mimo-v2-pro",
     } as Model<"openai-completions">;
     const stream = await agent.streamFn?.(model, { messages: [] }, {});
-    expect(stream).toBeDefined();
-    if (!stream) {
-      throw new Error("expected stream function");
-    }
+    assert(stream, "expected stream function");
     const events: unknown[] = [];
     for await (const event of stream) {
       events.push(event);
@@ -1201,6 +1199,74 @@ describe("applyExtraParamsToAgent", () => {
 
     expect(payload.google).toEqual({ thinking_config: { thinking_budget: 0 } });
     expect(payload).not.toHaveProperty("store");
+  });
+
+  it("applies extra_body tuning-key overrides without warning", () => {
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      const payload = runResponsesPayloadMutationCase({
+        applyProvider: "deepseek",
+        applyModelId: "deepseek-chat",
+        extraParamsOverride: {
+          extra_body: {
+            thinking: { type: "disabled" },
+          },
+        },
+        model: {
+          api: "openai-completions",
+          provider: "deepseek",
+          id: "deepseek-chat",
+          baseUrl: "https://api.deepseek.com/v1",
+        } as Model<"openai-completions">,
+        payload: {
+          messages: [],
+          model: "deepseek-chat",
+          thinking: { type: "enabled" },
+        },
+      });
+
+      expect(payload.thinking).toEqual({ type: "disabled" });
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it.each<[string, unknown]>([
+    ["messages", [{ role: "user", content: "configured message" }]],
+    ["model", "configured-model"],
+    ["stream", true],
+  ])("warns when extra_body overrides framework-managed %s", (key, value) => {
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      const payload = runResponsesPayloadMutationCase({
+        applyProvider: "deepseek",
+        applyModelId: "deepseek-chat",
+        extraParamsOverride: {
+          extra_body: {
+            [key]: value,
+          },
+        },
+        model: {
+          api: "openai-completions",
+          provider: "deepseek",
+          id: "deepseek-chat",
+          baseUrl: "https://api.deepseek.com/v1",
+        } as Model<"openai-completions">,
+        payload: {
+          messages: [],
+          model: "deepseek-chat",
+          stream: true,
+        },
+      });
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining(`framework-managed request keys: ${key}`),
+      );
+      expect(payload[key]).toEqual(value);
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it("forwards chat_template_kwargs params as top-level openai-completions payload fields", () => {

@@ -2,9 +2,8 @@
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import { isBuiltin } from "node:module";
-import { join, posix, resolve } from "node:path";
+import { delimiter, join, posix, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { deserialize, serialize } from "node:v8";
 
 export type ReleasePlanIntent =
   | "publish"
@@ -13,14 +12,14 @@ export type ReleasePlanIntent =
   | "main-qualification";
 export type MainQualificationValidationIntent = "main-daily" | "main-weekly";
 type RunGh = (args: string[]) => string;
-type ReleasePlanSourceBase = {
+export type ReleaseInventorySource = {
   repoRoot?: string;
   candidateSha: string;
-  candidateRef: string;
   toolingSha: string;
   toolingFullRef: string;
   runGh?: RunGh;
 };
+type ReleasePlanSourceBase = ReleaseInventorySource & { candidateRef: string };
 export type ReleasePlanSource =
   | (ReleasePlanSourceBase & {
       intent: "main-qualification";
@@ -51,6 +50,12 @@ type ReleasePlan = {
   };
 };
 type ReleasePlanLock = Record<"schema" | "digest", string> & { plan: ReleasePlan };
+export type VerifiedReleaseInventory = {
+  candidateSha: string;
+  tooling: ReleasePlan["tooling"];
+  version: string;
+  inventory: ReleasePlan["inventory"];
+};
 
 const REPOSITORY = "openclaw/openclaw";
 const EXECUTION_ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -59,11 +64,14 @@ const BOOTSTRAP_PATH = "scripts/release-plan-producer.mts",
 const TOOLING_MODULE_PATHS = [
   "packages/normalization-core/src/record-coerce.ts",
   "packages/normalization-core/src/string-coerce.ts",
+  "packages/plugin-package-contract/src/categories.ts",
   "packages/plugin-package-contract/src/index.ts",
+  "scripts/lib/bounded-response.mjs",
   "scripts/lib/canonical-json.mjs",
   "scripts/lib/npm-publish-plan.mjs",
   "scripts/lib/plugin-publication-candidates.ts",
   "scripts/lib/plugin-publication-collector.ts",
+  "scripts/lib/plugin-publication-target.mjs",
   "scripts/lib/pnpm-lockfile-documents.mjs",
   "scripts/lib/record-shared.mjs",
   "scripts/lib/release-version.mjs",
@@ -75,13 +83,68 @@ const TOOLING_MODULE_PATHS = [
 const PROTECTED_TAG_PATTERN = /^release-publish\/([a-f0-9]{12})-([1-9][0-9]*)$/u;
 const MAX_TOOLING_FILE_BYTES = 512 * 1024,
   MAX_TOOLING_BYTES = 2 * 1024 * 1024;
-const YAML_PACKAGE_TREE_SHA256 = "610ccacfe592d226ac1eb04842d1f591c5381f2a68b9f785643101d10db52c27";
+const YAML_PACKAGE_TREE_SHA256 = "0bdabef304b977ea9eea35e0ecb51e85d1450f4c1ed0bb3c93010ccecdde7779";
 const YAML_PACKAGE_MAX_FILES = 512;
 const YAML_PACKAGE_MAX_ENTRIES = 1024;
 const YAML_PACKAGE_MAX_BYTES = 4 * 1024 * 1024;
 // Keep both comparators local: this one precedes tooling verification, and CHILD_RUNNER's precedes
 // loader-hook registration. Importing either would execute code before its integrity boundary.
 const compareAscii = (left: string, right: string) => (left < right ? -1 : left > right ? 1 : 0);
+
+function resolveReleasePlanNodeExecutable(): string | undefined {
+  if (!process.versions.bun && process.allowedNodeEnvironmentFlags.has("--input-type")) {
+    return process.execPath;
+  }
+
+  const names =
+    process.platform === "win32"
+      ? (process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM")
+          .split(";")
+          .filter(Boolean)
+          .map((extension) => `node${extension.toLowerCase()}`)
+      : ["node"];
+  const candidates = (process.env.PATH ?? "")
+    .split(delimiter)
+    .filter(Boolean)
+    .flatMap((directory) => names.map((name) => join(directory, name)));
+  if (process.platform === "darwin") {
+    candidates.push(
+      "/opt/homebrew/bin/node",
+      "/opt/homebrew/opt/node/bin/node",
+      "/usr/local/bin/node",
+      "/usr/local/opt/node/bin/node",
+      "/usr/bin/node",
+    );
+  } else if (process.platform === "linux") {
+    candidates.push("/usr/local/bin/node", "/usr/bin/node");
+  }
+
+  const probeEnv: NodeJS.ProcessEnv = {};
+  for (const key of ["SystemRoot", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "TMPDIR"]) {
+    const value = process.env[key];
+    if (value) {
+      probeEnv[key] = value;
+    }
+  }
+  const probeSource =
+    'process.stdout.write(!process.versions.bun&&process.allowedNodeEnvironmentFlags.has("--input-type")?process.execPath:"")';
+  for (const candidate of new Set(candidates)) {
+    try {
+      const nodePath = execFileSync(candidate, ["--eval", probeSource], {
+        encoding: "utf8",
+        env: probeEnv,
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 5_000,
+      }).trim();
+      if (nodePath) {
+        return nodePath;
+      }
+    } catch {
+      // Missing, non-executable, incompatible, and Bun shim candidates are skipped.
+    }
+  }
+  return undefined;
+}
 
 type ToolingModule = { path: string; bytes: Buffer; imports: Array<[string, string]> };
 type YamlEntry =
@@ -90,28 +153,34 @@ type YamlEntry =
 type SerializableSource = Omit<ReleasePlanSourceBase, "runGh"> & Record<string, unknown>;
 type ProducerRequest =
   | { operation: "produce" | "produce-lock"; params: SerializableSource }
+  | { operation: "produce-inventory"; params: Omit<ReleaseInventorySource, "runGh"> }
   | { operation: "verify-lock"; lockJson: string; params: SerializableSource };
 
 const CHILD_RUNNER = String.raw`
 import { createHash } from "node:crypto"; import { readFileSync } from "node:fs";
 import { createRequire, isBuiltin, registerHooks } from "node:module";
-import { deserialize, serialize } from "node:v8";
 const TOOLING_ROOT = "file:///__openclaw_verified_tooling__/", YAML_ROOT = "file:///__openclaw_verified_yaml__/";
 const YAML_ABSOLUTE_ROOT = "/__openclaw_verified_yaml__", CORE_PATH = ${JSON.stringify(CORE_PATH)};
 const EXPECTED_TOOLING_PATHS = ${JSON.stringify(TOOLING_MODULE_PATHS)};
 const compareAscii = (left, right) => left < right ? -1 : left > right ? 1 : 0;
 const fail = message => { throw new Error(message); };
+const decodeBase64 = value => {
+  if (typeof value !== "string" || value.length % 4 !== 0 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) fail("verified retained bytes are not canonical base64");
+  const bytes = Buffer.from(value, "base64");
+  if (bytes.toString("base64") !== value) fail("verified retained bytes are not canonical base64");
+  return bytes;
+};
 const toolingUrl = path => new URL(path, TOOLING_ROOT).href, yamlUrl = path => new URL(path, YAML_ROOT).href;
 const safePath = path => typeof path === "string" && path.length > 0 &&
   /^[\x20-\x7e]+$/.test(path) && !path.includes("\\") && !path.startsWith("/") &&
   !path.split("/").some(part => part === "." || part === "..");
 try {
-  const payload = deserialize(readFileSync(0)), expectedPaths = [...EXPECTED_TOOLING_PATHS].sort(compareAscii);
+  const payload = JSON.parse(readFileSync(0, "utf8")), expectedPaths = [...EXPECTED_TOOLING_PATHS].sort(compareAscii);
   if (!Array.isArray(payload.toolingModules) || payload.toolingModules.length !== expectedPaths.length) fail("verified tooling module set is incomplete");
   const toolingModules = new Map();
   for (const record of payload.toolingModules) {
     if (!record || !expectedPaths.includes(record.path) || toolingModules.has(record.path) || !Array.isArray(record.imports)) fail("verified tooling module record is invalid");
-    toolingModules.set(record.path, { bytes: Buffer.from(record.bytes),
+    toolingModules.set(record.path, { bytes: decodeBase64(record.bytesBase64),
       format: record.path.endsWith(".mjs") ? "module" : "module-typescript",
       imports: new Map(record.imports) });
   }
@@ -124,7 +193,7 @@ try {
       yamlRecords.push(JSON.stringify(["directory", entry.path])); continue;
     }
     if (entry.kind !== "file" || yamlModules.has(entry.path)) fail("verified yaml retained tree contains an invalid entry");
-    const bytes = Buffer.from(entry.bytes); yamlFiles += 1; yamlBytes += bytes.byteLength;
+    const bytes = decodeBase64(entry.bytesBase64); yamlFiles += 1; yamlBytes += bytes.byteLength;
     if (yamlFiles > ${YAML_PACKAGE_MAX_FILES} || yamlBytes > ${YAML_PACKAGE_MAX_BYTES}) fail("verified yaml retained tree exceeds its bounds");
     yamlModules.set(entry.path, bytes);
     yamlRecords.push(JSON.stringify(["file", entry.path, bytes.byteLength, createHash("sha256").update(bytes).digest("hex")]));
@@ -134,7 +203,7 @@ try {
   const packageBytes = yamlModules.get("package.json");
   if (!packageBytes) fail("verified yaml retained package.json is missing");
   const yamlPackage = JSON.parse(packageBytes.toString("utf8"));
-  if (yamlPackage.name !== "yaml" || yamlPackage.version !== "2.9.0") fail("verified yaml retained package identity mismatch");
+  if (yamlPackage.name !== "yaml" || yamlPackage.version !== "2.9.1") fail("verified yaml retained package identity mismatch");
   registerHooks({
     resolve(specifier, context, nextResolve) {
       if (isBuiltin(specifier)) return nextResolve(specifier, context);
@@ -188,9 +257,9 @@ try {
     return sources.map(parseYaml);
   };
   const core = await import(toolingUrl(CORE_PATH)), value = core.runReleasePlanProducerOperation(payload.request, { runGh, parseYamlDocuments });
-  process.stdout.write(serialize({ ok: true, value }));
+  process.stdout.write(JSON.stringify({ ok: true, value }));
 } catch (error) {
-  process.stdout.write(serialize({ ok: false, message: error instanceof Error ? error.message : String(error) }));
+  process.stdout.write(JSON.stringify({ ok: false, message: error instanceof Error ? error.message : String(error) }));
 }
 `;
 
@@ -219,10 +288,23 @@ function defaultRunGh(args: string[]) {
   });
 }
 
-function verifyRemoteTooling(params: ReleasePlanSource, runGh: RunGh) {
+function verifyRemoteTooling(
+  params: ReleaseInventorySource | ReleasePlanSource,
+  runGh: RunGh,
+  inventoryOnly: boolean,
+) {
   const sha = requireSha(params.toolingSha, "tooling SHA");
   const tagRef = params.toolingFullRef.replace(/^refs\/tags\//u, "");
   const protectedMatch = PROTECTED_TAG_PATTERN.exec(tagRef);
+  // Acquisition is not admission: the verified child owns canonical branch policy.
+  // Preserve its literal GET argv while rejecting reserved and traversal operands.
+  const inventoryBranch =
+    inventoryOnly &&
+    params.toolingFullRef !== "refs/heads/main" &&
+    /^refs\/heads\/[A-Za-z0-9._/-]{1,256}$/u.test(params.toolingFullRef) &&
+    params.toolingFullRef.trim() === params.toolingFullRef &&
+    !params.toolingFullRef.includes("..") &&
+    params.toolingFullRef.split("/").every((part) => part !== "" && part !== ".");
   let args: string[], failure: string;
   if (protectedMatch) {
     if (protectedMatch[1] !== sha.slice(0, 12)) {
@@ -241,6 +323,14 @@ function verifyRemoteTooling(params: ReleasePlanSource, runGh: RunGh) {
       "{status}",
     ];
     failure = "main release tooling ancestry could not be verified";
+  } else if (inventoryBranch) {
+    args = [
+      "api",
+      `repos/${REPOSITORY}/git/ref/heads/${params.toolingFullRef.slice("refs/heads/".length)}`,
+      "--method",
+      "GET",
+    ];
+    failure = "inventory release tooling branch is missing or unreadable";
   } else {
     throw new Error("release tooling identity must be trusted main or an exact protected tag");
   }
@@ -256,19 +346,30 @@ function verifyRemoteTooling(params: ReleasePlanSource, runGh: RunGh) {
     object?: { type?: unknown; sha?: unknown };
   };
   if (
-    protectedMatch &&
+    (protectedMatch || inventoryBranch) &&
     (response.ref !== params.toolingFullRef ||
       response.object?.type !== "commit" ||
       response.object.sha !== sha)
   ) {
     throw new Error(
-      "protected release tooling tag is missing, moved, annotated, or bound to the wrong SHA",
+      `${inventoryBranch ? "inventory release tooling branch" : "protected release tooling tag"} is missing, moved, annotated, or bound to the wrong SHA`,
     );
   }
-  if (!protectedMatch && response.status !== "ahead" && response.status !== "identical") {
+  if (
+    !protectedMatch &&
+    !inventoryBranch &&
+    response.status !== "ahead" &&
+    response.status !== "identical"
+  ) {
     throw new Error("main release tooling SHA is not reachable from current main");
   }
-  if (params.intent !== "diagnostic" && params.intent !== "main-qualification" && !protectedMatch) {
+  if (
+    !inventoryOnly &&
+    "intent" in params &&
+    params.intent !== "diagnostic" &&
+    params.intent !== "main-qualification" &&
+    !protectedMatch
+  ) {
     throw new Error(`${params.intent} tooling must use a release-publish tag bound to its SHA`);
   }
   return [[JSON.stringify(args), raw]] as Array<[string, string]>;
@@ -452,10 +553,17 @@ function retainYamlPackage() {
 const serializableParams = ({ runGh: _runGh, ...source }: ReleasePlanSource) =>
   source as SerializableSource;
 
-function runOperation(request: ProducerRequest, params: ReleasePlanSource) {
+function runOperation(
+  request: ProducerRequest,
+  params: ReleaseInventorySource | ReleasePlanSource,
+) {
   const repoRoot = resolve(params.repoRoot ?? ".");
   const runGh = params.runGh ?? defaultRunGh;
-  const identityResponses = verifyRemoteTooling(params, runGh);
+  const identityResponses = verifyRemoteTooling(
+    params,
+    runGh,
+    request.operation === "produce-inventory",
+  );
   const toolingSha = requireSha(params.toolingSha, "tooling SHA");
   const executionHead = gitBytes(EXECUTION_ROOT, ["rev-parse", "HEAD"]).toString("utf8").trim();
   if (executionHead !== toolingSha) {
@@ -465,17 +573,31 @@ function runOperation(request: ProducerRequest, params: ReleasePlanSource) {
   if (!fs.readFileSync(fileURLToPath(import.meta.url)).equals(bootstrapBytes)) {
     throw new Error(`tooling bootstrap differs from tooling SHA: ${BOOTSTRAP_PATH}`);
   }
-  let stdout: Buffer;
+  let stdout: string;
   try {
-    stdout = execFileSync(process.execPath, ["--input-type=module", "-e", CHILD_RUNNER], {
+    const nodeExecPath = resolveReleasePlanNodeExecutable();
+    if (!nodeExecPath) {
+      throw new Error("verified release plan child requires a Node executable");
+    }
+    // The verified child always runs on Node, while its parent may run on Bun.
+    // JSON plus canonical base64 keeps this integrity boundary runtime-neutral.
+    const toolingModules = retainToolingClosure(repoRoot, toolingSha).map(({ bytes, ...record }) =>
+      Object.assign(record, { bytesBase64: bytes.toString("base64") }),
+    );
+    const yamlEntries = retainYamlPackage().map((entry) =>
+      entry.kind === "file"
+        ? { kind: entry.kind, path: entry.path, bytesBase64: entry.bytes.toString("base64") }
+        : entry,
+    );
+    stdout = execFileSync(nodeExecPath, ["--input-type=module", "-e", CHILD_RUNNER], {
       cwd: repoRoot,
-      encoding: null,
+      encoding: "utf8",
       env: {},
-      input: serialize({
+      input: JSON.stringify({
         identityResponses,
         request,
-        toolingModules: retainToolingClosure(repoRoot, toolingSha),
-        yamlEntries: retainYamlPackage(),
+        toolingModules,
+        yamlEntries,
       }),
       maxBuffer: 16 * 1024 * 1024,
       stdio: ["pipe", "pipe", "pipe"],
@@ -483,7 +605,7 @@ function runOperation(request: ProducerRequest, params: ReleasePlanSource) {
   } catch (error) {
     throw new Error("verified release plan child failed", { cause: error });
   }
-  const envelope = deserialize(stdout) as { ok?: unknown; value?: unknown; message?: unknown };
+  const envelope = JSON.parse(stdout) as { ok?: unknown; value?: unknown; message?: unknown };
   if (envelope.ok !== true) {
     throw new Error(
       typeof envelope.message === "string" ? envelope.message : "verified child failed",
@@ -497,6 +619,19 @@ export function produceReleasePlan(params: ReleasePlanSource): ReleasePlan {
     { operation: "produce", params: serializableParams(params) },
     params,
   ) as ReleasePlan;
+}
+
+export function produceVerifiedReleaseInventory(
+  params: ReleaseInventorySource,
+): VerifiedReleaseInventory {
+  const { repoRoot, candidateSha, toolingSha, toolingFullRef } = params;
+  return runOperation(
+    {
+      operation: "produce-inventory",
+      params: { repoRoot, candidateSha, toolingSha, toolingFullRef },
+    },
+    params,
+  ) as VerifiedReleaseInventory;
 }
 
 export function verifyReleasePlanLock(lockJson: string, params: ReleasePlanSource) {

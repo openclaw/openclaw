@@ -1,5 +1,6 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import { buildControlUiResourcePath } from "../../../../src/gateway/control-ui-resource-routes.js";
+import { sessionActivityTimestamp } from "../../../../src/shared/session-activity-timestamp.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import {
   ACTIVITY_PERSON_PARAM,
@@ -9,6 +10,8 @@ import {
 } from "../../app-route-paths.ts";
 import { readAvatarGatewayContext } from "../../lib/identity-avatar-context.ts";
 import type { PresenceViewer } from "../../lib/presence-users.ts";
+
+export { sessionActivityTimestamp } from "../../../../src/shared/session-activity-timestamp.js";
 
 export const ACTIVITY_TIME_FILTERS = ["24h", "7d", "30d", "all"] as const;
 export type ActivityTimeFilter = (typeof ACTIVITY_TIME_FILTERS)[number];
@@ -108,10 +111,6 @@ export function canonicalSessionActivityLocation(
   return pathname === location.pathname && search === location.search
     ? null
     : { pathname, search, hash: location.hash };
-}
-
-export function sessionActivityTimestamp(row: GatewaySessionRow): number {
-  return row.lastActivityAt ?? row.updatedAt ?? row.createdAt ?? 0;
 }
 
 function compareSessionActivity(a: GatewaySessionRow, b: GatewaySessionRow): number {

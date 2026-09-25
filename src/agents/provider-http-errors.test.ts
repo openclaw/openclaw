@@ -449,6 +449,41 @@ describe("provider error utils", () => {
     expect(providerError.errorBody).not.toContain("sk-secret1234567890abcd");
   });
 
+  it.each([
+    ["delta seconds", "12", 12_000],
+    ["HTTP date", "Fri, 01 May 2026 12:00:05 GMT", 5_000],
+    ["past HTTP date", "Fri, 01 May 2026 11:59:55 GMT", 0],
+  ])("preserves Retry-After $name as structured milliseconds", async (_name, value, expected) => {
+    const now = Date.UTC(2026, 4, 1, 12, 0, 0);
+    // Shared-worker runs (--isolate=false): restore Date.now even on assertion failure.
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      const error = await createProviderHttpError(
+        new Response(null, { status: 429, headers: { "Retry-After": value } }),
+        "Provider API error",
+      );
+
+      expect(error).toMatchObject({ retryAfterMs: expected });
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it.each([
+    ["negative header", { header: "-1" }],
+    ["unsafe header", { header: "9007199254741" }],
+  ])("ignores $name cooldown hints", async (_name, value) => {
+    const error = await createProviderHttpError(
+      new Response(null, {
+        status: 429,
+        headers: { "Retry-After": value.header },
+      }),
+      "Provider API error",
+    );
+
+    expect((error as ProviderHttpError).retryAfterMs).toBeUndefined();
+  });
+
   it("keeps legacy HTTP status formatting while sharing provider parsing", async () => {
     const response = new Response(
       JSON.stringify({
@@ -643,6 +678,107 @@ describe("provider error utils", () => {
     expect(cancel).not.toHaveBeenCalled();
     await captureClone.body?.cancel();
     expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { kind: "audio", contentType: "audio/mpeg" },
+    { kind: "audio", contentType: "AUDIO/OGG; codecs=opus" },
+    { kind: "audio", contentType: 'audio/ogg; codecs="opus, vorbis"' },
+    { kind: "audio", contentType: 'audio/ogg; codecs="opus\\", vorbis"' },
+    { kind: "audio", contentType: 'audio/ogg; codecs="opus\\\\, vorbis"' },
+    { kind: "audio", contentType: "audio/opus" },
+    { kind: "audio", contentType: "application/ogg" },
+    { kind: "audio", contentType: 'application/ogg; codecs="opus"' },
+    { kind: "audio", contentType: "binary/octet-stream" },
+    { kind: "video", contentType: "binary/octet-stream" },
+    { kind: "audio", contentType: "audio/pcm" },
+    { kind: "audio", contentType: "audio/pcm;" },
+    { kind: "audio", contentType: "audio/pcm; ; " },
+    { kind: "video", contentType: 'video/mp4;; codecs="avc1"' },
+    { kind: "video", contentType: "application/octet-stream;" },
+    { kind: "audio", contentType: "audio/vnd.wave" },
+    { kind: "video", contentType: "video/mp4" },
+    { kind: "video", contentType: "VIDEO/WEBM; codecs=vp9" },
+    { kind: "video", contentType: 'video/mp4; codecs="avc1, mp4a.40.2"' },
+    { kind: "video", contentType: 'video/mp4; codecs="avc1, mp4a.40.2"; profile=main' },
+    { kind: "video", contentType: "video/x-matroska" },
+    { kind: "audio", contentType: "application/octet-stream" },
+    { kind: "video", contentType: "application/octet-stream" },
+    { kind: "audio", contentType: undefined },
+    { kind: "video", contentType: undefined },
+    { kind: "binary", contentType: "image/png" },
+    { kind: "binary", contentType: "image/png; charset=utf-8, text/html" },
+    { kind: "binary", contentType: "; text/html" },
+    { kind: "binary", contentType: "application/zip" },
+  ])("accepts $kind response content type $contentType", async ({ kind, contentType }) => {
+    const response = new Response(
+      new Uint8Array([1]),
+      contentType ? { headers: { "content-type": contentType } } : undefined,
+    );
+
+    await expect(readProviderBinaryResponse(response, "Provider failed", kind)).resolves.toEqual(
+      Buffer.from([1]),
+    );
+  });
+
+  it.each([
+    { kind: "audio", contentType: "image/png" },
+    { kind: "audio", contentType: "" },
+    { kind: "audio", contentType: "; text/html" },
+    { kind: "audio", contentType: "; audio/mpeg, text/html" },
+    { kind: "audio", contentType: "audio/" },
+    { kind: "audio", contentType: "audio/ogg;;, text/html" },
+    { kind: "audio", contentType: 'audio/ogg; codecs="opus"; ;, text/html' },
+    { kind: "audio", contentType: "audio/ogg; codecs" },
+    { kind: "audio", contentType: 'audio/ogg; codecs="opus"garbage' },
+    { kind: "audio", contentType: "audio/mpeg image/png" },
+    { kind: "audio", contentType: "video/mp4" },
+    { kind: "audio", contentType: "audio/mpeg, video/mp4" },
+    { kind: "audio", contentType: "audio/mpeg; charset=utf-8, text/html" },
+    { kind: "audio", contentType: "audio/mpeg; charset=utf-8; profile=voice, text/html" },
+    { kind: "audio", contentType: 'audio/ogg; codecs="opus, vorbis", text/html' },
+    { kind: "audio", contentType: 'audio/ogg; codecs="opus\\", vorbis", text/html' },
+    { kind: "audio", contentType: 'audio/ogg; codecs="opus, vorbis' },
+    { kind: "audio", contentType: 'audio/ogg; codecs="opus\\' },
+    { kind: "video", contentType: "audio/ogg" },
+    { kind: "video", contentType: "application/ogg" },
+    { kind: "audio", contentType: "application/ogg; codecs=opus, text/html" },
+    { kind: "video", contentType: "binary/octet-stream; charset=utf-8, text/html" },
+    { kind: "video", contentType: "" },
+    { kind: "video", contentType: "; video/mp4, application/json" },
+    { kind: "video", contentType: "video/" },
+    { kind: "video", contentType: "video/mp4 image/png" },
+    { kind: "video", contentType: "video/mp4, image/png" },
+    { kind: "video", contentType: "video/mp4; codecs=avc1, application/json" },
+    { kind: "video", contentType: 'video/mp4; codecs="avc1, mp4a"; profile=main, text/html' },
+    { kind: "video", contentType: "image/png" },
+    { kind: "video", contentType: "application/pdf" },
+    { kind: "audio", contentType: "application/json" },
+    { kind: "video", contentType: "application/problem+json" },
+    { kind: "binary", contentType: "text/html; charset=utf-8" },
+    { kind: "binary", contentType: "application/problem+json" },
+  ])("rejects $contentType for $kind responses", async ({ kind, contentType }) => {
+    const response = new Response(new Uint8Array([1]), {
+      headers: { "content-type": contentType },
+    });
+
+    await expect(readProviderBinaryResponse(response, "Provider failed", kind)).rejects.toThrow(
+      `Provider failed: malformed ${kind} response`,
+    );
+  });
+
+  it.each([
+    { kind: "audio", first: "audio/mpeg; charset=utf-8", second: "text/html" },
+    { kind: "video", first: "video/mp4; codecs=avc1", second: "application/json" },
+  ])("rejects repeated Fetch Content-Type headers for $kind", async ({ kind, first, second }) => {
+    const headers = new Headers();
+    headers.append("content-type", first);
+    headers.append("content-type", second);
+    const response = new Response(new Uint8Array([1]), { headers });
+
+    await expect(readProviderBinaryResponse(response, "Provider failed", kind)).rejects.toThrow(
+      `Provider failed: malformed ${kind} response`,
+    );
   });
 
   it("rejects stalled JSON response body after chunk idle timeout", async () => {

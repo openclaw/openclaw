@@ -1,4 +1,5 @@
 // Openrouter tests cover music generation provider plugin behavior.
+import assert from "node:assert/strict";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import {
   getProviderHttpMocks,
@@ -65,31 +66,23 @@ function sseResponse(
   } as Response;
 }
 
-function sseResponseLines(params: {
-  audio?: string;
-  transcript?: string;
-  done?: boolean;
-}): string[] {
+function sseResponseLines(params: { audio: string; transcript?: string }): string[] {
   const lines: string[] = [];
-  if (params.audio || params.transcript) {
-    lines.push(
-      `data: ${JSON.stringify({
-        choices: [
-          {
-            delta: {
-              audio: {
-                ...(params.audio ? { data: params.audio } : {}),
-                ...(params.transcript ? { transcript: params.transcript } : {}),
-              },
+  lines.push(
+    `data: ${JSON.stringify({
+      choices: [
+        {
+          delta: {
+            audio: {
+              data: params.audio,
+              ...(params.transcript ? { transcript: params.transcript } : {}),
             },
           },
-        ],
-      })}\n`,
-    );
-  }
-  if (params.done) {
-    lines.push("data: [DONE]\n");
-  }
+        },
+      ],
+    })}\n`,
+  );
+  lines.push("data: [DONE]\n");
   return lines;
 }
 
@@ -194,7 +187,6 @@ describe("openrouter music generation provider", () => {
       const lines = sseResponseLines({
         audio: Buffer.from("wav-bytes").toString("base64"),
         transcript: "café 🦞 soundtrack",
-        done: true,
       });
       const bytes = new TextEncoder().encode(
         lines.map((line) => line.trimEnd()).join(ending) + (terminated ? ending : ""),
@@ -225,7 +217,6 @@ describe("openrouter music generation provider", () => {
       response: sseResponse(
         sseResponseLines({
           audio: Buffer.from("wav-bytes").toString("base64"),
-          done: true,
         }),
         { cancel, releaseLock },
       ),
@@ -249,10 +240,13 @@ describe("openrouter music generation provider", () => {
   it.each(["completed", "provider error", "timeout"] as const)(
     "releases a capture tee after %s without waiting for its sibling",
     async (outcome) => {
+      // Hold wall time so the deadline reaches the acquired stream's tee cleanup.
+      // Real timers still drive the 1ms stalled-stream timeout.
+      vi.setSystemTime(1_000);
       const cancel = vi.fn();
       const lines =
         outcome === "completed"
-          ? sseResponseLines({ audio: Buffer.from("wav-bytes").toString("base64"), done: true })
+          ? sseResponseLines({ audio: Buffer.from("wav-bytes").toString("base64") })
           : outcome === "provider error"
             ? ['data: {"error":{"message":"provider disconnected"}}\n']
             : [];
@@ -305,7 +299,7 @@ describe("openrouter music generation provider", () => {
 
   it("rejects streamed audio with non-canonical base64 pad bits", async () => {
     postJsonRequestMock.mockResolvedValue({
-      response: sseResponse(sseResponseLines({ audio: "ZE==", done: true })),
+      response: sseResponse(sseResponseLines({ audio: "ZE==" })),
       release: vi.fn(async () => {}),
     });
 
@@ -419,6 +413,8 @@ describe("openrouter music generation provider", () => {
   });
 
   it("times out stalled OpenRouter audio streams after headers", async () => {
+    // Freeze wall time so the timeout comes from reading the acquired response body.
+    vi.setSystemTime(1_000);
     postJsonRequestMock.mockResolvedValue({
       response: stalledSseResponse(
         `data: ${JSON.stringify({ choices: [{ delta: { audio: { transcript: "start" } } }] })}\n`,
@@ -542,7 +538,7 @@ describe("openrouter music generation provider", () => {
         cfg: { agents: { defaults: { mediaMaxMb: 2 } } },
       });
 
-      expect(result.tracks[0]?.buffer).toEqual(audio);
+      assert.deepStrictEqual(result.tracks[0]?.buffer, audio);
     },
   );
 

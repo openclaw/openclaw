@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements discovery eval behavior.
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { readQaScenarioExecutionConfig } from "./scenario-catalog.js";
 

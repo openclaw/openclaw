@@ -4,10 +4,22 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveOsHomeDir } from "../../infra/home-dir.js";
 import { isPathInside } from "../../infra/path-guards.js";
-import { resolveConfigDir } from "../../utils.js";
+import {
+  hasActivePluginInstallRoots,
+  resolveActivePluginInstallRoots,
+} from "../../plugins/install-root-context.js";
+import { CONFIG_DIR, resolveConfigDir } from "../../utils.js";
 import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
 import type { Skill } from "./skill-contract.js";
 import { tryRealpath } from "./symlink-targets.js";
+
+export function resolvePluginSkillsDir(): string {
+  // Generated links follow the active state scope; managed skill reads keep their source root.
+  const stateDir = hasActivePluginInstallRoots()
+    ? resolveActivePluginInstallRoots().stateDir
+    : CONFIG_DIR;
+  return path.join(stateDir, "plugin-skills");
+}
 
 /** Workspace sync excludes repository internals and installed dependencies at every depth. */
 export function shouldSyncSkillPath(filePath: string): boolean {

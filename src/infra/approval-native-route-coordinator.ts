@@ -506,29 +506,15 @@ async function maybeFinalizeApprovalRouteNotice(
 }
 
 /** Tracks native approval deliveries and sends origin-chat notices after all observed runtimes report. */
-export function createApprovalNativeRouteReporter(params: {
-  handledKinds: ReadonlySet<ChannelApprovalKind>;
-  channel?: string;
-  channelLabel?: string;
-  accountId?: string | null;
-  requestGateway: GatewayRequestFn;
-  shouldHandle: (request: ApprovalRequest) => boolean;
-  classifyRoute: (request: ApprovalRequest) => ApprovalRequestChannelRouteClass;
-}) {
+export function createApprovalNativeRouteReporter(
+  params: Omit<ApprovalRouteRuntimeRecord, "runtimeId">,
+) {
   return createApprovalNativeRouteReporterForState(defaultCoordinatorState, params);
 }
 
 function createApprovalNativeRouteReporterForState(
   state: ApprovalNativeRouteCoordinatorState,
-  params: {
-    handledKinds: ReadonlySet<ChannelApprovalKind>;
-    channel?: string;
-    channelLabel?: string;
-    accountId?: string | null;
-    requestGateway: GatewayRequestFn;
-    shouldHandle: (request: ApprovalRequest) => boolean;
-    classifyRoute: (request: ApprovalRequest) => ApprovalRequestChannelRouteClass;
-  },
+  params: Omit<ApprovalRouteRuntimeRecord, "runtimeId">,
 ) {
   const runtimeId = `native-approval-route:${++state.runtimeSeq}`;
   let registered = false;
@@ -670,6 +656,14 @@ export type ApprovalNativeRouteCoordinator = {
   hasActiveRuntime: typeof hasActiveApprovalNativeRouteRuntime;
   close: () => void;
 };
+
+/** Reads native route activity from the owning Gateway coordinator, else the process default. */
+export function hasActiveNativeApprovalRoute(
+  coordinator: ApprovalNativeRouteCoordinator | undefined,
+  params: Parameters<typeof hasActiveApprovalNativeRouteRuntime>[0],
+): boolean {
+  return coordinator?.hasActiveRuntime(params) ?? hasActiveApprovalNativeRouteRuntime(params);
+}
 
 /** Creates an instance-local route coordinator so Gateway runtimes cannot share account state. */
 export function createApprovalNativeRouteCoordinator(): ApprovalNativeRouteCoordinator {

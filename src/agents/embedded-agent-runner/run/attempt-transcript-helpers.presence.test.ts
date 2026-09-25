@@ -72,19 +72,31 @@ it("keeps one presence snapshot while another connection classifies a message", 
       ) {
         return statement;
       }
+      const classify = () => {
+        // Commit classification after the index probe finishes, while the
+        // physical message remains present throughout both connections.
+        writer
+          .prepare(
+            "UPDATE transcript_event_identities SET event_type = 'message' WHERE session_id = ?",
+          )
+          .run(sessionTarget.sessionId);
+        classified = true;
+      };
       return new Proxy(statement, {
         get(target, property) {
+          if (property === "get") {
+            return new Proxy(target.get.bind(target), {
+              apply(get, _receiver, params) {
+                const row = get(...params);
+                classify();
+                return row;
+              },
+            });
+          }
           if (property === "iterate") {
             return (...params: Parameters<typeof target.iterate>) => {
               const rows = [...target.iterate(...params)];
-              // Commit classification after the index probe finishes, while the
-              // physical message remains present throughout both connections.
-              writer
-                .prepare(
-                  "UPDATE transcript_event_identities SET event_type = 'message' WHERE session_id = ?",
-                )
-                .run(sessionTarget.sessionId);
-              classified = true;
+              classify();
               return rows.values();
             };
           }

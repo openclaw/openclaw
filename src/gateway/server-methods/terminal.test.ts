@@ -1,10 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
-import {
-  ErrorCodes,
-  type TerminalUploadResult,
-} from "../../../packages/gateway-protocol/src/index.js";
+import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -13,8 +11,8 @@ import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 import { createTerminalLaunchPolicy } from "../terminal/launch.js";
 import { TerminalSessionManager } from "../terminal/session-manager.js";
 import { makeFakePty } from "../terminal/session-manager.test-helpers.js";
-import type { TerminalSessionSummary } from "../terminal/session-types.js";
 import { openTerminalSession, terminalHandlers, TERMINAL_OPEN_DEADLINE_MS } from "./terminal.js";
+import { makeTerminalSessionMocks } from "./terminal.test-helpers.js";
 
 function waitForFast<T>(
   callback: () => T | Promise<T>,
@@ -45,14 +43,6 @@ const sessionMocks = vi.hoisted(() => ({
   ),
 }));
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((next) => {
-    resolve = next;
-  });
-  return { promise, resolve };
-}
-
 vi.mock("../node-command-policy.js", () => ({
   resolveNodeCommandAllowlist: policyMocks.resolveNodeCommandAllowlist,
   isNodeCommandAllowed: policyMocks.isNodeCommandAllowed,
@@ -76,34 +66,7 @@ function makeOpts(
     invoke?: (params: unknown) => Promise<unknown>;
   } = { get: () => undefined },
 ) {
-  const sessions = {
-    open: vi.fn(async (_request: unknown) => ({
-      ok: true as const,
-      sessionId: "terminal-1",
-      agentId: "main",
-      shell: "/bin/zsh",
-      cwd: "/work",
-    })),
-    write: vi.fn(() => true),
-    resize: vi.fn(() => true),
-    close: vi.fn(() => true),
-    attach: vi.fn(() => ({
-      sessionId: "terminal-1",
-      agentId: "main",
-      shell: "/bin/zsh",
-      cwd: "/work",
-      buffer: "replay",
-      seq: 6,
-      title: "codex",
-      owner: "conn" as const,
-    })),
-    snapshot: vi.fn(() => "10%\r100%"),
-    list: vi.fn((): TerminalSessionSummary[] => []),
-    upload: vi.fn(async (): Promise<TerminalUploadResult> => ({
-      path: "/tmp/upload/report.pdf",
-      size: 4,
-    })),
-  };
+  const sessions = makeTerminalSessionMocks();
   const runtimeConfig = { gateway: { terminal: terminalConfig } } as OpenClawConfig;
   const policy = createTerminalLaunchPolicy(runtimeConfig);
   if (terminalPolicyConfig) {
@@ -351,69 +314,78 @@ describe("terminal gateway policy", () => {
     );
   });
 
-  it("opens a provider-built local resume plan and returns its title", async () => {
-    const openTerminal = vi.fn(async () => ({
-      kind: "local" as const,
-      argv: ["codex", "resume", "thread"],
-      env: {
-        CODEX_HOME: "/agent/codex-home",
-        ComSpec: "C:\\Windows\\System32\\ambient-cmd.exe",
-        COMSPEC: "C:\\Windows\\System32\\configured-cmd.exe",
-      },
-      pathEnv: "/login-shell/bin:/usr/bin",
-      title: "codex resume thread",
-    }));
-    installCatalog({
-      id: "codex",
-      label: "Codex",
-      list: async () => [],
-      read: async (request) => ({
-        hostId: request.hostId,
-        threadId: request.threadId,
-        items: [],
-      }),
-      openTerminal,
-    });
-    const { opts, sessions, respond } = makeOpts(
-      {
-        cols: 80,
-        rows: 24,
-        catalog: { catalogId: "codex", hostId: "gateway:local", threadId: "thread" },
-      },
-      { enabled: true },
-    );
-    await expectDefined(terminalHandlers["terminal.open"], "terminal.open")(opts);
-
-    expect(openTerminal).toHaveBeenCalledWith({
-      agentId: "main",
-      allowProcessHomeFallback: false,
-      hostId: "gateway:local",
-      threadId: "thread",
-    });
-    expect(sessions.open).toHaveBeenCalledWith(
-      expect.objectContaining({
-        shell: expect.any(String),
-        args:
-          process.platform === "win32"
-            ? ["resume", "thread"]
-            : ["-il", "-c", "'codex' 'resume' 'thread'"],
-        env: expect.objectContaining({
+  it.each([undefined, "selected-codex-home"])(
+    "opens a provider-built local resume plan for source %s and returns its title",
+    async (sourceHomeId) => {
+      const openTerminal = vi.fn(async () => ({
+        kind: "local" as const,
+        argv: ["codex", "resume", "thread"],
+        env: {
           CODEX_HOME: "/agent/codex-home",
-          PATH: "/login-shell/bin:/usr/bin",
+          ComSpec: "C:\\Windows\\System32\\ambient-cmd.exe",
+          COMSPEC: "C:\\Windows\\System32\\configured-cmd.exe",
+        },
+        pathEnv: "/login-shell/bin:/usr/bin",
+        title: "codex resume thread",
+      }));
+      installCatalog({
+        id: "codex",
+        label: "Codex",
+        list: async () => [],
+        read: async (request) => ({
+          hostId: request.hostId,
+          threadId: request.threadId,
+          items: [],
         }),
-      }),
-    );
-    if (process.platform === "win32") {
-      const terminalEnv = sessions.open.mock.calls[0]?.[0] as { env: Record<string, string> };
-      expect(
-        Object.entries(terminalEnv.env).filter(([key]) => key.toUpperCase() === "COMSPEC"),
-      ).toEqual([["COMSPEC", "C:\\Windows\\System32\\configured-cmd.exe"]]);
-    }
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ sessionId: "terminal-1", title: "codex resume thread" }),
-    );
-  });
+        openTerminal,
+      });
+      const { opts, sessions, respond } = makeOpts(
+        {
+          cols: 80,
+          rows: 24,
+          catalog: {
+            catalogId: "codex",
+            hostId: "gateway:local",
+            threadId: "thread",
+            ...(sourceHomeId ? { sourceHomeId } : {}),
+          },
+        },
+        { enabled: true },
+      );
+      await expectDefined(terminalHandlers["terminal.open"], "terminal.open")(opts);
+
+      expect(openTerminal).toHaveBeenCalledWith({
+        agentId: "main",
+        allowProcessHomeFallback: false,
+        hostId: "gateway:local",
+        threadId: "thread",
+        ...(sourceHomeId ? { sourceHomeId } : {}),
+      });
+      expect(sessions.open).toHaveBeenCalledWith(
+        expect.objectContaining({
+          shell: expect.any(String),
+          args:
+            process.platform === "win32"
+              ? ["resume", "thread"]
+              : ["-il", "-c", "'codex' 'resume' 'thread'"],
+          env: expect.objectContaining({
+            CODEX_HOME: "/agent/codex-home",
+            PATH: "/login-shell/bin:/usr/bin",
+          }),
+        }),
+      );
+      if (process.platform === "win32") {
+        const terminalEnv = sessions.open.mock.calls[0]?.[0] as { env: Record<string, string> };
+        expect(
+          Object.entries(terminalEnv.env).filter(([key]) => key.toUpperCase() === "COMSPEC"),
+        ).toEqual([["COMSPEC", "C:\\Windows\\System32\\configured-cmd.exe"]]);
+      }
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ sessionId: "terminal-1", title: "codex resume thread" }),
+      );
+    },
+  );
 
   it("rejects a catalog plan that finishes after the absolute open deadline", async () => {
     vi.useFakeTimers();
@@ -487,7 +459,7 @@ describe("terminal gateway policy", () => {
   });
 
   it("does not create a terminal after the owning connection closes during catalog lookup", async () => {
-    const plan = deferred<{ kind: "local"; argv: string[] }>();
+    const plan = createDeferred<{ kind: "local"; argv: string[] }>();
     const openTerminal = vi.fn(() => plan.promise);
     installCatalog({
       id: "codex",
@@ -520,7 +492,7 @@ describe("terminal gateway policy", () => {
   });
 
   it("closes a terminal whose owning connection disappears during PTY creation", async () => {
-    const created = deferred<{
+    const created = createDeferred<{
       ok: true;
       sessionId: string;
       agentId: string;
@@ -556,7 +528,7 @@ describe("terminal gateway policy", () => {
   it("times out one terminal open with request-scoped cancellation", async () => {
     vi.useFakeTimers();
     try {
-      const created = deferred<{
+      const created = createDeferred<{
         ok: true;
         sessionId: string;
         agentId: string;
@@ -597,7 +569,7 @@ describe("terminal gateway policy", () => {
   });
 
   it("does not create a terminal when disabled during catalog lookup", async () => {
-    const plan = deferred<{ kind: "local"; argv: string[] }>();
+    const plan = createDeferred<{ kind: "local"; argv: string[] }>();
     const openTerminal = vi.fn(() => plan.promise);
     installCatalog({
       id: "codex",
@@ -630,7 +602,7 @@ describe("terminal gateway policy", () => {
   });
 
   it("uses the refreshed launch plan after catalog lookup", async () => {
-    const plan = deferred<{ kind: "local"; argv: string[] }>();
+    const plan = createDeferred<{ kind: "local"; argv: string[] }>();
     const openTerminal = vi.fn(() => plan.promise);
     installCatalog({
       id: "codex",
@@ -806,7 +778,7 @@ describe("terminal gateway policy", () => {
     "rejects a changed node admission: %s",
     async (change) => {
       const command = "anthropic.claude.terminal.resume.v1";
-      const policy = deferred<null>();
+      const policy = createDeferred<null>();
       policyMocks.applyPluginNodeInvokePolicy.mockImplementationOnce(() => policy.promise);
       installCatalog({
         id: "claude",

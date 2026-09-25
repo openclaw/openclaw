@@ -1,17 +1,20 @@
 import path from "node:path";
+import { capturePolicyTransitions, revokeTranscriptStartRetries } from "./capture-startup.js";
 import { persistTranscriptSummary } from "./capture-summary.js";
 import {
   activeSessions,
+  startingSessions,
   finalizeTranscriptCapture,
   isTranscriptSelectionCurrent,
+  isTranscriptSelectionOwned,
   isTranscriptSessionStarting,
-  revokeTranscriptStartRetries,
   stopTranscriptProviderCapture,
   type TranscriptCaptureSelection,
   type TranscriptsRuntimeContext,
 } from "./capture.js";
 import { resolveTranscriptsConfig } from "./config.js";
 import type { TranscriptSessionDescriptor } from "./provider-types.js";
+import { TranscriptsSummaryChangedError } from "./store-errors.js";
 import { TranscriptsStore } from "./store.js";
 
 export function createTranscriptsStore(ctx: TranscriptsRuntimeContext): TranscriptsStore {
@@ -50,7 +53,9 @@ export async function stopTranscriptCapture(params: {
     selector,
   });
   // Authorization may await native policy while the provider retires this owner.
-  if (!isTranscriptSelectionCurrent(selection, params.store)) {
+  const current = await isTranscriptSelectionCurrent(selection, params.store);
+  params.ctx.assertCallerActive?.();
+  if (!current || !isTranscriptSelectionOwned(selection)) {
     return skip("inactive");
   }
   if (isTranscriptSessionStarting(sessionId)) {
@@ -59,7 +64,7 @@ export async function stopTranscriptCapture(params: {
   if (selectedActive?.stopping) {
     return skip("stopping");
   }
-  revokeTranscriptStartRetries(params.ctx, session);
+  revokeTranscriptStartRetries(params.ctx.stateDir, session);
   if (selectedActive) {
     selectedActive.stopping = true;
   }
@@ -88,15 +93,33 @@ export async function stopTranscriptCapture(params: {
       stoppedSession = selectedActive.session;
       finalized = true;
     } else {
+      const assertCurrent = () => {
+        params.ctx.assertCallerActive?.();
+        if (!isTranscriptSelectionOwned(selection) || isTranscriptSessionStarting(sessionId)) {
+          throw new TranscriptsSummaryChangedError();
+        }
+      };
       stoppedSession = { ...session, stoppedAt: session.stoppedAt ?? new Date().toISOString() };
       if (!session.stoppedAt) {
-        await params.store.writeSession(stoppedSession);
+        try {
+          await params.store.writeSession(stoppedSession, {
+            expectedInputRevision: selection.historicalRevision,
+            assertCurrent,
+          });
+        } catch (error) {
+          if (error instanceof TranscriptsSummaryChangedError) {
+            return skip("inactive");
+          }
+          throw error;
+        }
       }
       persisted = await persistTranscriptSummary({
         config: resolveTranscriptsConfig(params.ctx.config?.transcripts),
         cfg: params.ctx.config,
         store: params.store,
         session: stoppedSession,
+        expectedInputRevision: session.stoppedAt ? selection.historicalRevision : undefined,
+        assertCurrent,
       });
     }
     const { summaryPath, intendedSummaryPath, summary, summaryExportError } =
@@ -119,4 +142,34 @@ export async function stopTranscriptCapture(params: {
       }
     }
   }
+}
+
+export function prepareTranscriptCaptureDisable(stateDir: string) {
+  const transition = Symbol("capture-policy");
+  capturePolicyTransitions.set(stateDir, transition);
+  const entries = [...new Set([...startingSessions.values(), ...activeSessions.values()])].filter(
+    (entry) => entry.directCapture?.stateDir === stateDir,
+  );
+  for (const entry of entries) {
+    entry.cleanupPending = true;
+    entry.abortStartup?.();
+  }
+  return {
+    async drain() {
+      const results = await Promise.allSettled(
+        entries.map(async (entry) => entry.directCapture?.drain()),
+      );
+      const failures = results.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : [],
+      );
+      if (failures.length) {
+        throw new AggregateError(failures, "Transcript capture policy drainage failed");
+      }
+    },
+    resume: () => {
+      if (capturePolicyTransitions.get(stateDir) === transition) {
+        capturePolicyTransitions.delete(stateDir);
+      }
+    },
+  };
 }

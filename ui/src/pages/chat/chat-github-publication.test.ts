@@ -1,111 +1,57 @@
 /* @vitest-environment jsdom */
+import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway.ts";
+import type { GitHubPublicationOptions } from "../../lib/sessions/github-publication-controller.ts";
 import {
-  GitHubPublicationController,
-  type GitHubPublicationOptions,
-  type GitHubPublicationPresentationBinding,
-} from "../../lib/sessions/github-publication-controller.ts";
-
-type GitHubPublicationScope = Parameters<GitHubPublicationPresentationBinding["sync"]>[0] & {
-  client: Pick<GatewayBrowserClient, "request">;
-  key: string;
-  target: ConstructorParameters<typeof GitHubPublicationController>[0]["target"];
-};
-
-const shared = { source: "system-configured" as const, accountId: 1, login: "system-bot" };
-const account = { accountId: 2, login: "alice-tools" };
-const generation = "bdca439a-e787-4f9f-b5f3-a878c662cc76";
-const requestId = "bdca439a-e787-4f9f-b5f3-a878c662cc77";
-const options: GitHubPublicationOptions = {
-  shared,
-  personal: {
-    state: "connected",
-    generation,
-    account,
-    accessExpiresAtMs: null,
-    refreshState: "available",
-    pending: null,
-  },
-  pendingPersonal: null,
-};
-const confirmation = {
   account,
-  generation,
-  requestDigest: "a".repeat(64),
-  pushRepository: "alice/demo",
-  repository: "team/demo",
-  branch: "feature/one",
-  baseBranch: "main",
-  sourceHeadCommit: "1".repeat(40),
-  sourceIndexTree: "2".repeat(40),
-  workspaceTree: "3".repeat(40),
-};
-const interrupted = {
-  result: {
-    requestId,
-    publisher: { source: "personal" as const, ...account },
-    status: "needs_confirmation" as const,
-    message: "Review the original publication.",
-  },
   confirmation,
-};
-
-function setup(initialOptions = options) {
-  const request = vi.fn().mockImplementation(async (method: string) => {
-    if (method === "sessions.github.options") {
-      return initialOptions;
-    }
-    throw new Error(`Unexpected request: ${method}`);
-  });
-  const scope: GitHubPublicationScope = {
-    client: { request },
-    key: "gateway:alice:session:1",
-    target: { sessionKey: "agent:main:one", agentId: "main" },
-    canWrite: true,
-    personalReady: true,
-    isPresented: () => true,
-    isCurrent: () => true,
-  };
-  const changed = vi.fn();
-  let current = scope;
-  const create = (owner: GitHubPublicationScope) =>
-    new GitHubPublicationController({
-      client: owner.client,
-      target: owner.target,
-      isCurrent: () => current.key === owner.key && current.isCurrent(),
-      reserve: () => {},
-      release: () => {},
-      unbound: () => {},
-    });
-  let operation = create(scope);
-  let binding = operation.bind(changed);
-  binding.sync(scope);
-  const controller = {
-    view: () => binding.view(),
-    reset: () => operation.reset(),
-    sync(next: GitHubPublicationScope) {
-      if (next.key !== current.key) {
-        binding.detach();
-        operation.reset();
-        current = next;
-        operation = create(next);
-        binding = operation.bind(changed);
-      } else {
-        current = next;
-      }
-      binding.sync(next);
-    },
-  };
-  return { controller, request, scope, changed };
-}
-async function settled(controller: ReturnType<typeof setup>["controller"]) {
-  await vi.waitFor(() => expect(controller.view()?.busy).toBe(false));
-  return controller.view()!;
-}
+  generation,
+  interrupted,
+  options,
+  requestId,
+  setup,
+  settled,
+  shared,
+} from "./chat-github-publication.test-support.ts";
+import { renderGitHubPublicationAction } from "./components/chat-github-publication.ts";
 
 describe("explicit GitHub publication", () => {
+  it("does not present an accepted publication status read as a new write", async () => {
+    const { controller, request } = setup();
+    (await settled(controller)).onSelect?.("personal");
+    const accepted = {
+      requestId,
+      publisher: { source: "personal", ...account },
+      status: "requested",
+      message: "Accepted.",
+    };
+    request.mockResolvedValueOnce(accepted);
+    controller.view()?.onPublish?.();
+    const pending = await settled(controller);
+    const status = createDeferred<unknown>();
+    request.mockImplementationOnce(() => status.promise);
+    pending.onRefresh();
+    const container = document.createElement("div");
+    try {
+      render(renderGitHubPublicationAction(controller.view()!), container);
+      expect(container.textContent).not.toContain("Publishing");
+      expect(container.querySelector<HTMLButtonElement>(".chat-pr__create")?.disabled).toBe(true);
+      expect(request).toHaveBeenLastCalledWith("sessions.github.status", {
+        sessionKey: "agent:main:one",
+        agentId: "main",
+        requestId,
+      });
+      expect(
+        request.mock.calls.filter(([method]) => method === "sessions.github.publish"),
+      ).toHaveLength(1);
+    } finally {
+      status.resolve({ result: accepted, confirmation: null });
+      await settled(controller);
+      render(null, container);
+    }
+  });
   it("defaults to the displayed shared account; personal connection alone changes no default", async () => {
     const { controller, request } = setup();
     const view = await settled(controller);
@@ -347,6 +293,7 @@ describe("explicit GitHub publication", () => {
       shared: { ...shared, login: "other-system" },
       personal: null,
       pendingPersonal: null,
+      latestShared: null,
     };
     request.mockResolvedValueOnce(nextOptions);
     controller.sync({ ...scope, key: "gateway:bob:session:2" });
@@ -479,7 +426,7 @@ describe("explicit GitHub publication", () => {
   );
 
   it("offers shared publication without a personal owner and never auto-selects personal when shared is absent", async () => {
-    const unbound = setup({ shared, personal: null, pendingPersonal: null });
+    const unbound = setup({ shared, personal: null, pendingPersonal: null, latestShared: null });
     expect((await settled(unbound.controller)).selection).toEqual({
       source: "shared",
       expected: shared,

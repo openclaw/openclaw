@@ -188,7 +188,6 @@ export function createTelegramInboundMedia({
       senderId,
       effectiveDmAllow: authorization.effectiveDmAllow,
       effectiveGroupAllow: authorization.effectiveGroupAllow,
-      ownerAccess: { ownerList: [], senderIsOwner: false },
       eventKind: "message",
       allowTextCommands: true,
       hasControlCommand: hasControlCommandInMessage,
@@ -218,7 +217,7 @@ export function createTelegramInboundMedia({
       },
     );
     const hasAnyMention = textParts.entities.some((entity) => entity.type === "mention");
-    const explicitlyMentioned = botUsername ? hasBotMention(msg, botUsername) : false;
+    const explicitlyMentioned = botUsername ? hasBotMention(msg, botUsername, ctx.me?.id) : false;
     const wasMentioned = matchesMentionWithExplicit({
       text: textParts.text,
       mentionRegexes,

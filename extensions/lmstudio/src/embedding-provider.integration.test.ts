@@ -1,6 +1,7 @@
 import { once } from "node:events";
 import { createServer, type IncomingHttpHeaders } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createModelProviderConfig } from "../../test-support/model-provider-config.test-support.js";
 import { createLmstudioEmbeddingProvider } from "./embedding-provider.js";
 
 afterEach(() => {
@@ -193,28 +194,24 @@ it.each(["single", "documents", "queries", "cancelled"] as const)(
         model: "embedding-model",
         fallback: "none",
         remote: { apiKey: "lmstudio-local" },
-        config: {
-          models: {
-            providers: {
-              lmstudio: {
-                baseUrl: `http://127.0.0.1:${address.port}/v1`,
-                apiKey: "lmstudio-local",
-                localService: { command: "/usr/bin/lms" },
-                models: [
-                  {
-                    id: "embedding-model",
-                    name: "Embedding model",
-                    reasoning: false,
-                    input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    maxTokens: 0,
-                    contextTokens: 2048,
-                  },
-                ],
+        config: createModelProviderConfig({
+          lmstudio: {
+            baseUrl: `http://127.0.0.1:${address.port}/v1`,
+            apiKey: "lmstudio-local",
+            localService: { command: "/usr/bin/lms" },
+            models: [
+              {
+                id: "embedding-model",
+                name: "Embedding model",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                maxTokens: 0,
+                contextTokens: 2048,
               },
-            },
+            ],
           },
-        },
+        }),
         acquireLocalService: async () => {
           leases++;
           return {

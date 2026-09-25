@@ -100,7 +100,8 @@ function requireQaSuiteOptions() {
   return options;
 }
 
-vi.mock("openclaw/plugin-sdk/qa-runner-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/qa-runner-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/qa-runner-runtime")>()),
   listQaRunnerCliContributions,
 }));
 
@@ -461,6 +462,7 @@ describe("qa cli registration", () => {
       providerMode: "live-frontier",
       repoRoot: "/tmp/openclaw-repo",
       scenario: "discord-status-reactions-tool-only",
+      signal: expect.any(AbortSignal),
       skipBuild: true,
       skipInstall: true,
       transport: "discord",

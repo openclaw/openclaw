@@ -2,6 +2,7 @@
 // references, and merged Tailscale gateway auth config.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { REDACTED_SENTINEL } from "../config/redact-sentinel.js";
 import { getConfigResolutionFacts, setConfigResolutionFacts } from "../config/resolution-facts.js";
 import { assertGatewayAuthNotKnownWeak } from "./known-weak-gateway-secrets.js";
 import { applyGatewayAuthOverridesForStartupPreflight } from "./server-startup-config-helpers.js";
@@ -72,6 +73,47 @@ describe("mergeGatewayTailscaleConfig", () => {
 });
 
 describe("ensureGatewayStartupAuth", () => {
+  it.each(["config", "environment"])(
+    "allows trusted-proxy startup with a redacted optional password from %s",
+    async (source) => {
+      const warn = vi.fn();
+      const result = await ensureGatewayStartupAuth({
+        cfg: gatewayAuthConfig({
+          mode: "trusted-proxy",
+          trustedProxy: { userHeader: "x-forwarded-user" },
+          ...(source === "config" ? { password: REDACTED_SENTINEL } : {}),
+        }),
+        env: source === "environment" ? { OPENCLAW_GATEWAY_PASSWORD: REDACTED_SENTINEL } : {},
+        warn,
+      });
+      expect(result.auth.mode).toBe("trusted-proxy");
+      expect(result.generatedToken).toBeUndefined();
+      expect(result.persistedGeneratedToken).toBe(false);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("local password fallback"));
+      expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["inline", "ref"])(
+    "refuses a redacted %s Gateway token and points to Doctor without generating a replacement",
+    async (source) => {
+      await expect(
+        ensureGatewayStartupAuth({
+          cfg: gatewayAuthConfigWithDefaultEnvProvider({
+            mode: "token",
+            token:
+              source === "inline"
+                ? REDACTED_SENTINEL
+                : gatewayEnvSecretRef("OPENCLAW_GATEWAY_TOKEN"),
+            allowTailscale: true,
+          }),
+          env: { OPENCLAW_GATEWAY_TOKEN: REDACTED_SENTINEL },
+        }),
+      ).rejects.toThrow(/redaction (?:sentinel|placeholder).*doctor --fix/);
+      expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+    },
+  );
+
   async function runStartupAuth(
     params: Omit<StartupAuthInput, "env"> & { env?: NodeJS.ProcessEnv },
   ) {

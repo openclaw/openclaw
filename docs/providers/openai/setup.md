@@ -1,5 +1,5 @@
 ---
-summary: "Connect OpenAI with an API key or a ChatGPT/Codex subscription"
+summary: "Connect OpenAI with an API key, Codex subscription, or Sign in with ChatGPT"
 read_when:
   - You are connecting OpenAI to OpenClaw for the first time
   - You want Codex subscription auth instead of API keys
@@ -7,6 +7,9 @@ read_when:
 title: "OpenAI setup"
 sidebarTitle: "Setup"
 ---
+
+Compare [OpenAI authentication methods](/providers/openai/authentication) to
+choose based on model access, hosted plugins, usage tracking, and permissions.
 
 ## Getting started
 
@@ -60,7 +63,7 @@ sidebarTitle: "Setup"
     ```json5
     {
       env: { vars: { OPENAI_API_KEY: "example-openai-key-not-real" } },
-      agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } },
+      agents: { defaults: { model: { primary: "openai/gpt-6-astra" } } },
     }
     ```
 
@@ -79,7 +82,7 @@ sidebarTitle: "Setup"
     ```
 
     `chat-latest` is a moving alias. Fresh OpenAI API-key setup instead uses
-    `openai/gpt-5.6-sol`. The bare direct-API `openai/gpt-5.6` alias remains
+    `openai/gpt-6-astra`. The bare direct-API `openai/gpt-5.6` alias remains
     supported and resolves to Sol. Existing
     explicit primaries, including `openai/gpt-5.5`, remain unchanged. The
     `chat-latest` alias only accepts `medium` text verbosity; OpenClaw forces
@@ -120,7 +123,7 @@ sidebarTitle: "Setup"
       </Step>
       <Step title="Use the canonical OpenAI model route">
         ```bash
-        openclaw config set agents.defaults.model.primary openai/gpt-5.6-sol
+        openclaw config set agents.defaults.model.primary openai/gpt-6-astra
         ```
 
         No runtime config is required for this exact official HTTPS native
@@ -142,10 +145,10 @@ sidebarTitle: "Setup"
 
     | Model ref                | Runtime policy or route facts                                 | Route                                                    | Auth                                               |
     | ------------------------ | ------------------------------------------------------------- | -------------------------------------------------------- | -------------------------------------------------- |
-    | `openai/gpt-5.6-sol`     | unset/`auto`, exact official HTTPS native route, no request override | Codex may be selected                                    | Codex sign-in, or an ordered `openai` auth profile |
+    | `openai/gpt-6-astra`     | unset/`auto`, exact official HTTPS native route, no request override | Codex may be selected                                    | Codex sign-in, or an ordered `openai` auth profile |
     | `openai/gpt-5.6-terra`   | unset/`auto`, exact official HTTPS native route, no request override | Codex may be selected                                    | Codex sign-in when the catalog exposes Terra       |
     | `openai/gpt-5.6-luna`    | unset/`auto`, exact official HTTPS native route, no request override | Codex may be selected                                    | Codex sign-in when the catalog exposes Luna        |
-    | `openai/gpt-5.6-sol`     | provider/model `agentRuntime.id: "openclaw"`                  | OpenClaw embedded runtime, internal Codex-auth transport | Selected `openai` OAuth profile                    |
+    | `openai/gpt-6-astra`     | provider/model `agentRuntime.id: "openclaw"`                  | OpenClaw embedded runtime, internal Codex-auth transport | Selected `openai` OAuth profile                    |
     | `openai/gpt-5.5`         | explicit provider/model `agentRuntime.id`                     | Selected agent runtime                                   | Selected OpenAI auth profile                       |
     | `openai/*`               | authored Completions, custom, or request override | OpenClaw embedded runtime                                | Credential requirement remains route-specific      |
     | `openai/*`               | plaintext official HTTP endpoint                  | Rejected                                                 | Credential is not sent                              |
@@ -153,9 +156,9 @@ sidebarTitle: "Setup"
     | `codex-cli/gpt-5.5`      | repaired by doctor                                            | Rewritten to `openai/gpt-5.5`                            | Codex app-server auth                              |
 
     <Warning>
-    Fresh subscription-backed setup uses exact `openai/gpt-5.6-sol`; the
+    Fresh subscription-backed setup uses exact `openai/gpt-6-astra`; the
     native Codex catalog may also expose exact Terra or Luna refs. If the
-    account does not expose GPT-5.6, select `openai/gpt-5.5` explicitly. Older
+    account does not expose Astra, select an available model explicitly. Older
     Codex GPT refs are legacy OpenClaw routes, not the native Codex runtime
     path; run `openclaw doctor --fix` to migrate them without upgrading an
     existing explicit GPT-5.5 selection. `gpt-5.3-codex-spark` stays limited
@@ -175,7 +178,7 @@ sidebarTitle: "Setup"
       plugins: { entries: { codex: { enabled: true } } },
       agents: {
         defaults: {
-          model: { primary: "openai/gpt-5.6-sol" },
+          model: { primary: "openai/gpt-6-astra" },
         },
       },
     }
@@ -190,7 +193,7 @@ sidebarTitle: "Setup"
       plugins: { entries: { codex: { enabled: true } } },
       agents: {
         defaults: {
-          model: { primary: "openai/gpt-5.6-sol" },
+          model: { primary: "openai/gpt-6-astra" },
         },
       },
       auth: {
@@ -348,7 +351,7 @@ sidebarTitle: "Setup"
     it from display and diagnostics. Never print, log, or expose the encrypted
     content.
 
-    A process-owned isolated-Gateway run verified this exact
+    A process-owned isolated-Gateway run on OpenClaw 2026.8.1 verified this exact
     `openai/gpt-5.6-sol` configuration. Dense turns reached `295098`, `586562`,
     and `863664` prompt tokens. Turn three emitted and persisted a first-class
     server compaction item; the next request replayed that exact opaque item,
@@ -421,3 +424,58 @@ sidebarTitle: "Setup"
 
   </Tab>
 </Tabs>
+
+<a id="chatgpt-token-sharing-preview" />
+
+## Sign in with ChatGPT (preview)
+
+Use Sign in with ChatGPT (SIWC) for app-specific permissions, usage tracking,
+and token limits per OpenClaw instance while eligible Responses API requests use
+your Codex allowance.
+Your account and workspace must have SIWC registration and token sharing enabled
+by OpenAI.
+
+SIWC does not support OpenAI-hosted plugins or connected apps yet. Those require
+a Codex credential with connector invocation scope, which device-code login does
+not grant. OpenClaw tools and locally configured plugins can still use their own
+credentials. See
+[OpenAI authentication](/providers/openai/authentication) to compare the methods.
+
+Run this on the computer running OpenClaw:
+
+```bash
+openclaw models auth login --provider openai --method siwc
+```
+
+Approve token sharing during sign-in to enable model calls. If you grant identity
+permissions only, OpenClaw saves the account but asks you to enable sharing or
+choose another credential before inference.
+
+The browser returns to `http://localhost:8080/auth/callback`. If your browser runs
+on another computer, forward its port 8080 to OpenClaw's IPv4 loopback before
+starting sign-in. For an SSH host, keep this command running on your browser's
+computer:
+
+```bash
+ssh -N -L 8080:127.0.0.1:8080 user@gateway-host
+```
+
+Open the sign-in link on that computer.
+
+To reconnect an existing account, sign in with the same ChatGPT user and
+workspace. To switch either, choose **Connect a different ChatGPT account or
+workspace** in the sign-in prompt.
+
+### Current limitations
+
+- Developer function tools and web search are supported. OpenAI-hosted plugins,
+  connected apps, hosted MCP tools, tool search, and file-backed inputs are not
+  supported yet.
+- Responses requests use HTTP streaming. WebSocket inference and SIWC quota
+  reporting in OpenClaw are not available.
+- With the Codex runtime, SIWC requires a managed local process and an isolated
+  agent home. Automatic context summarization is supported; manual `/compact`,
+  remote execution, and supervised sessions are unavailable with this credential.
+
+Model and allowance eligibility are enforced by OpenAI. SIWC does not import
+ChatGPT conversations or Codex history.

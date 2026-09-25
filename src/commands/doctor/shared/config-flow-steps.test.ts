@@ -59,15 +59,15 @@ describe("doctor config flow steps", () => {
   it("collects legacy compatibility issue lines and preview fix hints", () => {
     migrateLegacyConfigMock.mockReturnValueOnce({
       config: {},
-      changes: ["Moved heartbeat → agents.defaults.heartbeat."],
+      changes: ["Moved session.typingMode → agents.defaults.typingMode."],
     });
 
     const result = createLegacyStepResult({
-      parsed: { heartbeat: { enabled: true } },
-      legacyIssues: [{ path: "heartbeat", message: "use agents.defaults.heartbeat" }],
+      parsed: { session: { typingMode: "thinking" } },
+      legacyIssues: [{ path: "session.typingMode", message: "use agents.defaults.typingMode" }],
     });
 
-    expect(result.issueLines).toEqual(["- heartbeat: use agents.defaults.heartbeat"]);
+    expect(result.issueLines).toEqual(["- session.typingMode: use agents.defaults.typingMode"]);
     expect(result.changeLines).not.toStrictEqual([]);
     expect(result.state.fixHints).toStrictEqual([
       'Run "openclaw doctor --fix" to migrate legacy config keys.',
@@ -99,8 +99,11 @@ describe("doctor config flow steps", () => {
     });
 
     expect(migrateLegacyConfigMock).toHaveBeenCalledWith(sourceConfig, {
-      authoredRaw: { mcp: { $include: "./mcp.json5" } },
-      resolvedRaw: sourceConfig,
+      sourceConfigBeforeMigrations: undefined,
+      context: {
+        authoredRaw: { mcp: { $include: "./mcp.json5" } },
+        resolvedRaw: sourceConfig,
+      },
     });
     expect(result.state.pendingChanges).toBe(true);
     expect(result.state.candidate.mcp?.servers?.local?.enabled).toBe(false);
@@ -195,23 +198,19 @@ describe("doctor config flow steps", () => {
   );
 
   it("commits migration even when post-migration validation has unrelated issues (#76798)", () => {
-    const migratedConfig = { agents: { defaults: { model: { primary: "openai/gpt-5.4" } } } };
+    const migratedConfig = { agents: { defaults: { typingMode: "thinking" } }, session: {} };
     migrateLegacyConfigMock.mockReturnValueOnce({
       config: migratedConfig,
-      changes: [
-        "Removed agents.defaults.llm; model idle timeout now follows models.providers within the agent/run timeout ceiling.",
-      ],
+      changes: ["Moved session.typingMode → agents.defaults.typingMode."],
       partiallyValid: true,
     });
 
     const result = createLegacyStepResult({
       parsed: {
-        agents: {
-          defaults: { llm: { idleTimeoutSeconds: 120 }, model: { primary: "openai/gpt-5.4" } },
-        },
+        session: { typingMode: "thinking" },
         tools: { web: { search: { provider: "brave" } } },
       },
-      legacyIssues: [{ path: "agents.defaults.llm", message: "deprecated key" }],
+      legacyIssues: [{ path: "session.typingMode", message: "deprecated key" }],
       valid: false,
       issues: [
         {

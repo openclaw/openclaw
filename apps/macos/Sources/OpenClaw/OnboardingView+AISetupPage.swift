@@ -5,7 +5,6 @@ struct GatewayAuthenticationReturnDecision: Equatable {
     let authIssue: RemoteGatewayAuthIssue
     let probeState: RemoteOnboardingProbeState
     let showRemoteChoices: Bool
-    let showAdvancedConnection: Bool
 }
 
 extension OnboardingView {
@@ -82,11 +81,12 @@ extension OnboardingView {
     @discardableResult
     func resumePendingSystemAgent(
         modelRef: String,
+        modelTarget: OnboardingAISetupModel.ModelTarget? = nil,
         intent: OnboardingAISetupModel.SetupIntent = .resumePending) -> Task<Void, Never>
     {
         self.prepareSystemAgentHandoff()
         let expectedRouteIdentity = self.aiSetupRouteIdentityProvider()
-        aiSetup.resumeConfiguredInference(modelRef: modelRef)
+        aiSetup.resumeConfiguredInference(modelRef: modelRef, modelTarget: modelTarget)
         if let page = pageOrder.firstIndex(of: aiPageIndex) {
             currentPage = page
         }
@@ -141,7 +141,6 @@ extension OnboardingView {
         remoteAuthIssue = decision.authIssue
         remoteProbeState = decision.probeState
         showRemoteChoices = decision.showRemoteChoices
-        showAdvancedConnection = decision.showAdvancedConnection
         withAnimation { currentPage = decision.connectionPage }
     }
 
@@ -160,8 +159,7 @@ extension OnboardingView {
             connectionPage: connectionPage,
             authIssue: authIssue,
             probeState: .failed(probeInput, authIssue.statusMessage),
-            showRemoteChoices: true,
-            showAdvancedConnection: true)
+            showRemoteChoices: true)
     }
 
     func resumePendingInferenceSetup() {

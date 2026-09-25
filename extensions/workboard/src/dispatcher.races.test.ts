@@ -3,26 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
-import type { PersistedWorkboardCard, WorkboardKeyedStore } from "./persistence-types.js";
-import { WorkboardStore } from "./store.js";
-
-function createMemoryStore(): WorkboardKeyedStore {
-  const entries = new Map<string, PersistedWorkboardCard>();
-  return {
-    async register(key, value) {
-      entries.set(key, value);
-    },
-    async lookup(key) {
-      return entries.get(key);
-    },
-    async delete(key) {
-      return entries.delete(key);
-    },
-    async entries() {
-      return [...entries].map(([key, value]) => ({ key, value }));
-    },
-  };
-}
+import { createWorkboardSqliteTestStore } from "./test/sqlite-store.js";
 
 describe("Workboard dispatcher lifecycle races", () => {
   it.each([
@@ -32,7 +13,7 @@ describe("Workboard dispatcher lifecycle races", () => {
     { name: "under review", status: "review" as const },
     { name: "moved to another board", boardId: "product" },
   ])("does not start a card $name during dispatch preflight", async (transition) => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const card = await store.create({
       title: "Concurrent dispatch transition",
       status: "ready",
@@ -78,7 +59,7 @@ describe("Workboard dispatcher lifecycle races", () => {
   });
 
   it("does not spend worker attempts on cards that change before they can be claimed", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const first = await store.create({
       title: "First stale dispatch",
       status: "ready",
@@ -131,7 +112,7 @@ describe("Workboard dispatcher lifecycle races", () => {
 
   it("retains a managed worktree when pre-start lossless cleanup declines", async () => {
     const managedPath = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-retained-"));
-    const store = new WorkboardStore(createMemoryStore());
+    const store = createWorkboardSqliteTestStore();
     const card = await store.create({
       title: "Retain failed worker checkout",
       status: "ready",

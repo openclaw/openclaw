@@ -55,7 +55,7 @@ import {
 } from "./anthropic-auth-headers.js";
 import {
   applyClaudeRequestContract,
-  ANTHROPIC_CLAUDE_CODE_VERSION,
+  buildAnthropicClaudeCodeIdentity,
   prepareClaudeNoPrefillRequestContext,
   resolveAnthropicThinkingEffort,
   resolveClaudeOpus5ModelIdentity,
@@ -188,6 +188,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
       // caller-owned headers.
       let serverSideFallback = false;
       let directApiKeyBetaHeader: string | undefined;
+      let claudeCodeVersion: string | undefined;
 
       if (requestOptions?.client) {
         client = requestOptions.client;
@@ -221,6 +222,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
         isOAuth = created.isOAuthToken;
         serverSideFallback = created.serverSideFallback;
         directApiKeyBetaHeader = created.directApiKeyBetaHeader;
+        claudeCodeVersion = created.claudeCodeVersion;
       }
       const builtParams = await buildParams(
         model,
@@ -228,6 +230,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
         isOAuth,
         requestOptions,
         serverSideFallback,
+        claudeCodeVersion,
       );
       usedCompactionReplay = builtParams.usedCompactionReplay;
       let params = builtParams.params;
@@ -253,7 +256,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
         maxRetries: 0,
         headers:
           applyAnthropicThinkingBindingControls(params, betaHeader) ??
-          (betaHeader !== undefined ? { "anthropic-beta": betaHeader } : undefined),
+          (betaHeader ? { "anthropic-beta": betaHeader } : undefined),
       };
       const response = await client.messages
         .create({ ...params, stream: true }, sdkRequestOptions)
@@ -318,6 +321,7 @@ type AnthropicSimpleStreamOptions = SimpleStreamOptions &
   AnthropicContextManagementOptions & {
     authProfileId?: string;
     toolChoice?: AnthropicCompactionOptions["toolChoice"];
+    thinkingDisplay?: AnthropicOptions["thinkingDisplay"];
   };
 
 export const streamSimpleAnthropic: StreamFunction<
@@ -341,6 +345,7 @@ export const streamSimpleAnthropic: StreamFunction<
     authProfileId: options?.authProfileId,
     maxTokens: clampMaxTokensToModel(model, options?.maxTokens ?? model.maxTokens),
     toolChoice: options?.toolChoice,
+    thinkingDisplay: options?.thinkingDisplay,
   };
   const mandatoryAdaptiveThinking = requiresClaudeAdaptiveThinking(model);
   if (options?.reasoning === "off" && !mandatoryAdaptiveThinking) {
@@ -359,14 +364,13 @@ export const streamSimpleAnthropic: StreamFunction<
     return streamAnthropic(model, context, {
       ...base,
       thinkingEnabled: true,
-      effort: resolveAnthropicThinkingEffort(model, reasoning ?? "high"),
+      effort: resolveAnthropicThinkingEffort(model, reasoning),
     } satisfies AnthropicCompactionOptions);
   }
   if (!reasoning) {
     return streamAnthropic(model, context, {
       ...base,
       thinkingEnabled: mandatoryAdaptiveThinking,
-      ...(mandatoryAdaptiveThinking ? { effort: "high" as const } : {}),
     } satisfies AnthropicCompactionOptions);
   }
 
@@ -385,7 +389,7 @@ export const streamSimpleAnthropic: StreamFunction<
   // Do not coerce to 0 here, or the thinking budget would become the entire max_tokens value.
   const adjusted = adjustMaxTokensForThinking(
     base.maxTokens,
-    model.maxTokens,
+    model.maxTokens ?? base.maxTokens,
     reasoning,
     options?.thinkingBudgets,
   );
@@ -435,6 +439,7 @@ function createClient(
   isOAuthToken: boolean;
   serverSideFallback: boolean;
   directApiKeyBetaHeader?: string;
+  claudeCodeVersion?: string;
 } {
   // Adaptive thinking models (Opus 4.6, Sonnet 4.6) have interleaved thinking built-in.
   // The beta header is deprecated on Opus 4.6 and redundant on Sonnet 4.6, so skip it.
@@ -530,27 +535,27 @@ function createClient(
 
   // OAuth: Bearer auth, Claude Code identity headers
   if (isAnthropicOAuthApiKey(apiKey)) {
+    const identity = buildAnthropicClaudeCodeIdentity(
+      ["claude-code-20250219", "oauth-2025-04-20", ...betaFeatures].join(","),
+      model.headers,
+      optionsHeaders,
+    );
     const client = new Anthropic({
       apiKey: null,
       authToken: apiKey,
       baseURL: model.baseUrl,
       dangerouslyAllowBrowser: true,
-      defaultHeaders: mergeHeaders(
-        {
-          accept: "application/json",
-          "anthropic-dangerous-direct-browser-access": "true",
-          "anthropic-beta": ["claude-code-20250219", "oauth-2025-04-20", ...betaFeatures].join(","),
-          "user-agent": `claude-cli/${ANTHROPIC_CLAUDE_CODE_VERSION}`,
-          "x-app": "cli",
-        },
-        model.headers,
-        optionsHeaders,
-      ),
+      defaultHeaders: identity.headers,
       fetch,
       maxRetries: 0,
     });
 
-    return { client, isOAuthToken: true, serverSideFallback: false };
+    return {
+      client,
+      isOAuthToken: true,
+      serverSideFallback: false,
+      claudeCodeVersion: identity.version,
+    };
   }
 
   // API key auth
@@ -601,6 +606,7 @@ async function buildParams(
   isOAuthTokenResult: boolean,
   options?: AnthropicCompactionOptions,
   serverSideFallback = false,
+  claudeCodeVersion?: string,
 ): Promise<{
   params: MessageCreateParamsStreaming;
   toolProjection?: AnthropicToolProjection;
@@ -612,7 +618,12 @@ async function buildParams(
     model,
     options?.cacheRetention,
   );
-  const system = buildAnthropicSystemBlocks(context.systemPrompt, isOAuthTokenResult, cacheControl);
+  const system = buildAnthropicSystemBlocks(
+    context.systemPrompt,
+    isOAuthTokenResult,
+    cacheControl,
+    claudeCodeVersion,
+  );
   const compat = getAnthropicCompat(model);
   const convertedTools = context.tools
     ? convertAnthropicTools(
@@ -628,6 +639,7 @@ async function buildParams(
     authProfileId: options?.authProfileId,
     sessionId: options?.sessionId,
   });
+  const cacheBreakpointOptOutMessageIndexes = new Set<number>();
   const params: MessageCreateParamsStreaming = {
     model: model.id,
     // The SDK's stable message union omits compaction blocks accepted by its beta endpoint.
@@ -640,6 +652,7 @@ async function buildParams(
         allowEmptySignature: compat.allowEmptySignature,
         compaction: replayPlan.compaction,
         replayThinkingEnabled,
+        cacheBreakpointOptOutMessageIndexes,
       },
     )) as MessageParam[],
     max_tokens: options?.maxTokens ?? model.maxTokens,
@@ -662,7 +675,12 @@ async function buildParams(
     buildAnthropicGenerationParams({ model, options, tools, toolProjection, profile: "provider" }),
   );
 
-  applyAnthropicRequestCacheControl(params, cacheControl, supportsCacheControlOnTools);
+  applyAnthropicRequestCacheControl(
+    params,
+    cacheControl,
+    supportsCacheControlOnTools,
+    cacheBreakpointOptOutMessageIndexes,
+  );
 
   return { params, toolProjection, usedCompactionReplay: replayPlan.compaction !== undefined };
 }

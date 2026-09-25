@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createColdPluginFixture } from "../../plugins/test-helpers/cold-plugin-fixtures.js";
 import { invokePluginArtifactInstallMock } from "../../plugins/test-helpers/install-fixtures.js";
+import { expectObjectFields } from "../../test-utils/mock-call-assertions.js";
 
 const installPluginFromNpmSpec = vi.fn();
 const resolveNpmSpecMetadata = vi.hoisted(() => vi.fn());
@@ -283,10 +284,7 @@ function requireArray(value: unknown, label: string): unknown[] {
 }
 
 function expectRecordFields(value: unknown, label: string, expected: Record<string, unknown>) {
-  const record = requireRecord(value, label);
-  for (const [key, expectedValue] of Object.entries(expected)) {
-    expect(record[key]).toEqual(expectedValue);
-  }
+  expectObjectFields(requireRecord(value, label), expected);
 }
 
 type MockWithCalls = { mock: { calls: unknown[][] } };

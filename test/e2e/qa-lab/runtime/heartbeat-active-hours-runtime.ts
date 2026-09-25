@@ -74,8 +74,9 @@ async function waitForObservation(
 ) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (observations.slice(afterCount).some((entry) => entry.outcome === outcome)) {
-      return;
+    const observation = observations.slice(afterCount).find((entry) => entry.outcome === outcome);
+    if (observation) {
+      return observation;
     }
     await new Promise((resolve) => {
       setTimeout(resolve, 20);
@@ -101,7 +102,7 @@ async function pokeScheduledHeartbeat(params: {
     reason: "interval",
     coalesceMs: 0,
   });
-  await waitForObservation(
+  return await waitForObservation(
     params.observations,
     params.outcome,
     params.afterCount,
@@ -135,6 +136,7 @@ export async function runHeartbeatActiveHoursRuntime(options: HeartbeatRuntimeOp
   const writer = createWriter(options);
   const startedAt = Date.now();
   const observations: SchedulerObservation[] = [];
+  const phaseObservations: SchedulerObservation[] = [];
   let currentConfig = heartbeatConfig(false);
   const runner = startHeartbeatRunner({
     cfg: currentConfig,
@@ -150,33 +152,43 @@ export async function runHeartbeatActiveHoursRuntime(options: HeartbeatRuntimeOp
     },
   });
   try {
-    await pokeScheduledHeartbeat({
-      observations,
-      outcome: "active-fire",
-      afterCount: 0,
-      timeoutMs: options.timeoutMs,
-    });
+    phaseObservations.push(
+      await pokeScheduledHeartbeat({
+        observations,
+        outcome: "active-fire",
+        afterCount: 0,
+        timeoutMs: options.timeoutMs,
+      }),
+    );
     const beforeQuiet = observations.length;
     currentConfig = heartbeatConfig(true);
     runner.updateConfig(currentConfig);
-    await pokeScheduledHeartbeat({
-      observations,
-      outcome: "quiet-hours-skip",
-      afterCount: beforeQuiet,
-      timeoutMs: options.timeoutMs,
-    });
+    phaseObservations.push(
+      await pokeScheduledHeartbeat({
+        observations,
+        outcome: "quiet-hours-skip",
+        afterCount: beforeQuiet,
+        timeoutMs: options.timeoutMs,
+      }),
+    );
     const beforeReload = observations.length;
     currentConfig = heartbeatConfig(false);
     runner.updateConfig(currentConfig);
-    await pokeScheduledHeartbeat({
-      observations,
-      outcome: "active-fire",
-      afterCount: beforeReload,
-      timeoutMs: options.timeoutMs,
-    });
+    phaseObservations.push(
+      await pokeScheduledHeartbeat({
+        observations,
+        outcome: "active-fire",
+        afterCount: beforeReload,
+        timeoutMs: options.timeoutMs,
+      }),
+    );
 
     const summaryPath = path.join(options.artifactBase, "heartbeat-active-hours-summary.json");
-    await fs.writeFile(summaryPath, `${JSON.stringify({ observations }, null, 2)}\n`, "utf8");
+    await fs.writeFile(
+      summaryPath,
+      `${JSON.stringify({ observations: phaseObservations }, null, 2)}\n`,
+      "utf8",
+    );
     return await writer.write({
       artifacts: [{ kind: "summary", filePath: summaryPath }],
       details: "Observed active fire, quiet-hours skip, and active-hours reload fire",

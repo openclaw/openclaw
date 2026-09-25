@@ -2,8 +2,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import ts from "typescript";
-import { describe, expect, it } from "vitest";
+import * as ts from "typescript/unstable/ast";
+import { afterAll, describe, expect, it } from "vitest";
+import { createNativeTypeScriptParser } from "../../../scripts/lib/native-typescript.mts";
 import { contractPluginPath, getBundledPluginRoots } from "./test-helpers/bundled-plugin-roots.js";
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -16,7 +17,6 @@ const UNGUARDED_RUNTIME_API_PLUGIN_IDS = [
   "a2a",
   "acpx",
   "browser",
-  "buzz",
   "canvas",
   "clickclack",
   "copilot-proxy",
@@ -42,6 +42,8 @@ const UNGUARDED_RUNTIME_API_PLUGIN_IDS = [
 ] as const;
 
 const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
+  [contractPluginPath({ rootDir: ROOT_DIR, pluginId: "facetime", relativePath: "runtime-api.ts" })]:
+    ['export { createFaceTimeRuntime, type FaceTimeRuntime } from "./src/runtime.js";'],
   [contractPluginPath({
     rootDir: ROOT_DIR,
     pluginId: "diagnostics-otel",
@@ -337,14 +339,19 @@ function collectRuntimeApiFiles(): string[] {
     );
 }
 
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
+
 function readExportStatements(path: string): string[] {
   const sourceText = readFileSync(resolve(ROOT_DIR, "..", path), "utf8");
-  const sourceFile = ts.createSourceFile(path, sourceText, ts.ScriptTarget.Latest, true);
+  const sourceFile = parser.parseSourceFile(path, sourceText);
 
   return sourceFile.statements.flatMap((statement) => {
     if (!ts.isExportDeclaration(statement)) {
-      const modifiers = ts.canHaveModifiers(statement) ? ts.getModifiers(statement) : undefined;
-      if (!modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)) {
+      const isExported = statement.forEachChild((child) =>
+        child.kind === ts.SyntaxKind.ExportKeyword ? true : undefined,
+      );
+      if (!isExported) {
         return [];
       }
       return [statement.getText(sourceFile).replaceAll(/\s+/g, " ").trim()];
@@ -472,14 +479,14 @@ describe("runtime api guardrails", () => {
     ]);
   });
 
-  it("keeps Matrix's narrow runtime-setter entrypoint pinned to a single export", () => {
+  it("keeps Matrix's runtime-setter entrypoint limited to registration helpers", () => {
     const setterFile = contractPluginPath({
       rootDir: ROOT_DIR,
       pluginId: "matrix",
       relativePath: "runtime-setter-api.ts",
     });
     expect(readExportStatements(setterFile)).toEqual([
-      'export { setMatrixRuntime } from "./src/runtime.js";',
+      'export { setMatrixRuntime, setMatrixRuntimeLifecycle } from "./src/runtime.js";',
     ]);
   });
 

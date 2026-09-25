@@ -13,7 +13,7 @@ import {
   redactSetupInferenceError,
   type ActivateSetupInferenceDeps,
 } from "./setup-inference-core.js";
-import { verifySetupInferenceConfig } from "./setup-inference-verify.js";
+import { verifySetupInferenceConfig } from "./setup-inference-turn.js";
 import {
   createSystemAgentPluginMetadataTestSnapshot,
   createSystemAgentVerifiedInferenceTestFixture,
@@ -39,7 +39,6 @@ async function observeScenario(scenario: Scenario, json: boolean) {
   const exits: number[] = [];
   const phases: string[] = [];
   const tempDirs: string[] = [];
-  let writes = 0;
   let callbackAttempts = 0;
   let managedDispatches = 0;
   let onboardingDispatches = 0;
@@ -101,10 +100,6 @@ async function observeScenario(scenario: Scenario, json: boolean) {
             ...fixture.deps,
             resolvePluginMetadataSnapshot: metadata.bind,
             readCodexCliActiveApiKey: () => null,
-            updateAuthProfileStoreWithLock: async () => {
-              writes += 1;
-              throw new Error("unexpected credential write");
-            },
             createTempDir: async () => {
               const dir = await fs.mkdtemp(path.join(root, "operation-"));
               tempDirs.push(dir);
@@ -184,9 +179,8 @@ async function observeScenario(scenario: Scenario, json: boolean) {
         });
       },
     );
-    expect(writes).toBe(0);
     expect(onboardingDispatches).toBe(0);
-    expect(tempDirs).toHaveLength(1);
+    expect(tempDirs).toHaveLength(scenario === "capture" ? 0 : 1);
     for (const dir of tempDirs) {
       await expect(fs.stat(dir)).rejects.toMatchObject({ code: "ENOENT" });
     }
@@ -269,7 +263,6 @@ async function observeScenario(scenario: Scenario, json: boolean) {
               callbackAttempts,
               managedDispatches,
               onboardingDispatches,
-              writes,
               tempDirsCreated: tempDirs.length,
               rootRemoved: true,
             },

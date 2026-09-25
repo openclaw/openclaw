@@ -17,12 +17,99 @@ vi.mock("../../../plugins/provider-hook-runtime.js", async (importOriginal) => {
 
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { formatBillingErrorMessage } from "../../embedded-agent-helpers.js";
+import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import {
   buildPayloads,
   expectSinglePayloadText,
   expectSingleToolErrorPayload,
 } from "./payloads.test-helpers.js";
+
+describe("buildEmbeddedRunPayloads tool-error silence", () => {
+  it.each([
+    { text: "NO_REPLY", mutatingAction: false },
+    { text: "NO_REPLY", mutatingAction: true },
+    { text: "NO_REPLY", mutatingAction: undefined },
+    { text: '{"action":"NO_REPLY"}', mutatingAction: false },
+    { text: '{"action":"NO_REPLY"}', mutatingAction: true },
+    { text: '{"action":"NO_REPLY"}', mutatingAction: undefined },
+  ])(
+    "respects authored conversational silence: $text, mutatingAction=$mutatingAction",
+    ({ text, mutatingAction }) => {
+      expect(
+        buildPayloads({
+          assistantTexts: [text],
+          lastToolError: {
+            toolName: "codex_apps.slack.slack_read_thread",
+            error: "429 RATE_LIMITED",
+            mutatingAction,
+          },
+        }),
+      ).toHaveLength(0);
+    },
+  );
+
+  it("does not append a bash warning after the agent edits its Slack answer and finishes silently", () => {
+    const assistant = makeAgentAssistantMessage({
+      content: [{ type: "text", text: "NO_REPLY" }],
+    });
+    expect(
+      buildPayloads({
+        assistantTexts: ["NO_REPLY"],
+        lastAssistant: assistant,
+        didSendViaMessagingTool: true,
+        lastToolError: {
+          toolName: "bash",
+          error: "rg: src/optional-panel: No such file or directory",
+          // Native command execution conservatively marks even searches as mutating.
+          mutatingAction: true,
+        },
+      }),
+    ).toHaveLength(0);
+  });
+
+  it.each([
+    { name: "a scheduled run", mutatingAction: false, isCronTrigger: true },
+    { name: "a heartbeat", mutatingAction: false, isHeartbeatTrigger: true },
+    { name: "an aborted run", mutatingAction: false, runAborted: true },
+  ])(
+    "keeps failure reporting for $name despite NO_REPLY",
+    ({ name: _name, mutatingAction, ...run }) => {
+      expectSingleToolErrorPayload(
+        buildPayloads({
+          ...run,
+          assistantTexts: ["NO_REPLY"],
+          lastToolError: { toolName: "read", error: "failed", mutatingAction },
+        }),
+        { title: "Read" },
+      );
+    },
+  );
+
+  it("does not treat an earlier silent steered input as the current answer", () => {
+    const prior = makeAgentAssistantMessage({ content: [{ type: "text", text: "NO_REPLY" }] });
+    expectSingleToolErrorPayload(
+      buildPayloads({
+        assistantTexts: ["NO_REPLY"],
+        answerSegments: [{ textEnd: 1, messageEnd: 2, finalMessageStart: 2, lastAssistant: prior }],
+        lastToolError: { toolName: "read", error: "failed", mutatingAction: false },
+      }),
+      { title: "Read" },
+    );
+  });
+
+  it.each([false, true, undefined])(
+    "still warns without an answer (mutatingAction=%s)",
+    (mutatingAction) => {
+      expectSingleToolErrorPayload(
+        buildPayloads({
+          lastToolError: { toolName: "read", error: "failed", mutatingAction },
+        }),
+        { title: "Read" },
+      );
+    },
+  );
+});
 
 describe("buildEmbeddedRunPayloads", () => {
   const OVERLOADED_FALLBACK_TEXT =
@@ -113,37 +200,6 @@ describe("buildEmbeddedRunPayloads", () => {
             ? expect.stringContaining('Tool "browser" blocked by sandbox tool policy')
             : REDACTED_TEST_MODEL_FAILURE_TEXT,
         isError: true,
-      },
-    ]);
-  });
-
-  it("turns returned OpenAI refresh failures into Codex login recovery", () => {
-    const payloads = buildPayloads({
-      provider: "openai",
-      lastAssistant: makeAssistant({
-        stopReason: "error",
-        errorMessage: "OAuth token refresh failed for openai: refresh_token_invalidated",
-        content: [],
-      }),
-    });
-
-    expect(payloads).toEqual([
-      {
-        text: expect.stringContaining("/login codex"),
-        isError: true,
-        presentation: {
-          blocks: [
-            {
-              type: "buttons",
-              buttons: [
-                {
-                  label: "Log in to Codex",
-                  action: { type: "command", command: "/login codex" },
-                },
-              ],
-            },
-          ],
-        },
       },
     ]);
   });

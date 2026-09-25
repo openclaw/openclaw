@@ -1,13 +1,11 @@
-import fs from "node:fs";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { describe, expect, it, onTestFinished } from "vitest";
+import { describe, expect, it } from "vitest";
 import { VoiceCallConfigSchema } from "./config.js";
 import { CallManager } from "./manager.js";
 import {
   createManagerHarness,
   FakeProvider,
-  finalizeTestManagerCalls,
   registerTestManagerCleanup,
 } from "./manager.test-harness.js";
 import { PlivoProvider } from "./providers/plivo.js";
@@ -55,17 +53,6 @@ describe("CallManager termination lifecycle", () => {
         config,
         new FakeProvider(providerName),
       );
-      const managers = [manager];
-      onTestFinished(() => {
-        try {
-          for (const owner of managers) {
-            finalizeTestManagerCalls(owner);
-          }
-        } finally {
-          resetPluginStateStoreForTests();
-          fs.rmSync(storePath, { recursive: true, force: true });
-        }
-      });
       const started = await manager.initiateCall("+15550000001", "agent:sales:voice:fixture", {
         agentId: "sales",
       });
@@ -104,7 +91,7 @@ describe("CallManager termination lifecycle", () => {
         }
         return event;
       };
-      manager.processEvent(callback(initialProviderId, "in-progress", true));
+      await manager.processEvent(callback(initialProviderId, "in-progress", true));
       await expect(
         manager.speak(started.callId, "Preserve this call transcript."),
       ).resolves.toEqual({
@@ -127,7 +114,6 @@ describe("CallManager termination lifecycle", () => {
       if (restart) {
         resetPluginStateStoreForTests();
         current = registerTestManagerCleanup(new CallManager(config, storePath));
-        managers.push(current);
         await current.initialize(provider, "https://example.com/voice/webhook");
       }
 
@@ -136,7 +122,7 @@ describe("CallManager termination lifecycle", () => {
         providerName === "plivo" ? "ringing" : "completed",
         providerName === "twilio",
       );
-      expect(current.processEvent(late).kind).not.toBe("final-speech");
+      expect((await current.processEvent(late)).kind).not.toBe("final-speech");
 
       const history = await current.getCallHistory();
       expect(new Set(history.map((call) => call.callId))).toEqual(new Set([started.callId]));
@@ -159,7 +145,7 @@ describe("CallManager termination lifecycle", () => {
     try {
       expect(provider.attempts).toHaveLength(1);
 
-      manager.processEvent({
+      await manager.processEvent({
         id: "provider-terminal",
         type: "call.ended",
         callId: call.callId,

@@ -3,8 +3,9 @@ import { repeat } from "lit/directives/repeat.js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
-import { formatDurationCompact } from "../../../lib/format.ts";
+import { formatDurationCompact } from "../../../lib/format-duration.ts";
 import { resolveSessionDisplayName } from "../../../lib/session-display.ts";
+import { isSessionRunActive } from "../../../lib/session-run-state.ts";
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
 
 type SwarmDotStatus = "queued" | "running" | "done" | "failed";
@@ -14,6 +15,13 @@ type SwarmDot = {
   label: string;
   status: SwarmDotStatus;
   duration: string;
+};
+
+const SWARM_STATUS_LABEL_KEYS: Record<SwarmDotStatus, string> = {
+  queued: "tasksPage.status.queued",
+  running: "tasksPage.status.running",
+  done: "tasksPage.status.completed",
+  failed: "labsPage.swarm.failedOrStopped",
 };
 
 function swarmDuration(row: GatewaySessionRow, status: SwarmDotStatus): string {
@@ -78,15 +86,17 @@ export function renderChatSwarmProgress({
   sessionKey: string;
   agentId?: string;
 }): TemplateResult | typeof nothing {
-  const summary = sessions.find(
+  const parentRow = sessions.find(
     (row) =>
       areUiSessionKeysEquivalent(row.key, sessionKey) &&
       ((sessionKey !== "global" && sessionKey !== "unknown") ||
         Boolean(agentId && row.agentId === agentId)),
-  )?.swarm;
+  );
+  const summary = parentRow?.swarm;
   if (!summary?.groups.length) {
     return nothing;
   }
+  const parentActive = parentRow ? isSessionRunActive(parentRow) : false;
   const details = collectSwarmTasks(sessions, summary.groups);
   return html` <aside
     class="chat-swarm"
@@ -149,19 +159,23 @@ export function renderChatSwarmProgress({
                       ${total > markers.length ? html`<span>+${total - markers.length}</span>` : nothing}
                     </div>
                     <div class="chat-swarm__counts">${counts}</div>
-                    ${terminal ? html`<div class="chat-swarm__outcome">${t("labsPage.swarm.childOutcome")}</div>` : nothing}
+                    ${terminal ? html`<div class="chat-swarm__outcome">${t(parentActive ? "labsPage.swarm.childOutcomeProcessing" : "labsPage.swarm.childOutcome")}</div>` : nothing}
                     <span class="chat-swarm__disclosure"
                       >${t("labsPage.swarm.details")} ${icons.chevronDown}</span
                     >
                   `
             }
           </summary>
-          ${successful ? html`<div class="chat-swarm__outcome">${t("labsPage.swarm.childOutcome")}</div>` : nothing}
+          ${successful ? html`<div class="chat-swarm__outcome">${t(parentActive ? "labsPage.swarm.childOutcomeProcessing" : "labsPage.swarm.childOutcome")}</div>` : nothing}
           <div class="chat-swarm__tasks" role="list">
             ${tasks.length === 0 ? html`<div class="chat-swarm__outcome">${t("labsPage.swarm.detailsUnavailable")}</div>` : nothing}
             ${tasks.map(
               (task) => html` <div class="chat-swarm__task" role="listitem">
-                <span class=${`chat-swarm__task-icon chat-swarm__task-icon--${task.status}`}>
+                <span
+                  class=${`chat-swarm__task-icon chat-swarm__task-icon--${task.status}`}
+                  role="img"
+                  aria-label=${t(SWARM_STATUS_LABEL_KEYS[task.status])}
+                >
                   ${task.status === "done" ? icons.check : task.status === "failed" ? icons.alertTriangle : task.status === "running" ? icons.loader : icons.clock}
                 </span>
                 <span class="chat-swarm__task-name">${task.label}</span>

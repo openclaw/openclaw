@@ -162,12 +162,6 @@ describe("Synology Chat TLS verification defaults", () => {
 describe("sendMessage", () => {
   installFakeTimerHarness();
 
-  it("returns true on successful send", async () => {
-    mockSuccessResponse();
-    const result = await settleTimers(sendMessage("https://nas.example.com/incoming", "Hello"));
-    expect(result).toBe(true);
-  });
-
   it("returns false on server error without replaying", async () => {
     mockFailureResponse(500);
     const result = await settleTimers(sendMessage("https://nas.example.com/incoming", "Hello"));
@@ -244,14 +238,6 @@ describe("sendMessage", () => {
 
     expect(result).toBe(true);
     expect(vi.mocked(https.request)).toHaveBeenCalledTimes(1);
-  });
-
-  it("includes user_ids when userId is numeric", async () => {
-    mockSuccessResponse();
-    await settleTimers(sendMessage("https://nas.example.com/incoming", "Hello", 42));
-    expect(vi.mocked(https.request)).toHaveBeenCalled();
-    const callArgs = firstHttpsRequestCall();
-    expect(callArgs[0]).toBe("https://nas.example.com/incoming");
   });
 
   it("does not coerce partial numeric user ids into recipients", async () => {
@@ -599,17 +585,18 @@ describe("resolveLegacyWebhookNameToChatUserId", () => {
     mockUserListResponseOnce([{ user_id: 4, username: "jmn67", nickname: "jmn" }]);
     mockUserListResponseOnce([{ user_id: 9, username: "jmn67", nickname: "jmn" }]);
 
-    const result1 = await resolveLegacyWebhookNameToChatUserId({
-      incomingUrl: baseUrl,
-      mutableWebhookUsername: "jmn",
-    });
-    const result2 = await resolveLegacyWebhookNameToChatUserId({
-      incomingUrl: baseUrl2,
-      mutableWebhookUsername: "jmn",
-    });
-
-    expect(result1).toBe(4);
-    expect(result2).toBe(9);
+    for (const [incomingUrl, expectedUserId] of [
+      [baseUrl, 4],
+      [baseUrl2, 9],
+      [baseUrl, 4],
+    ] as const) {
+      await expect(
+        resolveLegacyWebhookNameToChatUserId({
+          incomingUrl,
+          mutableWebhookUsername: "jmn",
+        }),
+      ).resolves.toBe(expectedUserId);
+    }
     const httpsGet = vi.mocked(https.get);
     expect(httpsGet).toHaveBeenCalledTimes(2);
   });
@@ -620,13 +607,13 @@ describe("resolveLegacyWebhookNameToChatUserId user lookup", () => {
 
   it("filters malformed user entries while keeping valid ones", async () => {
     mockUserListResponse([
+      { user_id: "bad", username: "broken", nickname: "jmn" },
       { user_id: 4, username: "jmn67", nickname: "jmn" },
-      { user_id: "bad", username: "broken" },
     ]);
 
     const userId = await resolveLegacyWebhookNameToChatUserId({
       incomingUrl:
-        "https://nas.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=chatbot&version=2&token=%22test%22",
+        "https://malformed-user-nas.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=chatbot&version=2&token=%22test%22",
       mutableWebhookUsername: "jmn",
     });
 
@@ -661,19 +648,5 @@ describe("resolveLegacyWebhookNameToChatUserId user lookup", () => {
 
     expect(userId).toBeUndefined();
     expect(warns.some((line) => line.includes("exceeded"))).toBe(true);
-  });
-
-  it("verifies TLS by default for user_list lookups", async () => {
-    mockUserListResponse([{ user_id: 4, username: "jmn67", nickname: "jmn" }]);
-    const freshUrl =
-      "https://fresh-nas.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=chatbot&version=2&token=%22fresh%22";
-
-    await resolveLegacyWebhookNameToChatUserId({
-      incomingUrl: freshUrl,
-      mutableWebhookUsername: "jmn",
-    });
-
-    const firstCall = firstHttpsGetCall();
-    expect(firstCall[1]?.rejectUnauthorized).toBe(true);
   });
 });

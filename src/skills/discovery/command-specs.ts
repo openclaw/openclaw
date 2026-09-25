@@ -1,4 +1,3 @@
-// Skill command spec helpers expose skill-provided commands to model/tool surfaces.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -10,7 +9,11 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { loadEnabledClaudeBundleCommands } from "../../plugins/bundle-commands.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveSkillTelemetrySource } from "../loading/source.js";
-import { filterWorkspaceSkills, loadVisibleSkills } from "../loading/workspace-skill-loader.js";
+import {
+  filterWorkspaceSkills,
+  loadVisibleSkills,
+  prepareWorkspaceSkills,
+} from "../loading/workspace-skill-loader.js";
 import type {
   SkillEligibilityContext,
   SkillCommandSpec,
@@ -25,26 +28,16 @@ const skillsLogger = createSubsystemLogger("skills");
 const skillCommandDebugOnce = createDedupeCache({ ttlMs: 0, maxSize: 1024 });
 
 // De-duplicate noisy skill command diagnostics across large workspace scans.
-function debugSkillCommandOnce(
+function logSkillCommandOnce(
   messageKey: string,
   message: string,
   meta?: Record<string, unknown>,
+  level: "debug" | "trace" = "debug",
 ) {
   if (skillCommandDebugOnce.check(messageKey)) {
     return;
   }
-  skillsLogger.debug(message, meta);
-}
-
-function traceSkillCommandOnce(
-  messageKey: string,
-  message: string,
-  meta?: Record<string, unknown>,
-) {
-  if (skillCommandDebugOnce.check(messageKey)) {
-    return;
-  }
-  skillsLogger.trace(message, meta);
+  skillsLogger[level](message, meta);
 }
 
 function resolveUniqueSkillCommandName(base: string, used: Set<string>): string {
@@ -65,43 +58,79 @@ function resolveUniqueSkillCommandName(base: string, used: Set<string>): string 
   return `${base.slice(0, Math.max(1, SKILL_COMMAND_MAX_LENGTH - 2))}_x`;
 }
 
-/** Builds user-invocable slash command specs for visible workspace skills. */
+type WorkspaceSkillCommandOptions = {
+  bundledSkillName?: string;
+  config?: OpenClawConfig;
+  managedSkillsDir?: string;
+  bundledSkillsDir?: string;
+  entries?: SkillEntry[];
+  librarySelections?: SkillSnapshot["librarySelections"];
+  agentId?: string;
+  skillFilter?: string[];
+  includeAllowlistHidden?: boolean;
+  eligibility?: SkillEligibilityContext;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
+  reservedNames?: Set<string>;
+};
+
+function resolveCommandSkillLoadOptions(opts?: WorkspaceSkillCommandOptions) {
+  return {
+    bundledSkillName: opts?.bundledSkillName,
+    config: opts?.config,
+    managedSkillsDir: opts?.managedSkillsDir,
+    bundledSkillsDir: opts?.bundledSkillsDir,
+    librarySelections: opts?.librarySelections,
+    agentId: opts?.agentId,
+    agentSkillFilter: opts?.includeAllowlistHidden ? ("ignore" as const) : ("apply" as const),
+    skillFilter: opts?.includeAllowlistHidden
+      ? undefined
+      : (opts?.skillFilter ?? resolveEffectiveAgentSkillFilter(opts?.config, opts?.agentId)),
+    eligibility: opts?.eligibility,
+    pluginMetadataSnapshot: opts?.pluginMetadataSnapshot,
+  };
+}
+
+/** Builds user-invocable slash command specs for synchronous SDK consumers. */
 export function buildWorkspaceSkillCommandSpecs(
   workspaceDir: string,
-  opts?: {
-    config?: OpenClawConfig;
-    managedSkillsDir?: string;
-    bundledSkillsDir?: string;
-    entries?: SkillEntry[];
-    librarySelections?: SkillSnapshot["librarySelections"];
-    agentId?: string;
-    skillFilter?: string[];
-    includeAllowlistHidden?: boolean;
-    eligibility?: SkillEligibilityContext;
-    pluginMetadataSnapshot?: PluginMetadataSnapshot;
-    reservedNames?: Set<string>;
-  },
+  opts?: WorkspaceSkillCommandOptions & { gatewayOnly?: boolean },
 ): SkillCommandSpec[] {
-  const effectiveSkillFilter = opts?.includeAllowlistHidden
-    ? undefined
-    : (opts?.skillFilter ?? resolveEffectiveAgentSkillFilter(opts?.config, opts?.agentId));
+  const loadOptions = { ...resolveCommandSkillLoadOptions(opts), gatewayOnly: opts?.gatewayOnly };
   const eligible = opts?.entries
     ? filterWorkspaceSkills(opts.entries, {
         config: opts?.config,
-        skillFilter: effectiveSkillFilter,
+        skillFilter: loadOptions.skillFilter,
         eligibility: opts?.eligibility,
       })
-    : loadVisibleSkills(workspaceDir, {
-        config: opts?.config,
-        managedSkillsDir: opts?.managedSkillsDir,
-        bundledSkillsDir: opts?.bundledSkillsDir,
-        librarySelections: opts?.librarySelections,
-        agentId: opts?.agentId,
-        agentSkillFilter: opts?.includeAllowlistHidden ? "ignore" : "apply",
-        skillFilter: effectiveSkillFilter,
-        eligibility: opts?.eligibility,
-        pluginMetadataSnapshot: opts?.pluginMetadataSnapshot,
-      });
+    : loadVisibleSkills(workspaceDir, loadOptions);
+  return assembleWorkspaceSkillCommandSpecs(workspaceDir, eligible, opts);
+}
+
+/** Prepares eligibility once before sharing the synchronous command assembly. */
+export async function prepareWorkspaceSkillCommandSpecs(
+  workspaceDir: string,
+  opts: Omit<WorkspaceSkillCommandOptions, "entries" | "eligibility"> & {
+    eligibility: SkillEligibilityContext;
+  },
+  assertCurrent?: () => void,
+): Promise<SkillCommandSpec[]> {
+  const eligible = await prepareWorkspaceSkills(
+    workspaceDir,
+    {
+      ...resolveCommandSkillLoadOptions(opts),
+      eligibility: opts.eligibility,
+    },
+    assertCurrent,
+  );
+  assertCurrent?.();
+  return assembleWorkspaceSkillCommandSpecs(workspaceDir, eligible, opts);
+}
+
+function assembleWorkspaceSkillCommandSpecs(
+  workspaceDir: string,
+  eligible: SkillEntry[],
+  opts?: WorkspaceSkillCommandOptions,
+): SkillCommandSpec[] {
   const userInvocable = filterUserInvocableSkillEntries(eligible);
   const used = new Set<string>();
   for (const reserved of opts?.reservedNames ?? []) {
@@ -109,25 +138,34 @@ export function buildWorkspaceSkillCommandSpecs(
   }
 
   const specs: SkillCommandSpec[] = [];
-  for (const entry of userInvocable) {
-    const rawName = entry.skill.name;
+  const claimName = (rawName: string, bundle = false) => {
+    const prefix = bundle ? "bundle-" : "";
+    const label = bundle ? "bundle" : "skill";
+    const level = bundle ? "debug" : "trace";
     const base = sanitizeSkillCommandName(rawName);
     if (base !== rawName) {
-      traceSkillCommandOnce(
-        `sanitize:${rawName}:${base}`,
-        `Sanitized skill command name "${rawName}" to "/${base}".`,
+      logSkillCommandOnce(
+        `${prefix}sanitize:${rawName}:${base}`,
+        `Sanitized ${label} command name "${rawName}" to "/${base}".`,
         { rawName, sanitized: `/${base}` },
+        level,
       );
     }
     const unique = resolveUniqueSkillCommandName(base, used);
     if (unique !== base) {
-      traceSkillCommandOnce(
-        `dedupe:${rawName}:${unique}`,
-        `De-duplicated skill command name for "${rawName}" to "/${unique}".`,
+      logSkillCommandOnce(
+        `${prefix}dedupe:${rawName}:${unique}`,
+        `De-duplicated ${label} command name for "${rawName}" to "/${unique}".`,
         { rawName, deduped: `/${unique}` },
+        level,
       );
     }
     used.add(normalizeLowercaseStringOrEmpty(unique));
+    return unique;
+  };
+  for (const entry of userInvocable) {
+    const rawName = entry.skill.name;
+    const unique = claimName(rawName);
     const description = entry.skill.description?.trim() || rawName;
     const dispatch = entry.disableCommandDispatch
       ? undefined
@@ -137,7 +175,7 @@ export function buildWorkspaceSkillCommandSpecs(
               entry.frontmatter?.["command_dispatch"] ??
               "",
           );
-          if (!kindRaw || kindRaw !== "tool") {
+          if (kindRaw !== "tool") {
             return undefined;
           }
 
@@ -147,7 +185,7 @@ export function buildWorkspaceSkillCommandSpecs(
             ""
           ).trim();
           if (!toolName) {
-            debugSkillCommandOnce(
+            logSkillCommandOnce(
               `dispatch:missingTool:${rawName}`,
               `Skill command "/${unique}" requested tool dispatch but did not provide command-tool. Ignoring dispatch.`,
               { skillName: rawName, command: unique },
@@ -160,9 +198,8 @@ export function buildWorkspaceSkillCommandSpecs(
               entry.frontmatter?.["command_arg_mode"] ??
               "",
           );
-          const argMode = !argModeRaw || argModeRaw === "raw" ? "raw" : null;
-          if (!argMode) {
-            debugSkillCommandOnce(
+          if (argModeRaw && argModeRaw !== "raw") {
+            logSkillCommandOnce(
               `dispatch:badArgMode:${rawName}:${argModeRaw}`,
               `Skill command "/${unique}" requested tool dispatch but has unknown command-arg-mode. Falling back to raw.`,
               { skillName: rawName, command: unique, argMode: argModeRaw },
@@ -189,25 +226,8 @@ export function buildWorkspaceSkillCommandSpecs(
     cfg: opts?.config,
   });
   for (const entry of bundleCommands) {
-    const base = sanitizeSkillCommandName(entry.rawName);
-    if (base !== entry.rawName) {
-      debugSkillCommandOnce(
-        `bundle-sanitize:${entry.rawName}:${base}`,
-        `Sanitized bundle command name "${entry.rawName}" to "/${base}".`,
-        { rawName: entry.rawName, sanitized: `/${base}` },
-      );
-    }
-    const unique = resolveUniqueSkillCommandName(base, used);
-    if (unique !== base) {
-      debugSkillCommandOnce(
-        `bundle-dedupe:${entry.rawName}:${unique}`,
-        `De-duplicated bundle command name for "${entry.rawName}" to "/${unique}".`,
-        { rawName: entry.rawName, deduped: `/${unique}` },
-      );
-    }
-    used.add(normalizeLowercaseStringOrEmpty(unique));
     specs.push({
-      name: unique,
+      name: claimName(entry.rawName, true),
       skillName: entry.rawName,
       description: entry.description,
       modelVisible: false,

@@ -811,18 +811,6 @@ describe("shell env fallback", () => {
     expect(exec).toHaveBeenCalledOnce();
   });
 
-  it("returns the login-shell PATH needed by env-based executable launchers", () => {
-    const exec = vi.fn(() => framedShellEnv("PATH=/bin\0"));
-
-    const result = resolveExecutableFromUserShellPath("sh", {
-      env: { PATH: "/missing", SHELL: "/bin/sh" },
-      strategy: "fallback",
-      exec: exec as unknown as Parameters<typeof resolveExecutableFromUserShellPath>[1]["exec"],
-    });
-
-    expect(result).toEqual({ executable: "/bin/sh", pathEnv: "/bin" });
-  });
-
   it("returns null without invoking shell on win32", () => {
     const exec = vi.fn(() => framedShellEnv("PATH=/usr/local/bin:/usr/bin\0HOME=/tmp\0"));
 

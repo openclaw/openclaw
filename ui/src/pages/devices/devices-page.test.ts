@@ -7,7 +7,11 @@ import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gatewa
 import type { PresenceEntry } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
-import { createInitialDevicesState, loadDevices, loadNodes } from "../../lib/nodes/index.ts";
+import {
+  createInitialDevicesState,
+  loadDevices,
+  loadNodes,
+} from "../../lib/nodes/page-operations.ts";
 import {
   deviceSystemInfo,
   deviceDesktopEnvironments,
@@ -542,26 +546,20 @@ describe("DevicesPage gateway lifecycle", () => {
       },
     } as ApplicationGatewaySnapshot;
     const currentGateway = gateway(client, snapshot);
-    const page = document.createElement("openclaw-devices-page") as TestDevicesPage;
-    page.context = {
-      gateway: currentGateway,
-      runtimeConfig: {
-        state: { configSnapshot: {}, configLoading: false },
-        subscribe: vi.fn(() => () => undefined),
-      },
-    } as unknown as ApplicationContext;
-    page.routeData = {
-      gateway: currentGateway,
-      gatewaySnapshot: snapshot,
-      devices: createInitialDevicesState({ client, connected: true }),
-    };
-    page.willUpdate(new Map([["routeData", undefined]]));
-    applyGatewaySnapshot(page, snapshot);
-    page.ensureInitialData();
-
-    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("node.list", {}));
-    expect(request.mock.calls.map(([method]) => method)).not.toContain("device.pair.list");
-    expect(request.mock.calls.map(([method]) => method)).not.toContain("exec.approvals.get");
+    const page = mountInventoryPage(currentGateway);
+    try {
+      page.routeData = {
+        gateway: currentGateway,
+        gatewaySnapshot: snapshot,
+        devices: createInitialDevicesState({ client, connected: true }),
+      };
+      await page.updateComplete;
+      await vi.waitFor(() => expect(request).toHaveBeenCalledWith("node.list", {}));
+      expect(request.mock.calls.map(([method]) => method)).not.toContain("device.pair.list");
+      expect(request.mock.calls.map(([method]) => method)).not.toContain("exec.approvals.get");
+    } finally {
+      page.remove();
+    }
   });
 
   it("keeps event-driven device reloads gated on pairing access", async () => {

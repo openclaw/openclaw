@@ -2,13 +2,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Readable } from "node:stream";
-import { expectDefined } from "@openclaw/normalization-core";
 import JSZip from "jszip";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer, createTinyJpegBuffer } from "../../test/helpers/image-fixtures.js";
 import { isPathWithinBase } from "../../test/helpers/paths.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
+import { expectSavedOriginalFilenameCase } from "./store-filename.test-support.js";
 
 describe("media store", () => {
   let store: typeof import("./store.js");
@@ -52,8 +52,8 @@ describe("media store", () => {
   }) {
     const mockKey = `./store.js?scope=retry-pruned-write-${params.segment}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     let injectedEnoent = false;
-    vi.doMock("../infra/file-store.js", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("../infra/file-store.js")>();
+    vi.doMock("@openclaw/fs-safe/store", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("@openclaw/fs-safe/store")>();
       return {
         ...actual,
         fileStore: (options: Parameters<typeof actual.fileStore>[0]) => {
@@ -89,15 +89,15 @@ describe("media store", () => {
       expect(injectedEnoent).toBe(true);
       expect(savedStat.isFile()).toBe(true);
     } finally {
-      vi.doUnmock("../infra/file-store.js");
+      vi.doUnmock("@openclaw/fs-safe/store");
     }
   }
 
   async function expectFailedBufferWriteCase() {
     const mockKey = `./store.js?scope=failed-buffer-write-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const attemptedRelPaths: string[] = [];
-    vi.doMock("../infra/file-store.js", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("../infra/file-store.js")>();
+    vi.doMock("@openclaw/fs-safe/store", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("@openclaw/fs-safe/store")>();
       return {
         ...actual,
         fileStore: (options: Parameters<typeof actual.fileStore>[0]) => {
@@ -140,38 +140,7 @@ describe("media store", () => {
       expect(path.basename(attemptedRelPaths[0] ?? "")).toMatch(/^[^/\\]+\.ogg$/);
       expect(entries).toStrictEqual([]);
     } finally {
-      vi.doUnmock("../infra/file-store.js");
-    }
-  }
-
-  async function expectSavedOriginalFilenameCase(params: {
-    originalFilename?: string;
-    expectedIdPattern: RegExp;
-    expectedExtractedFilename?: string;
-    expectUuidOnly?: boolean;
-    maxBaseNameLength?: number;
-  }) {
-    const saved = await store.saveMediaBuffer(
-      Buffer.from("test content"),
-      "text/plain",
-      "inbound",
-      5 * 1024 * 1024,
-      params.originalFilename,
-    );
-
-    expect(saved.id).toMatch(params.expectedIdPattern);
-    if (params.expectedExtractedFilename) {
-      expect(store.extractOriginalFilename(saved.path)).toBe(params.expectedExtractedFilename);
-    }
-    if (params.expectUuidOnly) {
-      expect(saved.id).not.toContain("---");
-    }
-    if (params.maxBaseNameLength !== undefined) {
-      const baseName = expectDefined(
-        path.parse(saved.id).name.split("---")[0],
-        'path.parse(saved.id).name.split("---")[0] test invariant',
-      );
-      expect(baseName.length).toBeLessThanOrEqual(params.maxBaseNameLength);
+      vi.doUnmock("@openclaw/fs-safe/store");
     }
   }
 
@@ -1038,12 +1007,30 @@ describe("media store", () => {
         expectUuidOnly: true,
       },
       {
+        name: "falls back to UUID-only when the original basename is blank",
+        originalFilename: "   .txt",
+        expectedIdPattern: /^[a-f0-9-]{36}\.txt$/,
+        expectUuidOnly: true,
+      },
+      {
+        name: "falls back to UUID-only when the original basename has only invalid characters",
+        originalFilename: "<>:\u0001.txt",
+        expectedIdPattern: /^[a-f0-9-]{36}\.txt$/,
+        expectUuidOnly: true,
+      },
+      {
+        name: "preserves an original basename matching the sanitizer default",
+        originalFilename: "file.txt",
+        expectedIdPattern: /^file---[a-f0-9-]{36}\.txt$/,
+        expectedExtractedFilename: "file.txt",
+      },
+      {
         name: "strips controls and neutralizes bidi/zero-width formatting",
         originalFilename: "report\rC\nL\tT\fF\x1bE\x00N\x7fD\u202efd\u200bp\ufeffsafe.exe",
         expectedIdPattern: /^reportCLTFEND_fd_p_safe---[a-f0-9-]{36}\.txt$/,
       },
     ] as const)("$name", async (testCase) => {
-      await expectSavedOriginalFilenameCase(testCase);
+      await expectSavedOriginalFilenameCase(store, testCase);
     });
   });
 });

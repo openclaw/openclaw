@@ -64,7 +64,7 @@ const teamReportsConfigSchema = z
       .regex(
         /^\/(?!api\/channels(?:\/|$))(?!\.{1,2}(?:\/|$))(?!.*\/\.{1,2}(?:\/|$))[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*\/*$/,
       )
-      .default("/reports"),
+      .default("/plugins/team-reports"),
     displayTimezone: nonempty.default("UTC"),
     github: githubSchema,
     discord: z

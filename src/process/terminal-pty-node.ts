@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { constants } from "node:os";
-import { resolveExecutablePath } from "../infra/executable-path.js";
+import { toErrorObject } from "../infra/errors.js";
+import { resolveNodeRuntimeExecutable } from "../infra/node-runtime-executable.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -14,8 +15,9 @@ const CLEANUP_TIMEOUT_MS = 2_000;
 /** Keeps native PTY I/O on Node while the Gateway or node host runs on Bun. */
 export async function spawnNodeTerminalPty(
   params: TerminalPtySpawnParams,
+  beforeSpawn?: () => void,
 ): Promise<TerminalPtyHandle> {
-  const node = resolveExecutablePath("node", { env: process.env });
+  const node = resolveNodeRuntimeExecutable();
   if (!node) {
     throw new Error("A Node executable is required for terminals on Bun; add node to PATH.");
   }
@@ -51,7 +53,6 @@ export async function spawnNodeTerminalPty(
       return;
     }
     startupError ??= error;
-    ready.reject(error);
     if (child.connected) {
       child.disconnect();
     }
@@ -127,10 +128,17 @@ export async function spawnNodeTerminalPty(
       return;
     }
     if (message.type === "boot") {
-      send({ type: "start", params });
+      try {
+        beforeSpawn?.();
+        send({ type: "start", params });
+      } catch (error) {
+        fail(toErrorObject(error, "PTY launch denied"));
+      }
     } else if (message.type === "ready") {
       ptyPid = message.pid;
-      ready.resolve(message.pid);
+      if (!startupError) {
+        ready.resolve(message.pid);
+      }
     } else if (message.type === "error") {
       fail(new Error(message.message));
     } else {
@@ -162,7 +170,12 @@ export async function spawnNodeTerminalPty(
   }
   return {
     pid,
-    write: (data) => send({ type: "input", data }),
+    write: (data) =>
+      send(
+        typeof data === "string"
+          ? { type: "input", data }
+          : { type: "input", dataBase64: data.toString("base64") },
+      ),
     resize: (cols, rows) => send({ type: "resize", cols, rows }),
     pause: () => {
       paused = true;
@@ -180,12 +193,22 @@ export async function spawnNodeTerminalPty(
       if (!paused) {
         stdout.resume();
       }
+      return {
+        dispose() {
+          stdout.off("data", listener);
+          subscribed = stdout.listenerCount("data") > 0;
+          if (!subscribed) {
+            stdout.pause();
+          }
+        },
+      };
     },
     onExit: (listener) => {
       listeners.add(listener);
       if (exited) {
         listener(exited);
       }
+      return { dispose: () => listeners.delete(listener) };
     },
     kill: (signal) => {
       send({ type: "kill", signal });

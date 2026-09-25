@@ -7,18 +7,22 @@ import {
   isOpenAIGpt54MiniModel,
   isOpenAIGpt55Model,
   isOpenAIGpt56Model,
-  resolveOpenAIReasoningEffortForModel,
-  type OpenAIReasoningEffort,
 } from "../providers/openai-reasoning-effort.js";
+import {
+  resolveOpenAIRequestReasoning,
+  resolveOpenAISimpleReasoningEffort,
+} from "../providers/openai-request-reasoning.js";
 import {
   resolveOpenAICompletionsResponseFormat,
   shouldOmitOllamaCompatResponseFormat,
 } from "../providers/openai-response-format.js";
 import {
   projectOpenAITools,
+  prepareOpenAITools,
   reconcileOpenAICompletionsToolChoice,
 } from "../providers/openai-tool-projection.js";
 import { normalizeOpenAIStrictToolParameters } from "../providers/openai-tool-schema.js";
+import { withPreparedToolSchemaNormalization } from "../providers/tool-schema-normalization-cache.js";
 import { resolveOpenAIStrictToolSetting, resolveProviderEndpoint } from "./host-policy.js";
 import { resolveMaxTokensParam } from "./model-max-tokens-params.js";
 import { emitModelTransportDebug } from "./model-transport-debug.js";
@@ -28,6 +32,7 @@ import {
 } from "./openai-completions-cache-control.js";
 import {
   detectOpenAICompletionsCompat,
+  isNativeOpenAIEndpoint,
   type ResolvedOpenAICompletionsCompat,
 } from "./openai-completions-compat.js";
 import { applyDirectCompletionsReasoningAndRouting } from "./openai-completions-direct-policy.js";
@@ -45,7 +50,6 @@ import {
   resolveOpenAIStrictToolFlagWithDiagnostics,
 } from "./openai-transport-params.js";
 import {
-  isOpenAICompletionsThinkingEnabled,
   log,
   resolvePromptCacheKey,
   sortTransportToolsByName,
@@ -58,7 +62,7 @@ import {
 } from "./transport-utils.js";
 
 function isKnownOpenAICompletionsEndpoint(model: Pick<Model, "baseUrl">): boolean {
-  if (!model.baseUrl.trim()) {
+  if (!model.baseUrl.trim() || isNativeOpenAIEndpoint(model)) {
     return true;
   }
   const endpointClass = resolveProviderEndpoint(model).endpointClass;
@@ -70,10 +74,6 @@ function isKnownOpenAICompletionsEndpoint(model: Pick<Model, "baseUrl">): boolea
   } catch {
     return false;
   }
-}
-
-function resolveOpenAICompletionsReasoningEffort(options: OpenAICompletionsOptions | undefined) {
-  return options?.reasoningEffort ?? options?.reasoning ?? "high";
 }
 
 function resolveOpenAICompletionsMaxTokens(
@@ -102,12 +102,13 @@ function resolveOpenAICompletionsModelMaxTokens(model: OpenAIModeModel): number 
 
 const OPENAI_COMPLETIONS_INPUT_TOKEN_SAFETY_MARGIN = 1.25;
 const OPENAI_COMPLETIONS_IMAGE_CHAR_ESTIMATE = 8_000;
+const MIN_USEFUL_OUTPUT_TOKENS = 16;
 
 // Used only to bound `max_completion_tokens` below the effective context cap
 // for strict OpenAI-compatible servers (e.g. vLLM, StepFun). The CJK-aware
 // helper avoids undercounting non-Latin prompts enough to trigger server-side
-// context rejections; wrong-high here just trims output a little. Estimate the
-// final shaped payload, not the raw context, so compat transforms and dropped
+// context rejections; exhausted estimates enter the existing overflow recovery.
+// Estimate the final shaped payload, not the raw context, so compat transforms and dropped
 // replay turns are reflected in the output cap.
 function estimateOpenAICompletionsInputTokens(payload: {
   messages?: unknown;
@@ -205,10 +206,6 @@ function resolveOpenAICompletionsEffectiveContextTokens(
     : undefined;
 }
 
-function isQwenOpenAICompletionsThinkingFormat(format: string): boolean {
-  return format === "qwen" || format === "qwen-chat-template";
-}
-
 function setQwenChatTemplateThinking(params: Record<string, unknown>, enabled: boolean): void {
   const existing = params.chat_template_kwargs;
   params.chat_template_kwargs =
@@ -217,39 +214,30 @@ function setQwenChatTemplateThinking(params: Record<string, unknown>, enabled: b
       : { enable_thinking: enabled };
 }
 
-function applyQwenOpenAICompletionsThinkingParams(params: {
+/** Return whether the binary control replaces scalar reasoning effort. */
+function applyBinaryCompletionsThinkingParams(params: {
   compatThinkingFormat: string;
   modelReasoning: boolean;
   payload: Record<string, unknown>;
-  requestedEffort: OpenAIReasoningEffort;
+  thinkingEnabled: boolean;
 }): boolean {
-  if (
-    !params.modelReasoning ||
-    !isQwenOpenAICompletionsThinkingFormat(params.compatThinkingFormat)
-  ) {
+  if (!params.modelReasoning) {
     return false;
   }
-  const enabled = isOpenAICompletionsThinkingEnabled(params.requestedEffort);
-  if (params.compatThinkingFormat === "qwen-chat-template") {
-    setQwenChatTemplateThinking(params.payload, enabled);
-  } else {
-    params.payload.enable_thinking = enabled;
+  const enabled = params.thinkingEnabled;
+  switch (params.compatThinkingFormat) {
+    case "qwen-chat-template":
+      setQwenChatTemplateThinking(params.payload, enabled);
+      return true;
+    case "qwen":
+      params.payload.enable_thinking = enabled;
+      return true;
+    case "together":
+      params.payload.reasoning = { enabled };
+      return !enabled;
+    default:
+      return false;
   }
-  return true;
-}
-
-function applyTogetherOpenAICompletionsThinkingParams(params: {
-  compatThinkingFormat: string;
-  modelReasoning: boolean;
-  payload: Record<string, unknown>;
-  requestedEffort: OpenAIReasoningEffort;
-}): void {
-  if (!params.modelReasoning || params.compatThinkingFormat !== "together") {
-    return;
-  }
-  params.payload.reasoning = {
-    enabled: isOpenAICompletionsThinkingEnabled(params.requestedEffort),
-  };
 }
 
 function convertTools(
@@ -258,48 +246,52 @@ function convertTools(
   model: OpenAIModeModel,
   mode: "direct" | "managed",
 ) {
-  const projection = projectOpenAITools(tools);
-  const strict =
-    mode === "direct"
-      ? compat.supportsStrictMode
-        ? false
-        : undefined
-      : resolveOpenAIStrictToolFlagWithDiagnostics(
-          projection,
-          resolveOpenAIStrictToolSetting(model, {
-            transport: "stream",
-            supportsStrictMode: compat?.supportsStrictMode,
-          }),
-          {
-            transport: "completions",
-            model,
-          },
-        );
-  return {
-    projection,
-    tools: sortTransportToolsByName(projection.tools).map((tool) => {
-      const functionTool: {
-        name: string;
-        description: string | undefined;
-        parameters: ReturnType<typeof normalizeOpenAIStrictToolParameters>;
-        strict?: boolean;
-      } = {
-        name: tool.name,
-        description: tool.description,
-        parameters:
-          mode === "direct"
-            ? tool.parameters
-            : normalizeOpenAIStrictToolParameters(tool.parameters, strict === true, model.compat),
-      };
-      if (strict !== undefined) {
-        functionTool.strict = strict;
-      }
-      return {
-        type: "function" as const,
-        function: functionTool,
-      };
-    }),
+  const prepared = mode === "managed" ? prepareOpenAITools(tools) : undefined;
+  const projection = prepared?.projection ?? projectOpenAITools(tools);
+  const convert = () => {
+    const strict =
+      mode === "direct"
+        ? compat.supportsStrictMode
+          ? false
+          : undefined
+        : resolveOpenAIStrictToolFlagWithDiagnostics(
+            projection,
+            resolveOpenAIStrictToolSetting(model, {
+              transport: "stream",
+              supportsStrictMode: compat?.supportsStrictMode,
+            }),
+            {
+              transport: "completions",
+              model,
+            },
+          );
+    return {
+      projection,
+      tools: sortTransportToolsByName(projection.tools).map((tool) => {
+        const functionTool: {
+          name: string;
+          description: string | undefined;
+          parameters: ReturnType<typeof normalizeOpenAIStrictToolParameters>;
+          strict?: boolean;
+        } = {
+          name: tool.name,
+          description: tool.description,
+          parameters:
+            mode === "direct"
+              ? tool.parameters
+              : normalizeOpenAIStrictToolParameters(tool.parameters, strict === true, model.compat),
+        };
+        if (strict !== undefined) {
+          functionTool.strict = strict;
+        }
+        return {
+          type: "function" as const,
+          function: functionTool,
+        };
+      }),
+    };
   };
+  return prepared ? withPreparedToolSchemaNormalization(prepared.schemas, convert) : convert();
 }
 
 export function buildOpenAICompletionsParams(
@@ -348,6 +340,7 @@ export function buildOpenAICompletionsRequest(
     endpointClass !== "modelstudio-native" &&
     !(endpointClass === "default" && ["modelstudio", "dashscope", "qwen"].includes(model.provider));
   const cacheOptOutIndexes = new Set<number>();
+  // The converter needs intact boundaries for Runtime relocation or cache markers.
   let messages: unknown[] = convertMessages(model as never, context, compat as never, {
     cacheOptOutIndexes,
     preserveSystemPromptCacheBoundary:
@@ -477,6 +470,26 @@ export function buildOpenAICompletionsRequest(
       params.tool_choice = toolChoice;
     }
   }
+  const isOpenRouter = compat.thinkingFormat === "openrouter";
+  // Only model metadata can declare a missing effort selector; endpoint defaults cannot.
+  const usesBinaryOpenRouterThinking =
+    isOpenRouter &&
+    (model.compat?.supportsReasoningEffort === false ||
+      model.compat?.supportedReasoningEfforts?.length === 0);
+  const simpleReasoning = options?.reasoning;
+  const requestedEffort =
+    policy.mode === "direct"
+      ? options?.reasoningEffort
+      : (options?.reasoningEffort ??
+        (simpleReasoning === "none"
+          ? "none"
+          : resolveOpenAISimpleReasoningEffort(
+              { ...model, compat: model.compat ?? undefined },
+              simpleReasoning,
+            )) ??
+        (usesBinaryOpenRouterThinking ? undefined : "high"));
+  const reasoning = resolveOpenAIRequestReasoning(model, requestedEffort);
+  const { effort, thinkingEnabled } = reasoning;
   {
     const maxTokenBudget =
       policy.mode === "direct"
@@ -517,6 +530,22 @@ export function buildOpenAICompletionsRequest(
             `model=${model.id} requested=${effectiveMaxTokens} output=${clampedMaxTokens} ` +
             `effectiveContext=${effectiveContextTokens} estimatedInput=${estimatedInputTokens}`,
         );
+        if (remainingBudget < MIN_USEFUL_OUTPUT_TOKENS) {
+          if (model.reasoning && thinkingEnabled !== false) {
+            throw Object.assign(
+              new Error(
+                `Context window exceeded: estimated input ${estimatedInputTokens} leaves only ` +
+                  `${remainingBudget} output tokens within the ${effectiveContextTokens}-token context.`,
+              ),
+              { code: "context_length_exceeded" },
+            );
+          }
+          log.warn(
+            `[completions] insufficient_output_budget provider=${model.provider} api=${model.api} ` +
+              `model=${model.id} output=${clampedMaxTokens} ` +
+              `effectiveContext=${effectiveContextTokens} estimatedInput=${estimatedInputTokens}`,
+          );
+        }
       }
     }
     if (policy.mode === "direct" ? options?.maxTokens : clampedMaxTokens) {
@@ -527,69 +556,49 @@ export function buildOpenAICompletionsRequest(
       }
     }
   }
+  if (isOpenRouter && model.reasoning) {
+    if (usesBinaryOpenRouterThinking && thinkingEnabled !== undefined) {
+      params.reasoning = { enabled: thinkingEnabled };
+    } else if (effort !== undefined) {
+      params.reasoning = { effort };
+    }
+  }
   if (policy.mode === "direct") {
-    applyDirectCompletionsReasoningAndRouting(params, model, options, compat);
-    return params;
+    applyDirectCompletionsReasoningAndRouting(params, model, reasoning, compat);
+  } else {
+    const suppressScalarEffort = applyBinaryCompletionsThinkingParams({
+      compatThinkingFormat: compat.thinkingFormat,
+      modelReasoning: model.reasoning,
+      payload: params,
+      thinkingEnabled: thinkingEnabled ?? false,
+    });
+    if (
+      !isOpenRouter &&
+      effort &&
+      model.reasoning &&
+      compat.supportsReasoningEffort &&
+      !suppressScalarEffort
+    ) {
+      params.reasoning_effort = effort;
+    }
+    if (compat.cacheControlFormat === "anthropic") {
+      applyCompletionsAnthropicCacheControl(
+        params,
+        cacheControl ?? null,
+        cacheOptOutIndexes,
+        markTools,
+        !managedCompat?.requiresStringContent,
+      );
+    }
   }
-  const completionsReasoningEffort = resolveOpenAICompletionsReasoningEffort(options);
-  const resolvedCompletionsReasoningEffort = completionsReasoningEffort
-    ? resolveOpenAIReasoningEffortForModel({
-        model,
-        effort: completionsReasoningEffort,
-        fallbackMap: managedCompat?.reasoningEffortMap,
-      })
-    : undefined;
-  const omitChatCompletionsToolReasoningEffort =
-    Array.isArray(params.tools) &&
-    params.tools.length > 0 &&
-    (isOpenAIGpt54MiniModel(model) ||
-      (isOpenAIGpt55Model(model) && isKnownOpenAICompletionsEndpoint(model)));
-  const disableChatCompletionsToolReasoning =
-    Array.isArray(params.tools) &&
-    params.tools.length > 0 &&
-    isOpenAIGpt56Model(model) &&
-    isKnownOpenAICompletionsEndpoint(model);
-  const handledQwenThinkingFormat = applyQwenOpenAICompletionsThinkingParams({
-    compatThinkingFormat: compat.thinkingFormat,
-    modelReasoning: model.reasoning,
-    payload: params,
-    requestedEffort: completionsReasoningEffort,
-  });
-  applyTogetherOpenAICompletionsThinkingParams({
-    compatThinkingFormat: compat.thinkingFormat,
-    modelReasoning: model.reasoning,
-    payload: params,
-    requestedEffort: completionsReasoningEffort,
-  });
-  if (disableChatCompletionsToolReasoning) {
-    // GPT-5.6 Chat Completions defaults reasoning on, but rejects function
-    // tools unless reasoning is explicitly disabled.
-    params.reasoning_effort = "none";
-  } else if (
-    compat.thinkingFormat === "openrouter" &&
-    model.reasoning &&
-    resolvedCompletionsReasoningEffort
-  ) {
-    params.reasoning = {
-      effort: resolvedCompletionsReasoningEffort,
-    };
-  } else if (
-    resolvedCompletionsReasoningEffort &&
-    model.reasoning &&
-    compat.supportsReasoningEffort &&
-    !handledQwenThinkingFormat &&
-    !omitChatCompletionsToolReasoningEffort
-  ) {
-    params.reasoning_effort = resolvedCompletionsReasoningEffort;
-  }
-  if (compat.cacheControlFormat === "anthropic") {
-    applyCompletionsAnthropicCacheControl(
-      params,
-      cacheControl ?? null,
-      cacheOptOutIndexes,
-      markTools,
-      !managedCompat?.requiresStringContent,
-    );
+  if (params.tools?.length && isKnownOpenAICompletionsEndpoint(model)) {
+    // Native Chat Completions rejects tools with enabled GPT-5.6 reasoning,
+    // and rejects the effort field entirely for GPT-5.4 Mini and GPT-5.5 tools.
+    if (isOpenAIGpt56Model(model)) {
+      params.reasoning_effort = "none";
+    } else if (isOpenAIGpt54MiniModel(model) || isOpenAIGpt55Model(model)) {
+      delete params.reasoning_effort;
+    }
   }
   return params;
 }

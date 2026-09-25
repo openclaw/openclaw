@@ -81,12 +81,13 @@ describe("multi-Gateway suite acquisition ownership", () => {
           throw clientError;
         }
       };
-      const bodies: Array<() => Promise<void>> = [];
+      const bodies: Array<{ name: string; run: () => Promise<void> }> = [];
       const cleanups: Array<() => Promise<void>> = [];
       vi.doMock("vitest", () => ({
         afterAll: (cleanup: () => Promise<void>) => cleanups.push(cleanup),
         describe: (_name: string, run: () => void) => run(),
-        it: (_name: string, _options: unknown, run: () => Promise<void>) => bodies.push(run),
+        it: (name: string, _options: unknown, run: () => Promise<void>) =>
+          bodies.push({ name, run }),
         expect,
       }));
       let nextInstance = 0;
@@ -113,11 +114,19 @@ describe("multi-Gateway suite acquisition ownership", () => {
       let cleanup: Promise<unknown> | undefined;
       try {
         await import("../gateway.multi.e2e.test.js");
-        expect(bodies).toHaveLength(2);
-        await bodies[0]!();
+        const acquisitionBody = bodies.find(
+          (body) => body.name === "spins up two gateways and exercises WS + HTTP + node pairing",
+        );
+        const passiveBody = bodies.find(
+          (body) =>
+            body.name === "preserves scheduler runtime across a scheduler-disabled Gateway edit",
+        );
+        expect(acquisitionBody).toBeDefined();
+        expect(passiveBody).toBeDefined();
+        await acquisitionBody!.run();
         // Preserve the suite's two bodies and final afterAll order. The second
         // body fails before spawning its scheduler but still owns a Gateway.
-        passive = bodies[1]!().catch((error: unknown) => error);
+        passive = passiveBody!.run().catch((error: unknown) => error);
         await clientStarted.promise;
         expect(events).toEqual([]);
         heldClient.resolve();

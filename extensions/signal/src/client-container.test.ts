@@ -684,9 +684,9 @@ describe("containerRestRequest", () => {
         observedSignal = init.signal ?? undefined;
         return new Response(
           delayedBodyStream([
-            { delayMs: 10, text: "{" },
-            { delayMs: 20, text: '"ok"' },
-            { delayMs: 20, text: ":true" },
+            { delayMs: 5, text: "{" },
+            { delayMs: 5, text: '"ok"' },
+            { delayMs: 5, text: ":true" },
             { delayMs: 20, text: "}" },
           ]).body,
           {
@@ -1614,6 +1614,27 @@ describe("streamContainerEvents", () => {
     expectMockLogNotContains(log, "+14259798283");
     expectMockLogNotContains(log, "%2B14259798283");
   });
+
+  it.each([
+    { timeoutMs: 1_000, expected: 1_000 },
+    { timeoutMs: 60_000, expected: 60_000 },
+    { timeoutMs: 0, expected: 30_000 },
+    { timeoutMs: undefined, expected: 30_000 },
+  ])(
+    "preserves the stream opening budget for timeoutMs=$timeoutMs",
+    async ({ timeoutMs, expected }) => {
+      wsMockState.behavior = "open";
+      await streamContainerEvents({
+        baseUrl: "http://localhost:8080",
+        account: "+15550001111",
+        timeoutMs,
+        onEvent: vi.fn(),
+      });
+      expect(wsMockState.options).toEqual([
+        { maxPayload: 1024 * 1024, handshakeTimeout: expected },
+      ]);
+    },
+  );
 
   it("removes the abort listener when the stream closes", async () => {
     const abortController = new AbortController();

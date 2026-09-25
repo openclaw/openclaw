@@ -199,25 +199,19 @@ function parseYamlFrontmatterOnce(
 
 function parseYamlFrontmatter(block: string): ParsedFrontmatterBlockResult {
   const fallback = parseLineFrontmatter(block);
-  const parsed = parseYamlFrontmatterOnce(block, fallback);
-  if (parsed.issues.length === 0) {
-    return parsed;
-  }
+  let parsed = parseYamlFrontmatterOnce(block, fallback);
   // Recover one error-located field per iteration, retrying parse each time,
   // so multiple colon-rich fields are fixed without rewriting valid siblings.
   let recoveredBlock = block;
-  for (let i = 0; i < FREEFORM_TEXT_FIELDS.size; i += 1) {
+  for (let i = 0; i < FREEFORM_TEXT_FIELDS.size && parsed.issues.length > 0; i += 1) {
     const next = normalizeFreeformFieldAtError(recoveredBlock);
     if (next === recoveredBlock) {
       break;
     }
     recoveredBlock = next;
-    const reparsed = parseYamlFrontmatterOnce(recoveredBlock, fallback);
-    if (reparsed.issues.length === 0) {
-      return reparsed;
-    }
+    parsed = parseYamlFrontmatterOnce(recoveredBlock, fallback);
   }
-  return recoveredBlock === block ? parsed : parseYamlFrontmatterOnce(recoveredBlock, fallback);
+  return parsed;
 }
 
 export type ExtractedFrontmatterBlock = {

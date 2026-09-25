@@ -1,5 +1,4 @@
 // Memory Core tests cover short term promotion plugin behavior.
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,9 +7,11 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { listMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import { afterAll, afterEach, beforeAll, describe, expect, it as baseIt, vi } from "vitest";
 import { deriveConceptTags } from "./concept-vocabulary.js";
 import { isPromotionOriginBlocked } from "./dreaming-consolidation-candidates.js";
+import { previewRemDreaming } from "./dreaming-phases.js";
 
 vi.mock("openclaw/plugin-sdk/memory-host-events", () => ({
   appendMemoryHostEvent: vi.fn(async () => {}),
@@ -206,13 +207,10 @@ describe("short-term promotion", () => {
   }
 
   type WorkspaceTest = (title: string, run: (workspaceDir: string) => Promise<void>) => void;
-  const it: WorkspaceTest & Pick<typeof baseIt, "runIf"> = Object.assign(
-    (title: string, run: (workspaceDir: string) => Promise<void>) =>
-      baseIt(title, async () => {
-        await withTempWorkspace(run);
-      }),
-    { runIf: baseIt.runIf },
-  );
+  const it: WorkspaceTest = (title, run) =>
+    baseIt(title, async () => {
+      await withTempWorkspace(run);
+    });
 
   async function writeDailyMemoryNote(
     workspaceDir: string,
@@ -552,42 +550,38 @@ describe("short-term promotion", () => {
     expect(await readRecallStoreEntries(workspaceDir)).toEqual({});
   });
 
-  it("ignores contaminated dreaming snippets when recording short-term recalls", async (workspaceDir) => {
-    await recordMemoryRecalls(workspaceDir, "action preference", [
-      memoryRecallResult(
-        "memory/2026-04-03.md",
-        1,
-        1,
-        0.92,
-        "Candidate: Default to action. confidence: 0.76 evidence: memory/.dreams/session-corpus/2026-04-08.txt:1-1 recalls: 3 status: staged",
+  it("excludes staged and generated REM recalls while keeping ordinary reflections", async (workspaceDir) => {
+    const ordinary = "Reflections on deployment planning: keep a verified backup before release.";
+    const snippets = [
+      [
+        "- Candidate: Default to action.",
+        "  - confidence: 0.76",
+        "  - evidence: memory/.dreams/session-corpus/2026-04-08.txt:1-1",
+        "  - recalls: 3",
+        "  - status: staged",
+      ].join("\n"),
+      previewRemDreaming({
+        entries: [
+          recallStoreEntryFixture({
+            key: "source",
+            path: "memory/2026-04-03.md",
+            conceptTags: ["deployment"],
+          }),
+        ],
+        limit: 1,
+        minPatternStrength: 0.5,
+      }).bodyLines.join("\n"),
+      ordinary,
+    ];
+    await recordMemoryRecalls(
+      workspaceDir,
+      "deployment planning",
+      snippets.map((snippet, index) =>
+        memoryRecallResult("memory/2026-04-03.md", index + 1, index + 1, 0.92, snippet),
       ),
-    ]);
-
-    const store = await testing.readRecallStore(workspaceDir, new Date().toISOString());
-    expect(store.version).toBe(1);
-    expect(store.entries).toEqual({});
-  });
-
-  it("ignores bullet-prefixed dreaming snippets when recording short-term recalls", async (workspaceDir) => {
-    await recordMemoryRecalls(workspaceDir, "action preference", [
-      memoryRecallResult(
-        "memory/2026-04-03.md",
-        1,
-        5,
-        0.92,
-        [
-          "- Candidate: Default to action.",
-          "  - confidence: 0.76",
-          "  - evidence: memory/.dreams/session-corpus/2026-04-08.txt:1-1",
-          "  - recalls: 3",
-          "  - status: staged",
-        ].join("\n"),
-      ),
-    ]);
-
-    const store = await testing.readRecallStore(workspaceDir, new Date().toISOString());
-    expect(store.version).toBe(1);
-    expect(store.entries).toEqual({});
+    );
+    const ranked = await rankAllCandidates(workspaceDir);
+    expect(ranked.map((candidate) => candidate.snippet)).toEqual([ordinary]);
   });
 
   it("ignores raw session and transcript snippets when recording short-term recalls", async (workspaceDir) => {
@@ -795,7 +789,7 @@ describe("short-term promotion", () => {
     expect(ranked).toHaveLength(0);
   });
 
-  it("merges a repeated claim across three day files and clears the default gates", async (workspaceDir) => {
+  it("merges a repeated claim across days without faking query diversity", async (workspaceDir) => {
     const queryDays = ["2026-04-01", "2026-04-02", "2026-04-03"];
     let candidateKey;
 
@@ -852,8 +846,17 @@ describe("short-term promotion", () => {
       }
     }
 
+    await expect(
+      rankShortTermPromotionCandidates({
+        workspaceDir,
+        nowMs: Date.parse("2026-04-03T10:01:00.000Z"),
+      }),
+    ).resolves.toHaveLength(0);
+
     const ranked = await rankShortTermPromotionCandidates({
       workspaceDir,
+      minScore: 0,
+      minUniqueQueries: 0,
       nowMs: Date.parse("2026-04-03T10:01:00.000Z"),
     });
 
@@ -864,9 +867,9 @@ describe("short-term promotion", () => {
     expect(ranked[0]?.recallCount).toBe(0);
     expect(ranked[0]?.dailyCount).toBe(3);
     expect(ranked[0]?.signalCount).toBe(3);
-    expect(ranked[0]?.uniqueQueries).toBe(3);
+    expect(ranked[0]?.uniqueQueries).toBe(0);
     expect(ranked[0]?.recallDays).toEqual(queryDays);
-    expect(ranked[0]?.score).toBeGreaterThanOrEqual(0.75);
+    expect(ranked[0]?.score).toBeLessThan(0.75);
     expect(ranked[0] && isPromotionOriginBlocked(ranked[0])).toBe(false);
   });
 
@@ -985,7 +988,7 @@ describe("short-term promotion", () => {
     );
   });
 
-  it("lets grounded durable evidence satisfy default deep thresholds", async (workspaceDir) => {
+  it("does not let grounded backfill keys satisfy query diversity", async (workspaceDir) => {
     await writeDailyMemoryNote(workspaceDir, "2026-04-03", [
       'Always use "Happy Together" calendar for flights and reservations.',
     ]);
@@ -1017,25 +1020,78 @@ describe("short-term promotion", () => {
       nowMs: Date.parse("2026-04-03T10:00:00.000Z"),
     });
 
+    await expect(
+      rankShortTermPromotionCandidates({
+        workspaceDir,
+        nowMs: Date.parse("2026-04-03T10:00:00.000Z"),
+      }),
+    ).resolves.toHaveLength(0);
+
     const ranked = await rankShortTermPromotionCandidates({
       workspaceDir,
+      minScore: 0,
+      minUniqueQueries: 0,
       nowMs: Date.parse("2026-04-03T10:00:00.000Z"),
     });
 
     expect(ranked).toHaveLength(1);
     expect(ranked[0]?.groundedCount).toBe(3);
-    expect(ranked[0]?.uniqueQueries).toBe(3);
+    expect(ranked[0]?.uniqueQueries).toBe(0);
     expect(ranked[0]?.avgScore).toBeGreaterThan(0.85);
 
     const applied = await applyShortTermPromotions({
       workspaceDir,
       candidates: ranked,
+      minScore: 0,
+      minUniqueQueries: 0,
       nowMs: Date.parse("2026-04-03T10:00:00.000Z"),
     });
 
     expect(applied.applied).toBe(1);
     const memory = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
     expect(memory).toContain('Always use "Happy Together" calendar');
+  });
+
+  it("preserves interactive query diversity across grounded reruns", async (workspaceDir) => {
+    const snippet = "Keep encrypted router backups in S3 Glacier.";
+    await writeDailyMemoryNote(workspaceDir, "2026-04-03", [snippet]);
+    const groundedItem = groundedCandidateFixture({
+      path: "memory/2026-04-03.md",
+      snippet,
+      query: "__dreaming_grounded_backfill__:candidate",
+    });
+
+    await recordGroundedShortTermCandidates({
+      workspaceDir,
+      query: "__dreaming_grounded_backfill__",
+      items: [groundedItem],
+      nowMs: Date.parse("2026-04-03T09:00:00.000Z"),
+    });
+    for (const query of ["router backups", "encrypted retention", "glacier storage"]) {
+      await recordMemoryRecalls(
+        workspaceDir,
+        query,
+        [memoryRecallResult("memory/2026-04-03.md", 1, 1, 0.92, snippet)],
+        { nowMs: Date.parse("2026-04-03T10:00:00.000Z") },
+      );
+    }
+
+    const before = await rankAllCandidates(workspaceDir);
+    expect(before).toHaveLength(1);
+    expect(before[0]?.uniqueQueries).toBe(3);
+
+    await recordGroundedShortTermCandidates({
+      workspaceDir,
+      query: "__dreaming_grounded_backfill__",
+      items: [groundedItem],
+      nowMs: Date.parse("2026-04-03T11:00:00.000Z"),
+    });
+
+    const after = await rankAllCandidates(workspaceDir);
+    expect(after).toHaveLength(1);
+    expect(after[0]?.key).toBe(before[0]?.key);
+    expect(after[0]?.uniqueQueries).toBe(3);
+    expect(after[0]?.groundedCount).toBe(2);
   });
 
   it("removes grounded-only staged entries without deleting mixed live entries", async (workspaceDir) => {
@@ -1287,7 +1343,7 @@ describe("short-term promotion", () => {
     }
   });
 
-  it("keeps recent valid recall stats ahead of malformed timestamps at the entry cap", async (workspaceDir) => {
+  it("keeps valid recall and promotion stats with malformed timestamps at the entry cap", async (workspaceDir) => {
     const nowMs = Date.parse("2026-04-05T10:00:00.000Z");
     const malformedEntries = Object.fromEntries(
       Array.from({ length: 8 }, (_, index) => {
@@ -1320,6 +1376,26 @@ describe("short-term promotion", () => {
       updatedAt: "2026-04-05T10:00:00.000Z",
       entries: {
         ...malformedEntries,
+        malformedPromotion: recallStoreEntryFixture({
+          key: "malformedPromotion",
+          path: "memory/2026-04-01-malformed-promotion.md",
+          promotedAt: "not-a-timestamp",
+        }),
+        previousDay: recallStoreEntryFixture({
+          key: "previousDay",
+          path: "memory/2026-04-04-previous-day.md",
+          promotedAt: "2026-04-04T18:00:00.000Z",
+        }),
+        utcDay: recallStoreEntryFixture({
+          key: "utcDay",
+          path: "memory/2026-04-05-utc-day.md",
+          promotedAt: "2026-04-05T06:00:00.000Z",
+        }),
+        today: recallStoreEntryFixture({
+          key: "today",
+          path: "memory/2026-04-05-today.md",
+          promotedAt: "2026-04-05T09:00:00.000Z",
+        }),
         recent: {
           key: "recent",
           path: "memory/2026-04-05-recent.md",
@@ -1349,6 +1425,26 @@ describe("short-term promotion", () => {
     expect(stats.shortTermEntries.map((entry) => entry.path)).not.toContain(
       "memory/2026-04-01-malformed-7.md",
     );
+    expect(stats.promotedEntries).toHaveLength(4);
+    expect(stats.promotedEntries).toContainEqual(
+      expect.objectContaining({ key: "malformedPromotion", promotedAt: "not-a-timestamp" }),
+    );
+    for (const [timezone, promotedToday] of [
+      ["America/Los_Angeles", 1],
+      ["UTC", 2],
+      ["America/Los_Angeles", 1],
+    ] as const) {
+      const zonedStats = await loadShortTermPromotionDreamingStats({
+        workspaceDir,
+        nowMs,
+        timezone,
+      });
+      expect(zonedStats).toMatchObject({
+        promotedTotal: 4,
+        promotedToday,
+        lastPromotedAt: "2026-04-05T09:00:00.000Z",
+      });
+    }
   });
 
   it("reconciles existing promotion markers instead of appending duplicates", async (workspaceDir) => {
@@ -1495,6 +1591,47 @@ describe("short-term promotion", () => {
 
     expect(applied.applied).toBe(0);
     expect(applied.rejectedCandidates[0]?.reason).toContain("signal threshold");
+    expect(applied.rejectedCandidates[0]?.category).toBe("signal threshold");
+  });
+
+  it("does not let recall days satisfy the apply-time query gate", async (workspaceDir) => {
+    const nowIso = new Date().toISOString();
+    const applied = await applyShortTermPromotions({
+      workspaceDir,
+      candidates: [
+        {
+          key: "memory:memory/2026-04-03.md:1:2",
+          path: "memory/2026-04-03.md",
+          startLine: 1,
+          endLine: 2,
+          source: "memory",
+          snippet: "Move backups to S3 Glacier.",
+          recallCount: 3,
+          signalCount: 3,
+          avgScore: 0.95,
+          maxScore: 0.95,
+          uniqueQueries: 0,
+          firstRecalledAt: nowIso,
+          lastRecalledAt: nowIso,
+          ageDays: 0,
+          score: 0.95,
+          recallDays: ["2026-04-01", "2026-04-02", "2026-04-03"],
+          conceptTags: ["glacier", "backups"],
+          components: {
+            frequency: 0.6,
+            relevance: 0.95,
+            diversity: 0,
+            recency: 1,
+            consolidation: 0.6,
+            conceptual: 0.4,
+          },
+        },
+      ],
+    });
+
+    expect(applied.applied).toBe(0);
+    expect(applied.rejectedCandidates[0]?.reason).toBe("query threshold (0 < 3)");
+    expect(applied.rejectedCandidates[0]?.category).toBe("query threshold");
   });
 
   it("does not rank contaminated dreaming snippets from an existing short-term store", async (workspaceDir) => {
@@ -1656,6 +1793,7 @@ describe("short-term promotion", () => {
 
     expect(applied.applied).toBe(0);
     expect(applied.rejectedCandidates[0]?.reason).toContain("age threshold");
+    expect(applied.rejectedCandidates[0]?.category).toBe("age threshold");
     await expectEnoent(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"));
   });
 
@@ -1699,6 +1837,7 @@ describe("short-term promotion", () => {
 
     expect(applied.applied).toBe(0);
     expect(applied.rejectedCandidates[0]?.reason).toBe("contamination filter");
+    expect(applied.rejectedCandidates[0]?.category).toBe("contamination");
     await expectEnoent(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"));
   });
 
@@ -1760,7 +1899,63 @@ describe("short-term promotion", () => {
     const applied = await applyAllCandidates(workspaceDir, ranked);
     expect(applied.applied).toBe(0);
     expect(applied.rejectedCandidates[0]?.reason).toBe("origin filter (untrusted)");
+    expect(applied.rejectedCandidates[0]?.category).toBe("origin");
     await expectEnoent(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"));
+  });
+
+  it("excludes a candidate downgraded during consolidation from the fallback write", async (workspaceDir) => {
+    const relativePath = "memory/2026-04-01.md";
+    const firstSnippet = "Gateway binds loopback on the admin host.";
+    const secondSnippet = "Backups use the encrypted archive bucket.";
+    await writeDailyMemoryNote(workspaceDir, "2026-04-01", [firstSnippet, secondSnippet]);
+    await recordMemoryRecalls(
+      workspaceDir,
+      "operations policy",
+      [firstSnippet, secondSnippet].map((snippet, index) => ({
+        path: relativePath,
+        startLine: index + 1,
+        endLine: index + 1,
+        score: 0.92,
+        snippet,
+        source: "memory" as const,
+        provenance: {
+          originClass: "agent" as const,
+          sessionKind: "interactive" as const,
+          observedAt: Date.parse("2026-04-01T12:00:00.000Z"),
+        },
+      })),
+    );
+    const ranked = await rankAllCandidates(workspaceDir);
+    expect(ranked).toHaveLength(2);
+
+    const complete = vi.fn(async () => {
+      const store = await testing.readRecallStore(workspaceDir, new Date().toISOString());
+      const downgraded = expectDefined(
+        Object.values(store.entries).find((entry) => entry.startLine === 1),
+        "downgraded recall entry",
+      );
+      downgraded.provenance = {
+        originClass: "untrusted",
+        sessionKind: "interactive",
+        observedAt: Date.parse("2026-04-01T12:05:00.000Z"),
+      };
+      await testing.writeRawRecallStore(workspaceDir, store);
+      return { text: "invalid consolidation response" };
+    });
+    const applied = await applyAllCandidates(workspaceDir, ranked, {
+      agentId: "main",
+      consolidation: {
+        subagent: { complete },
+        logger: { info: vi.fn(), warn: vi.fn() },
+      },
+    });
+
+    expect(complete).toHaveBeenCalledOnce();
+    expect(applied.appliedCandidates.map((candidate) => candidate.startLine)).toEqual([2]);
+    expect(applied.rejectedCandidates.map(({ candidate }) => candidate.startLine)).toEqual([1]);
+    const memory = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+    expect(memory).not.toContain(firstSnippet);
+    expect(memory).toContain(secondSnippet);
   });
 
   it("does not double-prefix promoted snippets that are already markdown bullets", async (workspaceDir) => {
@@ -2222,6 +2417,17 @@ describe("short-term promotion", () => {
     expect(applied.applied).toBe(1);
     const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
     expect(memoryText).toContain("Promoted From Short-Term Memory (2026-04-01)");
+    for (const [now, promotedToday] of [
+      ["2026-04-02T06:59:59.000Z", 1],
+      ["2026-04-02T07:00:00.000Z", 0],
+    ] as const) {
+      const stats = await loadShortTermPromotionDreamingStats({
+        workspaceDir,
+        nowMs: Date.parse(now),
+        timezone: "America/Los_Angeles",
+      });
+      expect(stats).toMatchObject({ promotedTotal: 1, promotedToday });
+    }
   });
 
   it("audits and repairs invalid store metadata plus stale locks", async (workspaceDir) => {
@@ -2594,6 +2800,7 @@ describe("short-term promotion", () => {
           path: "memory/2026-04-01.md",
           endLine: 2,
           snippet,
+          userQueryHashes: ["a", "b"],
           conceptTags: deriveConceptTags({
             path: "memory/2026-04-01.md",
             snippet,
@@ -2613,44 +2820,6 @@ describe("short-term promotion", () => {
     expect(repair.changed).toBe(false);
     expect(repair.rewroteStore).toBe(false);
     expect(await testing.readRecallStore(workspaceDir, new Date().toISOString())).toEqual(raw);
-  });
-
-  it("waits for an active short-term lock before repairing", async (workspaceDir) => {
-    await testing.writeRawRecallStore(workspaceDir, {
-      version: 1,
-      updatedAt: "2026-04-04T00:00:00.000Z",
-      entries: {
-        bad: {
-          path: "",
-        },
-      },
-    });
-    await testing.writeShortTermLock(workspaceDir, {
-      owner: `${process.pid}:${Date.now()}`,
-      acquiredAt: Date.now(),
-    });
-
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    try {
-      let settled = false;
-      const repairPromise = repairShortTermPromotionArtifacts({ workspaceDir }).then((result) => {
-        settled = true;
-        return result;
-      });
-
-      await vi.advanceTimersByTimeAsync(41);
-      expect(settled).toBe(false);
-
-      await testing.deleteShortTermLock(workspaceDir);
-      await vi.advanceTimersByTimeAsync(40);
-      const repair = await repairPromise;
-
-      expect(repair.changed).toBe(true);
-      expect(repair.rewroteStore).toBe(true);
-      expect(repair.removedInvalidEntries).toBe(1);
-    } finally {
-      vi.useRealTimers();
-    }
   });
 
   it("preserves recall updates from sequential and parallel nested workspace writers", async (workspaceDir) => {
@@ -2733,20 +2902,17 @@ describe("short-term promotion", () => {
     });
   });
 
-  it("reclaims a stale sqlite lock owned by a Linux zombie", async (workspaceDir) => {
+  it("reclaims a stale sqlite lock when its owner is definitely dead", async (workspaceDir) => {
     const ownerPid = 4242;
     await testing.writeShortTermLock(workspaceDir, {
       owner: `${ownerPid}:0`,
       acquiredAt: Date.now() - 120_000,
     });
-    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    vi.spyOn(process, "kill").mockImplementation(() => true);
-    vi.spyOn(fsSync, "readFileSync").mockImplementation((filePath) => {
-      if (String(filePath) === `/proc/${ownerPid}/status`) {
-        return `Name:\tmemory worker\nState:\tZ (zombie)\nPid:\t${ownerPid}\nThreads:\t1\n`;
-      }
-      throw new Error(`unexpected read: ${String(filePath)}`);
-    });
+    const originalIsPidDefinitelyDead = processRuntime.isPidDefinitelyDead;
+    // Keep SQLite's platform and coordinator identity native while probing the synthetic owner.
+    vi.spyOn(processRuntime, "isPidDefinitelyDead").mockImplementation(
+      (pid) => pid === ownerPid || originalIsPidDefinitelyDead(pid),
+    );
 
     const audit = await auditShortTermPromotionArtifacts({ workspaceDir });
     expect(audit.issues.map((issue) => issue.code)).toContain("recall-lock-stale");
@@ -2819,6 +2985,7 @@ describe("short-term promotion", () => {
       return await applyAllCandidates(workspaceDir, await rankAllCandidates(workspaceDir), {
         nowMs,
         memoryFileMaxChars: 1_400,
+        maxPriorEntryLossFraction: 1,
       });
     }
 
@@ -2951,6 +3118,94 @@ describe("short-term promotion", () => {
         expect((await fs.stat(memoryPath)).mode & 0o7777).toBe(0o640);
       }
     });
+
+    it("defers promotion when preserved content leaves no room in the file budget", async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-29", [
+        "Keep the Tuesday deployment window in durable memory.",
+      ]);
+      await recordMemoryRecalls(
+        workspaceDir,
+        "deployment window",
+        [
+          memoryRecallResult(
+            "memory/2026-04-29.md",
+            1,
+            1,
+            0.95,
+            "Keep the Tuesday deployment window in durable memory.",
+          ),
+        ],
+        { nowMs: Date.parse("2026-04-29T10:00:00.000Z") },
+      );
+      const ranked = await rankAllCandidates(workspaceDir);
+      const memoryPath = path.join(workspaceDir, "MEMORY.md");
+      const oversizedBase = `# Long-Term Memory\n\n${"u".repeat(8_800)}\n`;
+      await fs.writeFile(memoryPath, oversizedBase, "utf-8");
+      const consolidate = vi.fn(async () => ({ text: "unused" }));
+
+      const deferred = await applyAllCandidates(workspaceDir, ranked, {
+        agentId: "main",
+        memoryFileMaxChars: 9_000,
+        nowMs: Date.parse("2026-04-29T10:00:00.000Z"),
+        consolidation: {
+          subagent: { complete: consolidate },
+          logger: { info: vi.fn(), warn: vi.fn() },
+        },
+      });
+
+      expect(deferred).toMatchObject({ applied: 0, appended: 0, compactedSections: 0 });
+      expect(deferred.rejectedCandidates).toEqual([
+        expect.objectContaining({ reason: expect.stringContaining("MEMORY.md budget exceeded") }),
+      ]);
+      expect(consolidate).toHaveBeenCalledOnce();
+      await expect(fs.readFile(memoryPath, "utf-8")).resolves.toBe(oversizedBase);
+
+      await fs.writeFile(memoryPath, "# Long-Term Memory\n\n", "utf-8");
+      const retried = await applyAllCandidates(workspaceDir, ranked, {
+        memoryFileMaxChars: 9_000,
+        nowMs: Date.parse("2026-04-29T10:05:00.000Z"),
+      });
+      expect(retried.applied).toBe(1);
+      expect((await fs.readFile(memoryPath, "utf-8")).length).toBeLessThanOrEqual(9_000);
+    });
+
+    it("leaves prior promotions intact when fitting would exceed the loss limit", async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-29", [
+        "Keep the Tuesday deployment window in durable memory.",
+      ]);
+      await recordMemoryRecalls(
+        workspaceDir,
+        "deployment window",
+        [
+          memoryRecallResult(
+            "memory/2026-04-29.md",
+            1,
+            1,
+            0.95,
+            "Keep the Tuesday deployment window in durable memory.",
+          ),
+        ],
+        { nowMs: Date.parse("2026-04-29T10:00:00.000Z") },
+      );
+      const memoryPath = path.join(workspaceDir, "MEMORY.md");
+      const existing = ["2026-04-01", "2026-04-08", "2026-04-15", "2026-04-22"]
+        .map(
+          (date, index) =>
+            `## Promoted From Short-Term Memory (${date})\n<!-- openclaw-memory-promotion:legacy-${index} -->\n- ${"x".repeat(500)}`,
+        )
+        .join("\n");
+      await fs.writeFile(memoryPath, existing, "utf-8");
+
+      const result = await applyAllCandidates(workspaceDir, await rankAllCandidates(workspaceDir), {
+        memoryFileMaxChars: 1_600,
+        maxPriorEntryLossFraction: 0.25,
+        nowMs: Date.parse("2026-04-29T10:00:00.000Z"),
+      });
+
+      expect(result).toMatchObject({ applied: 0, compactedSections: 0 });
+      expect(result.rejectedCandidates[0]?.reason).toContain("MEMORY.md budget exceeded");
+      await expect(fs.readFile(memoryPath, "utf-8")).resolves.toBe(existing);
+    });
   });
 
   it("defers append-only promotion when recall state changes during rehydration", async (workspaceDir) => {
@@ -3010,7 +3265,7 @@ describe("short-term promotion", () => {
   });
 
   describe("MEMORY.md atomic promotion write", () => {
-    it.runIf(process.platform !== "win32")(
+    baseIt.runIf(process.platform !== "win32")(
       "preserves a dangling MEMORY.md symlink and its target directory mode",
       async () => {
         await withTempWorkspace(async (workspaceDir) => {
@@ -3072,6 +3327,8 @@ describe("short-term promotion", () => {
           expect((await fs.stat(sharedDir)).mode & 0o7777).toBe(0o755);
 
           const secondSnippet = "Keep writing through a shared read-only directory.";
+          const lexicalCollisionPath = path.join(workspaceDir, "memory-alias.md");
+          await fs.writeFile(lexicalCollisionPath, "Do not overwrite this lexical collision.");
           await writeDailyMemoryNote(workspaceDir, "2026-04-30", [secondSnippet]);
           await recordMemoryRecalls(
             workspaceAlias,
@@ -3086,9 +3343,13 @@ describe("short-term promotion", () => {
           try {
             const applied = await applyAllCandidates(workspaceAlias, secondRanked, {
               memoryFileMaxChars: 400,
+              maxPriorEntryLossFraction: 1,
             });
             expect(applied.applied).toBe(1);
             expect(await fs.readFile(targetPath, "utf-8")).toContain(secondSnippet);
+            expect(await fs.readFile(lexicalCollisionPath, "utf-8")).toBe(
+              "Do not overwrite this lexical collision.",
+            );
             expect((await fs.stat(sharedDir)).mode & 0o7777).toBe(0o555);
           } finally {
             await fs.chmod(sharedDir, 0o755);

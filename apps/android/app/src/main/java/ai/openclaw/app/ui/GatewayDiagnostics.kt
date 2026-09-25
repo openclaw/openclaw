@@ -3,7 +3,6 @@ package ai.openclaw.app.ui
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.GatewayConnectionDisplay
 import ai.openclaw.app.GatewayConnectionProblem
-import ai.openclaw.app.GatewayNodeApprovalState
 import ai.openclaw.app.GatewayNodeCapabilityApproval
 import ai.openclaw.app.gateway.normalizeGatewayApprovalRequestId
 import ai.openclaw.app.gatewayConnectionStatusForDisplay
@@ -169,44 +168,22 @@ private fun gatewayAuthRecoveryLabel(kind: GatewayAuthRecoveryLabelKind): String
   }
 
 /** Returns the exact host command for one node's approval state when available. */
-internal fun gatewayNodeApprovalCommand(
-  state: GatewayNodeApprovalState,
-  requestId: String?,
-): String? =
-  when (state) {
-    GatewayNodeApprovalState.PendingApproval,
-    GatewayNodeApprovalState.PendingReapproval,
-    -> normalizeGatewayApprovalRequestId(requestId)?.let { "openclaw nodes approve $it" } ?: "openclaw nodes status"
+internal fun gatewayNodeApprovalCommand(approval: GatewayNodeCapabilityApproval): String? {
+  val requestId =
+    when (approval) {
+      is GatewayNodeCapabilityApproval.PendingApproval -> approval.requestId
 
-    GatewayNodeApprovalState.Unapproved -> "openclaw nodes status"
+      is GatewayNodeCapabilityApproval.PendingReapproval -> approval.requestId
 
-    GatewayNodeApprovalState.Loading,
-    GatewayNodeApprovalState.Unsupported,
-    GatewayNodeApprovalState.Approved,
-    -> null
-  }
+      GatewayNodeCapabilityApproval.Unapproved -> null
 
-internal fun gatewayNodeApprovalCommand(approval: GatewayNodeCapabilityApproval): String? =
-  when (approval) {
-    is GatewayNodeCapabilityApproval.PendingApproval -> {
-      gatewayNodeApprovalCommand(GatewayNodeApprovalState.PendingApproval, approval.requestId)
+      GatewayNodeCapabilityApproval.Loading,
+      GatewayNodeCapabilityApproval.Unsupported,
+      GatewayNodeCapabilityApproval.Approved,
+      -> return null
     }
-
-    is GatewayNodeCapabilityApproval.PendingReapproval -> {
-      gatewayNodeApprovalCommand(GatewayNodeApprovalState.PendingReapproval, approval.requestId)
-    }
-
-    GatewayNodeCapabilityApproval.Unapproved -> {
-      gatewayNodeApprovalCommand(GatewayNodeApprovalState.Unapproved, requestId = null)
-    }
-
-    GatewayNodeCapabilityApproval.Loading,
-    GatewayNodeCapabilityApproval.Unsupported,
-    GatewayNodeCapabilityApproval.Approved,
-    -> {
-      null
-    }
-  }
+  return normalizeGatewayApprovalRequestId(requestId)?.let { "openclaw nodes approve $it" } ?: "openclaw nodes status"
+}
 
 /** Builds the copyable support prompt with device, endpoint, and exact status context. */
 internal fun buildGatewayDiagnosticsReport(

@@ -1,15 +1,148 @@
-// Codex supervision tests cover passive listing and safe local session takeover.
-import { describe, expect, it, vi } from "vitest";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   commandRpcMocks,
   createCodexSessionCatalogControl,
+  createCodexSessionCatalogControlFactory,
   config,
   idleThread,
   resolveDefaultAgentDir,
   type OpenClawConfig,
 } from "./session-catalog.test-helpers.js";
 
-describe("Codex supervision catalog", () => {
+afterEach(() => vi.restoreAllMocks());
+
+describe("Codex catalog resident home sharing", () => {
+  it("shares one home inventory across agents, filters, and arbitrary clock advances", async () => {
+    let now = 1_000;
+    commandRpcMocks.codexControlRequest.mockResolvedValue({
+      data: [
+        idleThread({ id: "one", source: "cli", cwd: "/workspace/one" }),
+        idleThread({ id: "two", source: "cli", cwd: "/workspace/two" }),
+      ],
+    });
+    const factory = createCodexSessionCatalogControlFactory({
+      getPluginConfig: () => ({ supervision: { enabled: true } }),
+      getRuntimeConfig: () => config,
+      now: () => now,
+    });
+    const home = (await factory.homesForAgent("main"))[0]!;
+    const first = factory.forRequest("main", { ...home, localSessionsRoot: undefined });
+    const second = factory.forRequest("another", { ...home, localSessionsRoot: undefined });
+    await first.initialize();
+    await expect(first.listPage({ cwd: "/workspace/one" })).resolves.toMatchObject({
+      sessions: [expect.objectContaining({ threadId: "one" })],
+    });
+    now += 24 * 60 * 60 * 1_000;
+    await expect(
+      second.listPage({ cwd: "/workspace/two", searchTerm: "native" }),
+    ).resolves.toMatchObject({
+      sessions: [expect.objectContaining({ threadId: "two" })],
+    });
+    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledOnce();
+  });
+
+  it.each(["resolve", "reject"] as const)(
+    "waits for the first native page while one shared initializer will %s",
+    async (outcome) => {
+      const held = createDeferred<unknown>();
+      const started = createDeferred<void>();
+      commandRpcMocks.codexControlRequest.mockImplementationOnce(() => {
+        started.resolve();
+        return held.promise;
+      });
+      const control = createCodexSessionCatalogControl({
+        getPluginConfig: () => ({ supervision: { enabled: true } }),
+        getRuntimeConfig: () => config,
+      });
+      let delivered = 0;
+      const lists = [
+        { limit: 1 },
+        { limit: 2, searchTerm: "native" },
+        { cwd: "/workspace/project" },
+      ].map((query) => control.listPage(query).finally(() => delivered++));
+      const listed = Promise.allSettled(lists);
+      const initialized = Promise.allSettled([control.initialize(), control.initialize()]);
+      try {
+        await started.promise;
+        await nextTurn();
+        expect(delivered).toBe(0);
+        expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledOnce();
+        const failure = new Error("native hydration failed");
+        if (outcome === "resolve") {
+          held.resolve({ data: [idleThread({ source: "cli" })] });
+        } else {
+          held.reject(failure);
+        }
+        for (const result of await initialized) {
+          expect(result).toEqual(
+            outcome === "resolve"
+              ? { status: "fulfilled", value: undefined }
+              : { status: "rejected", reason: failure },
+          );
+        }
+        for (const result of await listed) {
+          if (outcome === "resolve") {
+            expect(result).toMatchObject({
+              status: "fulfilled",
+              value: { sessions: [{ threadId: "thread-1" }] },
+            });
+          } else {
+            expect(result).toEqual({ status: "rejected", reason: failure });
+          }
+        }
+        expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledOnce();
+      } finally {
+        held.resolve({ data: [] });
+        await Promise.all([initialized, listed]);
+      }
+    },
+  );
+
+  it("searches the complete resident inventory by title without searching previews", async () => {
+    commandRpcMocks.codexControlRequest
+      .mockResolvedValueOnce({
+        data: [idleThread({ id: "preview-only", name: "Other", preview: "Match", source: "cli" })],
+        nextCursor: "older",
+      })
+      .mockResolvedValueOnce({
+        data: [
+          idleThread({ id: "match-one", name: "Match one", source: "cli", recencyAt: 2 }),
+          idleThread({ id: "match-two", name: "MATCH two", source: "vscode", recencyAt: 1 }),
+        ],
+      });
+    const control = createCodexSessionCatalogControl({
+      getPluginConfig: () => ({ supervision: { enabled: true } }),
+      getRuntimeConfig: () => config,
+    });
+    await control.initialize();
+    commandRpcMocks.codexControlRequest.mockClear();
+    const first = await control.listPage({ limit: 1, searchTerm: "match" });
+    expect(first.sessions.map((row) => row.threadId)).toEqual(["match-one"]);
+    const second = await control.listPage({
+      limit: 1,
+      searchTerm: "match",
+      cursor: first.nextCursor,
+    });
+    expect(second.sessions.map((row) => row.threadId)).toEqual(["match-two"]);
+    expect(second.nextCursor).toBeUndefined();
+    expect(commandRpcMocks.codexControlRequest).not.toHaveBeenCalled();
+  });
+
+  it("fails a repeated native hydration cursor instead of publishing an incomplete catalog", async () => {
+    commandRpcMocks.codexControlRequest.mockResolvedValue({
+      data: [idleThread({ source: "cli" })],
+      nextCursor: "cycle",
+    });
+    const control = createCodexSessionCatalogControl({
+      getPluginConfig: () => ({ supervision: { enabled: true } }),
+      getRuntimeConfig: () => config,
+    });
+    await expect(control.initialize()).rejects.toThrow(/repeated.*cursor/);
+    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(2);
+  });
+
   it("memoizes cloned request options until runtime config identity changes", async () => {
     let runtimeConfig = { agents: { defaults: { workspace: "/workspace/a" } } } as OpenClawConfig;
     commandRpcMocks.codexControlRequest.mockResolvedValue({ thread: idleThread() });
@@ -28,237 +161,22 @@ describe("Codex supervision catalog", () => {
     expect(cloneSpy).toHaveBeenCalledTimes(4);
   });
 
-  it("serves an expired page while one background refresh updates the next poll", async () => {
-    let now = 1_000;
-    let runtimeConfig = {} as OpenClawConfig;
-    commandRpcMocks.codexControlRequest.mockResolvedValue({
-      data: [idleThread({ id: "thread-stale", source: "cli" })],
-    });
-    const control = createCodexSessionCatalogControl({
-      getPluginConfig: () => ({ supervision: { enabled: true } }),
-      getRuntimeConfig: () => runtimeConfig,
-      now: () => now,
-    });
-
-    await control.listPage({ limit: 25 });
-    await control.listPage({ limit: 25 });
-    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledOnce();
-
-    now += 31_999;
-    await control.listPage({ limit: 25 });
-    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledOnce();
-
-    now += 2;
-    let resolveRefresh!: (value: unknown) => void;
-    let refreshSettled = false;
-    const refresh = new Promise<unknown>((resolve) => {
-      resolveRefresh = resolve;
-    }).then((value) => {
-      refreshSettled = true;
-      return value;
-    });
-    let markRefreshStarted!: () => void;
-    const refreshStarted = new Promise<void>((resolve) => {
-      markRefreshStarted = resolve;
-    });
-    commandRpcMocks.codexControlRequest.mockImplementationOnce(() => {
-      markRefreshStarted();
-      return refresh;
-    });
-    const firstExpiredPoll = control.listPage({ limit: 25 });
-    const overlappingExpiredPoll = control.listPage({ limit: 25 });
-
-    await expect(Promise.all([firstExpiredPoll, overlappingExpiredPoll])).resolves.toEqual([
-      expect.objectContaining({
-        sessions: [expect.objectContaining({ threadId: "thread-stale" })],
-      }),
-      expect.objectContaining({
-        sessions: [expect.objectContaining({ threadId: "thread-stale" })],
-      }),
-    ]);
-    expect(refreshSettled).toBe(false);
-    // Stale delivery does not wait for the deferred RPC module to start its request.
-    await refreshStarted;
-    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(2);
-
-    resolveRefresh({ data: [idleThread({ id: "thread-refreshed", source: "cli" })] });
-    await vi.waitFor(async () => {
-      await expect(control.listPage({ limit: 25 })).resolves.toMatchObject({
-        sessions: [expect.objectContaining({ threadId: "thread-refreshed" })],
-      });
-    });
-    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(2);
-
-    runtimeConfig = { agents: {} } as OpenClawConfig;
-    await control.listPage({ limit: 25 });
-    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(3);
-  });
-
-  it("serves the last real page after a refresh failure and retries the next poll", async () => {
-    let now = 1_000;
-    commandRpcMocks.codexControlRequest.mockResolvedValue({
-      data: [idleThread({ id: "thread-stale", source: "cli" })],
-    });
-    const control = createCodexSessionCatalogControl({
-      getPluginConfig: () => ({ supervision: { enabled: true } }),
-      getRuntimeConfig: () => config,
-      now: () => now,
-    });
-    const first = await control.listPage({ limit: 25 });
-
-    now += 32_001;
-    let markRefreshStarted!: () => void;
-    const refreshStarted = new Promise<void>((resolve) => {
-      markRefreshStarted = resolve;
-    });
-    commandRpcMocks.codexControlRequest.mockImplementationOnce(async () => {
-      markRefreshStarted();
-      throw new Error("app-server unavailable");
-    });
-    await expect(control.listPage({ limit: 25 })).resolves.toEqual(first);
-    await refreshStarted;
-    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(2);
-
-    commandRpcMocks.codexControlRequest.mockResolvedValue({
-      data: [idleThread({ id: "thread-recovered", source: "cli" })],
-    });
-    await expect(control.listPage({ limit: 25 })).resolves.toEqual(first);
-    await vi.waitFor(async () => {
-      await expect(control.listPage({ limit: 25 })).resolves.toMatchObject({
-        sessions: [expect.objectContaining({ threadId: "thread-recovered" })],
-      });
-    });
-    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(3);
-  });
-
-  it("evicts a cold failed page so the next caller retries immediately", async () => {
+  it("reports a failed initializer and permits its immediate retry", async () => {
     commandRpcMocks.codexControlRequest.mockRejectedValueOnce(new Error("cold failure"));
     const control = createCodexSessionCatalogControl({
       getPluginConfig: () => ({ supervision: { enabled: true } }),
       getRuntimeConfig: () => config,
     });
 
-    await expect(control.listPage({ limit: 25 })).rejects.toThrow("cold failure");
+    await expect(control.initialize()).rejects.toThrow("cold failure");
     commandRpcMocks.codexControlRequest.mockResolvedValue({
       data: [idleThread({ id: "thread-recovered", source: "cli" })],
     });
+    await control.initialize();
     await expect(control.listPage({ limit: 25 })).resolves.toMatchObject({
       sessions: [expect.objectContaining({ threadId: "thread-recovered" })],
     });
     expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(2);
-  });
-
-  it("scans bounded native pages for complete title-only search results", async () => {
-    const pluginConfig = { supervision: { enabled: true } };
-    commandRpcMocks.codexControlRequest.mockImplementation(
-      async (_pluginConfig: unknown, _method: string, request: Record<string, unknown>) => {
-        if (request.cursor === "page-3") {
-          return {
-            data: [idleThread({ id: "match-2", name: "MATCH two", source: "vscode" })],
-          };
-        }
-        if (request.cursor === "page-2") {
-          return {
-            data: [
-              idleThread({ id: "match-1", name: "Match one", source: "cli" }),
-              idleThread({ id: "private-2", name: "Other", source: "cli" }),
-            ],
-            nextCursor: "page-3",
-          };
-        }
-        return {
-          data: [idleThread({ id: "private-1", name: "Unrelated", source: "cli" })],
-          nextCursor: "page-2",
-          backwardsCursor: "previous-page",
-        };
-      },
-    );
-    const control = createCodexSessionCatalogControl({
-      getPluginConfig: () => pluginConfig,
-      getRuntimeConfig: () => config,
-    });
-
-    await expect(control.listPage({ limit: 2, searchTerm: "match" })).resolves.toEqual({
-      sessions: [
-        expect.objectContaining({ threadId: "match-1", name: "Match one" }),
-        expect.objectContaining({ threadId: "match-2", name: "MATCH two" }),
-      ],
-      backwardsCursor: "previous-page",
-    });
-    expect(commandRpcMocks.codexControlRequest.mock.calls.map((call) => call[2])).toEqual([
-      expect.objectContaining({ limit: 2 }),
-      expect.objectContaining({ cursor: "page-2", limit: 2 }),
-      expect.objectContaining({ cursor: "page-3", limit: 1 }),
-    ]);
-    for (const call of commandRpcMocks.codexControlRequest.mock.calls) {
-      expect(call[2]).not.toHaveProperty("searchTerm");
-    }
-  });
-
-  it("returns the last native cursor when a title search reaches its scan cap", async () => {
-    let page = 0;
-    commandRpcMocks.codexControlRequest.mockImplementation(async () => {
-      page += 1;
-      return {
-        data: [idleThread({ id: `private-${page}`, name: "Unrelated", source: "cli" })],
-        nextCursor: `page-${page}`,
-      };
-    });
-    const control = createCodexSessionCatalogControl({
-      getPluginConfig: () => ({ supervision: { enabled: true } }),
-      getRuntimeConfig: () => config,
-    });
-
-    await expect(control.listPage({ limit: 10, searchTerm: "match" })).resolves.toEqual({
-      sessions: [],
-      nextCursor: "page-20",
-    });
-    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(20);
-  });
-
-  it("fails closed when title-search cursors cycle", async () => {
-    commandRpcMocks.codexControlRequest.mockResolvedValue({
-      data: [idleThread({ name: "Unrelated", source: "cli" })],
-      nextCursor: "cycle",
-    });
-    const control = createCodexSessionCatalogControl({
-      getPluginConfig: () => ({ supervision: { enabled: true } }),
-      getRuntimeConfig: () => config,
-    });
-
-    await expect(control.listPage({ limit: 10, searchTerm: "match" })).rejects.toThrow(
-      "repeated search cursor",
-    );
-    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(2);
-  });
-
-  it("shares one timeout budget across title-search pages", async () => {
-    let elapsedMs = 0;
-    let page = 0;
-    commandRpcMocks.codexControlRequest.mockImplementation(async () => {
-      page += 1;
-      elapsedMs += 600;
-      return {
-        data: [idleThread({ id: `other-${page}`, name: "Unrelated", source: "cli" })],
-        nextCursor: `page-${page}`,
-      };
-    });
-    const control = createCodexSessionCatalogControl({
-      getPluginConfig: () => ({
-        appServer: { requestTimeoutMs: 1_000 },
-        supervision: { enabled: true },
-      }),
-      getRuntimeConfig: () => config,
-      now: () => elapsedMs,
-    });
-
-    await expect(control.listPage({ limit: 10, searchTerm: "match" })).rejects.toThrow(
-      "catalog listing timed out",
-    );
-    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(2);
-    expect(
-      commandRpcMocks.codexControlRequest.mock.calls.map((call) => call[3]?.timeoutMs),
-    ).toEqual([1_000, 400]);
   });
 
   it("keeps a title-search cursor chain on its initial App Server configuration", async () => {
@@ -285,6 +203,7 @@ describe("Codex supervision catalog", () => {
       getRuntimeConfig: () => config,
     });
 
+    await control.initialize();
     await expect(control.listPage({ limit: 1, searchTerm: "match" })).resolves.toMatchObject({
       sessions: [expect.objectContaining({ threadId: "match" })],
     });
@@ -307,24 +226,6 @@ describe("Codex supervision catalog", () => {
     expect(commandRpcMocks.codexControlRequest).not.toHaveBeenCalled();
   });
 
-  it.each(["nextCursor", "backwardsCursor"] as const)(
-    "rejects an oversized native %s",
-    async (cursorField) => {
-      commandRpcMocks.codexControlRequest.mockResolvedValue({
-        data: [],
-        [cursorField]: "x".repeat(4097),
-      });
-      const control = createCodexSessionCatalogControl({
-        getPluginConfig: () => ({ supervision: { enabled: true } }),
-        getRuntimeConfig: () => config,
-      });
-
-      await expect(control.listPage({})).rejects.toThrow(
-        `invalid Codex session catalog ${cursorField === "nextCursor" ? "next" : "backwards"} response cursor`,
-      );
-    },
-  );
-
   it("keeps every Codex interactive source while omitting other custom sources", async () => {
     commandRpcMocks.codexControlRequest.mockResolvedValue({
       data: [
@@ -338,13 +239,14 @@ describe("Codex supervision catalog", () => {
         idleThread({ id: "custom", source: { custom: "integration" } }),
         idleThread({ id: "unknown", source: "unknown" }),
         idleThread({ id: "missing" }),
-      ],
+      ].map((thread, index) => Object.assign(thread, { recencyAt: 100 - index })),
     });
     const control = createCodexSessionCatalogControl({
       getPluginConfig: () => ({ supervision: { enabled: true } }),
       getRuntimeConfig: () => config,
     });
 
+    await control.initialize();
     const page = await control.listPage({});
 
     expect(page.sessions.map((session) => session.threadId)).toEqual([
@@ -378,29 +280,13 @@ describe("Codex supervision catalog", () => {
       {
         agentDir: resolveDefaultAgentDir(config),
         config,
+        authProfileId: null,
         startOptions: expect.objectContaining({ transport: "stdio", homeScope: "user" }),
       },
     );
     expect(commandRpcMocks.codexControlRequest.mock.calls.map((call) => call[1])).not.toContain(
       "thread/fork",
     );
-  });
-
-  it("keeps catalog reads and writes available when supervision is disabled live", async () => {
-    let pluginConfig: unknown = { supervision: { enabled: true } };
-    let runtimeConfig = {} as OpenClawConfig;
-    commandRpcMocks.codexControlRequest.mockResolvedValue({ data: [] });
-    const control = createCodexSessionCatalogControl({
-      getPluginConfig: () => pluginConfig,
-      getRuntimeConfig: () => runtimeConfig,
-    });
-
-    await expect(control.listPage({})).resolves.toEqual({ sessions: [] });
-    pluginConfig = { supervision: { enabled: false } };
-    runtimeConfig = { plugins: {} } as OpenClawConfig;
-
-    await expect(control.listPage({})).resolves.toEqual({ sessions: [] });
-    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(2);
   });
 
   it("keeps an in-flight catalog independent of supervision changes", async () => {
@@ -421,8 +307,27 @@ describe("Codex supervision catalog", () => {
       pluginConfig = { supervision: { enabled: false } };
       return { data: [] };
     });
+    await control.initialize();
     await expect(control.listPage({ limit: 10, searchTerm: "match" })).resolves.toEqual({
       sessions: [],
     });
   });
+
+  it.each(["nextCursor", "backwardsCursor"] as const)(
+    "rejects an oversized native %s",
+    async (cursorField) => {
+      commandRpcMocks.codexControlRequest.mockResolvedValue({
+        data: [],
+        [cursorField]: "x".repeat(4097),
+      });
+      const control = createCodexSessionCatalogControl({
+        getPluginConfig: () => ({ supervision: { enabled: true } }),
+        getRuntimeConfig: () => config,
+      });
+
+      await expect(control.initialize()).rejects.toThrow(
+        `invalid Codex session catalog ${cursorField === "nextCursor" ? "next" : "backwards"} response cursor`,
+      );
+    },
+  );
 });

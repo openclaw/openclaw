@@ -99,52 +99,7 @@ type ThemeJson = Static<typeof ThemeJsonSchema>;
 
 const validateThemeJson = Compile(ThemeJsonSchema);
 
-type ThemeColor =
-  | "accent"
-  | "border"
-  | "borderAccent"
-  | "borderMuted"
-  | "success"
-  | "error"
-  | "warning"
-  | "muted"
-  | "dim"
-  | "text"
-  | "thinkingText"
-  | "userMessageText"
-  | "customMessageText"
-  | "customMessageLabel"
-  | "toolTitle"
-  | "toolOutput"
-  | "mdHeading"
-  | "mdLink"
-  | "mdLinkUrl"
-  | "mdCode"
-  | "mdCodeBlock"
-  | "mdCodeBlockBorder"
-  | "mdQuote"
-  | "mdQuoteBorder"
-  | "mdHr"
-  | "mdListBullet"
-  | "toolDiffAdded"
-  | "toolDiffRemoved"
-  | "toolDiffContext"
-  | "syntaxComment"
-  | "syntaxKeyword"
-  | "syntaxFunction"
-  | "syntaxVariable"
-  | "syntaxString"
-  | "syntaxNumber"
-  | "syntaxType"
-  | "syntaxOperator"
-  | "syntaxPunctuation"
-  | "thinkingOff"
-  | "thinkingMinimal"
-  | "thinkingLow"
-  | "thinkingMedium"
-  | "thinkingHigh"
-  | "thinkingXhigh"
-  | "bashMode";
+type ThemeColor = Exclude<keyof ThemeJson["colors"], ThemeBg>;
 
 type ThemeBg =
   | "selectedBg"
@@ -252,38 +207,21 @@ function hexTo256(hex: string): number {
   return rgbTo256(r, g, b);
 }
 
-function fgAnsi(color: string | number, mode: ColorMode): string {
+function colorAnsi(color: string | number, mode: ColorMode, layer: "fg" | "bg"): string {
+  const code = layer === "fg" ? 38 : 48;
   if (color === "") {
-    return "\x1b[39m";
+    return layer === "fg" ? "\x1b[39m" : "\x1b[49m";
   }
   if (typeof color === "number") {
-    return `\x1b[38;5;${color}m`;
+    return `\x1b[${code};5;${color}m`;
   }
   if (color.startsWith("#")) {
     if (mode === "truecolor") {
       const { r, g, b } = hexToRgb(color);
-      return `\x1b[38;2;${r};${g};${b}m`;
+      return `\x1b[${code};2;${r};${g};${b}m`;
     }
     const index = hexTo256(color);
-    return `\x1b[38;5;${index}m`;
-  }
-  throw new Error(`Invalid color value: ${color}`);
-}
-
-function bgAnsi(color: string | number, mode: ColorMode): string {
-  if (color === "") {
-    return "\x1b[49m";
-  }
-  if (typeof color === "number") {
-    return `\x1b[48;5;${color}m`;
-  }
-  if (color.startsWith("#")) {
-    if (mode === "truecolor") {
-      const { r, g, b } = hexToRgb(color);
-      return `\x1b[48;2;${r};${g};${b}m`;
-    }
-    const index = hexTo256(color);
-    return `\x1b[48;5;${index}m`;
+    return `\x1b[${code};5;${index}m`;
   }
   throw new Error(`Invalid color value: ${color}`);
 }
@@ -325,6 +263,15 @@ function resolveThemeColors<T extends Record<string, ColorValue>>(
 // Theme Class
 // ============================================================================
 
+// Keep formatting independent of overridable public ANSI getters.
+function getThemeAnsi(colors: ReadonlyMap<string, string>, color: string, label: string): string {
+  const ansi = colors.get(color);
+  if (!ansi) {
+    throw new Error(`Unknown theme ${label}: ${color}`);
+  }
+  return ansi;
+}
+
 export class Theme {
   readonly name?: string;
   readonly sourcePath?: string;
@@ -345,27 +292,21 @@ export class Theme {
     this.mode = mode;
     this.fgColors = new Map();
     for (const [key, value] of Object.entries(fgColors) as [ThemeColor, string | number][]) {
-      this.fgColors.set(key, fgAnsi(value, mode));
+      this.fgColors.set(key, colorAnsi(value, mode, "fg"));
     }
     this.bgColors = new Map();
     for (const [key, value] of Object.entries(bgColors) as [ThemeBg, string | number][]) {
-      this.bgColors.set(key, bgAnsi(value, mode));
+      this.bgColors.set(key, colorAnsi(value, mode, "bg"));
     }
   }
 
   fg(color: ThemeColor, text: string): string {
-    const ansi = this.fgColors.get(color);
-    if (!ansi) {
-      throw new Error(`Unknown theme color: ${color}`);
-    }
+    const ansi = getThemeAnsi(this.fgColors, color, "color");
     return `${ansi}${text}\x1b[39m`; // Reset only foreground color
   }
 
   bg(color: ThemeBg, text: string): string {
-    const ansi = this.bgColors.get(color);
-    if (!ansi) {
-      throw new Error(`Unknown theme background color: ${color}`);
-    }
+    const ansi = getThemeAnsi(this.bgColors, color, "background color");
     return `${ansi}${text}\x1b[49m`; // Reset only background color
   }
 
@@ -390,19 +331,11 @@ export class Theme {
   }
 
   getFgAnsi(color: ThemeColor): string {
-    const ansi = this.fgColors.get(color);
-    if (!ansi) {
-      throw new Error(`Unknown theme color: ${color}`);
-    }
-    return ansi;
+    return getThemeAnsi(this.fgColors, color, "color");
   }
 
   getBgAnsi(color: ThemeBg): string {
-    const ansi = this.bgColors.get(color);
-    if (!ansi) {
-      throw new Error(`Unknown theme background color: ${color}`);
-    }
-    return ansi;
+    return getThemeAnsi(this.bgColors, color, "background color");
   }
 
   getColorMode(): ColorMode {

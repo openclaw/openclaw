@@ -3,6 +3,7 @@
  * Starts PTY sessions, polls them through the process tool, and verifies
  * terminal input/output handling.
  */
+import { readFile } from "node:fs/promises";
 import { afterEach, expect, test } from "vitest";
 import { deleteSession, markBackgrounded } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
@@ -86,13 +87,11 @@ test("exec supports pty output, OPENCLAW_SHELL, send-keys, and submit", async ()
         "process.stdout.write(`ok:${process.env.OPENCLAW_SHELL || ''}`);",
         "const dataEvent=String.fromCharCode(100,97,116,97);",
         "const submitted=String.fromCharCode(115,117,98,109,105,116,116,101,100);",
-        "let first=false;",
+        "let submissions=0;",
         "process.stdin.on(dataEvent,d=>{",
         "process.stdout.write(d);",
-        "if(d.includes(10)||d.includes(13)){",
-        "if(first){process.stdout.write(submitted);process.exit(0);}",
-        "first=true;",
-        "}",
+        "for(const byte of d){if(byte===10||byte===13)submissions++;}",
+        "if(submissions>=2){process.stdout.write(submitted);process.exit(0);}",
         "});",
       ].join(""),
     ),
@@ -220,3 +219,55 @@ test("PTY cursor queries and key modes survive output chunk boundaries", async (
     deleteSession(run.session.id);
   }
 });
+
+test.runIf(process.platform === "linux")(
+  "preserves sandbox transport policy while host children and PTYs keep their OOM bias",
+  async ({ skip }) => {
+    const inheritedScore = (await readFile("/proc/self/oom_score_adj", "utf8")).trim();
+    if (inheritedScore === "1000") {
+      skip();
+      return;
+    }
+    const script =
+      'process.stdout.write([require("node:fs").readFileSync("/proc/self/oom_score_adj","utf8").trim(),process.env.ENV??"",process.stdout.isTTY?"tty":"pipe"].join("|"))';
+    const command = currentNodeEvalCommand(script);
+    const env = { PATH: process.env.PATH ?? "/usr/bin:/bin", ENV: "backend-policy" };
+    for (const target of ["child", "pty", "sandbox"] as const) {
+      const warnings: string[] = [];
+      const run = await runExecProcess({
+        command,
+        execCommand: command,
+        workdir: process.cwd(),
+        env,
+        usePty: target === "pty",
+        sandbox:
+          target === "sandbox"
+            ? {
+                containerName: "backend-launcher",
+                workspaceDir: process.cwd(),
+                containerWorkdir: process.cwd(),
+                buildExecSpec: async () => ({
+                  argv: [process.execPath, "-e", script],
+                  env,
+                  stdinMode: "pipe-closed",
+                }),
+              }
+            : undefined,
+        warnings,
+        maxOutput: 1000,
+        pendingMaxOutput: 1000,
+        notifyOnExit: false,
+        timeoutSec: 5,
+      });
+      expect(await run.promise).toMatchObject({
+        status: "completed",
+        exitCode: 0,
+        aggregated:
+          target === "sandbox"
+            ? `${inheritedScore}|backend-policy|pipe`
+            : `1000||${target === "pty" ? "tty" : "pipe"}`,
+      });
+      expect(warnings).toEqual([]);
+    }
+  },
+);

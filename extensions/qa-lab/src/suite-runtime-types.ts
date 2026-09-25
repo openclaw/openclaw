@@ -1,13 +1,18 @@
-// Qa Lab plugin module implements suite runtime types behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { QaProviderMode } from "./model-selection.js";
 import type { QaTransportActionName, QaTransportAdapter } from "./qa-transport.js";
 
 type QaRuntimeGatewayClient = {
+  readonly evidenceIdentity?: { protocol: number; version: string } | null;
   baseUrl: string;
   tempRoot: string;
   workspaceDir: string;
   runtimeEnv: NodeJS.ProcessEnv;
+  cliCommand?: {
+    executablePath: string;
+    argsPrefix: readonly string[];
+    cwd: string;
+  };
   getProcessCpuMs?: () => number | null;
   getProcessRssBytes?: () => number | null;
   logs?: () => string;

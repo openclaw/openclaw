@@ -1,5 +1,6 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profile.js";
 // Merges gateway provider signals (auth status, live usage/quota, local session
 // cost) into one card list for the Models settings page.
 import type {
@@ -8,6 +9,7 @@ import type {
 } from "../../../../src/infra/provider-usage.types.js";
 import type { SessionModelUsage } from "../../../../src/infra/session-cost-usage.types.js";
 import type {
+  FastMode,
   ModelAuthStatusProvider,
   ModelAuthStatusProfile,
   ModelAuthStatusResult,
@@ -20,6 +22,7 @@ import {
   isMonitoredAuthProvider,
   listEffectiveModelAuthProviders,
 } from "../../lib/model-auth.ts";
+import type { ModelCatalogPresentation } from "../../lib/model-catalog-store.ts";
 
 export type ModelProviderAuthKind = "ok" | "expiring" | "expired" | "missing" | "api-key";
 
@@ -32,7 +35,7 @@ type ModelProviderAuthSummary = {
 type ModelProviderLocalCost = {
   totalCost: number;
   totalTokens: number;
-  sessionCount: number;
+  messageCount: number;
 };
 
 export type ModelProviderLogoutTarget = {
@@ -79,6 +82,7 @@ export type ModelProviderCard = {
   modelCount: number;
   availableModelCount: number;
   catalogStatus?: ModelCatalogProviderOutcome["status"];
+  checkingModels?: boolean;
   /** Live provider-reported usage (quota windows, billing, cost history). */
   usage?: ProviderUsageSnapshot;
   /** Locally-computed session spend for the requested window. */
@@ -89,6 +93,7 @@ type ModelProviderCardsInput = {
   authStatus: ModelAuthStatusResult | null;
   models: ModelCatalogEntry[] | null;
   providerOutcomes?: ModelCatalogProviderOutcome[];
+  pendingProviders?: readonly string[];
   configProviderIds?: string[] | null;
   configApiKeyProviderIds?: string[] | null;
   configProviderAuthModes?: Record<string, string> | null;
@@ -225,6 +230,13 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
     const id = canonicalProviderId(provider);
     if (id) {
       ensureDraft(drafts, id, providerDisplayLabel(id)).card.configAuthMode = authMode;
+    }
+  }
+
+  for (const provider of input.pendingProviders ?? []) {
+    const id = canonicalProviderId(provider);
+    if (id) {
+      ensureDraft(drafts, id, providerDisplayLabel(id)).card.checkingModels = true;
     }
   }
 
@@ -374,14 +386,14 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
     const addition: ModelProviderLocalCost = {
       totalCost: entry.totals.totalCost,
       totalTokens: entry.totals.totalTokens,
-      sessionCount: entry.count,
+      messageCount: entry.count,
     };
     const current = draft.card.localCost;
     draft.card.localCost = current
       ? {
           totalCost: current.totalCost + addition.totalCost,
           totalTokens: current.totalTokens + addition.totalTokens,
-          sessionCount: current.sessionCount + addition.sessionCount,
+          messageCount: current.messageCount + addition.messageCount,
         }
       : addition;
   }
@@ -394,6 +406,7 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
         Boolean(draft.card.usage) ||
         draft.card.modelCount > 0 ||
         Boolean(draft.catalogOutcome) ||
+        draft.card.checkingModels ||
         (draft.card.localCost?.totalTokens ?? 0) > 0,
     )
     .map((draft) => {
@@ -413,9 +426,45 @@ export type DefaultModelSelection = {
   fallbacks: string[];
   /** null = automatic/unset; empty string = explicitly disabled. */
   utilityModel: string | null;
+  /** Unset or null disables decisions globally. */
+  decisionModel?: string | null;
 };
 
 export type ModelPickerEntry = ModelCatalogEntry & { selectionRef?: string };
+export type ModelBehaviorConfig = {
+  thinkingLevel: string | undefined;
+  thinkingOverridden: boolean;
+  fastMode: FastMode | undefined;
+  fastModeOverridden: boolean;
+};
+export type DefaultsDraft = DefaultModelSelection & ModelBehaviorConfig;
+
+export function resolveDefaultModelPresentation(
+  catalog: ModelCatalogPresentation,
+  configured: DefaultsDraft,
+  draft: DefaultsDraft | null,
+): { defaults: DefaultsDraft; configuredModels: ModelPickerEntry[] } {
+  if (catalog.retired || catalog.modelSelectionPolicy?.restricted) {
+    return {
+      defaults: {
+        ...configured,
+        primary: catalog.modelSelectionPolicy?.defaultModel ?? "",
+        fallbacks: [],
+        utilityModel: null,
+        decisionModel: null,
+      },
+      configuredModels: catalog.models.filter((model) => model.manualSelectionAllowed !== false),
+    };
+  }
+  const defaults = draft ?? configured;
+  return {
+    defaults,
+    configuredModels: buildSelectableDefaultModels(
+      catalog.hasSnapshot ? catalog.models : null,
+      defaults,
+    ),
+  };
+}
 
 export function modelCatalogRef(model: ModelPickerEntry): string {
   if (model.selectionRef !== undefined) {
@@ -424,7 +473,7 @@ export function modelCatalogRef(model: ModelPickerEntry): string {
   return model.id.startsWith(`${model.provider}/`) ? model.id : `${model.provider}/${model.id}`;
 }
 
-export function buildSelectableDefaultModels(
+function buildSelectableDefaultModels(
   models: ModelCatalogEntry[] | null,
   selection: DefaultModelSelection,
 ): ModelPickerEntry[] {
@@ -442,6 +491,14 @@ export function buildSelectableDefaultModels(
   for (const ref of selected) {
     if (seen.has(ref)) {
       continue;
+    }
+    const { model: modelRef, profile } = splitTrailingAuthProfile(ref);
+    if (profile) {
+      const match = (models ?? []).find((model) => modelCatalogRef(model) === modelRef);
+      if (match) {
+        selectable.push({ ...match, selectionRef: ref });
+        continue;
+      }
     }
     const slash = ref.indexOf("/");
     if (slash <= 0 || slash === ref.length - 1) {
@@ -505,6 +562,9 @@ export function readModelProviderConfig(config: Record<string, unknown> | null):
       primary,
       fallbacks,
       utilityModel: typeof defaults?.utilityModel === "string" ? defaults.utilityModel : null,
+      ...(typeof defaults?.decisionModel === "string"
+        ? { decisionModel: defaults.decisionModel }
+        : {}),
     },
   };
 }

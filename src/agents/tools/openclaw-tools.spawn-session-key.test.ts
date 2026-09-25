@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => {
   return {
     stubTool,
     spawnToolOptions: vi.fn(),
+    sendToolOptions: vi.fn(),
     subagentsToolOptions: vi.fn(),
     imageGenerateToolOptions: vi.fn(),
     videoGenerateToolOptions: vi.fn(),
@@ -106,7 +107,10 @@ vi.mock("./sessions-list-tool.js", () => ({
 }));
 
 vi.mock("./sessions-send-tool.js", () => ({
-  createSessionsSendTool: () => mocks.stubTool("sessions_send"),
+  createSessionsSendTool: (options: unknown) => {
+    mocks.sendToolOptions(options);
+    return mocks.stubTool("sessions_send");
+  },
 }));
 
 vi.mock("./sessions-spawn-tool.js", () => ({
@@ -148,6 +152,7 @@ import { createOpenClawTools } from "../openclaw-tools.js";
 describe("createOpenClawTools sessions_spawn session-key selection", () => {
   beforeEach(() => {
     mocks.spawnToolOptions.mockClear();
+    mocks.sendToolOptions.mockClear();
     mocks.subagentsToolOptions.mockClear();
     mocks.imageGenerateToolOptions.mockClear();
     mocks.videoGenerateToolOptions.mockClear();
@@ -194,6 +199,26 @@ describe("createOpenClawTools sessions_spawn session-key selection", () => {
       expect.objectContaining({
         agentSessionKey: policyKey,
       }),
+    );
+  });
+
+  it("passes the durable runSessionKey to createSessionsSendTool when keys differ", () => {
+    // Regression for #144265: spawned children persist spawnedBy under the durable
+    // run session key (Gateway canonicalizes the spawn parent), so sessions_send must
+    // identify the requester with the same key or it treats its own visible child as
+    // a peer and starts the A2A announce flow after a waited reply.
+    const policyKey = "agent:main:telegram:default:direct:456";
+    const durableKey = "agent:main:telegram:direct:456";
+
+    createOpenClawTools({
+      agentSessionKey: policyKey,
+      runSessionKey: durableKey,
+      disableMessageTool: true,
+      disablePluginTools: true,
+    });
+
+    expect(mocks.sendToolOptions).toHaveBeenCalledWith(
+      expect.objectContaining({ agentSessionKey: durableKey }),
     );
   });
 

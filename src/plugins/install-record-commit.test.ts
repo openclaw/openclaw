@@ -76,6 +76,11 @@ vi.mock("./installed-plugin-index-records.js", async (importOriginal) => {
   };
 });
 
+vi.mock("./installed-plugin-index-store.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./installed-plugin-index-store.js")>()),
+  readPersistedInstalledPluginIndex: vi.fn(async () => null),
+}));
+
 vi.mock("./installed-plugin-index-store-write.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./installed-plugin-index-store-write.js")>();
   return {
@@ -192,7 +197,6 @@ describe("commitConfigWithPendingPluginInstalls", () => {
       },
       baseHash: "config-1",
       writeOptions: {
-        afterWrite: { mode: "restart", reason: "plugin source changed" },
         unsetPaths: [["plugins", "installs"]],
       },
     });
@@ -296,7 +300,6 @@ describe("commitConfigWithPendingPluginInstalls", () => {
     expect(commit).toHaveBeenCalledWith(
       {},
       {
-        afterWrite: { mode: "restart", reason: "plugin source changed" },
         unsetPaths: [["plugins", "installs"]],
       },
     );
@@ -309,7 +312,12 @@ describe("commitConfigWithPendingPluginInstalls", () => {
     expect(Object.getPrototypeOf(result.installRecords)).toBeNull();
   });
 
-  it.each([undefined, { mode: "auto" }, { mode: "restart", reason: "test restart" }] as const)(
+  it.each([
+    undefined,
+    { mode: "auto" },
+    { mode: "none", reason: "caller owns runtime application" },
+    { mode: "restart", reason: "test restart" },
+  ] as const)(
     "preserves source records and the runtime application receipt with intent %j",
     async (afterWrite) => {
       const sourceConfig: OpenClawConfig = {
@@ -338,21 +346,24 @@ describe("commitConfigWithPendingPluginInstalls", () => {
           commit: (input: unknown) => Promise<unknown>;
         };
         const transformed = transformParams.transform(sourceConfig, { snapshot });
-        await transformParams.commit({
+        return await transformParams.commit({
           nextConfig: transformed.nextConfig,
           snapshot,
           writeOptions: transformParams.writeOptions,
         });
-        return {};
       });
 
-      await transformConfigWithPendingPluginInstalls({
+      const result = await transformConfigWithPendingPluginInstalls({
         afterWrite,
         writeOptions: attachRuntimeConfigWriteApplication({}, application),
         transform: () => ({
           nextConfig: { plugins: { installs: { codex: codexRecord } } },
         }),
       });
+      expect(result.afterWrite).toEqual(afterWrite ?? { mode: "auto" });
+      expect(mocks.replaceConfigFile.mock.calls[0]?.[0].writeOptions.afterWrite).toEqual(
+        afterWrite,
+      );
       expect(application.claimed).toBe(true);
       await expect(application.result).resolves.toBe("applied");
 

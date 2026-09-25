@@ -5,11 +5,13 @@ import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 const KIMI_PROVIDER_ID = "kimi";
 const KIMI_CODING_CATALOG = manifest.modelCatalog.providers.kimi;
-const KIMI_LEGACY_MODEL_IDS = ["kimi-code", "k2p5"] as const;
+const KIMI_MODEL_ALIASES = new Map(
+  Object.entries(manifest.modelIdNormalization.providers.kimi.aliases),
+);
 
 export const KIMI_CODING_BASE_URL = KIMI_CODING_CATALOG.baseUrl;
 export const KIMI_CODING_DEFAULT_MODEL_ID = KIMI_CODING_CATALOG.defaultModel;
-export const KIMI_CODING_LEGACY_MODEL_IDS = KIMI_LEGACY_MODEL_IDS;
+export const KIMI_CODING_LEGACY_MODEL_IDS = ["kimi-code", "k2p5"] as const;
 
 export function buildKimiCodingProvider(): ModelProviderConfig {
   return buildManifestModelProviderConfig({
@@ -19,11 +21,5 @@ export function buildKimiCodingProvider(): ModelProviderConfig {
 }
 
 export function normalizeKimiCodingModelId(modelId: string): string {
-  // Legacy k3[1m] was retired upstream and normalizes to k3 for shipped configurations.
-  if (modelId === "k3[1m]") {
-    return "k3";
-  }
-  return KIMI_LEGACY_MODEL_IDS.includes(modelId as (typeof KIMI_LEGACY_MODEL_IDS)[number])
-    ? KIMI_CODING_DEFAULT_MODEL_ID
-    : modelId;
+  return KIMI_MODEL_ALIASES.get(modelId) ?? modelId;
 }

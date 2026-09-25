@@ -4,15 +4,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Command } from "commander";
+import {
+  parseStrictNonNegativeInteger,
+  parseStrictPositiveInteger,
+} from "openclaw/plugin-sdk/number-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SnapshotResult } from "../browser/client.js";
 import { writeExternalFileWithinOutputRoot } from "../browser/output-files.js";
 import {
   BROWSER_TAB_REFERENCE_HELP,
   callBrowserRequest,
-  parseBrowserNonNegativeIntegerValue,
   parseBrowserPositiveIntegerOption,
-  parseBrowserPositiveIntegerValue,
   type BrowserParentOpts,
 } from "./browser-cli-shared.js";
 import {
@@ -32,9 +34,7 @@ function parseOptionalIntegerOption(
     return undefined;
   }
   const parsed =
-    opts.min === 0
-      ? parseBrowserNonNegativeIntegerValue(value)
-      : parseBrowserPositiveIntegerValue(value);
+    opts.min === 0 ? parseStrictNonNegativeInteger(value) : parseStrictPositiveInteger(value);
   if (parsed === undefined || parsed < opts.min) {
     defaultRuntime.error(danger(`Invalid ${label}: must be an integer >= ${opts.min}`));
     defaultRuntime.exit(1);
@@ -242,7 +242,7 @@ export function registerBrowserInspectCommands(
               const indent = "  ".repeat(Math.min(20, n.depth));
               const name = n.name ? ` "${n.name}"` : "";
               const value = n.value ? ` = "${n.value}"` : "";
-              return `${indent}- ${n.role}${name}${value}`;
+              return `${indent}- ${n.role}${name}${value} [ref=${n.ref}]`;
             })
             .join("\n"),
         );

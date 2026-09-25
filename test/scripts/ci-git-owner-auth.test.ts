@@ -1,35 +1,8 @@
 import { readFileSync } from "node:fs";
-import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it } from "vitest";
 import { parse } from "yaml";
-import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
-
-async function runAuthFixture(mode: string, script?: string) {
-  let stdout = "";
-  let stderr = "";
-  const code = await runManagedCommand({
-    bin: "python3",
-    args: [
-      "-I",
-      "-S",
-      "test/scripts/fixtures/ci-checkout-auth.py",
-      path.resolve(".github/actions/git-owner/owner.py"),
-      mode,
-      ...(script ? [script] : []),
-    ],
-    stdio: ["ignore", "pipe", "pipe"],
-    timeoutMs: 30_000,
-    timeoutKillGraceMs: 12_000,
-    requireProcessTreeExit: true,
-    onReady(child) {
-      child.stdout?.on("data", (chunk) => (stdout += String(chunk)));
-      child.stderr?.on("data", (chunk) => (stderr += String(chunk)));
-    },
-  });
-  expect(code, stderr).toBe(0);
-  return JSON.parse(stdout);
-}
+import { runAuthFixture } from "./ci-checkout-auth.test-support.js";
 
 it.skipIf(process.platform === "win32").each(["fetch-only", "checkout"])(
   "keeps checkout HTTP authentication transient and scoped (%s)",

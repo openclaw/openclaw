@@ -20,7 +20,6 @@
     hasLeafControl = false,
     systemPrompt,
     tools,
-    renderedTools,
     warning,
   } = data;
 
@@ -189,40 +188,15 @@
     return current.entry.id;
   }
 
-  /**
-   * Flatten tree into list with indentation and connector info.
-   * Returns array of { node, indent, showConnector, isLast, gutters, isVirtualRootChild, multipleRoots }.
-   * Matches tree-selector.ts logic exactly.
-   */
-  function flattenTree(roots, activePathIds) {
-    const result = [];
+  /** Lay out ordered children into caller-owned records without replacing their node identity. */
+  function layoutTree(roots, getChildren, getLayoutTarget) {
     const multipleRoots = roots.length > 1;
-
-    // Mark which subtrees contain the active leaf
-    const containsActive = new Map();
-    function markActive(node) {
-      let has = activePathIds.has(node.entry.id);
-      for (const child of node.children) {
-        if (markActive(child)) {
-          has = true;
-        }
-      }
-      containsActive.set(node, has);
-      return has;
-    }
-    roots.forEach(markActive);
-
     // Stack: [node, indent, justBranched, showConnector, isLast, gutters, isVirtualRootChild]
     const stack = [];
-
-    // Add roots (prioritize branch containing active leaf)
-    const orderedRoots = [...roots].toSorted(
-      (a, b) => Number(containsActive.get(b)) - Number(containsActive.get(a)),
-    );
-    for (let i = orderedRoots.length - 1; i >= 0; i--) {
-      const isLast = i === orderedRoots.length - 1;
+    for (let i = roots.length - 1; i >= 0; i--) {
+      const isLast = i === roots.length - 1;
       stack.push([
-        orderedRoots[i],
+        roots[i],
         multipleRoots ? 1 : 0,
         multipleRoots,
         multipleRoots,
@@ -236,25 +210,19 @@
       const [node, indent, justBranched, showConnector, isLast, gutters, isVirtualRootChild] =
         stack.pop();
 
-      result.push({
-        node,
-        indent,
-        showConnector,
-        isLast,
-        gutters,
-        isVirtualRootChild,
-        multipleRoots,
-      });
+      const target = getLayoutTarget(node);
+      if (!target) {
+        continue;
+      }
+      target.indent = indent;
+      target.showConnector = showConnector;
+      target.isLast = isLast;
+      target.gutters = gutters;
+      target.isVirtualRootChild = isVirtualRootChild;
+      target.multipleRoots = multipleRoots;
 
-      const children = node.children;
+      const children = getChildren(node);
       const multipleChildren = children.length > 1;
-
-      // Order children (active branch first)
-      const orderedChildren = [...children].toSorted(
-        (a, b) => Number(containsActive.get(b)) - Number(containsActive.get(a)),
-      );
-
-      // Calculate child indent (matches tree-selector.ts)
       let childIndent;
       if (multipleChildren) {
         // Parent branches: children get +1
@@ -276,10 +244,10 @@
         : gutters;
 
       // Add children in reverse order for stack
-      for (let i = orderedChildren.length - 1; i >= 0; i--) {
-        const childIsLast = i === orderedChildren.length - 1;
+      for (let i = children.length - 1; i >= 0; i--) {
+        const childIsLast = i === children.length - 1;
         stack.push([
-          orderedChildren[i],
+          children[i],
           childIndent,
           multipleChildren,
           multipleChildren,
@@ -289,7 +257,34 @@
         ]);
       }
     }
+  }
 
+  /** Flatten the full tree with the active branch first at each level. */
+  function flattenTree(roots, activePathIds) {
+    const result = [];
+    const containsActive = new Map();
+    function markActive(node) {
+      let has = activePathIds.has(node.entry.id);
+      for (const child of node.children) {
+        if (markActive(child)) {
+          has = true;
+        }
+      }
+      containsActive.set(node, has);
+      return has;
+    }
+    roots.forEach(markActive);
+
+    const activeFirst = (a, b) => Number(containsActive.get(b)) - Number(containsActive.get(a));
+    layoutTree(
+      [...roots].toSorted(activeFirst),
+      (node) => [...node.children].toSorted(activeFirst),
+      (node) => {
+        const target = { node };
+        result.push(target);
+        return target;
+      },
+    );
     return result;
   }
 
@@ -499,7 +494,7 @@
    * Recompute indentation/connectors for the filtered view
    *
    * Filtering can hide intermediate entries; descendants attach to the nearest visible ancestor.
-   * Keep indentation semantics aligned with flattenTree() so single-child chains don't drift right.
+   * Reuse the shared layout without rewriting the original tree or filtered record identities.
    */
   function recalculateVisualStructure(filteredNodes, allFlatNodes) {
     if (filteredNodes.length === 0) {
@@ -528,14 +523,12 @@
     }
 
     // Build visible tree structure
-    const visibleParent = new Map();
     const visibleChildren = new Map();
     visibleChildren.set(null, []); // root-level nodes
 
     for (const flatNode of filteredNodes) {
       const nodeId = flatNode.node.entry.id;
       const ancestorId = findVisibleAncestor(nodeId);
-      visibleParent.set(nodeId, ancestorId);
 
       if (!visibleChildren.has(ancestorId)) {
         visibleChildren.set(ancestorId, []);
@@ -543,9 +536,7 @@
       visibleChildren.get(ancestorId).push(nodeId);
     }
 
-    // Update multipleRoots based on visible roots
     const visibleRootIds = visibleChildren.get(null);
-    const multipleRoots = visibleRootIds.length > 1;
 
     // Build a map for quick lookup: nodeId → FlatNode
     const filteredNodeMap = new Map();
@@ -553,80 +544,12 @@
       filteredNodeMap.set(flatNode.node.entry.id, flatNode);
     }
 
-    // DFS traversal of visible tree, applying same indentation rules as flattenTree()
-    // Stack items: [nodeId, indent, justBranched, showConnector, isLast, gutters, isVirtualRootChild]
-    const stack = [];
-
-    // Add visible roots in reverse order (to process in forward order via stack)
-    for (let i = visibleRootIds.length - 1; i >= 0; i--) {
-      const isLast = i === visibleRootIds.length - 1;
-      stack.push([
-        visibleRootIds[i],
-        multipleRoots ? 1 : 0,
-        multipleRoots,
-        multipleRoots,
-        isLast,
-        [],
-        multipleRoots,
-      ]);
-    }
-
-    while (stack.length > 0) {
-      const [nodeId, indent, justBranched, showConnector, isLast, gutters, isVirtualRootChild] =
-        stack.pop();
-
-      const flatNode = filteredNodeMap.get(nodeId);
-      if (!flatNode) {
-        continue;
-      }
-
-      // Update this node's visual properties
-      flatNode.indent = indent;
-      flatNode.showConnector = showConnector;
-      flatNode.isLast = isLast;
-      flatNode.gutters = gutters;
-      flatNode.isVirtualRootChild = isVirtualRootChild;
-      flatNode.multipleRoots = multipleRoots;
-
-      // Get visible children of this node
-      const children = visibleChildren.get(nodeId) || [];
-      const multipleChildren = children.length > 1;
-
-      // Calculate child indent using same rules as flattenTree():
-      // - Parent branches (multiple children): children get +1
-      // - Just branched and indent > 0: children get +1 for visual grouping
-      // - Single-child chain: stay flat
-      let childIndent;
-      if (multipleChildren) {
-        childIndent = indent + 1;
-      } else if (justBranched && indent > 0) {
-        childIndent = indent + 1;
-      } else {
-        childIndent = indent;
-      }
-
-      // Build gutters for children (same logic as flattenTree)
-      const connectorDisplayed = showConnector && !isVirtualRootChild;
-      const currentDisplayIndent = multipleRoots ? Math.max(0, indent - 1) : indent;
-      const connectorPosition = Math.max(0, currentDisplayIndent - 1);
-      const childGutters = connectorDisplayed
-        ? [...gutters, { position: connectorPosition, show: !isLast }]
-        : gutters;
-
-      // Add children in reverse order (to process in forward order via stack)
-      for (let i = children.length - 1; i >= 0; i--) {
-        const childIsLast = i === children.length - 1;
-        stack.push([
-          children[i],
-          childIndent,
-          multipleChildren,
-          multipleChildren,
-          childIsLast,
-          childGutters,
-          false,
-        ]);
-      }
-    }
+    // Filtering preserves the full traversal's order; update the original last-ID records.
+    layoutTree(
+      visibleRootIds,
+      (nodeId) => visibleChildren.get(nodeId) || [],
+      (nodeId) => filteredNodeMap.get(nodeId),
+    );
   }
 
   // ============================================================
@@ -1029,6 +952,19 @@
     return null;
   }
 
+  function formatOutputLines(lines, lang) {
+    if (lang) {
+      const code = lines.join("\n");
+      try {
+        return hljs.highlight(code, { language: lang }).value;
+      } catch {
+        return escapeHtml(code);
+      }
+    }
+
+    return lines.map((line) => `<div>${escapeHtml(replaceTabs(line))}</div>`).join("");
+  }
+
   function formatExpandableOutput(text, maxLines, lang) {
     text = replaceTabs(text);
     const lines = text.split("\n");
@@ -1036,21 +972,10 @@
     const remaining = lines.length - maxLines;
 
     if (lang) {
-      let highlighted;
-      try {
-        highlighted = hljs.highlight(text, { language: lang }).value;
-      } catch {
-        highlighted = escapeHtml(text);
-      }
+      const highlighted = formatOutputLines(lines, lang);
 
       if (remaining > 0) {
-        const previewCode = displayLines.join("\n");
-        let previewHighlighted;
-        try {
-          previewHighlighted = hljs.highlight(previewCode, { language: lang }).value;
-        } catch {
-          previewHighlighted = escapeHtml(previewCode);
-        }
+        const previewHighlighted = formatOutputLines(displayLines, lang);
 
         return `<div class="tool-output expandable" onclick="this.classList.toggle('expanded')">
               <div class="output-preview"><pre><code class="hljs">${previewHighlighted}</code></pre>
@@ -1066,24 +991,15 @@
       let out =
         '<div class="tool-output expandable" onclick="this.classList.toggle(\'expanded\')">';
       out += '<div class="output-preview">';
-      for (const line of displayLines) {
-        out += `<div>${escapeHtml(replaceTabs(line))}</div>`;
-      }
+      out += formatOutputLines(displayLines);
       out += `<div class="expand-hint">... (${remaining} more lines)</div></div>`;
       out += '<div class="output-full">';
-      for (const line of lines) {
-        out += `<div>${escapeHtml(replaceTabs(line))}</div>`;
-      }
+      out += formatOutputLines(lines);
       out += "</div></div>";
       return out;
     }
 
-    let out = '<div class="tool-output">';
-    for (const line of displayLines) {
-      out += `<div>${escapeHtml(replaceTabs(line))}</div>`;
-    }
-    out += "</div>";
-    return out;
+    return `<div class="tool-output">${formatOutputLines(displayLines)}</div>`;
   }
 
   function renderToolCall(call) {
@@ -1212,44 +1128,12 @@
         break;
       }
       default: {
-        // Check for pre-rendered custom tool HTML
-        const rendered = renderedTools?.[call.id];
-        if (rendered?.callHtml || rendered?.resultHtml) {
-          // Custom tool with pre-rendered HTML from TUI renderer
-          if (rendered.callHtml) {
-            html += `<div class="tool-header ansi-rendered">${rendered.callHtml}</div>`;
-          } else {
-            html += `<div class="tool-header"><span class="tool-name">${escapeHtml(name)}</span></div>`;
-          }
-
-          if (rendered.resultHtml) {
-            // Apply same truncation as built-in tools (10 lines)
-            const lines = rendered.resultHtml.split("\n");
-            if (lines.length > 10) {
-              const preview = lines.slice(0, 10).join("\n");
-              html += `<div class="tool-output expandable ansi-rendered" onclick="this.classList.toggle('expanded')">
-                    <div class="output-preview">${preview}<div class="expand-hint">... (${lines.length - 10} more lines)</div></div>
-                    <div class="output-full">${rendered.resultHtml}</div>
-                  </div>`;
-            } else {
-              html += `<div class="tool-output ansi-rendered">${rendered.resultHtml}</div>`;
-            }
-          } else if (result) {
-            // Fallback to JSON for result if no pre-rendered HTML
-            const output = getResultText();
-            if (output) {
-              html += formatExpandableOutput(output, 10);
-            }
-          }
-        } else {
-          // Fallback to JSON display (existing behavior)
-          html += `<div class="tool-header"><span class="tool-name">${escapeHtml(name)}</span></div>`;
-          html += `<div class="tool-output"><pre>${escapeHtml(JSON.stringify(args, null, 2))}</pre></div>`;
-          if (result) {
-            const output = getResultText();
-            if (output) {
-              html += formatExpandableOutput(output, 10);
-            }
+        html += `<div class="tool-header"><span class="tool-name">${escapeHtml(name)}</span></div>`;
+        html += `<div class="tool-output"><pre>${escapeHtml(JSON.stringify(args, null, 2))}</pre></div>`;
+        if (result) {
+          const output = getResultText();
+          if (output) {
+            html += formatExpandableOutput(output, 10);
           }
         }
       }

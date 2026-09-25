@@ -38,7 +38,7 @@ describe("skills-cli (e2e)", () => {
     const filePath = path.join(baseDir, "SKILL.md");
     return [
       {
-        skill: createFixtureSkill({
+        skill: createCanonicalFixtureSkill({
           name: "peekaboo",
           description: "Capture UI screenshots",
           filePath,
@@ -214,13 +214,3 @@ describe("skills-cli (e2e)", () => {
     expect(info).toContain(`✗ ${missingBin}`);
   });
 });
-
-function createFixtureSkill(params: {
-  name: string;
-  description: string;
-  filePath: string;
-  baseDir: string;
-  source: string;
-}): SkillEntry["skill"] {
-  return createCanonicalFixtureSkill(params);
-}

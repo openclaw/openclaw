@@ -46,16 +46,16 @@ function makeKey(accountId: string, channelId: string, threadRootId: string): st
   return `${accountId}:${channelId}:${threadRootId}`;
 }
 
-export function recordMattermostThreadParticipation(
+export async function recordMattermostThreadParticipation(
   accountId: string,
   channelId: string,
   threadRootId: string,
   opts?: { agentId?: string },
-): void {
+): Promise<void> {
   if (!accountId || !channelId || !threadRootId) {
     return;
   }
-  void threadParticipation.register(makeKey(accountId, channelId, threadRootId), {
+  await threadParticipation.register(makeKey(accountId, channelId, threadRootId), {
     // Stored for future per-agent thread routing; current reads only need presence.
     ...(opts?.agentId ? { agentId: opts.agentId } : {}),
     repliedAt: Date.now(),

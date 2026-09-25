@@ -6,7 +6,7 @@ import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-su
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target-paths.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -22,6 +22,7 @@ import {
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import { buildCommandContext } from "./commands-context.js";
 import { handleGoalCommand } from "./commands-goal.js";
+import type { CommandDispatchParams } from "./commands-types.js";
 import { initFastReplySessionState } from "./get-reply-fast-path.js";
 import {
   emptyAliasIndex,
@@ -193,11 +194,9 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     });
     mocks.ensureAgentWorkspace.mockReset();
     mocks.handleCommands.mockReset();
-    mocks.handleCommands.mockImplementation(async (params: unknown) => {
-      const result = await handleGoalCommand(
-        params as Parameters<typeof handleGoalCommand>[0],
-        true,
-      );
+    mocks.handleCommands.mockImplementation(async (params: CommandDispatchParams) => {
+      const modelLevels = await params.resolveModelLevels();
+      const result = await handleGoalCommand({ ...params, ...modelLevels }, true);
       return result ?? { shouldContinue: true, reply: undefined };
     });
     mocks.handleInlineActions.mockReset();

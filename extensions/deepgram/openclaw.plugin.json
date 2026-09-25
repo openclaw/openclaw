@@ -1,5 +1,6 @@
 {
   "id": "deepgram",
+  "categories": ["voice"],
   "capabilityCatalogEntry": "./capability-catalog.ts",
   "activation": {
     "onStartup": false
@@ -9,17 +10,25 @@
     "providers": [
       {
         "id": "deepgram",
-        "envVars": ["DEEPGRAM_API_KEY"]
+        "envVars": [
+          "DEEPGRAM_API_KEY"
+        ]
       }
     ]
   },
   "contracts": {
-    "mediaUnderstandingProviders": ["deepgram"],
-    "realtimeTranscriptionProviders": ["deepgram"]
+    "mediaUnderstandingProviders": [
+      "deepgram"
+    ],
+    "realtimeTranscriptionProviders": [
+      "deepgram"
+    ]
   },
   "mediaUnderstandingProviderMetadata": {
     "deepgram": {
-      "capabilities": ["audio"],
+      "capabilities": [
+        "audio"
+      ],
       "defaultModels": {
         "audio": "nova-3"
       },
@@ -32,5 +41,6 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {}
-  }
+  },
+  "description": "Deepgram audio transcription with Nova and Flux models, plus realtime speech recognition."
 }

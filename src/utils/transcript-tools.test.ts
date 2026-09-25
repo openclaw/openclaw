@@ -9,28 +9,51 @@ describe("transcript-tools", () => {
       expect(extractToolCallNames({ tool_name: "notes" })).toEqual(["notes"]);
     });
 
-    it("extracts tool call names from content blocks (tool_use/toolcall/tool_call)", () => {
+    it("extracts tool call names from supported content blocks", () => {
       const names = extractToolCallNames({
         content: [
           { type: "text", text: "hi" },
           { type: "tool_use", name: "read" },
           { type: "toolcall", name: "exec" },
           { type: "tool_call", name: "write" },
+          { type: " toolCall ", name: "padded" },
+          { type: "toolUse", name: "legacy" },
         ],
       });
-      expect(new Set(names)).toEqual(new Set(["read", "exec", "write"]));
+      expect(names).toEqual(["read", "exec", "write", "padded", "legacy"]);
     });
 
-    it("normalizes type and trims names; de-dupes", () => {
+    it.each([
+      ["distinct IDs", "call-1", "call-2"],
+      ["reused IDs", "call-1", "call-1"],
+      ["missing IDs", undefined, undefined],
+    ])("counts repeated names with %s after the top-level mirror", (_label, firstId, secondId) => {
       const names = extractToolCallNames({
         content: [
-          { type: " TOOL_CALL ", name: "  read " },
-          { type: "tool_call", name: "read" },
+          { type: " TOOL_CALL ", id: firstId, name: "  read " },
+          { type: "tool_call", id: secondId, name: "read" },
           { type: "tool_call", name: "" },
         ],
         toolName: "read",
       });
-      expect(names).toEqual(["read"]);
+      expect(names).toEqual(["read", "read"]);
+    });
+
+    it("preserves top-level alias precedence and skips only its first matching block", () => {
+      expect(
+        extractToolCallNames({
+          toolName: " write ",
+          tool_name: "ignored",
+          content: [
+            { type: "toolCall", name: "read" },
+            { type: "toolUse", name: "write" },
+            { type: "tooluse", name: "write" },
+          ],
+        }),
+      ).toEqual(["write", "read", "write"]);
+      expect(extractToolCallNames({ toolName: " ", tool_name: "ignored", content: [] })).toEqual(
+        [],
+      );
     });
   });
 

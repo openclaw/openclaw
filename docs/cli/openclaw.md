@@ -25,7 +25,7 @@ Running `openclaw` with no subcommand routes based on config state:
   without onboarding or OpenClaw. Use `/openclaw` inside the TUI, or run
   `openclaw setup` directly, to reach OpenClaw later.
 
-Running `openclaw setup` first live-tests the configured default model. A passing turn starts OpenClaw. An interactive failure opens guided inference setup and hands off to OpenClaw after a candidate passes. One-shot, JSON, and other noninteractive requests fail with instructions to run `openclaw onboard` when inference is unavailable. `openclaw --help` and `openclaw --version` keep their normal fast paths.
+Running `openclaw setup` first live-tests the configured default model. A passing turn starts OpenClaw. An interactive failure opens guided inference setup and hands off to OpenClaw after a candidate passes. One-shot, JSON, and other noninteractive requests fail with instructions to run [`openclaw onboard`](/cli/onboard) when inference is unavailable. `openclaw --help` and `openclaw --version` keep their normal fast paths.
 
 If inference plugin loading or owner verification fails, the error includes the underlying cause after applying OpenClaw's error redaction. One-shot text and JSON output retain that detail alongside onboarding guidance.
 
@@ -102,6 +102,10 @@ quit
 
 OpenClaw uses typed operations instead of editing config ad hoc.
 
+For `config get`, quote record keys that contain dots or brackets, such as
+`config get channels.modelByChannel.telegram["team.ops[west]"]`.
+Config reads redact sensitive values before selecting the requested path.
+
 Read-only operations run immediately: show overview, list agents, list installed plugins, search ClawHub plugins, show model/backend status, run status/health checks, check Gateway reachability, run doctor without interactive fixes, validate config, show the audit-log path.
 
 Starting a guided setup flow also runs immediately: channel setup (`connect telegram`), workspace skills setup (`configure skills`), web-search provider setup (`configure web search`), and local Gateway setup (`configure gateway`). Each config-backed hosted wizard collects explicit answers and owns the resulting writes; completions append audit entries and re-validate config. A web-search provider that needs a plugin install writes config only after the install succeeds — a failed or timed-out install stops setup and reports it instead of claiming the provider is configured.
@@ -148,25 +152,16 @@ Doctor repairs are unavailable inside OpenClaw because they can rewrite the prov
 
 New agents inherit the live-verified default inference route. The agent ids `openclaw` and `crestodian` are reserved for the system agent and cannot be created as normal agents. The retired id remains blocked so an old config cannot claim it.
 
-`config set` and `config set-ref` can change any setting a user can change,
-with a short human-only denylist: `$include`, `auth.*`, `env.*`, `models.*`,
-and `secrets.*` stay refused because they carry credential material,
-alternate-config inclusion, or the provider/catalog definitions that feed
-inference routing. Inference routing itself is also protected: default model
-routes (`agents.defaults` model/params/runtime fields) and the routing fields
-of whichever agent backs the active default route are refused, as are agent
-identity/topology fields (`id`, `agentDir`, `default`). Routing fields for
-other agents remain writable behind approval. Gateway and channel auth remain
-normal config surfaces. Use `set default model <provider/model>` for an
-already configured route; it live-tests the route before saving it. To
-configure or repair provider/auth access, exit OpenClaw and run
-`openclaw onboard`.
+`config set` and `config set-ref` propose config changes for approval. Approved
+writes use the existing config validator and writer. Validation or write errors
+return to the assistant for one corrective proposal, which needs fresh approval.
+A failure after saving is reported as such. Config writes do not test whether a
+model route or API key works. Follow your secret storage preference; for environment
+storage, use `config set-ref`. Secret values are not echoed in chat.
+`set default model <provider/model>` still live-tests the route before saving it.
 
-`plugins.entries.<id>.*` writes (enable/disable/config of installed plugins)
-are allowed unless that plugin backs the active inference route. Plugin
-install sources and load policy keep their trust boundary in the typed
-plugin-install workflow. Plugin uninstall of the route-backing plugin is
-refused for the same reason; exit OpenClaw and run
+Plugin installation keeps its source restrictions. Plugin uninstall refuses a
+plugin that backs the active inference route; exit OpenClaw and run
 `openclaw plugins uninstall <id>` from a terminal.
 
 Approval is given in your own words: unambiguous replies ("yes", "sure", "go ahead", "not now") resolve from a closed deterministic list. When the configured route supports a separate completion call, other replies can be classified from only your message and the pending proposal — never by the conversation model itself, which cannot self-approve. Unclassified or ambiguous replies keep the proposal pending and the conversation asks again.
@@ -218,12 +213,12 @@ same way for web-search provider setup, opening the masked search wizard after
 the chat TUI closes. `open gateway wizard` opens masked local Gateway setup;
 when it finishes, run `openclaw gateway restart` to apply the saved settings.
 
-OpenClaw never changes provider/auth access from inside its own session: the
-session already depends on that inference route. For model-provider setup or
-repair, `configure model provider` returns exit/onboarding guidance without
-starting a wizard or writing config. Exit OpenClaw and run `openclaw
-onboard`; onboarding stages the credentials and saves only a route that
-completes a real live turn. Start OpenClaw again after onboarding succeeds.
+`configure model provider` directs you to **Settings → Models → Connect provider**
+without starting a wizard or changing config. Check the connected Gateway and
+selected **System** or agent scope in Settings before signing in. Enter credentials
+only in the protected sign-in controls, never in chat. Connecting another provider
+does not select it as the active model or require stopping the host. Model selection
+is separate; replacing credentials for a provider already in use can affect work.
 
 ## Setup bootstrap
 
@@ -273,6 +268,16 @@ Interactive OpenClaw's free-form conversation runs through the same agent loop a
 
 A failed or timed-out turn ends that setup conversation with a visible error.
 Retrying starts a fresh conversation and live-checks the inference route again.
+
+System-agent turns use `agents.defaults.timeoutSeconds`, including `0` to disable
+the deadline, just like ordinary agent turns. The default is 48 hours; there is
+no separate two-minute cap for setup and repair.
+
+When a regular agent calls its `openclaw` tool, it delegates to this system agent
+through the running Gateway rather than launching the CLI. That adds a separate
+model turn, so routine session and workspace checks should use the agent's
+available tools directly. The embedded system helper does not load workspace
+skill catalogs because it can act only through its built-in system tool.
 
 The host does not parse natural-language requests into operations. Free-form
 messages — including command-looking text and questions such as "why did my
@@ -360,7 +365,7 @@ OpenClaw: Applied. Audit entry written.
 Agent creation can also be queued locally or via rescue:
 
 ```text
-create agent work workspace ~/path/to/work model openai/gpt-5.6-sol
+create agent work workspace ~/path/to/work model openai/gpt-6-astra
 /openclaw create agent work workspace ~/path/to/work
 ```
 
@@ -423,6 +428,8 @@ pnpm openclaw qa suite --scenario system-agent-ring-zero-setup
 ## Related
 
 - [CLI reference](/cli)
+- [Setup CLI](/cli/setup)
+- [Onboard](/cli/onboard)
 - [Doctor](/cli/doctor)
 - [TUI](/cli/tui)
 - [Sandbox](/cli/sandbox)

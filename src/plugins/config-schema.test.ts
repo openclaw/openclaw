@@ -1,6 +1,7 @@
 // Covers plugin config schema validation and diagnostics.
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { z as z3 } from "zod/v3";
 import {
   buildJsonPluginConfigSchema,
   buildPluginConfigSchema,
@@ -25,7 +26,7 @@ function expectJsonSchema(
 }
 
 describe("buildPluginConfigSchema", () => {
-  it("builds json schema when toJSONSchema is available", () => {
+  it("builds json schema in input mode", () => {
     const schema = z.strictObject({ enabled: z.boolean().default(true) });
     const result = buildPluginConfigSchema(schema);
     expectJsonSchema(result, {
@@ -35,37 +36,64 @@ describe("buildPluginConfigSchema", () => {
     });
   });
 
-  it("uses input mode and strips helper-only draft metadata", () => {
-    const toJSONSchema = vi.fn(() => ({
-      $schema: "http://json-schema.org/draft-07/schema#",
-      type: "object",
-      propertyNames: { type: "string" },
-      required: [],
-      properties: {
-        enabled: { type: "boolean", default: true },
-      },
-    }));
-    const schema = { toJSONSchema } as unknown as Parameters<typeof buildPluginConfigSchema>[0];
+  it("uses the host converter and preserves metadata, references and runtime transforms", () => {
+    const policy = z.string().describe("Policy name").meta({
+      id: "Plugin/Policy~v1",
+      title: "Policy",
+    });
+    const schema = z.strictObject({
+      settings: z.record(z.string(), z.boolean()).optional(),
+      first: policy,
+      second: policy,
+      enabled: z.boolean().default(true),
+      length: z
+        .string()
+        .transform((value) => value.length)
+        .optional(),
+    });
+    vi.spyOn(schema, "toJSONSchema").mockImplementation(() => {
+      throw new Error("schema-owned converter must not run");
+    });
 
     const result = buildPluginConfigSchema(schema);
 
-    expect(toJSONSchema).toHaveBeenCalledWith({
-      target: "draft-07",
-      io: "input",
-      unrepresentable: "any",
-    });
-    expect(result.jsonSchema).toEqual({
-      type: "object",
+    expect(result.jsonSchema).toMatchObject({
       properties: {
+        settings: { type: "object", additionalProperties: { type: "boolean" } },
+        first: { $ref: "#/definitions/Plugin~1Policy~0v1" },
+        second: { $ref: "#/definitions/Plugin~1Policy~0v1" },
         enabled: { type: "boolean", default: true },
+        length: { type: "string" },
       },
+      required: ["first", "second"],
+      definitions: {
+        "Plugin/Policy~v1": { type: "string", description: "Policy name", title: "Policy" },
+      },
+    });
+    expect(result.jsonSchema).not.toHaveProperty("$schema");
+    expect(result.jsonSchema).not.toHaveProperty("properties.settings.propertyNames");
+    const input = { first: "read", second: "write", settings: { active: true }, length: "read" };
+    expect(result.safeParse?.(input)).toEqual({
+      success: true,
+      data: { ...input, enabled: true, length: 4 },
+    });
+    expect(result.safeParse?.({ ...input, enabled: "yes" })).toMatchObject({
+      success: false,
+      error: { issues: [{ path: ["enabled"] }] },
     });
   });
 
-  it("falls back when toJSONSchema is missing", () => {
-    const legacySchema = {} as unknown as Parameters<typeof buildPluginConfigSchema>[0];
-    const result = buildPluginConfigSchema(legacySchema);
+  it("preserves permissive json schema and runtime parsing for zod v3 plugins", () => {
+    const legacySchema = z3.object({ enabled: z3.boolean().default(true) }).strict();
+    const result = buildPluginConfigSchema(
+      legacySchema as unknown as Parameters<typeof buildPluginConfigSchema>[0],
+    );
     expectJsonSchema(result, { type: "object", additionalProperties: true });
+    expect(result.safeParse?.({})).toEqual({ success: true, data: { enabled: true } });
+    expect(result.safeParse?.({ enabled: "yes" })).toMatchObject({
+      success: false,
+      error: { issues: [{ path: ["enabled"] }] },
+    });
   });
 
   it("uses zod runtime parsing by default", () => {

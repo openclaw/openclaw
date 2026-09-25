@@ -1,5 +1,6 @@
 {
   "id": "openai",
+  "categories": ["models"],
   "capabilityCatalogEntry": "./capability-catalog.ts",
   "sessionRouteStateOwners": [
     {
@@ -74,6 +75,58 @@
             "compat": {
               "supportsReasoningEffort": true,
               "supportedReasoningEfforts": ["low", "medium", "high", "xhigh", "max"],
+              "supportsTemperature": false,
+              "codeMode": "preferred"
+            }
+          },
+          {
+            "id": "gpt-6-sol",
+            "name": "GPT-6 Sol",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1050000,
+            "contextTokens": 272000,
+            "maxTokens": 128000,
+            "cost": {
+              "input": 2,
+              "output": 10,
+              "cacheRead": 0.2,
+              "cacheWrite": 2.5,
+              "tieredPricing": [
+                { "range": [0, 272001], "input": 2, "output": 10, "cacheRead": 0.2, "cacheWrite": 2.5 },
+                { "range": [272001], "input": 4, "output": 15, "cacheRead": 0.4, "cacheWrite": 5 }
+              ]
+            },
+            "thinkingLevelMap": { "off": "none", "minimal": "low", "xhigh": "xhigh", "max": "max" },
+            "compat": {
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": ["none", "low", "medium", "high", "xhigh", "max"],
+              "supportsTemperature": false,
+              "codeMode": "preferred"
+            }
+          },
+          {
+            "id": "gpt-6-luna",
+            "name": "GPT-6 Luna",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1050000,
+            "contextTokens": 272000,
+            "maxTokens": 128000,
+            "cost": {
+              "input": 0.1,
+              "output": 0.5,
+              "cacheRead": 0.01,
+              "cacheWrite": 0.125,
+              "tieredPricing": [
+                { "range": [0, 272001], "input": 0.1, "output": 0.5, "cacheRead": 0.01, "cacheWrite": 0.125 },
+                { "range": [272001], "input": 0.2, "output": 0.75, "cacheRead": 0.02, "cacheWrite": 0.25 }
+              ]
+            },
+            "thinkingLevelMap": { "off": "none", "minimal": "low", "xhigh": "xhigh", "max": "max" },
+            "compat": {
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": ["none", "low", "medium", "high", "xhigh", "max"],
               "supportsTemperature": false,
               "codeMode": "preferred"
             }
@@ -254,13 +307,14 @@
       "personalAccount": true,
       "choiceId": "openai",
       "appGuidedAuth": "oauth",
-      "choiceLabel": "ChatGPT Login",
-      "choiceHint": "Sign in with your ChatGPT or Codex subscription",
-      "assistantPriority": -40,
+      "credentialOnly": true,
+      "choiceLabel": "Codex login (browser)",
+      "choiceHint": "Sign in to Codex locally with your ChatGPT account",
+      "docsUrl": "https://docs.openclaw.ai/providers/openai/authentication",
+      "assistantPriority": -10,
       "groupId": "openai",
       "groupLabel": "OpenAI",
-      "groupHint": "ChatGPT/Codex sign-in or API key",
-      "onboardingFeatured": true
+      "groupHint": "Codex login, Sign in with ChatGPT, or API key"
     },
     {
       "provider": "openai",
@@ -268,12 +322,33 @@
       "personalAccount": true,
       "choiceId": "openai-device-code",
       "appGuidedAuth": "device-code",
-      "choiceLabel": "ChatGPT Device Pairing",
-      "choiceHint": "Pair your ChatGPT account in browser with a device code",
-      "assistantPriority": -10,
+      "credentialOnly": true,
+      "channelLogin": {
+        "aliases": ["codex"]
+      },
+      "choiceLabel": "Codex login (device code)",
+      "choiceHint": "Use a browser code when OpenClaw runs on a remote VM",
+      "docsUrl": "https://docs.openclaw.ai/providers/openai/authentication",
+      "assistantPriority": -40,
       "groupId": "openai",
       "groupLabel": "OpenAI",
-      "groupHint": "ChatGPT/Codex sign-in or API key"
+      "groupHint": "Codex login, Sign in with ChatGPT, or API key",
+      "onboardingFeatured": true
+    },
+    {
+      "provider": "openai",
+      "method": "siwc",
+      "personalAccount": true,
+      "choiceId": "openai-token-sharing",
+      "appGuidedAuth": "oauth",
+      "credentialOnly": true,
+      "choiceLabel": "Sign in with ChatGPT",
+      "choiceHint": "Use your Codex allowance with per-instance usage tracking and token limits",
+      "docsUrl": "https://docs.openclaw.ai/providers/openai/authentication",
+      "assistantPriority": -50,
+      "groupId": "openai",
+      "groupLabel": "OpenAI",
+      "groupHint": "Codex login, Sign in with ChatGPT, or API key"
     },
     {
       "provider": "openai",
@@ -283,10 +358,11 @@
       "appGuidedSecret": true,
       "choiceLabel": "OpenAI API Key",
       "choiceHint": "Use your OpenAI API key directly",
+      "docsUrl": "https://docs.openclaw.ai/providers/openai/authentication",
       "assistantPriority": 5,
       "groupId": "openai",
       "groupLabel": "OpenAI",
-      "groupHint": "ChatGPT/Codex sign-in or API key",
+      "groupHint": "Codex login, Sign in with ChatGPT, or API key",
       "onboardingFeatured": true,
       "optionKey": "openaiApiKey",
       "cliFlag": "--openai-api-key",
@@ -326,7 +402,7 @@
     "openai": {
       "capabilities": ["image", "audio"],
       "defaultModels": {
-        "image": "gpt-5.6-sol",
+        "image": "gpt-6-astra",
         "audio": "gpt-4o-transcribe"
       },
       "autoPriority": {
@@ -335,6 +411,14 @@
       }
     }
   },
+  "configGroups": [
+    {
+      "id": "response-style",
+      "title": "Response style",
+      "order": 10,
+      "properties": ["personality"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

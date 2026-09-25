@@ -1,15 +1,34 @@
 import type { RestartSentinelPayload } from "../infra/restart-sentinel.js";
-import { findActiveUpdateRun, getUpdateRun, listUpdateRuns } from "../infra/update-run-ledger.js";
+import { getUpdateRun } from "../infra/update-run-ledger.js";
+import { isAcknowledgedAbandonedUpdateRun } from "../infra/update-run-record.js";
 import {
   renderUpdateRunReport,
   updateRunReportInputFromSentinel,
 } from "../infra/update-run-report.js";
+import { readUpdateRunStatus } from "../infra/update-run-status.js";
 
 type Formatter = (value: string) => string;
 
+function renderStatusReport(run: Parameters<typeof renderUpdateRunReport>[0]) {
+  const report = renderUpdateRunReport(run);
+  const reconciled = isAcknowledgedAbandonedUpdateRun(run);
+  const message =
+    run.status === "failed" && !reconciled
+      ? run.steps
+          .filter((step) => step.status === "failed")
+          .flatMap((step) => step.failureFacts ?? [])
+          .find((fact) => fact.message)?.message
+      : undefined;
+  return {
+    ...report,
+    reconciled,
+    headline: message ? `${report.headline} ${message}` : report.headline,
+  };
+}
+
 function readReport(payload: RestartSentinelPayload) {
   const run = payload.stats?.runId ? getUpdateRun(payload.stats.runId) : undefined;
-  return renderUpdateRunReport(run ?? updateRunReportInputFromSentinel(payload));
+  return renderStatusReport(run ?? updateRunReportInputFromSentinel(payload));
 }
 
 export function formatUpdateRestartStatusValue(
@@ -19,9 +38,14 @@ export function formatUpdateRestartStatusValue(
   if (!payload || payload.kind !== "update") {
     return null;
   }
-  const headline = readReport(payload).headline;
-  const format =
-    payload.status === "error" ? opts.warn : payload.status === "ok" ? opts.ok : opts.muted;
+  const { headline, reconciled } = readReport(payload);
+  const format = reconciled
+    ? opts.muted
+    : payload.status === "error"
+      ? opts.warn
+      : payload.status === "ok"
+        ? opts.ok
+        : opts.muted;
   return format ? format(headline) : headline;
 }
 
@@ -30,8 +54,23 @@ export function buildStatusUpdateRows(
   payload: RestartSentinelPayload | null | undefined,
   opts: Parameters<typeof formatUpdateRestartStatusValue>[1] = {},
 ) {
-  const run = findActiveUpdateRun() ?? listUpdateRuns({ limit: 1 })[0];
-  const rows = run ? [{ Item: "Update run", Value: renderUpdateRunReport(run).headline }] : [];
+  const history = readUpdateRunStatus();
+  if ("runStatusError" in history) {
+    return [
+      { Item: "Update run", Value: `Update run status unavailable: ${history.runStatusError}` },
+    ];
+  }
+  const run = history.activeRun ?? history.lastRun;
+  const rows = run ? [{ Item: "Update run", Value: renderStatusReport(run).headline }] : [];
+  if (history.runReconciliationError) {
+    rows.push({
+      Item: "Update reconciliation",
+      Value: `Update run reconciliation failed: ${history.runReconciliationError}`,
+    });
+  }
+  for (const advisory of history.advisories ?? []) {
+    rows.push({ Item: "Update advisory", Value: advisory.message });
+  }
   // Legacy sentinels lack run IDs; matching prose cannot establish the same occurrence.
   const restart =
     !run || payload?.stats?.runId !== run.runId

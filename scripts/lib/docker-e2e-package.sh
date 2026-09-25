@@ -284,6 +284,13 @@ docker_e2e_cleanup_package_tgz() {
   fi
 }
 
+docker_e2e_cleanup_package_run() {
+  docker_e2e_cleanup_package_tgz "${1:-}"
+  if [ -n "${2:-}" ]; then
+    rm -f "$2"
+  fi
+}
+
 docker_e2e_cleanup_package_mount_args() {
   local expect_volume_path=0
   local arg
@@ -325,6 +332,7 @@ docker_e2e_print_failed_container_state() {
   inspect_output="$(
     docker_e2e_docker_cmd inspect --format 'ExitCode={{.State.ExitCode}}
 OOMKilled={{.State.OOMKilled}}
+Init={{.HostConfig.Init}}
 Error={{printf "%.4096s" .State.Error}}' "$container_id" 2>&1
   )" || inspect_status="$?"
   if [ "$inspect_status" -ne 0 ]; then

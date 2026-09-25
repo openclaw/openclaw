@@ -1,9 +1,12 @@
 // Nostr plugin module implements channel.setup behavior.
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import {
+  buildChannelConfigSchema,
+  type ChannelPlugin,
+} from "openclaw/plugin-sdk/channel-plugin-common";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDelegatedSetupWizardProxy } from "openclaw/plugin-sdk/setup-runtime";
-import { buildChannelConfigSchema, type ChannelPlugin } from "./channel-api.js";
 import { NostrConfigSchema } from "./config-schema.js";
 import { DEFAULT_RELAYS } from "./default-relays.js";
 import { hasConfiguredNostrPrivateKey, resolveNostrPrivateKey } from "./private-key.js";

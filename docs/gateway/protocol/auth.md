@@ -13,6 +13,8 @@ How a client proves who it is: the handshake auth paths, device identity and pai
 
 ## Auth
 
+Owner page: [Gateway authentication](/gateway/authentication) — auth modes, token/password setup, and the operator-facing policy this wire contract enforces.
+
 - Shared-secret gateway auth accepts the configured secret in either
   `connect.params.auth.token` or `connect.params.auth.password`.
   `gateway.auth.mode: "token"` selects `gateway.auth.token`; `"password"`
@@ -105,11 +107,17 @@ How a client proves who it is: the handshake auth paths, device identity and pai
 
 ## Device identity and pairing
 
+Owner page: [Gateway pairing](/gateway/pairing) — the approval flow, device records, and CLI surfaces behind these fields.
+
 - Nodes should include a stable device identity (`device.id`) derived from a
   keypair fingerprint.
 - Gateways issue tokens per device + role.
 - Pairing approvals are required for new device IDs unless local
   auto-approval is enabled.
+- If approval overlaps a reconnect, the Gateway checks the current paired device
+  before completing the handshake. The approved key, role, scopes, and pinned
+  client metadata must authorize that connection; a consumed request alone does
+  not grant access.
 - Pairing auto-approval is centered on direct local loopback connects.
 - OpenClaw also has a narrow backend/container-local self-connect path for
   trusted shared-secret helper flows.
@@ -161,6 +169,8 @@ Migration target:
   metadata pinning still controls command policy on reconnect.
 
 ## TLS and pinning
+
+Owner page: [Remote access](/gateway/remote) — configuring `gateway.tls` and obtaining the fingerprint clients pin.
 
 - TLS is supported for WS connections (`gateway.tls` config).
 - Clients may optionally pin the gateway cert fingerprint via

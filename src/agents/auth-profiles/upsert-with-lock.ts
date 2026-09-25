@@ -1,10 +1,15 @@
 /** Locked auth profile writes and attempt-scoped compensation. */
 import { isDeepStrictEqual } from "node:util";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { AUTH_STORE_VERSION } from "./constants.js";
 import { normalizeAuthProfileCredential } from "./credential-normalize.js";
 import { withOAuthProfileLock, withOAuthProfileLocks } from "./oauth-profile-lock.js";
 import { isOAuthRefreshFence, isSameOAuthRefreshGeneration } from "./oauth-refresh-marker.js";
-import { loadPersistedAuthProfileStore, loadPersistedSharedAuthProfileStore } from "./persisted.js";
+import {
+  loadPersistedAuthProfileStore,
+  loadPersistedAuthProfileStoreAtDatabasePath,
+  loadPersistedSharedAuthProfileStore,
+} from "./persisted.js";
 import {
   deletePersistedAuthProfileStoreRaw,
   inspectPersistedAuthProfileStateRaw,
@@ -130,6 +135,8 @@ function supersedesOAuthRefreshGenerationObservedAtAdmission(params: {
 }
 
 type PersistAuthProfileBatchParams = {
+  /** Revalidate the calling operation after lock acquisition, at the write boundary. */
+  beforeWrite?: () => void;
   profiles: readonly {
     profileId: string;
     credential: AuthProfileCredential;
@@ -189,6 +196,7 @@ export async function persistAuthProfileBatch(
       const preparedOwner = runAuthProfileWriteTransaction(
         params.agentDir,
         (database, owner) => {
+          params.beforeWrite?.();
           storeWasAbsent =
             inspectPersistedAuthProfileStoreRaw(params.agentDir, database).status === "missing";
           stateWasAbsent =
@@ -338,6 +346,8 @@ export async function persistAuthProfileBatch(
 
 type AuthProfileUpsertParams = {
   profileId: string;
+  validateCurrentCredential?: (credential: AuthProfileCredential | undefined) => void;
+  preserveApiKeyMetadata?: boolean;
   credential: AuthProfileCredential;
   agentDir?: string;
   stateDir?: string;
@@ -351,7 +361,6 @@ export async function upsertAuthProfileWithLock(
   const observed = loadAuthProfileWriteAuthority(params, params.profileId);
   let rejectedFencedGeneration = false;
   const update = async () => {
-    const currentAuthority = loadAuthProfileWriteAuthority(params, params.profileId);
     return await updateAuthProfileStoreWithLock({
       agentDir: params.agentDir,
       sharedStoreWrite: true,
@@ -360,7 +369,17 @@ export async function upsertAuthProfileWithLock(
         filterExternalAuthProfiles: false,
         syncExternalCli: false,
       },
-      updater: (store) => {
+      updater: (store, owner) => {
+        const currentAuthority =
+          store.profiles[params.profileId] ??
+          (owner && owner.databasePath !== owner.sharedDatabasePath
+            ? loadPersistedAuthProfileStoreAtDatabasePath(
+                owner.sharedDatabasePath,
+                owner.location === "state-db" ? "shared-state" : "agent",
+              )?.profiles[params.profileId]
+            : undefined);
+        // Consumers can reject a changed profile kind under the same lock as the write.
+        params.validateCurrentCredential?.(store.profiles[params.profileId]);
         if (
           supersedesOAuthRefreshGenerationObservedAtAdmission({
             profileId: params.profileId,
@@ -378,7 +397,18 @@ export async function upsertAuthProfileWithLock(
           rejectedFencedGeneration = true;
           return false;
         }
-        store.profiles[params.profileId] = credential;
+        const existing = store.profiles[params.profileId];
+        if (
+          params.preserveApiKeyMetadata &&
+          existing?.type === "api_key" &&
+          credential.type === "api_key" &&
+          normalizeProviderId(existing.provider) === normalizeProviderId(credential.provider)
+        ) {
+          const { key: _key, keyRef: _keyRef, ...metadata } = existing;
+          store.profiles[params.profileId] = { ...metadata, ...credential };
+        } else {
+          store.profiles[params.profileId] = credential;
+        }
         return true;
       },
     });

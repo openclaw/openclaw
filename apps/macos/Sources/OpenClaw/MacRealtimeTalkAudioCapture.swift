@@ -1,4 +1,3 @@
-import AudioToolbox
 @preconcurrency import AVFoundation
 import CoreAudio
 import Foundation
@@ -125,7 +124,8 @@ final class MacRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
             try input.setVoiceProcessingEnabled(true)
         }
 
-        let activeResolution = self.bindSelectedInputIfNeeded(selection, to: input)
+        let activeResolution = AudioInputDeviceObserver.bindSelectedInputIfNeeded(
+            selection, to: input, logger: self.logger, context: "realtime")
         guard activeResolution.resolvedUID != nil else {
             throw MacRealtimeTalkAudioCaptureError.inputUnavailable
         }
@@ -153,46 +153,6 @@ final class MacRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
         engine.prepare()
         try engine.start()
         self.activeInputResolution = activeResolution
-    }
-
-    private func bindSelectedInputIfNeeded(
-        _ selection: AudioInputDeviceResolution,
-        to input: AVAudioInputNode) -> AudioInputDeviceResolution
-    {
-        guard selection.shouldBindSelectedDevice, let selectedUID = selection.resolvedUID else {
-            return selection
-        }
-        guard let audioUnit = input.audioUnit,
-              var deviceID = AudioInputDeviceObserver.inputDeviceID(forUID: selectedUID)
-        else {
-            self.logger.warning("realtime selected input could not be resolved; using system default")
-            return self.defaultFallback(for: selection)
-        }
-
-        let status = AudioUnitSetProperty(
-            audioUnit,
-            kAudioOutputUnitProperty_CurrentDevice,
-            kAudioUnitScope_Global,
-            0,
-            &deviceID,
-            UInt32(MemoryLayout<AudioObjectID>.size))
-        guard status == noErr else {
-            self.logger.warning(
-                "realtime selected input binding failed status=\(status); using system default")
-            return self.defaultFallback(for: selection)
-        }
-        self.logger.info(
-            "realtime selected input bound uid=\(selectedUID, privacy: .private(mask: .hash))")
-        return selection
-    }
-
-    private func defaultFallback(
-        for selection: AudioInputDeviceResolution) -> AudioInputDeviceResolution
-    {
-        AudioInputDeviceResolution(
-            selectedUID: selection.selectedUID,
-            resolvedUID: AudioInputDeviceObserver.resolveSelection(nil).resolvedUID,
-            fellBackToSystemDefault: selection.selectedUID != nil)
     }
 
     private func startDeviceObserver() {

@@ -1,5 +1,6 @@
 import type {
   TaskSummary,
+  TasksHistoryParams,
   TasksListParams,
 } from "../packages/gateway-protocol/src/schema/tasks.js";
 import type { ControlUiMockGateway } from "../ui/src/test-helpers/control-ui-e2e.ts";
@@ -52,6 +53,12 @@ export function buildBackgroundTasksMock(baseTime: number) {
   const taskSessionKey = "agent:openclaw-mock:subagent:mock-task-1";
   const requesterSessionKey = "agent:main:main";
   const cliSessionKey = "agent:main:production-export";
+  const cappedMessageId = "mock-task-full-reply";
+  const fullMessage = historyMessage(
+    "assistant",
+    "The task event reaches the detail panel through its task ID. The child session supplies the transcript.\n\n**Full reply recovered:** the activity feed loads capped replies with the child session and task agent, while keeping the preview visible until the complete message arrives.",
+    baseTime + 40 * 60_000 + 17_000,
+  );
   const tasks: TaskSummary[] = [
     {
       id: "task-mock-queued",
@@ -108,10 +115,17 @@ export function buildBackgroundTasksMock(baseTime: number) {
   ];
   return {
     tasks,
+    fullMessage: {
+      sessionKey: taskSessionKey,
+      agentId: "openclaw-mock",
+      messageId: cappedMessageId,
+      message: fullMessage,
+    },
     sessions: [taskSessionKey].map((key) => ({ key })),
     sessionTranscripts: {
       [taskSessionKey]: {
         messages: [
+          historyMessage("assistant", "Starting the run-status investigation.", baseTime),
           historyMessage(
             "user",
             "Map the run-status indicator code and report the active execution path.",
@@ -122,20 +136,114 @@ export function buildBackgroundTasksMock(baseTime: number) {
             "Tracing task events from the gateway through the chat background-tasks rail.",
             baseTime + 40 * 60_000 + 8_000,
           ),
-        ],
+          {
+            role: "assistant",
+            timestamp: baseTime + 40 * 60_000 + 9_000,
+            content: [
+              {
+                type: "toolCall",
+                id: "mock-typecheck",
+                name: "exec",
+                arguments: {
+                  command: "pnpm tsgo --project tsconfig.gateway.json",
+                },
+              },
+            ],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "mock-typecheck",
+            toolName: "exec",
+            content: [{ type: "text", text: "Typecheck passed." }],
+          },
+          historyMessage(
+            "assistant",
+            "The gateway types pass. Next I am checking the rail update path.",
+            baseTime + 40 * 60_000 + 12_000,
+          ),
+          {
+            role: "assistant",
+            timestamp: baseTime + 40 * 60_000 + 13_000,
+            content: [
+              {
+                type: "toolCall",
+                id: "mock-read",
+                name: "read",
+                arguments: {
+                  path: "ui/src/pages/chat/components/chat-task-detail.ts",
+                },
+              },
+            ],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "mock-read",
+            toolName: "read",
+            content: [{ type: "text", text: "Task detail renderer loaded." }],
+          },
+          {
+            role: "assistant",
+            timestamp: baseTime + 40 * 60_000 + 14_000,
+            content: [
+              {
+                type: "toolCall",
+                id: "mock-edit",
+                name: "edit",
+                arguments: {
+                  path: "ui/src/styles/chat/sidebar.css",
+                  oldText: "display: flex;",
+                  newText: "display: flex; flex-direction: column;",
+                },
+              },
+            ],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "mock-edit",
+            toolName: "edit",
+            content: [{ type: "text", text: "Updated task panel layout." }],
+          },
+          {
+            ...historyMessage(
+              "assistant",
+              "The task event reaches the detail panel through its task ID.\n...(truncated)...",
+              fullMessage.timestamp,
+            ),
+            __openclaw: { id: cappedMessageId, truncated: true, reason: "display-cap" },
+          },
+          historyMessage(
+            "assistant",
+            "Checking the narrow panel layout and history paging before reporting the result.",
+            baseTime + 40 * 60_000 + 20_000,
+          ),
+        ].map((message, index) =>
+          Object.assign(message, { messageId: `mock-task-message-${index}` }),
+        ),
         thinkingLevel: null,
       },
     },
   };
 }
 
-function installBackgroundTasksMock(seed: TaskSummary[]): void {
+function installBackgroundTasksMock(seed: ReturnType<typeof buildBackgroundTasksMock>): void {
   const gateway = (window as Window & { openclawControlUiE2eGateway?: ControlUiMockGateway })
     .openclawControlUiE2eGateway;
   if (!gateway) {
     return;
   }
-  const tasks = new Map(seed.map((task) => [task.id, task]));
+  const tasks = new Map(seed.tasks.map((task) => [task.id, task]));
+  const transcripts = new Map(Object.entries(seed.sessionTranscripts));
+  gateway.setRequestHandler("chat.message.get", ({ params: input, respond }) => {
+    const params = input as { sessionKey: string; agentId?: string; messageId: string };
+    const full = seed.fullMessage;
+    respond(
+      params.sessionKey === full.sessionKey &&
+        params.agentId === full.agentId &&
+        params.messageId === full.messageId
+        ? { ok: true, message: full.message }
+        : { ok: false, unavailableReason: "not_found" },
+    );
+  });
   gateway.setRequestHandler("tasks.list", ({ params: input, respond }) => {
     const params = (input ?? {}) as TasksListParams;
     const statuses = typeof params.status === "string" ? [params.status] : params.status;
@@ -153,6 +261,20 @@ function installBackgroundTasksMock(seed: TaskSummary[]): void {
     respond({
       tasks: rows.slice(offset, offset + limit),
       ...(offset + limit < rows.length ? { nextCursor: String(offset + limit) } : {}),
+    });
+  });
+  gateway.setRequestHandler("tasks.history", ({ params: input, respond }) => {
+    const params = input as TasksHistoryParams;
+    const task = tasks.get(params.taskId);
+    const messages = task?.childSessionKey
+      ? (transcripts.get(task.childSessionKey)?.messages ?? [])
+      : [];
+    const end = params.cursor ? Number(params.cursor) : messages.length;
+    // Keep one earlier page visible even when the client requests its full limit.
+    const start = Math.max(0, end - Math.min(params.limit ?? 11, 11));
+    respond({
+      messages: messages.slice(start, end),
+      ...(start > 0 ? { nextCursor: String(start) } : {}),
     });
   });
   gateway.setRequestHandler("tasks.get", ({ params: input, respond }) => {
@@ -195,5 +317,5 @@ function installBackgroundTasksMock(seed: TaskSummary[]): void {
 }
 
 export function backgroundTasksMockInitScript(baseTime: number): string {
-  return `(() => { const __name = (target) => target; (${installBackgroundTasksMock.toString()})(${JSON.stringify(buildBackgroundTasksMock(baseTime).tasks)}); })();`;
+  return `(() => { const __name = (target) => target; (${installBackgroundTasksMock.toString()})(${JSON.stringify(buildBackgroundTasksMock(baseTime))}); })();`;
 }

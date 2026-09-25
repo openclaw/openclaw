@@ -1,10 +1,11 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSnapshot } from "../../api/types.ts";
 import { loadConfig } from "./config-gateway-operations.ts";
 import { nextRequestVersion } from "./config-state-model.ts";
-import { createConfigCapabilityHarness, deferred } from "./config-test-harness.ts";
+import { createConfigCapabilityHarness } from "./config-test-harness.ts";
 
 function snapshot(count: number): ConfigSnapshot {
   return {
@@ -27,7 +28,7 @@ describe("external mutation config refresh", () => {
     async ({ order, failure }) => {
       const mutationRead = deferred<ConfigSnapshot>();
       const successorRead = deferred<ConfigSnapshot>();
-      const mutationReadStarted = deferred<void>();
+      const mutationReadStarted = deferred();
       let reads = 0;
       const request = vi.fn((method: string) => {
         if (method !== "config.get") {
@@ -92,7 +93,7 @@ describe("external mutation config refresh", () => {
     "ends a pending mutation refresh on %s without waiting for its transport reply",
     async (retirement) => {
       const pendingRead = deferred<ConfigSnapshot>();
-      const readStarted = deferred<void>();
+      const readStarted = deferred();
       let reads = 0;
       const request = vi.fn((method: string) => {
         if (method !== "config.get") {

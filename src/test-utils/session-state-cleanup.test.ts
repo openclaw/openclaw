@@ -4,49 +4,31 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { closeAuthProfileReadPool } from "../agents/auth-profiles/sqlite-read-pool.js";
+import { readPersistedAuthProfileStoreRaw } from "../agents/auth-profiles/sqlite.js";
 import { runExclusiveSqliteSessionWrite } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import { resetFileLockStateForTest } from "../infra/file-lock.js";
+import * as nodeSqlite from "../infra/node-sqlite.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import {
-  cleanupSessionStateForTest,
-  resetSessionStateCleanupRuntimeForTests,
-  setSessionStateCleanupRuntimeForTests,
-} from "./session-state-cleanup.js";
-
-const drainFileLockStateMock = vi.hoisted(() => vi.fn(async () => undefined));
-const drainSessionStoreWriterQueuesMock = vi.hoisted(() => vi.fn(async () => undefined));
-
-async function flushMicrotasks(rounds = 3): Promise<void> {
-  for (let index = 0; index < rounds; index += 1) {
-    await Promise.resolve();
-  }
-}
+import { cleanupSessionStateForTest } from "./session-state-cleanup.js";
 
 describe("cleanupSessionStateForTest", () => {
   beforeEach(() => {
     vi.useRealTimers();
     clearSessionStoreCacheForTest();
     resetFileLockStateForTest();
-    drainFileLockStateMock.mockClear();
-    drainSessionStoreWriterQueuesMock.mockClear();
-    setSessionStateCleanupRuntimeForTests({
-      drainFileLockStateForTest: drainFileLockStateMock,
-      drainSessionStoreWriterQueuesForTest: drainSessionStoreWriterQueuesMock,
-    });
   });
 
   afterEach(() => {
     vi.useRealTimers();
     clearSessionStoreCacheForTest();
     resetFileLockStateForTest();
-    resetSessionStateCleanupRuntimeForTests();
-    vi.restoreAllMocks();
   });
 
   it("waits for in-flight session store writer queues before clearing test state", async () => {
@@ -54,14 +36,7 @@ describe("cleanupSessionStateForTest", () => {
     const storePath = path.join(fixtureRoot, "openclaw-sessions.json");
     const started = createDeferred();
     const release = createDeferred();
-    const drainRequested = createDeferred();
-    let finishDrain: () => void = () => undefined;
-    drainSessionStoreWriterQueuesMock.mockImplementationOnce(async () => {
-      drainRequested.resolve();
-      await new Promise<void>((resolve) => {
-        finishDrain = resolve;
-      });
-    });
+    let cleanupPromise: Promise<void> | undefined;
     let running: Promise<void> | undefined;
     try {
       running = runExclusiveSessionStoreWrite(storePath, async () => {
@@ -72,26 +47,23 @@ describe("cleanupSessionStateForTest", () => {
       await started.promise;
 
       let settled = false;
-      const cleanupPromise = cleanupSessionStateForTest().then(() => {
+      cleanupPromise = cleanupSessionStateForTest().then(() => {
         settled = true;
       });
 
-      await drainRequested.promise;
-      await flushMicrotasks();
+      // An empty drain settles before this event-loop checkpoint.
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
       expect(settled).toBe(false);
-      expect(drainSessionStoreWriterQueuesMock).toHaveBeenCalledTimes(1);
-      expect(drainFileLockStateMock).not.toHaveBeenCalled();
 
       release.resolve();
       await running;
-      finishDrain();
       await cleanupPromise;
-
-      expect(drainFileLockStateMock).toHaveBeenCalledTimes(1);
     } finally {
       release.resolve();
-      finishDrain();
       await running?.catch(() => undefined);
+      await cleanupPromise;
       await cleanupSessionStateForTest();
       await fs.rm(fixtureRoot, { recursive: true, force: true });
     }
@@ -107,7 +79,6 @@ describe("cleanupSessionStateForTest", () => {
     const release = createDeferred();
     let database: ReturnType<typeof openOpenClawAgentDatabase> | undefined;
     let cleanupPromise: Promise<void> | undefined;
-    setSessionStateCleanupRuntimeForTests({ drainSessionStoreWriterQueuesForTest: null });
 
     const running = runExclusiveSqliteSessionWrite(
       { agentId: "main", env, path: databasePath },
@@ -116,6 +87,7 @@ describe("cleanupSessionStateForTest", () => {
         await release.promise;
         database = openOpenClawAgentDatabase({ agentId: "main", env, path: databasePath });
       },
+      "session.transcript.batch",
     );
     try {
       await started.promise;
@@ -142,6 +114,63 @@ describe("cleanupSessionStateForTest", () => {
       closeOpenClawAgentDatabasesForTest();
       closeOpenClawStateDatabaseForTest();
       await fs.rm(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("closes pooled auth readers only within the requested state root", async () => {
+    // openclaw-temp-dir: allow verifies state-root removal after scoped database cleanup
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-cleanup-auth-"));
+    const targets = ["state", "state-sibling"].map((name) => {
+      const stateDir = path.join(root, name);
+      const agentDir = path.join(stateDir, "agents", "main", "agent");
+      return { stateDir, agentDir, databasePath: path.join(agentDir, "openclaw-agent.sqlite") };
+    });
+    const readers = new Map<string, ReturnType<typeof nodeSqlite.openNodeSqliteDatabase>>();
+    const actualOpen = nodeSqlite.openNodeSqliteDatabase;
+    const observer = vi
+      .spyOn(nodeSqlite, "openNodeSqliteDatabase")
+      .mockImplementation((location, options) => {
+        const database = actualOpen(location, options);
+        if (options?.readOnly) {
+          readers.set(nodeSqlite.resolveSqliteFilesystemPath(location), database);
+        }
+        return database;
+      });
+    try {
+      for (const target of targets) {
+        openOpenClawAgentDatabase({
+          agentId: "main",
+          env: { ...process.env, OPENCLAW_STATE_DIR: target.stateDir },
+          path: target.databasePath,
+        });
+        expect(readPersistedAuthProfileStoreRaw(target.agentDir)).toBeNull();
+      }
+      const selected = readers.get(
+        nodeSqlite.resolveSqliteFilesystemPath(targets[0]!.databasePath),
+      );
+      const unrelated = readers.get(
+        nodeSqlite.resolveSqliteFilesystemPath(targets[1]!.databasePath),
+      );
+      if (!selected || !unrelated) {
+        throw new Error("expected both real pooled auth readers");
+      }
+      await cleanupSessionStateForTest();
+      expect(selected.isOpen).toBe(true);
+      expect(unrelated.isOpen).toBe(true);
+
+      await cleanupSessionStateForTest({ stateDir: targets[0]!.stateDir });
+      expect(selected.isOpen).toBe(false);
+      expect(unrelated.isOpen).toBe(true);
+      await fs.rm(targets[0]!.stateDir, { recursive: true, force: true });
+      await expect(fs.stat(targets[0]!.stateDir)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      observer.mockRestore();
+      // Close retained readers on the original implementation before removing fixtures.
+      for (const target of targets) {
+        closeAuthProfileReadPool({ kind: "root", rootPath: target.stateDir });
+        await cleanupSessionStateForTest({ stateDir: target.stateDir });
+      }
+      await fs.rm(root, { recursive: true, force: true });
     }
   });
 });

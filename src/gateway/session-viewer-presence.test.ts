@@ -121,15 +121,20 @@ function recipient(scopes = ["operator.admin"]): GatewayClient {
   };
 }
 
-async function seedColdStore(count: number): Promise<string[]> {
+async function seedColdStore(count: number, prompt = ""): Promise<string[]> {
   const keys = Array.from({ length: count }, (_, index) => `agent:main:presence-${index}`);
   for (const [index, sessionKey] of keys.entries()) {
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey },
-      { sessionId: `presence-${index}`, updatedAt: 1, visibility: "shared" },
+      {
+        sessionId: `presence-${index}`,
+        updatedAt: 1,
+        visibility: "shared",
+        skillsSnapshot: { prompt, skills: [] },
+      },
     );
   }
-  // Fresh read-only handles expose repeated admission work hidden by a warm writer.
+  // Close the native handle while preserving its unchanged physical database validation.
   expect(
     closeOpenClawAgentDatabaseByPath(resolveOpenClawAgentSqlitePath({ agentId: "main" })),
   ).toBe(true);
@@ -137,29 +142,41 @@ async function seedColdStore(count: number): Promise<string[]> {
 }
 
 describe("presence projection store admission", () => {
-  it("bounds a cold fanout to one metadata census per store, including repeated watches and recipients", async () => {
+  it("reuses physical validation for cold fanout, including repeated watches and recipients", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const watchedSessions = (await seedColdStore(64)).slice(0, 8);
+      const prompt = "unused presence prompt ".repeat(4096);
+      const watchedSessions = (await seedColdStore(64, prompt)).slice(0, 8);
       const presence = [
         { text: "first watcher", ts: 1, watchedSessions },
         { text: "second watcher", ts: 2, watchedSessions: [...watchedSessions] },
       ];
       const { DatabaseSync } = requireNodeSqlite();
       const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
+      const parse = JSON.parse;
+      let decodedPromptBytes = 0;
+      const parsed = vi.spyOn(JSON, "parse").mockImplementation((value, reviver) => {
+        if (typeof value === "string" && value.includes(prompt)) {
+          decodedPromptBytes += Buffer.byteLength(value);
+        }
+        return parse(value, reviver);
+      });
       try {
         const project = createPresenceRecipientProjection({ cfg: {}, presence });
         expect(project(recipient())).toEqual(presence);
+        expect(decodedPromptBytes).toBe(0);
         // Observe real unbounded session reads, without replacing the canonical
         // validator or exact reader. Selected-row queries contain a WHERE clause.
         const censuses = prepare.mock.calls.filter(([sql]) => {
           const normalized = sql.toLowerCase().replaceAll(/\s+/g, " ");
           return normalized.includes('from "session_nodes"') && !normalized.includes(" where ");
         });
-        expect(censuses).toHaveLength(1);
+        expect(censuses).toHaveLength(0);
         const preparedQueries = prepare.mock.calls.length;
         expect(project(recipient())).toEqual(presence);
         expect(prepare).toHaveBeenCalledTimes(preparedQueries);
+        expect(decodedPromptBytes).toBe(0);
       } finally {
+        parsed.mockRestore();
         prepare.mockRestore();
       }
     });

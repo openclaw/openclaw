@@ -66,7 +66,7 @@ const mocks = vi.hoisted(() => {
     collectDiscordAuditChannelIds: vi.fn(() => ({ channelIds: [], unresolvedChannels: [] })),
     editDiscordComponentMessage: vi.fn(async () => componentEditResult),
     listThreadBindingsBySessionKey: vi.fn(() => []),
-    registerBuiltDiscordComponentMessage: vi.fn(),
+    registerBuiltDiscordComponentMessage: vi.fn().mockResolvedValue(undefined),
     unbindThreadBindingsBySessionKey: vi.fn(() => []),
   };
 
@@ -158,7 +158,7 @@ describe("discord plugin-sdk facade", () => {
       { text: "edited" },
       { cfg: mocks.runtimeConfig },
     );
-    registerBuiltDiscordComponentMessage({
+    await registerBuiltDiscordComponentMessage({
       buildResult: built,
       messageId: "message",
     });

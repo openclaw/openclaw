@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { createZeroUsage } from "../usage.test-support.js";
 import { processCompletionsStream } from "./openai-completions-stream.js";
 import {
   createAssistantOutput,
@@ -19,16 +18,7 @@ describe("openai completions stream", () => {
       contextWindow: 1000000,
     });
 
-    const output = {
-      role: "assistant" as const,
-      content: [],
-      api: model.api,
-      provider: model.provider,
-      model: model.id,
-      usage: createZeroUsage(),
-      stopReason: "stop" as const,
-      timestamp: Date.now(),
-    };
+    const output = createAssistantOutput(model);
 
     const stream = {
       push: () => {},
@@ -40,13 +30,7 @@ describe("openai completions stream", () => {
       makeCompletionsChunk({ tool_calls: [] as never[] }, "tool_calls" as const),
     ] as const;
 
-    async function* mockStream() {
-      for (const chunk of mockChunks) {
-        yield chunk as never;
-      }
-    }
-
-    await processCompletionsStream(mockStream(), output, model, stream);
+    await processCompletionsStream(streamChunks(mockChunks), output, model, stream);
 
     expect(output.stopReason).toBe("stop");
     expect(

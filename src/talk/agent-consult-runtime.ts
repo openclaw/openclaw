@@ -8,6 +8,7 @@ import {
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
 import type { EmbeddedAgentRunMeta } from "../agents/embedded-agent-runner/types.js";
+import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import type { ReplyToolAuthorityOverlay } from "../auto-reply/reply/reply-run-registry.contracts.js";
 import {
   buildSessionCreationStamp,
@@ -19,8 +20,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeLogger, PluginRuntimeCore } from "../plugins/runtime/types-core.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { isModelSelectionLocked, ModelSelectionLockedError } from "../sessions/model-overrides.js";
+import { deliveryContextFromSession } from "../utils/delivery-context.read.js";
 import {
-  deliveryContextFromSession,
   hasDeliveryTargetFields,
   normalizeDeliveryContext,
   normalizeSessionDeliveryState,
@@ -92,12 +93,14 @@ export function assertRealtimeVoiceAgentConsultModelSelectionUnlocked(params: {
 
   remember(params.sessionKey, params.agentId, params.storePath);
   const requesterSessionKey = params.spawnedBy?.trim();
-  if (requesterSessionKey) {
-    const requesterAgentId = parseAgentSessionKey(requesterSessionKey)?.agentId ?? params.agentId;
-    remember(requesterSessionKey, requesterAgentId);
+  const requesterAgentId = parseAgentSessionKey(requesterSessionKey)?.agentId;
+  const targetAgentId = parseAgentSessionKey(params.sessionKey)?.agentId ?? params.agentId;
+  if (requesterSessionKey && (!requesterAgentId || requesterAgentId === targetAgentId)) {
+    const requesterAgent = requesterAgentId ?? params.agentId;
+    remember(requesterSessionKey, requesterAgent);
     const { baseSessionKey } = parseSessionThreadInfoFast(requesterSessionKey);
     if (baseSessionKey && baseSessionKey !== requesterSessionKey) {
-      remember(baseSessionKey, requesterAgentId);
+      remember(baseSessionKey, requesterAgent);
     }
   }
 
@@ -480,7 +483,7 @@ export async function consultRealtimeVoiceAgent(params: {
       const sessionId = sessionEntry.sessionId;
       assertRealtimeVoiceAgentConsultModelSelectionUnlocked(modelLockParams);
 
-      const runId = `${params.runIdPrefix}:${Date.now()}:${randomUUID()}`;
+      const runId = `${params.runIdPrefix}-${randomUUID()}`;
       const timeoutMs =
         params.timeoutMs ?? params.agentRuntime.resolveAgentTimeoutMs({ cfg: params.cfg });
       const runRegistration = params.onRunStarted?.({ runId, sessionId, timeoutMs });
@@ -528,6 +531,8 @@ export async function consultRealtimeVoiceAgent(params: {
         verboseLevel: "off",
         reasoningLevel: "off",
         toolResultFormat: "plain",
+        execSession: sessionEntry,
+        toolsAllow: params.toolsAllow,
         timeoutMs,
         runId,
         lane: params.lane,
@@ -558,7 +563,11 @@ export async function consultRealtimeVoiceAgent(params: {
           yielded: true,
         };
       }
-      const text = collectRealtimeVoiceAgentConsultVisibleText(result.payloads ?? []);
+      // Earlier input answers remain in history; this completion speaks for the current input.
+      const currentInputPayloads = (result.payloads ?? []).filter(
+        (payload) => getReplyPayloadMetadata(payload)?.precedingInputAnswer !== true,
+      );
+      const text = collectRealtimeVoiceAgentConsultVisibleText(currentInputPayloads);
       if (!text) {
         params.logger.warn(
           "[talk] agent consult produced no answer: agent returned no speakable text",

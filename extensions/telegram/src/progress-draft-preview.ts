@@ -6,7 +6,7 @@ import {
   type ChannelProgressDraftCompositorLine,
   type ChannelProgressDraftCompositorSnapshot,
 } from "openclaw/plugin-sdk/channel-outbound";
-import type { TelegramDraftPreview } from "./draft-stream.js";
+import type { TelegramDraftPreview } from "./draft-stream-message.js";
 import { escapeTelegramHtml, renderTelegramHtmlText } from "./format.js";
 import {
   boldRichText,
@@ -18,11 +18,25 @@ import {
 import { markdownToTelegramRichBlocks } from "./rich-blocks.js";
 import { buildTelegramRichBlocksPlan } from "./rich-message.js";
 
+function isTelegramProgressPriorityLine(line: ChannelProgressDraftCompositorLine): boolean {
+  if (typeof line === "string") {
+    return false;
+  }
+  const status = line.status?.toLowerCase();
+  return (
+    line.kind === "approval" || status === "failed" || status === "error" || status === "blocked"
+  );
+}
+
 // Each row has one content decision; both Telegram transports use that row.
 type ProgressText = { html: string; rich: RichText };
 
-function literalProgressText(text: string, style?: "bold" | "italic"): ProgressText {
+function literalProgressText(text: string, style?: "bold" | "italic" | "code"): ProgressText {
   const escaped = escapeTelegramHtml(text);
+  if (style === "code") {
+    // Telegram also detects bare URLs in HTML text; code entities keep prepared notes inert.
+    return { html: `<code>${escaped}</code>`, rich: { type: "code", text } };
+  }
   return style === "bold"
     ? { html: `<b>${escaped}</b>`, rich: boldRichText(text) }
     : style === "italic"
@@ -60,7 +74,7 @@ function progressLineText(
   const detail = line.detail && line.detail !== line.label ? line.detail : undefined;
   if (detail) {
     parts.push(literalProgressText(compact(detail)));
-  } else if (line.text.trim() && line.text.trim() !== label) {
+  } else if (!line.toolName && line.text.trim() && line.text.trim() !== label) {
     parts.push(literalProgressText(compact(line.text)));
   }
   if (line.status && line.status !== "completed" && line.status !== line.detail) {
@@ -71,25 +85,25 @@ function progressLineText(
 
 export function renderTelegramProgressDraftPreview(
   snapshot: ChannelProgressDraftCompositorSnapshot,
-  options: { richMessages: boolean; maxLines: number; maxLineChars: number },
+  options: { richMessages: boolean; maxLines: number; maxLineChars: number; toolProgress: boolean },
 ): TelegramDraftPreview {
   const { maxLines, maxLineChars } = options;
   const activity =
     snapshot.statusHeadline || snapshot.plan?.length
       ? snapshot.lines.filter(
-          (line) =>
-            typeof line !== "string" &&
-            !line.id?.startsWith("reasoning:") &&
-            !line.id?.startsWith("commentary:"),
+          (line) => typeof line !== "string" && !line.id?.startsWith("reasoning:"),
         )
       : snapshot.lines;
-  const attention = activity.filter(isChannelProgressAttentionLine);
+  const isPriorityLine = options.toolProgress
+    ? isTelegramProgressPriorityLine
+    : isChannelProgressAttentionLine;
+  const attention = activity.filter(isPriorityLine);
   const checklist = selectPlanChecklistSteps(snapshot.plan ?? [], {
     maxLines: maxLines - attention.length,
   });
   const checklistLines = checklist.steps.length + (checklist.summary ? 1 : 0);
   const lineBudget = Math.max(0, maxLines - checklistLines);
-  const lines = [...activity.filter((line) => !isChannelProgressAttentionLine(line)), ...attention];
+  const lines = [...activity.filter((line) => !isPriorityLine(line)), ...attention];
   const visibleLines = lineBudget ? lines.slice(-lineBudget) : [];
   const diffStat =
     visibleLines.length + checklistLines < maxLines
@@ -109,11 +123,11 @@ export function renderTelegramProgressDraftPreview(
     addParagraph(literalProgressText(compactChannelProgressDraftLine(label, maxLineChars), "bold"));
   }
   if (snapshot.statusHeadline) {
-    const status = markdownProgressText(
-      compactChannelProgressDraftLine(snapshot.statusHeadline, maxLineChars),
-    );
+    const text = compactChannelProgressDraftLine(snapshot.statusHeadline, maxLineChars);
+    const plain = snapshot.statusHeadlineFormat === "plain";
+    const status = plain ? literalProgressText(text, "code") : markdownProgressText(text);
     addParagraph(
-      label
+      label || plain
         ? status
         : {
             html: `<b>${status.html}</b>`,

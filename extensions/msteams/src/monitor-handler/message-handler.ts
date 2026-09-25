@@ -4,11 +4,8 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound";
 import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
-import {
-  DEFAULT_GROUP_HISTORY_LIMIT,
-  createChannelHistoryWindow,
-  type HistoryEntry,
-} from "openclaw/plugin-sdk/reply-history";
+import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
+import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { formatUnknownError } from "../errors.js";
@@ -53,11 +50,8 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     cfg,
     channel: "msteams",
   });
-  const historyLimit = Math.max(
-    0,
-    msteamsCfg?.historyLimit ??
-      cfg.messages?.groupChat?.historyLimit ??
-      DEFAULT_GROUP_HISTORY_LIMIT,
+  const historyLimit = resolvePromptHistoryLimit(
+    msteamsCfg?.historyLimit ?? cfg.messages?.groupChat?.historyLimit,
   );
   const conversationHistories = new Map<string, HistoryEntry[]>();
   const readConfig = createRuntimeConfigReader(cfg);
@@ -65,7 +59,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     core.channel.debounce.resolveInboundDebounceMs({ cfg: readConfig(), channel: "msteams" });
 
   const handleTeamsMessageNow = async (params: MSTeamsDebounceEntry) => {
-    const facts = assembleMSTeamsInboundFacts({ entry: params, mediaMaxBytes });
+    const facts = assembleMSTeamsInboundFacts(params);
     const {
       context,
       activity,
@@ -220,7 +214,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         if (historyBody) {
           enqueuePrimaryMessageSystemEvent();
           createChannelHistoryWindow({ historyMap: conversationHistories }).record({
-            historyKey: conversationId,
+            historyKey: facts.historyKey,
             limit: historyLimit,
             entry: {
               sender: senderName,

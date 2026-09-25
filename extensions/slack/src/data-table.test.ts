@@ -224,5 +224,15 @@ describe("Slack data table blocks", () => {
         rows: [],
       }),
     ).toBe("Provider table");
+    const sparseHeader: unknown[] = [];
+    sparseHeader.length = 1;
+    const malformedTable = {
+      type: "data_table",
+      caption: "Sparse header",
+      rows: [sparseHeader, [{ type: "raw_text", text: "value" }]],
+    };
+    expect(renderSlackDataTableFallbackText(malformedTable)).toBe("Sparse header");
+    expect(renderSlackDataTableCompactPlainTextFallback(malformedTable)).toBe("Sparse header");
+    expect(countSlackDataTableCellCharacters(malformedTable)).toBeUndefined();
   });
 });

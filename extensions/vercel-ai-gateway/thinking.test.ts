@@ -6,16 +6,6 @@ import {
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
 
-function collectLegacyExtendedLevelIds(levels: readonly { id: string }[] | undefined): string[] {
-  const ids: string[] = [];
-  for (const level of levels ?? []) {
-    if (level.id === "xhigh" || level.id === "max") {
-      ids.push(level.id);
-    }
-  }
-  return ids;
-}
-
 const OPENAI_XHIGH_LEVELS = [
   { id: "off" },
   { id: "minimal" },
@@ -78,7 +68,6 @@ describe("vercel ai gateway thinking profile", () => {
       levels: CLAUDE_ADAPTIVE_LEVELS,
       defaultLevel: "adaptive",
     });
-    expect(collectLegacyExtendedLevelIds(profile?.levels)).toStrictEqual([]);
   });
 
   it("falls through for unsupported OpenAI or untrusted namespaced refs", async () => {

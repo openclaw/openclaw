@@ -39,8 +39,8 @@ describe("session route navigation handoffs", () => {
         sessionKey: storedRow.key,
         agentId: "roboclaw",
         canonicalLocation: {
-          // Canonicalizes to the same short reference every other surface links to.
-          pathname: `/${face}/roboclaw/default-mode-with-rare-surprises-12345678`,
+          // Canonicalizes to the same full UUID reference as other generated links.
+          pathname: `/${face}/roboclaw/default-mode-with-rare-surprises-1234567890abcdef1234567890abcdef`,
         },
       });
       if (!("kind" in loaded) || loaded.kind !== "session" || !loaded.canonicalLocation) {

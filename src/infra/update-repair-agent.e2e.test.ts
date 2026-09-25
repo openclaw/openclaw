@@ -1,7 +1,9 @@
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import type { ServerResponse } from "node:http";
 import path from "node:path";
 import { text as readText } from "node:stream/consumers";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { describe, expect, it, vi } from "vitest";
 import {
   writeOpenAiResponsesSse,
@@ -10,17 +12,105 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { prepareUnattendedUpdateRepair } from "./update-repair-agent.js";
-import { createUpdateRun, getUpdateRun, recordUpdateRunPhase } from "./update-run-ledger.js";
+import { installationTargetEnv } from "./installation-target-context.js";
+import { updateRepairWorkerMessageSchema } from "./test-fixtures/update-repair-protocol.v2026-9-4.js";
+import { runUpdateRepairLoop } from "./update-repair-agent.js";
+import {
+  updateRepairBudgetSchema,
+  type UpdateRepairParams,
+  type UpdateRepairResult,
+} from "./update-repair-protocol.js";
+import { createUpdateRun, finishUpdateRun, getUpdateRun } from "./update-run-ledger.js";
 
-// Exercise the built runtime through Node's loader; Vitest's source-module graph
-// stalls inside agent command execution before the synthetic provider is called.
+// Manual triage retains the shared in-process loop. Load its built runtime through
+// Node's loader, as the CLI does; worker cases already use the packaged child.
 vi.mock("./update-repair-agent.runtime.js", async () => {
   const { createRequire } = await import("node:module");
   return createRequire(import.meta.url)(
     "../../dist/update-repair-agent.runtime.js",
   ) as typeof import("./update-repair-agent.runtime.js");
 });
+
+async function runReleasedParentRepair(params: UpdateRepairParams): Promise<UpdateRepairResult> {
+  const child = spawn(
+    process.execPath,
+    [path.join(params.target.installRoot, "dist", "infra", "update-repair.worker.js")],
+    {
+      cwd: params.target.installRoot,
+      env: {
+        ...process.env,
+        NODE_DISABLE_COMPILE_CACHE: "1",
+        ...installationTargetEnv({
+          stateDir: params.target.stateDir,
+          configPath: params.target.configPath,
+          defaultWorkspaceDir: params.target.workspaceDir,
+        }),
+      },
+      stdio: ["ignore", "ignore", "ignore", "ipc"],
+    },
+  );
+  const controller = new AbortController();
+  let failure: unknown;
+  let result: UpdateRepairResult | undefined;
+  const timer = setTimeout(() => {
+    failure = new Error("Released-parent worker timed out.");
+    controller.abort(failure);
+    child.kill("SIGKILL");
+  }, 90_000);
+  try {
+    return await new Promise((resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", (code) => {
+        if (code === 0 && result && !failure) {
+          resolve(result);
+        } else {
+          reject(toErrorObject(failure, `Released-parent worker exited ${code}.`));
+        }
+      });
+      child.on("message", (raw) => {
+        void (async () => {
+          const message = updateRepairWorkerMessageSchema.parse(raw);
+          if (message.type === "ready") {
+            const {
+              phase: _phase,
+              beforeVersion,
+              targetVersion,
+              symptoms,
+              ...context
+            } = params.context;
+            // v2026.9.4 sends neither an authority object nor context.phase after
+            // activation. The candidate must defer both released message shapes.
+            child.send({
+              type: "start",
+              runId: "released-update-run",
+              requester: { channel: "synthetic", senderId: "owner" },
+              target: params.target,
+              failure: context,
+              context: {
+                ...(params.context.phase === "validating" ? { phase: "validating" } : {}),
+                beforeVersion,
+                targetVersion,
+                symptoms,
+              },
+              budget: updateRepairBudgetSchema.parse(params.budget),
+            });
+          } else if (message.type === "validate") {
+            const validation = await params.validate(controller.signal);
+            child.send({ type: "validation-result", id: message.id, validation });
+          } else if (message.type === "result") {
+            result = message.result;
+          }
+        })().catch((error: unknown) => {
+          failure = error;
+          controller.abort(error);
+          child.kill("SIGKILL");
+        });
+      });
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 type ModelRequest = {
   model?: string;
@@ -70,18 +160,24 @@ function writeRepairToolCall(response: ServerResponse, name: "exec" | "write"): 
 }
 
 describe("update repair with a local model provider", () => {
-  it.each(["validating", "verifying"] as const)(
-    "runs host exec on the pinned target during %s",
-    async (phase) => {
+  it.each([
+    { phase: "validating", entry: "released-parent" },
+    { phase: "verifying", entry: "released-parent" },
+    { phase: "verifying", entry: "manual" },
+  ] as const)(
+    "defers published update inference and scopes manual post-failure repair ($entry, $phase)",
+    async ({ phase, entry }) => {
       await withOpenClawTestState(
         { prefix: "update-repair-boundary-", layout: "home" },
         async (state) => {
           const requests: ModelRequest[] = [];
+          const providerCalls: string[] = [];
           const errors: unknown[] = [];
           let issuedRepair = false;
           let issuedScopeProbe = false;
           await withServer(
             (request, response) => {
+              providerCalls.push(`${request.method} ${request.url}`);
               void (async () => {
                 if (request.method === "GET" && request.url === "/v1/models") {
                   response.writeHead(200, { "content-type": "application/json" });
@@ -119,6 +215,7 @@ describe("update repair with a local model provider", () => {
             async (baseUrl) => {
               const modelRef = "repair-test/repair-model";
               const config: OpenClawConfig = {
+                commands: { ownerAllowFrom: ["owner"] },
                 plugins: { slots: { memory: "none" } },
                 tools: { exec: { mode: "ask", safeBins: ["cat"] }, fs: { workspaceOnly: false } },
                 agents: {
@@ -157,29 +254,48 @@ describe("update repair with a local model provider", () => {
               };
               await state.writeConfig(config);
               const marker = path.join(state.workspaceDir, "repair-proof.txt");
-              const expected = `${state.stateDir} 0 0 external`;
+              const targetStateDir =
+                phase === "validating" ? state.path("rehearsal") : state.stateDir;
+              const targetConfigPath =
+                phase === "validating"
+                  ? path.join(targetStateDir, "openclaw.json")
+                  : state.configPath;
+              if (phase === "validating") {
+                await fs.mkdir(targetStateDir, { recursive: true });
+                await fs.writeFile(targetConfigPath, JSON.stringify(config));
+              }
+              const expected = `${targetStateDir} 0 0 external`;
               const ledgerEnv = { ...process.env };
-              const run = createUpdateRun({ trigger: "cli" }, { env: ledgerEnv });
-              recordUpdateRunPhase(run.runId, "repairing", undefined, { env: ledgerEnv });
-              if (phase === "verifying") {
-                await fs.symlink(
-                  path.join(process.cwd(), "dist"),
-                  path.join(state.workspaceDir, "dist"),
-                  "dir",
+              const run =
+                entry === "manual"
+                  ? createUpdateRun({ trigger: "cli" }, { env: ledgerEnv })
+                  : undefined;
+              if (run) {
+                finishUpdateRun(
+                  run.runId,
+                  { status: "failed", reason: "Synthetic startup failure" },
+                  { env: ledgerEnv },
                 );
               }
-              const result = await prepareUnattendedUpdateRepair({
-                runId: run.runId,
-                isCurrent: () => getUpdateRun(run.runId, { env: ledgerEnv })?.status === "running",
+              // The released parent may target a copied rehearsal or omit context.phase.
+              await fs.symlink(
+                path.join(process.cwd(), "dist"),
+                path.join(state.workspaceDir, "dist"),
+                "dir",
+              );
+              const params: UpdateRepairParams = {
+                isCurrent: run
+                  ? () => getUpdateRun(run.runId, { env: ledgerEnv })?.status === "failed"
+                  : undefined,
                 target: {
-                  stateDir: state.stateDir,
-                  configPath: state.configPath,
+                  stateDir: targetStateDir,
+                  configPath: targetConfigPath,
                   workspaceDir: state.workspaceDir,
                   installRoot: state.workspaceDir,
                 },
                 context: { error: "Synthetic repair marker is missing.", phase },
                 budget: { maxTurns: 1, wallClockMs: 90_000, perTurnMs: 60_000, maxToolCalls: 2 },
-                validate: async () => {
+                validate: vi.fn(async () => {
                   const text = await fs.readFile(marker, "utf8").catch(() => "");
                   const ok = text === expected;
                   return {
@@ -187,10 +303,28 @@ describe("update repair with a local model provider", () => {
                     score: ok ? 1 : 0,
                     summary: ok ? "Target marker verified." : "Target marker absent.",
                   };
-                },
-              });
+                }),
+              };
+              const result =
+                entry === "released-parent"
+                  ? await runReleasedParentRepair(params)
+                  : await runUpdateRepairLoop(params);
 
               expect(errors).toEqual([]);
+              if (entry === "released-parent") {
+                expect(result).toMatchObject({
+                  status: "unavailable",
+                  reason:
+                    "Inference repair is deferred until after the update has failed. Updates do not require inference.",
+                  attempts: [],
+                  finalValidation: { ok: false },
+                });
+                expect(params.validate).not.toHaveBeenCalled();
+                expect(providerCalls).toEqual([]);
+                await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
+                expect(JSON.parse(await fs.readFile(targetConfigPath, "utf8"))).toEqual(config);
+                return;
+              }
               expect(result, JSON.stringify(result)).toMatchObject({
                 status: "repaired",
                 finalValidation: { ok: true, score: 1 },

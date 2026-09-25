@@ -27,6 +27,7 @@ import { markSessionTranscriptIndexDirtyInTransaction } from "../../config/sessi
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createWorkerSessionPlacementStore } from "../../gateway/worker-environments/placement-store.js";
+import { seedAttachedPlacementEnvironment } from "../../gateway/worker-environments/placement-test-fixtures.js";
 import { readCodexSessionTranscriptEventsBeforeAdmission } from "../../plugin-sdk/codex-session-transcript-runtime.js";
 import { readSessionTranscriptVisibleMessageDelta } from "../../plugin-sdk/session-transcript-runtime.js";
 import { onInternalSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
@@ -42,6 +43,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeMessagesForLlmBoundary } from "../embedded-agent-runner/run/attempt-llm-boundary.js";
 import { convertToLlm } from "../sessions/messages.js";
@@ -394,7 +396,7 @@ describe("host-owned current admission annotation", () => {
             .all(f.target.sessionId);
         const searchBefore = searchRows();
         const projectionWork = trackSqliteStatementExecutions(db, ["fts", "size"], (sql) =>
-          sql.includes("session_transcript_fts")
+          /\bsession_transcript_fts\b/i.test(sql)
             ? "fts"
             : sql.includes("octet_length")
               ? "size"
@@ -631,6 +633,7 @@ describe("host-owned current admission annotation", () => {
           entered.resolve();
           await release.promise;
         },
+        "session.transcript.batch",
       );
       await entered.promise;
       const updates = vi.fn();
@@ -681,6 +684,11 @@ describe("host-owned current admission annotation", () => {
   it("revalidates the captured host-owned worker claim inside the write transaction", async () => {
     await withAdmission(async (f) => {
       const placements = createWorkerSessionPlacementStore();
+      seedAttachedPlacementEnvironment(openOpenClawStateDatabase(), {
+        environmentId: "annotation-worker",
+        sessionId: f.target.sessionId,
+        ownerEpoch: 7,
+      });
       let placement = placements.startDispatch(f.target);
       placement = placements.transition({
         sessionId: f.target.sessionId,
@@ -742,6 +750,7 @@ describe("host-owned current admission annotation", () => {
           entered.resolve();
           await release.promise;
         },
+        "session.transcript.batch",
       );
       await entered.promise;
       const refused = expect(
@@ -846,7 +855,7 @@ describe("host-owned current admission annotation", () => {
     );
   });
 
-  it.each(["unpersisted", "suppressed", "internal", "copied"] as const)(
+  it.each(["unpersisted", "suppressed", "excluded", "copied"] as const)(
     "does not issue current-row authority for %s recorders",
     async (kind) => {
       await withAdmission(
@@ -872,7 +881,10 @@ describe("host-owned current admission annotation", () => {
         {
           persist: kind !== "unpersisted",
           suppress: kind === "suppressed",
-          input: kind === "internal" ? { display: false, text: "prompt" } : undefined,
+          input:
+            kind === "excluded"
+              ? { display: false, excludeFromContext: true, text: "prompt" }
+              : undefined,
         },
       );
     },

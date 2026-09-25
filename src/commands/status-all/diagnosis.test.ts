@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { ProgressReporter } from "../../cli/progress.js";
-import { buildWorkspaceSkillStatus } from "../../skills/discovery/status.js";
+import { buildWorkspaceSkillReadiness } from "../../skills/discovery/status.js";
 import { createCanonicalFixtureSkill } from "../../skills/test-support/test-helpers.js";
 
 type GatewayLogPaths = {
@@ -79,14 +79,9 @@ function createBaseParams(
     port: 18789,
     portUsage: { port: 18789, status: "busy", listeners, hints: [] },
     tailscaleMode: "off",
-    tailscale: {
-      backendState: null,
-      dnsName: null,
-      ips: [],
-      error: null,
-    },
+    tailscaleDns: null,
     tailscaleHttpsUrl: null,
-    skillStatus: null,
+    skillReadiness: null,
     pluginCompatibility: [],
     channelsStatus: null,
     channelIssues: [],
@@ -167,7 +162,7 @@ describe("status-all diagnosis port checks", () => {
     const workspaceDir = tempDirs.make("openclaw-status-skills-");
     const baseDir = path.join(workspaceDir, "skills", "fixture");
     const params = createBaseParams([]);
-    params.skillStatus = buildWorkspaceSkillStatus(workspaceDir, {
+    params.skillReadiness = buildWorkspaceSkillReadiness(workspaceDir, {
       managedSkillsDir: path.join(workspaceDir, "managed"),
       agentId: "qa",
       config: {
@@ -259,15 +254,14 @@ describe("status-all diagnosis port checks", () => {
     expect(output).toContain("Pasteable debug report. Auth tokens redacted.");
   });
 
-  it("labels OpenClaw Tailscale exposure separately from daemon state", async () => {
+  it("keeps DNS context while daemon state remains unobserved", async () => {
     const params = createBaseParams([]);
-    params.tailscale.backendState = "Running";
-    params.tailscale.dnsName = "box.tail.ts.net";
+    params.tailscaleDns = "box.tail.ts.net";
 
     await appendStatusAllDiagnosis(params);
 
     const output = params.lines.join("\n");
-    expect(output).toContain("✓ Tailscale exposure: off · daemon Running · box.tail.ts.net");
+    expect(output).toContain("✓ Tailscale exposure: off · daemon unknown · box.tail.ts.net");
     expect(output).not.toContain("Tailscale: off");
   });
 
@@ -583,7 +577,6 @@ describe("status-all diagnosis port checks", () => {
       "Local gateway: not expected on this machine",
       "Remote gateway target: gateway.example.com:19000",
     ].join("\n");
-    params.tailscale.backendState = "Running";
     params.health = undefined;
     params.nodeOnlyGateway = {
       gatewayTarget: "gateway.example.com:19000",
@@ -615,6 +608,17 @@ describe("status-all diagnosis port checks", () => {
     expect(output).not.toContain("Inbound delivery telemetry: unavailable");
     expect(output).not.toContain("Telemetry exporters: unavailable");
     expect(output).not.toContain("Retry: openclaw gateway stability");
+  });
+
+  it("preserves startup phase in channel diagnosis", async () => {
+    const params = createBaseParams([]);
+    params.gatewayStartupPhase = "plugins";
+    await appendStatusAllDiagnosis(params);
+
+    const output = params.lines.join("\n");
+    expect(output).toContain("Channel issues skipped (gateway still starting (phase plugins))");
+    expect(output).not.toContain("gateway unreachable");
+    expect(output).not.toContain("Gateway health:");
   });
 
   it("does not read or display stale stderr tails on Darwin", async () => {

@@ -7,15 +7,17 @@ import {
 } from "./code-mode-control-tools.js";
 import type { AgentTool } from "./runtime/index.js";
 
-const { createHashCalls } = vi.hoisted(() => ({ createHashCalls: { count: 0 } }));
+const { digestCalls } = vi.hoisted(() => ({ digestCalls: { count: 0 } }));
 
-vi.mock("node:crypto", async () => {
-  const actual = await vi.importActual<typeof import("node:crypto")>("node:crypto");
+vi.mock("@openclaw/normalization-core/node-crypto", async () => {
+  const actual = await vi.importActual<typeof import("@openclaw/normalization-core/node-crypto")>(
+    "@openclaw/normalization-core/node-crypto",
+  );
   return {
     ...actual,
-    createHash: (...args: Parameters<typeof actual.createHash>) => {
-      createHashCalls.count += 1;
-      return actual.createHash(...args);
+    sha256Hex: (...args: Parameters<typeof actual.sha256Hex>) => {
+      digestCalls.count += 1;
+      return actual.sha256Hex(...args);
     },
   };
 });
@@ -54,19 +56,19 @@ describe("tool summary digest cache", () => {
       makeTool(`probe_${name}`, `Digest probe: ${name}`),
     );
     const firstTools = finalize(definitions);
-    createHashCalls.count = 0;
+    digestCalls.count = 0;
     const first = buildReport(firstTools);
-    expect(createHashCalls.count).toBe(8);
+    expect(digestCalls.count).toBe(8);
 
     const secondTools = finalize(definitions);
     for (const [index, tool] of secondTools.entries()) {
       expect(tool).not.toBe(firstTools[index]);
       expect(tool.parameters).toBe(firstTools[index]?.parameters);
     }
-    createHashCalls.count = 0;
+    digestCalls.count = 0;
     const second = buildReport(secondTools);
 
-    expect(createHashCalls.count).toBe(2);
+    expect(digestCalls.count).toBe(2);
     expect(second).toEqual(first);
   });
 
@@ -103,10 +105,10 @@ describe("tool summary digest cache", () => {
     const definition = makeTool("oversized_probe", `Oversized probe ${"x".repeat(5_000)}`);
     const first = buildReport(finalize([definition]));
     const tools = finalize([definition]);
-    createHashCalls.count = 0;
+    digestCalls.count = 0;
     const second = buildReport(tools);
 
-    expect(createHashCalls.count).toBe(3);
+    expect(digestCalls.count).toBe(3);
     expect(second).toEqual(first);
   });
 });

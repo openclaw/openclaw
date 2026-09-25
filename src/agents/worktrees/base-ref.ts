@@ -22,6 +22,7 @@ export async function resolveWorktreeBase(
   repoRoot: string,
   baseRef?: string,
   signal?: AbortSignal,
+  assertCurrent?: () => void,
 ): Promise<ResolvedWorktreeBase> {
   if (baseRef) {
     const verified = await runGit(
@@ -34,7 +35,7 @@ export async function resolveWorktreeBase(
         "--end-of-options",
         `${baseRef === "-" ? "@{-1}" : baseRef}^{commit}`,
       ],
-      { signal },
+      { signal, beforeRun: assertCurrent },
     );
     signal?.throwIfAborted();
     if (
@@ -57,20 +58,26 @@ export async function resolveWorktreeBase(
     const gitOperand = baseRef !== "-" && baseRef.startsWith("-") ? commit : baseRef;
     return { commit, gitOperand, recordRef: baseRef, remote: false };
   }
-  const fetched = await runGit(repoRoot, ["fetch", "origin"], { signal });
+  const fetched = await runGit(repoRoot, ["fetch", "origin"], { signal, beforeRun: assertCurrent });
   signal?.throwIfAborted();
   if (fetched.termination === "exit" && fetched.code === 0) {
-    const remoteHead = await runGit(repoRoot, [
-      "symbolic-ref",
-      "--quiet",
-      "--short",
-      "refs/remotes/origin/HEAD",
-    ]);
+    const remoteHead = await runGit(
+      repoRoot,
+      ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"],
+      { signal, beforeRun: assertCurrent },
+    );
     if (remoteHead.termination === "exit" && remoteHead.code === 0 && remoteHead.stdout.trim()) {
       const remoteRef = remoteHead.stdout.trim();
-      const resolved = await resolveWorktreeBase(repoRoot, remoteRef, signal);
-      return { ...resolved, remote: true };
+      try {
+        const resolved = await resolveWorktreeBase(repoRoot, remoteRef, signal, assertCurrent);
+        return { ...resolved, remote: true };
+      } catch (error) {
+        // Pruning a retired default branch can leave origin/HEAD dangling.
+        if (!(error instanceof InvalidWorktreeBaseRefError)) {
+          throw error;
+        }
+      }
     }
   }
-  return await resolveWorktreeBase(repoRoot, "HEAD", signal);
+  return await resolveWorktreeBase(repoRoot, "HEAD", signal, assertCurrent);
 }

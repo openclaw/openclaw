@@ -76,7 +76,7 @@ describe("models.list provider catalog outcomes", () => {
         buildModelsListResult({
           source: { kind: "gateway", context },
           agentId: "main",
-          params: { view: "configured" },
+          params: { view: "configured", includeDefaultModels: false },
           preloadedCatalog: { agentId: "main", config, snapshot },
           preloadedOnly: true,
           catalogProjector: projector,
@@ -207,7 +207,7 @@ describe("models.list provider catalog outcomes", () => {
       buildModelsListResult({
         source: { kind: "gateway", context },
         agentId: "main",
-        params: { view: "configured" },
+        params: { view: "configured", includeDefaultModels: false },
         preloadedCatalog: { agentId: "main", config, snapshot },
         preloadedOnly: true,
         catalogProjector: projector,

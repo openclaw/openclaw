@@ -7,6 +7,7 @@ import type {
 import type {
   WorkerEnvironmentServiceContract,
   WorkerPlacementDispatchContract,
+  WorkerPlacementReclaimSourceCheck,
 } from "./service-contract.js";
 
 export type SessionWorkerPlacementContext = {
@@ -19,6 +20,17 @@ export type SessionWorkerPlacementContext = {
 type PlacementMutationAction = "fork" | "reset" | "restore" | "rewind" | "switch";
 type Placement = WorkerSessionPlacementRecord;
 type PlacementState = Placement["state"];
+type PlacementOwner = Pick<
+  Placement,
+  | "sessionId"
+  | "sessionKey"
+  | "agentId"
+  | "state"
+  | "generation"
+  | "environmentId"
+  | "activeOwnerEpoch"
+  | "executionMode"
+>;
 
 class SessionWorkerPlacementMutationError extends Error {
   constructor(state: PlacementState, action: PlacementMutationAction, key: string) {
@@ -27,11 +39,7 @@ class SessionWorkerPlacementMutationError extends Error {
 }
 
 export class SessionWorkerPlacementStopError extends Error {
-  constructor(
-    readonly state: PlacementState,
-    action: "archive" | "delete" | "recover",
-    key: string,
-  ) {
+  constructor(state: PlacementState, action: "archive" | "delete" | "recover", key: string) {
     const recovery =
       state === "failed"
         ? "Worker cleanup is still pending. Use Stop cloud worker to retry cleanup; if stopping fails, resolve the provider error before trying again."
@@ -56,7 +64,18 @@ type RetirablePlacement = Extract<Placement, { state: "local" | "reclaimed" | "f
 type FailedPlacement = Extract<Placement, { state: "failed" }>;
 
 export function isFailedWorkerPlacementEnvironmentGone(params: {
-  environmentService: SessionWorkerPlacementContext["workerEnvironmentService"];
+  environmentService:
+    | {
+        get(
+          environmentId: string,
+        ):
+          | Pick<
+              NonNullable<ReturnType<WorkerEnvironmentServiceContract["get"]>>,
+              "state" | "leaseId"
+            >
+          | undefined;
+      }
+    | undefined;
   placement: FailedPlacement;
 }): boolean {
   if (params.placement.environmentId === null) {
@@ -97,7 +116,11 @@ export function resolveWorkerPlacementArchiveRestoreError(params: {
   key: string;
   placement: WorkerSessionPlacementRecord | undefined;
 }): string | undefined {
-  if (!params.placement || isWorkerPlacementSafeForMutation(params.context, params.placement)) {
+  if (
+    !params.placement ||
+    (params.placement.state === "failed" && !params.placement.turnClaim) ||
+    isWorkerPlacementSafeForMutation(params.context, params.placement)
+  ) {
     return undefined;
   }
   return `Session ${params.key} cannot change archive state while cloud worker placement is ${params.placement.state}.`;
@@ -169,8 +192,8 @@ function readSessionWorkerPlacement(params: {
 }
 
 function samePlacementOwner(
-  expected: Placement | undefined,
-  current: Placement | undefined,
+  expected: PlacementOwner | undefined,
+  current: PlacementOwner | undefined,
 ): boolean {
   return (
     current?.sessionId === expected?.sessionId &&
@@ -202,6 +225,33 @@ export function prepareSessionWorkerPlacementMutationCheck(
   };
   assertCurrent();
   return assertCurrent;
+}
+
+/** Archive visibility can change while a failed placement retains its physical cleanup. */
+export function prepareSessionWorkerPlacementArchiveCheck(
+  params: Pick<SessionWorkerPlacementMutationParams, "context" | "sessionId">,
+): { assertCurrent: () => void; cleanupPending: boolean } {
+  const expected = readSessionWorkerPlacement(params);
+  if (expected?.state !== "failed") {
+    return {
+      assertCurrent: prepareSessionWorkerPlacementMutationCheck(params),
+      cleanupPending: false,
+    };
+  }
+  const assertCurrent = () => {
+    const current = readSessionWorkerPlacement(params);
+    if (!samePlacementOwner(expected, current) || current?.turnClaim) {
+      throw new Error(`Worker session placement ${params.sessionId} changed before archive`);
+    }
+  };
+  assertCurrent();
+  return {
+    assertCurrent,
+    cleanupPending: !isFailedWorkerPlacementEnvironmentGone({
+      environmentService: params.context.workerEnvironmentService,
+      placement: expected,
+    }),
+  };
 }
 
 /** Capture retirement without erasing cloud affinity before fallible session cleanup. */
@@ -242,7 +292,7 @@ export function prepareSessionWorkerPlacementStop(params: {
   context: SessionWorkerPlacementContext;
   sessionId?: string;
   sessionKey: string;
-}): () => Promise<void> {
+}): { stop: () => Promise<void>; startBeforeDrain: boolean } {
   const { agentId, context, sessionId, sessionKey } = params;
   const expected = readSessionWorkerPlacement(params);
   // Cron run aliases share their base's physical session, even after session-id adoption.
@@ -256,24 +306,32 @@ export function prepareSessionWorkerPlacementStop(params: {
   }
   if (
     expected &&
-    !isWorkerPlacementSafeForMutation(context, expected) &&
-    expected.state !== "active"
+    (expected.state === "reconciling" ||
+      (params.action === "recover" &&
+        expected.state !== "active" &&
+        !isWorkerPlacementSafeForMutation(context, expected)))
   ) {
     throw new SessionWorkerPlacementStopError(expected.state, params.action, sessionKey);
   }
-  const beforeDrain = () => {
+  const beforeDrain: WorkerPlacementReclaimSourceCheck = (predecessor) => {
     params.authorize?.();
     const current = readSessionWorkerPlacement(params);
-    if (
-      !samePlacementOwner(expected, current) ||
-      (current && current.state !== "active" && !isWorkerPlacementSafeForMutation(context, current))
-    ) {
+    const owned =
+      expected && predecessor && predecessor.generation > expected.generation
+        ? { ...expected, ...predecessor }
+        : expected;
+    if (!samePlacementOwner(owned, current)) {
       throw new Error(`Session ${sessionKey} cloud worker placement identity changed.`);
     }
   };
-  return async () => {
+  const stop = async () => {
     beforeDrain();
-    if (!expected || expected.state !== "active" || !sessionId) {
+    if (
+      !expected ||
+      (params.action === "archive" && expected.state === "failed") ||
+      isWorkerPlacementSafeForMutation(context, expected) ||
+      !sessionId
+    ) {
       return;
     }
     if (!context.workerPlacementDispatchService?.reclaim) {
@@ -289,11 +347,19 @@ export function prepareSessionWorkerPlacementStop(params: {
     params.authorize?.();
     const settled = readSessionWorkerPlacement(params);
     if (
-      reclaimed.state !== "reclaimed" ||
+      (reclaimed.state !== "reclaimed" && reclaimed.state !== "local") ||
       !matches(reclaimed) ||
       !samePlacementOwner(reclaimed, settled)
     ) {
       throw new Error(`Session ${sessionKey} cloud worker reclaim identity changed.`);
     }
+  };
+  return {
+    stop,
+    startBeforeDrain:
+      expected?.state === "requested" ||
+      expected?.state === "provisioning" ||
+      expected?.state === "syncing" ||
+      expected?.state === "starting",
   };
 }

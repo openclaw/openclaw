@@ -129,15 +129,6 @@ export function buildCompactionDividerItem(
             count: formatCompactTokenCount(tokensSaved),
           }),
         }),
-    ...(phase === "complete" && marker.kind === "compaction"
-      ? {
-          description: t("chat.compaction.description"),
-          action: {
-            kind: "session-checkpoints" as const,
-            label: t("chat.compaction.openCheckpoints"),
-          },
-        }
-      : {}),
     timestamp,
   };
 }
@@ -161,7 +152,11 @@ export function buildResetDividerItem(
 }
 
 function queuedSendStarted(item: ChatQueueItem): boolean {
-  return typeof item.sendSubmittedAtMs === "number" || (item.sendAttempts ?? 0) > 0;
+  // Submitting offline records timing without attempting delivery.
+  return (
+    (item.sendAttempts ?? 0) > 0 ||
+    (item.sendState !== "waiting-reconnect" && typeof item.sendSubmittedAtMs === "number")
+  );
 }
 
 export function isQueuedSendInlineState(item: ChatQueueItem): boolean {
@@ -170,6 +165,8 @@ export function isQueuedSendInlineState(item: ChatQueueItem): boolean {
     !item.localCommandName &&
     (item.sendState === "failed" ||
       item.sendState === "unconfirmed" ||
+      item.sendState === "held" ||
+      item.sendState === "waiting-reconnect" ||
       (item.sendState === "waiting-idle" && Boolean(item.sendError)))
   );
 }
@@ -179,8 +176,8 @@ export function shouldRenderQueuedSendInThread(item: ChatQueueItem): boolean {
   return (
     queuedSendStarted(item) &&
     (item.sendState === "waiting-model" ||
+      item.sendState === "submitting" ||
       item.sendState === "sending" ||
-      item.sendState === "waiting-reconnect" ||
       isQueuedSendInlineState(item))
   );
 }
@@ -196,7 +193,8 @@ export function resolveWorkingProgress(
   const visibleSends = queue.filter(shouldRenderQueuedSendInThread);
   const pendingSends = visibleSends.filter((item) => !isQueuedSendInlineState(item));
   const queuedProgress =
-    pendingSends.find((item) => item.sendState === "sending") ?? pendingSends[0];
+    pendingSends.find((item) => item.sendState === "submitting" || item.sendState === "sending") ??
+    pendingSends[0];
   const queuedRunId = queuedProgress?.sendRunId ?? queuedProgress?.pendingRunId;
   const segmentRunId = streamSegments
     .map((segment) => segment.runId)
@@ -211,7 +209,10 @@ export function resolveWorkingProgress(
     );
   // A submitted send owns the acknowledgment gap; delayed activity from an
   // earlier run must not claim it. Future queued sends remain a fallback.
-  const submittedRunId = queuedProgress?.sendState === "sending" ? queuedRunId : undefined;
+  const submittedRunId =
+    queuedProgress?.sendState === "submitting" || queuedProgress?.sendState === "sending"
+      ? queuedRunId
+      : undefined;
   const explicitRunId = runId ?? submittedRunId ?? segmentRunId ?? toolRunId ?? queuedRunId;
   const cached = workingProgressBySession.get(sessionKey);
   const compatibleCached =

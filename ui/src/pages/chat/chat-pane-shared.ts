@@ -1,13 +1,11 @@
 import { asNullableRecord as catalogRawRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { RouteId } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { BoardProvider } from "../../lib/board/provider.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import type { BoardSnapshot } from "../../lib/board/types.ts";
 import type { ChatAttachment, ChatGoalDraftMode, HumanMention } from "../../lib/chat/chat-types.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
-import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 
 export type ChatPageContext = ApplicationContext;
@@ -18,9 +16,7 @@ export type PaneSessionHandoff = {
   composerFallbacks?: ChatPageHost["chatComposerFallbackByScope"];
   draft: string;
   mentions?: readonly HumanMention[];
-  restore?: boolean;
   send?: boolean;
-  storageFailed?: boolean;
 };
 type PendingPaneSessionHandoff = PaneSessionHandoff & { expiresAt: number; sessionKey: string };
 // A retained pane owns one session for life, so creation/fork adoption crosses
@@ -28,19 +24,9 @@ type PendingPaneSessionHandoff = PaneSessionHandoff & { expiresAt: number; sessi
 const PANE_SESSION_HANDOFF_TTL_MS = 30_000;
 const PANE_SESSION_HANDOFF_LIMIT = 4;
 const paneSessionHandoffs = new WeakMap<
-  ApplicationContext<RouteId>,
+  ApplicationContext,
   Map<string, PendingPaneSessionHandoff[]>
 >();
-
-function discardPaneSessionHandoff(handoff: PendingPaneSessionHandoff): void {
-  if (!handoff.restore) {
-    return;
-  }
-  releaseChatAttachmentPayloads([
-    ...handoff.attachments,
-    ...Object.values(handoff.composerFallbacks ?? {}).flatMap((fallback) => fallback.attachments),
-  ]);
-}
 
 function removePaneSessionHandoffs(
   pending: PendingPaneSessionHandoff[] | undefined,
@@ -48,7 +34,7 @@ function removePaneSessionHandoffs(
 ): void {
   for (let index = (pending?.length ?? 0) - 1; index >= 0; index -= 1) {
     if (matches(pending![index]!)) {
-      discardPaneSessionHandoff(pending!.splice(index, 1)[0]!);
+      pending!.splice(index, 1);
     }
   }
 }
@@ -95,7 +81,7 @@ export function preparePaneSessionHandoff(
     paneHandoffs(context, paneId, false);
   }, PANE_SESSION_HANDOFF_TTL_MS);
   while (pending.length > PANE_SESSION_HANDOFF_LIMIT) {
-    discardPaneSessionHandoff(pending.shift()!);
+    pending.shift();
   }
 }
 
@@ -127,7 +113,7 @@ export function clearPaneSessionHandoff(
 }
 
 export function retireSessionPaneHandoffs(
-  context: ApplicationContext<RouteId>,
+  context: ApplicationContext,
   targets: readonly { key: string; retireBeforeRevision: number }[],
 ): void {
   for (const pending of paneSessionHandoffs.get(context)?.values() ?? []) {
@@ -149,9 +135,6 @@ export function clearPaneSessionHandoffs(context: ApplicationContext, paneId: st
   const pending = byPane.get(paneId);
   if (!pending) {
     return;
-  }
-  for (const handoff of pending) {
-    discardPaneSessionHandoff(handoff);
   }
   byPane.delete(paneId);
   if (byPane.size === 0) {
@@ -212,7 +195,7 @@ export type ChatPaneConnectionScope = {
   headerOutcomeOwner: string;
   sessions: ChatPageContext["sessions"];
 };
-export const CHAT_OPEN_DETAILS_SELECTOR =
+const CHAT_OPEN_DETAILS_SELECTOR =
   ".chat-controls__inline-select[open], .context-usage details[open], .agent-chat__attach-menu[open], .chat-pr__checks[open]";
 export const CHAT_COMPOSER_TEXTAREA_SELECTOR = ".agent-chat__composer-combobox > textarea";
 // Menus without typeahead own activation/navigation, not printable input.
@@ -220,7 +203,7 @@ export const CHAT_COMPOSER_TEXTAREA_SELECTOR = ".agent-chat__composer-combobox >
 const CHAT_PRINTABLE_KEY_TARGET_SELECTOR =
   "input, textarea, select, [contenteditable]:not([contenteditable='false']), [role='combobox'], [role='textbox'], [data-chat-autotype-exempt]";
 const CHAT_SPACE_ACTIVATION_SELECTOR =
-  "a[href], button, summary, [role='button'], [role='checkbox'], [role='link'], [role='listbox'], [role='menu'], [role='menuitem'], [role='menuitemcheckbox'], [role='menuitemradio'], [role='option'], [role='radio'], [role='switch']";
+  "a[href], button, summary, [role='button'], [role='checkbox'], [role='link'], [role='listbox'], [role='menu'], [role='menuitem'], [role='menuitemcheckbox'], [role='menuitemradio'], [role='option'], [role='radio'], [role='switch'], [role='tab']";
 const CHAT_DROPDOWN_KEYS = new Set([
   " ",
   "Enter",
@@ -268,6 +251,21 @@ function openDropdownOwnsKey(root: ParentNode, key: string): boolean {
       !dropdown.closest("[inert]") &&
       (CHAT_DROPDOWN_KEYS.has(key) || keyboardShortcutTargetOwnsKey(dropdown, key)),
   );
+}
+
+/** Close this pane's disclosures, except those containing the current pointer event. */
+export function closeChatPaneDetails(
+  root: ParentNode,
+  retainedPath: readonly EventTarget[] = [],
+): boolean {
+  let changed = false;
+  root.querySelectorAll<HTMLDetailsElement>(CHAT_OPEN_DETAILS_SELECTOR).forEach((details) => {
+    if (!retainedPath.includes(details)) {
+      details.open = false;
+      changed = true;
+    }
+  });
+  return changed;
 }
 
 export function focusChatComposerFromPrintableKeydown(

@@ -8,6 +8,11 @@ import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import type { ProviderAuthChoiceMetadata } from "./provider-auth-choices.js";
+import {
+  parseProviderPluginMethodChoice,
+  buildProviderPluginMethodChoice,
+} from "./provider-plugin-choice.js";
 import { resolvePluginProvidersCore } from "./providers.runtime.js";
 import { resolvePluginSetupProviderCore } from "./setup-registry.js";
 import type {
@@ -16,21 +21,7 @@ import type {
   ProviderPluginWizardModelPicker,
   ProviderPluginWizardSetup,
 } from "./types.js";
-
-const PROVIDER_PLUGIN_CHOICE_PREFIX = "provider-plugin:";
-
-type ProviderWizardOption = {
-  value: string;
-  label: string;
-  hint?: string;
-  groupId: string;
-  groupLabel: string;
-  groupHint?: string;
-  onboardingScopes?: Array<"text-inference" | "image-generation" | "music-generation">;
-  assistantPriority?: number;
-  assistantVisibility?: "visible" | "manual-only";
-  onboardingFeatured?: boolean;
-};
+export { buildProviderPluginMethodChoice } from "./provider-plugin-choice.js";
 
 export type ProviderModelPickerEntry = {
   value: string;
@@ -99,38 +90,6 @@ function listMethodWizardSetups(provider: ProviderPlugin): Array<{
     );
 }
 
-function buildSetupOptionForMethod(params: {
-  provider: ProviderPlugin;
-  wizard: ProviderPluginWizardSetup;
-  method: ProviderAuthMethod;
-  value: string;
-}): ProviderWizardOption {
-  const normalizedGroupId = normalizeOptionalString(params.wizard.groupId) || params.provider.id;
-  return {
-    value: normalizeOptionalString(params.value) ?? "",
-    label:
-      normalizeOptionalString(params.wizard.choiceLabel) ||
-      (params.provider.auth.length === 1 ? params.provider.label : params.method.label),
-    hint: normalizeOptionalString(params.wizard.choiceHint) || params.method.hint,
-    groupId: normalizedGroupId,
-    groupLabel: normalizeOptionalString(params.wizard.groupLabel) || params.provider.label,
-    groupHint: normalizeOptionalString(params.wizard.groupHint),
-    ...(params.wizard.onboardingScopes ? { onboardingScopes: params.wizard.onboardingScopes } : {}),
-    ...(typeof params.wizard.assistantPriority === "number" &&
-    Number.isFinite(params.wizard.assistantPriority)
-      ? { assistantPriority: params.wizard.assistantPriority }
-      : {}),
-    ...(params.wizard.assistantVisibility
-      ? { assistantVisibility: params.wizard.assistantVisibility }
-      : {}),
-    ...(params.wizard.onboardingFeatured ? { onboardingFeatured: true } : {}),
-  };
-}
-
-export function buildProviderPluginMethodChoice(providerId: string, methodId: string): string {
-  return `${PROVIDER_PLUGIN_CHOICE_PREFIX}${normalizeOptionalString(providerId) ?? ""}:${normalizeOptionalString(methodId) ?? ""}`;
-}
-
 function resolveProviderWizardProviders(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -147,63 +106,6 @@ function resolveProviderWizardProviders(params: {
     mode: "setup",
     ...(params.providerRefs?.length ? { providerRefs: params.providerRefs } : {}),
   });
-}
-
-export function resolveProviderWizardOptions(params: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-}): ProviderWizardOption[] {
-  const providers = resolveProviderWizardProviders(params);
-  const options: ProviderWizardOption[] = [];
-
-  for (const provider of providers) {
-    const methodSetups = listMethodWizardSetups(provider);
-    for (const { method, wizard } of methodSetups) {
-      options.push(
-        buildSetupOptionForMethod({
-          provider,
-          wizard,
-          method,
-          value:
-            normalizeOptionalString(wizard.choiceId) ||
-            buildProviderPluginMethodChoice(provider.id, method.id),
-        }),
-      );
-    }
-    if (methodSetups.length > 0) {
-      continue;
-    }
-    const setup = provider.wizard?.setup;
-    if (!setup) {
-      continue;
-    }
-    const explicitMethod = resolveMethodById(provider, setup.methodId);
-    if (explicitMethod) {
-      options.push(
-        buildSetupOptionForMethod({
-          provider,
-          wizard: setup,
-          method: explicitMethod,
-          value: resolveWizardSetupChoiceId(provider, setup),
-        }),
-      );
-      continue;
-    }
-
-    for (const method of provider.auth) {
-      options.push(
-        buildSetupOptionForMethod({
-          provider,
-          wizard: setup,
-          method,
-          value: buildProviderPluginMethodChoice(provider.id, method.id),
-        }),
-      );
-    }
-  }
-
-  return options;
 }
 
 function resolveModelPickerChoiceValue(
@@ -233,6 +135,9 @@ export function resolveProviderModelPickerEntries(params: {
     if (!modelPicker) {
       continue;
     }
+    if (resolveMethodById(provider, modelPicker.methodId)?.wizard?.modelTarget === "utility") {
+      continue;
+    }
     entries.push({
       value: resolveModelPickerChoiceValue(provider, modelPicker),
       label: normalizeOptionalString(modelPicker.label) || `${provider.label} (custom)`,
@@ -243,9 +148,20 @@ export function resolveProviderModelPickerEntries(params: {
   return entries;
 }
 
+type ProviderManifestChoice = Pick<
+  ProviderAuthChoiceMetadata,
+  "pluginId" | "providerId" | "methodId" | "choiceId" | "modelTarget"
+>;
+
 export function resolveProviderPluginChoiceCore(params: {
   providers: ProviderPlugin[];
   choice: string;
+  manifestChoice?: ProviderManifestChoice;
+  /** Caller's prepared metadata lookup, bound to the method selected by dispatch. */
+  resolveManifestMethodChoice?: (
+    provider: ProviderPlugin,
+    method: ProviderAuthMethod,
+  ) => ProviderManifestChoice | undefined;
 }): {
   provider: ProviderPlugin;
   method: ProviderAuthMethod;
@@ -255,12 +171,31 @@ export function resolveProviderPluginChoiceCore(params: {
   if (!choice) {
     return null;
   }
+  const withManifestTarget = (resolved: {
+    provider: ProviderPlugin;
+    method: ProviderAuthMethod;
+    wizard?: ProviderPluginWizardSetup;
+  }) => {
+    const { provider, method } = resolved;
+    const matchesMethod = (declared: ProviderManifestChoice | undefined) =>
+      Boolean(
+        declared &&
+        declared.pluginId === provider.pluginId &&
+        normalizeProviderId(declared.providerId) === normalizeProviderId(provider.id) &&
+        normalizeOptionalLowercaseString(declared.methodId) ===
+          normalizeOptionalLowercaseString(method.id),
+      );
+    const matching = matchesMethod(params.manifestChoice)
+      ? params.manifestChoice
+      : params.resolveManifestMethodChoice?.(provider, method);
+    return matching?.modelTarget && matchesMethod(matching)
+      ? { ...resolved, wizard: { ...resolved.wizard, modelTarget: matching.modelTarget } }
+      : resolved;
+  };
 
-  if (choice.startsWith(PROVIDER_PLUGIN_CHOICE_PREFIX)) {
-    const payload = choice.slice(PROVIDER_PLUGIN_CHOICE_PREFIX.length);
-    const separator = payload.indexOf(":");
-    const providerId = separator >= 0 ? payload.slice(0, separator) : payload;
-    const methodId = separator >= 0 ? payload.slice(separator + 1) : undefined;
+  const explicitChoice = parseProviderPluginMethodChoice(choice);
+  if (explicitChoice) {
+    const { providerId, methodId } = explicitChoice;
     const provider = params.providers.find(
       (entry) => normalizeProviderId(entry.id) === normalizeProviderId(providerId),
     );
@@ -268,7 +203,39 @@ export function resolveProviderPluginChoiceCore(params: {
       return null;
     }
     const method = resolveMethodById(provider, methodId);
-    return method ? { provider, method } : null;
+    if (!method) {
+      return null;
+    }
+    return withManifestTarget({
+      provider,
+      method,
+      ...(method.wizard ? { wizard: method.wizard } : {}),
+    });
+  }
+
+  // The manifest owns dispatch; runtime wizard metadata need not repeat its choice ID.
+  if (params.manifestChoice) {
+    const declared = params.manifestChoice;
+    if (declared.choiceId !== choice) {
+      return null;
+    }
+    const provider = params.providers.find(
+      (entry) =>
+        entry.pluginId === declared.pluginId &&
+        normalizeProviderId(entry.id) === normalizeProviderId(declared.providerId),
+    );
+    const methodId = normalizeOptionalLowercaseString(declared.methodId);
+    if (!provider || !methodId) {
+      return null;
+    }
+    const method = resolveMethodById(provider, methodId);
+    return method
+      ? withManifestTarget({
+          provider,
+          method,
+          wizard: method.wizard,
+        })
+      : null;
   }
 
   for (const provider of params.providers) {
@@ -277,7 +244,7 @@ export function resolveProviderPluginChoiceCore(params: {
         normalizeOptionalString(wizard.choiceId) ||
         buildProviderPluginMethodChoice(provider.id, method.id);
       if ((normalizeOptionalString(choiceId) ?? "") === choice) {
-        return { provider, method, wizard };
+        return withManifestTarget({ provider, method, wizard });
       }
     }
     const setup = provider.wizard?.setup;
@@ -286,7 +253,7 @@ export function resolveProviderPluginChoiceCore(params: {
       if ((normalizeOptionalString(setupChoiceId) ?? "") === choice) {
         const method = resolveMethodById(provider, setup.methodId);
         if (method) {
-          return { provider, method, wizard: setup };
+          return withManifestTarget({ provider, method, wizard: setup });
         }
       }
     }
@@ -294,10 +261,11 @@ export function resolveProviderPluginChoiceCore(params: {
       normalizeProviderId(provider.id) === normalizeProviderId(choice) &&
       provider.auth.length > 0
     ) {
-      return {
+      return withManifestTarget({
         provider,
         method: expectDefined(provider.auth[0], "auth entry at 0"),
-      };
+        ...(provider.auth[0]?.wizard ? { wizard: provider.auth[0].wizard } : {}),
+      });
     }
   }
 

@@ -15,6 +15,7 @@ import {
   type ExecApprovalsFile,
 } from "../infra/exec-approvals.js";
 import { sendMessage } from "../infra/outbound/message.js";
+import type { SpawnInput } from "../process/supervisor/types.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { buildSystemRunPreparePayload } from "../test-utils/system-run-prepare-payload.js";
@@ -124,28 +125,16 @@ vi.mock("../infra/shell-env.js", () => ({
   resolveShellEnvFallbackTimeoutMs: vi.fn(() => 0),
 }));
 
-vi.mock("../process/supervisor/index.js", () => {
+vi.mock("../process/supervisor/index.js", async () => {
+  const { createProcessSupervisor } = await import("../process/supervisor/supervisor.js");
+  const nativeSupervisor = createProcessSupervisor();
+  afterAll(() => nativeSupervisor.shutdown());
   const stdoutFor = (command: string) => {
     if (
       command.includes("calendar events primary --today --json") ||
       command.includes("gog-wrapper")
     ) {
       return '{"events":[]}\n';
-    }
-    if (command.includes("printf delayed-ok")) {
-      return "delayed-ok";
-    }
-    if (command.includes("printf webchat-ok")) {
-      return "webchat-ok";
-    }
-    if (command.includes("printf approval-one")) {
-      return "approval-one";
-    }
-    if (command.includes("printf approval-two")) {
-      return "approval-two";
-    }
-    if (command.includes("echo allow-always")) {
-      return "allow-always\n";
     }
     if (command.includes("echo cron-ok")) {
       return "cron-ok\n";
@@ -157,9 +146,20 @@ vi.mock("../process/supervisor/index.js", () => {
   };
   return {
     getProcessSupervisor: () => ({
-      spawn: async (input: { argv?: string[]; onStdout?: (chunk: string) => void }) => {
-        const command = input.argv?.join(" ") ?? "";
-        const stdout = stdoutFor(command);
+      spawn: async (input: SpawnInput) => {
+        const command = "argv" in input ? input.argv.join(" ") : "";
+        const inlineOutput = [
+          "delayed-ok",
+          "webchat-ok",
+          "approval-one",
+          "approval-two",
+          "allow-always",
+        ].find((value) => command.includes(value));
+        // Let the real POSIX shell handle executable quoting; Windows keeps the routing fixture.
+        if (inlineOutput && process.platform !== "win32") {
+          return nativeSupervisor.spawn(input);
+        }
+        const stdout = inlineOutput ?? stdoutFor(command);
         if (stdout) {
           input.onStdout?.(stdout);
         }
@@ -882,6 +882,7 @@ describe("exec approvals", () => {
     });
 
     expect(second.details.status).toBe("completed");
+    expect(getResultText(second)).toContain("allow-always");
     expect(calls).not.toContain("exec.approval.request");
     expect(calls).not.toContain("exec.approval.waitDecision");
   });

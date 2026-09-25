@@ -530,7 +530,8 @@ struct CommandCenterTab: View {
             sessions: sessions,
             currentSessionKey: "main",
             mainSessionKey: self.appModel.defaultChatSessionKey,
-            activeAgentID: self.appModel.chatAgentId)
+            activeAgentID: self.appModel.chatAgentId,
+            sessionRoutingContract: self.appModel.chatSessionRoutingContract)
         return sessions.first { $0.key == mainKey }
     }
 
@@ -669,17 +670,22 @@ struct CommandCenterTab: View {
         if let label, !label.isEmpty {
             return label
         }
-        if let title = redactedSessionTitle(for: session.key) {
-            return title
-        }
 
         let displayName = session.displayName?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let displayName, !displayName.isEmpty {
             return Self.redactedSessionTitle(for: displayName) ?? displayName
         }
+        let autoLabel = session.autoLabel?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let autoLabel, !autoLabel.isEmpty {
+            return autoLabel
+        }
         let subject = session.subject?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let subject, !subject.isEmpty {
             return Self.redactedSessionTitle(for: subject) ?? subject
+        }
+        // Generic key placeholders only after real topic names are absent.
+        if let title = redactedSessionTitle(for: session.key) {
+            return title
         }
         return session.key
     }

@@ -437,7 +437,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       const current = loadExecApprovals();
       mutate(current);
       saveExecApprovals(current);
-      await commitExecAuthorizationLocked(params);
+      return await commitExecAuthorizationLocked(params);
     });
   }
 
@@ -502,6 +502,8 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       params.cwd,
       undefined,
       undefined,
+      undefined,
+      expect.any(Function),
     );
   }
 
@@ -1670,10 +1672,11 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       const commitAuthorization: HandleSystemRunInvokeOptions["commitExecAuthorization"] = async (
         params,
       ) => {
-        await commitExecAuthorizationLocked(params);
+        const assertCurrent = await commitExecAuthorizationLocked(params);
         fs.renameSync(tmp, moved);
         fs.mkdirSync(tmp);
         fs.writeFileSync(path.join(tmp, "run.sh"), "#!/bin/sh\necho CHANGED\n", { mode: 0o755 });
+        return assertCurrent;
       };
 
       const invoke = await runLocalSystemInvokeWithPolicy("full", "off", {
@@ -1689,6 +1692,66 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         "SYSTEM_RUN_DENIED: approval cwd changed before execution",
         true,
       );
+    },
+  );
+
+  it.runIf(process.platform !== "win32").each([
+    { boundary: "commit", revoke: true },
+    { boundary: "commit", revoke: false },
+    { boundary: "callback", revoke: true },
+    { boundary: "callback", revoke: false },
+  ] as const)(
+    "checks live node policy at $boundary before real execution (revoke=$revoke)",
+    async ({ boundary, revoke }) => {
+      const { runCommand } = await import("./invoke-run-command.js");
+      const cwd = createFixtureDir("openclaw-node-policy-before-spawn-");
+      fs.writeFileSync(path.join(cwd, "approved.txt"), "");
+      const revokePolicy = () => {
+        if (!revoke) {
+          return;
+        }
+        const current = loadExecApprovals();
+        current.defaults = { ...current.defaults, security: "deny", ask: "off" };
+        current.agents = { ...current.agents, main: { security: "deny", ask: "off" } };
+        saveExecApprovals(current);
+      };
+      let stdout = "";
+      const invoke = await runLocalSystemInvokeWithPolicy("full", "off", {
+        command: ["/bin/ls", "approved.txt"],
+        cwd,
+        commitExecAuthorization: async (params) => {
+          const assertCurrent = await commitExecAuthorizationLocked(params);
+          if (boundary === "commit") {
+            revokePolicy();
+          }
+          return assertCurrent;
+        },
+        runCommand: async (argv, runCwd, _env, timeoutMs, signal, assertCurrent) => {
+          await Promise.resolve();
+          if (boundary === "callback") {
+            revokePolicy();
+          }
+          const result = await runCommand(
+            argv,
+            runCwd,
+            { PATH: "/usr/bin:/bin", HOME: cwd },
+            timeoutMs,
+            signal,
+            assertCurrent,
+          );
+          stdout = result.stdout;
+          return result;
+        },
+      });
+
+      expect(stdout).toBe(revoke ? "" : "approved.txt\n");
+      expect(requireInvokeResult(invoke.sendInvokeResult).ok).toBe(!revoke);
+      expect(invoke.sendExecFinishedEvent.mock.calls.length).toBe(revoke ? 0 : 1);
+      if (revoke) {
+        expect(requireInvokeResult(invoke.sendInvokeResult).error?.code).toBe("SYSTEM_RUN_DENIED");
+        expectInvokeErrorMessage(invoke.sendInvokeResult, "exec approval changed before execution");
+        expectExecDeniedEvent(invoke.sendNodeEvent);
+      }
     },
   );
 
@@ -1728,8 +1791,9 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       const commitAuthorization: HandleSystemRunInvokeOptions["commitExecAuthorization"] = async (
         params,
       ) => {
-        await commitExecAuthorizationLocked(params);
+        const assertCurrent = await commitExecAuthorizationLocked(params);
         changed = driftAt === "commit";
+        return assertCurrent;
       };
       setRuntimeConfigSnapshot({ tools: { exec: { mode: "auto" } } });
       try {
@@ -1781,8 +1845,9 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     const commitAuthorization: HandleSystemRunInvokeOptions["commitExecAuthorization"] = async (
       params,
     ) => {
-      await commitExecAuthorizationLocked(params);
+      const assertCurrent = await commitExecAuthorizationLocked(params);
       fs.writeFileSync(fixture.scriptPath, fixture.changedBody);
+      return assertCurrent;
     };
 
     const invoke = await runLocalSystemInvokeWithPolicy("full", "off", {
@@ -2165,7 +2230,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
                 main: { ...main, allowlist: [] },
               },
             });
-            await commitExecAuthorizationLocked(params);
+            return await commitExecAuthorizationLocked(params);
           },
         );
 
@@ -2732,6 +2797,8 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         prepared.plan.cwd,
         undefined,
         undefined,
+        undefined,
+        expect.any(Function),
       );
       expectInvokeOk(invoke.sendInvokeResult);
     });
@@ -2960,10 +3027,9 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
           command: [executablePath, "-c", "print('hi')"],
         });
 
-        expect(prepared).toEqual({
+        expect(prepared).toMatchObject({
           ok: false,
-          message:
-            "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
+          reason: "unsupported-command-shape",
         });
         expect(loadExecApprovals().agents?.main?.allowlist ?? []).toStrictEqual([]);
       });
@@ -3273,9 +3339,10 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         async () => {
           const commitAuthorization: HandleSystemRunInvokeOptions["commitExecAuthorization"] =
             async (params) => {
-              await commitExecAuthorizationLocked(params);
+              const assertCurrent = await commitExecAuthorizationLocked(params);
               fs.renameSync(tempDir, movedDir);
               fs.mkdirSync(tempDir);
+              return assertCurrent;
             };
           const rerun = await runLocalSystemInvokeWithPolicy("allowlist", "on-miss", {
             preparedPlan: prepared.plan,

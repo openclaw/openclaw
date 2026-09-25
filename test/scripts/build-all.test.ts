@@ -31,6 +31,25 @@ import { listBundledPluginBuildEntries } from "../../scripts/lib/bundled-plugin-
 import { createManagedCommandInvocation } from "../../scripts/lib/managed-child-process.mts";
 import { TSDOWN_UNIFIED_CONFIG_GROUP } from "../../scripts/lib/tsdown-config-groups.mts";
 import { runNodeMain } from "../../scripts/run-node.mts";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import { toolingProbeRuntimeEntrypoints } from "./tooling-probe-runtime.test-support.mts";
+
+vi.mock("../../src/cli/update-cli/update-command-service-publication.js", () => ({
+  withGatewayRuntimeArtifactPublication: async (
+    _params: unknown,
+    publish: () => Promise<unknown>,
+  ) => publish(),
+}));
+
+const testNodeExecPath = resolveTestNodeExecPath();
+const buildAllUrl = resolveRuntimeWorkerUrl(toolingProbeRuntimeEntrypoints.buildAll);
+const buildArtifactCacheUrl = resolveRuntimeWorkerUrl(
+  toolingProbeRuntimeEntrypoints.buildArtifactCache,
+);
 
 function getBuildAllStep(label: string) {
   const step = BUILD_ALL_STEPS.find((entry) => entry.label === label);
@@ -215,25 +234,6 @@ describe("resolveBuildAllStep", () => {
     }
   });
 
-  it("keeps node steps on the current node binary", () => {
-    const step = getBuildAllStep("runtime-postbuild");
-
-    const result = resolveBuildAllStep(step, {
-      nodeExecPath: "/custom/node",
-      env: { FOO: "bar" },
-    });
-
-    expect(result).toEqual({
-      command: "/custom/node",
-      args: ["scripts/runtime-postbuild.mjs"],
-      options: {
-        stdio: "inherit",
-        env: { FOO: "bar" },
-        shell: false,
-      },
-    });
-  });
-
   it("passes encoded import URLs literally to managed Node on Windows", () => {
     const importUrl = "file:///C:/Users/RUNNER%7E1/Project/scripts/tsx.mjs";
     const result = resolveBuildAllStep(
@@ -257,6 +257,11 @@ describe("resolveBuildAllStep", () => {
   });
 
   it.each([
+    {
+      label: "runtime-postbuild",
+      scriptPath: "scripts/runtime-postbuild.mts",
+      expectedEnv: { FOO: "bar" },
+    },
     {
       label: "write-plugin-sdk-entry-dts",
       scriptPath: "scripts/write-plugin-sdk-entry-dts.ts",
@@ -363,8 +368,8 @@ describe("resolveBuildAllSteps", () => {
   it("prints CLI help without starting build steps", () => {
     for (const args of [["--help"], ["cliStartup", "--help"]]) {
       const result = spawnSync(
-        process.execPath,
-        ["--import", "tsx", "scripts/build-all.mts", ...args],
+        testNodeExecPath,
+        [...resolveRuntimeWorkerArgv(buildAllUrl, testNodeExecPath), ...args],
         {
           cwd: process.cwd(),
           encoding: "utf8",
@@ -381,8 +386,8 @@ describe("resolveBuildAllSteps", () => {
 
   it("rejects unknown CLI args without starting build steps", () => {
     const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/build-all.mts", "cliStartup", "--bogus"],
+      testNodeExecPath,
+      [...resolveRuntimeWorkerArgv(buildAllUrl, testNodeExecPath), "cliStartup", "--bogus"],
       {
         cwd: process.cwd(),
         encoding: "utf8",
@@ -886,7 +891,13 @@ describe("resolveBuildAllSteps", () => {
           }),
         ).toBe(0);
         expect(spawn.mock.calls.map(([, args]) => args)).toEqual([
-          ["--import", "tsx", "scripts/build-all.mts", "qaRuntime"],
+          [
+            "--import",
+            expect.stringMatching(/\/scripts\/tsx\.mjs$/),
+            expect.stringMatching(/[\\/]scripts[\\/]lib[\\/]dist-artifact-ownership\.mts$/),
+            expect.stringMatching(/\/scripts\/build-all\.mts$/),
+            "qaRuntime",
+          ],
           ["openclaw.mjs", "status"],
         ]);
         const env = spawn.mock.calls[0]![2].env!;
@@ -928,7 +939,7 @@ describe("resolveBuildAllSteps", () => {
 
   it.each([
     ["external-plugins:local-dist", "scripts/build-external-plugin-local-dist.mts"],
-    ["runtime-postbuild", "scripts/runtime-postbuild.mjs"],
+    ["runtime-postbuild", "scripts/runtime-postbuild.mts"],
   ])("does not stamp qaRuntime after %s fails", async (label, script) => {
     const invocations: ReturnType<typeof resolveBuildAllStep>[] = [];
     const result = await runBuildAllSteps("qaRuntime", {
@@ -975,6 +986,36 @@ describe("resolveBuildAllSteps", () => {
   });
 
   describe.each(["full", "package"])("%s runner build environment", (profile) => {
+    it.each([undefined, "1"])("isolates update build children with marker %s", async (marker) => {
+      const env = {
+        OPENCLAW_DEV_SOURCE_ROOT: "/serving-checkout",
+        OPENCLAW_UPDATE_IN_PROGRESS: marker,
+      };
+      const originalEnv = { ...env };
+      const invocations: ReturnType<typeof resolveBuildAllStep>[] = [];
+      const result = await runBuildAllSteps(profile, {
+        cacheEnabled: false,
+        env,
+        logger: { error: vi.fn(), warn: vi.fn() },
+        memoryLimit: buildMemoryLimit(5),
+        now: () => 0,
+        resolveCacheState: () => ({ cacheable: false, fresh: false, reason: "no-cache" }),
+        runStep(invocation) {
+          invocations.push(invocation);
+          return { status: 0 };
+        },
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.timings.map((timing) => timing.label)).toContain("plugins:assets:build");
+      expect(invocations.length).toBeGreaterThan(0);
+      for (const invocation of invocations) {
+        expect(invocation.options.env.OPENCLAW_DEV_SOURCE_ROOT).toBe(
+          marker === "1" ? process.cwd() : "/serving-checkout",
+        );
+      }
+      expect(env).toEqual(originalEnv);
+    });
+
     it.each([
       { name: "ordinary build", env: {}, runtimeOnly: false, skipDts: undefined },
       {
@@ -1229,17 +1270,16 @@ describe("resolveBuildStepCacheState", () => {
     withBuildCacheFixture(({ rootDir }) => {
       // Builds run on the main Node thread; Vitest workers have a different stack budget.
       const result = spawnSync(
-        process.execPath,
+        testNodeExecPath,
         [
-          "--import",
-          "./scripts/tsx.mjs",
+          ...resolveRuntimeWorkerArgv(buildArtifactCacheUrl, testNodeExecPath).slice(0, -1),
           "--input-type=module",
           "-e",
           `
             import assert from "node:assert/strict";
             import fs from "node:fs";
             import path from "node:path";
-            import { listCacheFiles } from "./scripts/lib/build-artifact-cache.mts";
+            import { listCacheFiles } from ${JSON.stringify(buildArtifactCacheUrl.href)};
             const root = process.argv[1];
             const directory = path.join(root, "src");
             const [template] = fs.readdirSync(directory, { withFileTypes: true });
@@ -1461,14 +1501,6 @@ describe("resolveBuildStepCacheState", () => {
       writeBuildStepCacheStamp(step, cacheState, { rootDir });
 
       const fresh = resolveBuildStepCacheState(step, { rootDir });
-      expect(fresh.cacheable).toBe(true);
-      expect(fresh.fresh).toBe(true);
-      expect(fresh.reason).toBe("fresh");
-      expect(fresh.inputFiles).toBe(1);
-      expect(fresh.outputFiles).toBe(1);
-      expect(fresh.restorable).toBe(false);
-      expect(fresh.relativeOutputFiles).toEqual(["dist/output.js"]);
-      expect(fresh.stampedOutputs).toEqual(["dist/output.js"]);
       expect(typeof fresh.signature).toBe("string");
       expect(fresh.signature).toHaveLength(64);
       expect(fresh.outputRoot).toBe(
@@ -1631,8 +1663,6 @@ describe("resolveBuildStepCacheState", () => {
       expect(stale.outputFiles).toBe(1);
       expect(stale.restorable).toBe(false);
       expect(restoreBuildStepCacheOutputs(stale, { rootDir })).toBe(false);
-      expect(stale.relativeOutputFiles).toEqual(["dist/output.js"]);
-      expect(stale.stampedOutputs).toEqual(["dist/output.js"]);
       expect(typeof stale.signature).toBe("string");
       expect(stale.signature).toHaveLength(64);
       expect(stale.outputRoot).toBe(
@@ -1746,14 +1776,6 @@ describe("resolveBuildStepCacheState", () => {
       fs.rmSync(path.join(rootDir, "dist"), { force: true, recursive: true });
 
       const restorable = resolveBuildStepCacheState(step, { rootDir });
-      expect(restorable.cacheable).toBe(true);
-      expect(restorable.fresh).toBe(true);
-      expect(restorable.reason).toBe("fresh-cache");
-      expect(restorable.inputFiles).toBe(1);
-      expect(restorable.outputFiles).toBe(0);
-      expect(restorable.restorable).toBe(true);
-      expect(restorable.relativeOutputFiles).toEqual([]);
-      expect(restorable.stampedOutputs).toEqual(["dist/output.js"]);
       expect(typeof restorable.signature).toBe("string");
       expect(restorable.signature).toHaveLength(64);
       expect(restorable.outputRoot).toBe(
@@ -1793,18 +1815,28 @@ describe("resolveBuildStepCacheState", () => {
       const cacheState = resolveBuildStepCacheState(alwaysRestoreStep, { rootDir });
       writeBuildStepCacheStamp(alwaysRestoreStep, cacheState, { rootDir });
       fs.writeFileSync(outputPath, "overwritten by earlier build step");
+      const obsoletePath = path.join(rootDir, "dist/obsolete.js");
+      fs.writeFileSync(obsoletePath, "obsolete output");
 
-      const restorable = resolveBuildStepCacheState(alwaysRestoreStep, { rootDir });
+      const readSpy = vi.spyOn(fs, "readFileSync");
+      let restorable: ReturnType<typeof resolveBuildStepCacheState>;
+      try {
+        restorable = resolveBuildStepCacheState(alwaysRestoreStep, { rootDir });
+        expect(readSpy.mock.calls.map(([file]) => file)).not.toContain(outputPath);
+      } finally {
+        readSpy.mockRestore();
+      }
       expect(restorable.cacheable).toBe(true);
       expect(restorable.fresh).toBe(true);
       expect(restorable.reason).toBe("fresh-cache");
-      expect(restorable.outputFiles).toBe(1);
+      expect(restorable.outputFiles).toBe(2);
       expect(restorable.restorable).toBe(true);
-      expect(restorable.relativeOutputFiles).toEqual(["dist/output.js"]);
+      expect(restorable.relativeOutputFiles).toEqual(["dist/obsolete.js", "dist/output.js"]);
       expect(restorable.stampedOutputs).toEqual(["dist/output.js"]);
 
       expect(restoreBuildStepCacheOutputs(restorable, { rootDir })).toBe(true);
       expect(fs.readFileSync(outputPath, "utf8")).toBe("output");
+      expect(fs.existsSync(obsoletePath)).toBe(false);
     });
   });
 

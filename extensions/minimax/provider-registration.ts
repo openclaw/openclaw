@@ -28,10 +28,9 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import {
   isMiniMaxModernModelId,
   MINIMAX_DEFAULT_MODEL_ID,
-  MINIMAX_TEXT_MODEL_CATALOG,
   MINIMAX_TEXT_MODEL_ORDER,
 } from "./api.js";
-import { DEFAULT_MINIMAX_MAX_TOKENS, resolveMinimaxApiCost } from "./model-definitions.js";
+import { buildMinimaxApiModelDefinition } from "./model-definitions.js";
 import type { MiniMaxRegion } from "./oauth.js";
 import { applyMinimaxApiConfig, applyMinimaxApiConfigCn } from "./onboard.js";
 import {
@@ -107,32 +106,23 @@ function buildPortalProviderCatalog(params: { baseUrl: string; apiKey: string })
   };
 }
 
-function findMinimaxCatalogModel(modelId: string) {
-  const normalizedModelId = modelId.trim().toLowerCase();
-  const catalogId = MINIMAX_TEXT_MODEL_ORDER.find((id) => id.toLowerCase() === normalizedModelId);
-  return catalogId ? { id: catalogId, model: MINIMAX_TEXT_MODEL_CATALOG[catalogId] } : undefined;
-}
-
 function resolveMinimaxDynamicModel(params: {
   providerId: string;
   ctx: ProviderResolveDynamicModelContext;
 }): ProviderRuntimeModel | undefined {
-  const catalogModel = findMinimaxCatalogModel(params.ctx.modelId);
-  if (!catalogModel) {
+  const normalizedModelId = params.ctx.modelId.trim().toLowerCase();
+  const catalogModelId = MINIMAX_TEXT_MODEL_ORDER.find(
+    (id) => id.toLowerCase() === normalizedModelId,
+  );
+  if (!catalogModelId) {
     return undefined;
   }
   return normalizeModelCompat({
-    id: catalogModel.id,
-    name: catalogModel.model.name,
+    ...buildMinimaxApiModelDefinition(catalogModelId),
     provider: params.providerId,
     api: "anthropic-messages",
     baseUrl:
       normalizeOptionalString(params.ctx.providerConfig?.baseUrl) ?? resolveMinimaxCatalogBaseUrl(),
-    reasoning: catalogModel.model.reasoning,
-    input: [...catalogModel.model.input],
-    cost: resolveMinimaxApiCost(catalogModel.id),
-    contextWindow: catalogModel.model.contextWindow,
-    maxTokens: DEFAULT_MINIMAX_MAX_TOKENS,
   });
 }
 
@@ -141,14 +131,20 @@ async function resolveApiCatalog(ctx: ProviderCatalogContext) {
   if (!auth.apiKey) {
     return null;
   }
+  const defaults = buildMinimaxProvider(ctx.env);
+  const providerConfig = {
+    ...defaults,
+    baseUrl: getProviderBaseUrl(ctx.config, API_PROVIDER_ID) ?? defaults.baseUrl,
+    api: ctx.config.models?.providers?.[API_PROVIDER_ID]?.api ?? defaults.api,
+  };
   return await buildOpenAICompatibleLiveProviderCatalog({
     discoveryMode: "strict",
     providerId: API_PROVIDER_ID,
-    providerConfig: buildMinimaxProvider(ctx.env),
+    providerConfig,
     apiKey: auth.apiKey,
     discoveryApiKey: auth.discoveryApiKey,
     profileId: auth.profileId,
-    modelDiscovery: buildMinimaxModelDiscovery(),
+    modelDiscovery: buildMinimaxModelDiscovery(providerConfig),
   });
 }
 
@@ -209,7 +205,10 @@ async function resolvePortalCatalog(ctx: ProviderCatalogContext): Promise<Provid
     apiKey,
     discoveryApiKey: auth.discoveryApiKey,
     profileId: auth.profileId,
-    modelDiscovery: buildMinimaxModelDiscovery(usesPortalBearerAuth ? "oauth" : "api_key"),
+    modelDiscovery: buildMinimaxModelDiscovery(
+      providerConfig,
+      usesPortalBearerAuth ? "oauth" : "api_key",
+    ),
   });
 }
 
@@ -224,9 +223,11 @@ function createOAuthHandler(region: MiniMaxRegion) {
       const result = await loginMiniMaxPortalOAuth({
         openUrl: ctx.openUrl,
         note: (message, title) => ctx.prompter.note(message, title),
+        deviceCode: ctx.prompter.deviceCode,
         progress,
         region,
         ...(ctx.signal ? { signal: ctx.signal } : {}),
+        ...(ctx.assertCurrent ? { assertCurrent: ctx.assertCurrent } : {}),
       });
 
       progress.stop("MiniMax OAuth complete");

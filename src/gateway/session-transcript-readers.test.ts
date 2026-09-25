@@ -15,16 +15,16 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
-import { readSessionMessagesAroundIdWithStatsAsync } from "./session-transcript-anchor-reader.js";
 import {
   readSessionMessageByIdAsync,
   readSessionMessageCountAsync,
   readSessionMessagesAsync,
+  readSessionMessagesAroundIdWithStatsAsync,
   readSessionMessagesPageWithStatsAsync,
-  readLatestSessionUsageFromTranscriptAsync,
   visitSessionMessagesAsync,
   type SessionTranscriptReadScope,
 } from "./session-transcript-readers.js";
+import { readLatestSessionUsageFromTranscriptAsync } from "./session-transcript-usage.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 

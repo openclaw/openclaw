@@ -8,6 +8,7 @@ import {
 import { withEnvAsync } from "../test-utils/env.js";
 import { commitPluginInstallRecordsOnly } from "./install-record-commit.js";
 import { writePersistedInstalledPluginIndexInstallRecordsWithLease } from "./installed-plugin-index-records.js";
+import { refreshPersistedInstalledPluginIndexWithLeaseSync } from "./installed-plugin-index-store-write.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
@@ -50,6 +51,47 @@ function readRow(databasePath: string) {
 }
 
 describe("installed plugin index mutation receipts", () => {
+  it("collects only committed index writes and their owned compensation", async () => {
+    const env = makeEnv();
+    await withEnvAsync(env, () =>
+      withPluginLifecycleLease({}, async (lease) => {
+        const failure = new Error("source changed after index publication");
+        await expect(
+          commitPluginInstallRecordsOnly({
+            nextInstallRecords: {},
+            nextConfig: {},
+            verifyConfigFresh: async () => {
+              throw failure;
+            },
+          }),
+        ).rejects.toBe(failure);
+        expect(readRow(lease.databasePath)).toBeNull();
+      }),
+    );
+  });
+  it("discards mutation receipts when the actual outer SQLite transaction rolls back", async () => {
+    const env = makeEnv();
+    await withPluginLifecycleLease({ env }, async (lease) => {
+      const failure = new Error("outer transaction rollback");
+      expect(() =>
+        runOpenClawStateWriteTransaction(
+          () => {
+            refreshPersistedInstalledPluginIndexWithLeaseSync({
+              reason: "source-changed",
+              installRecords: {},
+              candidates: [],
+              env,
+              lease,
+            });
+            throw failure;
+          },
+          { env },
+        ),
+      ).toThrow(failure);
+      expect(readRow(lease.databasePath)).toBeNull();
+    });
+  });
+
   it.each([null, priorJson, "true"])(
     "retains exact predecessor and committed row for %s",
     async (valueJson) => {

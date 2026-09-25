@@ -71,7 +71,8 @@ the tray to confirm connection, pairing, node status, and channel health.
 
 Windows Hub can register as an OpenClaw node so the agent can use declared
 Windows-native capabilities through the Gateway. Node commands must be
-declared by the node and allowed by Gateway policy before they run; see
+declared by the node, included in its approved surface, and allowed by Gateway
+policy before they run; see
 [Nodes](/nodes/command-policy#command-policy) for the full allow/deny model.
 
 Common commands:
@@ -89,9 +90,25 @@ approve it from the Gateway host:
 
 ```powershell
 openclaw devices list
-openclaw devices approve <requestId>
-openclaw nodes status
+openclaw devices approve <deviceRequestId>
 ```
+
+Device approval admits the connection only. If node mode has paused for manual
+pairing, restart node mode or the app so it reconnects. This reconnect creates
+a separate command-surface request. On the Gateway:
+
+```powershell
+openclaw nodes pending
+openclaw nodes approve <nodeRequestId>
+openclaw nodes status
+openclaw nodes describe --node <idOrNameOrIp>
+```
+
+The two request IDs are distinct. An initial unapproved surface has no effective
+commands. During a pending expansion, approved commands that remain declared and
+allowed can still run. SSH-verified and bootstrap enrollment can approve the
+first surface automatically; trusted-network device approval alone does not.
+Later command, capability, or permission expansion still requires approval.
 
 The Gateway only forwards commands the node declares and server policy
 allows. Privacy-sensitive commands such as `screen.record`, `camera.snap`,
@@ -137,6 +154,13 @@ through a generated `gateway.vbs` WScript wrapper, so the background Gateway
 does not open a visible console window. If task creation is denied, OpenClaw
 falls back to a per-user Startup-folder login item.
 
+If you append output redirection to the `gateway.cmd` launch line, quote the
+entire target, for example `>> "%USERPROFILE%\.openclaw\logs\gateway-stdout.log" 2>&1`.
+Complete trailing redirections are excluded from process ownership checks.
+Unquoted environment expansions can leave filename fragments in the Gateway's
+arguments; OpenClaw preserves ambiguous launcher commands and refuses to terminate
+a listener whose ownership cannot be verified. Quote the target before retrying.
+
 The hidden launcher owns the supervised Gateway process tree. Ending the task
 with `schtasks /end /tn "OpenClaw Gateway"`, `Stop-ScheduledTask`, or Task
 Scheduler's **End** action terminates the Gateway and its descendants. After
@@ -144,6 +168,15 @@ updating an older installation, run `openclaw gateway install --force` to
 regenerate the launcher if the update did not refresh it.
 
 Gateway status and Doctor read the Scheduled Task's numeric current state, independently of the Windows display language or console code page. A previous task exit result does not prove whether it is running now. Queued or unknown tasks do not count as safely stopped for Doctor maintenance. Stop a queued task through its service owner; if inspection is inaccessible, restore Task Scheduler inspection permissions before retrying.
+
+The task probe allows Windows PowerShell to inherit or create a console because
+some PowerShell 5.1 hosts fail inspection when console creation is disabled.
+Invoking it from an app without a console can briefly display a console window.
+If inspection fails, Doctor and update refusals include the underlying probe
+detail; an empty response identifies the exit code and reports that PowerShell
+produced no output.
+
+During update preflight, the Scheduled Task runtime probe uses the update's `--timeout` budget for each attempt and retries once on timeout; if it still times out, the refusal reports the probe budget and keeps code unchanged.
 
 Gateway startup creates private SQLite staging directories through Windows APIs,
 without compiling C# or launching PowerShell for their permissions. The owner,
@@ -323,6 +356,11 @@ openclaw devices approve <requestId>
 
 If the device already had a token, reconnect from the Connections tab after
 approval.
+
+For a node request, complete the separate command-surface approval in
+[Windows node mode](#windows-node-mode): restart paused node mode, then run
+`openclaw nodes pending` and approve its distinct node request ID. Operator-device
+approval alone does not complete that node flow.
 
 ### Web chat cannot reach a remote Gateway
 

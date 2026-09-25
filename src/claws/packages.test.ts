@@ -1,67 +1,17 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import { describe, expect, it, vi } from "vitest";
 import { PLUGIN_ARTIFACT_ADAPTER_IDENTITY } from "../plugins/install-artifact-inspection.js";
 import { installClawPackages, preflightClawPackage } from "./packages.js";
+import { packageInstallPlan as plan } from "./packages.test-support.js";
 import type { PersistedClawPackageRef } from "./provenance.js";
-import type { ClawAddPlan, ResolvedClawPackage } from "./types.js";
 
-function plan(
-  packages: ResolvedClawPackage[],
-  ownerAction: "install" | "reuse" = "install",
-): ClawAddPlan {
-  return {
-    schemaVersion: "openclaw.clawAddPlan.v1",
-    manifestSchemaVersion: 1,
-    stability: "experimental",
-    dryRun: true,
-    mutationAllowed: false,
-    planIntegrity: "sha256:plan",
-    claw: {
-      kind: "package",
-      name: "incident-claw",
-      version: "1.0.0",
-      packageRoot: "/tmp/claw",
-      manifestPath: "/tmp/claw/claw.json",
-      integrityKind: "artifact",
-      integrity: "sha256:claw",
-      byteLength: 123,
-    },
-    agent: {
-      requestedId: "incident",
-      finalId: "incident-2",
-      workspace: "/tmp/incident-2",
-      config: { id: "incident-2", workspace: "/tmp/incident-2" },
-    },
-    summary: {
-      totalActions: packages.length,
-      agentActions: 0,
-      workspaceActions: 0,
-      packageActions: packages.length,
-      mcpServerActions: 0,
-      cronJobActions: 0,
-      blockedActions: 0,
-      capabilityEscalations: 0,
-    },
-    capabilityChanges: [],
-    actions: packages.map((pkg) => ({
-      kind: "package",
-      id: `${pkg.kind}:${pkg.ref}`,
-      action: "install",
-      target: `${pkg.source}:${pkg.ref}@${pkg.version}`,
-      details: {
-        ...pkg,
-        ownerAction,
-        ...(pkg.kind === "plugin" ? { installId: pkg.ref.split("/").at(-1) } : {}),
-      },
-      blocked: false,
-    })),
-    readiness: { ready: true, requirements: [] },
-    blockers: [],
-    diagnostics: [],
-  };
-}
+vi.mock("@openclaw/fs-safe/temp", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@openclaw/fs-safe/temp")>();
+  return { ...actual, tempWorkspace: vi.fn(actual.tempWorkspace) };
+});
 
 const integrity = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const pluginPackage = {
@@ -295,7 +245,6 @@ describe("preflightClawPackage isolated plugin inspection", () => {
   });
 
   it("preserves live extension-directory conflict checks for a new plugin install", async () => {
-    const createProbeExtensionsDir = vi.fn();
     const liveProbe = vi.fn(async () => ({
       ok: false as const,
       code: "plugin_target_exists" as never,
@@ -311,7 +260,6 @@ describe("preflightClawPackage isolated plugin inspection", () => {
             request: {} as never,
           })),
           probePlugin: liveProbe,
-          createProbeExtensionsDir,
         },
       }),
     ).resolves.toMatchObject({
@@ -321,7 +269,6 @@ describe("preflightClawPackage isolated plugin inspection", () => {
     expect(liveProbe).toHaveBeenCalledWith(
       expect.not.objectContaining({ extensionsDir: expect.anything() }),
     );
-    expect(createProbeExtensionsDir).not.toHaveBeenCalled();
   });
 
   it("preserves canonical inspection when an installed plugin version conflicts", async () => {
@@ -357,8 +304,6 @@ describe("preflightClawPackage isolated plugin inspection", () => {
             request: {} as never,
           })),
           probePlugin: probePluginConflict,
-          createProbeExtensionsDir: vi.fn(async () => "/tmp/claw-plugin-probe"),
-          removeProbeExtensionsDir: vi.fn(async () => undefined),
         },
       }),
     ).resolves.toMatchObject({
@@ -374,29 +319,44 @@ describe("preflightClawPackage isolated plugin inspection", () => {
     });
   });
 
-  it("inspects an exact installed plugin outside its live extension directory", async () => {
-    const removeProbeExtensionsDir = vi.fn(async () => {
-      throw new Error("temporary directory is still busy");
+  it("keeps canonical inspection when isolated probe cleanup reports failure", async () => {
+    let cleanupFailureInjected = false;
+    vi.mocked(tempWorkspace).mockImplementationOnce(async (options) => {
+      const actual =
+        await vi.importActual<typeof import("@openclaw/fs-safe/temp")>("@openclaw/fs-safe/temp");
+      const workspace = await actual.tempWorkspace(options);
+      const cleanup = workspace.cleanup.bind(workspace);
+      workspace.cleanup = async () => {
+        await cleanup();
+        cleanupFailureInjected = true;
+        throw new Error("temporary directory cleanup failed");
+      };
+      return workspace;
     });
-    const isolatedProbe = vi.fn(async () => ({
-      ok: true as const,
-      pluginId: "audit",
-      packageName: "@owner/audit",
-      targetDir: "/tmp/claw-plugin-probe/audit",
-      extensions: [],
-      artifactInspection: {
-        format: "openclaw" as const,
-        mapped: ["plugin"],
-        unavailable: [],
-      },
-      clawhub: {
-        source: "clawhub" as const,
-        clawhubUrl: "https://clawhub.ai",
-        clawhubPackage: "@owner/audit",
-        clawhubFamily: "code-plugin" as const,
-        integrity,
-      },
-    }));
+    let probeDirectory: string | undefined;
+    const isolatedProbe = vi.fn(async (params: { extensionsDir?: string }) => {
+      probeDirectory = params.extensionsDir;
+      expect((await lstat(probeDirectory!)).isDirectory()).toBe(true);
+      return {
+        ok: true as const,
+        pluginId: "audit",
+        packageName: "@owner/audit",
+        targetDir: join(probeDirectory!, "audit"),
+        extensions: [],
+        artifactInspection: {
+          format: "openclaw" as const,
+          mapped: ["plugin"],
+          unavailable: [],
+        },
+        clawhub: {
+          source: "clawhub" as const,
+          clawhubUrl: "https://clawhub.ai",
+          clawhubPackage: "@owner/audit",
+          clawhubFamily: "code-plugin" as const,
+          integrity,
+        },
+      };
+    });
 
     await expect(
       preflightClawPackage(pluginPackage, "/tmp/workspace", {
@@ -411,8 +371,6 @@ describe("preflightClawPackage isolated plugin inspection", () => {
             installedAt: "2026-08-06T00:00:00.000Z",
           })),
           probePlugin: isolatedProbe,
-          createProbeExtensionsDir: vi.fn(async () => "/tmp/claw-plugin-probe"),
-          removeProbeExtensionsDir,
         },
       }),
     ).resolves.toMatchObject({
@@ -425,10 +383,8 @@ describe("preflightClawPackage isolated plugin inspection", () => {
       mapped: ["plugin"],
       unavailable: [],
     });
-    expect(isolatedProbe).toHaveBeenCalledWith(
-      expect.objectContaining({ extensionsDir: "/tmp/claw-plugin-probe", dryRun: true }),
-    );
-    expect(removeProbeExtensionsDir).toHaveBeenCalledWith("/tmp/claw-plugin-probe");
+    expect(cleanupFailureInjected).toBe(true);
+    await expect(lstat(probeDirectory!)).rejects.toMatchObject({ code: "ENOENT" });
   });
 });
 
@@ -522,9 +478,11 @@ describe("installClawPackages", () => {
 
     expect(installPlugin).toHaveBeenCalledWith(
       expect.objectContaining({
-        raw: "clawhub:@owner/audit@2.0.1",
-        allowInstallPolicyWarningPrompt: false,
-        opts: {
+        request: {
+          source: "clawhub",
+          packageName: "@owner/audit",
+          version: "2.0.1",
+          mode: "install",
           expectedIntegrity:
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           expectedPluginId: "audit",
@@ -532,9 +490,6 @@ describe("installClawPackages", () => {
         invalidateRuntimeCache: false,
         clawManaged: true,
       }),
-    );
-    expect(probePlugin).toHaveBeenCalledWith(
-      expect.not.objectContaining({ extensionsDir: expect.anything() }),
     );
     expect(persistPackageRef).toHaveBeenCalledWith(
       expect.anything(),
@@ -875,9 +830,12 @@ describe("installClawPackages", () => {
     ).rejects.toMatchObject({ code: "package_install_failed", message: "second install failed" });
 
     expect(uninstallPlugin).toHaveBeenCalledWith(
-      "first",
-      { force: true, invalidateRuntimeCache: false, clawManaged: true },
-      expect.anything(),
+      expect.objectContaining({
+        pluginId: "first",
+        caller: "cli",
+        invalidateRuntimeCache: false,
+        clawManaged: true,
+      }),
     );
     expect(completePackageRef).toHaveBeenCalledWith(
       expect.objectContaining({ ref: "@owner/first" }),

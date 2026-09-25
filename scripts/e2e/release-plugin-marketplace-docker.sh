@@ -13,13 +13,7 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-release-plugin-marketplace-e2e" OPENCLAW_RELEASE_PLUGIN_MARKETPLACE_E2E_IMAGE)"
 SKIP_BUILD="${OPENCLAW_RELEASE_PLUGIN_MARKETPLACE_E2E_SKIP_BUILD:-0}"
 run_log=""
-cleanup() {
-  docker_e2e_cleanup_package_tgz "${PACKAGE_TGZ:-}"
-  if [ -n "${run_log:-}" ]; then
-    rm -f "$run_log"
-  fi
-}
-trap cleanup EXIT
+trap 'docker_e2e_cleanup_package_run "${PACKAGE_TGZ:-}" "${run_log:-}"' EXIT
 
 PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz release-plugin-marketplace "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}")"
 docker_e2e_package_mount_args "$PACKAGE_TGZ"

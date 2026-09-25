@@ -13,6 +13,7 @@ import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqli
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { CompactionProvider } from "../../plugins/compaction-provider.js";
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { MAX_OVERFLOW_COMPACTION_ATTEMPTS } from "../agent-compaction-constants.js";
 import {
   getCompactionSafeguardRuntime,
@@ -48,8 +49,15 @@ import { loadExtensionFromFactory } from "./extensions/loader.js";
 import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    for (const stateDir of tempDirs.dirs) {
+      await cleanupSessionStateForTest({ stateDir });
+    }
+    cleanup();
+  }),
+);
 registerAgentSessionLoopTestLifecycle();
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function createStaleThinkingContent(): AssistantMessage["content"] {
   return [
@@ -573,6 +581,7 @@ describe("AgentSession compaction", () => {
 
     await session.prompt("continue");
 
+    expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
     const compactionEvents = onAgentEvent.mock.calls
       .map(([event]) => event)
       .filter((event) => event.stream === "compaction");
@@ -605,29 +614,15 @@ describe("AgentSession compaction", () => {
       ...createAssistant(testModel, [{ type: "text", text: "old answer" }]),
       timestamp: 2,
     });
-    const handlers = createCompactionHandlers();
     const syntheticError = new Error("synthetic manual cancellation rejection");
-    const abortActiveCompaction = () => session.abortCompaction();
-    handlers.set("session_before_compact", [
-      async () => {
-        abortActiveCompaction();
-        throw syntheticError;
-      },
-    ]);
     streamMocks.streamSimple.mockImplementation(
       (_activeModel: Model, _context: Context, options?: SimpleStreamOptions) => {
-        if (options?.signal?.aborted) {
-          throw syntheticError;
-        }
-        return createAssistantResultStream(
-          createAssistant(testModel, [{ type: "text", text: "unexpected compaction" }]),
-        );
+        expect(options?.signal?.aborted).toBe(false);
+        session.abortCompaction();
+        throw syntheticError;
       },
     );
-    const { session } = await createTestSession({
-      sessionManager,
-      resourceLoader: createResourceLoader(handlers),
-    });
+    const { session } = await createTestSession({ sessionManager });
     const onAgentEvent = vi.fn();
     const subscription = subscribeEmbeddedAgentSession({
       session,
@@ -637,6 +632,7 @@ describe("AgentSession compaction", () => {
 
     await expect(session.compact()).rejects.toBe(syntheticError);
 
+    expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
     const compactionEvents = onAgentEvent.mock.calls
       .map(([event]) => event)
       .filter((event) => event.stream === "compaction");
@@ -817,7 +813,7 @@ describe("AgentSession compaction", () => {
         }
         const contextTokens = estimateContextTokens(session.messages).tokens;
         expect(contextTokens).toBeGreaterThan(0);
-        expect(committed).toMatchObject({ summary });
+        expect(committed).toMatchObject({ summary, tokensAfter: contextTokens });
         expect(committed.id).not.toBe(oldCompactionId);
         expect.soft(reportedCompactionId).toBe(committed.id);
         expect.soft(replacementTokens).toEqual([contextTokens]);

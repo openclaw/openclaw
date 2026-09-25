@@ -9,7 +9,7 @@ import type { TSchema } from "typebox";
 import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { McpCodexToolApprovalMode, McpServerToolFilterConfig } from "../config/types.mcp.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.types.js";
 import type { McpCodexToolAnnotations } from "./mcp-codex-tool-approval.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -67,6 +67,8 @@ export type McpCatalogTool = {
   excludedFromOpenClawCatalog?: true;
   deniedBySession?: true;
   codexAnnotations?: McpCodexToolAnnotations;
+  /** Trusted requester OAuth sign-in bootstrap; never dispatches into the server's tools. */
+  oauthConnectBootstrap?: true;
 };
 
 /** Complete tool catalog for a session-scoped MCP runtime. */
@@ -178,6 +180,8 @@ export type SessionMcpRuntime = {
 export type SessionMcpRuntimeLease = {
   runtime: SessionMcpRuntime;
   releaseLease: () => void;
+  /** Retires unleased discovery servers outside the final prepared bundle. */
+  retireUnusedServers?: (retainedServerNames: ReadonlySet<string>) => Promise<void>;
 };
 
 /** One requester call's lease and immutable catalog publication version. */
@@ -199,23 +203,15 @@ export type SessionMcpRuntimeManager = {
     agentAccountId?: string | null;
     messageChannel?: string | null;
     toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
+    toolDenylist?: string[];
   }) => Promise<SessionMcpRuntimeLease>;
   /**
    * Requester-scoped partition only — never creates static transports.
    * Undefined when no scoped servers, no senderId, or nothing resolves.
    */
-  acquireRequesterScoped: (params: {
-    sessionId: string;
-    sessionKey?: string;
-    workspaceDir: string;
-    agentDir?: string;
-    cfg?: OpenClawConfig;
-    manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
-    requesterSenderId?: string | null;
-    agentAccountId?: string | null;
-    messageChannel?: string | null;
-    toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
-  }) => Promise<RequesterScopedMcpRuntimeHandle | undefined>;
+  acquireRequesterScoped: (
+    params: Parameters<SessionMcpRuntimeManager["acquire"]>[0],
+  ) => Promise<RequesterScopedMcpRuntimeHandle | undefined>;
   /**
    * Session-stable advertised catalog for scoped servers. Used by shared-thread
    * harnesses so dynamic tool specs do not rotate per sender.

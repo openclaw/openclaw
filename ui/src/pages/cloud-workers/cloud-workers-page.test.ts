@@ -43,6 +43,7 @@ const operatingSystems = [
   { id: "linux", label: "Linux", default: true },
   { id: "macos", label: "macOS" },
   { id: "windows/wsl2", label: "Windows (WSL2)" },
+  { id: "future-os", label: "Future OS", disabledReason: "Upgrade the worker provider." },
 ];
 
 describe("Cloud Workers mutation requests", () => {
@@ -105,12 +106,22 @@ describe("Cloud Workers mutation requests", () => {
             sourceConfig: config,
             raw: JSON.stringify(config),
             hash,
+            appliedConfigHash: hash,
             valid: true,
             issues: [],
           };
         }
         if (method === "environments.list") {
-          return { environments: [], profiles: [{ id: "pending", operatingSystems: systems }] };
+          if (!isRecord(params) || params.projection !== "profiles") {
+            throw new Error("environment inventory unavailable");
+          }
+          return {
+            environments: [],
+            profiles: [
+              { id: "pending", operatingSystems: systems },
+              ...(hash === "after" ? [{ id: "retained" }] : []),
+            ],
+          };
         }
         if (method !== "config.patch" || !validateConfigPatchParams(params)) {
           throw new Error(`Unexpected request ${method}`);
@@ -147,9 +158,13 @@ describe("Cloud Workers mutation requests", () => {
       provider.append(page);
       document.body.append(provider);
       try {
-        await waitForFast(() =>
-          expect(page.querySelectorAll(".settings-row code")).toHaveLength(2),
-        );
+        await waitForFast(() => {
+          const profiles = [...page.querySelectorAll(".settings-section")].find((section) =>
+            section.querySelector("h2")?.textContent?.trim().startsWith("Profiles"),
+          );
+          expect(profiles?.querySelectorAll(".settings-row code")).toHaveLength(2);
+        });
+        expect(page.textContent).not.toContain("environment inventory unavailable");
         const row = expectDefined(
           [...page.querySelectorAll(".settings-row")].find(
             (entry) => entry.querySelector("code")?.textContent === "pending",
@@ -180,6 +195,16 @@ describe("Cloud Workers mutation requests", () => {
                 ? [initialTarget]
                 : []),
             ]);
+            for (const system of systems) {
+              if (system.disabledReason) {
+                const option = expectDefined(
+                  [...select.options].find((candidate) => candidate.value === system.id),
+                  "Unavailable operating system",
+                );
+                expect(option.disabled).toBe(true);
+                expect(option.textContent).toContain(system.disabledReason);
+              }
+            }
             select.value = expectDefined(target, "Selected OS");
             select.dispatchEvent(new Event("change", { bubbles: true }));
           }
@@ -188,8 +213,38 @@ describe("Cloud Workers mutation requests", () => {
           setup.dispatchEvent(new Event("input", { bubbles: true }));
           await waitForFast(() => expect(actionButton(page, "Save").disabled).toBe(false));
           actionButton(page, "Save").click();
+          await waitForFast(() =>
+            expect(page.textContent).toContain(
+              "Enter a setup command or clear the setup environment names.",
+            ),
+          );
+          expect(patches).toHaveLength(0);
+          const setupEnv = expectDefined(
+            page.querySelector<HTMLInputElement>('input[aria-label="Setup environment names"]'),
+            "Setup environment names editor",
+          );
+          expect(setupEnv.value).toBe("QA_WORKER_FLAG");
+          setupEnv.value = "";
+          setupEnv.dispatchEvent(new Event("input", { bubbles: true }));
+          await waitForFast(() => expect(actionButton(page, "Save").disabled).toBe(false));
+          actionButton(page, "Save").click();
         }
         await waitForFast(() => expect(patches).toHaveLength(1));
+        await runtimeConfig.refresh();
+        await waitForFast(() => {
+          const retainedRow = [...page.querySelectorAll(".settings-row")].find(
+            (entry) => entry.querySelector("code")?.textContent === "retained",
+          );
+          expect(retainedRow?.textContent).toContain("Advertised");
+        });
+        if (action !== "delete") {
+          await waitForFast(() =>
+            expect(page.textContent).toContain(
+              "Profile saved. Build a snapshot from the Snapshots view.",
+            ),
+          );
+          expect(request).not.toHaveBeenCalledWith("environments.prepare", expect.anything());
+        }
         expect(patches[0]).toMatchObject({
           baseHash: "before",
           replacePaths: ["cloudWorkers.profiles.pending.settings.setupEnv"],
@@ -249,6 +304,14 @@ describe("Cloud Workers mutation requests", () => {
             expect(page.querySelector('input[aria-label="Profile ID"]')).not.toBeNull(),
           );
           expect(page.querySelector('select[aria-label="Operating system"]')).toBeNull();
+        } else {
+          gatewayHarness.publish(false);
+          await waitForFast(() => {
+            const retainedRow = [...page.querySelectorAll(".settings-row")].find(
+              (entry) => entry.querySelector("code")?.textContent === "retained",
+            );
+            expect(retainedRow?.textContent).toContain("Unavailable");
+          });
         }
       } finally {
         provider.remove();

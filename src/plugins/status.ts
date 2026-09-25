@@ -2,6 +2,7 @@
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOpenClawVersionBase } from "../config/version.js";
+import { inspectDecisionProviders } from "../decisions/runtime.js";
 import { listImportedBundledPluginFacadeIds } from "../plugin-sdk/facade-runtime.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { inspectBundleLspRuntimeSupport } from "./bundle-lsp.js";
@@ -27,7 +28,7 @@ import {
   resolveCompatibleRuntimePluginRegistry,
 } from "./loader.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
-import { tracksPluginDependencyStatus } from "./official-external-plugin-repair-hints.js";
+import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import {
   tracePluginLifecyclePhase,
   tracePluginLifecyclePhaseAsync,
@@ -47,11 +48,7 @@ import {
   formatPluginCompatibilityNotice,
   type PluginCompatibilityNotice,
 } from "./status-compatibility.js";
-import {
-  buildPluginDependencyStatus,
-  projectPluginDependencyHealth,
-} from "./status-dependencies-core.js";
-import { collectPluginCapabilityConsentDiagnostics } from "./status-snapshot.js";
+import { projectPluginInstallHealth } from "./status-snapshot.js";
 import type { PluginHookName, PluginLogger } from "./types.js";
 
 export type PluginStatusReport = PluginRegistry & {
@@ -98,6 +95,7 @@ export type PluginInspectReport = {
   commands: string[];
   cliCommands: string[];
   services: string[];
+  decisions?: ReturnType<typeof inspectDecisionProviders>;
   gatewayDiscoveryServices: string[];
   gatewayMethods: string[];
   mcpServers: Array<{
@@ -199,6 +197,7 @@ type PluginReportParams = {
   onlyPluginIds?: readonly string[];
   /** Capture full registrations without starting channel runtime sidecars. */
   runtimeInspection?: boolean;
+  loadMode?: "validate";
   workspaceDir?: string;
   /** Use an explicit env when plugin roots should resolve independently from process.env. */
   env?: NodeJS.ProcessEnv;
@@ -238,11 +237,6 @@ function preparePluginReport(params: PluginReportParams | undefined) {
           ...baseContext,
           workspaceDir,
         };
-  const manifestByPluginId = metadataSnapshot.byPluginId;
-  // Runtime records drop package build metadata; the installed index still owns it.
-  const packageBuildByPluginId = new Map(
-    metadataSnapshot.index.plugins.map((plugin) => [plugin.pluginId, plugin.packageBuild]),
-  );
   const config = context.config;
 
   // Apply bundled-provider allowlist compat so that `plugins list` and `doctor`
@@ -277,8 +271,6 @@ function preparePluginReport(params: PluginReportParams | undefined) {
     workspaceDir,
     metadataSnapshot,
     context,
-    manifestByPluginId,
-    packageBuildByPluginId,
     runtimeCompatConfig,
     onlyPluginIds,
     runtimeLoadOptions: buildPluginRuntimeLoadOptions(context, {
@@ -287,7 +279,8 @@ function preparePluginReport(params: PluginReportParams | undefined) {
       workspaceDir,
       env: params?.env,
       loadModules: true,
-      cache: false,
+      cache: true,
+      mode: params?.loadMode,
       onlyPluginIds,
       toolDiscovery: params?.runtimeInspection,
     }),
@@ -332,8 +325,7 @@ function projectPluginReport(
   params: PluginReportParams | undefined,
   loadModules: boolean,
 ): PluginStatusReport {
-  const { workspace, workspaceDir, metadataSnapshot, manifestByPluginId, packageBuildByPluginId } =
-    prepared;
+  const { workspace, workspaceDir, metadataSnapshot } = prepared;
   const importedPluginIds = new Set([
     ...(loadModules
       ? registry.plugins
@@ -344,50 +336,37 @@ function projectPluginReport(
     ...listImportedBundledPluginFacadeIds(),
   ]);
 
-  return projectPluginDependencyHealth({
-    workspaceDir,
-    workspaceScope: workspace.workspaceScope,
-    ...registry,
-    diagnostics: appendPluginControlPlaneWorkspaceDiagnostic(
-      [
-        ...registry.diagnostics,
-        ...collectPluginCapabilityConsentDiagnostics({
-          index: metadataSnapshot.index,
-          manifests: manifestByPluginId,
+  return projectPluginInstallHealth(
+    {
+      workspaceDir,
+      workspaceScope: workspace.workspaceScope,
+      ...registry,
+      diagnostics: appendPluginControlPlaneWorkspaceDiagnostic(
+        [...registry.diagnostics],
+        workspace,
+      ),
+      plugins: registry.plugins.map((plugin) =>
+        Object.assign({}, plugin, {
+          imported: plugin.format !== `bundle` && importedPluginIds.has(plugin.id),
+          version: resolveReportedPluginVersion(plugin, params?.env),
         }),
-      ],
-      workspace,
-    ),
-    plugins: registry.plugins.map((plugin) =>
-      Object.assign({}, plugin, {
-        imported: plugin.format !== `bundle` && importedPluginIds.has(plugin.id),
-        version: resolveReportedPluginVersion(plugin, params?.env),
-        dependencyStatus:
-          plugin.dependencyStatus ??
-          (tracksPluginDependencyStatus({
-            origin: plugin.origin,
-            pluginId: plugin.id,
-            packageName: plugin.packageName ?? manifestByPluginId.get(plugin.id)?.packageName,
-            packageBuild: packageBuildByPluginId.get(plugin.id),
-          })
-            ? buildPluginDependencyStatus({
-                rootDir: plugin.rootDir,
-                dependencies: manifestByPluginId.get(plugin.id)?.packageDependencies,
-                optionalDependencies: manifestByPluginId.get(plugin.id)
-                  ?.packageOptionalDependencies,
-              })
-            : undefined),
-      }),
-    ),
-  });
+      ),
+    },
+    { metadata: metadataSnapshot, config: prepared.rawConfig, env: params?.env },
+  );
 }
 
 export function buildPluginSnapshotReport(params?: PluginReportParams): PluginStatusReport {
   return buildPluginReport(params, false);
 }
 
-export function buildPluginDiagnosticsReport(params?: PluginReportParams): PluginStatusReport {
-  return buildPluginReport(params, true);
+/** Complete diagnostics projection before retiring its imported plugin generation. */
+export async function withPluginDiagnosticsReport<T>(
+  params: PluginReportParams | undefined,
+  consume: (report: PluginStatusReport) => T | Promise<T>,
+): Promise<T> {
+  await using cache = createPluginCache();
+  return await withPluginCache(cache, () => consume(buildPluginReport(params, true)));
 }
 
 /** Serializes an owned inspection before disposing its registration resources. */
@@ -424,13 +403,13 @@ type PluginInspectParams = Pick<
   PluginReportParams,
   "config" | "workspaceDir" | "env" | "logger"
 > & {
-  report?: PluginStatusReportLike;
+  report: PluginStatusReportLike;
 };
 
 function resolvePluginInspectContext({ report, ...params }: PluginInspectParams) {
-  const { rawConfig, config } = resolvePluginRuntimeLoadContext(params);
+  const { config } = resolvePluginRuntimeLoadContext(params);
   return {
-    report: report ?? buildPluginDiagnosticsReport({ ...params, config: rawConfig }),
+    report,
     entries: normalizePluginsConfig(config.plugins).entries,
   };
 }
@@ -448,39 +427,45 @@ export function buildPluginInspectReport({
   return plugin ? buildPluginInspectRecord(plugin, context) : null;
 }
 
+type PluginInspectRows = Pick<
+  PluginRegistry,
+  "typedHooks" | "hooks" | "tools" | "diagnostics" | "gatewayMethodDescriptors" | "sessionCatalogs"
+>;
+
 function buildPluginInspectRecord(
   plugin: PluginRegistry["plugins"][number],
   { report, entries }: ReturnType<typeof resolvePluginInspectContext>,
+  rows?: PluginInspectRows,
 ): PluginInspectReport {
-  const typedHooks = report.typedHooks
-    .filter((entry) => entry.pluginId === plugin.id)
+  const typedHooks = (
+    rows?.typedHooks ?? report.typedHooks.filter((entry) => entry.pluginId === plugin.id)
+  )
     .map((entry) => ({
       name: entry.hookName,
       priority: entry.priority,
     }))
     .toSorted((a, b) => a.name.localeCompare(b.name));
-  const customHooks = report.hooks
-    .filter((entry) => entry.pluginId === plugin.id)
+  const customHooks = (rows?.hooks ?? report.hooks.filter((entry) => entry.pluginId === plugin.id))
     .map((entry) => ({
       name: entry.entry.hook.name,
       events: [...entry.events].toSorted(),
     }))
     .toSorted((a, b) => a.name.localeCompare(b.name));
-  const tools = report.tools
-    .filter((entry) => entry.pluginId === plugin.id)
-    .map((entry) => ({
-      names: [...entry.names],
-      optional: entry.optional,
-    }));
-  const diagnostics = report.diagnostics.filter((entry) => entry.pluginId === plugin.id);
+  const tools = (rows?.tools ?? report.tools.filter((entry) => entry.pluginId === plugin.id)).map(
+    (entry) => ({ names: [...entry.names], optional: entry.optional }),
+  );
+  const diagnostics = rows
+    ? [...rows.diagnostics]
+    : report.diagnostics.filter((entry) => entry.pluginId === plugin.id);
   const policyEntry = entries[normalizePluginPolicyId(plugin.id)];
-  const shapeSummary = buildPluginShapeSummary({ plugin, report });
+  const shapeSummary = buildPluginShapeSummary({ plugin, report: rows ?? report });
   const shape = shapeSummary.shape;
-  const gatewayMethods = (report.gatewayMethodDescriptors ?? [])
-    .filter(
+  const gatewayMethods = (
+    rows?.gatewayMethodDescriptors ??
+    (report.gatewayMethodDescriptors ?? []).filter(
       (descriptor) => descriptor.owner.kind === "plugin" && descriptor.owner.pluginId === plugin.id,
     )
-    .map((descriptor) => descriptor.name);
+  ).map((descriptor) => descriptor.name);
 
   // MCP metadata is process-stable and comes from the discovered plugin manifest.
   let mcpServers: PluginInspectReport["mcpServers"] = [];
@@ -552,6 +537,9 @@ function buildPluginInspectRecord(
     commands: [...plugin.commands],
     cliCommands: [...plugin.cliCommands],
     services: [...plugin.services],
+    decisions: inspectDecisionProviders(getRuntimeConfig(), report).filter(
+      (entry) => entry.pluginId === plugin.id,
+    ),
     gatewayDiscoveryServices: [...plugin.gatewayDiscoveryServiceIds],
     gatewayMethods,
     mcpServers,
@@ -572,21 +560,58 @@ function buildPluginInspectRecord(
   };
 }
 
-export function buildAllPluginInspectReports(
-  params: PluginInspectParams = {},
-): PluginInspectReport[] {
-  const context = resolvePluginInspectContext(params);
-  return context.report.plugins.map((plugin) => buildPluginInspectRecord(plugin, context));
+function groupByPluginId<T>(rows: readonly T[], getPluginId: (row: T) => string | undefined) {
+  const grouped = new Map<string, T[]>();
+  for (const row of rows) {
+    const pluginId = getPluginId(row);
+    if (pluginId === undefined) {
+      continue;
+    }
+    const group = grouped.get(pluginId);
+    if (group) {
+      group.push(row);
+    } else {
+      grouped.set(pluginId, [row]);
+    }
+  }
+  return grouped;
 }
 
-export function buildPluginCompatibilityWarnings(params?: PluginInspectParams): string[] {
+export function buildAllPluginInspectReports(params: PluginInspectParams): PluginInspectReport[] {
+  const context = resolvePluginInspectContext(params);
+  const { report } = context;
+  if (report.plugins.length < 2) {
+    return report.plugins.map((plugin) => buildPluginInspectRecord(plugin, context));
+  }
+  const typedHooks = groupByPluginId(report.typedHooks, (entry) => entry.pluginId);
+  const hooks = groupByPluginId(report.hooks, (entry) => entry.pluginId);
+  const tools = groupByPluginId(report.tools, (entry) => entry.pluginId);
+  const diagnostics = groupByPluginId(report.diagnostics, (entry) => entry.pluginId);
+  const sessionCatalogs = groupByPluginId(report.sessionCatalogs, (entry) => entry.pluginId);
+  const gatewayMethodDescriptors = groupByPluginId(
+    report.gatewayMethodDescriptors ?? [],
+    (descriptor) => (descriptor.owner.kind === "plugin" ? descriptor.owner.pluginId : undefined),
+  );
+  return report.plugins.map((plugin) =>
+    buildPluginInspectRecord(plugin, context, {
+      typedHooks: typedHooks.get(plugin.id) ?? [],
+      hooks: hooks.get(plugin.id) ?? [],
+      tools: tools.get(plugin.id) ?? [],
+      diagnostics: diagnostics.get(plugin.id) ?? [],
+      sessionCatalogs: sessionCatalogs.get(plugin.id) ?? [],
+      gatewayMethodDescriptors: gatewayMethodDescriptors.get(plugin.id) ?? [],
+    }),
+  );
+}
+
+export function buildPluginCompatibilityWarnings(params: PluginInspectParams): string[] {
   return buildPluginCompatibilityNotices(params).map(formatPluginCompatibilityNotice);
 }
 
 export function buildPluginCompatibilityNotices(
-  params?: PluginInspectParams,
+  params: PluginInspectParams,
 ): PluginCompatibilityNotice[] {
-  const registry = params?.report ?? buildPluginDiagnosticsReport(params);
+  const registry = params.report;
   return registry.plugins.flatMap((plugin) =>
     buildCompatibilityNoticesForInspect({
       plugin,

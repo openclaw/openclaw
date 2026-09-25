@@ -1,6 +1,6 @@
 import { css } from "lit";
 import { scrollbarShadowStyles } from "../../lit/scrollbar-styles.ts";
-import { dockPanelStyles } from "../dock-layout-controller.ts";
+import { dockPanelStyles } from "../dock-panel-styles.ts";
 import { desktopDocumentStyles } from "./desktop-document-styles.ts";
 import { desktopPanelLauncherStyles } from "./desktop-panel-launcher-styles.ts";
 
@@ -26,6 +26,10 @@ const desktopPanelStyles = css`
   .bp-icon[aria-disabled="true"] {
     opacity: 0.4;
   }
+  .desktop-toolbar-action > svg {
+    width: 15px;
+    height: 15px;
+  }
   .desktop-fullscreen-icon > svg {
     width: 15px;
     height: 15px;
@@ -50,11 +54,27 @@ const desktopPanelStyles = css`
     border-bottom: 1px solid var(--border, #262b34);
   }
   .desktop-toolbar--connection {
+    flex-wrap: wrap;
     min-height: 42px;
     gap: 12px;
   }
   .desktop-toolbar__spacer {
     flex: 1;
+  }
+  .desktop-sizing {
+    width: 88px;
+    height: 32px;
+    flex: 0 0 auto;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0 6px;
+    background: var(--bg);
+    color: var(--text);
+    font: inherit;
+    font-size: 12px;
+  }
+  .desktop-touch-toolbar .desktop-sizing {
+    height: 44px;
   }
   .desktop-button {
     border: 1px solid var(--border, #262b34);

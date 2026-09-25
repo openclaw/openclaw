@@ -11,6 +11,7 @@ import {
   resolveFirstExistingMacOSDesktopCodexBundledMarketplacePath,
   resolveMacOSDesktopCodexBundledMarketplaceCandidates,
 } from "./desktop-app-paths.js";
+import { waitForCodexDesktopGeneration } from "./desktop-generation.js";
 
 type CodexComputerUsePluginCacheRepairResult =
   | {
@@ -116,13 +117,8 @@ function resolveComputerUseBundledMarketplacePath(params: {
 
 async function readBundledPluginVersion(sourcePluginRoot: string): Promise<string | undefined> {
   const pluginJsonPath = path.join(sourcePluginRoot, ".codex-plugin", "plugin.json");
-  let raw: string;
   try {
-    raw = await fs.readFile(pluginJsonPath, "utf8");
-  } catch {
-    return undefined;
-  }
-  try {
+    const raw = await fs.readFile(pluginJsonPath, "utf8");
     const parsed = JSON.parse(raw) as { version?: unknown };
     return typeof parsed.version === "string" && parsed.version.trim()
       ? parsed.version.trim()
@@ -175,6 +171,9 @@ async function ensureRealDirectoryCopy(
   let backupCreated = false;
   try {
     await fs.cp(sourcePluginRoot, stagedPath, { recursive: true });
+    // Source-copy notifications are only invalidations; reconcile them before
+    // the original generation's synchronous guard authorizes publication.
+    await waitForCodexDesktopGeneration();
     if (ownedParent) {
       await assertDirectoryIdentityStable(ownedParent, "Computer Use plugin cache parent");
     }

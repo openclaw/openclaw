@@ -151,3 +151,17 @@ turn them off in the Web UI under **Config > Plugins**.
 Terminal resume uses the stored session working directory and the same
 allowlisted duplex PTY relay as Codex and Claude. It does not expose arbitrary
 node command execution.
+
+## OpenClaw sessions and transcripts
+
+The bundled [Session Share plugin](/plugins/session-share) publishes selected
+native OpenClaw sessions from a source Gateway to a paired receiver Gateway.
+The source node host runs as the same user with the source Gateway's state
+directory. Enable the plugin on both sides, choose source session groups, and
+connect with only `openclaw.sessions.list.v1` and
+`openclaw.sessions.read.v1` in `--commands`.
+
+The receiver shows read-only rows under the source node in **OpenClaw sessions**.
+Viewers need permission to view others' sessions on role-restricted Gateways.
+This does not permit continuation, terminal access, or worker execution on the
+source. It is separate from hosting new sessions on a node, described in [Session hosting](/nodes/session-hosting).

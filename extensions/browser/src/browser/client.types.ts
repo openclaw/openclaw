@@ -4,6 +4,7 @@
  * Shared by the browser control client, CLI, and Browser agent tool.
  */
 import type { lookup as dnsLookupCb } from "node:dns";
+import type { BrowserEngineDescriptor, BrowserEngineId } from "./engines/types.js";
 
 type BrowserCdpLookup = typeof dnsLookupCb;
 
@@ -86,6 +87,10 @@ export type BrowserStatus = {
   enabled: boolean;
   profile?: string;
   driver?: "openclaw" | "existing-session" | "extension";
+  engine?: BrowserEngineId;
+  sessionScope?: BrowserEngineDescriptor["sessionScope"];
+  screenshotFidelity?: BrowserEngineDescriptor["screenshotFidelity"];
+  availableEngines?: BrowserEngineDescriptor[];
   transport?: BrowserTransport;
   running: boolean;
   cdpReady?: boolean;
@@ -125,6 +130,8 @@ export type BrowserTab = {
   targetId: string;
   /** Stable, human-friendly tab handle for this profile runtime (for example t1). */
   tabId?: string;
+  /** Runtime-scoped native Chrome tab id exposed only by the browser-extension driver. */
+  webExtensionTabId?: number;
   /** Optional user-assigned tab label. */
   label?: string;
   title: string;

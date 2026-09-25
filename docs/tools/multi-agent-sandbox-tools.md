@@ -310,7 +310,12 @@ Per-agent elevated overrides (`agents.entries.*.tools.elevated`) can further res
 </Tabs>
 
 <Note>
-Legacy `agents.list` rosters and retired per-agent keys (such as `sandbox.perSession`, `agentRuntime`, and `embeddedPi`) are migrated by `openclaw doctor`; prefer `agents.defaults` + `agents.entries` going forward.
+Doctor migrates legacy `agents.list` rosters to `agents.entries`. Migrations for
+pre-June keys such as `sandbox.perSession`, `embeddedPi`, and `embeddedHarness`
+are retired; use `sandbox.scope`, `embeddedAgent`, and provider/model runtime
+policy. For an older installation,
+[upgrade through `2026.9.5`](/install/updating#upgrading-very-old-versions) before
+installing the latest version.
 </Note>
 
 ---
@@ -442,3 +447,6 @@ After configuring multi-agent sandbox and tools:
 - [Sandbox vs tool policy vs elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) — debugging "why is this blocked?"
 - [Sandboxing](/gateway/sandboxing) — full sandbox reference (modes, scopes, backends, images)
 - [Session management](/concepts/session)
+- [OpenShell](/gateway/openshell) — a managed sandbox backend a per-agent sandbox can delegate to
+- [ACP agents](/tools/acp-agents) — a separate boundary: OpenClaw sandbox policy does not wrap ACP harness execution
+- [Sub-agents](/tools/subagents) — the spawned sessions these limits clamp

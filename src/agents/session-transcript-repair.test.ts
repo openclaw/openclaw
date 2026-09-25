@@ -3,6 +3,7 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
 import {
   sanitizeToolCallInputs,
+  makeMissingToolResult,
   sanitizeToolUseResultPairing,
   repairToolUseResultPairing,
   stripToolResultDetails,
@@ -858,6 +859,37 @@ describe("sanitizeToolCallInputs legacy block filtering", () => {
 });
 
 describe("sanitizeToolCallInputs allowed-name filtering", () => {
+  it.each([false, true])("preserves completed removed tools (signed thinking: %s)", (signed) => {
+    const assistant = sparseAssistant([
+      ...(signed
+        ? [{ type: "thinking", thinking: "Recorded work", thinkingSignature: "sig_old" }]
+        : []),
+      { type: "toolCall", id: "old_call", name: "removed_plugin", arguments: { action: "done" } },
+    ]);
+    const input = castAgentMessages([
+      assistant,
+      textToolResult("old_call", "removed_plugin", "completed-action-id", { isError: false }),
+    ]);
+    const options = { allowedToolNames: ["read"], allowProviderOwnedThinkingReplay: signed };
+    expect(sanitizeToolCallInputs(input, options)).toBe(input);
+    expect(sanitizeToolCallInputs(castAgentMessages([assistant]), options)).toEqual([]);
+    for (const result of [
+      textToolResult("other_call", "removed_plugin", "unrelated result", { isError: false }),
+      makeMissingToolResult({ toolCallId: "old_call", toolName: "removed_plugin" }),
+    ]) {
+      expect(sanitizeToolCallInputs(castAgentMessages([assistant, result]), options)).toEqual([
+        result,
+      ]);
+    }
+    const later = sparseAssistant([
+      { type: "toolCall", id: "old_call", name: "read", arguments: {} },
+    ]);
+    const laterResult = textToolResult("old_call", "read", "later result", { isError: false });
+    expect(
+      sanitizeToolCallInputs(castAgentMessages([assistant, later, laterResult]), options),
+    ).toEqual([later, laterResult]);
+  });
+
   function sanitizeAssistantContent(
     content: unknown[],
     options?: Parameters<typeof sanitizeToolCallInputs>[1],

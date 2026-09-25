@@ -1,9 +1,11 @@
+import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
 import {
   asNullableObjectRecord as readRecord,
   asNullableRecord,
   isRecord,
 } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Control UI chat domain owns pure tool-card extraction rules.
 import {
@@ -12,14 +14,16 @@ import {
 } from "../../../../src/chat/canvas-render.js";
 import {
   isToolCallContentType,
+  isToolErrorOutput,
+  readToolErrorFlag,
   isToolResultContentType,
   resolveToolUseId,
 } from "../../../../src/chat/tool-content.js";
 import { readBrowserTabTarget } from "../../components/browser/browser-target.ts";
 import { redactToolPayloadText } from "../browser-redact.ts";
-import type { ToolCard, ToolCardOutcome } from "./chat-types.ts";
-import { extractTextCached } from "./message-extract.ts";
+import type { ToolCard, ToolCardOutcome, ToolOutputMetadata } from "./chat-types.ts";
 import { isToolResultMessage } from "./message-normalizer.ts";
+import { readPreparedActivity } from "./tool-call-grouping.ts";
 
 export type ToolPreview = NonNullable<ToolCard["preview"]>;
 export type CanvasToolPreview = Extract<ToolPreview, { kind: "canvas" }>;
@@ -32,6 +36,20 @@ function resolveTranscriptMessageId(message: Record<string, unknown>): string | 
   const transcriptMeta = asNullableRecord(openClawMeta);
   return typeof transcriptMeta?.id === "string" && transcriptMeta.id.trim()
     ? transcriptMeta.id
+    : undefined;
+}
+
+function readToolOutputMetadata(value: unknown): ToolOutputMetadata | undefined {
+  const metadata = asNullableRecord(asNullableRecord(value)?.["__openclaw"]);
+  const output = asNullableRecord(metadata?.toolOutput);
+  return (output?.source === "provider-response" || output?.source === "execution") &&
+    output.modelInput === "unverified"
+    ? {
+        source: output.source,
+        modelInput: output.modelInput,
+        ...(output.outcome === "unknown" ? { outcome: "unknown" as const } : {}),
+        ...(output.captureTruncated === true ? { captureTruncated: true as const } : {}),
+      }
     : undefined;
 }
 
@@ -96,11 +114,6 @@ function extractToolText(item: Record<string, unknown>): string | undefined {
   return undefined;
 }
 
-function readToolErrorFlag(value: Record<string, unknown>): boolean | undefined {
-  const raw = value.isError ?? value.is_error;
-  return typeof raw === "boolean" ? raw : undefined;
-}
-
 function readToolExitCode(...values: unknown[]): number | undefined {
   for (const value of values) {
     const record = readRecord(value);
@@ -112,61 +125,22 @@ function readToolExitCode(...values: unknown[]): number | undefined {
   return undefined;
 }
 
-const TOOL_NOT_FOUND_PATTERN = /^tool not found\.?$/i;
-const MAX_ERROR_DETECT_CHARS = 20_000;
-const TOOL_ERROR_STATUSES = new Set(["error", "failed", "timeout"]);
-
-function hasToolErrorStatus(value: unknown): boolean {
-  return typeof value === "string" && TOOL_ERROR_STATUSES.has(value.trim().toLowerCase());
-}
-
-function isToolErrorOutput(outputText: string | undefined): boolean {
-  if (!outputText) {
-    return false;
-  }
-  const trimmed = outputText.trim();
-  if (!trimmed) {
-    return false;
-  }
-  if (TOOL_NOT_FOUND_PATTERN.test(trimmed)) {
-    return true;
-  }
-  if (trimmed.length > MAX_ERROR_DETECT_CHARS) {
-    return false;
-  }
-  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
-    return false;
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(trimmed);
-  } catch {
-    return false;
-  }
-  if (!isRecord(parsed)) {
-    return false;
-  }
-  const obj = parsed;
-  const explicitErrorFlag = readToolErrorFlag(obj);
-  if (explicitErrorFlag !== undefined) {
-    return explicitErrorFlag;
-  }
-  if ("error" in obj) {
-    const value = obj.error;
-    if (typeof value === "string") {
-      return value.trim().length > 0;
-    }
-    if (typeof value === "boolean") {
-      return value;
-    }
-    if (value && typeof value === "object") {
-      return true;
-    }
-  }
-  return hasToolErrorStatus(obj.status);
+export function isToolCardSkipped(card: ToolCard): boolean {
+  const details = readRecord(card.details);
+  return (
+    (card.live !== true || card.completed === true) &&
+    details?.status === "skipped" &&
+    details.deniedReason === "steering"
+  );
 }
 
 export function isToolCardError(card: ToolCard): boolean {
+  if (isToolCardSkipped(card)) {
+    return false;
+  }
+  if (card.activity) {
+    return card.activity.status === "failed";
+  }
   // Progress can contain error-shaped text; only a result may imply failure.
   const canInferFailure = card.live !== true || card.completed === true;
   return card.isError ?? (canInferFailure && isToolErrorOutput(card.outputText));
@@ -176,6 +150,27 @@ export function resolveToolCardOutcome(
   card: ToolCard,
   runActive: boolean | undefined,
 ): ToolCardOutcome {
+  if (isToolCardSkipped(card)) {
+    return "skipped";
+  }
+  // A response receipt without a native outcome must not become a success
+  // merely because history grouped it into a completed tool row.
+  if (card.toolOutput?.outcome === "unknown") {
+    return isToolCardError(card) ? "failed" : "unknown";
+  }
+  if (card.activity) {
+    switch (card.activity.status) {
+      case "failed":
+      case "blocked":
+        return card.activity.status;
+      case "completed":
+        return "succeeded";
+      case "running":
+        return runActive === true && card.live === true ? "running" : "unknown";
+      default:
+        return "unknown";
+    }
+  }
   if (isToolCardError(card)) {
     return "failed";
   }
@@ -273,13 +268,7 @@ function serializeToolInput(args: unknown): string | undefined {
   try {
     return JSON.stringify(args, null, 2);
   } catch {
-    if (typeof args === "number" || typeof args === "boolean" || typeof args === "bigint") {
-      return String(args);
-    }
-    if (typeof args === "symbol") {
-      return args.description ? `Symbol(${args.description})` : "Symbol()";
-    }
-    return Object.prototype.toString.call(args);
+    return typeof args === "bigint" ? String(args) : Object.prototype.toString.call(args);
   }
 }
 
@@ -339,7 +328,15 @@ export function resolveCollapsedToolArgumentPreview(args: unknown): string | und
     if (typeof value !== "string") {
       continue;
     }
-    const firstLine = value.split(/\r\n?|\n/).find((line) => line.trim().length > 0);
+    const firstContent = value.search(/\S/);
+    let firstLine: string | undefined;
+    if (firstContent >= 0) {
+      const start =
+        Math.max(value.lastIndexOf("\r", firstContent), value.lastIndexOf("\n", firstContent)) + 1;
+      const lineEnd = /[\r\n]/g;
+      lineEnd.lastIndex = firstContent;
+      firstLine = value.slice(start, lineEnd.exec(value)?.index ?? value.length);
+    }
     const preview = formatCollapsedToolPreviewText(
       firstLine ? redactToolPayloadText(firstLine) : undefined,
     );
@@ -351,6 +348,20 @@ export function resolveCollapsedToolArgumentPreview(args: unknown): string | und
 }
 
 let nextPreviewRevision = 0;
+
+export function isToolCallContentBlock(item: {
+  type?: unknown;
+  name?: unknown;
+  arguments?: unknown;
+  args?: unknown;
+  input?: unknown;
+}): boolean {
+  return (
+    isToolCallContentType(item.type) ||
+    (typeof item.name === "string" &&
+      (item.arguments != null || item.args != null || item.input != null))
+  );
+}
 
 function extractToolCards(message: unknown): ToolCard[] {
   const m = message as Record<string, unknown>;
@@ -377,20 +388,21 @@ function extractToolCards(message: unknown): ToolCard[] {
   const cards: ToolCard[] = [];
   const fallbackMatchedCards = new WeakSet<ToolCard>();
   const transcriptMessageId = resolveTranscriptMessageId(m);
+  const messageRunId = readSessionMessageIdentity(m)?.runId ?? readNonBlankString(m.runId);
 
   for (let index = 0; index < content.length; index++) {
     const item = content[index] ?? {};
-    const isToolCall =
-      isToolCallContentType(item.type) ||
-      (typeof item.name === "string" &&
-        (item.arguments != null || item.args != null || item.input != null));
-    if (isToolCall) {
+    const runId = readNonBlankString(item.runId) ?? messageRunId;
+    const parentToolCallId = readNonBlankString(item.parentToolCallId);
+    if (isToolCallContentBlock(item)) {
       const args = coerceArgs(item.arguments ?? item.args ?? item.input);
       const callId = resolveToolCallId(item, m);
       const details = item.details ?? m.details;
       cards.push({
         id: resolveToolCardId(item, m, index),
         ...(callId ? { callId } : {}),
+        ...(runId ? { runId } : {}),
+        ...(parentToolCallId ? { parentToolCallId } : {}),
         name: resolveToolName(item, m),
         args,
         inputText: serializeToolInput(args),
@@ -419,6 +431,17 @@ function extractToolCards(message: unknown): ToolCard[] {
             !fallbackMatchedCards.has(card),
         );
       const text = extractToolText(item);
+      const resultMetadata = asNullableRecord(item["__openclaw"]);
+      const resultMessageId =
+        resultMetadata && Object.hasOwn(resultMetadata, "id")
+          ? readNonBlankString(resultMetadata.id)
+          : transcriptMessageId;
+      const toolOutput = readToolOutputMetadata(item) ?? readToolOutputMetadata(m);
+      const outputTruncated =
+        (resultMetadata && Object.hasOwn(resultMetadata, "truncated")
+          ? resultMetadata
+          : asNullableRecord(m["__openclaw"])
+        )?.truncated === true;
       const details = item.details ?? m.details;
       // Browser previews trigger I/O. Nested content cannot override its tool
       // envelope, and a paired result cannot override the authoritative call.
@@ -433,6 +456,8 @@ function extractToolCards(message: unknown): ToolCard[] {
       if (existing) {
         fallbackMatchedCards.add(existing);
         existing.callId ??= callId;
+        existing.runId ??= runId;
+        existing.parentToolCallId ??= parentToolCallId;
         // Live tool-stream messages emit a toolresult block for partial
         // `update` output too; completion there is owned by the stream's
         // resultReceived marker (set at card creation), not block presence —
@@ -441,6 +466,9 @@ function extractToolCards(message: unknown): ToolCard[] {
           existing.completed = true;
         }
         existing.outputText = text;
+        existing.resultMessageId = resultMessageId;
+        existing.outputTruncated = outputTruncated;
+        existing.toolOutput = toolOutput;
         existing.preview = presentation.preview;
         existing.browserTab = presentation.browserTab;
         if (details !== undefined) {
@@ -457,9 +485,14 @@ function extractToolCards(message: unknown): ToolCard[] {
       cards.push({
         id: cardId,
         ...(callId ? { callId } : {}),
+        ...(runId ? { runId } : {}),
+        ...(parentToolCallId ? { parentToolCallId } : {}),
         name,
         completed: true,
         outputText: text,
+        resultMessageId,
+        outputTruncated,
+        toolOutput,
         ...(details !== undefined ? { details } : {}),
         messageId: transcriptMessageId,
         ...(isError !== undefined ? { isError } : {}),
@@ -474,15 +507,19 @@ function extractToolCards(message: unknown): ToolCard[] {
       (typeof m.toolName === "string" && m.toolName) ||
       (typeof m.tool_name === "string" && m.tool_name) ||
       "tool";
-    const text = extractTextCached(message) ?? undefined;
+    const text = extractToolText(m);
     const callId = resolveToolCallId({}, m);
     const exitCode = readToolExitCode(m, m.details, text ? parseJsonRecord(text) : undefined);
     cards.push({
       id: resolveToolCardId({}, m, 0),
       ...(callId ? { callId } : {}),
+      ...(messageRunId ? { runId: messageRunId } : {}),
       name,
       completed: isToolResultMessage(message) || role === "tool" || role === "function",
       outputText: text,
+      resultMessageId: transcriptMessageId,
+      outputTruncated: asNullableRecord(m["__openclaw"])?.truncated === true,
+      toolOutput: readToolOutputMetadata(m),
       ...(m.details !== undefined ? { details: m.details } : {}),
       messageId: transcriptMessageId,
       ...(messageIsError !== undefined ? { isError: messageIsError } : {}),
@@ -491,8 +528,17 @@ function extractToolCards(message: unknown): ToolCard[] {
     });
   }
 
+  const activityByCall = new Map(
+    readPreparedActivity(message)
+      .filter((item) => !item.suppressChannelProgress)
+      .map((item) => [item.toolCallId ?? item.itemId, item]),
+  );
   let revision: number | undefined;
   for (const [index, card] of cards.entries()) {
+    const activity = card.callId ? activityByCall.get(card.callId) : undefined;
+    if (activity) {
+      card.activity = activity;
+    }
     if (!card.browserTab || card.callId || card.messageId) {
       continue;
     }

@@ -91,6 +91,11 @@ describe("projectAnthropicTools", () => {
             items: [{ type: "integer" }, { type: "integer" }],
             additionalItems: false,
           },
+          Trailing: {
+            ...(dialect ? { $schema: dialect } : {}),
+            type: "array",
+            items: [],
+          },
         },
       };
       const original = structuredClone(parameters);
@@ -111,6 +116,7 @@ describe("projectAnthropicTools", () => {
             prefixItems: [{ type: "integer" }, { type: "integer" }],
             items: false,
           },
+          Trailing: { type: "array", prefixItems: [] },
         },
       });
       expect(parameters).toEqual(original);

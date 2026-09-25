@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createAuthProfileStoreFixture } from "../agents/auth-profiles/credential-fixtures.test-support.js";
 import {
   noteCommittedSharedAuthStoreOwnership,
   resolveSharedAuthStorePath,
@@ -341,11 +342,19 @@ describe("secrets audit", () => {
             apiKey: { source: "store", provider: "default", id: "STORED_API_KEY" },
             models: [{ id: "fixture", name: "fixture" }],
           },
+          envReferenced: {
+            baseUrl: "https://env-referenced.example.test/v1",
+            api: "openai-completions",
+            apiKey: "${AUDIT_STORE_VALUE}",
+            models: [{ id: "fixture", name: "fixture" }],
+          },
         },
       },
     });
 
-    const report = await runSecretsAudit({ env: fixture.env });
+    const report = await runSecretsAudit({
+      env: { ...fixture.env, AUDIT_STORE_VALUE: "shared-store-value" },
+    });
     expect(report.summary.storeResidueCount).toBe(1);
     expect(report.findings.find((entry) => entry.code === "STORE_PLAINTEXT_RESIDUE")).toMatchObject(
       {
@@ -536,16 +545,23 @@ describe("secrets audit", () => {
     expect(callCount).toBe(1);
   });
 
-  it("scans agent models.json files for plaintext provider apiKey values", async () => {
-    await writeModelsProvider({ apiKey: "sk-models-plaintext" }); // pragma: allowlist secret
+  it.each(["regular", "hardlinked"] as const)(
+    "scans %s agent models.json files for plaintext provider apiKey values",
+    async (kind) => {
+      await writeModelsProvider({ apiKey: "sk-models-plaintext" }); // pragma: allowlist secret
+      if (kind === "hardlinked") {
+        await fs.link(fixture.modelsPath, path.join(fixture.rootDir, "models-alias.json"));
+      }
 
-    const report = await runSecretsAudit({ env: fixture.env });
-    expectModelsFinding(report, {
-      code: "PLAINTEXT_FOUND",
-      jsonPath: "providers.openai.apiKey",
-    });
-    expect(report.filesScanned).toContain(fixture.modelsPath);
-  });
+      const report = await runSecretsAudit({ env: fixture.env });
+      expectModelsFinding(report, {
+        code: "PLAINTEXT_FOUND",
+        jsonPath: "providers.openai.apiKey",
+      });
+      expectModelsFinding(report, { code: "REF_UNRESOLVED", present: false });
+      expect(report.filesScanned).toContain(fixture.modelsPath);
+    },
+  );
 
   it("scans agent models.json files for plaintext provider header values", async () => {
     await writeModelsProvider({
@@ -640,9 +656,26 @@ describe("secrets audit", () => {
   });
 
   it("reports malformed models.json as unresolved findings", async () => {
-    await fs.writeFile(fixture.modelsPath, "{bad-json", "utf8");
+    const payloadMarker = "audit-raw";
+    await fs.writeFile(fixture.modelsPath, payloadMarker, "utf8");
     const report = await runSecretsAudit({ env: fixture.env });
     expectModelsFinding(report, { code: "REF_UNRESOLVED" });
+    expect(JSON.stringify(report)).not.toContain(payloadMarker);
+  });
+
+  it.each([null, 42])("ignores models.json with a %j root", async (value) => {
+    await writeJsonFile(fixture.modelsPath, value);
+    const report = await runSecretsAudit({ env: fixture.env });
+    expectModelsFinding(report, { code: "REF_UNRESOLVED", present: false });
+    expectModelsFinding(report, { code: "PLAINTEXT_FOUND", present: false });
+    expect(report.filesScanned).toContain(fixture.modelsPath);
+  });
+
+  it("skips initially missing models.json", async () => {
+    const report = await runSecretsAudit({ env: fixture.env });
+    expectModelsFinding(report, { code: "REF_UNRESOLVED", present: false });
+    expectModelsFinding(report, { code: "PLAINTEXT_FOUND", present: false });
+    expect(report.filesScanned).not.toContain(fixture.modelsPath);
   });
 
   it("reports non-regular models.json files as unresolved findings", async () => {
@@ -651,6 +684,24 @@ describe("secrets audit", () => {
     const report = await runSecretsAudit({ env: fixture.env });
     expectModelsFinding(report, { code: "REF_UNRESOLVED" });
   });
+
+  it.runIf(process.platform !== "win32").each(["present", "missing"] as const)(
+    "reports symlinked models.json with a %s target as unresolved findings",
+    async (targetState) => {
+      await writeModelsProvider({ apiKey: "linked-models-fixture" });
+      const target = path.join(fixture.rootDir, "models-target.json");
+      await fs.rename(fixture.modelsPath, target);
+      if (targetState === "missing") {
+        await fs.unlink(target);
+      }
+      await fs.symlink(target, fixture.modelsPath);
+
+      const report = await runSecretsAudit({ env: fixture.env });
+      expectModelsFinding(report, { code: "REF_UNRESOLVED" });
+      expectModelsFinding(report, { code: "PLAINTEXT_FOUND", present: false });
+      expect(report.filesScanned).toContain(fixture.modelsPath);
+    },
+  );
 
   it("reports oversized models.json as unresolved findings", async () => {
     // The audit rejects by stat before reading, so a sparse file proves the size bound cheaply.
@@ -741,16 +792,13 @@ describe("secrets audit", () => {
     const ambientAgentDir = path.join(ambientStateDir, "agents", "main", "agent");
     vi.stubEnv("OPENCLAW_STATE_DIR", ambientStateDir);
     writePersistedAuthProfileStoreRaw(
-      {
-        version: 1,
-        profiles: {
-          "openai:ambient": {
-            type: "api_key",
-            provider: "openai",
-            key: "sk-ambient-plaintext",
-          },
+      createAuthProfileStoreFixture({
+        "openai:ambient": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-ambient-plaintext",
         },
-      },
+      }),
       ambientAgentDir,
     );
     const stateDatabase = openOpenClawStateDatabase({ env: fixture.env }).db;
@@ -766,16 +814,15 @@ describe("secrets audit", () => {
       )
       .run(
         "authProfiles.store",
-        JSON.stringify({
-          version: 1,
-          profiles: {
+        JSON.stringify(
+          createAuthProfileStoreFixture({
             "openai:target": {
               type: "api_key",
               provider: "openai",
               key: "sk-target-plaintext",
             },
-          },
-        }),
+          }),
+        ),
       );
     noteCommittedSharedAuthStoreOwnership({ location: "state-db" }, fixture.env);
 
@@ -836,12 +883,37 @@ describe("secrets audit", () => {
     ).toBe(true);
   });
 
-  it("exempts only known openclaw.json model provider apiKey markers", async () => {
-    for (const { apiKey, isPlaintext } of [
-      { apiKey: "lmstudio-local", isPlaintext: false },
-      { apiKey: "ollama-local", isPlaintext: false },
-      { apiKey: "sk-real-plaintext", isPlaintext: true },
-    ]) {
+  it.each([
+    { name: "lmstudio marker", apiKey: "lmstudio-local", isPlaintext: false, refsChecked: 0 },
+    { name: "ollama marker", apiKey: "ollama-local", isPlaintext: false, refsChecked: 0 },
+    { name: "plaintext", apiKey: "sk-real-plaintext", isPlaintext: true, refsChecked: 0 },
+    {
+      name: "resolved shorthand",
+      apiKey: "${OPENAI_API_KEY}",
+      isPlaintext: false,
+      refsChecked: 1,
+    },
+    {
+      name: "pending shorthand",
+      apiKey: "$OPENAI_API_KEY",
+      isPlaintext: false,
+      refsChecked: 1,
+    },
+    {
+      name: "structured reference",
+      apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+      isPlaintext: false,
+      refsChecked: 1,
+    },
+    {
+      name: "escaped literal",
+      apiKey: "$${OPENAI_API_KEY}",
+      isPlaintext: true,
+      refsChecked: 0,
+    },
+  ])(
+    "classifies config provider credentials from $name",
+    async ({ apiKey, isPlaintext, refsChecked }) => {
       await writeJsonFile(fixture.configPath, {
         models: {
           providers: {
@@ -865,8 +937,9 @@ describe("secrets audit", () => {
             entry.jsonPath === "models.providers.openai.apiKey",
         ),
       ).toBe(isPlaintext);
-    }
-  });
+      expect(report.resolution.refsChecked).toBe(refsChecked);
+    },
+  );
 
   it("scans .env in legacy .clawdbot state directory via automatic fallback", async () => {
     // Do NOT set OPENCLAW_STATE_DIR or OPENCLAW_CONFIG_PATH — rely on

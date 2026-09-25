@@ -239,14 +239,32 @@ describe("sendMessageDiscord", () => {
   it("creates a thread", async () => {
     const { rest, getMock, postMock } = makeDiscordRest();
     postMock.mockResolvedValue({ id: "t1" });
-    await createThreadDiscord(
-      "chan1",
-      { name: "thread", messageId: "m1" },
-      discordClientOpts(rest),
-    );
+    await createThreadDiscord("chan1", { name: "thread", messageId: "1" }, discordClientOpts(rest));
     expect(getMock).not.toHaveBeenCalled();
-    expect(requestPath(postMock)).toBe(Routes.threads("chan1", "m1"));
+    expect(requestPath(postMock)).toBe(Routes.threads("chan1", "1"));
     expect(requestBody(postMock)).toEqual({ name: "thread" });
+  });
+
+  it("keeps original create authority after awaited channel metadata", async () => {
+    const { rest, getMock, postMock } = makeDiscordRest();
+    let ownerCurrent = true;
+    const options = {
+      ...discordClientOpts(rest),
+      assertCreateAllowed: () => {
+        if (!ownerCurrent) {
+          throw new Error("Command owner was revoked");
+        }
+      },
+    };
+    getMock.mockImplementationOnce(async () => {
+      ownerCurrent = false;
+      options.assertCreateAllowed = () => {};
+      return { type: ChannelType.GuildText };
+    });
+    await expect(createThreadDiscord("chan1", { name: "thread" }, options)).rejects.toThrow(
+      "Command owner was revoked",
+    );
+    expect(postMock).not.toHaveBeenCalled();
   });
 
   it("creates forum threads with an initial message", async () => {
@@ -316,7 +334,7 @@ describe("sendMessageDiscord", () => {
     postMock.mockResolvedValue({ id: "t1" });
     await createThreadDiscord(
       "chan1",
-      { name: "thread", messageId: "m1", autoArchiveMinutes: 4320 },
+      { name: "thread", messageId: "1", autoArchiveMinutes: 4320 },
       discordClientOpts(rest),
     );
     expect(getMock).not.toHaveBeenCalled();
@@ -450,14 +468,14 @@ describe("sendMessageDiscord", () => {
     postMock.mockResolvedValue({ id: "t1" });
     await createThreadDiscord(
       "chan1",
-      { name: "thread", messageId: "m1", content: "Discussion here" },
+      { name: "thread", messageId: "1", content: "Discussion here" },
       discordClientOpts(rest),
     );
     // Should not detect channel type for message-attached threads
     expect(getMock).not.toHaveBeenCalled();
     expect(postMock).toHaveBeenCalledTimes(2);
     // First call: create thread from message
-    expect(requestPath(postMock, 0)).toBe(Routes.threads("chan1", "m1"));
+    expect(requestPath(postMock, 0)).toBe(Routes.threads("chan1", "1"));
     expect(requestBody(postMock, 0)).toEqual({ name: "thread" });
     // Second call: send message to thread
     expect(requestPath(postMock, 1)).toBe(Routes.channelMessages("t1"));

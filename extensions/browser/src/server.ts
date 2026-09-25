@@ -2,6 +2,8 @@
  * Browser control HTTP server startup and shutdown entrypoints.
  */
 import express from "express";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   createBrowserControlContext,
   ensureBrowserControlRuntime,
@@ -24,9 +26,7 @@ import {
   installBrowserAuthMiddleware,
   installBrowserCommonMiddleware,
 } from "./browser/server-middleware.js";
-import { getRuntimeConfig } from "./config/config.js";
-import { createSubsystemLogger } from "./logging/subsystem.js";
-import { isDefaultBrowserPluginEnabled } from "./plugin-enabled.js";
+import { resolveBrowserPluginEnableState } from "./plugin-enabled.js";
 
 const log = createSubsystemLogger("browser");
 const logServer = log.child("server");
@@ -39,7 +39,7 @@ async function startBrowserControlServerUnlocked(): Promise<BrowserServerState |
 
   const cfg = getRuntimeConfig();
   const browserCfg = loadBrowserConfigForRuntimeRefresh();
-  if (!isDefaultBrowserPluginEnabled(browserCfg)) {
+  if (!resolveBrowserPluginEnableState(cfg).enabled) {
     return null;
   }
   const resolved = resolveBrowserConfig(browserCfg.browser, browserCfg);

@@ -1,6 +1,5 @@
 // Discovers gateways over Bonjour and normalizes service records.
 import { expectDefined } from "@openclaw/normalization-core";
-import { parseStrictInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
   normalizeStringEntries,
@@ -9,6 +8,7 @@ import {
 import pLimit from "p-limit";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { isTailnetIPv4 } from "./tailnet.js";
+import { MAX_TCP_PORT, parseTcpPort } from "./tcp-port.js";
 import { resolveWideAreaDiscoveryDomain } from "./widearea-dns.js";
 
 export type GatewayBonjourBeacon = {
@@ -74,7 +74,6 @@ type GatewayBonjourDiscoverOpts = {
 
 const DEFAULT_TIMEOUT_MS = 2000;
 const GATEWAY_SERVICE_TYPE = "_openclaw-gw._tcp";
-const MAX_TCP_PORT = 65_535;
 
 function decodeDnsSdEscapes(value: string): string {
   let decoded = false;
@@ -151,9 +150,9 @@ function parseDigSrv(stdout: string): { host: string; port: number } | null {
   if (parts.length < 4) {
     return null;
   }
-  const port = parsePortOrUndefined(parts[2]);
+  const port = parseTcpPort(parts[2]);
   const hostRaw = parts[3] ?? "";
-  if (port === undefined) {
+  if (port === null) {
     return null;
   }
   const host = hostRaw.replace(/\.$/, "");
@@ -198,14 +197,6 @@ function parseTailscaleStatusIPv4s(stdout: string): string[] {
   return uniqueStrings(out);
 }
 
-function parsePortOrUndefined(value: string | undefined): number | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const parsed = parseStrictInteger(value);
-  return parsed !== undefined && parsed > 0 && parsed <= MAX_TCP_PORT ? parsed : undefined;
-}
-
 function parseTxtTokens(tokens: string[]): Record<string, string> {
   const txt: Record<string, string> = {};
   for (const token of tokens) {
@@ -221,6 +212,23 @@ function parseTxtTokens(tokens: string[]): Record<string, string> {
     txt[key] = value;
   }
   return txt;
+}
+
+function applyBeaconTxt(beacon: GatewayBonjourBeacon, txt: Record<string, string>): void {
+  for (const field of ["tailnetDns", "cliPath", "role", "transport"] as const) {
+    if (txt[field]) {
+      beacon[field] = txt[field];
+    }
+  }
+  beacon.gatewayPort = parseTcpPort(txt.gatewayPort) ?? undefined;
+  beacon.sshPort = parseTcpPort(txt.sshPort) ?? undefined;
+  if (txt.gatewayTls) {
+    const raw = normalizeOptionalLowercaseString(txt.gatewayTls);
+    beacon.gatewayTls = raw === "1" || raw === "true" || raw === "yes";
+  }
+  if (txt.gatewayTlsSha256) {
+    beacon.gatewayTlsFingerprintSha256 = txt.gatewayTlsSha256;
+  }
 }
 
 function parseDnsSdBrowse(stdout: string): string[] {
@@ -257,7 +265,7 @@ function parseDnsSdResolve(stdout: string, instanceName: string): GatewayBonjour
         beacon.host = match[1].replace(/\.$/, "");
       }
       if (match?.[2]) {
-        beacon.port = parsePortOrUndefined(match[2]);
+        beacon.port = parseTcpPort(match[2]) ?? undefined;
       }
       continue;
     }
@@ -275,27 +283,7 @@ function parseDnsSdResolve(stdout: string, instanceName: string): GatewayBonjour
   if (txt.lanHost) {
     beacon.lanHost = txt.lanHost;
   }
-  if (txt.tailnetDns) {
-    beacon.tailnetDns = txt.tailnetDns;
-  }
-  if (txt.cliPath) {
-    beacon.cliPath = txt.cliPath;
-  }
-  beacon.gatewayPort = parsePortOrUndefined(txt.gatewayPort);
-  beacon.sshPort = parsePortOrUndefined(txt.sshPort);
-  if (txt.gatewayTls) {
-    const raw = normalizeOptionalLowercaseString(txt.gatewayTls);
-    beacon.gatewayTls = raw === "1" || raw === "true" || raw === "yes";
-  }
-  if (txt.gatewayTlsSha256) {
-    beacon.gatewayTlsFingerprintSha256 = txt.gatewayTlsSha256;
-  }
-  if (txt.role) {
-    beacon.role = txt.role;
-  }
-  if (txt.transport) {
-    beacon.transport = txt.transport;
-  }
+  applyBeaconTxt(beacon, txt);
 
   if (!beacon.displayName) {
     beacon.displayName = decodedInstanceName;
@@ -442,24 +430,10 @@ async function discoverWideAreaViaTailnetDns(
       host: srvParsed.host,
       port: srvParsed.port,
       txt: Object.keys(txtMap).length ? txtMap : undefined,
-      gatewayPort: parsePortOrUndefined(txtMap.gatewayPort),
-      sshPort: parsePortOrUndefined(txtMap.sshPort),
       tailnetDns: txtMap.tailnetDns || undefined,
       cliPath: txtMap.cliPath || undefined,
     };
-    if (txtMap.gatewayTls) {
-      const raw = normalizeOptionalLowercaseString(txtMap.gatewayTls);
-      beacon.gatewayTls = raw === "1" || raw === "true" || raw === "yes";
-    }
-    if (txtMap.gatewayTlsSha256) {
-      beacon.gatewayTlsFingerprintSha256 = txtMap.gatewayTlsSha256;
-    }
-    if (txtMap.role) {
-      beacon.role = txtMap.role;
-    }
-    if (txtMap.transport) {
-      beacon.transport = txtMap.transport;
-    }
+    applyBeaconTxt(beacon, txtMap);
 
     results.push(beacon);
   }
@@ -508,7 +482,7 @@ function parseAvahiBrowse(stdout: string): GatewayBonjourBeacon[] {
     if (trimmed.startsWith("port =")) {
       const match = trimmed.match(/port\s*=\s*\[(\d+)\]/);
       if (match?.[1]) {
-        current.port = parsePortOrUndefined(match[1]);
+        current.port = parseTcpPort(match[1]) ?? undefined;
       }
       continue;
     }
@@ -525,27 +499,7 @@ function parseAvahiBrowse(stdout: string): GatewayBonjourBeacon[] {
       if (txt.lanHost) {
         current.lanHost = txt.lanHost;
       }
-      if (txt.tailnetDns) {
-        current.tailnetDns = txt.tailnetDns;
-      }
-      if (txt.cliPath) {
-        current.cliPath = txt.cliPath;
-      }
-      current.gatewayPort = parsePortOrUndefined(txt.gatewayPort);
-      current.sshPort = parsePortOrUndefined(txt.sshPort);
-      if (txt.gatewayTls) {
-        const rawLocal = normalizeOptionalLowercaseString(txt.gatewayTls);
-        current.gatewayTls = rawLocal === "1" || rawLocal === "true" || rawLocal === "yes";
-      }
-      if (txt.gatewayTlsSha256) {
-        current.gatewayTlsFingerprintSha256 = txt.gatewayTlsSha256;
-      }
-      if (txt.role) {
-        current.role = txt.role;
-      }
-      if (txt.transport) {
-        current.transport = txt.transport;
-      }
+      applyBeaconTxt(current, txt);
     }
   }
 

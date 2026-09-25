@@ -5,6 +5,7 @@ import { shouldHandleTextCommands } from "../commands-registry.js";
 import { copyReplyPayloadMetadata } from "../reply-payload.js";
 import { maybeHandleResetCommand } from "./commands-reset.js";
 import type {
+  CommandDispatchParams,
   CommandHandler,
   CommandHandlerResult,
   HandleCommandsParams,
@@ -12,10 +13,6 @@ import type {
 const commandHandlersRuntimeLoader = createLazyImportLoader(
   () => import("./commands-handlers.runtime.js"),
 );
-
-function loadCommandHandlersRuntime() {
-  return commandHandlersRuntimeLoader.load();
-}
 
 let HANDLERS: CommandHandler[] | null = null;
 
@@ -33,13 +30,10 @@ function normalizeCommandHandlerResult(result: CommandHandlerResult): CommandHan
   };
 }
 
-export async function handleCommands(params: HandleCommandsParams): Promise<CommandHandlerResult> {
+export async function handleCommands(params: CommandDispatchParams): Promise<CommandHandlerResult> {
   // Literal Gateway input must bypass commands as well as directive parsing.
   if (params.ctx.CommandInterpretationSuppressed === true) {
     return { shouldContinue: true };
-  }
-  if (HANDLERS === null) {
-    HANDLERS = (await loadCommandHandlersRuntime()).loadCommandHandlers();
   }
   const allowCreateSessionEntry = params.allowCreateSessionEntry === true;
   const initialSessionEntry =
@@ -55,8 +49,9 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
     config: params.cfg,
     fallbackAgentId: params.agentId,
   });
-  const commandParams: HandleCommandsParams = {
-    ...params,
+  const { resolveModelLevels, ...dispatchParams } = params;
+  const commandParams = {
+    ...dispatchParams,
     agentId,
     agentDir: agentId === params.agentId ? params.agentDir : resolveAgentDir(params.cfg, agentId),
     initialSessionEntry,
@@ -67,6 +62,13 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
     return normalizeCommandHandlerResult(resetResult);
   }
 
+  const handlerParams: HandleCommandsParams = {
+    ...commandParams,
+    ...(await resolveModelLevels()),
+  };
+  if (HANDLERS === null) {
+    HANDLERS = (await commandHandlersRuntimeLoader.load()).loadCommandHandlers();
+  }
   const allowTextCommands = shouldHandleTextCommands({
     cfg: params.cfg,
     surface: params.command.surface,
@@ -74,7 +76,7 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
   });
 
   for (const handler of HANDLERS) {
-    const result = await handler(commandParams, allowTextCommands);
+    const result = await handler(handlerParams, allowTextCommands);
     if (result) {
       return normalizeCommandHandlerResult(result);
     }

@@ -1,4 +1,4 @@
-// Line test helpers shared by the durable spool and upgrade-migration suites.
+// LINE event fixtures shared by handler, durable spool, and upgrade-migration suites.
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { webhook } from "@line/bot-sdk";
@@ -26,29 +26,57 @@ type LegacySpoolPayload = {
 
 export const runtime = (): RuntimeEnv => ({ error: vi.fn(), exit: vi.fn(), log: vi.fn() });
 
+export function createTestMessageEvent(params: {
+  message: webhook.MessageEvent["message"];
+  source: webhook.MessageEvent["source"];
+  webhookEventId: string;
+  timestamp?: number;
+  replyToken?: string;
+  isRedelivery?: boolean;
+  mode?: webhook.EventMode;
+}): webhook.MessageEvent {
+  return {
+    type: "message",
+    message: params.message,
+    ...(params.mode === "standby" ? {} : { replyToken: params.replyToken ?? "reply-token" }),
+    timestamp: params.timestamp ?? Date.now(),
+    source: params.source,
+    mode: params.mode ?? "active",
+    webhookEventId: params.webhookEventId,
+    deliveryContext: { isRedelivery: params.isRedelivery ?? false },
+  };
+}
+
 export function createEvent(params: {
   webhookEventId: string;
   messageId?: string;
   userId?: string;
   text?: string;
+  /** Marks the event as one part of a LINE multi-image send. */
+  imageSet?: { id: string; index: number; total: number };
   mode?: webhook.EventMode;
 }): webhook.Event {
-  const event: webhook.MessageEvent = {
-    type: "message",
-    message: {
-      id: params.messageId ?? `message-${params.webhookEventId}`,
-      type: "text",
-      text: params.text ?? "hello",
-      quoteToken: "test-quote-token-placeholder",
-    },
-    ...(params.mode === "standby" ? {} : { replyToken: "test-reply-token" }),
-    timestamp: Date.now(),
+  const message: webhook.MessageEvent["message"] = params.imageSet
+    ? {
+        id: params.messageId ?? `message-${params.webhookEventId}`,
+        type: "image",
+        contentProvider: { type: "line" },
+        imageSet: params.imageSet,
+        quoteToken: "test-quote-token-placeholder",
+      }
+    : {
+        id: params.messageId ?? `message-${params.webhookEventId}`,
+        type: "text",
+        text: params.text ?? "hello",
+        quoteToken: "test-quote-token-placeholder",
+      };
+  return createTestMessageEvent({
+    message,
+    replyToken: "test-reply-token",
     source: { type: "user", userId: params.userId ?? "user-1" },
-    mode: params.mode ?? "active",
+    mode: params.mode,
     webhookEventId: params.webhookEventId,
-    deliveryContext: { isRedelivery: false },
-  };
-  return event;
+  });
 }
 
 export function callback(event: webhook.Event): webhook.CallbackRequest {

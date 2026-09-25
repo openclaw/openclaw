@@ -3,7 +3,6 @@
  */
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { projectChatErrorDetail } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
-import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { hasAcceptedSessionSpawn } from "./accepted-session-spawn.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
@@ -26,6 +25,7 @@ import {
   hasAssistantVisibleReply,
   readPendingToolMediaReply,
 } from "./embedded-agent-subscribe.handlers.messages.replies.js";
+import { finalizeToolActivity } from "./embedded-agent-subscribe.handlers.tools.start.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import { isAssistantMessage } from "./embedded-agent-utils.js";
 import type { AgentSessionEvent } from "./sessions/index.js";
@@ -108,11 +108,6 @@ export function handleAgentEnd(
     toolAudioAsVoice:
       ctx.state.pendingToolAudioAsVoice ||
       ctx.state.deferredBlockReplies.some((payload) => payload.audioAsVoice),
-    toolTrustedLocalMedia: resolveTerminalToolMediaTrust({
-      pendingMediaUrls: ctx.state.pendingToolMediaUrls,
-      pendingTrustByUrl: ctx.state.pendingToolMediaTrustByUrl,
-      deferredReplies: ctx.state.deferredBlockReplies,
-    }),
     hasToolMediaBlockReply: ctx.state.hasToolMediaBlockReply,
     didDeliverSourceReplyViaMessageTool:
       ctx.state.messageToolOnlySourceReplyDelivered ||
@@ -204,6 +199,7 @@ export function handleAgentEnd(
   }
 
   const emitLifecycleTerminal = () => {
+    finalizeToolActivity(ctx);
     const terminalStopReason =
       ctx.params.resolveTerminalStopReason?.() ??
       ctx.state.terminalStopReason ??
@@ -257,13 +253,6 @@ export function handleAgentEnd(
   };
 
   const finalizeAgentEnd = () => {
-    ctx.state.blockState.thinking = false;
-    ctx.state.blockState.final = false;
-    ctx.state.blockState.inlineCode = createInlineCodeState();
-    ctx.state.blockState.fence = undefined;
-    ctx.state.blockState.reasoningPendingFenceFragment = undefined;
-    ctx.state.blockState.pendingFenceFragment = undefined;
-
     if (ctx.state.pendingCompactionRetry > 0) {
       ctx.resolveCompactionRetry();
     } else {
@@ -416,19 +405,3 @@ export function handleAgentEnd(
   }
   return deliverTerminalWithLifecycleErrorFallback();
 }
-function resolveTerminalToolMediaTrust(params: {
-  pendingMediaUrls: readonly string[];
-  pendingTrustByUrl: ReadonlyMap<string, boolean>;
-  deferredReplies: readonly { mediaUrls?: string[]; trustedLocalMedia?: boolean }[];
-}): boolean {
-  const trust = [
-    ...params.pendingMediaUrls.map((url) => params.pendingTrustByUrl.get(url.trim()) === true),
-    ...params.deferredReplies.flatMap((payload) =>
-      (payload.mediaUrls ?? []).map(() => payload.trustedLocalMedia === true),
-    ),
-  ];
-  return trust.length > 0 && trust.every(Boolean);
-}
-
-const testing = { resolveTerminalToolMediaTrust };
-export { testing as __testing };

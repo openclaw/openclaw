@@ -141,6 +141,12 @@ Set `channels.discord.activities` to let the core `show_widget` tool post self-c
 ## Safety and operations
 
 - Treat bot tokens as secrets (`DISCORD_BOT_TOKEN` preferred in supervised environments).
+- `DISCORD_API_URL` overrides the process-wide, versioned Discord REST base (for example,
+  `https://discord.example.com/api/v10`). OpenClaw also uses that origin for Gateway discovery,
+  WebSocket connections, media, webhooks, OAuth, and command registration; requests do not fall
+  back to public Discord while the override is set. Plain HTTP/WS is accepted only on loopback,
+  and Discord voice transport is unavailable with the override. Set it in the Gateway process
+  environment or global runtime dotenv, not a workspace `.env`.
 - Grant least-privilege Discord permissions.
 - If command deploy/state is stale, restart the gateway and re-check with `openclaw channels status --probe`.
 
@@ -152,6 +158,9 @@ Set `channels.discord.activities` to let the core `show_widget` tool post self-c
   </Card>
   <Card title="Pairing" icon="link" href="/channels/pairing">
     Pair a Discord user to the gateway.
+  </Card>
+  <Card title="Reactions" icon="thumbs-up" href="/tools/reactions">
+    Emoji reaction semantics for the `message` tool.
   </Card>
   <Card title="Groups" icon="users" href="/channels/groups">
     Group chat and allowlist behavior.

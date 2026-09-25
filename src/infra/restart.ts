@@ -1,12 +1,5 @@
 // Coordinates gateway restart requests across supported supervisors.
-import { spawnSync } from "node:child_process";
-import os from "node:os";
-import path from "node:path";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-import {
-  resolveGatewayLaunchAgentLabel,
-  resolveGatewaySystemdServiceName,
-} from "../daemon/constants.js";
 import { abortPendingChannelReloads } from "../gateway/server-reload-generation.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -18,37 +11,61 @@ import {
   type GatewayRestartSignalAdmissionLease,
 } from "../process/gateway-work-admission.js";
 import { formatErrorMessage } from "./errors.js";
+import { resolveGatewayRestartDeferralTimeoutMs } from "./restart-budget.js";
 import { type GatewayRestartIntent, normalizeRestartIntentReason } from "./restart-intent.js";
-import { cleanStaleGatewayProcessesSync } from "./restart-stale-pids.js";
+import {
+  GatewayRestartRequest,
+  PendingGatewayRestart,
+  formatRestartAudit,
+  normalizeGatewayRestartDelayMs,
+  type RestartAuditInfo,
+  type RestartDeferralHandle,
+  type RestartDeferralHooks,
+  type RestartEmitHooks,
+  type GatewayRestartEmitResult,
+  type ScheduledRestart,
+} from "./restart-request.js";
+import { restartGatewayViaSupervisor } from "./restart-supervisor.js";
 import type { RestartAttempt } from "./restart.types.js";
-import { relaunchGatewayScheduledTask } from "./windows-task-restart.js";
 
-const SPAWN_TIMEOUT_MS = 2000;
-const SIGUSR1_AUTH_GRACE_MS = 5000;
+export { normalizeSystemdUnit } from "./restart-supervisor.js";
+export {
+  normalizeGatewayRestartDelayMs,
+  type GatewayRestartEmitter,
+  type RestartDeferralHandle,
+  type ScheduledRestart,
+} from "./restart-request.js";
+
+const RESTART_AUTH_GRACE_MS = 5000;
 const DEFAULT_DEFERRAL_POLL_MS = 500;
 const DEFAULT_DEFERRAL_STILL_PENDING_WARN_MS = 30_000;
-const DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS = 300_000;
 const RESTART_COOLDOWN_MS = 30_000;
-const LAUNCHCTL_ALREADY_LOADED_EXIT_CODE = 37;
 
 const restartLog = createSubsystemLogger("restart");
 
-let sigusr1AuthorizedCount = 0;
-let sigusr1AuthorizedUntil = 0;
-let sigusr1ExternalAllowed = false;
+// Control-flow deadlines (SIGUSR2 grace, deferral caps, restart cooldown) run on
+// the monotonic clock: a wall-clock step (NTP correction, VM suspend/resume)
+// would otherwise extend authorization grace or fire/skip deferral timeouts.
+const monotonicNow = () => performance.now();
+
+let restartAuthorizedCount = 0;
+let restartAuthorizedUntil = 0;
+let externalRestartAllowed = false;
 let preRestartCheck: (() => number) | null = null;
 let restartCycleToken = 0;
 let emittedRestartToken = 0;
 let consumedRestartToken = 0;
 let emittedRestartReason: string | undefined;
 let emittedRestartIntent: GatewayRestartIntent | undefined;
-let lastRestartEmittedAt = 0;
+// null marks "never emitted": a 0 sentinel would collide with the monotonic
+// clock origin and impose a phantom cooldown during the first RESTART_COOLDOWN_MS
+// of process life.
+let lastRestartEmittedAt: number | null = null;
 let pendingRestartTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingRestartDueAt = 0;
 let pendingRestartReason: string | undefined;
 let pendingRestartSuccessorOwner: GatewayRestartIntent["successorOwner"];
-let pendingRestartEmitHooks: RestartEmitHooks | undefined;
-let pendingRestartSessionKey: string | undefined;
+let pendingRestartRequest: PendingGatewayRestart | undefined;
 let pendingRestartSkipDeferral = false;
 let pendingRestartPreparing = false;
 let pendingRestartSignalAdmission: GatewayRestartSignalAdmissionLease | null = null;
@@ -70,8 +87,7 @@ function clearPendingScheduledRestart(): void {
   pendingRestartDueAt = 0;
   pendingRestartReason = undefined;
   pendingRestartSuccessorOwner = undefined;
-  pendingRestartEmitHooks = undefined;
-  pendingRestartSessionKey = undefined;
+  pendingRestartRequest = undefined;
   pendingRestartSkipDeferral = false;
   pendingRestartPreparing = false;
 }
@@ -98,6 +114,7 @@ function armPendingRestartTimer(requestedDueAt: number, nowMs: number): void {
     () => {
       const scheduledReason = pendingRestartReason;
       const scheduledSkipDeferral = pendingRestartSkipDeferral;
+      const request = pendingRestartRequest;
       pendingRestartTimer = null;
       pendingRestartDueAt = 0;
       pendingRestartReason = undefined;
@@ -105,16 +122,21 @@ function armPendingRestartTimer(requestedDueAt: number, nowMs: number): void {
       pendingRestartPreparing = true;
       const pendingCheck = preRestartCheck;
       if (scheduledSkipDeferral || !pendingCheck) {
-        void emitPreparedGatewayRestart(undefined, scheduledReason);
+        void emitPreparedGatewayRestart(undefined, scheduledReason, undefined, {
+          scheduledRequest: request,
+        });
         return;
       }
       const deferralTimeoutMs = resolveGatewayRestartDeferralTimeoutMs();
-      deferGatewayRestartUntilIdle({
-        getPendingCount: pendingCheck,
-        maxWaitMs: deferralTimeoutMs,
-        reason: scheduledReason,
-        timeoutIntent: { force: true, ...(scheduledReason ? { reason: scheduledReason } : {}) },
-      });
+      deferGatewayRestartUntilIdle(
+        {
+          getPendingCount: pendingCheck,
+          maxWaitMs: deferralTimeoutMs,
+          reason: scheduledReason,
+          timeoutIntent: { force: true, ...(scheduledReason ? { reason: scheduledReason } : {}) },
+        },
+        request,
+      );
     },
     Math.max(0, requestedDueAt - nowMs),
   );
@@ -129,14 +151,14 @@ function clearActiveDeferralPolls(): void {
 
 function clearGatewayRestartTransientState(): void {
   restartTransientGeneration += 1;
-  sigusr1AuthorizedCount = 0;
-  sigusr1AuthorizedUntil = 0;
+  restartAuthorizedCount = 0;
+  restartAuthorizedUntil = 0;
   restartCycleToken = 0;
   emittedRestartToken = 0;
   consumedRestartToken = 0;
   emittedRestartReason = undefined;
   emittedRestartIntent = undefined;
-  lastRestartEmittedAt = 0;
+  lastRestartEmittedAt = null;
   clearActiveDeferralPolls();
   clearPendingScheduledRestart();
   clearPendingRestartSignalAdmission();
@@ -148,54 +170,15 @@ export function resetGatewayRestartStateForInProcessRestart(): void {
   abortPendingChannelReloads();
 }
 
-type RestartAuditInfo = {
-  actor?: string;
-  deviceId?: string;
-  clientIp?: string;
-  changedPaths?: string[];
-};
-
-function summarizeChangedPaths(paths: string[] | undefined, maxPaths = 6): string | null {
-  if (!Array.isArray(paths) || paths.length === 0) {
-    return null;
-  }
-  if (paths.length <= maxPaths) {
-    return paths.join(",");
-  }
-  const head = paths.slice(0, maxPaths).join(",");
-  return `${head},+${paths.length - maxPaths} more`;
-}
-
-function formatRestartAudit(audit: RestartAuditInfo | undefined): string {
-  const actor = typeof audit?.actor === "string" && audit.actor.trim() ? audit.actor.trim() : null;
-  const deviceId =
-    typeof audit?.deviceId === "string" && audit.deviceId.trim() ? audit.deviceId.trim() : null;
-  const clientIp =
-    typeof audit?.clientIp === "string" && audit.clientIp.trim() ? audit.clientIp.trim() : null;
-  const changed = summarizeChangedPaths(audit?.changedPaths);
-  const fields = [
-    actor && `actor=${actor}`,
-    deviceId && `device=${deviceId}`,
-    clientIp && `ip=${clientIp}`,
-    changed && `changedPaths=${changed}`,
-  ].filter(Boolean);
-  return fields.length > 0 ? fields.join(" ") : "actor=<unknown>";
-}
-
 /**
- * Register a callback that scheduleGatewaySigusr1Restart checks before emitting SIGUSR1.
+ * Register a callback that scheduleGatewayRestart checks before emitting SIGUSR2.
  * The callback should return the number of pending items (0 = safe to restart).
  */
 export function setPreRestartDeferralCheck(fn: () => number): void {
   preRestartCheck = fn;
 }
 
-/**
- * Emit an authorized SIGUSR1 gateway restart, guarded against duplicate emissions.
- * Returns true if SIGUSR1 was emitted, false if a restart was already emitted.
- * Runtime callers use emitGatewayRestartWithSignalAdmission so the signal-to-drain
- * handoff stays fenced; this lower-level primitive remains available to tests.
- */
+/** Emit one authorized restart per cycle; refuse unavailable or duplicate delivery. */
 function emitGatewayRestart(reasonOverride?: string, intent?: GatewayRestartIntent): boolean {
   if (hasUnconsumedRestartSignal()) {
     clearActiveDeferralPolls();
@@ -208,34 +191,33 @@ function emitGatewayRestart(reasonOverride?: string, intent?: GatewayRestartInte
   emittedRestartToken = cycleToken;
   emittedRestartReason = reasonOverride ?? intent?.reason ?? pendingRestartReason;
   emittedRestartIntent = intent;
-  authorizeGatewaySigusr1Restart();
+  authorizeGatewayRestart();
   try {
-    if (process.listenerCount("SIGUSR1") > 0) {
-      // Signal path: let the run-loop's SIGUSR1 handler drive restart.
+    if (process.listenerCount("SIGUSR2") > 0) {
+      // Signal path: let the run-loop's SIGUSR2 handler drive restart.
       // Works on all platforms including Windows when a listener is registered.
-      process.emit("SIGUSR1");
+      process.emit("SIGUSR2");
     } else if (process.platform === "win32") {
-      // On Windows with no SIGUSR1 listener, fall back to task-scheduler handoff.
+      // On Windows with no SIGUSR2 listener, fall back to task-scheduler handoff.
       // triggerOpenClawRestart() uses schtasks to restart the gateway.
       const result = triggerOpenClawRestart();
       if (!result.ok) {
         // Roll back the cycle marker so future restart requests can still proceed.
-        rollBackGatewayRestartEmission();
         restartLog.warn("Windows scheduled task restart failed, token rolled back");
-        return false;
+        return rollBackGatewayRestartEmission();
       }
-      consumeGatewaySigusr1RestartAuthorization();
-      markGatewaySigusr1RestartHandled();
+      consumeGatewayRestartAuthorization();
+      markGatewayRestartHandled();
     } else {
-      // Unix without listener: send signal directly.
-      process.kill(process.pid, "SIGUSR1");
+      // Embedded Gateways have no run loop; an unhandled SIGUSR2 would kill their host.
+      restartLog.warn("Gateway restart unavailable: no restart handler; restart through the host.");
+      return rollBackGatewayRestartEmission();
     }
   } catch {
     // Roll back the cycle marker so future restart requests can still proceed.
-    rollBackGatewayRestartEmission();
-    return false;
+    return rollBackGatewayRestartEmission();
   }
-  lastRestartEmittedAt = Date.now();
+  lastRestartEmittedAt = monotonicNow();
   return true;
 }
 
@@ -283,51 +265,51 @@ export function requestGatewayRestartWithSignalAdmission(
   return { status: hadUnconsumedRestartSignal ? "coalesced" : "failed" };
 }
 
-function resetSigusr1AuthorizationIfExpired(now = Date.now()) {
-  if (sigusr1AuthorizedCount <= 0 || now <= sigusr1AuthorizedUntil) {
+function resetRestartAuthorizationIfExpired(now = monotonicNow()) {
+  if (restartAuthorizedCount <= 0 || now <= restartAuthorizedUntil) {
     return;
   }
-  sigusr1AuthorizedCount = 0;
-  sigusr1AuthorizedUntil = 0;
+  restartAuthorizedCount = 0;
+  restartAuthorizedUntil = 0;
 }
 
-export function setGatewaySigusr1RestartPolicy(opts?: { allowExternal?: boolean }) {
-  sigusr1ExternalAllowed = opts?.allowExternal === true;
+export function setGatewayRestartPolicy(opts?: { allowExternal?: boolean }) {
+  externalRestartAllowed = opts?.allowExternal === true;
 }
 
-export function isGatewaySigusr1RestartExternallyAllowed() {
-  return sigusr1ExternalAllowed;
+export function isGatewayRestartExternallyAllowed() {
+  return externalRestartAllowed;
 }
 
-function authorizeGatewaySigusr1Restart() {
-  const expiresAt = Date.now() + SIGUSR1_AUTH_GRACE_MS;
-  sigusr1AuthorizedCount += 1;
-  if (expiresAt > sigusr1AuthorizedUntil) {
-    sigusr1AuthorizedUntil = expiresAt;
+function authorizeGatewayRestart() {
+  const expiresAt = monotonicNow() + RESTART_AUTH_GRACE_MS;
+  restartAuthorizedCount += 1;
+  if (expiresAt > restartAuthorizedUntil) {
+    restartAuthorizedUntil = expiresAt;
   }
 }
 
-export function consumeGatewaySigusr1RestartAuthorization(): boolean {
-  resetSigusr1AuthorizationIfExpired();
-  if (sigusr1AuthorizedCount <= 0) {
+export function consumeGatewayRestartAuthorization(): boolean {
+  resetRestartAuthorizationIfExpired();
+  if (restartAuthorizedCount <= 0) {
     return false;
   }
-  sigusr1AuthorizedCount -= 1;
-  if (sigusr1AuthorizedCount <= 0) {
-    sigusr1AuthorizedUntil = 0;
+  restartAuthorizedCount -= 1;
+  if (restartAuthorizedCount <= 0) {
+    restartAuthorizedUntil = 0;
   }
   return true;
 }
 
-export function peekGatewaySigusr1RestartReason(): string | undefined {
+export function peekGatewayRestartReason(): string | undefined {
   return hasUnconsumedRestartSignal() ? emittedRestartReason : undefined;
 }
 
 /**
- * Reads and clears only the in-memory intent for the current emitted SIGUSR1 cycle.
- * The restart reason and cycle token are advanced by markGatewaySigusr1RestartHandled().
+ * Reads and clears only the in-memory intent for the current emitted SIGUSR2 cycle.
+ * The restart reason and cycle token are advanced by markGatewayRestartHandled().
  */
-export function consumeGatewaySigusr1RestartIntent(): GatewayRestartIntent | null {
+export function consumeGatewayRestartIntent(): GatewayRestartIntent | null {
   if (!hasUnconsumedRestartSignal()) {
     return null;
   }
@@ -337,11 +319,11 @@ export function consumeGatewaySigusr1RestartIntent(): GatewayRestartIntent | nul
 }
 
 /**
- * Mark the currently emitted SIGUSR1 restart cycle as consumed by the run loop.
+ * Mark the currently emitted SIGUSR2 restart cycle as consumed by the run loop.
  * This explicitly advances the cycle state instead of resetting emit guards inside
- * consumeGatewaySigusr1RestartAuthorization().
+ * consumeGatewayRestartAuthorization().
  */
-export function markGatewaySigusr1RestartHandled(): void {
+export function markGatewayRestartHandled(): void {
   if (hasUnconsumedRestartSignal()) {
     consumedRestartToken = emittedRestartToken;
     emittedRestartReason = undefined;
@@ -353,49 +335,12 @@ export function markGatewaySigusr1RestartHandled(): void {
   clearPendingRestartSignalAdmission();
 }
 
-function rollBackGatewayRestartEmission(): void {
+function rollBackGatewayRestartEmission(): false {
   emittedRestartToken = consumedRestartToken;
   emittedRestartReason = undefined;
   emittedRestartIntent = undefined;
-  consumeGatewaySigusr1RestartAuthorization();
-}
-
-type RestartDeferralHooks = {
-  onDeferring?: (pending: number) => void;
-  onStillPending?: (pending: number, elapsedMs: number) => void;
-  onReady?: () => void;
-  onTimeout?: (pending: number, elapsedMs: number) => void;
-  onCheckError?: (err: unknown) => void;
-};
-
-type RestartEmitHooks = {
-  beforeEmit?: () => Promise<void>;
-  afterEmitRejected?: () => Promise<void>;
-  afterEmitFailed?: () => Promise<void>;
-  emitRestart?: GatewayRestartEmitter;
-};
-
-export type RestartDeferralHandle = {
-  cancel: () => void;
-};
-
-export type GatewayRestartEmitter = (
-  reasonOverride?: string,
-  intent?: GatewayRestartIntent,
-) => GatewayRestartEmitResult;
-
-type GatewayRestartEmitResult =
-  | { status: "emitted" }
-  | { status: "coalesced" }
-  | { status: "failed" };
-
-export function resolveGatewayRestartDeferralTimeoutMs(): number;
-export function resolveGatewayRestartDeferralTimeoutMs(timeoutMs: unknown): number | undefined;
-export function resolveGatewayRestartDeferralTimeoutMs(timeoutMs?: unknown): number | undefined {
-  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs)) {
-    return DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS;
-  }
-  return timeoutMs > 0 ? Math.floor(timeoutMs) : undefined;
+  consumeGatewayRestartAuthorization();
+  return false;
 }
 
 function canReplacePendingRestartEmitHooks(
@@ -403,7 +348,9 @@ function canReplacePendingRestartEmitHooks(
   sessionKey: string | undefined,
 ): boolean {
   return (
-    !hooks || pendingRestartSessionKey === undefined || pendingRestartSessionKey === sessionKey
+    !hooks ||
+    pendingRestartRequest?.sessionKey === undefined ||
+    pendingRestartRequest.sessionKey === sessionKey
   );
 }
 
@@ -443,12 +390,14 @@ function warnRestartEmitHookFailure(
 // in tryBeginGatewayIndependentRootWorkAdmission (restartSignalPending), so two
 // bodies never interleave and a detached parked hook cannot be bypassed mid-await.
 async function emitPreparedGatewayRestartUnderAdmission(
-  hooks?: RestartEmitHooks,
+  caller: GatewayRestartRequest | undefined,
   reasonOverride?: string,
   intent?: GatewayRestartIntent,
   transientGeneration = restartTransientGeneration,
   canEmit: () => boolean = () => true,
+  scheduledRequest?: PendingGatewayRestart,
 ): Promise<GatewayRestartEmitResult | null> {
+  const hooks = caller?.hooks;
   const isCurrent = () => transientGeneration === restartTransientGeneration && canEmit();
   if (!isCurrent()) {
     return null;
@@ -459,14 +408,12 @@ async function emitPreparedGatewayRestartUnderAdmission(
   // this await was in flight, leaving no async window before emission where
   // parked continuations could be silently dropped.
   let callerPrepared = false;
-  if (hooks) {
+  if (hooks && caller?.isCurrent()) {
     try {
       await hooks.beforeEmit?.();
       callerPrepared = true;
     } catch (err) {
-      restartLog.warn(
-        `restart preparation failed; restart will continue without it: ${String(err)}`,
-      );
+      restartLog.warn(`restart preparation failed: ${String(err)}`);
     }
     if (!isCurrent()) {
       if (callerPrepared) {
@@ -474,73 +421,100 @@ async function emitPreparedGatewayRestartUnderAdmission(
       }
       return null;
     }
+    if (callerPrepared && !caller.isCurrent()) {
+      await rejectPreparedRestartHook(hooks);
+      callerPrepared = false;
+    }
   }
 
   // Drain parked emit hooks even when the caller supplies its own. Reload
   // deferral can win the emission race; without this drain the gateway-tool
   // sentinel/continuation is never written and session ownership goes stale.
-  // Keep pendingRestartSessionKey until the slot is fully consumed so
+  // Keep the pending session key until the slot is fully consumed so
   // different-session coalesces during preparation still hit the #86742 guard.
   // Timing note: with an empty slot this stays await-free; mid-flight intent
   // and deferral consumers observe hookless emission at original latency.
-  let nextParked = pendingRestartEmitHooks;
-  pendingRestartEmitHooks = undefined;
-  let preparedParked: RestartEmitHooks | undefined;
+  let nextParked = pendingRestartRequest?.takeEmitHooks();
+  let preparedParked: GatewayRestartRequest | undefined;
   const rejectCallerOnBail = async () => {
     if (hooks && callerPrepared) {
       await rejectPreparedRestartHook(hooks);
     }
   };
-  while (nextParked) {
-    if (preparedParked) {
-      await rejectPreparedRestartHook(preparedParked);
-      preparedParked = undefined;
-      if (!isCurrent()) {
-        await rejectCallerOnBail();
-        return null;
-      }
-    }
-    try {
-      await nextParked.beforeEmit?.();
-      preparedParked = nextParked;
-    } catch (err) {
-      restartLog.warn(
-        `restart preparation failed; restart will continue without it: ${String(err)}`,
-      );
-    }
+  for (;;) {
     if (!isCurrent()) {
-      await rejectPreparedRestartHook(preparedParked);
+      await rejectPreparedRestartHook(preparedParked?.hooks);
       await rejectCallerOnBail();
       return null;
     }
-    nextParked = pendingRestartEmitHooks;
-    pendingRestartEmitHooks = undefined;
+    if (nextParked) {
+      if (preparedParked) {
+        await rejectPreparedRestartHook(preparedParked.hooks);
+        preparedParked = undefined;
+        if (!isCurrent()) {
+          await rejectCallerOnBail();
+          return null;
+        }
+      }
+      if (nextParked.isCurrent()) {
+        try {
+          await nextParked.hooks?.beforeEmit?.();
+          preparedParked = nextParked;
+        } catch (err) {
+          restartLog.warn(`restart preparation failed: ${String(err)}`);
+        }
+      }
+      nextParked = pendingRestartRequest?.takeEmitHooks();
+      continue;
+    }
+    if (preparedParked && !preparedParked.isCurrent()) {
+      await rejectPreparedRestartHook(preparedParked.hooks);
+      preparedParked = undefined;
+    } else if (caller && callerPrepared && !caller.isCurrent()) {
+      await rejectPreparedRestartHook(hooks);
+      callerPrepared = false;
+    } else {
+      break;
+    }
+    // Cleanup can admit another coalesced requester; drain that slot before emission too.
+    nextParked = pendingRestartRequest?.takeEmitHooks();
   }
 
-  // Track every successfully prepared hook set (parked + caller) so non-emitted
-  // outcomes can roll back both the gateway-tool sentinel and reload preflight.
-  const preparedHooksList: RestartEmitHooks[] = preparedParked ? [preparedParked] : [];
-  if (hooks && callerPrepared) {
-    preparedHooksList.push(hooks);
-  }
+  // Non-emitted outcomes roll back every successfully prepared acknowledgement.
+  const preparedHooksList = [preparedParked?.hooks, callerPrepared ? hooks : undefined].filter(
+    (prepared): prepared is RestartEmitHooks => prepared !== undefined,
+  );
   // With caller hooks, emission stays the caller's (or falls back to the core
   // signal path if its preparation failed); parked hooks never own emission
   // when a caller is present.
   const emitOwner =
     hooks && callerPrepared
       ? hooks
-      : hooks || (pendingRestartSuccessorOwner && pendingRestartSessionKey === undefined)
+      : (hooks && caller?.isCurrent()) ||
+          (pendingRestartSuccessorOwner && pendingRestartRequest?.sessionKey === undefined)
         ? undefined
-        : preparedParked;
+        : preparedParked?.hooks;
 
   // Slot settled and no awaits remain before emission — release ownership for
   // every emission attempt, not only hookless ones, so a later session can
   // claim continuation hooks for the next restart cycle.
-  pendingRestartSessionKey = undefined;
+  if (pendingRestartRequest) {
+    pendingRestartRequest.sessionKey = undefined;
+  }
 
   if (!isCurrent()) {
     await rejectPreparedRestartHooks(preparedHooksList);
     return null;
+  }
+  if (
+    !caller?.isCurrent() &&
+    !scheduledRequest?.isCurrent() &&
+    !pendingRestartRequest?.isCurrent()
+  ) {
+    restartLog.warn("scheduled restart cancelled: requester authority changed");
+    clearPendingScheduledRestart();
+    await rejectPreparedRestartHooks(preparedHooksList);
+    return { status: "failed" };
   }
 
   // A managed update can coalesce while beforeEmit awaits. Promote that reason
@@ -582,91 +556,105 @@ async function emitPreparedGatewayRestart(
   hooks?: RestartEmitHooks,
   reasonOverride?: string,
   intent?: GatewayRestartIntent,
-  finalIdleCheck?: () => boolean,
-  setFenceRollback?: (rollback: (() => void) | null) => void,
+  options: {
+    finalIdleCheck?: () => boolean;
+    setFenceRollback?: (rollback: (() => void) | null) => void;
+    signal?: AbortSignal;
+    scheduledRequest?: PendingGatewayRestart;
+  } = {},
 ): Promise<boolean> {
+  const { finalIdleCheck, setFenceRollback, signal, scheduledRequest } = options;
   const transientGeneration = restartTransientGeneration;
+  const caller = scheduledRequest ? undefined : new GatewayRestartRequest(hooks);
   try {
     // A delayed restart can become due after host suspension prepared. Independent
     // root admission makes the transition atomic: due restarts block preparation,
     // while a prepared suspension defers emission until it resumes.
-    return await runWithGatewayIndependentRootWorkAdmission(async () => {
-      if (transientGeneration !== restartTransientGeneration) {
-        return false;
-      }
-      // SIGUSR1 already queued: coalesce. Run loop owns reopen-or-drain.
-      if (hasUnconsumedRestartSignal()) {
-        return false;
-      }
-      // Single live lease, multiple attempts may share it (deferred prepare →
-      // concurrent emit / retry). Never invent a dead stand-in lease.
-      let signalAdmission = pendingRestartSignalAdmission;
-      let ownsFenceLease = false;
-      if (!signalAdmission) {
-        // Orphan fence: pending without a lease and without a delivered signal.
-        rollbackGatewayRestartSignalFence();
-        signalAdmission = beginGatewayRestartSignalAdmission();
+    return await runWithGatewayIndependentRootWorkAdmission(
+      async () => {
+        if (signal?.aborted || transientGeneration !== restartTransientGeneration) {
+          return false;
+        }
+        // SIGUSR2 already queued: coalesce. Run loop owns reopen-or-drain.
+        if (hasUnconsumedRestartSignal()) {
+          return false;
+        }
+        // Single live lease, multiple attempts may share it (deferred prepare →
+        // concurrent emit / retry). Never invent a dead stand-in lease.
+        let signalAdmission = pendingRestartSignalAdmission;
+        let ownsFenceLease = false;
         if (!signalAdmission) {
-          return false;
+          // Orphan fence: pending without a lease and without a delivered signal.
+          rollbackGatewayRestartSignalFence();
+          signalAdmission = beginGatewayRestartSignalAdmission();
+          if (!signalAdmission) {
+            return false;
+          }
+          pendingRestartSignalAdmission = signalAdmission;
+          ownsFenceLease = true;
         }
-        pendingRestartSignalAdmission = signalAdmission;
-        ownsFenceLease = true;
-      }
-      let fenceActive = true;
-      let keepFenceForRunLoop = false;
-      const rollbackFence = () => {
-        // A concurrent emitter may queue SIGUSR1 on this shared lease while we
-        // await beforeEmit. Cancel/finally must not reopen over an in-flight
-        // signal — the run loop owns reopen-or-drain from here.
-        if (keepFenceForRunLoop || hasUnconsumedRestartSignal()) {
-          return;
-        }
-        // Adopters share the lease with a still-active prepare/deferral owner.
-        // Only the creator may reopen on abandon; stop this attempt's canEmit.
-        if (!ownsFenceLease) {
+        let fenceActive = true;
+        let keepFenceForRunLoop = false;
+        const rollbackFence = () => {
+          // A concurrent emitter may queue SIGUSR2 on this shared lease while we
+          // await beforeEmit. Cancel/finally must not reopen over an in-flight
+          // signal — the run loop owns reopen-or-drain from here.
+          if (keepFenceForRunLoop || hasUnconsumedRestartSignal()) {
+            return;
+          }
+          // Adopters share the lease with a still-active prepare/deferral owner.
+          // Only the creator may reopen on abandon; stop this attempt's canEmit.
+          if (!ownsFenceLease) {
+            fenceActive = false;
+            return;
+          }
           fenceActive = false;
-          return;
+          signalAdmission.rollback();
+          if (pendingRestartSignalAdmission === signalAdmission) {
+            pendingRestartSignalAdmission = null;
+          }
+        };
+        setFenceRollback?.(rollbackFence);
+        try {
+          const isIdle = finalIdleCheck
+            ? finalIdleCheck() && getActiveGatewayRootWorkCount({ excludeCurrent: true }) === 0
+            : true;
+          if (!isIdle) {
+            return false;
+          }
+          const emitResult = await emitPreparedGatewayRestartUnderAdmission(
+            caller,
+            reasonOverride,
+            intent,
+            transientGeneration,
+            () => fenceActive && !signal?.aborted,
+            scheduledRequest,
+          );
+          if (
+            emitResult &&
+            (emitResult.status === "emitted" ||
+              (emitResult.status === "coalesced" && hasUnconsumedRestartSignal()))
+          ) {
+            // Delivered or already-in-flight signal: run loop owns reopen-or-drain.
+            keepFenceForRunLoop = true;
+            return true;
+          }
+          return emitResult !== null;
+        } finally {
+          // Creator non-delivery reopens; adopters leave the live prepare lease.
+          if (!keepFenceForRunLoop) {
+            rollbackFence();
+          }
+          setFenceRollback?.(null);
         }
-        fenceActive = false;
-        signalAdmission.rollback();
-        if (pendingRestartSignalAdmission === signalAdmission) {
-          pendingRestartSignalAdmission = null;
-        }
-      };
-      setFenceRollback?.(rollbackFence);
-      try {
-        const isIdle = finalIdleCheck
-          ? finalIdleCheck() && getActiveGatewayRootWorkCount({ excludeCurrent: true }) === 0
-          : true;
-        if (!isIdle) {
-          return false;
-        }
-        const emitResult = await emitPreparedGatewayRestartUnderAdmission(
-          hooks,
-          reasonOverride,
-          intent,
-          transientGeneration,
-          () => fenceActive,
-        );
-        if (
-          emitResult &&
-          (emitResult.status === "emitted" ||
-            (emitResult.status === "coalesced" && hasUnconsumedRestartSignal()))
-        ) {
-          // Delivered or already-in-flight signal: run loop owns reopen-or-drain.
-          keepFenceForRunLoop = true;
-          return true;
-        }
-        return emitResult !== null;
-      } finally {
-        // Creator non-delivery reopens; adopters leave the live prepare lease.
-        if (!keepFenceForRunLoop) {
-          rollbackFence();
-        }
-        setFenceRollback?.(null);
-      }
-    }, "restart:delayed");
+      },
+      "restart:delayed",
+      signal,
+    );
   } catch (err) {
+    if (signal?.aborted) {
+      return false;
+    }
     if (!isGatewayRestartDraining()) {
       throw err;
     }
@@ -679,306 +667,171 @@ async function emitPreparedGatewayRestart(
  * A positive maxWaitMs keeps the old capped behavior for explicit configs.
  * Shared by both the direct RPC restart path and the config watcher path.
  */
-export function deferGatewayRestartUntilIdle(opts: {
-  getPendingCount: () => number;
-  hooks?: RestartDeferralHooks;
-  emitHooks?: RestartEmitHooks;
-  pollMs?: number;
-  maxWaitMs?: number;
-  reason?: string;
-  timeoutIntent?: GatewayRestartIntent;
-}): RestartDeferralHandle {
+export function deferGatewayRestartUntilIdle(
+  opts: {
+    getPendingCount: () => number;
+    hooks?: RestartDeferralHooks;
+    emitHooks?: RestartEmitHooks;
+    pollMs?: number;
+    maxWaitMs?: number;
+    reason?: string;
+    timeoutIntent?: GatewayRestartIntent;
+  },
+  scheduledRequest?: PendingGatewayRestart,
+): RestartDeferralHandle {
   const pollMs = resolveTimerTimeoutMs(opts.pollMs, DEFAULT_DEFERRAL_POLL_MS, 10);
   const maxWaitMs =
     typeof opts.maxWaitMs === "number" && Number.isFinite(opts.maxWaitMs) && opts.maxWaitMs > 0
       ? Math.max(pollMs, Math.floor(opts.maxWaitMs))
       : undefined;
 
+  type EmissionAttempt = {
+    controller: AbortController;
+    startedAt: number;
+    rollbackFence: (() => void) | null;
+  };
   let cancelled = false;
-  let attemptingEmission = false;
-  let cancelEmissionFence: (() => void) | null = null;
+  let activeAttempt: EmissionAttempt | null = null;
   let poll: ReturnType<typeof setInterval> | null = null;
   const stopPoll = () => {
-    if (!poll) {
-      return;
+    if (poll) {
+      clearInterval(poll);
+      activeDeferralPolls.delete(poll);
+      poll = null;
     }
-    clearInterval(poll);
-    activeDeferralPolls.delete(poll);
-    poll = null;
   };
-  const cancel = () => {
-    cancelled = true;
-    cancelEmissionFence?.();
-    cancelEmissionFence = null;
-    stopPoll();
+  const cancelAttempt = () => {
+    const attempt = activeAttempt;
+    activeAttempt = null;
+    // Retire admission waiters as well as a fence already acquired by preparation.
+    attempt?.controller.abort();
+    attempt?.rollbackFence?.();
   };
-  const handle = { cancel };
-  const startedAt = Date.now();
+  const handle = {
+    cancel: () => {
+      cancelled = true;
+      cancelAttempt();
+      stopPoll();
+    },
+  };
+  const startedAt = monotonicNow();
   let nextStillPendingAt = startedAt + DEFAULT_DEFERRAL_STILL_PENDING_WARN_MS;
-  const attemptEmission = (params: {
-    intent?: GatewayRestartIntent;
-    notifyReady: boolean;
-    skipIdleCheck?: boolean;
-  }) => {
-    if (cancelled || attemptingEmission) {
+  let timeoutNotified = false;
+  let lastKnownPending: number | undefined;
+  const readPendingCount = (): number | undefined => {
+    try {
+      lastKnownPending = opts.getPendingCount();
+      return lastKnownPending;
+    } catch (err) {
+      // Failed inspection is unknown, not evidence that live work has drained.
+      opts.hooks?.onCheckError?.(err);
+      return undefined;
+    }
+  };
+  const attemptEmission = (timedOut: boolean) => {
+    if (cancelled || activeAttempt) {
       return;
     }
-    attemptingEmission = true;
+    const attempt: EmissionAttempt = {
+      controller: new AbortController(),
+      startedAt: monotonicNow(),
+      rollbackFence: null,
+    };
+    activeAttempt = attempt;
     void emitPreparedGatewayRestart(
       opts.emitHooks,
       opts.reason,
-      params.intent,
-      params.skipIdleCheck ? undefined : () => opts.getPendingCount() <= 0,
-      (rollback) => {
-        cancelEmissionFence = rollback;
+      timedOut ? { ...opts.timeoutIntent, drainBudgetExhausted: true } : undefined,
+      {
+        finalIdleCheck: timedOut
+          ? undefined
+          : () => {
+              const current = readPendingCount();
+              return current !== undefined && current <= 0;
+            },
+        setFenceRollback: (rollback) => {
+          if (activeAttempt === attempt) {
+            attempt.rollbackFence = rollback;
+          } else {
+            // Cancellation can precede admission; never abandon a late-owned fence.
+            rollback?.();
+          }
+        },
+        signal: attempt.controller.signal,
+        scheduledRequest,
       },
     )
       .then((attempted) => {
-        attemptingEmission = false;
-        // Successful delivery clears the cancel hook after the fence is owned by
-        // the run loop. Failed attempts already reopened via emitPrepared finally.
-        cancelEmissionFence = null;
-        if (cancelled || !attempted) {
+        if (activeAttempt !== attempt) {
+          return;
+        }
+        activeAttempt = null;
+        if (!attempted) {
           return;
         }
         stopPoll();
-        if (params.notifyReady) {
+        if (!timedOut) {
           opts.hooks?.onReady?.();
         }
       })
       .catch((err: unknown) => {
-        attemptingEmission = false;
-        // Invoke before clearing: a thrown emission must reopen the fence even
-        // when emitPreparedGatewayRestart's finally did not run (for example a
-        // rejection from the independent-root wrapper after cancel raced).
-        cancelEmissionFence?.();
-        cancelEmissionFence = null;
-        stopPoll();
+        if (activeAttempt !== attempt) {
+          return;
+        }
+        cancelAttempt();
+        // Retry through the same checks and deadline, never an unchecked emission.
         opts.hooks?.onCheckError?.(err);
-        void emitPreparedGatewayRestart(opts.emitHooks, opts.reason, params.intent);
       });
   };
   const inspectPending = () => {
     if (cancelled) {
       return;
     }
-    let current: number;
-    try {
-      current = opts.getPendingCount();
-    } catch (err) {
-      stopPoll();
-      opts.hooks?.onCheckError?.(err);
-      void emitPreparedGatewayRestart(opts.emitHooks, opts.reason);
-      return;
-    }
-    if (current <= 0) {
-      attemptEmission({ notifyReady: true });
-      return;
-    }
-    const elapsedMs = Date.now() - startedAt;
-    if (Date.now() >= nextStillPendingAt) {
-      opts.hooks?.onStillPending?.(current, elapsedMs);
-      nextStillPendingAt = Date.now() + DEFAULT_DEFERRAL_STILL_PENDING_WARN_MS;
-    }
+    const current = readPendingCount();
+    const now = monotonicNow();
+    const elapsedMs = now - startedAt;
     if (maxWaitMs !== undefined && elapsedMs >= maxWaitMs) {
-      stopPoll();
-      opts.hooks?.onTimeout?.(current, elapsedMs);
-      attemptEmission({
-        intent: opts.timeoutIntent,
-        notifyReady: false,
-        skipIdleCheck: true,
-      });
+      if (!timeoutNotified) {
+        timeoutNotified = true;
+        opts.hooks?.onTimeout?.(lastKnownPending, elapsedMs);
+      }
+      // Preparation gets a full configured budget, not merely one poll interval.
+      // A stuck forced retry is subject to the same bound as the initial attempt.
+      if (activeAttempt && now - activeAttempt.startedAt >= maxWaitMs) {
+        cancelAttempt();
+      }
+      attemptEmission(true);
+      return;
+    }
+    if (current !== undefined && current <= 0) {
+      attemptEmission(false);
+      return;
+    }
+    if (current !== undefined && current > 0 && now >= nextStillPendingAt) {
+      opts.hooks?.onStillPending?.(current, elapsedMs);
+      nextStillPendingAt = now + DEFAULT_DEFERRAL_STILL_PENDING_WARN_MS;
     }
   };
-  let pending: number;
-  try {
-    pending = opts.getPendingCount();
-  } catch (err) {
-    opts.hooks?.onCheckError?.(err);
-    void emitPreparedGatewayRestart(opts.emitHooks, opts.reason);
-    return handle;
-  }
-  if (pending > 0) {
+  const pending = readPendingCount();
+  if (pending !== undefined && pending > 0) {
     opts.hooks?.onDeferring?.(pending);
   }
   poll = setInterval(inspectPending, pollMs);
   activeDeferralPolls.add(poll);
-  if (pending <= 0) {
-    attemptEmission({ notifyReady: true });
+  if (pending !== undefined && pending <= 0) {
+    attemptEmission(false);
   }
   return handle;
-}
-
-function formatSpawnDetail(result: {
-  error?: unknown;
-  status?: number | null;
-  stdout?: string | Buffer | null;
-  stderr?: string | Buffer | null;
-}): string {
-  const clean = (value: string | Buffer | null | undefined) => {
-    const text = typeof value === "string" ? value : value ? value.toString() : "";
-    return text.replace(/\s+/g, " ").trim();
-  };
-  if (result.error) {
-    if (result.error instanceof Error) {
-      return result.error.message;
-    }
-    if (typeof result.error === "string") {
-      return result.error;
-    }
-    try {
-      return JSON.stringify(result.error);
-    } catch {
-      return "unknown error";
-    }
-  }
-  return (
-    clean(result.stderr) ||
-    clean(result.stdout) ||
-    (typeof result.status === "number" ? `exit ${result.status}` : "unknown error")
-  );
-}
-
-function normalizeSystemdUnit(raw?: string, profile?: string): string {
-  const unit = raw?.trim();
-  if (!unit) {
-    return `${resolveGatewaySystemdServiceName(profile)}.service`;
-  }
-  return unit.endsWith(".service") ? unit : `${unit}.service`;
 }
 
 export function triggerOpenClawRestart(): RestartAttempt {
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
     return { ok: true, method: "supervisor", detail: "test mode" };
   }
-
-  cleanStaleGatewayProcessesSync();
-
-  const tried: string[] = [];
-  if (process.platform === "linux") {
-    const unit = normalizeSystemdUnit(
-      process.env.OPENCLAW_SYSTEMD_UNIT,
-      process.env.OPENCLAW_PROFILE,
-    );
-    const userArgs = ["--user", "restart", unit];
-    tried.push(`systemctl ${userArgs.join(" ")}`);
-    const userRestart = spawnSync("systemctl", userArgs, {
-      encoding: "utf8",
-      timeout: SPAWN_TIMEOUT_MS,
-    });
-    if (!userRestart.error && userRestart.status === 0) {
-      return { ok: true, method: "systemd", tried };
-    }
-    const systemArgs = ["restart", unit];
-    tried.push(`systemctl ${systemArgs.join(" ")}`);
-    const systemRestart = spawnSync("systemctl", systemArgs, {
-      encoding: "utf8",
-      timeout: SPAWN_TIMEOUT_MS,
-    });
-    if (!systemRestart.error && systemRestart.status === 0) {
-      return { ok: true, method: "systemd", tried };
-    }
-    const detail = [
-      `user: ${formatSpawnDetail(userRestart)}`,
-      `system: ${formatSpawnDetail(systemRestart)}`,
-    ].join("; ");
-    return { ok: false, method: "systemd", detail, tried };
-  }
-
-  if (process.platform === "win32") {
-    return relaunchGatewayScheduledTask(process.env);
-  }
-
-  if (process.platform !== "darwin") {
-    return {
-      ok: false,
-      method: "supervisor",
-      detail: "unsupported platform restart",
-    };
-  }
-
-  const label =
-    process.env.OPENCLAW_LAUNCHD_LABEL ||
-    resolveGatewayLaunchAgentLabel(process.env.OPENCLAW_PROFILE);
-  const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
-  const domain = uid !== undefined ? `gui/${uid}` : "gui/501";
-  const target = `${domain}/${label}`;
-  const args = ["kickstart", "-k", target];
-  tried.push(`launchctl ${args.join(" ")}`);
-  const res = spawnSync("launchctl", args, {
-    encoding: "utf8",
-    timeout: SPAWN_TIMEOUT_MS,
-  });
-  if (!res.error && res.status === 0) {
-    return { ok: true, method: "launchctl", tried };
-  }
-
-  // kickstart fails when the service was previously booted out (deregistered from launchd).
-  // Fall back to bootstrap, which loads RunAtLoad agents without a follow-up kickstart.
-  // Use env HOME to match how launchd.ts resolves the plist install path.
-  const home = process.env.HOME?.trim() || os.homedir();
-  const plistPath = path.join(home, "Library", "LaunchAgents", `${label}.plist`);
-  const bootstrapArgs = ["bootstrap", domain, plistPath];
-  tried.push(`launchctl ${bootstrapArgs.join(" ")}`);
-  const boot = spawnSync("launchctl", bootstrapArgs, {
-    encoding: "utf8",
-    timeout: SPAWN_TIMEOUT_MS,
-  });
-  if (
-    boot.error ||
-    (boot.status !== 0 &&
-      boot.status !== LAUNCHCTL_ALREADY_LOADED_EXIT_CODE &&
-      boot.status !== null)
-  ) {
-    return {
-      ok: false,
-      method: "launchctl",
-      detail: formatSpawnDetail(boot),
-      tried,
-    };
-  }
-  if (boot.status === 0) {
-    return { ok: true, method: "launchctl", tried };
-  }
-  const retryArgs = ["kickstart", target];
-  tried.push(`launchctl ${retryArgs.join(" ")}`);
-  const retry = spawnSync("launchctl", retryArgs, {
-    encoding: "utf8",
-    timeout: SPAWN_TIMEOUT_MS,
-  });
-  if (!retry.error && retry.status === 0) {
-    return { ok: true, method: "launchctl", tried };
-  }
-  return {
-    ok: false,
-    method: "launchctl",
-    detail: formatSpawnDetail(retry),
-    tried,
-  };
+  return restartGatewayViaSupervisor();
 }
 
-export type ScheduledRestart = {
-  ok: boolean;
-  pid: number;
-  signal: "SIGUSR1";
-  delayMs: number;
-  reason?: string;
-  mode: "emit" | "signal" | "supervisor";
-  coalesced: boolean;
-  cooldownMsApplied: number;
-  // True iff the caller's emitHooks own the pending restart slot. Coalesced
-  // requests from a different sessionKey are rejected to protect the existing
-  // session's continuation (#86742).
-  emitHooksQueued: boolean;
-};
-
-export function normalizeGatewayRestartDelayMs(delayMs?: number): number {
-  return typeof delayMs === "number" && Number.isFinite(delayMs)
-    ? Math.min(Math.max(Math.floor(delayMs), 0), 60_000)
-    : 2000;
-}
-
-export function scheduleGatewaySigusr1Restart(opts?: {
+export function scheduleGatewayRestart(opts?: {
   delayMs?: number;
   reason?: string;
   audit?: RestartAuditInfo;
@@ -992,27 +845,26 @@ export function scheduleGatewaySigusr1Restart(opts?: {
   const delayMs = normalizeGatewayRestartDelayMs(opts?.delayMs);
   const reason = normalizeRestartIntentReason(opts?.reason);
   const mode: ScheduledRestart["mode"] =
-    process.listenerCount("SIGUSR1") > 0
+    process.listenerCount("SIGUSR2") > 0
       ? "emit"
       : process.platform === "win32"
         ? "supervisor"
         : "signal";
-  const nowMs = Date.now();
+  const nowMs = monotonicNow();
   const cooldownMsApplied =
-    opts?.skipCooldown === true
+    opts?.skipCooldown === true || lastRestartEmittedAt === null
       ? 0
       : Math.max(0, lastRestartEmittedAt + RESTART_COOLDOWN_MS - nowMs);
   const restartResultBase = {
     ok: true,
     pid: process.pid,
-    signal: "SIGUSR1" as const,
+    signal: "SIGUSR2" as const,
     reason,
     mode,
     cooldownMsApplied,
   };
   const requestedDueAt = nowMs + delayMs + cooldownMsApplied;
   const skipDeferral = opts?.skipDeferral === true;
-  let nextPendingEmitHooks = opts?.emitHooks;
   let nextPendingSessionKey = opts?.sessionKey;
   let nextPendingReason = reason;
   let nextPendingSuccessorOwner = opts?.successorOwner;
@@ -1039,10 +891,14 @@ export function scheduleGatewaySigusr1Restart(opts?: {
       ...restartResultBase,
       delayMs: 0,
       coalesced: true,
-      // SIGUSR1 already emitted; the new caller's hooks cannot run for this cycle.
+      // SIGUSR2 already emitted; the new caller's hooks cannot run for this cycle.
       emitHooksQueued: false,
     };
   }
+
+  const requestOwner = (pendingRestartRequest ??= new PendingGatewayRestart());
+  const requester = requestOwner.admit(opts?.emitHooks);
+  let nextPendingEmitHooks = opts?.emitHooks ? requester : undefined;
 
   if (pendingRestartTimer || pendingRestartPreparing) {
     const remainingMs = pendingRestartPreparing ? 0 : Math.max(0, pendingRestartDueAt - nowMs);
@@ -1051,7 +907,7 @@ export function scheduleGatewaySigusr1Restart(opts?: {
     const preservePendingHooks =
       opts?.preservePendingEmitHooksOnDeferralBypass === true &&
       opts?.emitHooks === undefined &&
-      pendingRestartSessionKey !== undefined;
+      requestOwner.sessionKey !== undefined;
     if (pendingRestartPreparing && skipDeferral && activeDeferralPolls.size > 0) {
       restartLog.warn(
         `restart request bypassed active deferral reason=${reason ?? "unspecified"} pendingReason=${pendingRestartReason ?? "unspecified"} ${formatRestartAudit(opts?.audit)}`,
@@ -1060,10 +916,12 @@ export function scheduleGatewaySigusr1Restart(opts?: {
       pendingRestartReason = reason;
       pendingRestartSuccessorOwner = opts?.successorOwner ?? pendingRestartSuccessorOwner;
       if (!preservePendingHooks) {
-        pendingRestartEmitHooks = opts?.emitHooks;
-        pendingRestartSessionKey = opts?.sessionKey;
+        requestOwner.emitHooks = nextPendingEmitHooks;
+        requestOwner.sessionKey = opts?.sessionKey;
       }
-      void emitPreparedGatewayRestart(undefined, reason);
+      void emitPreparedGatewayRestart(undefined, reason, undefined, {
+        scheduledRequest: requestOwner,
+      });
       return {
         ...restartResultBase,
         delayMs: 0,
@@ -1084,7 +942,7 @@ export function scheduleGatewaySigusr1Restart(opts?: {
         !canReplacePendingRestartEmitHooks(opts?.emitHooks, opts?.sessionKey)
       ) {
         restartLog.warn(
-          `restart continuation dropped: another session owns the pending restart (callerSessionKey=${opts?.sessionKey ?? "unspecified"} pendingSessionKey=${pendingRestartSessionKey ?? "unspecified"})`,
+          `restart continuation dropped: another session owns the pending restart (callerSessionKey=${opts?.sessionKey ?? "unspecified"} pendingSessionKey=${requestOwner.sessionKey ?? "unspecified"})`,
         );
         clearTimeout(pendingRestartTimer ?? undefined);
         pendingRestartTimer = null;
@@ -1101,8 +959,8 @@ export function scheduleGatewaySigusr1Restart(opts?: {
         };
       }
       if (preservePendingHooks) {
-        nextPendingEmitHooks = pendingRestartEmitHooks;
-        nextPendingSessionKey = pendingRestartSessionKey;
+        nextPendingEmitHooks = requestOwner.emitHooks;
+        nextPendingSessionKey = requestOwner.sessionKey;
       }
       restartLog.warn(
         `restart request rescheduled earlier reason=${reason ?? "unspecified"} pendingReason=${pendingRestartReason ?? "unspecified"} oldDelayMs=${remainingMs} newDelayMs=${Math.max(0, requestedDueAt - nowMs)} ${formatRestartAudit(opts?.audit)}`,
@@ -1127,12 +985,12 @@ export function scheduleGatewaySigusr1Restart(opts?: {
           opts?.emitHooks === undefined &&
           (restartReasonPromoted || opts?.successorOwner !== undefined))
       ) {
-        pendingRestartEmitHooks = opts?.emitHooks;
-        pendingRestartSessionKey = opts?.emitHooks ? opts.sessionKey : undefined;
+        requestOwner.emitHooks = nextPendingEmitHooks;
+        requestOwner.sessionKey = opts?.emitHooks ? opts.sessionKey : undefined;
       }
       if (opts?.emitHooks && !emitHooksQueued) {
         restartLog.warn(
-          `restart continuation dropped: another session owns the pending restart (callerSessionKey=${opts.sessionKey ?? "unspecified"} pendingSessionKey=${pendingRestartSessionKey ?? "unspecified"})`,
+          `restart continuation dropped: another session owns the pending restart (callerSessionKey=${opts.sessionKey ?? "unspecified"} pendingSessionKey=${requestOwner.sessionKey ?? "unspecified"})`,
         );
       }
       return {
@@ -1147,8 +1005,9 @@ export function scheduleGatewaySigusr1Restart(opts?: {
   pendingRestartDueAt = requestedDueAt;
   pendingRestartReason = nextPendingReason;
   pendingRestartSuccessorOwner = nextPendingSuccessorOwner;
-  pendingRestartEmitHooks = nextPendingEmitHooks;
-  pendingRestartSessionKey = nextPendingSessionKey;
+  pendingRestartRequest = requestOwner;
+  requestOwner.emitHooks = nextPendingEmitHooks;
+  requestOwner.sessionKey = nextPendingSessionKey;
   pendingRestartSkipDeferral = skipDeferral;
   armPendingRestartTimer(requestedDueAt, nowMs);
   return {

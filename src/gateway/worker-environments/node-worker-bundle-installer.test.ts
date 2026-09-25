@@ -65,6 +65,9 @@ describe("Gateway node worker bundle installer", () => {
       gatewayNamespace: "gateway-test",
       getTransport: () => ({
         hasCurrentRunner: () => false,
+        async getCurrentNode(nodeId) {
+          return (await this.listCurrentNodes()).find((candidate) => candidate.nodeId === nodeId);
+        },
         listCurrentNodes,
         isCurrent: (candidate) => candidate === node,
         invoke,
@@ -112,6 +115,7 @@ describe("Gateway node worker bundle installer", () => {
     }));
     const transport: NodeWorkerSupervisorTransport = {
       hasCurrentRunner: () => false,
+      getCurrentNode: async (nodeId) => (node.nodeId === nodeId ? node : undefined),
       listCurrentNodes: async () => [node],
       isCurrent: (candidate) => candidate === node,
       invoke,
@@ -147,6 +151,7 @@ describe("Gateway node worker bundle installer", () => {
     });
     const transport: NodeWorkerSupervisorTransport = {
       hasCurrentRunner: () => false,
+      getCurrentNode: async (nodeId) => (node.nodeId === nodeId ? node : undefined),
       listCurrentNodes: async () => [node],
       isCurrent: () => true,
       invoke: async () => ({
@@ -181,6 +186,8 @@ describe("Gateway node worker bundle installer", () => {
     }));
     const transport: NodeWorkerSupervisorTransport = {
       hasCurrentRunner: () => false,
+      getCurrentNode: async (nodeId) =>
+        [advertising, legacy].find((candidate) => candidate.nodeId === nodeId),
       listCurrentNodes: async () => [advertising, legacy],
       isCurrent: () => true,
       invoke,
@@ -218,6 +225,7 @@ describe("Gateway node worker bundle installer", () => {
       });
       const transport: NodeWorkerSupervisorTransport = {
         hasCurrentRunner: () => true,
+        getCurrentNode: async (nodeId) => (node.nodeId === nodeId ? node : undefined),
         listCurrentNodes: async () => [node],
         isCurrent: () => true,
         invoke,

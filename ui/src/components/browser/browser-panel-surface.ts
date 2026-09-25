@@ -1,4 +1,5 @@
 import { t } from "../../i18n/index.ts";
+import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
 import {
   buildBrowserAnnotationContent,
   type BrowserAnnotationDispatchResult,
@@ -14,6 +15,8 @@ import type {
   BrowserPanelTab,
 } from "./browser-client.ts";
 import type { BrowserTabTarget } from "./browser-target.ts";
+
+registerBrowserEnglish();
 
 const FORWARDED_KEYS = new Set([
   "Enter",

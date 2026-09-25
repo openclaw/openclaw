@@ -32,7 +32,10 @@ const spokenResult = {
   outputFormat: "pcm16",
 };
 
-async function createFixture(engine: "transcription" | "voice" = "transcription") {
+async function createFixture(
+  engine: "transcription" | "voice" = "transcription",
+  inputAudioIsolated = false,
+) {
   const sessionKey = "agent:main:subagent:test-meeting:meeting-1";
   let entry: SessionEntry = { sessionId: "synthetic-consult", updatedAt: 1 };
   const runEmbeddedAgent = vi.fn(async (_params: RunEmbeddedAgentParams) => ({
@@ -90,14 +93,19 @@ async function createFixture(engine: "transcription" | "voice" = "transcription"
   });
   let fatal = () => {};
   let transcript = (_text: string) => {};
+  let inputAudio = (_audio: Buffer) => {};
+  const sendAudio = vi.fn();
   const disposed = createDeferredCore();
   const writeOutput = vi.fn(async (_audio: Buffer) => {});
   const sendUserMessage = vi.fn();
   const transport: MeetingRealtimeAudioTransport = {
+    inputAudioIsolated,
     onFatal: (handler) => {
       fatal = handler;
     },
-    startInput: vi.fn(),
+    startInput: (handler) => {
+      inputAudio = handler;
+    },
     beginOutput: vi.fn(),
     stop: vi.fn(async () => {}),
     dispose: vi.fn(async () => {
@@ -125,7 +133,7 @@ async function createFixture(engine: "transcription" | "voice" = "transcription"
       isConfigured: () => true,
       createSession: (request) => {
         transcript = (text) => request.onTranscript?.(text);
-        return { connect: async () => {}, sendAudio() {}, close() {}, isConnected: () => true };
+        return { connect: async () => {}, sendAudio, close() {}, isConnected: () => true };
       },
     };
     handle = await startMeetingAgentRealtimeEngine({ ...common, providers: [provider] });
@@ -161,6 +169,8 @@ async function createFixture(engine: "transcription" | "voice" = "transcription"
     sendUserMessage,
     logger,
     transcript: (text: string) => transcript(text),
+    inputAudio: (audio: Buffer) => inputAudio(audio),
+    sendAudio,
     stop: async (kind: "stop" | "fatal") => {
       if (kind === "fatal") {
         fatal();
@@ -191,6 +201,46 @@ describe("meeting shutdown", () => {
     environment.restore();
     await fs.rm(stateDir, { recursive: true, force: true });
   });
+
+  it.each([true, false])(
+    "admits participant audio and repeated words during TTS only when input is isolated=%s",
+    async (isolated) => {
+      const fixture = await createFixture("transcription", isolated);
+      const playback = createDeferredCore();
+      const playbackStarted = createDeferredCore();
+      const secondRunStarted = createDeferredCore();
+      const answer = "The synthetic project is ready.";
+      fixture.runEmbeddedAgent
+        .mockResolvedValueOnce({ payloads: [{ text: answer }], meta: {} })
+        .mockImplementationOnce(async () => {
+          secondRunStarted.resolve();
+          return { payloads: [{ text: "Acknowledged." }], meta: {} };
+        });
+      fixture.writeOutput.mockImplementationOnce(() => {
+        playbackStarted.resolve();
+        return playback.promise;
+      });
+      try {
+        fixture.transcript("Please give me a project status update.");
+        await vi.advanceTimersByTimeAsync(MEETING_AGENT_TRANSCRIPT_DEBOUNCE_MS);
+        await playbackStarted.promise;
+        expect(fixture.runEmbeddedAgent).toHaveBeenCalledOnce();
+        expect(fixture.writeOutput).toHaveBeenCalledOnce();
+        fixture.inputAudio(Buffer.alloc(960, 1));
+        fixture.transcript(answer);
+        await vi.advanceTimersByTimeAsync(MEETING_AGENT_TRANSCRIPT_DEBOUNCE_MS);
+        expect(fixture.sendAudio).toHaveBeenCalledTimes(isolated ? 1 : 0);
+        if (isolated) {
+          await secondRunStarted.promise;
+        }
+        expect(fixture.runEmbeddedAgent).toHaveBeenCalledTimes(isolated ? 2 : 1);
+        expect(fixture.handle.getHealth().suppressedInputBytes).toBe(isolated ? 0 : 960);
+      } finally {
+        playback.resolve();
+        await fixture.handle.stop();
+      }
+    },
+  );
 
   it.each(["transcription", "voice"] as const)(
     "delivers a completed %s consult once",

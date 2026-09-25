@@ -6,11 +6,14 @@ import type {
   TaskDeliveryStatus,
   TaskNotifyPolicy,
   TaskRecord,
+  TaskPersistenceReceipt,
   TaskRuntime,
+  TaskRunTransition,
   TaskScopeKind,
   TaskStatus,
   TaskTerminalOutcome,
 } from "./task-registry.types.js";
+import type { TaskRunOwner, TaskRunOwnerBinding } from "./task-run-owner.types.js";
 
 // A killed subagent can still report a completion that raced the kill marker.
 // Task cancellation replaces this marker once the operator request is accepted.
@@ -39,6 +42,7 @@ export type DetachedTaskCreateParams = {
 };
 
 export type DetachedRunningTaskCreateParams = DetachedTaskCreateParams & {
+  executionOwner?: TaskRecord["executionOwner"];
   startedAt?: number;
   lastEventAt?: number;
   progressSummary?: string | null;
@@ -46,6 +50,7 @@ export type DetachedRunningTaskCreateParams = DetachedTaskCreateParams & {
 
 type DetachedTaskStartParams = {
   runId: string;
+  taskId?: string;
   runtime?: TaskRuntime;
   sessionKey?: string;
   startedAt?: number;
@@ -56,15 +61,18 @@ type DetachedTaskStartParams = {
 
 type DetachedTaskProgressParams = {
   runId: string;
+  taskId?: string;
   runtime?: TaskRuntime;
   sessionKey?: string;
   lastEventAt?: number;
   progressSummary?: string | null;
   eventSummary?: string | null;
+  detail?: JsonValue;
 };
 
 type DetachedTaskFinalizeCommonParams = {
   runId: string;
+  taskId?: string;
   runtime?: TaskRuntime;
   sessionKey?: string;
   childSessionKey?: string | null;
@@ -95,8 +103,27 @@ export type DetachedTaskFinalizeParams = DetachedTaskFinalizeCommonParams & {
 
 export type DetachedTaskTerminalState = Omit<
   DetachedTaskFinalizeParams,
-  "runId" | "runtime" | "sessionKey"
+  "runId" | "taskId" | "runtime" | "sessionKey"
 >;
+
+export type CreatedDetachedTaskRun = {
+  task: TaskRecord;
+  bindRunOwner: (
+    cancel: TaskRunOwner["cancel"],
+    assertCurrent: () => void,
+  ) => Promise<TaskRunOwnerBinding>;
+  finalizeActive: (
+    terminal: Pick<
+      DetachedTaskTerminalState,
+      "status" | "endedAt" | "error" | "terminalSummary" | "detail" | "clearError" | "lastEventAt"
+    >,
+    canSettle: (task: TaskRecord) => boolean,
+  ) => Promise<void>;
+  settleUnstarted: (
+    terminal: Pick<DetachedTaskTerminalState, "status" | "endedAt" | "error" | "terminalSummary">,
+    canSettle: (task: TaskRecord) => boolean,
+  ) => Promise<boolean>;
+};
 
 type DetachedTaskDeliveryStatusParams = {
   runId: string;
@@ -143,9 +170,39 @@ export type DetachedTaskFindResult =
   | { lookup: "available"; task?: TaskRecord }
   | { lookup: "unavailable"; task?: undefined };
 
+export type DetachedTaskAssignmentTransition = {
+  transition: TaskRunTransition;
+  expectedTask: TaskPersistenceReceipt;
+  /** Recheck the captured live owner immediately before persistence. */
+  assertCurrent: () => void;
+};
+
+export class DetachedTaskAssignmentUnsupportedError extends Error {
+  constructor() {
+    super(
+      "Detached task runtime must implement transitionTaskAssignment before accepting exact-assignment work. Upgrade the custom task runtime adapter.",
+    );
+    this.name = "DetachedTaskAssignmentUnsupportedError";
+  }
+}
+
+export class DetachedTaskRuntimeOwnerRetiredError extends Error {
+  constructor() {
+    super("Detached task runtime owner changed before task settlement.");
+    this.name = "DetachedTaskRuntimeOwnerRetiredError";
+  }
+}
+
 export type DetachedTaskLifecycleRuntime = {
+  /** Optional exact-assignment settlement; legacy run-scoped methods are unchanged. */
+  transitionTaskAssignment?: (params: DetachedTaskAssignmentTransition) => TaskRecord[];
   createQueuedTaskRun: (params: DetachedTaskCreateParams) => TaskRecord | null;
   createRunningTaskRun: (params: DetachedRunningTaskCreateParams) => TaskRecord | null;
+  /**
+   * When supplied, taskId narrows the run/runtime/session scope to that task
+   * and its authoritative managed projections. Omission keeps run-scoped updates.
+   * Start, progress, and terminal adapters must preserve this selector.
+   */
   startTaskRunByRunId: (params: DetachedTaskStartParams) => TaskRecord[];
   recordTaskRunProgressByRunId: (params: DetachedTaskProgressParams) => TaskRecord[];
   finalizeTaskRunByRunId?: (params: DetachedTaskFinalizeParams) => TaskRecord[];

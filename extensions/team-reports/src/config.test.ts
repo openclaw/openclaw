@@ -67,7 +67,7 @@ describe("Team Reports configuration", () => {
     expect(manifestSchema.safeParse?.(documented).success).toBe(true);
     const defaults = parseTeamReportsConfig(minimal);
     expect(defaults).toMatchObject({
-      basePath: "/reports",
+      basePath: "/plugins/team-reports",
       displayTimezone: "UTC",
       github: { teams: [], includeDirectCollaborators: false, ignoreCommentPatterns: [] },
       summaries: { enabled: true },
@@ -111,8 +111,8 @@ describe("Team Reports configuration", () => {
   });
 
   it("reserves a mounted Control UI subtree while allowing the default root UI", () => {
-    expect(parseTeamReportsConfig(minimal, "/").basePath).toBe("/reports");
-    expect(parseTeamReportsConfig(minimal, "/dashboard/").basePath).toBe("/reports");
+    expect(parseTeamReportsConfig(minimal, "/").basePath).toBe("/plugins/team-reports");
+    expect(parseTeamReportsConfig(minimal, "/dashboard/").basePath).toBe("/plugins/team-reports");
     for (const basePath of ["/dashboard", "/dashboard/reports/"]) {
       expect(() => parseTeamReportsConfig({ ...minimal, basePath }, "/dashboard/")).toThrow(
         "Control UI base path",

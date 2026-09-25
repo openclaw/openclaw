@@ -1,14 +1,22 @@
+import type { RouteLoadCause } from "@openclaw/uirouter";
 import type { ApplicationContext } from "../../app/context.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { resolveAgentId, resolveCreateTarget } from "./catalog-target.ts";
-import { newSessionLocationFromSearch, type NewSessionRouteData } from "./location.ts";
+import { takeInstantThreadRestore } from "./instant-thread-restore.ts";
+import type { NewSessionRouteData } from "./location.ts";
+import { newSessionModelLocationFromSearch } from "./model-location.ts";
 
 export async function load(
   context: ApplicationContext,
   search: string,
+  cause?: RouteLoadCause,
 ): Promise<NewSessionRouteData> {
-  const requestedLocation = newSessionLocationFromSearch(search);
+  const restored = cause && cause !== "preload" && takeInstantThreadRestore(context, search);
+  if (restored) {
+    return restored;
+  }
+  const requestedLocation = newSessionModelLocationFromSearch(search);
   const requestedAgentId = requestedLocation.agentId.trim();
   let groupCwd = "";
   let groupWorktree = false;
@@ -38,7 +46,7 @@ export async function load(
       groupWorktree,
       groupCatalogGeneration,
       groupDefaultsStatus,
-      model: "",
+      model: requestedLocation.requestedModel ?? "",
       catalogLabel: "",
       startTerminal: false,
     };
@@ -68,7 +76,10 @@ export async function load(
   }
   // ensureList is fail-closed: offline and request-error paths return cached
   // data or null, allowing the unresolved catalog page to mount and retry.
-  const loadedAgentsList = initialAgentsState.agentsList ?? (await context.agents.ensureList());
+  const loadedAgentsList =
+    !initialAgentsState.agentsList || initialAgentsState.agentsListCached
+      ? await context.agents.ensureList()
+      : initialAgentsState.agentsList;
   const gateway = context.gateway.snapshot;
   const agentsState = context.agents.state;
   if (
@@ -77,6 +88,7 @@ export async function load(
     gateway.client !== initialGateway.client ||
     !agentsState.connected ||
     agentsState.client !== gateway.client ||
+    agentsState.agentsListCached ||
     agentsState.agentsList !== loadedAgentsList
   ) {
     return unresolved();

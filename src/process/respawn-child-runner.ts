@@ -30,6 +30,7 @@ export function runRespawnChildWithSignalBridge(params: {
     stdio: "inherit",
     env,
     detached: detachForProcessTree,
+    windowsHide: !stdioIsTerminal,
   });
 
   // Let the child honor forwarded signals first; then terminate it so the
@@ -106,6 +107,10 @@ export function runRespawnChildWithSignalBridge(params: {
     }
     clearSignalTimers();
     if (signal) {
+      if (process.platform !== "win32") {
+        process.kill(process.pid, signal);
+        return;
+      }
       const forwardedSignalExitCode =
         !hardKillBackstopStarted && signal === firstForwardedSignal
           ? signal === "SIGINT"

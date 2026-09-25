@@ -1,7 +1,20 @@
 // API baseline helpers render public SDK exports for contract drift reports.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import ts from "typescript";
+import * as ts from "typescript/unstable/ast";
+import {
+  SymbolFlags,
+  type Checker,
+  type Emitter,
+  type Program,
+  type Symbol as CompilerSymbol,
+} from "typescript/unstable/sync";
+import { CompilerInputSnapshot } from "../../scripts/lib/compiler-input-snapshot.mts";
+import { emitNativeDeclarations } from "../../scripts/lib/native-declaration-emitter.mts";
+import {
+  createNativeTypeScriptProject,
+  resolveInstalledNativeTypeScriptCompiler,
+} from "../../scripts/lib/native-typescript.mts";
 import {
   pluginSdkDocMetadata,
   type PluginSdkDocCategory,
@@ -10,7 +23,6 @@ import {
 import { publicPluginSdkEntrypoints } from "../../scripts/lib/plugin-sdk-entries.mts";
 import {
   createDeclarationClosureRenderer,
-  formatPluginSdkDiagnostics,
   type PluginSdkApiDeclarationSection,
 } from "./api-baseline-declaration-closure.js";
 import { printPluginSdkExportDeclaration } from "./api-baseline-declaration-print.js";
@@ -94,31 +106,14 @@ function resolveRepoRoot(): string {
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 }
 
-function createCompilerContext(repoRoot: string, entrypoints: readonly string[]) {
-  const configPath = ts.findConfigFile(
-    repoRoot,
-    (filePath) => ts.sys.fileExists(filePath),
-    "tsconfig.json",
-  );
-  assert(configPath, "Could not find tsconfig.json");
-  const configFile = ts.readConfigFile(configPath, (filePath) => ts.sys.readFile(filePath));
-  if (configFile.error) {
-    throw new Error(ts.flattenDiagnosticMessageText(configFile.error.messageText, "\n"));
-  }
-  const parsedConfig = ts.parseJsonConfigFileContent(configFile.config, ts.sys, repoRoot);
-  if (parsedConfig.errors.length > 0) {
-    throw new Error(formatPluginSdkDiagnostics(parsedConfig.errors, repoRoot));
-  }
+async function createCompilerContext(repoRoot: string, entrypoints: readonly string[]) {
+  const configPath = path.join(repoRoot, "tsconfig.json");
   const fileNames = entrypoints
     .map((entrypoint) => path.join(repoRoot, "src", "plugin-sdk", `${entrypoint}.ts`))
     .toSorted((left, right) =>
-      compareText(
-        relativePath(repoRoot, path.resolve(left)),
-        relativePath(repoRoot, path.resolve(right)),
-      ),
+      compareText(relativePath(repoRoot, left), relativePath(repoRoot, right)),
     );
-  const program = ts.createProgram(fileNames, {
-    ...parsedConfig.options,
+  const compilerOptions = {
     declaration: true,
     declarationMap: false,
     emitDeclarationOnly: true,
@@ -127,18 +122,67 @@ function createCompilerContext(repoRoot: string, entrypoints: readonly string[])
     noEmitOnError: false,
     removeComments: true,
     sourceMap: false,
-  });
-  const printer = ts.createPrinter({ newLine: ts.NewLineKind.LineFeed, removeComments: true });
-  return {
-    checker: program.getTypeChecker(),
-    declarationClosure: createDeclarationClosureRenderer({
-      printer,
-      program,
-      repoRoot,
-    }),
-    printer,
-    program,
   };
+  const configFileName = path.join(repoRoot, ".openclaw-plugin-sdk-api.tsconfig.json");
+  const config = JSON.stringify({
+    extends: configPath,
+    compilerOptions,
+    files: fileNames,
+    include: [],
+  });
+  const source = createNativeTypeScriptProject({
+    cwd: repoRoot,
+    configFileName,
+    files: { [configFileName]: config },
+  });
+  let declarations: ReturnType<typeof createNativeTypeScriptProject> | undefined;
+  try {
+    const emitted = await emitNativeDeclarations({
+      cwd: repoRoot,
+      configFile: configPath,
+      roots: fileNames,
+      compilerOptions,
+      diagnostics: "declarations",
+    });
+    // Keep each emitted module at its source location so package scope, path mappings, and
+    // import attributes retain the compiler's original resolution conditions.
+    declarations = createNativeTypeScriptProject({
+      cwd: repoRoot,
+      configFileName,
+      files: {
+        ...Object.fromEntries(
+          [...emitted.declarations].map(([file, output]) => [file, output.code]),
+        ),
+        [configFileName]: config,
+      },
+    });
+    return {
+      checker: source.project.checker,
+      inputs: [
+        ...new Set([
+          ...emitted.inputs,
+          ...source.project.program.getSourceFileNames(),
+          ...declarations.project.program.getSourceFileNames(),
+        ]),
+      ],
+      declarationClosure: createDeclarationClosureRenderer({
+        project: declarations.project,
+        sourceProgram: source.project.program,
+        emittedSources: new Set(emitted.declarations.keys()),
+        repoRoot,
+      }),
+      printer: source.project.emitter,
+      program: source.project.program,
+      close() {
+        declarations?.close();
+        source.close();
+      },
+    };
+  } catch (error) {
+    declarations?.close();
+    source.close();
+    throw error;
+  }
 }
 
 /** List canonical public SDK entrypoints included in the API baseline. */
@@ -147,7 +191,7 @@ export function listPluginSdkApiBaselineEntrypoints(): string[] {
 }
 
 function inferExportKind(
-  symbol: ts.Symbol,
+  symbol: CompilerSymbol,
   declaration: ts.Declaration | undefined,
 ): PluginSdkApiExportKind {
   if (declaration) {
@@ -169,7 +213,7 @@ function inferExportKind(
         if (
           variableStatement &&
           ts.isVariableStatement(variableStatement) &&
-          (ts.getCombinedNodeFlags(variableStatement.declarationList) & ts.NodeFlags.Const) !== 0
+          (variableStatement.declarationList.flags & ts.NodeFlags.Const) !== 0
         ) {
           return "const";
         }
@@ -181,13 +225,13 @@ function inferExportKind(
   }
 
   for (const [flag, kind] of [
-    [ts.SymbolFlags.Function, "function"],
-    [ts.SymbolFlags.Class, "class"],
-    [ts.SymbolFlags.Interface, "interface"],
-    [ts.SymbolFlags.TypeAlias, "type"],
-    [ts.SymbolFlags.ConstEnum | ts.SymbolFlags.RegularEnum, "enum"],
-    [ts.SymbolFlags.Variable, "variable"],
-    [ts.SymbolFlags.NamespaceModule | ts.SymbolFlags.ValueModule, "namespace"],
+    [SymbolFlags.Function, "function"],
+    [SymbolFlags.Class, "class"],
+    [SymbolFlags.Interface, "interface"],
+    [SymbolFlags.TypeAlias, "type"],
+    [SymbolFlags.ConstEnum | SymbolFlags.RegularEnum, "enum"],
+    [SymbolFlags.Variable, "variable"],
+    [SymbolFlags.NamespaceModule | SymbolFlags.ValueModule, "namespace"],
   ] as const) {
     if (symbol.flags & flag) {
       return kind;
@@ -197,20 +241,24 @@ function inferExportKind(
 }
 
 function resolveSymbolAndDeclaration(
-  checker: ts.TypeChecker,
+  checker: Checker,
   repoRoot: string,
-  symbol: ts.Symbol,
+  symbol: CompilerSymbol,
 ): {
   declaration: ts.Declaration | undefined;
-  resolvedSymbol: ts.Symbol;
+  resolvedSymbol: CompilerSymbol;
 } {
   const resolvedSymbol =
-    symbol.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(symbol) : symbol;
+    symbol.flags & SymbolFlags.Alias ? checker.getAliasedSymbol(symbol) : symbol;
   const declarations = (
-    resolvedSymbol.getDeclarations() ??
-    symbol.getDeclarations() ??
-    []
-  ).toSorted((left, right) => compareDeclarations(repoRoot, left, right));
+    resolvedSymbol.declarations.length ? resolvedSymbol.declarations : symbol.declarations
+  )
+    .map((handle) => handle.resolve())
+    .filter(
+      (node): node is ts.Declaration =>
+        node !== undefined && node.kind !== ts.SyntaxKind.SourceFile,
+    )
+    .toSorted((left, right) => compareDeclarations(repoRoot, left, right));
   const declaration = declarations.find((candidate) => candidate.kind !== ts.SyntaxKind.SourceFile);
   return { declaration, resolvedSymbol };
 }
@@ -235,16 +283,26 @@ function compareDeclarations(
 }
 
 function buildExportSurface(params: {
-  checker: ts.TypeChecker;
+  checker: Checker;
   declarationClosure: DeclarationClosureRenderer;
-  printer: ts.Printer;
+  printer: Emitter;
   repoRoot: string;
-  symbol: ts.Symbol;
+  symbol: CompilerSymbol;
 }): RenderedPluginSdkApiExport {
   const { checker, declarationClosure, printer, repoRoot, symbol } = params;
   const { declaration, resolvedSymbol } = resolveSymbolAndDeclaration(checker, repoRoot, symbol);
-  const exportName = symbol.getName();
-  const declarationName = declaration ? ts.getNameOfDeclaration(declaration) : undefined;
+  const exportName = symbol.name;
+  const declarationName =
+    declaration &&
+    (ts.isClassDeclaration(declaration) ||
+      ts.isEnumDeclaration(declaration) ||
+      ts.isFunctionDeclaration(declaration) ||
+      ts.isInterfaceDeclaration(declaration) ||
+      ts.isModuleDeclaration(declaration) ||
+      ts.isTypeAliasDeclaration(declaration) ||
+      ts.isVariableDeclaration(declaration))
+      ? declaration.name
+      : undefined;
   const closureName =
     declarationName && ts.isIdentifier(declarationName) ? declarationName.text : exportName;
   const declarationText = declaration
@@ -285,10 +343,10 @@ function sortExports(left: RenderedPluginSdkApiExport, right: RenderedPluginSdkA
 }
 
 function buildModuleSurface(params: {
-  checker: ts.TypeChecker;
+  checker: Checker;
   declarationClosure: DeclarationClosureRenderer;
-  printer: ts.Printer;
-  program: ts.Program;
+  printer: Emitter;
+  program: Program;
   repoRoot: string;
   entrypoint: string;
 }): RenderedPluginSdkApiModule {
@@ -306,7 +364,7 @@ function buildModuleSurface(params: {
 
   const exports = checker
     .getExportsOfModule(moduleSymbol)
-    .filter((symbol) => symbol.getName() !== "__esModule")
+    .filter((symbol) => symbol.name !== "__esModule")
     .map((symbol) =>
       buildExportSurface({
         checker,
@@ -337,62 +395,71 @@ export async function renderPluginSdkApiBaseline(params?: {
   if (params?.entrypoints === undefined) {
     validateMetadata();
   }
-  const { checker, declarationClosure, printer, program } = createCompilerContext(
-    repoRoot,
-    entrypoints,
-  );
-  const modules = [...entrypoints].toSorted(compareText).map((entrypoint) =>
-    buildModuleSurface({
-      checker,
-      declarationClosure,
-      printer,
-      program,
-      repoRoot,
-      entrypoint,
-    }),
-  );
+  const configPath = path.join(repoRoot, "tsconfig.json");
+  const { executable: binary } = resolveInstalledNativeTypeScriptCompiler();
+  const snapshot = () =>
+    new CompilerInputSnapshot(repoRoot, { toolchainFiles: [binary], generatorInputs: [] });
+  const before = snapshot();
+  before.signature(configPath, [], []);
+  const startedAt = Date.now();
+  const context = await createCompilerContext(repoRoot, entrypoints);
+  const { checker, declarationClosure, printer, program } = context;
+  try {
+    const modules = [...entrypoints].toSorted(compareText).map((entrypoint) =>
+      buildModuleSurface({
+        checker,
+        declarationClosure,
+        printer,
+        program,
+        repoRoot,
+        entrypoint,
+      }),
+    );
 
-  const declarationSections = [
-    ...new Map(
-      modules.flatMap((moduleSurface) =>
-        moduleSurface.exports.flatMap((exportSurface) =>
-          (exportSurface.closureSections ?? []).map((section) => [
-            `${section.name}\0${section.text}`,
-            section,
-          ]),
-        ),
-      ),
-    ).values(),
-  ].toSorted(
-    (left, right) => compareText(left.name, right.name) || compareText(left.text, right.text),
-  );
-  const sectionIds = new Map(
-    declarationSections.map((section, index) => [`${section.name}\0${section.text}`, index]),
-  );
-  return {
-    declarationSections,
-    modules: modules
-      .map((moduleSurface) => ({
-        category: moduleSurface.category,
-        entrypoint: moduleSurface.entrypoint,
-        exports: moduleSurface.exports.map((exportSurface) => ({
-          closureHash: exportSurface.closureHash,
-          closureSectionIds:
-            exportSurface.closureSections?.map((section) => {
-              const id = sectionIds.get(`${section.name}\0${section.text}`);
-              assert(id !== undefined, "Missing Plugin SDK declaration section");
-              return id;
-            }) ?? null,
-          declaration: exportSurface.declaration,
-          exportName: exportSurface.exportName,
-          kind: exportSurface.kind,
-          source: exportSurface.source,
-        })),
-        importSpecifier: moduleSurface.importSpecifier,
-        source: moduleSurface.source,
-      }))
-      .toSorted((left, right) => compareText(left.importSpecifier, right.importSpecifier)),
-  };
+    const sectionsByContent = new Map<string, PluginSdkApiDeclarationSection>();
+    for (const moduleSurface of modules) {
+      for (const exportSurface of moduleSurface.exports) {
+        for (const section of exportSurface.closureSections ?? []) {
+          sectionsByContent.set(`${section.name}\0${section.text}`, section);
+        }
+      }
+    }
+    const declarationSections = [...sectionsByContent.values()].toSorted(
+      (left, right) => compareText(left.name, right.name) || compareText(left.text, right.text),
+    );
+    const sectionIds = new Map(
+      declarationSections.map((section, index) => [`${section.name}\0${section.text}`, index]),
+    );
+    const baseline = {
+      declarationSections,
+      modules: modules
+        .map((moduleSurface) => ({
+          category: moduleSurface.category,
+          entrypoint: moduleSurface.entrypoint,
+          exports: moduleSurface.exports.map((exportSurface) => ({
+            closureHash: exportSurface.closureHash,
+            closureSectionIds:
+              exportSurface.closureSections?.map((section) => {
+                const id = sectionIds.get(`${section.name}\0${section.text}`);
+                assert(id !== undefined, "Missing Plugin SDK declaration section");
+                return id;
+              }) ?? null,
+            declaration: exportSurface.declaration,
+            exportName: exportSurface.exportName,
+            kind: exportSurface.kind,
+            source: exportSurface.source,
+          })),
+          importSpecifier: moduleSurface.importSpecifier,
+          source: moduleSurface.source,
+        }))
+        .toSorted((left, right) => compareText(left.importSpecifier, right.importSpecifier)),
+    };
+    // Source symbols and emitted closure text must describe the same input generation.
+    snapshot().seal(configPath, [], context.inputs, before, startedAt);
+    return baseline;
+  } finally {
+    context.close();
+  }
 }
 
 function validateMetadata(): void {

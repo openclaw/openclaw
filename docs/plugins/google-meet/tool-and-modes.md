@@ -44,7 +44,7 @@ Agents use the `google_meet` tool:
 | `test_speech`           | Create/reuse a session, trigger a known phrase, return Chrome health                              |
 | `test_listen`           | Create/reuse an observe-only session, wait for caption/transcript movement                        |
 
-`test_speech` always forces `mode: "agent"` or `"bidi"` and fails if asked to run in `mode: "transcribe"`, because observe-only sessions cannot emit speech. `speechOutputVerified` requires both fresh realtime output bytes and fresh non-silent audio returning on the bridge's microphone capture path during that output. A reused session's older output or loopback signal does not count, and sink-byte growth alone no longer reports verified speech.
+`test_speech` always forces `mode: "agent"` or `"bidi"` and fails if asked to run in `mode: "transcribe"`, because observe-only sessions cannot emit speech. `speechOutputVerified` requires both fresh realtime output bytes and a matching non-silent waveform on the native virtual microphone capture path during that output. With generated input commands, participant input is captured separately from browser playback; explicit input commands retain their configured capture path. A reused session's older output or loopback signal does not count, and sink-byte growth alone does not report verified speech. This verifies local microphone injection; a second participant is needed to confirm remote audibility.
 
 For Chrome transports, `leave` keeps a reused user-owned tab open after clicking Meet's Leave call button. Tabs opened by OpenClaw are closed after departure.
 
@@ -102,12 +102,12 @@ Speaking on demand:
 | `providerConnected` / `realtimeReady`                          | Realtime voice bridge state                                                                                            |
 | `lastInputAt` / `lastOutputAt`                                 | Last audio seen from/sent to the bridge                                                                                |
 | `audioInputRouted` / `audioInputDeviceLabel`                   | Whether Meet's microphone is the verified native virtual-audio input                                                   |
-| `audioOutputRouted` / `audioOutputDeviceLabel`                 | Whether the Meet tab's media output was actively routed to the native virtual-audio backend                            |
+| `audioOutputRouted` / `audioOutputDeviceLabel`                 | Whether participant playback is routed to the provider; managed browser capture reports `Isolated browser playback`    |
 | `lastOutputLoopbackAt` / `outputLoopbackSignalBytes`           | Fresh output whose waveform fingerprint was correlated on the virtual microphone capture path                          |
 | `lastOutputLoopbackCorrelation`                                | Correlation score tying the captured signal to the current assistant-output generation                                 |
 | `outputGeneration` / `verifiedOutputGeneration`                | Monotonic ids; equality means the current output, rather than an older utterance, passed loopback proof                |
 | `lastOutputLoopbackRms` / `lastOutputLoopbackPeak`             | Audio-energy diagnostics for the latest verified loopback capture chunk                                                |
-| `lastSuppressedInputAt` / `suppressedInputBytes`               | Loopback input ignored while assistant playback is active                                                              |
+| `lastSuppressedInputAt` / `suppressedInputBytes`               | Input ignored by legacy mixed-loopback echo protection; isolated browser input is not suppressed during playback       |
 
 ## Agent and bidi modes
 
@@ -116,19 +116,21 @@ Speaking on demand:
 | `agent` | The configured OpenClaw agent | Normal OpenClaw TTS runtime            | You want "my agent is in the meeting" behavior        |
 | `bidi`  | The realtime voice model      | Realtime voice provider audio response | You want the lowest-latency conversational voice loop |
 
-`agent` mode: the realtime transcription provider hears meeting audio, final participant transcripts route through the configured OpenClaw agent, and the answer is spoken through regular OpenClaw TTS. Nearby final-transcript fragments are coalesced before the consult so one spoken turn does not produce several stale partial answers; realtime input is suppressed while queued assistant audio is still playing, and recent assistant-like transcript echoes are ignored before the consult so BlackHole loopback does not make the agent answer its own speech.
+`agent` mode: the realtime transcription provider hears meeting audio, final participant transcripts route through the configured OpenClaw agent, and the answer is spoken through regular OpenClaw TTS. Nearby final-transcript fragments are coalesced before the consult so one spoken turn does not produce several stale partial answers. Isolated browser input remains available during TTS; only legacy transports with mixed loopback input retain playback and transcript echo suppression.
 
-`bidi` mode: the realtime voice model answers directly and can call `openclaw_agent_consult` for deeper reasoning, current information, or normal OpenClaw tools. The consult tool runs the regular OpenClaw agent behind the scenes with recent meeting transcript context and returns a concise spoken answer; in `agent` mode OpenClaw sends that answer directly to TTS, in `bidi` mode the realtime voice model can speak it back. It uses the same shared consult machinery as Voice Call.
+`bidi` mode: the realtime voice model answers directly and delegates deeper reasoning, current information, or normal OpenClaw tools to the configured agent. Providers with function tools use `openclaw_agent_consult`; GPT-Live uses native delegation through the same Gateway voice runtime as Discord and Talk. Both paths preserve meeting context and `realtime.toolPolicy`. The resulting answer is spoken by the realtime voice model.
+
+For GPT-Live with Cove, use the [Live configuration](/plugins/google-meet/config#gpt-live-with-cove). Live owns response timing and interruption: incoming participant audio stays open during playback, and OpenClaw does not add a local barge-in detector or wait for a response-completion event to play short replies. Stopping the meeting or replacing the provider session cancels active delegation and ignores late results.
 
 By default consults run against the `main` agent; set `realtime.agentId` to point a Meet lane at a dedicated agent workspace, model defaults, tool policy, memory, and session history. Agent-mode consults use a per-meeting `agent:<id>:subagent:google-meet:<session>` session key so follow-up questions keep meeting context while inheriting normal agent policy. When an agent calls `google_meet` in agent mode, the consultant session forks the caller's current transcript before answering participant speech; the Meet session stays separate so meeting follow-ups do not mutate the caller transcript directly.
 
 `realtime.toolPolicy` controls the consult run:
 
-| Policy           | Behavior                                                                                                                         |
-| ---------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `safe-read-only` | Expose the consult tool; limit the regular agent to `read`, `web_search`, `web_fetch`, `x_search`, `memory_search`, `memory_get` |
-| `owner`          | Expose the consult tool; let the regular agent use its normal tool policy                                                        |
-| `none`           | Do not expose the consult tool to the realtime voice model                                                                       |
+| Policy           | Behavior                                                                                                                  |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `safe-read-only` | Allow delegation; limit the regular agent to `read`, `web_search`, `web_fetch`, `x_search`, `memory_search`, `memory_get` |
+| `owner`          | Allow delegation with the regular agent's normal tool policy                                                              |
+| `none`           | Do not expose the consult tool; reject native Live delegation                                                             |
 
 The consult session key is scoped per Meet session, so follow-up consult calls reuse prior consult context during the same meeting.
 

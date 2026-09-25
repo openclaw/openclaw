@@ -21,7 +21,7 @@ import {
   readUserGitHubConnection,
   updateUserGitHubConnection,
 } from "../state/user-github-connections.js";
-import { linkEmail } from "../state/user-profiles.js";
+import { linkCanonicalUserProfileEmail } from "../state/user-profile-writes.js";
 import {
   readPersonalGitHubPublication,
   requirePersonalGitHubPublicationConfirmation,
@@ -48,7 +48,6 @@ import {
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
   persistPublicationTestSession,
-  root,
 } from "./github-publication.test-support.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { preparePersonalGitHubSessionAction } from "./server-methods/github-personal-authorization.js";
@@ -58,6 +57,7 @@ import {
   seedActivePlacement,
 } from "./worker-environments/placement-dispatch-test-fixtures.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
+import { seedAttachedPlacementEnvironment } from "./worker-environments/placement-test-fixtures.js";
 
 const mocks = githubPublicationTestMocks();
 
@@ -484,6 +484,11 @@ describe("personal publication authority and recovery", () => {
         });
       }
       if (state === "remote" || state === "reconciliation") {
+        seedAttachedPlacementEnvironment(openOpenClawStateDatabase(), {
+          environmentId: "remote",
+          sessionId: REQUEST.sessionId,
+          ownerEpoch: 1,
+        });
         const active = seedActivePlacement(placements, { environmentId: "remote", ownerEpoch: 1 });
         selectedAction = { ...action, sessionId: active.sessionId, sessionKey: REQUEST.sessionKey };
         if (state === "reconciliation") {
@@ -574,7 +579,7 @@ describe("personal publication authority and recovery", () => {
             );
           }
           if (race === "merge") {
-            linkEmail("alice@example.test", otherOwner);
+            await linkCanonicalUserProfileEmail("alice@example.test", otherOwner);
           }
           if (race === "session") {
             const original = mocks.loadSession.getMockImplementation()!;
@@ -992,7 +997,8 @@ describe("personal publication authority and recovery", () => {
     expect(receipt?.status).toBe("published");
     const binding = { publicationKind: "personal" as const, requestId: result.requestId };
     const originalLifecycle = readGitHubPublicationSessionLifecycle(binding);
-    expect(originalLifecycle).toEqual({ lifecycle_revision: session.read().lifecycleRevision });
+    const lifecycle_revision = session.read().lifecycleRevision;
+    expect(originalLifecycle).toEqual({ lifecycle_revision, requester_authority_json: null });
     await session.reset(placements);
     expect(readPersonalGitHubPublication(owner, { requestId: result.requestId })).toEqual(receipt);
     expect(
@@ -1003,7 +1009,7 @@ describe("personal publication authority and recovery", () => {
         })
       )[1],
     ).toMatchObject({ result: { status: "published" }, confirmation: null });
-    const storePath = path.join(root, "sessions.json");
+    const storePath = session.storePath;
     await patchSessionEntryCore({ agentId: "main", sessionKey: SESSION_KEY, storePath }, () => ({
       archivedAt: Date.now(),
     }));

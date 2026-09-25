@@ -7,6 +7,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
 import {
   upsertSessionEntryCore,
@@ -35,7 +36,11 @@ import {
   resolveBootstrapFilesForRun,
   resolveContextInjectionMode,
 } from "./bootstrap-files.js";
+import { createRemoteShellSandboxFsBridge } from "./sandbox/remote-fs-bridge.js";
+import { createLocalRemoteShellScriptRunner } from "./sandbox/remote-fs-bridge.test-helpers.js";
+import { createSandboxTestContext } from "./sandbox/test-fixtures.js";
 import { SessionManager } from "./sessions/session-manager.js";
+import { registerAgentWorkspaceAccess } from "./workspace-access.js";
 import { resetLegacyWorkspaceStateCheckForTest } from "./workspace-legacy-state.test-support.js";
 import { mergeWorkspaceSetupState } from "./workspace-state-store.js";
 import {
@@ -53,6 +58,7 @@ vi.mock("../plugins/memory-runtime.js", () => ({
 }));
 
 let testState: OpenClawTestState | undefined;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function registerExtraBootstrapFileHook() {
   registerInternalHook("agent:bootstrap", (event) => {
@@ -191,7 +197,7 @@ async function createHeartbeatAgentsWorkspace() {
 }
 
 async function writeCompletedWorkspaceState(workspaceDir: string): Promise<void> {
-  mergeWorkspaceSetupState(workspaceDir, {
+  await mergeWorkspaceSetupState(workspaceDir, {
     bootstrapSeededAt: "2026-05-16T00:00:00.000Z",
     setupCompletedAt: "2026-05-16T00:00:01.000Z",
   });
@@ -530,6 +536,60 @@ describe("resolveBootstrapFilesForRun", () => {
         expect(files.map((file) => file.path)).not.toContain(rootAliasPath);
       }
       expect(files.map((file) => file.path)).toContain(nestedAliasPath);
+    },
+  );
+
+  it.runIf(process.platform !== "win32").each([
+    { mode: "direct", chatType: "direct", sessionKey: "agent:main:opaque:binding" },
+    { mode: "group", chatType: "group", sessionKey: "agent:main:opaque:binding" },
+    { mode: "channel", chatType: "channel", sessionKey: "agent:main:opaque:binding" },
+    { mode: "subagent", chatType: "direct", sessionKey: "agent:main:subagent:worker" },
+    { mode: "cron", chatType: "direct", sessionKey: "agent:main:cron:daily:run:run-1" },
+  ] as const)(
+    "filters remote root-memory sources and keeps equal-byte nested memory for $mode",
+    async ({ mode, chatType, sessionKey }) => {
+      const workspaceDir = tempDirs.make("openclaw-bootstrap-gateway-");
+      const remoteDir = await fs.realpath(tempDirs.make("openclaw-bootstrap-harness-"));
+      const nestedDir = path.join(remoteDir, "nested");
+      await fs.mkdir(nestedDir);
+      await fs.writeFile(path.join(workspaceDir, DEFAULT_MEMORY_FILENAME), "Gateway decoy");
+      for (const root of [remoteDir, nestedDir]) {
+        await fs.writeFile(path.join(root, DEFAULT_MEMORY_FILENAME), "same memory bytes");
+      }
+      await fs.symlink(remoteDir, path.join(remoteDir, "root-alias"), "dir");
+      await fs.symlink(nestedDir, path.join(remoteDir, "nested-alias"), "dir");
+      const bridge = createRemoteShellSandboxFsBridge({
+        sandbox: createSandboxTestContext({
+          overrides: { workspaceDir, agentWorkspaceDir: workspaceDir },
+        }),
+        runtime: {
+          remoteWorkspaceDir: remoteDir,
+          remoteAgentWorkspaceDir: remoteDir,
+          runRemoteShellScript: createLocalRemoteShellScriptRunner(),
+        },
+      });
+      const release = registerAgentWorkspaceAccess(workspaceDir, { bridge });
+      try {
+        registerLoadedBootstrapFilesHook(
+          ["root-alias/MEMORY.md", "nested-alias/MEMORY.md"],
+          mode === "subagent" ? "AGENTS.md" : mode === "cron" ? "SOUL.md" : undefined,
+        );
+        const files = await resolveBootstrapFilesForRun({ workspaceDir, sessionKey, chatType });
+        const paths = files.map((file) => file.path);
+        const rootAliasPath = path.join(workspaceDir, "root-alias/MEMORY.md");
+        if (mode === "direct") {
+          expect(paths).toContain(rootAliasPath);
+        } else {
+          expect(paths).not.toContain(rootAliasPath);
+        }
+        expect(
+          files.find((file) => file.path === path.join(workspaceDir, "nested-alias/MEMORY.md")),
+        ).toMatchObject({ content: "same memory bytes", missing: false });
+        expect(files.map((file) => file.name)).not.toContain(DEFAULT_USER_FILENAME);
+        expect(files.some((file) => file.content === "Gateway decoy")).toBe(false);
+      } finally {
+        release();
+      }
     },
   );
 

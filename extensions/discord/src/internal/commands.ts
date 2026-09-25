@@ -1,4 +1,3 @@
-// Discord plugin module implements commands behavior.
 import {
   ApplicationCommandOptionType,
   ApplicationCommandType,

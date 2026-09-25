@@ -77,7 +77,7 @@ describe("resolveFirstGithubToken", () => {
     });
 
     const result = await resolveFirstGithubToken({
-      env: { GH_TOKEN: "env-token" } as NodeJS.ProcessEnv,
+      env: { COPILOT_GITHUB_TOKEN: "env-token" } as NodeJS.ProcessEnv,
     });
 
     expect(result).toEqual({
@@ -365,7 +365,7 @@ describe("resolveFirstGithubToken", () => {
         },
       },
     } as never;
-    const env = { GH_TOKEN: "test-auth-token" } as NodeJS.ProcessEnv;
+    const env = { COPILOT_GITHUB_TOKEN: "test-auth-token" } as NodeJS.ProcessEnv;
 
     const result = await resolveFirstGithubToken({
       config,
@@ -456,7 +456,7 @@ describe("resolveFirstGithubToken", () => {
         },
       },
     } as never;
-    const env = { GH_TOKEN: "test-auth-token" } as NodeJS.ProcessEnv;
+    const env = { COPILOT_GITHUB_TOKEN: "test-auth-token" } as NodeJS.ProcessEnv;
 
     const result = await resolveFirstGithubToken({
       config,
@@ -506,7 +506,7 @@ describe("resolveFirstGithubToken", () => {
     await expect(
       resolveFirstGithubToken({
         config,
-        env: { GH_TOKEN: "ambient-token" } as NodeJS.ProcessEnv,
+        env: { COPILOT_GITHUB_TOKEN: "ambient-token" } as NodeJS.ProcessEnv,
       }),
     ).resolves.toEqual({ githubToken: "ambient-token", hasProfile: false });
     expect(resolveConfiguredSecretInputWithFallbackMock).not.toHaveBeenCalled();
@@ -523,17 +523,11 @@ describe("resolveFirstGithubToken", () => {
     );
   });
 
-  it("skips empty higher-priority environment variables", async () => {
-    const result = await resolveFirstGithubToken({
-      env: {
-        COPILOT_GITHUB_TOKEN: "",
-        GH_TOKEN: "test-auth-token",
-      } as NodeJS.ProcessEnv,
-      authProfileMode: "api_key",
-    });
-
-    expect(result).toEqual({
-      githubToken: "test-auth-token",
+  it.each(["GH_TOKEN", "GITHUB_TOKEN"])("does not authenticate with generic %s", async (key) => {
+    ensureAuthProfileStoreMock.mockReturnValue({ profiles: {} });
+    listProfilesForProviderMock.mockReturnValue([]);
+    await expect(resolveFirstGithubToken({ env: { [key]: "generic-token" } })).resolves.toEqual({
+      githubToken: "",
       hasProfile: false,
     });
   });
@@ -588,7 +582,7 @@ describe("resolveFirstGithubToken", () => {
 
     await expect(
       resolveFirstGithubToken({
-        env: { GH_TOKEN: "ambient-token" },
+        env: { COPILOT_GITHUB_TOKEN: "ambient-token" },
         profileId: "github-copilot:missing",
       }),
     ).resolves.toEqual({ githubToken: "", hasProfile: true });

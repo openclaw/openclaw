@@ -21,7 +21,7 @@ public enum ChatTranscriptExporter {
                 let heading = "### \(self.displayRole(message.role)) — \(timestamp)"
                 let body = self.body(for: message)
                 sections.append([heading, body].filter { !$0.isEmpty }.joined(separator: "\n\n"))
-            case .message:
+            case .message, .completedWork:
                 continue
             case let .systemNotice(notice):
                 let timestamp = self.timestamp(notice.timestamp, formatter: timestampFormatter)

@@ -22,7 +22,10 @@ import type {
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
-import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
+import {
+  runOutsidePluginRuntimeGenerationScope,
+  withPluginRuntimeGenerationScope,
+} from "../../plugins/runtime/generation-scope.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
@@ -39,6 +42,10 @@ import type { SandboxContext } from "../sandbox/types.js";
 import { beginForegroundSessionMaintenance } from "../session-maintenance/coordinator.js";
 import { resolveSessionPlacementSandbox } from "../session-placement-admission.js";
 import { DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON } from "./compact-reasons.js";
+import {
+  runForegroundCompactionWork,
+  type ForegroundCompactionOwner,
+} from "./compact.foreground-work.js";
 import { compactNativeCliSession } from "./compact.js";
 import {
   createQueuedCompactionAbortedResult,
@@ -60,6 +67,7 @@ import {
 } from "./compaction-runtime-preparation.js";
 import type { acceptCompactionSuccessor } from "./compaction-successor.js";
 import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
+import type { ContextEngineMaintenanceResources } from "./context-engine-maintenance-work.js";
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 import { log } from "./logger.js";
 import { resolveTieredModel } from "./model-resolution.js";
@@ -116,22 +124,14 @@ function resolveManualCompactionActiveRunSessionId(
   );
 }
 
-async function disposeContextEngine(contextEngine: ContextEngine): Promise<void> {
-  try {
-    await contextEngine.dispose?.();
-  } catch (err) {
-    log.warn("context engine dispose failed", {
-      errorMessage: formatErrorMessage(err),
-    });
-  }
-}
-
 async function deferOwningContextEngineBudgetCompaction(params: {
   compactParams: CompactEmbeddedAgentSessionParams;
   contextEngineSessionKey?: string;
   contextEngine: ContextEngine;
   contextEngineRuntimeContext: ContextEngineRuntimeContext;
   contextEngineRuntimeSettings: ContextEngineRuntimeSettings;
+  onDeferredMaintenance: (completion: Promise<void>) => void;
+  factoryResources: ContextEngineMaintenanceResources;
 }): Promise<EmbeddedAgentCompactResult> {
   let deferredScheduled = false;
   let deferredScheduleFailure: unknown;
@@ -148,8 +148,10 @@ async function deferOwningContextEngineBudgetCompaction(params: {
       config: params.compactParams.config,
       contextEngineAgentId: params.compactParams.contextEngineAgentId,
       disposeDeferredContextEngineAfterMaintenance: true,
-      onDeferredMaintenance: () => {
+      factoryResources: params.factoryResources,
+      onDeferredMaintenance: (completion) => {
         deferredScheduled = true;
+        params.onDeferredMaintenance(completion);
       },
       onDeferredMaintenanceFailure: (error) => {
         deferredScheduleFailure = error;
@@ -232,6 +234,7 @@ export async function compactEmbeddedAgentSession(
       sessionKey: runtimeTarget.sessionKey,
       sessionTarget: runtimeTarget,
       sessionFile: runtimeTarget.sessionKey,
+      spawnedBy: normalizeOptionalString(params.spawnedBy) ?? entry?.spawnedBy,
       contextEngineAgentId,
     };
     if (resolvedParams.trigger !== "manual") {
@@ -299,6 +302,24 @@ async function compactEmbeddedAgentSessionImpl(
   host: QueuedCompactionHostOptions,
   contextEngineSessionKey?: string,
 ): Promise<EmbeddedAgentCompactResult> {
+  return await runForegroundCompactionWork((owner) =>
+    compactEmbeddedAgentSessionPrepared(
+      params,
+      expectedEntry,
+      host,
+      contextEngineSessionKey,
+      owner,
+    ),
+  );
+}
+
+async function compactEmbeddedAgentSessionPrepared(
+  params: QueuedCompactionParams,
+  expectedEntry: Parameters<typeof acceptCompactionSuccessor>[0]["expectedEntry"],
+  host: QueuedCompactionHostOptions,
+  contextEngineSessionKey: string | undefined,
+  owner: ForegroundCompactionOwner,
+): Promise<EmbeddedAgentCompactResult> {
   if (params.abortSignal?.aborted) {
     return createQueuedCompactionAbortedResult();
   }
@@ -347,37 +368,42 @@ async function compactEmbeddedAgentSessionImpl(
     return nativeCliResult;
   }
   assertQueuedCompactionPreparationActive(params, host);
-  const lease = await acquireAgentRunPreparedModelRuntime(
-    {
-      config: params.config ?? {},
-      agentId: agentIds.sessionAgentId,
-      agentDir,
-      workspaceDir: resolvedWorkspaceDir,
-      ...(params.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
-    },
-    {
-      abortSignal: params.abortSignal,
-      deriveRuntimePluginSelections: ({ config, metadataSnapshot }) => {
-        const selected = resolveCompactionRuntimeSelection({
-          ...requestedSelection,
-          config: projectCodexHostTranscriptBytePreflightConfig(
-            config,
-            Boolean(host.transcriptBytePreflightHarness),
-          ),
-          manifestPlugins: metadataSnapshot,
-          allowPluginNormalization: false,
-        });
-        return [
-          {
-            provider: selected.provider,
-            modelId: selected.modelId,
-            runtime: selected.selectedHarnessRuntime,
-            agentId: agentIds.sessionAgentId,
-          },
-        ];
+  // Compaction admits new work even when an engine restores a predecessor context.
+  // Keep caller authority, but select metadata from the committed inventory.
+  const lease = await runOutsidePluginRuntimeGenerationScope(() =>
+    acquireAgentRunPreparedModelRuntime(
+      {
+        config: params.config ?? {},
+        agentId: agentIds.sessionAgentId,
+        agentDir,
+        workspaceDir: resolvedWorkspaceDir,
+        ...(params.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
       },
-    },
+      {
+        abortSignal: params.abortSignal,
+        deriveRuntimePluginSelections: ({ config, metadataSnapshot }) => {
+          const selected = resolveCompactionRuntimeSelection({
+            ...requestedSelection,
+            config: projectCodexHostTranscriptBytePreflightConfig(
+              config,
+              Boolean(host.transcriptBytePreflightHarness),
+            ),
+            manifestPlugins: metadataSnapshot,
+            allowPluginNormalization: false,
+          });
+          return [
+            {
+              provider: selected.provider,
+              modelId: selected.modelId,
+              runtime: selected.selectedHarnessRuntime,
+              agentId: agentIds.sessionAgentId,
+            },
+          ];
+        },
+      },
+    ),
   );
+  const factoryResources = owner.adoptLease(lease);
   // Admission can replace config and agent storage while preserving the requested workspace.
   const preparedParams = {
     ...params,
@@ -389,41 +415,30 @@ async function compactEmbeddedAgentSessionImpl(
     agentDir: lease.snapshot.agentDir,
   };
   const run = async () => {
+    owner.captureContext();
     ensureContextEnginesInitialized();
-    const contextEngine = await resolveContextEngine(preparedParams.config, {
-      agentDir: preparedParams.agentDir,
-      workspaceDir: resolvedWorkspaceDir,
-    });
-    let disposeContextEngineOnExit = true;
-    try {
-      assertQueuedCompactionPreparationActive(params, host);
-      // Foreground disposal belongs to this finally. Only accepted background
-      // maintenance transfers engine ownership away from this call.
-      return await compactResolvedContextEngine(
-        preparedParams,
-        expectedEntry,
-        host,
-        contextEngine,
-        preparedParams.agentDir,
-        resolvedWorkspaceDir,
-        lease.snapshot,
-        contextEngineSessionKey,
-        () => {
-          disposeContextEngineOnExit = false;
-        },
-      );
-    } finally {
-      if (disposeContextEngineOnExit) {
-        await disposeContextEngine(contextEngine);
-      }
-    }
-  };
-  try {
+    const contextEngine = await owner.resolveEngine(() =>
+      resolveContextEngine(preparedParams.config, {
+        agentDir: preparedParams.agentDir,
+        workspaceDir: resolvedWorkspaceDir,
+      }),
+    );
     assertQueuedCompactionPreparationActive(params, host);
-    return await withPluginRuntimeGenerationScope(lease.snapshot, run);
-  } finally {
-    lease.release();
-  }
+    return await compactResolvedContextEngine(
+      preparedParams,
+      expectedEntry,
+      host,
+      contextEngine,
+      preparedParams.agentDir,
+      resolvedWorkspaceDir,
+      lease.snapshot,
+      contextEngineSessionKey,
+      owner.transferEngine,
+      factoryResources,
+    );
+  };
+  assertQueuedCompactionPreparationActive(params, host);
+  return await withPluginRuntimeGenerationScope(lease.snapshot, run);
 }
 
 async function compactResolvedContextEngine(
@@ -435,7 +450,8 @@ async function compactResolvedContextEngine(
   resolvedWorkspaceDir: string,
   preparedModelRuntime: PreparedModelRuntimeSnapshot,
   contextEngineSessionKey: string | undefined,
-  releaseContextEngineOwnership: () => void,
+  transferContextEngineOwnership: (completion: Promise<void>) => void,
+  factoryResources: ContextEngineMaintenanceResources,
 ): Promise<EmbeddedAgentCompactResult> {
   const runtimeTarget = params.sessionTarget;
   const lockedHarnessRuntime = resolveSessionPinnedHarnessId(params.sessionEntry);
@@ -477,6 +493,7 @@ async function compactResolvedContextEngine(
   });
   assertQueuedCompactionPreparationActive(params, host);
   const { resolution: modelResolution } = await resolveTieredModel({
+    abortSignal: params.abortSignal,
     provider: ceRuntimeProvider,
     modelId: ceModelId,
     agentDir,
@@ -490,11 +507,7 @@ async function compactResolvedContextEngine(
   const ceRuntimeModel = ceModel as ProviderRuntimeModel | undefined;
   // Overrides stay unset when no bound/planned/explicit harness resolved so auth-aware
   // selection can pick the credential-owning harness (codex for ChatGPT OAuth).
-  const {
-    runtimeAuthPreparation,
-    selectedPreparedHarness,
-    providerUsesProfileScopedModelMetadata,
-  } = await prepareCompactionHarnessAuth({
+  const preparedAuth = await prepareCompactionHarnessAuth({
     ...params,
     provider: ceProvider,
     metadataProvider: ceRuntimeProvider,
@@ -510,6 +523,14 @@ async function compactResolvedContextEngine(
     convergenceErrorPrefix: "Prepared queued compaction",
   });
   assertQueuedCompactionPreparationActive(params, host);
+  if (!preparedAuth.ok) {
+    return { ok: false, compacted: false, reason: formatErrorMessage(preparedAuth.error) };
+  }
+  const {
+    runtimeAuthPreparation,
+    selectedPreparedHarness,
+    providerUsesProfileScopedModelMetadata,
+  } = preparedAuth;
   const preparedHarnessRuntime = selectedPreparedHarness.id;
   const transcriptBytePreflightAuthority =
     host.transcriptBytePreflightHarness === preparedHarnessRuntime
@@ -533,12 +554,12 @@ async function compactResolvedContextEngine(
       providerUsesProfileScopedModelMetadata && Boolean(runtimeAuthPlan.selectedAuthMode),
     resolveModel: async ({ config, authProfileId, authProfileMode }) => {
       const resolved = await resolveModelAsync(ceRuntimeProvider, ceModelId, agentDir, config, {
+        abortSignal: params.abortSignal,
         authStorage,
         modelRegistry,
         preparedModelRuntime,
         skipAgentDiscovery: true,
         allowBundledStaticCatalogFallback: true,
-        preferBundledStaticCatalogTransport: true,
         workspaceDir: resolvedWorkspaceDir,
         authProfileId,
         authProfileMode,
@@ -662,17 +683,15 @@ async function compactResolvedContextEngine(
     contextEngine.info.turnMaintenanceMode === "background" &&
     typeof contextEngine.maintain === "function"
   ) {
-    const deferredResult = await deferOwningContextEngineBudgetCompaction({
+    return await deferOwningContextEngineBudgetCompaction({
       compactParams: preparedParams,
       contextEngineSessionKey,
       contextEngine,
       contextEngineRuntimeContext,
       contextEngineRuntimeSettings,
+      onDeferredMaintenance: transferContextEngineOwnership,
+      factoryResources,
     });
-    if (deferredResult.ok) {
-      releaseContextEngineOwnership();
-    }
-    return deferredResult;
   }
   return await executeQueuedContextEngineCompaction({
     params,

@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import http, { type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
@@ -10,9 +11,11 @@ import {
   resolveRequestClientIp,
   WEBHOOK_BODY_READ_DEFAULTS,
 } from "openclaw/plugin-sdk/webhook-ingress";
-import { rejectWebSocketUpgrade } from "openclaw/plugin-sdk/websocket-runtime";
-import { WebSocketServer, type WebSocket } from "ws";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
+import {
+  rejectWebSocketUpgrade,
+  WebSocketServer,
+  type WebSocket,
+} from "openclaw/plugin-sdk/websocket-runtime";
 import { randomRelayId } from "./auth-v2-crypto.js";
 import { authenticateExtensionWebSocket } from "./auth-v2-websocket.js";
 import {
@@ -25,7 +28,6 @@ import {
   parseExtensionRelayResource,
   parseRelayHttpChallengeRequest,
   parseRelayHttpCompleteRequest,
-  parseStrictJsonObject,
   type BrowserRelayAuthV2Authority,
 } from "./auth-v2.js";
 import { RELAY_OWNER_PATH, relayOwnerResource } from "./owner-protocol.js";
@@ -40,6 +42,7 @@ import {
   requestExtensionProtocolToken,
   requestProtocols,
 } from "./relay-request.js";
+import { parseStrictJsonObject } from "./strict-json.js";
 
 export { authenticateExtensionWebSocket } from "./auth-v2-websocket.js";
 

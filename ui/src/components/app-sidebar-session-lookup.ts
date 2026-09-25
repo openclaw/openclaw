@@ -1,6 +1,6 @@
 import type { SessionCatalog } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
-import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
+import { uiConversationMatches } from "../lib/sessions/session-key.ts";
 import { findCatalogSessionHovercardRow } from "./app-sidebar-session-catalogs.ts";
 import {
   findProjectedSidebarSession,
@@ -11,9 +11,11 @@ import type {
   SidebarSessionHovercardRow,
 } from "./app-sidebar-session-types.ts";
 import type { SessionDataController } from "./session-data-controller.ts";
+import { sessionLineageIdentityHost } from "./session-lineage-controller.ts";
 
 type SidebarSessionLookupData = Pick<
   SessionDataController,
+  | "context"
   | "activeSessionLineageRoot"
   | "activeSessionLineageSelectedRow"
   | "childSessionRowsByParent"
@@ -36,22 +38,42 @@ export function findActiveSidebarLineageRow(
     ...Object.values(sessionData.childSessionRowsByParent).flat(),
   ].find(
     (row): row is GatewaySessionRow =>
-      row != null && areUiSessionKeysEquivalent(row.key, sessionKey),
+      row != null &&
+      uiConversationMatches(
+        sessionLineageIdentityHost(sessionData.context),
+        sessionKey,
+        row.key,
+        row.agentId,
+      ),
   );
 }
 
 export function findSidebarHovercardRow(
   source: SidebarSessionLookupSource,
   sessionKey: string,
+  projectedRows: readonly SidebarRecentSession[],
 ): SidebarSessionHovercardRow | undefined {
+  // The rendered tree owns folded descendant attention; a flat row loses it.
+  const pending = [...projectedRows];
+  let projected: SidebarRecentSession | undefined;
+  while (pending.length > 0) {
+    const row = pending.pop()!;
+    if (row.key === sessionKey) {
+      projected = row;
+      break;
+    }
+    pending.push(...row.children);
+  }
   const navigationState = source.getSessionNavigationState();
   const child = findActiveSidebarLineageRow(source.sessionData, sessionKey);
   const liveRow =
+    projected ??
     findProjectedSidebarSession({
       sessionKey,
       navigationState,
       sessionResultsByAgent: source.sessionData.sessionResultsByAgent,
-    }) ?? (child ? navigationState.toSidebarSession(child, true) : undefined);
+    }) ??
+    (child ? navigationState.toSidebarSession(child, true) : undefined);
   return findCatalogSessionHovercardRow({
     catalogs: source.visibleSessionCatalogs(),
     sessionKey,

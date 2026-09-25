@@ -5,11 +5,14 @@ import type { Readable } from "node:stream";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isPidAlive } from "../shared/pid-alive.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import type {
   ManagedServiceManagerBoundaryResult,
   ManagedServiceManagerBoundaryOptions,
 } from "./update-managed-service-handoff-lifecycle.test-support.js";
 import { managedServiceStateUpdateScript } from "./update-managed-service-handoff-state.test-support.js";
+
+const testNodeExecPath = resolveTestNodeExecPath();
 
 /** A LaunchAgent gateway's own environment; the handoff keeps only the label for its children. */
 export const LAUNCHD_GATEWAY_IDENTITY_ENV = {
@@ -58,7 +61,7 @@ export function createManagedServiceCommandFixture(params: {
   return {
     serviceRecovery: recovery,
     recoveryCommandArgv: [
-      process.execPath,
+      testNodeExecPath,
       ...(checksServiceIdentity ? ["--input-type=module"] : []),
       "-e",
       [
@@ -157,7 +160,7 @@ export function createManagedServiceCommandFixture(params: {
     triageCommandArgv: options?.triageMissing
       ? [path.join(root, "missing-triage")]
       : [
-          process.execPath,
+          testNodeExecPath,
           "-e",
           [
             `void (async () => {`,
@@ -179,7 +182,7 @@ export function createManagedServiceCommandFixture(params: {
             ...(options?.triageHang
               ? [
                   `const { spawn } = require("node:child_process");`,
-                  `const triageDescendantPid = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" }).pid;`,
+                  `const triageDescendantPid = spawn(process.execPath, ["-e", ${JSON.stringify(`require("node:fs").writeFileSync(${JSON.stringify(path.join(root, "triage-descendant-ready"))}, String(process.pid)); setInterval(() => {}, 1000);`)}], { stdio: "ignore" }).pid;`,
                   `${managedServiceStateUpdateScript(statePath, "state.triageDescendantPid = triageDescendantPid")};`,
                   `setInterval(() => {}, 1000);`,
                 ]
@@ -229,7 +232,9 @@ export function registerManagedRecoveryCommandTests(
   expect: typeof import("vitest").expect,
 ): void {
   itUnix("verifies launchd after a slow guarded restart", async () => {
+    const recoveryTimeoutMs = 120_000;
     const { state, sentinel, commandTimings } = await runManagedServiceManagerBoundary("launchd", {
+      recoveryTimeoutMs,
       recoveryClockAdvanceMs: 31_000,
       updaterExitCode: 0,
       helperExitCode: 1,
@@ -250,7 +255,7 @@ export function registerManagedRecoveryCommandTests(
     });
     const inspections = commandTimings.filter(({ action }) => action === "print");
     expect(inspections.at(-1)!.startedAtMs - inspections.at(-2)!.startedAtMs).toBe(31_000);
-    expect(inspections.at(-1)!.timeoutMs).toBe(5_000);
+    expect(inspections.at(-1)!.timeoutMs).toBe(recoveryTimeoutMs);
   });
 
   itUnix(
@@ -449,14 +454,18 @@ export function registerManagedLaunchdTeardownTests(
     20_000,
   );
 
-  itUnix(
-    "never starts launchd bootstrap after its absolute restoration deadline or grants a command excess time",
-    async () => {
+  itUnix.each([
+    { recoveryTimeoutMs: 30_000, commandWorkMs: 5_000, restored: false },
+    { recoveryTimeoutMs: 120_000, commandWorkMs: 6_000, restored: true },
+  ])(
+    "honors a $recoveryTimeoutMs ms launchd restoration budget with $commandWorkMs ms commands",
+    async ({ recoveryTimeoutMs, commandWorkMs, restored }) => {
       const { commandTimings, commands, sentinel, state } = await runManagedServiceManagerBoundary(
         "launchd",
         {
           cancelAfterPark: true,
-          launchdTeardown: { clockEachCommandMs: 5_000, loadedPrints: 4 },
+          recoveryTimeoutMs,
+          launchdTeardown: { clockEachCommandMs: commandWorkMs, loadedPrints: 4 },
         },
       );
       const restoreIndex = commandTimings.findIndex(({ action }) => action === "bootout") + 1;
@@ -464,31 +473,48 @@ export function registerManagedLaunchdTeardownTests(
       const restoration = commandTimings.slice(restoreIndex);
       const restoreStartedAtMs = restoration[0]?.startedAtMs ?? 0;
 
-      expect(restoration.map(({ action }) => action)).toEqual([
-        "print",
+      const actions = restoration.map(({ action }) => action);
+      // Parent exit and bootout completion can add read-only observations before
+      // the fixture consumes its loaded states; mutations and deadlines stay exact.
+      expect(actions.slice(0, 2)).toEqual(["print", "enable"]);
+      expect(actions.filter((action) => action !== "print")).toEqual([
         "enable",
-        "print",
-        "print",
-        "print",
-        "print",
+        ...(restored ? ["bootstrap"] : []),
       ]);
-      expect(commands.some((command) => command.startsWith("bootstrap "))).toBe(false);
+      expect(actions.at(-1)).toBe("print");
+      expect(commands.some((command) => command.startsWith("bootstrap "))).toBe(restored);
       for (const { startedAtMs, timeoutMs } of restoration) {
         const elapsedMs = startedAtMs - restoreStartedAtMs;
-        expect(elapsedMs).toBeLessThan(30_000);
-        expect(timeoutMs).toBeLessThanOrEqual(5_000);
-        expect(elapsedMs + timeoutMs).toBeLessThanOrEqual(30_000);
+        expect(elapsedMs).toBeLessThan(recoveryTimeoutMs);
+        expect(elapsedMs + timeoutMs).toBeLessThanOrEqual(recoveryTimeoutMs);
       }
-      expect(restoration.at(-1)?.timeoutMs).toBeLessThan(5_000);
       expect(state).toMatchObject({ disabled: false, parked: true });
-      expect(state.restored).toBeUndefined();
+      if (restored) {
+        expect(actions.at(-2)).toBe("bootstrap");
+        expect(state).toMatchObject({
+          restored: true,
+          unloaded: true,
+          healthProbeCount: 1,
+          loadedPrintsObserved: 4,
+          loadedPrintsRemaining: 0,
+        });
+        expect(restoration.at(-1)!.startedAtMs - restoreStartedAtMs).toBeGreaterThan(30_000);
+      } else {
+        expect(restoration.at(-1)?.timeoutMs).toBeLessThan(commandWorkMs);
+        expect(state.restored).toBeUndefined();
+      }
       expect(sentinel).toMatchObject({
         payload: {
-          status: "error",
+          status: restored ? "skipped" : "error",
           stats: {
-            reason: "managed-service-handoff-restore-failed",
+            reason: restored
+              ? "managed-service-handoff-cancelled"
+              : "managed-service-handoff-restore-failed",
             steps: expect.arrayContaining([
-              expect.objectContaining({ name: "service-restore", log: { exitCode: 1 } }),
+              expect.objectContaining({
+                name: "service-restore",
+                log: { exitCode: restored ? 0 : 1 },
+              }),
             ]),
           },
         },

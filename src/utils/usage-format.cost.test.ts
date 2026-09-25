@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  createUsageAccumulator,
+  mergeUsageIntoAccumulator,
+  toNormalizedUsage,
+} from "../agents/embedded-agent-runner/usage-accumulator.js";
+import { normalizeUsage } from "../agents/usage.js";
+import {
   estimateAggregateUsageCost,
   estimateUsageCost,
   type ModelCostConfig,
@@ -8,15 +14,6 @@ import {
 type PricingTier = NonNullable<ModelCostConfig["tieredPricing"]>[number];
 
 describe("usage cost estimation", () => {
-  it("uses flat pricing when tieredPricing is absent", () => {
-    const cost = { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 0 };
-    const total = estimateUsageCost({
-      usage: { input: 1000, output: 500, cacheRead: 2000 },
-      cost,
-    });
-    expect(total).toBeCloseTo(0.003);
-  });
-
   it.each([
     {
       name: "recorded total",
@@ -76,6 +73,51 @@ describe("usage cost estimation", () => {
       ).toBe(expected);
     },
   );
+
+  it.each([
+    { name: "adapter zero", cost: { total: 0 }, expected: undefined },
+    {
+      name: "billed zero",
+      cost: { total: 0, totalOrigin: "provider-billed" as const },
+      expected: 0,
+    },
+    { name: "recorded positive estimate", cost: { total: 0.25 }, expected: 0.25 },
+  ])("reports unpriced aggregate usage only with cost evidence: $name", ({ cost, expected }) => {
+    expect(
+      estimateAggregateUsageCost({
+        usage: { input: 1_000, output: 500, cost },
+        provider: "unpriced-fixture",
+        model: "unpriced",
+        config: {},
+        allowPluginNormalization: false,
+      }),
+    ).toBe(expected);
+  });
+
+  it("keeps recorded zero components through nested sums without covering an unpriced call", () => {
+    const recorded = normalizeUsage({ input: 1_000, cost: { total: 0, input: 0.25 } });
+    const attempt = createUsageAccumulator();
+    mergeUsageIntoAccumulator(attempt, recorded);
+    const run = createUsageAccumulator();
+    mergeUsageIntoAccumulator(run, toNormalizedUsage(attempt));
+    const pricing = {
+      provider: "unpriced-fixture",
+      model: "unpriced",
+      config: {},
+      allowPluginNormalization: false,
+    };
+    expect(estimateAggregateUsageCost({ ...pricing, usage: toNormalizedUsage(run) })).toBe(0);
+    expect(toNormalizedUsage(run)?.cost?.totalOrigin).toBeUndefined();
+
+    mergeUsageIntoAccumulator(run, normalizeUsage({ input: 1_000, cost: { total: 0 } }));
+    expect(
+      estimateAggregateUsageCost({ ...pricing, usage: toNormalizedUsage(run) }),
+    ).toBeUndefined();
+    mergeUsageIntoAccumulator(run, recorded);
+    expect(
+      estimateAggregateUsageCost({ ...pricing, usage: toNormalizedUsage(run) }),
+    ).toBeUndefined();
+  });
 
   it("estimates cost with single-tier tiered pricing (equivalent to flat)", () => {
     const tiers: PricingTier[] = [

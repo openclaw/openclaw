@@ -175,9 +175,9 @@ suite.define(() => {
                   byAgent: [],
                   byChannel: [],
                   daily: [],
+                  costDaily: [],
                 },
               },
-              "usage.cost": { updatedAt: Date.now(), days: 7, daily: [], totals },
             },
           });
           await page.goto(`${suite.server.baseUrl}usage`);
@@ -186,7 +186,7 @@ suite.define(() => {
             .poll(() => page.locator("html").getAttribute("data-theme-mode"))
             .toBe(colorScheme);
           const expected = await resolvedBackground(page, "var(--accent-subtle)");
-          const filters = page.locator(".usage-controls");
+          const filters = page.locator(".usage-view-options");
           for (const label of ["Cost", "Tokens"]) {
             const selected = filters.getByRole("button", { name: label, exact: true });
             await selected.click();
@@ -599,7 +599,10 @@ suite.define(() => {
               (panel) => (panel as HTMLElement & { available?: boolean }).available,
             ),
           ).toBe(true);
-          await browserPanel.getByText("Example", { exact: true }).first().waitFor();
+          await page
+            .locator('[data-region-header="side"] .tabstrip-tab__label')
+            .getByText("Example", { exact: true })
+            .waitFor();
           await expect
             .poll(() =>
               browserPanel

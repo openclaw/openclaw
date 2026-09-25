@@ -42,6 +42,16 @@ export function resolveActivePluginInstallRoots(
   return pluginInstallRootContext.getStore() ?? resolvePluginInstallRoots(env, homedir);
 }
 
+/** Artifact paths do not need the state directory's legacy-location filesystem probes. */
+export function resolveActivePluginInstallDir(
+  kind: "extensions" | "git" | "npm",
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = os.homedir,
+): string {
+  const roots = pluginInstallRootContext.getStore();
+  return roots ? roots[`${kind}Dir`] : path.join(resolveConfigDir(env, homedir), kind);
+}
+
 /** Return whether the current run pinned operator-owned plugin install roots. */
 export function hasActivePluginInstallRoots(): boolean {
   return pluginInstallRootContext.getStore() !== undefined;

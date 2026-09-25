@@ -24,6 +24,7 @@ vi.mock("../config/config.js", () => ({
     valid: true,
     config: {},
     parsed: mocks.parsed,
+    raw: `${JSON.stringify(mocks.parsed)}\n`,
     hash: "config",
   }),
 }));
@@ -33,7 +34,7 @@ vi.mock("./inference-route.js", () => ({
   sameDefaultInferenceRoute: vi.fn(),
 }));
 vi.mock("./audit.js", () => ({ appendSystemAgentAuditEntry: mocks.audit }));
-vi.mock("../cli/plugins-install-config.js", () => ({
+vi.mock("../plugins/install-config.js", () => ({
   loadConfigForInstall: async () => ({ config: {}, baseHash: "config", writeOptions: {} }),
 }));
 vi.mock("../plugins/management-install.js", () => ({ installManagedPluginSource: mocks.install }));
@@ -111,6 +112,11 @@ describe("exact system-agent plugin artifacts", () => {
     expect(await fs.readFile(review.retainedPath)).toEqual(reviewedBytes);
     await fs.writeFile(operation.path, "source changed after proposal");
     const beforePersistentApply = vi.fn(() => {});
+    const applyPluginRuntime = vi.fn(async () => ({
+      operationId: "artifact-activation",
+      generation: 2,
+      pluginIds: ["artifact-demo"],
+    }));
     const installedPath = path.join(
       fixture,
       "state",
@@ -126,6 +132,11 @@ describe("exact system-agent plugin artifacts", () => {
       expect(params.acknowledgeCapabilities).toEqual({ reviewToken: review.reviewToken });
       await params.beforePersistentEffect();
       params.beforePersistentApply();
+      await params.applyRuntime({
+        config: {},
+        pluginIds: ["artifact-demo"],
+        reason: "install",
+      });
       return { ok: true, pluginId: "artifact-demo", config: {} };
     });
     const { runtime, lines } = createSystemAgentTestRuntime();
@@ -133,12 +144,18 @@ describe("exact system-agent plugin artifacts", () => {
       await executePluginArtifactActivation(operation, runtime, {
         approved: true,
         beforePersistentApply,
+        deps: { applyPluginRuntime },
       }),
     ).toMatchObject({ applied: true });
     await expect(fs.access(review.retainedPath)).rejects.toThrow();
     expect(beforePersistentApply).toHaveBeenCalledTimes(3);
+    expect(applyPluginRuntime).toHaveBeenCalledExactlyOnceWith({
+      config: {},
+      pluginIds: ["artifact-demo"],
+      reason: "install",
+    });
     expect(lines.join("\n")).toContain(
-      "Artifact installed. After the Gateway restarts, inspect the plugin's Control UI activation status.",
+      "Artifact installed. Inspect the plugin's runtime and Control UI activation status.",
     );
     expect(mocks.audit).toHaveBeenCalledWith(
       expect.objectContaining({

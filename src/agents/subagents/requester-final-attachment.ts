@@ -41,11 +41,14 @@ function sameRunIds(left: readonly string[], right: readonly string[]): boolean 
   return left.length === right.length && left.every((runId, index) => runId === right[index]);
 }
 
-function getCurrentAttachment(
-  requesterAgentId: string,
-  requesterSessionKey: string,
-): RequesterFinalAttachment | undefined {
-  const key = ownerKey(requesterAgentId, requesterSessionKey);
+function getCurrentAttachment(params: {
+  requesterAgentId: string;
+  requesterSessionKey: string;
+  requesterSessionId?: string;
+  batchRunIds?: readonly string[];
+  rearmGeneration?: number;
+}): RequesterFinalAttachment | undefined {
+  const key = ownerKey(params.requesterAgentId, params.requesterSessionKey);
   const attachment = state.byOwner.get(key);
   if (!attachment) {
     return undefined;
@@ -55,6 +58,17 @@ function getCurrentAttachment(
     attachment.lifecycleGeneration !== getAgentEventLifecycleGeneration()
   ) {
     state.byOwner.delete(key);
+    return undefined;
+  }
+  if (
+    (params.requesterSessionId !== undefined &&
+      attachment.requesterSessionId !== params.requesterSessionId) ||
+    (params.batchRunIds !== undefined &&
+      (!attachment.batch ||
+        !sameRunIds(attachment.batch.batchRunIds, params.batchRunIds.toSorted()))) ||
+    (params.rearmGeneration !== undefined &&
+      attachment.batch?.rearmGeneration !== params.rearmGeneration)
+  ) {
     return undefined;
   }
   return attachment;
@@ -102,7 +116,10 @@ export function promoteRequesterFinalAttachment(params: {
   batchRunIds: readonly string[];
   rearmGeneration: number;
 }): boolean {
-  const attachment = getCurrentAttachment(params.requesterAgentId, params.requesterSessionKey);
+  const attachment = getCurrentAttachment({
+    requesterAgentId: params.requesterAgentId,
+    requesterSessionKey: params.requesterSessionKey,
+  });
   if (!attachment || attachment.requesterTurnRunId !== params.requesterTurnRunId) {
     return false;
   }
@@ -110,6 +127,23 @@ export function promoteRequesterFinalAttachment(params: {
     batchRunIds: params.batchRunIds.toSorted(),
     rearmGeneration: params.rearmGeneration,
   };
+  return true;
+}
+
+export function transferRequesterFinalAttachment(params: {
+  requesterAgentId: string;
+  requesterSessionKey: string;
+  requesterSessionId: string;
+  batchRunIds: readonly string[];
+  rearmGeneration: number;
+  requesterTurnRunId: string;
+}): boolean {
+  const attachment = getCurrentAttachment(params);
+  if (!attachment) {
+    return false;
+  }
+  // Keep this batch until its successor either finishes or durably promotes the next one.
+  attachment.requesterTurnRunId = params.requesterTurnRunId;
   return true;
 }
 
@@ -121,17 +155,7 @@ export function revokeRequesterFinalAttachment(params: {
   rearmGeneration?: number;
 }): boolean {
   const key = ownerKey(params.requesterAgentId, params.requesterSessionKey);
-  const attachment = getCurrentAttachment(params.requesterAgentId, params.requesterSessionKey);
-  if (
-    !attachment ||
-    (params.requesterSessionId !== undefined &&
-      attachment.requesterSessionId !== params.requesterSessionId) ||
-    (params.batchRunIds !== undefined &&
-      (!attachment.batch ||
-        !sameRunIds(attachment.batch.batchRunIds, params.batchRunIds.toSorted()))) ||
-    (params.rearmGeneration !== undefined &&
-      attachment.batch?.rearmGeneration !== params.rearmGeneration)
-  ) {
+  if (!getCurrentAttachment(params)) {
     return false;
   }
   state.byOwner.delete(key);
@@ -147,15 +171,8 @@ export function consumeRequesterFinalAttachment(params: {
   text: string;
 }): "appended" | "rejected" | "missing" {
   const key = ownerKey(params.requesterAgentId, params.requesterSessionKey);
-  const attachment = getCurrentAttachment(params.requesterAgentId, params.requesterSessionKey);
-  const batchRunIds = params.batchRunIds.toSorted();
-  if (
-    !attachment ||
-    attachment.requesterSessionId !== params.requesterSessionId ||
-    !attachment.batch ||
-    attachment.batch.rearmGeneration !== params.rearmGeneration ||
-    !sameRunIds(attachment.batch.batchRunIds, batchRunIds)
-  ) {
+  const attachment = getCurrentAttachment(params);
+  if (!attachment) {
     return "missing";
   }
   // Claim before invoking provider code so replay and callback failure cannot double-append.

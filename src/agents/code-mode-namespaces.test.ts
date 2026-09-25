@@ -35,6 +35,30 @@ function mcpCatalogEntry(params: {
 }
 
 describe("Code Mode MCP namespace model", () => {
+  it("describes server names without inspecting tool parameter schemas", () => {
+    const readProperties = vi.fn(() => ({ query: { type: "string" } }));
+    const catalog = [
+      mcpCatalogEntry({
+        id: "github__read_file",
+        parameters: {
+          type: "object",
+          get properties() {
+            return readProperties();
+          },
+        },
+      }),
+    ];
+
+    expect(describeCodeModeNamespacesForPrompt(catalog)).toContain("visible servers: github.");
+    expect(readProperties).not.toHaveBeenCalled();
+    expect(
+      createCodeModeNamespaceRuntime(catalog).apiFiles.find(
+        (file) => file.path === "mcp/github.d.ts",
+      )?.content,
+    ).toContain("query?: string");
+    expect(readProperties).toHaveBeenCalled();
+  });
+
   it("keeps run-owned namespace descriptors and virtual API files in sync", async () => {
     const catalog = [
       mcpCatalogEntry({

@@ -97,6 +97,66 @@ describe.runIf(runChromiumProof)("managed Chromium action and download cancellat
     return { cdpUrl, pages };
   }
 
+  async function createPolicyDownloadPage() {
+    const rootDir = tempDirs.make("openclaw-download-policy-");
+    const payload = Buffer.from("policy download proof\n");
+    let downloadRequestCount = 0;
+    const downloadServer = createServer((request, response) => {
+      if (request.url === "/proof.txt") {
+        downloadRequestCount += 1;
+        response.writeHead(200, {
+          "content-disposition": 'attachment; filename="proof.txt"',
+          "content-length": String(payload.byteLength),
+          "content-type": "text/plain",
+        });
+        response.end(payload);
+        return;
+      }
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(
+        `<a href="http://localhost:${downloadPort}/proof.txt" download>Allowed download</a>` +
+          `<a href="http://127.0.0.1:${downloadPort}/proof.txt" download>Denied download</a>`,
+      );
+    });
+    const downloadPort = await listen(downloadServer);
+    cleanup.push(async () => await closeServer(downloadServer));
+
+    const cdpPort = await getFreePort();
+    const context = await getPlaywrightCore().chromium.launchPersistentContext(
+      path.join(rootDir, "profile"),
+      {
+        headless: true,
+        executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
+        args: [`--remote-debugging-port=${cdpPort}`],
+      },
+    );
+    cleanup.push(async () => await context.close());
+    const page = context.pages()[0] ?? (await context.newPage());
+    await page.goto(`http://localhost:${downloadPort}/`);
+    const cdpUrl = `http://127.0.0.1:${cdpPort}`;
+    cleanup.push(async () => await closePlaywrightBrowserConnection({ cdpUrl }));
+    const targetId = await readTargetId(page);
+    const controlled = await getPageForTargetId({ cdpUrl, targetId });
+    const snapshot = await snapshotRoleViaPlaywright({ cdpUrl, targetId });
+    const refFor = (name: string) => {
+      const match = Object.entries(snapshot.refs).find(([, ref]) => ref.name === name);
+      if (!match) {
+        throw new Error(`Missing download ref: ${name}`);
+      }
+      return match[0];
+    };
+    return {
+      cdpUrl,
+      controlled,
+      downloadRequestCount: () => downloadRequestCount,
+      page,
+      payload,
+      refFor,
+      rootDir,
+      targetId,
+    };
+  }
+
   function observeLocatorAction(page: import("playwright-core").Page, method: "click" | "fill") {
     const started = createDeferred<void>();
     const settled = createDeferred<void>();
@@ -310,6 +370,76 @@ describe.runIf(runChromiumProof)("managed Chromium action and download cancellat
     await native.settled;
     await expect(page.owner.locator("button").textContent()).resolves.toBe("Accepted");
   }, 20_000);
+
+  it.each([
+    { mode: "ref-based", trigger: "Allowed download" },
+    { mode: "waiter", trigger: "Allowed download" },
+  ] as const)(
+    "allows a $mode download through a configured strict-policy hostname exception",
+    async ({ mode, trigger }) => {
+      const fixture = await createPolicyDownloadPage();
+      const outputPath = path.join(fixture.rootDir, `${mode}-allowed.txt`);
+      const options = {
+        cdpUrl: fixture.cdpUrl,
+        targetId: fixture.targetId,
+        path: outputPath,
+        rootDir: fixture.rootDir,
+        timeoutMs: 5_000,
+        ssrfPolicy: {
+          dangerouslyAllowPrivateNetwork: false,
+          allowedHostnames: ["localhost"],
+        },
+      };
+      const pending =
+        mode === "ref-based"
+          ? downloadViaPlaywright({ ...options, ref: fixture.refFor(trigger) })
+          : waitForDownloadViaPlaywright(options);
+      if (mode === "waiter") {
+        await expect.poll(() => ensurePageState(fixture.controlled).downloadWaiterDepth).toBe(1);
+        await fixture.page.getByRole("link", { name: trigger }).click();
+      }
+
+      const result = await pending;
+      await expect(fs.readFile(result.path)).resolves.toEqual(fixture.payload);
+      expect(fixture.downloadRequestCount()).toBe(1);
+    },
+    20_000,
+  );
+
+  it.each([
+    { mode: "ref-based", trigger: "Denied download" },
+    { mode: "waiter", trigger: "Denied download" },
+  ] as const)(
+    "rejects a $mode download outside a configured strict-policy hostname exception",
+    async ({ mode, trigger }) => {
+      const fixture = await createPolicyDownloadPage();
+      const outputPath = path.join(fixture.rootDir, `${mode}-denied.txt`);
+      const options = {
+        cdpUrl: fixture.cdpUrl,
+        targetId: fixture.targetId,
+        path: outputPath,
+        rootDir: fixture.rootDir,
+        timeoutMs: 5_000,
+        ssrfPolicy: {
+          dangerouslyAllowPrivateNetwork: false,
+          allowedHostnames: ["localhost"],
+        },
+      };
+      const pending =
+        mode === "ref-based"
+          ? downloadViaPlaywright({ ...options, ref: fixture.refFor(trigger) })
+          : waitForDownloadViaPlaywright(options);
+      if (mode === "waiter") {
+        await expect.poll(() => ensurePageState(fixture.controlled).downloadWaiterDepth).toBe(1);
+        await fixture.page.getByRole("link", { name: trigger }).click();
+      }
+
+      await expect(pending).rejects.toThrow(/blocked|private/i);
+      await expect(fs.access(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(fixture.downloadRequestCount()).toBe(0);
+    },
+    20_000,
+  );
 
   it.each(["caller abort", "invalid output directory"])(
     "cancels a streaming download after %s without publishing output",

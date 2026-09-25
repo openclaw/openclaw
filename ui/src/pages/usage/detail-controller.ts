@@ -1,3 +1,4 @@
+import { parseAgentSessionKeyParts } from "@openclaw/session-url-contract";
 import type { ReactiveControllerHost } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
@@ -6,32 +7,62 @@ import {
   createPanelRefreshStatus,
   failPanelRefresh,
 } from "../../components/panel-refresh-status.ts";
+import { t } from "../../i18n/index.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import {
-  requestSessionUsageContextWeight,
+  requestSessionUsage,
   requestSessionUsageLogs,
   requestSessionUsageTimeSeries,
   type SessionUsageQuery,
+  type SessionUsageTarget,
 } from "../../lib/sessions/usage.ts";
 import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { failUsageDetailRefresh } from "./detail-refresh.ts";
 import { createUsageRequest } from "./request.ts";
 import type { SessionLogEntry, UsageSessionEntry } from "./types.ts";
 
+type UsageDetailTarget = Pick<UsageSessionEntry, "key" | "agentId" | "sessionId">;
+
+function sameUsageTarget(a: UsageDetailTarget | undefined, b: UsageDetailTarget): boolean {
+  return a?.key === b.key && a.agentId === b.agentId && a.sessionId === b.sessionId;
+}
+
 function createUsageDetailRequest<T>(
   host: ReactiveControllerHost,
   gateway: GatewayPageController,
-  request: (client: GatewayBrowserClient, key: string, signal: AbortSignal) => Promise<T>,
+  request: (
+    client: GatewayBrowserClient,
+    target: SessionUsageTarget,
+    signal: AbortSignal,
+    sessionId: string | undefined,
+  ) => Promise<T>,
+  resolveTarget: (key: string) => UsageDetailTarget,
   canLoad?: (key: string) => boolean,
+  onClear?: () => void,
 ) {
-  let value: { sessionKey: string; data: T } | null = null;
+  let value: { target: UsageDetailTarget; data?: T } | null = null;
   let status = createPanelRefreshStatus();
   let pending: Promise<void> | null = null;
   let generation = 0;
   const task = createUsageRequest(host, {
-    task: async ([client, sessionKey]: readonly [GatewayBrowserClient, string], { signal }) => ({
-      sessionKey,
-      data: await request(client, sessionKey, signal),
+    task: async (
+      [client, target]: readonly [GatewayBrowserClient, UsageDetailTarget],
+      { signal },
+    ) => ({
+      target,
+      // Qualified keys can name disk-backed owners outside the configured roster.
+      // Keep key-only wire routing while retaining the full local target identity.
+      data: await request(
+        client,
+        {
+          key: target.key,
+          ...(!parseAgentSessionKeyParts(target.key.trim()) && target.agentId
+            ? { agentId: target.agentId }
+            : {}),
+        },
+        signal,
+        target.sessionId,
+      ),
     }),
     onComplete: (result) => {
       pending = null;
@@ -41,8 +72,8 @@ function createUsageDetailRequest<T>(
     onError: (error) => {
       pending = null;
       const failure = failUsageDetailRefresh(status, error, gateway.snapshot);
-      if (failure.clearData) {
-        value = null;
+      if (failure.clearData && value) {
+        delete value.data;
       }
       status = failure.status;
     },
@@ -56,6 +87,11 @@ function createUsageDetailRequest<T>(
     generation += 1;
     task.cancel();
   };
+  const reset = (target?: UsageDetailTarget) => {
+    value = target ? { target } : null;
+    status = createPanelRefreshStatus();
+    onClear?.();
+  };
   return {
     get data() {
       return value?.data ?? null;
@@ -68,9 +104,11 @@ function createUsageDetailRequest<T>(
     },
     async recover(sessionKey: string, loadInitial = false): Promise<void> {
       const current = generation;
+      const target = resolveTarget(sessionKey);
       await pending;
       if (
         current === generation &&
+        sameUsageTarget(target, resolveTarget(sessionKey)) &&
         gateway.snapshot &&
         isGatewayAvailable(gateway.snapshot) &&
         (status.awaitingGateway || status.error !== null || (loadInitial && !status.hasLoaded))
@@ -78,28 +116,32 @@ function createUsageDetailRequest<T>(
         void this.load(sessionKey);
       }
     },
-    load(sessionKey: string): Promise<void> {
+    load(sessionKey: string, refresh = true): Promise<void> {
       const client = gateway.client;
       if (!client || !gateway.connected) {
         return Promise.resolve();
       }
       const enabled = Boolean(sessionKey) && canLoad?.(sessionKey) !== false;
-      if (value?.sessionKey !== sessionKey || !enabled) {
-        value = null;
-        status = createPanelRefreshStatus();
+      const target = resolveTarget(sessionKey);
+      const sameTarget = sameUsageTarget(value?.target, target);
+      if (!sameTarget || !enabled) {
+        reset(enabled ? target : undefined);
       }
       if (!enabled) {
         cancel();
         return Promise.resolve();
       }
+      // Routine overview refresh retains matching details, but never another owner's data.
+      if (!refresh && sameTarget) {
+        return pending ?? Promise.resolve();
+      }
       status = beginPanelRefresh(status);
       generation += 1;
-      return (pending = task.run([client, sessionKey]));
+      return (pending = task.run([client, target]));
     },
     cancel,
     clear() {
-      value = null;
-      status = createPanelRefreshStatus();
+      reset();
       cancel();
     },
   };
@@ -115,29 +157,62 @@ export class UsageDetailsController {
     gateway: GatewayPageController,
     query: () => SessionUsageQuery,
     sessions: () => UsageSessionEntry[],
+    clearTimeSeriesRange: () => void,
   ) {
-    this.timeSeries = createUsageDetailRequest(host, gateway, requestSessionUsageTimeSeries);
-    this.sessionLogs = createUsageDetailRequest(host, gateway, async (client, key) => {
-      const payload = await requestSessionUsageLogs(client, key);
-      // SAFETY: sessions.usage.logs returns entries normalized by the Gateway's loadSessionLogs.
-      return Array.isArray(payload.logs) ? (payload.logs as SessionLogEntry[]) : null;
-    });
+    const resolveTarget = (key: string): UsageDetailTarget => {
+      const session = sessions().find((entry) => entry.key === key);
+      const agentId = session?.agentId ?? query().agentId;
+      return { key, ...(agentId ? { agentId } : {}), sessionId: session?.sessionId };
+    };
+    this.timeSeries = createUsageDetailRequest(
+      host,
+      gateway,
+      requestSessionUsageTimeSeries,
+      resolveTarget,
+      undefined,
+      clearTimeSeriesRange,
+    );
+    this.sessionLogs = createUsageDetailRequest(
+      host,
+      gateway,
+      async (client, target) => {
+        const payload = await requestSessionUsageLogs(client, target);
+        // SAFETY: sessions.usage.logs returns entries normalized by the Gateway's loadSessionLogs.
+        return Array.isArray(payload.logs) ? (payload.logs as SessionLogEntry[]) : null;
+      },
+      resolveTarget,
+    );
     this.contextWeight = createUsageDetailRequest(
       host,
       gateway,
-      (client, key, signal) => {
-        const params = query();
-        const agentId =
-          sessions().find((session) => session.key === key)?.agentId ?? params.agentId;
-        return requestSessionUsageContextWeight(client, { ...params, agentId }, key, signal);
+      async (client, target, signal, sessionId) => {
+        const result = await requestSessionUsage(
+          client,
+          { ...query(), agentId: target.agentId },
+          {
+            key: target.key,
+            includeContextWeight: true,
+            signal,
+          },
+        );
+        const session = result.sessions[0];
+        if (
+          sessionId !== undefined &&
+          session?.sessionId !== undefined &&
+          session.sessionId !== sessionId
+        ) {
+          throw new Error(t("usage.details.contextOutOfDate"));
+        }
+        return session?.contextWeight;
       },
+      resolveTarget,
       (key) => sessions().some((session) => session.key === key && session.hasContextWeight),
     );
   }
 
-  load(sessionKey: string): void {
-    void this.timeSeries.load(sessionKey);
-    void this.sessionLogs.load(sessionKey);
+  load(sessionKey: string, refreshAll = true): void {
+    void this.timeSeries.load(sessionKey, refreshAll);
+    void this.sessionLogs.load(sessionKey, refreshAll);
     void this.contextWeight.load(sessionKey);
   }
 

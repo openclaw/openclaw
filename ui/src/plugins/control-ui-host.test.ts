@@ -3,7 +3,6 @@ import type { ControlUiSessionListSnapshot } from "../../../src/plugin-sdk/contr
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult } from "../api/types.ts";
-import type { RouteId } from "../app-route-paths.ts";
 import { createAgentSelectionCapability } from "../app/agent-selection.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { i18n } from "../i18n/index.ts";
@@ -22,7 +21,7 @@ function createRosterHost(request: GatewayBrowserClient["request"]) {
   const { gateway } = createGatewayHarness(client);
   const agents = createAgentCapability(gateway);
   const sessions = createTestSessionCapability(gateway);
-  const context = { gateway, agents, sessions } as unknown as ApplicationContext<RouteId>;
+  const context = { gateway, agents, sessions } as unknown as ApplicationContext;
   const abort = new AbortController();
   const owner = { client, abort, descriptor: { pluginId: "review" }, disposers: new Set() } as Omit<
     ControlUiPluginOwner,
@@ -376,7 +375,7 @@ describe("native UI locale subscription", () => {
       agents: { subscribe },
       agentSelection: { subscribe },
       theme: { subscribe },
-    } as unknown as ApplicationContext<RouteId>;
+    } as unknown as ApplicationContext;
     const abort = new AbortController();
     const owner = { abort, descriptor: { pluginId: "review" }, disposers: new Set() } as Omit<
       ControlUiPluginOwner,
@@ -456,9 +455,10 @@ describe("native UI page navigation", () => {
     }
   });
 
-  it.each([true, false])(
-    "preserves scoped filters during replacement navigation (native route: %s)",
-    (native) => {
+  it.each(["native", "generic", "slug"])(
+    "preserves scoped filters during replacement navigation (%s route)",
+    (kind) => {
+      const native = kind === "native";
       const originalUrl = window.location.href;
       window.history.replaceState(null, "", "/?agent=main&p.filter=ready");
       const navigate = vi.fn();
@@ -470,13 +470,15 @@ describe("native UI page navigation", () => {
             hello: {
               controlUiTabs: native
                 ? [{ pluginId: "review", id: "board", placement: "route:workboard" }]
-                : [],
+                : kind === "slug"
+                  ? [{ pluginId: "review", id: "board", slug: "reports" }]
+                  : [],
             },
           },
         },
         navigate,
         replace,
-      } as unknown as ApplicationContext<RouteId>;
+      } as unknown as ApplicationContext;
       const abort = new AbortController();
       const owner = { abort, descriptor: { pluginId: "review" }, disposers: new Set() } as Omit<
         ControlUiPluginOwner,
@@ -494,13 +496,20 @@ describe("native UI page navigation", () => {
           window.location.origin,
         );
         expect(location.pathname).toBe(
-          native ? "/console/workboard/Team%20%2F%20One" : "/console/plugin",
+          native
+            ? "/console/workboard/Team%20%2F%20One"
+            : kind === "slug"
+              ? "/console/reports"
+              : "/console/plugin",
         );
         expect(location.searchParams.get("agent")).toBe("main");
         expect(location.searchParams.get("p.filter")).toBe("done");
-        if (!native) {
+        if (kind === "generic") {
           expect(location.searchParams.get("plugin")).toBe("review");
           expect(location.searchParams.get("id")).toBe("board");
+        } else if (kind === "slug") {
+          expect(location.searchParams.has("plugin")).toBe(false);
+          expect(location.searchParams.has("id")).toBe(false);
         }
         host.navigation.openPage(target, { replace: true, preserveSearch: true });
         expect(replace).toHaveBeenCalledWith(

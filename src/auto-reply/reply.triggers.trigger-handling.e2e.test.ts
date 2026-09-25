@@ -1,7 +1,7 @@
 /** E2E tests for auto-reply trigger and command handling. */
 import fs from "node:fs/promises";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type MockInstance } from "vitest";
 import {
   expectInlineCommandHandledAndStripped,
   getAbortEmbeddedAgentRunMock,
@@ -30,6 +30,23 @@ import type { MsgContext } from "./templating.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
 
 type GetReplyFromConfig = typeof import("./reply/get-reply.js").getReplyFromConfig;
+
+async function withUnavailableThinkingCatalog(
+  run: (
+    catalog: MockInstance<
+      typeof import("../agents/model-catalog.runtime.js").loadProviderScopedThinkingCatalog
+    >,
+  ) => Promise<void>,
+): Promise<void> {
+  const catalog = vi
+    .spyOn(await import("../agents/model-catalog.runtime.js"), "loadProviderScopedThinkingCatalog")
+    .mockRejectedValue(new Error("thinking catalog unavailable"));
+  try {
+    return await run(catalog);
+  } finally {
+    catalog.mockRestore();
+  }
+}
 
 const TEST_PRIMARY_PROFILE_ID = "openai:primary@example.test";
 const TEST_SECONDARY_PROFILE_ID = "openai:secondary@example.test";
@@ -300,8 +317,11 @@ function makeUnauthorizedWhatsAppCfg(home: string) {
   return baseCfg;
 }
 
-async function expectResetBlockedForNonOwner(params: { home: string }): Promise<void> {
-  const { home } = params;
+async function expectResetBlockedForNonOwner(params: {
+  home: string;
+  command: "/new" | "/reset";
+}): Promise<void> {
+  const { home, command } = params;
   const runEmbeddedAgentMock = getRunEmbeddedAgentMock();
   runEmbeddedAgentMock.mockClear();
   const cfg = makeCfg(home);
@@ -318,18 +338,21 @@ async function expectResetBlockedForNonOwner(params: { home: string }): Promise<
     ...cfg.session,
     store: join(home, "blocked-reset.sessions.json"),
   };
-  const res = await getReplyFromConfig(
-    {
-      Body: "/reset",
-      From: "+1003",
-      To: "+2000",
-      CommandAuthorized: false,
-    },
-    {},
-    cfg,
-  );
-  expect(res).toBeUndefined();
-  expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+  await withUnavailableThinkingCatalog(async (catalog) => {
+    const res = await getReplyFromConfig(
+      {
+        Body: command,
+        From: "+1003",
+        To: "+2000",
+        CommandAuthorized: false,
+      },
+      {},
+      cfg,
+    );
+    expect(res).toBeUndefined();
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(catalog).not.toHaveBeenCalled();
+  });
 }
 
 function mockEmbeddedOk() {
@@ -422,10 +445,12 @@ describe("trigger handling", () => {
 
       const cfg = makeStartupContextCfg(home);
 
-      const res = await runAuthorizedSmsCommand("/new", cfg);
-
-      expect(maybeReplyText(res)).toBe("✅ New session started.");
-      expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+      await withUnavailableThinkingCatalog(async (catalog) => {
+        const res = await runAuthorizedSmsCommand("/new", cfg);
+        expect(maybeReplyText(res)).toBe("✅ New session started.");
+        expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+        expect(catalog).not.toHaveBeenCalled();
+      });
     });
   });
 
@@ -442,10 +467,25 @@ describe("trigger handling", () => {
 
       const cfg = makeStartupContextCfg(home, { applyOn: ["reset"] });
 
-      const res = await runAuthorizedSmsCommand("/RESET", cfg);
+      await withUnavailableThinkingCatalog(async (catalog) => {
+        const res = await runAuthorizedSmsCommand("/RESET", cfg);
+        expect(maybeReplyText(res)).toBe("✅ Session reset.");
+        expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+        expect(catalog).not.toHaveBeenCalled();
+      });
+    });
+  });
 
-      expect(maybeReplyText(res)).toBe("✅ Session reset.");
-      expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+  it("resolves model capabilities when /new includes follow-up text", async () => {
+    await withTempHome(async (home) => {
+      const runEmbeddedAgentMock = mockRunEmbeddedAgentText("hello", 1);
+      await withUnavailableThinkingCatalog(async (catalog) => {
+        await expect(runAuthorizedSmsCommand("/new take notes", makeCfg(home))).rejects.toThrow(
+          "thinking catalog unavailable",
+        );
+        expect(catalog).toHaveBeenCalledOnce();
+        expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+      });
     });
   });
 
@@ -860,7 +900,9 @@ describe("trigger handling", () => {
   it("handles bare session reset, inline commands, and unauthorized inline status", async () => {
     await withTempHome(async (home) => {
       await expectBareNewOrResetAcknowledged({ home, body: "/new", getReplyFromConfig });
-      await expectResetBlockedForNonOwner({ home });
+      for (const command of ["/new", "/reset"] as const) {
+        await expectResetBlockedForNonOwner({ home, command });
+      }
       await expectInlineCommandHandledAndStripped({
         home,
         getReplyFromConfig,

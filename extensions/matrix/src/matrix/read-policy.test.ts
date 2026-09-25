@@ -4,6 +4,12 @@ import type { CoreConfig } from "../types.js";
 import { withAuthorizedMatrixReadTarget } from "./read-policy.js";
 import type { MatrixClient } from "./sdk.js";
 
+vi.mock("openclaw/plugin-sdk/plugin-state-store-runtime", () => ({
+  createPluginStateSyncKeyedStore: () => {
+    throw new Error("read policy must not read credential storage");
+  },
+}));
+
 function createClient(
   members: string[],
   directFlag: boolean | null = null,
@@ -91,6 +97,85 @@ describe("Matrix read policy", () => {
         run: read,
       }),
     ).resolves.toBe("ok");
+  });
+
+  it.each([
+    {
+      name: "a denied direct peer",
+      userId: "@victim:example.org",
+      directFlag: true,
+      groupPolicy: "allowlist" as const,
+      allowed: false,
+    },
+    {
+      name: "an allowed direct peer",
+      userId: "@alice:example.org",
+      directFlag: true,
+      groupPolicy: "allowlist" as const,
+      allowed: true,
+    },
+    {
+      name: "an ambiguous two-member room",
+      userId: "@alice:example.org",
+      directFlag: null,
+      groupPolicy: "open" as const,
+      allowed: false,
+    },
+  ])("resolves $name without changing m.direct", async (scenario) => {
+    const roomId = "!resolved:example.org";
+    let directMapping: Record<string, unknown> = {};
+    const setAccountData = vi.fn(async (_eventType: string, content: Record<string, unknown>) => {
+      directMapping = content;
+    });
+    const client = createClient(
+      ["@bot:example.org", scenario.userId],
+      scenario.directFlag,
+      {},
+      undefined,
+      {
+        getAccountData: vi.fn(async () => directMapping),
+        getJoinedRooms: vi.fn(async () => [roomId]),
+        setAccountData,
+      },
+    );
+    // The production client refreshes its DM cache after an account-data write.
+    vi.mocked(client.dms.isDm).mockImplementation((candidate) =>
+      Object.values(directMapping).some(
+        (rooms) => Array.isArray(rooms) && rooms.includes(candidate),
+      ),
+    );
+    const read = vi.fn(async () => "ok");
+    const result = withAuthorizedMatrixReadTarget({
+      cfg: {
+        channels: {
+          matrix: {
+            groupPolicy: scenario.groupPolicy,
+            groups: { "!allowed:example.org": {} },
+            dm: { policy: "allowlist", allowFrom: ["@alice:example.org"] },
+          },
+        },
+      } as CoreConfig,
+      accountId: "default",
+      roomId: `user:${scenario.userId}`,
+      context: {
+        requesterAccountId: "default",
+        currentChannelProvider: "matrix",
+        currentChannelId: "!allowed:example.org",
+        currentChatType: "group",
+        conversationReadOrigin: "delegated",
+      },
+      opts: { client },
+      run: read,
+    });
+
+    if (scenario.allowed) {
+      await expect(result).resolves.toBe("ok");
+      expect(read).toHaveBeenCalledWith({ client, roomId });
+    } else {
+      await expect(result).rejects.toThrow("Matrix read target is not allowed.");
+      expect(read).not.toHaveBeenCalled();
+    }
+    expect(setAccountData).not.toHaveBeenCalled();
   });
 
   it("keeps a restrictive DM allowlist effective under open policy", async () => {

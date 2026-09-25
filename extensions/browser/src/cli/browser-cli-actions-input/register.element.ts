@@ -13,7 +13,7 @@ import {
   type BrowserParentOpts,
 } from "../browser-cli-shared.js";
 import { danger, defaultRuntime } from "../core-api.js";
-import { runBrowserAction, requireRef, resolveBrowserActionContext } from "./shared.js";
+import { runBrowserAction, requireRef } from "./shared.js";
 
 function parseBrowserMouseButtonOption(value: string): "left" | "right" | "middle" {
   if (value === "left" || value === "right" || value === "middle") {
@@ -55,11 +55,10 @@ export function registerBrowserElementCommands(
     body: BrowserActRequest;
     successMessage: string | ((result: { url?: string }) => string);
   }): Promise<void> => {
-    const { parent, profile } = resolveBrowserActionContext(params.cmd, parentOpts);
+    const parent = parentOpts(params.cmd);
     await runBrowserCliCommand(async () => {
       await runBrowserAction({
         parent,
-        profile,
         body: params.body,
         successMessage: params.successMessage,
       });

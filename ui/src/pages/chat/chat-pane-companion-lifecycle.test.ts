@@ -4,7 +4,7 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry } from "../../api/types.ts";
-import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { createGatewayRequestMock } from "../../test-helpers/gateway-client.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import {
@@ -27,6 +27,15 @@ describe("chat pane companion connection lifecycle", () => {
     ];
     const request = createGatewayRequestMock(async (method) => {
       switch (method) {
+        case "agents.list":
+          return {
+            defaultId: "main",
+            mainKey: "main",
+            scope: "per-sender",
+            agents: [{ id: "main" }],
+          };
+        case "sessions.subscribe":
+          return { subscribed: true, list: sessionsResult([], 1) };
         case "chat.startup":
           return { messages: [], sessionId: "session-current", hasMore: false, totalMessages: 0 };
         case "models.list":
@@ -37,7 +46,7 @@ describe("chat pane companion connection lifecycle", () => {
       }
     });
     const client = createGatewayBrowserClientFixture({ request });
-    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const { pane, state } = createTestChatPane({ client });
     onTestFinished(() => {
       pane.applyGatewaySnapshot({
         ...pane.context.gateway.snapshot,
@@ -75,15 +84,17 @@ describe("chat pane companion connection lifecycle", () => {
       hello: null,
     });
 
-    expect(threads.view("agent:main:current", "main").exchanges).toEqual([
-      { question: "Earlier question", answer: "Earlier answer", ts: 1 },
+    expect(threads.view("agent:main:current", "main").turns).toMatchObject([
+      { question: "Earlier question", status: "answered", answer: "Earlier answer", ts: 1 },
+      { question: "current question", status: "pending" },
     ]);
     expect(threads.view("agent:main:other", "main").draft).toBe("other draft");
     await pending;
     expect(threads.view("agent:main:current", "main")).toMatchObject({
-      exchanges: [{ question: "Earlier question", answer: "Earlier answer", ts: 1 }],
-      failedQuestion: "current question",
-      pendingQuestion: null,
+      turns: [
+        { question: "Earlier question", status: "answered", answer: "Earlier answer", ts: 1 },
+        { question: "current question", status: "failed", hint: "unavailable", retryable: true },
+      ],
     });
 
     pane.connectedClient = client;
@@ -101,12 +112,10 @@ describe("chat pane companion connection lifecycle", () => {
       "main",
     );
     expect(threads.view("agent:main:current", "main")).toMatchObject({
-      exchanges: [
-        { question: "Earlier question", answer: "Earlier answer", ts: 1 },
-        { question: "current question", answer: "Recovered answer", ts: 2 },
+      turns: [
+        { question: "Earlier question", status: "answered", answer: "Earlier answer", ts: 1 },
+        { question: "current question", status: "answered", answer: "Recovered answer", ts: 2 },
       ],
-      failedQuestion: null,
-      pendingQuestion: null,
     });
     await vi.waitFor(() => expect(state.chatModelsLoading).toBe(false));
     expect(consoleError).not.toHaveBeenCalled();
@@ -119,7 +128,7 @@ describe("chat pane companion connection lifecycle", () => {
   it("retires every thread and late answer when the Gateway client is replaced", async () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
     const replacement = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const { pane } = createTestChatPane({ client });
     const threads = companionThreads(pane);
     let resolveAnswer!: (value: { answer: string; ts: number }) => void;
     const pending = threads.submit(
@@ -141,13 +150,11 @@ describe("chat pane companion connection lifecycle", () => {
     });
 
     expect(threads.view("agent:main:current", "main")).toMatchObject({
-      exchanges: [],
-      failedQuestion: null,
-      pendingQuestion: null,
+      turns: [],
     });
     expect(threads.view("agent:main:other", "main").draft).toBe("");
     resolveAnswer({ answer: "late answer", ts: 3 });
     await pending;
-    expect(threads.view("agent:main:current", "main").exchanges).toEqual([]);
+    expect(threads.view("agent:main:current", "main").turns).toMatchObject([]);
   });
 });

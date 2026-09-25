@@ -9,14 +9,29 @@ import { ensureRepoNodeModulesLink } from "./local-check-runtime.mts";
 
 const FORWARDED_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
 const DEFAULT_FORCE_KILL_DELAY_MS = 5_000;
+const FORWARDED_COMPILER_FLAGS = new Set([
+  "--maglev",
+  "--no-maglev",
+  "--concurrent-sparkplug",
+  "--no-concurrent-sparkplug",
+]);
 const SHIM_CHECKOUT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
-export function resolveTsxImport(checkoutRoot) {
+// Forward compiler policy without replaying parent loaders, evals, or debuggers.
+export function resolveForwardedNodeCompilerArgs(execArgv = process.execArgv) {
+  return execArgv.filter((arg) => FORWARDED_COMPILER_FLAGS.has(arg));
+}
+
+function resolveConfiguredModulesDir(checkoutRoot) {
   const modulesDir =
     (process.env.PNPM_CONFIG_MODULES_DIR ?? process.env.pnpm_config_modules_dir) ||
     process.env.npm_config_modules_dir;
+  return modulesDir ? path.resolve(checkoutRoot, modulesDir) : undefined;
+}
+
+export function resolveTsxImport(checkoutRoot) {
   const localModulesDir = path.resolve(checkoutRoot, "node_modules");
-  const configuredModulesDir = modulesDir ? path.resolve(checkoutRoot, modulesDir) : undefined;
+  const configuredModulesDir = resolveConfiguredModulesDir(checkoutRoot);
   const candidates = configuredModulesDir
     ? [configuredModulesDir, localModulesDir]
     : [localModulesDir];
@@ -112,15 +127,34 @@ async function runCliShimInner(moduleUrl, options, nodeArgs) {
   process.on("exit", exitHandler);
 
   try {
+    // Native entrypoints need the explicit dependency link without loading TSX.
+    if (nodeArgs.length === 0) {
+      const modulesDir = resolveConfiguredModulesDir(SHIM_CHECKOUT_ROOT);
+      if (modulesDir) {
+        ensureRepoNodeModulesLink(modulesDir, { cwd: SHIM_CHECKOUT_ROOT });
+      }
+    }
     const implementationUrl = new URL(options.implementation, moduleUrl);
     const implementationPath = fileURLToPath(implementationUrl);
-    const nodeExecutable = process.versions.bun ? "node" : process.execPath;
-    child = spawn(nodeExecutable, [...nodeArgs, implementationPath, ...process.argv.slice(2)], {
-      cwd: process.cwd(),
-      detached,
-      env: process.env,
-      stdio: "inherit",
-    });
+    const nodeExecutable = options.executable ?? (process.versions.bun ? "node" : process.execPath);
+    // Preserve explicit compiler policy without copying parent loaders, evals, or debuggers.
+    const compilerArgs = resolveForwardedNodeCompilerArgs();
+    child = spawn(
+      nodeExecutable,
+      [
+        ...nodeArgs,
+        ...compilerArgs,
+        ...(options.execArgv ?? []),
+        implementationPath,
+        ...process.argv.slice(2),
+      ],
+      {
+        cwd: process.cwd(),
+        detached,
+        env: process.env,
+        stdio: options.stdio ?? "inherit",
+      },
+    );
     const result = await new Promise((resolve, reject) => {
       child.once("error", reject);
       child.once("close", (code, signal) => resolve({ code, signal }));

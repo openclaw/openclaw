@@ -5,6 +5,7 @@ import { getWorkerPlacementStartupMocks } from "./server-worker-placement-startu
 // Install the shared module mocks before any source imports can load the runtime.
 const { runtimeFactoryMocks, moveDestinationMocks } = getWorkerPlacementStartupMocks();
 
+import { getRuntimeConfig } from "../config/config.js";
 import {
   beginGatewayRestartSignalAdmission,
   markGatewayRestartDraining,
@@ -48,12 +49,14 @@ describe("worker placement startup health lifetime", () => {
       reconcileActive,
     });
     const environments = {
+      subscribeMachineShapeChanged: vi.fn(() => vi.fn()),
       installReconcileEnvironmentGuard: vi.fn(() => vi.fn()),
       start: vi.fn(),
       stop: vi.fn().mockResolvedValue(undefined),
     };
     const warn = vi.fn();
     const runtime = createGatewayWorkerPlacementRuntime({
+      getCommittedRuntimeConfig: getRuntimeConfig,
       cancelSessionWork: vi.fn(async () => {}),
       placements: {
         workspaceResultInstanceId: () => "gateway-test",
@@ -132,11 +135,13 @@ describe("worker placement startup health lifetime", () => {
         turnClaim: null,
       };
       const environments = {
+        subscribeMachineShapeChanged: vi.fn(() => vi.fn()),
         installReconcileEnvironmentGuard: vi.fn(() => vi.fn()),
         start: vi.fn(),
         stop: vi.fn().mockResolvedValue(undefined),
       };
       const runtime = createGatewayWorkerPlacementRuntime({
+        getCommittedRuntimeConfig: getRuntimeConfig,
         cancelSessionWork: vi.fn(async () => {}),
         placements: {
           workspaceResultInstanceId: () => "gateway-test",
@@ -223,12 +228,14 @@ describe("worker placement startup health lifetime", () => {
       stateChangedAtMs: 1,
     } as const;
     const environments = {
+      subscribeMachineShapeChanged: vi.fn(() => vi.fn()),
       installReconcileEnvironmentGuard: vi.fn(() => vi.fn()),
       start: vi.fn(),
       stop: vi.fn().mockResolvedValue(undefined),
       stopNodeEnrollmentWaits: vi.fn(),
     };
     const runtime = createGatewayWorkerPlacementRuntime({
+      getCommittedRuntimeConfig: getRuntimeConfig,
       cancelSessionWork: vi.fn(async () => {}),
       placements: {
         workspaceResultInstanceId: () => "gateway-test",
@@ -295,11 +302,13 @@ describe("worker placement startup health lifetime", () => {
       reconcileActive: vi.fn().mockResolvedValue(undefined),
     });
     const environments = {
+      subscribeMachineShapeChanged: vi.fn(() => vi.fn()),
       installReconcileEnvironmentGuard: vi.fn(() => vi.fn()),
       start: vi.fn(),
       stop: vi.fn().mockRejectedValueOnce(stopError).mockResolvedValueOnce(undefined),
     };
     const runtime = createGatewayWorkerPlacementRuntime({
+      getCommittedRuntimeConfig: getRuntimeConfig,
       cancelSessionWork: vi.fn(async () => {}),
       placements: {
         workspaceResultInstanceId: () => "gateway-test",
@@ -373,6 +382,7 @@ describe("worker placement startup health lifetime", () => {
     });
     const environments = {
       get: vi.fn((environmentId: string) => ({ environmentId, state: "provisioning" })),
+      subscribeMachineShapeChanged: vi.fn(() => vi.fn()),
       installReconcileEnvironmentGuard: vi.fn((guard: ReconcileGuard) => {
         installedGuard = guard;
         return vi.fn();
@@ -381,6 +391,7 @@ describe("worker placement startup health lifetime", () => {
       stop: vi.fn().mockResolvedValue(undefined),
     };
     const runtime = createGatewayWorkerPlacementRuntime({
+      getCommittedRuntimeConfig: getRuntimeConfig,
       cancelSessionWork: vi.fn(async () => {}),
       placements: {
         workspaceResultInstanceId: () => "gateway-test",
@@ -493,6 +504,7 @@ describe("worker placement startup health lifetime", () => {
     });
     const environments = {
       get: vi.fn((environmentId: string) => ({ environmentId, state: "provisioning" })),
+      subscribeMachineShapeChanged: vi.fn(() => vi.fn()),
       installReconcileEnvironmentGuard: vi.fn((guard: ReconcileGuard) => {
         installedGuard = guard;
         return async () => {
@@ -516,6 +528,7 @@ describe("worker placement startup health lifetime", () => {
       }),
     };
     const runtime = createGatewayWorkerPlacementRuntime({
+      getCommittedRuntimeConfig: getRuntimeConfig,
       cancelSessionWork: vi.fn(async () => {}),
       placements: {
         workspaceResultInstanceId: () => "gateway-test",
@@ -607,6 +620,7 @@ describe("worker placement startup recovery authority", () => {
       environmentId: "worker-recovery",
     };
     createGatewayWorkerPlacementRuntime({
+      getCommittedRuntimeConfig: getRuntimeConfig,
       cancelSessionWork: vi.fn(async () => {}),
       placements: {
         workspaceResultInstanceId: () => "gateway-test",

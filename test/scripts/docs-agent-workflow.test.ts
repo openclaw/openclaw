@@ -1,9 +1,18 @@
-import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { execFileSync, spawnSync } from "node:child_process";
+import {
+  appendFileSync,
+  copyFileSync,
+  mkdirSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { join, resolve } from "node:path";
+import { runInNewContext } from "node:vm";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { evaluateWorkflowExpression, readCiWorkflow } from "./ci-workflow.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const mainSha = "a".repeat(40);
@@ -83,6 +92,110 @@ function admittedOutput(reviewBase: string) {
 }
 
 describe.skipIf(process.platform === "win32")("Docs Agent gate", () => {
+  it.each(
+    ["mirror", "initial", "record", "independent edit"]
+      .flatMap((change) => [false, true].map((staged) => ({ change, staged })))
+      .concat([
+        { change: "index-only record", staged: true },
+        { change: "index-only source", staged: true },
+      ]),
+  )(
+    "admits only an exact regeneration of an existing docs mirror ($change, staged=$staged)",
+    ({ change, staged }) => {
+      const root = tempDirs.make("docs-agent-mirror-");
+      const git = (...args: string[]) =>
+        execFileSync("git", ["-C", root, ...args], { encoding: "utf8" });
+      const mirrorPath = join(root, "CHANGELOG/2026.9.4.md");
+      const docsPath = join(root, "docs/releases/2026.9.4.md");
+      mkdirSync(join(root, "docs/releases"), { recursive: true });
+      mkdirSync(join(root, "src"));
+      const sourcePath = join(root, "src/example.js");
+      const originalSource = "export const value = 1;\n";
+      writeFileSync(sourcePath, originalSource);
+      symlinkSync(resolve("scripts"), join(root, "scripts"), "dir");
+      writeFileSync(
+        join(root, "CHANGELOG.md"),
+        "# Changelog\n\n## 2026.9.4\n\nReleased notes.\n\n### Complete contribution record\n\n- Original accounting.\n\n## 2026.8.1\n\nHistorical notes.\n",
+      );
+      execFileSync(process.execPath, [
+        resolve("scripts/release-changelog.mjs"),
+        "split",
+        "--root",
+        root,
+      ]);
+      writeFileSync(docsPath, "# Release notes\n\nApproved source prose.\n");
+      const regenerate = () =>
+        execFileSync(process.execPath, [
+          resolve("scripts/render-release-changelog.mjs"),
+          "--root",
+          root,
+          "--version",
+          "2026.9.4",
+          "--source",
+          "docs/releases/2026.9.4.md",
+          "--output",
+          mirrorPath,
+        ]);
+      regenerate();
+      const recordPath = join(root, "CHANGELOG/records/2026.9.4.md");
+      const originalRecord = readFileSync(recordPath, "utf8");
+      git("init", "-q");
+      git("add", ".");
+      git(
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "-qm",
+        "fixture",
+      );
+      if (change === "mirror") {
+        appendFileSync(docsPath, "\nCorrected source detail.\n");
+        regenerate();
+      } else if (change === "initial") {
+        appendFileSync(join(root, "CHANGELOG/2026.8.1.md"), "Changed history.\n");
+      } else if (change === "record" || change === "index-only record") {
+        appendFileSync(recordPath, "Changed accounting.\n");
+      } else if (change === "index-only source") {
+        writeFileSync(sourcePath, "export const value = 2;\n");
+      } else {
+        appendFileSync(mirrorPath, "Unapproved independent prose.\n");
+      }
+      if (staged) {
+        git("add", ".");
+      }
+      if (change === "index-only record") {
+        writeFileSync(recordPath, originalRecord);
+      } else if (change === "index-only source") {
+        writeFileSync(sourcePath, originalSource);
+      }
+      const workflow = parse(readFileSync(".github/workflows/docs-agent.yml", "utf8")) as {
+        jobs: { "update-docs": { steps: Array<{ name?: string; run?: string }> } };
+      };
+      const guard = workflow.jobs["update-docs"].steps.find(
+        (step) => step.name === "Enforce existing-docs-only patch",
+      );
+      if (!guard?.run) {
+        throw new Error("Docs Agent patch guard is missing");
+      }
+      const result = spawnSync("bash", ["--noprofile", "--norc", "-c", guard.run], {
+        cwd: root,
+        encoding: "utf8",
+        timeout: 10_000,
+        env: {
+          PATH: process.env.PATH,
+          HOME: root,
+          RUNNER_TEMP: root,
+          CI_GIT_OWNER: resolve(".github/actions/git-owner/owner.py"),
+        },
+      });
+      expect(result.status, result.stdout + result.stderr).toBe(change === "mirror" ? 0 : 1);
+    },
+  );
+
   it("retains both corrected REST selectors and the one-hour review ordering", () => {
     const source = readFileSync(".github/workflows/docs-agent.yml", "utf8");
     expect(source.match(/select\(\.id != \$current_run_id\)/gu)).toHaveLength(2);
@@ -171,5 +284,224 @@ describe.skipIf(process.platform === "win32")("Docs Agent gate", () => {
       event: "workflow_dispatch",
     });
     expect(result.output).toBe(admittedOutput(parentSha));
+  });
+});
+
+describe("Docs Agent full-CI admission", () => {
+  const workflow = parse(readFileSync(".github/workflows/docs-agent.yml", "utf8"));
+  const verify = workflow.jobs["verify-ci"];
+  const writer = workflow.jobs["update-docs"];
+  const source = {
+    id: 456,
+    run_attempt: 2,
+    event: "workflow_dispatch",
+    display_title: "CI hourly-main-123-1",
+    path: ".github/workflows/ci.yml",
+    head_branch: "main",
+    head_sha: mainSha,
+    status: "completed",
+    conclusion: "success",
+    actor: { login: "github-actions[bot]" },
+    repository: { full_name: "openclaw/openclaw" },
+    head_repository: { full_name: "openclaw/openclaw" },
+  };
+  const confirmedGate = {
+    name: "openclaw/ci-gate",
+    head_sha: mainSha,
+    conclusion: "success",
+    steps: [{ name: "Confirm validated workflow revision", conclusion: "success" }],
+  };
+  const evaluate = (value: string, context: Parameters<typeof evaluateWorkflowExpression>[1]) =>
+    evaluateWorkflowExpression(value.startsWith("${{") ? value : "${{ " + value + " }}", context);
+
+  async function admit(
+    options: {
+      event?: Partial<typeof source>;
+      observedRun?: Partial<typeof source>;
+      latestRun?: Partial<typeof source>;
+      currentMain?: string;
+      jobs?: (typeof confirmedGate)[];
+      ciOnPush?: string;
+      manual?: boolean;
+      actor?: string;
+      apiFails?: boolean;
+    } = {},
+  ) {
+    const event = { ...source, ...options.event };
+    const run = { ...event, ...options.observedRun };
+    const outputs: Record<string, string> = { allowed: "false" };
+    const context = {
+      repository: "openclaw/openclaw",
+      runAttempt: 1,
+      eventName: options.manual ? ("workflow_dispatch" as const) : ("workflow_run" as const),
+      actor: options.actor ?? "github-actions[bot]",
+      githubEvent: { workflow_run: event },
+      ciOnPush: options.ciOnPush ?? "",
+    };
+    let runReads = 0;
+    const getWorkflowRun = vi.fn(async () => {
+      if (options.apiFails) {
+        throw new Error("GitHub unavailable");
+      }
+      runReads++;
+      return { data: runReads > 1 ? { ...run, ...options.latestRun } : run };
+    });
+    const getBranch = vi.fn(async () => ({
+      data: { commit: { sha: options.currentMain ?? mainSha } },
+    }));
+    const listJobsForWorkflowRunAttempt = vi.fn();
+    const paginate = vi.fn(async () => options.jobs ?? [confirmedGate]);
+    if (evaluate(verify.if, context)) {
+      await runInNewContext("(async () => {" + verify.steps[0].with.script + "})()", {
+        context: {
+          eventName: context.eventName,
+          repo: { owner: "openclaw", repo: "openclaw" },
+          payload: { workflow_run: event },
+        },
+        github: {
+          rest: {
+            actions: { getWorkflowRun, listJobsForWorkflowRunAttempt },
+            repos: { getBranch },
+          },
+          paginate,
+        },
+        core: {
+          setOutput: (key: string, value: string) => {
+            outputs[key] = value;
+          },
+          info() {},
+        },
+      });
+    }
+    const allowed = evaluate(writer.if, {
+      ...context,
+      additionalNeeds: { "verify-ci": { outputs } },
+    });
+    return { allowed, getWorkflowRun, getBranch, paginate, listJobsForWorkflowRunAttempt };
+  }
+
+  it("admits a successful exact-attempt hourly child, including its Actions bot actor", async () => {
+    const result = await admit();
+    expect(result.allowed).toBe(true);
+    expect(result.paginate).toHaveBeenCalledExactlyOnceWith(result.listJobsForWorkflowRunAttempt, {
+      owner: "openclaw",
+      repo: "openclaw",
+      run_id: 456,
+      attempt_number: 2,
+      per_page: 100,
+    });
+  });
+
+  it("does not allocate verification or write concurrency for default security-only push completions", async () => {
+    const result = await admit({
+      event: { event: "push", actor: { login: "maintainer" }, display_title: "CI" },
+    });
+    expect(result.allowed).toBe(false);
+    expect(result.getWorkflowRun).not.toHaveBeenCalled();
+    expect(workflow.concurrency).toBeUndefined();
+    expect(workflow.permissions).toEqual({ actions: "read", contents: "read" });
+    expect(writer.needs).toBe("verify-ci");
+    expect(writer.concurrency).toEqual({ group: "docs-agent-main", "cancel-in-progress": false });
+  });
+
+  it.each(["skipped", "failure"])(
+    "rejects a %s aggregate even if the push opt-in changed before completion",
+    async (conclusion) => {
+      const result = await admit({
+        ciOnPush: "true",
+        event: { event: "push", actor: { login: "maintainer" } },
+        jobs: [{ ...confirmedGate, conclusion }],
+      });
+      expect(result.allowed).toBe(false);
+    },
+  );
+
+  it("retains successful opted-in full main pushes", async () => {
+    expect(
+      (await admit({ ciOnPush: "true", event: { event: "push", actor: { login: "maintainer" } } }))
+        .allowed,
+    ).toBe(true);
+  });
+
+  it.each([
+    { id: 999 },
+    { head_sha: previousSha },
+    { run_attempt: 3 },
+    { path: ".github/workflows/other.yml" },
+    { head_branch: "topic" },
+    { repository: { full_name: "fork/openclaw" } },
+    { head_repository: { full_name: "fork/openclaw" } },
+    { status: "in_progress" },
+    { conclusion: "failure" },
+  ])("rejects stale or foreign observed run metadata %j", async (observedRun) => {
+    expect((await admit({ observedRun })).allowed).toBe(false);
+  });
+
+  it.each([
+    [],
+    [confirmedGate, confirmedGate],
+    [{ ...confirmedGate, head_sha: previousSha }],
+    [{ ...confirmedGate, steps: [] }],
+    [
+      {
+        ...confirmedGate,
+        steps: [{ name: "Confirm validated workflow revision", conclusion: "skipped" }],
+      },
+    ],
+  ])("rejects missing, duplicate, or unconfirmed full-CI evidence %j", async (...jobs) => {
+    expect((await admit({ jobs })).allowed).toBe(false);
+  });
+
+  it("rejects superseded main and propagates unavailable API evidence", async () => {
+    expect((await admit({ currentMain: previousSha })).allowed).toBe(false);
+    await expect(admit({ apiFails: true })).rejects.toThrow("GitHub unavailable");
+  });
+
+  it("rejects a new run attempt that starts during verification", async () => {
+    expect((await admit({ latestRun: { run_attempt: 3, status: "in_progress" } })).allowed).toBe(
+      false,
+    );
+  });
+
+  it("does not admit unrelated manual CI or PR completion", async () => {
+    for (const event of [{ display_title: "CI release validation" }, { event: "pull_request" }]) {
+      const result = await admit({ event });
+      expect(result.allowed).toBe(false);
+      expect(result.getWorkflowRun).not.toHaveBeenCalled();
+    }
+  });
+
+  it("preserves explicit non-bot Docs Agent manual admission", async () => {
+    const result = await admit({ manual: true, actor: "maintainer" });
+    expect(result.allowed).toBe(true);
+    expect(result.getWorkflowRun).not.toHaveBeenCalled();
+    expect((await admit({ manual: true })).allowed).toBe(false);
+  });
+
+  it("confirms only a successful CI aggregate for the validated workflow revision", () => {
+    const producer = readCiWorkflow().jobs["ci-gate"].steps.find(
+      (step: { name?: string }) => step.name === "Confirm validated workflow revision",
+    );
+    const context = {
+      repository: "openclaw/openclaw",
+      eventName: "workflow_dispatch" as const,
+      runAttempt: 1,
+      sha: mainSha,
+      preflightOutputs: { checkout_revision: mainSha },
+      includeAndroid: true,
+    };
+    expect(evaluate(producer.if, context)).toBe(true);
+    for (const change of [
+      { failed: true },
+      { targetRef: previousSha },
+      { releaseGate: true },
+      { releaseScope: "npm-beta" },
+      { includeAndroid: false },
+      { preflightOutputs: { checkout_revision: previousSha } },
+    ]) {
+      expect(evaluate(producer.if, { ...context, ...change })).toBe(false);
+    }
+    expect(evaluate(producer.if, { ...context, eventName: "push" })).toBe(true);
+    expect(evaluate(producer.if, { ...context, eventName: "pull_request" })).toBe(true);
   });
 });

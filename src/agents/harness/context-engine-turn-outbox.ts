@@ -27,6 +27,14 @@ type PendingContextEngineTurn = Readonly<{
   session_id: string;
 }>;
 
+/** Persist only resolved model facts, never live capabilities or credential-bearing config. */
+export type ContextEngineTurnRuntimeContext = Readonly<{
+  provider?: string;
+  modelId?: string;
+  modelContextWindow?: number;
+  tokenBudget?: number;
+}>;
+
 type AdmittedContextEngineTurnOutboxPayload = Readonly<{
   admission: TranscriptTurnAdmission;
   isHeartbeat: boolean;
@@ -37,6 +45,7 @@ type AcceptedContextEngineTurnOutboxPayload = Readonly<{
   boundary: TranscriptTurnBoundary;
   isHeartbeat: boolean;
   state: "accepted";
+  runtimeContext?: ContextEngineTurnRuntimeContext;
 }>;
 
 type ReadyContextEngineTurnOutboxPayload = Readonly<{
@@ -44,6 +53,7 @@ type ReadyContextEngineTurnOutboxPayload = Readonly<{
   isHeartbeat: boolean;
   messages: AgentMessage[];
   state: "ready";
+  runtimeContext?: ContextEngineTurnRuntimeContext;
 }>;
 
 type ContextEngineTurnReadFailureKind = Exclude<
@@ -201,6 +211,7 @@ export function acceptContextEngineTurnIntent(params: {
   engineId: string;
   isHeartbeat: boolean;
   ownerPluginId?: string;
+  runtimeContext?: ContextEngineTurnRuntimeContext;
 }): void {
   writeContextEngineTurnOutboxPayload({
     ...params,
@@ -208,6 +219,7 @@ export function acceptContextEngineTurnIntent(params: {
       boundary: params.boundary,
       isHeartbeat: params.isHeartbeat,
       state: "accepted",
+      runtimeContext: params.runtimeContext,
     },
   });
 }
@@ -333,6 +345,7 @@ export function recoverContextEngineTurnOutbox(params: {
         boundary: payload.boundary,
         isHeartbeat: payload.isHeartbeat,
         messages: closedTurn.messages,
+        runtimeContext: payload.runtimeContext,
       },
     });
   }
@@ -345,6 +358,8 @@ export async function drainContextEngineTurnOutbox(params: {
   ownerPluginId?: string;
   sessionId?: string;
   limit?: number;
+  /** Observe acknowledged turns without changing durable advancement on observer failure. */
+  onCommitted?: (turn: Parameters<NonNullable<ContextEngine["commitTurn"]>>[0]) => void;
   warn: (message: string) => void;
 }): Promise<{ pending: boolean }> {
   if (typeof params.engine.commitTurn !== "function") {
@@ -451,6 +466,7 @@ async function commitPendingContextEngineTurn(
         storePath: payload.boundary.admission.storePath,
       },
       isHeartbeat: payload.isHeartbeat,
+      ...(payload.runtimeContext ? { runtimeContext: payload.runtimeContext } : {}),
     };
     const result = await params.engine.commitTurn?.(commonParams);
     if (!result) {
@@ -465,6 +481,14 @@ async function commitPendingContextEngineTurn(
         .deleteFrom("context_engine_turn_outbox")
         .where("advancement_key", "=", row.advancement_key),
     );
+    // Notification is best effort after acknowledgment; its failure must never requeue a commit.
+    try {
+      params.onCommitted?.(commonParams);
+    } catch (error) {
+      params.warn(
+        `[context-engine] committed turn notification failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
     return true;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

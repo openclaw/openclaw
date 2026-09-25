@@ -165,7 +165,12 @@ function writePersistedInstalledPluginIndexRow(
           : {}),
       };
     }),
-    diagnostics: index.diagnostics,
+    // Keep v1 readable by v2026.9.6 until a format migration; the code retains info severity.
+    diagnostics: index.diagnostics.map((diagnostic) =>
+      diagnostic.level === "info" && diagnostic.code === "explicit-config-plugin-selection"
+        ? { ...diagnostic, level: "warn" }
+        : diagnostic,
+    ),
   };
   const valueJson = JSON.stringify({
     revision,
@@ -261,7 +266,8 @@ export async function restorePersistedInstalledPluginIndexIfCurrent(
   }
   const restored = runOpenClawStateWriteTransaction(({ db }) => {
     lease.assertOwnedInTransaction(db);
-    const currentRow = parseInstalledPluginIndexRow(readInstalledPluginIndexRow(db));
+    const before = readInstalledPluginIndexRow(db) ?? null;
+    const currentRow = parseInstalledPluginIndexRow(before ?? undefined);
     const currentRevision = currentRow ? currentRow.revision : null;
     if (currentRevision !== expectedRevision) {
       return false;
@@ -404,12 +410,6 @@ function refreshPersistedPolicyState(
   };
 }
 
-export async function refreshPersistedInstalledPluginIndex(
-  params: RefreshInstalledPluginIndexParams & InstalledPluginIndexStoreOptions,
-): Promise<InstalledPluginIndex> {
-  return refreshPersistedInstalledPluginIndexSync(params);
-}
-
 function resolveRefreshedPersistedInstalledPluginIndex(
   params: RefreshInstalledPluginIndexParams & InstalledPluginIndexStoreOptions,
 ): InstalledPluginIndex {
@@ -438,11 +438,16 @@ function resolveRefreshedPersistedInstalledPluginIndex(
   });
 }
 
-export function refreshPersistedInstalledPluginIndexSync(
-  params: RefreshInstalledPluginIndexParams & InstalledPluginIndexStoreOptions,
+export function refreshPersistedInstalledPluginIndex(
+  params: RefreshInstalledPluginIndexParams &
+    InstalledPluginIndexStoreOptions & {
+      lease?: InstalledPluginIndexWriteLease;
+    },
 ): InstalledPluginIndex {
-  const index = resolveRefreshedPersistedInstalledPluginIndex(params);
-  writePersistedInstalledPluginIndexSync(index, params);
+  const { lease, ...storeParams } = params;
+  const index = resolveRefreshedPersistedInstalledPluginIndex(storeParams);
+  writePersistedInstalledPluginIndexToSqlite(index, storeParams, lease);
+  clearPersistedInstalledPluginIndexCaches();
   return index;
 }
 

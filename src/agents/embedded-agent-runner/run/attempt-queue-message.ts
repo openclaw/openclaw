@@ -397,6 +397,7 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
   }
 }
 
+// Attempt claims allow legacy steering and preserve supplied run or source-bound authority.
 export async function claimEmbeddedPendingUserInputAnswer(
   text: string,
   options: EmbeddedAgentQueueMessageOptions | undefined,

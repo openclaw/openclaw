@@ -9,8 +9,7 @@ import type {
 } from "./hook-types.js";
 import { createHookRunner } from "./hooks.js";
 import { createHookRunnerWithRegistry } from "./hooks.test-fixtures.js";
-import { createPluginRegistry } from "./registry.js";
-import type { PluginRuntime } from "./runtime/types.js";
+import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
 import { createPluginRecord } from "./status.test-fixtures.js";
 
 const replyDispatchEvent = {
@@ -43,11 +42,7 @@ function firstErrorLog(logger: { error: ReturnType<typeof vi.fn> }) {
 }
 
 function createRegisteredReplyHook(eligibleDispatchKinds: unknown) {
-  const builder = createPluginRegistry({
-    logger: { info() {}, warn() {}, error() {}, debug() {} },
-    runtime: {} as PluginRuntime,
-    activateGlobalSideEffects: false,
-  });
+  const builder = createTestPluginRegistry();
   const api = builder.createApi(createPluginRecord({ id: "scoped-dispatch", origin: "bundled" }), {
     config: {},
   });

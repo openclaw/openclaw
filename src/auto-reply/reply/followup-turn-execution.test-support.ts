@@ -1,24 +1,25 @@
 import { vi } from "vitest";
 import type { AdmittedFollowupTurn } from "./followup-turn-admission.js";
+import { createMockReplyOperation } from "./test-helpers.js";
 
 const followupTurnTestState = vi.hoisted(() => ({
   execute: vi.fn(),
   loadEntryReadOnly: vi.fn(),
-  reset: vi.fn(),
 }));
 
 vi.mock("./agent-runner-execution.js", () => ({
   executeAgentTurn: (...args: unknown[]) => followupTurnTestState.execute(...args),
 }));
 
-vi.mock("./agent-runner-session-reset.js", () => ({
-  resetReplyRunSession: (...args: unknown[]) => followupTurnTestState.reset(...args),
-}));
-
-vi.mock("../../config/sessions/session-accessor.js", () => ({
-  loadSessionEntryReadOnly: (...args: unknown[]) =>
-    followupTurnTestState.loadEntryReadOnly(...args),
-}));
+vi.mock("../../config/sessions/session-accessor.js", async () => {
+  const { bindSessionPendingInputSources } =
+    await import("../../config/sessions/session-accessor.pending-inputs.js");
+  return {
+    bindSessionPendingInputSources,
+    loadSessionEntryReadOnly: (...args: unknown[]) =>
+      followupTurnTestState.loadEntryReadOnly(...args),
+  };
+});
 
 const { executeFollowupTurn } = await import("./followup-turn-execution.js");
 
@@ -73,7 +74,7 @@ export function createFollowupTurnTestTurn(
         blockReplyBreak: "message_end",
       },
     },
-    operation: { abortSignal: new AbortController().signal } as AdmittedFollowupTurn["operation"],
+    operation: createMockReplyOperation().replyOperation,
     config: {},
     session: {
       kind: "session",

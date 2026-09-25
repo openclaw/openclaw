@@ -12,6 +12,7 @@ import { persistStickyModelSelectionBestEffort } from "../../agents/sticky-model
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { triggerSessionPatchHook } from "../../gateway/session-patch-hooks.js";
+import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { applyModelOverrideWithAuthProfileCompatibility } from "../../sessions/auth-profile-preservation.js";
 import {
@@ -26,7 +27,10 @@ import {
   resolveSupportedThinkingLevel,
 } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
-import { maybeHandleUnexpectedDirectiveArguments } from "./directive-handling.arguments.js";
+import {
+  maybeHandleUnexpectedDirectiveArguments,
+  resolveInvalidExecDirectiveMessage,
+} from "./directive-handling.arguments.js";
 import { applyModelRuntimeDirective } from "./directive-handling.model-runtime.js";
 import { resolveModelSelectionFromDirective } from "./directive-handling.model-selection.js";
 import { maybeHandleModelDirectiveInfo } from "./directive-handling.model.js";
@@ -74,7 +78,6 @@ export async function handleDirectiveOnly(
     defaultProvider,
     defaultModel,
     aliasIndex,
-    policyAliasIndex,
     allowedModelKeys,
     allowedModelCatalog,
     resetModelOverride,
@@ -114,12 +117,11 @@ export async function handleDirectiveOnly(
   const { activeAgentId, agentDir, runtimePolicySessionKey, runtimeIsSandboxed } =
     resolveDirectiveRuntimeContext(params);
   const shouldHintDirectRuntime = directives.hasElevatedDirective && !runtimeIsSandboxed;
-  let thinkingCatalog =
-    params.thinkingCatalog && params.thinkingCatalog.length > 0
-      ? params.thinkingCatalog
-      : allowedModelCatalog.length > 0
-        ? allowedModelCatalog
-        : undefined;
+  let thinkingCatalog = params.thinkingCatalog?.length
+    ? params.thinkingCatalog
+    : allowedModelCatalog.length > 0
+      ? allowedModelCatalog
+      : undefined;
   const modelInfo = await maybeHandleModelDirectiveInfo({
     directives,
     cfg: params.cfg,
@@ -130,12 +132,12 @@ export async function handleDirectiveOnly(
     defaultProvider,
     defaultModel,
     aliasIndex,
-    policyAliasIndex,
-    allowedModelKeys,
     allowedModelCatalog,
     currentThinkLevel: currentThinkLevel ?? "off",
     thinkingCatalog,
     runtimePolicySessionKey,
+    sessionKey,
+    storePath,
     resetModelOverride,
     workspaceDir: params.workspaceDir,
     surface: params.surface,
@@ -157,38 +159,39 @@ export async function handleDirectiveOnly(
     provider,
     agentId: activeAgentId,
     modelPolicy: params.modelPolicy,
+    operatorAuthority: params.operatorAuthority,
     requesterProfileId: params.ctx ? readSessionInputProfileId(params.ctx) : undefined,
   });
   if (modelResolution.errorText) {
     return rejectModelTransaction(modelResolution.errorText);
   }
-  const modelSelection = modelResolution.modelSelection;
-  const profileOverride = modelResolution.profileOverride;
+  const { modelSelection, profileOverride } = modelResolution;
   if (modelSelection && isModelSelectionLocked(sessionEntry)) {
     return rejectModelTransaction(MODEL_SELECTION_LOCKED_MESSAGE);
   }
 
   const resolvedProvider = modelSelection?.provider ?? provider;
   const resolvedModel = modelSelection?.model ?? model;
-  let modelRuntimeResolution: Parameters<typeof applyModelRuntimeDirective>[1] = {
-    kind: "unchanged",
-  };
-  if (modelSelection) {
-    const prepared = await prepareModelSelectionRuntime({
-      cfg: params.cfg,
-      agentId: activeAgentId,
-      provider: resolvedProvider,
-      model: resolvedModel,
-      catalog: thinkingCatalog ?? [],
-      rawRuntime: directives.rawModelRuntime,
-      sessionEntry,
-    });
-    if (prepared.status === "rejected") {
-      return rejectModelTransaction(prepared.message);
-    }
-    thinkingCatalog = prepared.catalog;
-    modelRuntimeResolution = prepared.runtime;
+  const preparedModel = modelSelection
+    ? await prepareModelSelectionRuntime({
+        cfg: params.cfg,
+        agentId: activeAgentId,
+        workspaceDir: params.workspaceDir,
+        provider: resolvedProvider,
+        model: resolvedModel,
+        catalog: thinkingCatalog ?? [],
+        rawRuntime: directives.rawModelRuntime,
+        sessionEntry,
+        profileOverride,
+      })
+    : undefined;
+  if (preparedModel?.status === "rejected") {
+    return rejectModelTransaction(preparedModel.message);
   }
+  thinkingCatalog = preparedModel?.catalog ?? thinkingCatalog;
+  const modelRuntimeResolution = preparedModel?.runtime ?? { kind: "unchanged" as const };
+  const validateSelection = () =>
+    modelResolution.validateModelSelection?.() ?? preparedModel?.validateRuntimeSelection?.();
   const prospectiveSessionEntry = { ...sessionEntry };
   applyModelRuntimeDirective(prospectiveSessionEntry, modelRuntimeResolution);
   const selectedCatalogEntry = findSelectedCatalogEntry({
@@ -225,11 +228,8 @@ export async function handleDirectiveOnly(
     directives.fastMode ??
     (directives.clearFastMode ? fastModeState.mode : currentFastMode) ??
     fastModeState.mode;
-  const effectiveFastModeSource =
-    directives.fastMode !== undefined ? "session" : fastModeState.source;
 
   if (directives.hasThinkDirective && !directives.thinkLevel && !directives.clearThinkLevel) {
-    // If no argument was provided, show the current level
     if (!directives.rawThinkLevel) {
       const level = resolveSupportedThinkingLevel({
         ...thinkingPolicy,
@@ -284,7 +284,7 @@ export async function handleDirectiveOnly(
     if (!directives.rawFastMode || isFastStatus) {
       const statusText = formatFastModeCurrentStatus({
         mode: effectiveFastMode,
-        source: effectiveFastModeSource,
+        source: fastModeState.source,
         fastAutoOnSeconds: fastModeState.fastAutoOnSeconds,
       });
       return acknowledgeIgnoredDirective(
@@ -358,15 +358,7 @@ export async function handleDirectiveOnly(
     }
   }
   if (directives.hasExecDirective) {
-    const invalidExecMessage = directives.invalidExecHost
-      ? `Unrecognized exec host "${directives.rawExecHost ?? ""}". Valid hosts: auto, sandbox, gateway, node.`
-      : directives.invalidExecSecurity
-        ? `Unrecognized exec security "${directives.rawExecSecurity ?? ""}". Valid: deny, allowlist, full.`
-        : directives.invalidExecAsk
-          ? `Unrecognized exec ask "${directives.rawExecAsk ?? ""}". Valid: off, on-miss, always.`
-          : directives.invalidExecNode
-            ? "Exec node requires a value."
-            : undefined;
+    const invalidExecMessage = resolveInvalidExecDirectiveMessage(directives);
     if (invalidExecMessage) {
       return acknowledgeIgnoredDirective({ text: invalidExecMessage }, "hasExecDirective");
     }
@@ -465,7 +457,7 @@ export async function handleDirectiveOnly(
     directives.reasoningLevel !== prevReasoningLevel;
   // Validated, authorized directives have already named every field they can mutate.
   if (touchedSessionFields.length > 0) {
-    const authProfileError = modelResolution.validateAuthProfileSelection?.();
+    const authProfileError = validateSelection();
     if (authProfileError) {
       return rejectModelTransaction(authProfileError);
     }
@@ -508,7 +500,7 @@ export async function handleDirectiveOnly(
         reassertLiveModelSwitchPending:
           modelSelectionUpdated && sessionEntry.liveModelSwitchPending === true,
         touchedFields: touchedSessionFields,
-        validateCommit: modelResolution.validateAuthProfileSelection,
+        validateCommit: validateSelection,
       });
       if (persistence.status !== "applied") {
         const errorText =
@@ -527,6 +519,10 @@ export async function handleDirectiveOnly(
       params.canPersistStickyModelSelection === true &&
       params.stickyModelSelectionTarget
     ) {
+      const modelError = modelResolution.validateModelSelection?.();
+      if (modelError) {
+        return rejectModelTransaction(modelError);
+      }
       configuredDefaultUpdate = persistStickyModelSelectionBestEffort({
         agentId: activeAgentId,
         model: `${modelSelection.provider}/${modelSelection.model}`,
@@ -536,7 +532,12 @@ export async function handleDirectiveOnly(
     // List projections must observe committed settings, not only model selections.
     const sessionSettingsUpdated = directiveFieldsUpdated || shouldRemapUnsupportedThinkLevel;
     if (sessionKey && (sessionSettingsUpdated || modelSelectionUpdated)) {
-      emitSessionLifecycleEvent({ sessionKey, agentId: activeAgentId, reason: "patch" });
+      emitSessionLifecycleEvent({
+        sessionKey,
+        agentId: activeAgentId,
+        reason: "patch",
+        ...(modelSelectionUpdated ? { catalogChanged: true } : {}),
+      });
     }
     if (modelSelection && modelSelectionUpdated && sessionKey) {
       triggerSessionPatchHook({
@@ -572,7 +573,7 @@ export async function handleDirectiveOnly(
     const nextLabel = `${modelSelection.provider}/${modelSelection.model}`;
     if (nextLabel !== params.initialModelLabel) {
       enqueueSystemEvent(formatModelSwitchEvent(nextLabel, modelSelection.alias), {
-        sessionKey,
+        sessionKey: resolveSystemEventQueueKey(sessionKey, activeAgentId),
         contextKey: `model:${nextLabel}`,
       });
     }
@@ -581,7 +582,7 @@ export async function handleDirectiveOnly(
     enqueueModeSwitchEvents({
       enqueueSystemEvent,
       sessionEntry,
-      sessionKey,
+      sessionKey: resolveSystemEventQueueKey(sessionKey, activeAgentId),
       elevatedChanged,
       reasoningChanged,
     });
@@ -709,13 +710,10 @@ export async function handleDirectiveOnly(
         ? "Fast mode set to auto."
         : `Fast mode ${nextFastMode ? "enabled" : "disabled"}.`;
     enqueueSystemEvent(nextFastModeText, {
-      sessionKey,
+      sessionKey: resolveSystemEventQueueKey(sessionKey, activeAgentId),
       contextKey: `fast:${formatFastModeValue(nextFastMode)}`,
     });
   }
   const ack = parts.join(" ").trim();
-  if (!ack && directives.hasStatusDirective) {
-    return undefined;
-  }
-  return { text: ack || "OK." };
+  return !ack && directives.hasStatusDirective ? undefined : { text: ack || "OK." };
 }

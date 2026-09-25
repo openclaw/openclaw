@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
@@ -20,18 +21,23 @@ import {
   targetSource,
 } from "./update-plan.test-helpers.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  }),
+);
 
-afterEach(() => closeOpenClawStateDatabaseForTest());
-
-async function fixture() {
+async function fixture(options?: Parameters<typeof createUpdatePlanFixture>[1]) {
   const root = tempDirs.make("openclaw-claw-update-");
-  return await createUpdatePlanFixture(root);
+  return await createUpdatePlanFixture(root, options);
 }
 
 describe("buildClawUpdatePlan", () => {
   it("reads pre-bootstrap-column v6 state without mutating it", async () => {
     const current = await fixture();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     const databasePath = resolveOpenClawStateSqlitePath(current.env);
     const sqlite = requireNodeSqlite();
@@ -238,6 +244,53 @@ describe("buildClawUpdatePlan", () => {
       ]),
     );
   });
+
+  it.each([true, false])(
+    "discloses inherited default memory sources when enabled=%s",
+    async (enabled) => {
+      const current = await fixture({
+        config: { memory: { search: { sources: [], rememberAcrossConversations: true } } },
+        openClawProfile: {
+          schemaVersion: 1,
+          agent: {
+            memory: {
+              search: { enabled, rememberAcrossConversations: true, sources: ["sessions"] },
+            },
+          },
+        },
+      });
+      const plan = await buildClawUpdatePlan({
+        agentId: "worker",
+        targetManifest: current.manifest,
+        targetOpenClawProfile: {
+          schemaVersion: 1,
+          agent: { memory: { search: { enabled, rememberAcrossConversations: true } } },
+        },
+        targetSource: targetSource(current.root, "2.0.0", "sha256:target"),
+        config: current.config,
+        sourceMcpServers: current.config.mcp?.servers ?? {},
+        stateOptions: { env: current.env },
+        packagePreflight,
+      });
+
+      expect(plan.blockers).toEqual([]);
+      expect(plan.actions).toContainEqual(
+        expect.objectContaining({ kind: "agent", action: "change", blocked: false }),
+      );
+      expect(plan.capabilityChanges).toContainEqual(
+        expect.objectContaining({
+          path: "agent.memory.search.sources",
+          classification: "escalation",
+          requiresDistinctConsent: true,
+          effect: {
+            path: "memory.search.sources",
+            current: ["sessions"],
+            desired: ["memory", "sessions"],
+          },
+        }),
+      );
+    },
+  );
 
   it("plans grouped add, change, and removal actions", async () => {
     const current = await fixture();

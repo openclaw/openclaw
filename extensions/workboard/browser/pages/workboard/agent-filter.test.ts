@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgentsListResult } from "../../api/types.ts";
-import { buildAgentFilterOptions, buildAssignableAgentOptions } from "./agent-filter.ts";
+import { buildAgentFilterOptions, buildAssignableAgentPickerOptions } from "./agent-filter.ts";
 
 const agentsList: AgentsListResult = {
   defaultId: "main",
@@ -15,13 +15,13 @@ const agentsList: AgentsListResult = {
 
 describe("workboard agent options", () => {
   it("excludes system agents from assignment but retains diagnostic filtering", () => {
-    expect(buildAssignableAgentOptions(agentsList, "").map((option) => option.id)).toEqual([
-      "",
-      "main",
-      "research",
-    ]);
+    expect(buildAssignableAgentPickerOptions(agentsList, "").map((option) => option.value)).toEqual(
+      ["", "main", "research"],
+    );
     expect(
-      buildAssignableAgentOptions(agentsList, "ordinary-looking-id").map((option) => option.id),
+      buildAssignableAgentPickerOptions(agentsList, "ordinary-looking-id").map(
+        (option) => option.value,
+      ),
     ).toEqual(["", "main", "research"]);
     expect(buildAgentFilterOptions(agentsList, []).map((option) => option.id)).toContain(
       "ordinary-looking-id",

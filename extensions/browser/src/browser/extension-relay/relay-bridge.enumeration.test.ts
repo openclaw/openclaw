@@ -11,6 +11,131 @@ import {
 import type { RelayToExtensionMessage } from "./relay-protocol.js";
 
 describe("ExtensionRelayBridge target enumeration", () => {
+  it.each(["target_closed", "canceled_by_user"])(
+    "honors subscriptions and cancellation after native %s",
+    async (reason) => {
+      const bridge = new ExtensionRelayBridge();
+      let targetId = "original-target";
+      const extension = wireExtension(bridge, (message) =>
+        message.type === "attach"
+          ? { type: "result", seq: message.seq, result: { targetId } }
+          : replyFor(message),
+      );
+      sendHello(extension.handlers);
+      const first = new FakeSocket();
+      const firstCdp = bridge.attachCdpClientSocket(first);
+      const second = new FakeSocket();
+      const secondCdp = bridge.attachCdpClientSocket(second);
+      for (const cdp of [firstCdp, secondCdp]) {
+        cdp.onMessage(
+          JSON.stringify({ id: 1, method: "Target.setAutoAttach", params: { autoAttach: true } }),
+        );
+      }
+      await flush();
+      const original = first.frames().find((frame) => frame.method === "Target.attachedToTarget");
+      const sessionId = (original?.params as { sessionId?: string } | undefined)?.sessionId;
+      expect(typeof sessionId).toBe("string");
+      firstCdp.onMessage(
+        JSON.stringify({ id: 2, method: "Target.detachFromTarget", params: { sessionId } }),
+      );
+      await flush();
+
+      targetId = "replacement-target";
+      extension.handlers.onMessage(JSON.stringify({ type: "detached", tabId: 1, reason }));
+      await flush();
+      extension.handlers.onMessage(
+        JSON.stringify({
+          type: "tabs",
+          tabs: [{ tabId: 1, url: "https://example.com/next", title: "Next", active: true }],
+        }),
+      );
+      await flush();
+
+      const recovered = reason === "target_closed";
+      expect(
+        first.frames().filter((frame) => frame.method === "Target.attachedToTarget"),
+      ).toHaveLength(1);
+      const attached = second
+        .frames()
+        .filter((frame) => frame.method === "Target.attachedToTarget");
+      expect(attached).toHaveLength(recovered ? 2 : 1);
+      expect(extension.socket.frames().filter((frame) => frame.type === "attach")).toHaveLength(
+        recovered ? 2 : 1,
+      );
+      if (recovered) {
+        expect(attached[1]?.params).toMatchObject({
+          sessionId: expect.not.stringMatching(`^${sessionId}$`),
+          targetInfo: { targetId: "replacement-target" },
+        });
+      }
+      secondCdp.onMessage(
+        JSON.stringify({
+          id: 3,
+          sessionId,
+          method: "Runtime.evaluate",
+          params: { expression: "1" },
+        }),
+      );
+      await flush();
+      expect(second.frames().find((frame) => frame.id === 3)?.error).toBeDefined();
+      expect(
+        extension.socket
+          .frames()
+          .filter((frame) => frame.type === "cdp" && frame.method === "Runtime.evaluate"),
+      ).toHaveLength(0);
+    },
+  );
+
+  it.each(["client close", "tab removal", "user cancellation"])(
+    "rechecks recovery recipients after %s while native attachment is pending",
+    async (ending) => {
+      const bridge = new ExtensionRelayBridge();
+      const recovery = createDeferred<RelayToExtensionMessage>();
+      let attachAttempts = 0;
+      const extension = wireExtension(bridge, (message) => {
+        if (message.type === "attach" && ++attachAttempts > 1) {
+          recovery.resolve(message);
+          return null;
+        }
+        return replyFor(message);
+      });
+      sendHello(extension.handlers);
+      const first = new FakeSocket();
+      const firstCdp = bridge.attachCdpClientSocket(first);
+      const second = new FakeSocket();
+      const secondCdp = bridge.attachCdpClientSocket(second);
+      for (const cdp of [firstCdp, secondCdp]) {
+        cdp.onMessage(
+          JSON.stringify({ id: 1, method: "Target.setAutoAttach", params: { autoAttach: true } }),
+        );
+      }
+      await flush();
+      extension.handlers.onMessage(
+        JSON.stringify({ type: "detached", tabId: 1, reason: "target_closed" }),
+      );
+      const pending = await recovery.promise;
+      const closing = ending === "client close" ? firstCdp.onClose() : Promise.resolve();
+      if (ending === "tab removal") {
+        extension.handlers.onMessage(JSON.stringify({ type: "tabs", tabs: [] }));
+      } else if (ending === "user cancellation") {
+        extension.handlers.onMessage(
+          JSON.stringify({ type: "detached", tabId: 1, reason: "canceled_by_user" }),
+        );
+      }
+      extension.handlers.onMessage(JSON.stringify(replyFor(pending)));
+      await closing;
+      await flush();
+
+      expect(
+        first.frames().filter((frame) => frame.method === "Target.attachedToTarget"),
+      ).toHaveLength(1);
+      expect(
+        second.frames().filter((frame) => frame.method === "Target.attachedToTarget"),
+      ).toHaveLength(ending === "client close" ? 2 : 1);
+      expect(attachAttempts).toBe(2);
+    },
+  );
+
   it("includes a tab discovered while another native attachment is pending", async () => {
     const bridge = new ExtensionRelayBridge();
     const firstAttach = createDeferred<RelayToExtensionMessage>();

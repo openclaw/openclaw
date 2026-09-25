@@ -1,6 +1,6 @@
-/* @vitest-environment jsdom */
-
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+/* @vitest-environment jsdom */
+import { installTestLinkReader } from "../test-helpers/link-reader.ts";
 import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
 import { installTitleTooltips } from "./tooltip-title.ts";
 
@@ -91,6 +91,29 @@ describe("openclaw-tooltip", () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
+
+  it.each([
+    [undefined, "right-start"],
+    [false, "right-start"],
+    [true, "bottom-start"],
+  ] as const)(
+    "positions side cards when narrow viewport support is %s",
+    async (matches, placement) => {
+      vi.stubGlobal("matchMedia", matches === undefined ? undefined : vi.fn(() => ({ matches })));
+      try {
+        const { tooltip, trigger } = createRichTooltip("Device details");
+        tooltip.setAttribute("placement", "right-start");
+        document.body.append(tooltip);
+        await tooltip.updateComplete;
+        expect(webAwesomeTooltip(tooltip)?.getAttribute("placement")).toBe(placement);
+        focusTrigger(trigger);
+        expectOpenCount(1);
+        expect(webAwesomeTooltip(tooltip)?.getAttribute("placement")).toBe(placement);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    },
+  );
 
   it("reattaches trigger listeners after reconnect", async () => {
     const provider = createProvider();
@@ -541,6 +564,33 @@ describe("openclaw-tooltip", () => {
     expectOpenCount(0);
   });
 
+  it.each([false, true])(
+    "returns Escape focus from rich content to its trigger (wrapped=%s)",
+    async (wrapped) => {
+      const { tooltip, trigger, card } = createRichTooltip("Focusable card");
+      if (wrapped) {
+        const wrapper = document.createElement("span");
+        trigger.replaceWith(wrapper);
+        wrapper.append(trigger);
+      }
+      const action = document.createElement("button");
+      action.textContent = "Card action";
+      card.append(action);
+      document.body.append(tooltip);
+      await tooltip.updateComplete;
+      trigger.focus();
+      action.focus();
+      expectOpenCount(1);
+      action.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+      );
+      expect(document.activeElement).toBe(trigger);
+      expectOpenCount(0);
+      vi.advanceTimersByTime(500);
+      expectOpenCount(0);
+    },
+  );
+
   it("stays open when a focused trigger is swept through and out of rich content", async () => {
     const { tooltip, trigger } = createRichTooltip("Scrollable card");
     document.body.append(tooltip);
@@ -782,7 +832,9 @@ describe("title tooltips", () => {
   it.each(["link", "subtree"])(
     "claims preview ownership when an active %s moves into a provider",
     async (moved) => {
-      const provider = document.createElement("openclaw-github-link-hovercard-provider");
+      const provider = installTestLinkReader(
+        document.createElement("openclaw-link-reader-hovercard-provider"),
+      );
       const wrapper = document.createElement("div");
       const link = document.createElement("a");
       link.href = "https://github.com/openclaw/openclaw/pull/99816";
@@ -848,7 +900,9 @@ describe("title tooltips", () => {
   it("keeps inherited titles scoped when moving between a GitHub link and an ordinary control", async () => {
     const parent = document.createElement("div");
     parent.title = "Shared context hint";
-    const provider = document.createElement("openclaw-github-link-hovercard-provider");
+    const provider = installTestLinkReader(
+      document.createElement("openclaw-link-reader-hovercard-provider"),
+    );
     const link = document.createElement("a");
     link.href = "https://github.com/openclaw/openclaw/pull/99816";
     link.textContent = "#99816";
@@ -873,7 +927,9 @@ describe("title tooltips", () => {
   });
 
   it("yields a nested title when its link becomes preview eligible and restores ordinary hints on reentry", async () => {
-    const provider = document.createElement("openclaw-github-link-hovercard-provider");
+    const provider = installTestLinkReader(
+      document.createElement("openclaw-link-reader-hovercard-provider"),
+    );
     const link = document.createElement("a");
     link.href = "https://example.com/item";
     const label = document.createElement("span");

@@ -5,12 +5,12 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   encodeIosAppStoreVersion,
-  extractChangelogSection,
   normalizeIosAppStoreRevision,
   renderIosReleaseNotes,
   resolveGatewayVersionForIosRelease,
   resolveIosVersion,
 } from "../../scripts/lib/ios-version.ts";
+import { extractChangelogSection } from "../../scripts/lib/mobile-changelog.ts";
 import { installIosFixtureCleanup, writeIosFixture } from "./ios-version.test-support.ts";
 
 installIosFixtureCleanup();

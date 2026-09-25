@@ -9,7 +9,7 @@ export function createAssistantOutputItem(params: {
   id: string;
   text: string;
   phase?: "commentary" | "final_answer";
-  status?: "in_progress" | "completed";
+  status?: "in_progress" | "completed" | "incomplete";
 }): Extract<OutputItem, { type: "message" }> {
   return {
     type: "message",

@@ -1,4 +1,3 @@
-// QA Lab Matrix plugin module implements scenario runtime cli behavior.
 import { spawn as startOpenClawCliProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
@@ -281,7 +280,7 @@ export async function runMatrixQaOpenClawCli(params: {
   return await startMatrixQaOpenClawCli(params).wait();
 }
 
-async function assertMatrixQaPrivatePathMode(pathToCheck: string, label: string) {
+export async function assertMatrixQaPrivatePathMode(pathToCheck: string, label: string) {
   if (process.platform === "win32") {
     return;
   }

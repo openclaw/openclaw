@@ -3,6 +3,7 @@ import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-cata
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import chutesPlugin from "../extensions/chutes/index.js";
 import { buildOpenAIProvider } from "../extensions/openai/api.js";
+import radiusPlugin from "../extensions/radius/index.js";
 import xaiPlugin from "../extensions/xai/index.js";
 import {
   isOAuthRefreshFence,
@@ -40,15 +41,61 @@ vi.mock("../src/plugins/provider-discovery.runtime.js", () => ({
   resolvePluginDiscoveryProvidersRuntime: () => discovery.providers,
 }));
 
-function withCatalogProviders<T>(run: () => T): T {
+vi.mock("../src/plugins/provider-hook-runtime.js", async () => {
+  const { createProviderHookRuntime } =
+    await import("../src/plugins/provider-hook-runtime-core.js");
+  const { matchesProviderPluginRef } = await import("../src/plugins/provider-registry-shared.js");
+  const selectProviders = (params: {
+    onlyPluginIds?: string[];
+    providerRefs?: readonly string[];
+  }) =>
+    discovery.providers.filter(
+      (provider) =>
+        (!params.onlyPluginIds || params.onlyPluginIds.includes(provider.id)) &&
+        (!params.providerRefs?.length ||
+          params.providerRefs.some((ref) => matchesProviderPluginRef(provider, ref))),
+    );
+  // Discovery and runtime hooks use the same fixture providers; no plugin loading is under test.
+  return createProviderHookRuntime({
+    isPluginProvidersLoadInFlight: () => false,
+    resolvePluginProviderRegistryCore: (params) => {
+      const providers = selectProviders(params);
+      if (providers.length === 0) {
+        return undefined;
+      }
+      return {
+        registry: createCatalogProviderRegistry(providers),
+        workspaceDir: params.workspaceDir,
+        onlyPluginIds: params.onlyPluginIds,
+        isProviderOwnerEligible: (pluginId, providerRef) =>
+          providers.some(
+            (provider) =>
+              provider.id === pluginId && matchesProviderPluginRef(provider, providerRef),
+          ),
+      };
+    },
+    resolvePluginProvidersCore: (params, onSelectedRegistry) => {
+      const providers = selectProviders(params);
+      if (providers.length) {
+        onSelectedRegistry?.(createCatalogProviderRegistry(providers));
+      }
+      return providers.map((provider) => Object.assign({}, provider, { pluginId: provider.id }));
+    },
+  });
+});
+
+function createCatalogProviderRegistry(providers = discovery.providers) {
   const registry = createEmptyPluginRegistry();
-  registry.providers = discovery.providers.map((provider) => ({
+  registry.providers = providers.map((provider) => ({
     pluginId: provider.id,
     provider,
     source: "test",
   }));
-  // Exhausted auth must consult the same providers as discovery, without loading a second runtime.
-  return withPluginRuntimeRegistryScope(registry, run);
+  return registry;
+}
+
+function withCatalogProviders<T>(run: () => T): T {
+  return withPluginRuntimeRegistryScope(createCatalogProviderRegistry(), run);
 }
 
 describe("Provider model discovery auth preparation", () => {
@@ -59,6 +106,11 @@ describe("Provider model discovery auth preparation", () => {
     state = await createOpenClawTestState({ prefix: "catalog-auth-order-", agentEnv: "main" });
     agentDir = state.agentDir();
     discovery.providers = [buildOpenAIProvider()];
+    // These fixtures supply refreshable providers and mock their refresh operation.
+    // Keep capability discovery at the same boundary instead of loading the full runtime.
+    vi.spyOn(providerRuntime, "resolveProviderOAuthRefreshCapabilityWithPlugin").mockResolvedValue({
+      status: "available",
+    });
   });
 
   afterEach(async () => {
@@ -264,6 +316,12 @@ describe("Provider model discovery auth preparation", () => {
         ...(source === "env" ? { env: { XAI_API_KEY: keyB } } : {}),
       });
 
+      expect(
+        providerRuntime.resolveProviderOAuthRefreshCapabilityWithPlugin,
+      ).toHaveBeenCalledOnce();
+      expect(providerRuntime.resolveProviderOAuthRefreshCapabilityWithPlugin).toHaveBeenCalledWith(
+        expect.objectContaining({ provider: providerId }),
+      );
       expect(refresh).toHaveBeenCalledOnce();
       expect(refresh).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -362,6 +420,97 @@ describe("Provider model discovery auth preparation", () => {
       });
       expect(provider?.models.map((model) => model.id)).toContain("gpt-5.5");
       expect(store.profiles).toEqual({});
+    },
+  );
+
+  it.each(["oauth", "api_key"] as const)(
+    "plans the registered Radius catalog with the selected %s credential",
+    async (mode) => {
+      radiusPlugin.register(
+        createTestPluginApi({
+          registerProvider: (provider) => {
+            discovery.providers = [provider];
+          },
+        }),
+      );
+      vi.mocked(providerRuntime.resolveProviderOAuthRefreshCapabilityWithPlugin).mockRestore();
+      const profileId = "radius:oauth";
+      const keyProfileId = "radius:key";
+      const store = createExpiredOauthStore({
+        profileId,
+        provider: "radius",
+        access: "expired-radius-access",
+        refresh: "radius-refresh-token",
+      });
+      store.profiles[keyProfileId] = {
+        type: "api_key",
+        provider: "radius",
+        key: "selected-radius-key",
+      };
+      const captured = structuredClone(store);
+      await state.writeAuthProfiles(store);
+      const persisted = readAuthProfileStoreForTest(agentDir).profiles[profileId];
+      if (!persisted) {
+        throw new Error("Missing saved Radius OAuth profile");
+      }
+      const config: OpenClawConfig = {
+        auth: { order: { radius: mode === "oauth" ? [profileId] : [keyProfileId, profileId] } },
+      };
+      const selectedAccess = mode === "oauth" ? "refreshed-radius-access" : "selected-radius-key";
+      const requests: string[] = [];
+      vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+        if (typeof input !== "string") {
+          throw new Error("Expected a Radius request URL");
+        }
+        if (input === "https://radius.pi.dev/v1/oauth/token") {
+          requests.push("refresh");
+          if (!(init?.body instanceof URLSearchParams)) {
+            throw new Error("Expected a Radius token request form");
+          }
+          expect(init.body.get("refresh_token")).toBe("radius-refresh-token");
+          return Response.json({
+            access_token: "refreshed-radius-access",
+            refresh_token: "rotated-radius-refresh-token",
+            expires_in: 3600,
+          });
+        }
+        expect(input).toBe("https://radius.pi.dev/v1/config");
+        const authorization = new Headers(init?.headers).get("authorization") ?? "";
+        requests.push(authorization);
+        return authorization === `Bearer ${selectedAccess}`
+          ? Response.json({
+              baseUrl: "https://radius.pi.dev/v1",
+              models: [
+                {
+                  id: "organization-model",
+                  name: "Organization Model",
+                  reasoning: false,
+                  input: ["text"],
+                  contextWindow: 32_768,
+                  maxTokens: 4096,
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                },
+              ],
+            })
+          : new Response("unauthorized", { status: 401 });
+      });
+
+      const plan = await planCatalog(config, store, { providerId: "radius" });
+
+      expect(requests).toEqual([
+        ...(mode === "oauth" ? ["refresh"] : []),
+        `Bearer ${selectedAccess}`,
+      ]);
+      expect(readPlannedProvider(plan, "radius")?.models.map((model) => model.id)).toEqual([
+        "organization-model",
+      ]);
+      expect(store).toEqual(captured);
+      expect(readAuthProfileStoreForTest(agentDir).profiles[profileId]).toMatchObject(
+        mode === "oauth"
+          ? { access: selectedAccess, refresh: "rotated-radius-refresh-token" }
+          : persisted,
+      );
+      expect(plan.action === "write" ? plan.contents : "").not.toContain("refreshed-radius-access");
     },
   );
 
@@ -470,6 +619,7 @@ describe("Provider model discovery auth preparation", () => {
       }
       const auth = {
         authStore: store,
+        providerAuthLabels: new Map(),
         authModes: { [providerId]: "oauth" as const },
         credentials: { [providerId]: previousCredential },
       };
@@ -486,6 +636,7 @@ describe("Provider model discovery auth preparation", () => {
             { provider: providerId, profileId: previousProfileId, status: "ready" },
           ],
         },
+        new Map(),
         undefined,
         auth,
         (provider) => provider,
@@ -501,7 +652,8 @@ describe("Provider model discovery auth preparation", () => {
           ),
           providerOutcomes: outcomes,
         },
-        { ...previous, key: "same-config", pluginFingerprint: "same-plugins" },
+        new Map(),
+        previous,
         auth,
         (provider) => provider,
       );
@@ -764,6 +916,9 @@ describe("provider catalog late-result finalization", () => {
     };
     await state.writeAuthProfiles(store);
     vi.spyOn(providerRuntime, "buildProviderAuthDoctorHintWithPlugin").mockResolvedValue(undefined);
+    vi.spyOn(providerRuntime, "resolveProviderOAuthRefreshCapabilityWithPlugin").mockResolvedValue({
+      status: "available",
+    });
     vi.spyOn(providerRuntime, "resolveProviderOAuthCredentialWithPlugin").mockRejectedValue(
       new Error("fixture refresh failed"),
     );

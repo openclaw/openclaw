@@ -1,27 +1,96 @@
-/* ============================================
-   Lobster pet – decorative status mascot that
-   perches on the sidebar footer.
-   ============================================ */
-
-/* Every visit variant shares this zero-layout overlay strip above the footer.
-   Its bottom edge sits 3px inside the bar so feet dangle over the divider, and
-   overflow: hidden makes duck/peek/enter moves read as "behind the ledge". */
+/* All visitor species share measured, obstacle-free composer lanes. */
 openclaw-lobster-pet {
   position: absolute;
-  left: 0;
-  right: 0;
-  bottom: calc(100% - 3px);
+  inset: 0;
   display: block;
-  height: 52px;
-  overflow: hidden;
+  z-index: 1;
+  overflow: visible;
+  clip-path: inset(-88px 0 0);
   pointer-events: none;
 }
 
+openclaw-lobster-pet .lobster-pet {
+  top: var(--lob-y, 0px);
+  bottom: auto;
+  transform: translate(-50%, -100%);
+  transition: none;
+}
+
+.lobster-pet__motion {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.lobster-pet__motion--walk {
+  animation: lobster-pet-travel-walk var(--lob-travel-ms) ease-in-out both;
+}
+
+.lobster-pet__motion--hop {
+  animation: lobster-pet-travel-hop var(--lob-travel-ms) linear both;
+}
+
+.lobster-pet__motion--hop .lobster-pet .lobster-pet__body {
+  transform-origin: 50% 100%;
+  animation: lobster-pet-landing var(--lob-travel-ms) ease-in-out both;
+  animation-delay: var(--lob-act-delay, 0s);
+}
+
+@keyframes lobster-pet-travel-walk {
+  from {
+    transform: translate(var(--lob-from-x), var(--lob-from-y));
+  }
+  to {
+    transform: translate(0, 0);
+  }
+}
+
+/* Crouch, lift above departure, then accelerate into a soft landing.
+   The scene owner supplies the same duration to CSS and the act timer. */
+@keyframes lobster-pet-travel-hop {
+  0%,
+  14% {
+    transform: translate(var(--lob-from-x), var(--lob-from-y));
+  }
+  38% {
+    transform: translate(calc(var(--lob-from-x) * 0.7), calc(var(--lob-from-y) * 0.85 - 22px));
+  }
+  65% {
+    transform: translate(calc(var(--lob-from-x) * 0.3), calc(var(--lob-from-y) * 0.35 - 18px));
+  }
+  86%,
+  100% {
+    transform: translate(0, 0);
+  }
+}
+
+@keyframes lobster-pet-landing {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  14% {
+    transform: scale(1.03, 0.96);
+  }
+  38% {
+    transform: scale(0.98, 1.03) rotate(-4deg);
+  }
+  70% {
+    transform: scale(0.99, 1.02) rotate(3deg);
+  }
+  86% {
+    transform: scale(1.04, 0.94);
+  }
+  94% {
+    transform: scale(0.99, 1.02);
+  }
+}
+
 /* Departure/dismissal: duck down behind the ledge and fade. */
-.lobster-pet--away {
+openclaw-lobster-pet .lobster-pet--away {
   opacity: 0;
   visibility: hidden;
-  transform: translateX(-50%) translateY(105%);
+  transform: translate(-50%, -45%);
   transition:
     transform 0.3s ease-in,
     opacity 0.2s ease 0.1s,
@@ -32,8 +101,8 @@ openclaw-lobster-pet {
   position: absolute;
   bottom: 0;
   left: var(--lob-x, 80%);
-  /* Build multipliers stretch the sprite box; the svg renders with
-     preserveAspectRatio="none", so the silhouette follows the box. */
+  /* Lobsters keep the artwork's proportions; other species supply their
+     own fixed sprite dimensions through --lob-w and --lob-h. */
   width: calc(16px * var(--lob-scale, 2) * var(--lob-w, 1));
   height: calc(14px * var(--lob-scale, 2) * var(--lob-h, 1));
   transform: translateX(-50%);
@@ -45,6 +114,11 @@ openclaw-lobster-pet {
   /* Seeded glint tint is mapped before the palette rules so palette and
      offline class rules still out-cascade it on both look surfaces. */
   --lob-glint: var(--lob-glint-seed, #00e5cc);
+}
+
+openclaw-lobster-pet .lobster-bottle {
+  top: -20px;
+  bottom: auto;
 }
 
 /* Restore hit testing beneath the pointer-inert decorative pet host. */
@@ -64,7 +138,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
   position: absolute;
   left: 8%;
   right: 8%;
-  bottom: 0;
+  top: 0;
   height: 2px;
   background: linear-gradient(
     90deg,
@@ -1324,6 +1398,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  openclaw-lobster-pet .lobster-pet__motion,
   openclaw-lobster-pet .lobster-pet,
   openclaw-lobster-pet .lobster-pet *,
   openclaw-lobster-pet .lobster-bottle,
@@ -1356,25 +1431,19 @@ openclaw-lobster-pet[data-dex-complete]::after {
 
 /* ---- Pass-through visitors ---- */
 
-/* Passers cross the whole ledge once; left/right position comes from the
-   crossing keyframes, not the perch variable, and each kind sets its own
-   crossing time through --lob-cross (LOBSTER_PASSER_CROSS_MS). */
+/* All species cross the measured free lane, not the whole composer width. */
 .lobster-pet--passer {
   pointer-events: none;
   cursor: default;
-  bottom: 0;
+  animation: lobster-pet-cross var(--lob-cross, 11s) linear forwards;
 }
 
 .lobster-pet--passer .lobster-pet__body {
   animation: lobster-pet-waddle 0.32s ease-in-out infinite;
 }
 
-.lobster-pet--passer-ltr {
-  animation: lobster-pet-cross-ltr var(--lob-cross, 11s) linear forwards;
-}
-
-.lobster-pet--passer-rtl {
-  animation: lobster-pet-cross-rtl var(--lob-cross, 11s) linear forwards;
+.lobster-pet--passer-hop {
+  animation-name: lobster-pet-cross, lobster-pet-cross-hop;
 }
 
 /* The crab walks sideways by definition: it crosses while facing you and
@@ -1393,30 +1462,60 @@ openclaw-lobster-pet[data-dex-complete]::after {
   animation: lobster-pet-duck-bob 1.6s ease-in-out infinite;
 }
 
+.lobster-pet--fedora .lobster-pet__body {
+  animation: lobster-pet-fedora-tumble 1.4s ease-in-out infinite;
+}
+
+@keyframes lobster-pet-fedora-tumble {
+  0%,
+  100% {
+    transform: rotate(-6deg);
+  }
+  50% {
+    transform: rotate(6deg);
+  }
+}
+
 /* The jellyfish drifts above the ledge, pulsing softly. */
 .lobster-pet--jellyfish {
-  bottom: 12px;
+  margin-top: -8px;
 }
 
 .lobster-pet--jellyfish .lobster-pet__body {
   animation: lobster-pet-jelly-pulse 2.4s ease-in-out infinite;
 }
 
-@keyframes lobster-pet-cross-ltr {
-  from {
-    left: -6%;
+@keyframes lobster-pet-cross {
+  0% {
+    left: var(--lob-cross-from);
+    opacity: 0;
   }
-  to {
-    left: 106%;
+  8%,
+  92% {
+    opacity: 1;
+  }
+  100% {
+    left: var(--lob-cross-to);
+    opacity: 0;
   }
 }
 
-@keyframes lobster-pet-cross-rtl {
-  from {
-    left: 106%;
+@keyframes lobster-pet-cross-hop {
+  0%,
+  10%,
+  90%,
+  100% {
+    top: 0;
   }
-  to {
-    left: -6%;
+  15% {
+    top: -12px;
+  }
+  26%,
+  70% {
+    top: var(--lob-y);
+  }
+  82% {
+    top: -12px;
   }
 }
 

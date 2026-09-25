@@ -15,7 +15,7 @@ import {
 } from "../reply-reference.js";
 import { DiscordThreadInitialMessageError } from "../send.js";
 import type { DiscordSendComponents, DiscordSendEmbeds } from "../send.shared.js";
-import { discordMessagingActionRuntime } from "./runtime.messaging.runtime.js";
+import * as discordMessagingActionRuntime from "./runtime.messaging.runtime.js";
 import type { DiscordMessagingActionContext } from "./runtime.messaging.shared.js";
 import { readDiscordAutoArchiveDurationParam } from "./runtime.shared.js";
 
@@ -336,12 +336,17 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
         appliedTags: appliedTags ?? undefined,
       };
       try {
-        const thread = await discordMessagingActionRuntime.createThreadDiscord(
-          channelId,
-          payload,
-          ctx.withOpts(),
-        );
-        return jsonResult({ ok: true, thread });
+        const { initialMessageDelivery, ...thread } =
+          await discordMessagingActionRuntime.createThreadDiscord(
+            channelId,
+            payload,
+            ctx.withOpts(),
+          );
+        return jsonResult({
+          ok: true,
+          thread,
+          ...(initialMessageDelivery ? { threadSnapshot: "creation", initialMessageDelivery } : {}),
+        });
       } catch (error) {
         if (error instanceof DiscordThreadInitialMessageError) {
           const initialMessageDelivery = error.initialMessageDelivery;

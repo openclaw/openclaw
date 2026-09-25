@@ -2,7 +2,7 @@ import type { ChildProcess } from "node:child_process";
 import { createWriteStream, write, writev } from "node:fs";
 import { createRequire } from "node:module";
 import type { Writable } from "node:stream";
-import { toErrorObject } from "../infra/errors.js";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import type { SpawnSecretInput } from "./supervisor/types.js";
 
 export type SpawnStdioEntry = "ignore" | "inherit" | "ipc" | "overlapped" | "pipe" | number;
@@ -78,6 +78,7 @@ export function prepareSecretInputStdio(
   const pipe = process.platform === "win32" ? undefined : createSecretPipe();
   let [readFd, writeFd] = pipe?.fds ?? [];
   stdio[secretInput.fd] = readFd ?? "overlapped";
+  // Numeric secret descriptors keep this launch in-process; IPC cannot transfer them.
   const closeRead = () => {
     if (readFd !== undefined) {
       pipe!.close(readFd);

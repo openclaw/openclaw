@@ -1,5 +1,6 @@
 {
   "id": "moonshot",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },
@@ -32,7 +33,7 @@
   "modelPricing": {
     "providers": {
       "moonshot": {
-        "openRouter": {
+        "modelsDev": {
           "provider": "moonshotai"
         },
         "liteLLM": {
@@ -214,6 +215,14 @@
       }
     }
   },
+  "configGroups": [
+    {
+      "id": "web-search",
+      "title": "Web search",
+      "order": 10,
+      "properties": ["webSearch"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

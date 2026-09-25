@@ -1,10 +1,13 @@
 // Openai tests cover realtime voice provider plugin behavior.
+import { once } from "node:events";
+import { MessageChannel } from "node:worker_threads";
 import { REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ } from "openclaw/plugin-sdk/realtime-voice";
 import type {
   RealtimeVoiceBridge,
   RealtimeVoiceGatewayControl,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { OpenAIQuicksilverGatewayBridge } from "./realtime-quicksilver-gateway-bridge.js";
 import { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 
 const mocks = await vi.hoisted(async () => {
@@ -24,6 +27,15 @@ vi.mock("node:child_process", async (importOriginal) => {
 vi.mock("ws", () => ({
   default: mocks.FakeWebSocket,
 }));
+
+vi.mock("./realtime-quicksilver-socket.js", async () => {
+  const { createTestMediaSocketFactory } = await import("./realtime-voice-test-support.js");
+  return {
+    OpenAIQuicksilverWorkerSocket: {
+      create: await createTestMediaSocketFactory(mocks.FakeWebSocket),
+    },
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: mocks.fetchWithSsrFGuardMock,
@@ -77,7 +89,7 @@ describe("OpenAI realtime voice bridge connection", () => {
     });
 
     void bridge.connect();
-    bridge.close();
+    void bridge.close();
 
     const socket = FakeWebSocket.instances[0];
     const options = socket?.args[1] as
@@ -269,7 +281,7 @@ describe("OpenAI realtime voice bridge connection", () => {
       if (throwingCloseCallback) {
         expect(() => bridge.close()).toThrow("close callback failed");
       } else {
-        bridge.close();
+        await bridge.close();
       }
       expect(onClose).toHaveBeenCalledOnce();
       expect(onTerminal).toHaveBeenCalledOnce();
@@ -349,7 +361,7 @@ describe("OpenAI realtime voice bridge connection", () => {
     expect(
       audioEvents.map((event) => Buffer.from(String(event.audio), "base64").byteLength),
     ).toEqual([512 * 1024, Buffer.byteLength("overflow")]);
-    bridge.close();
+    await bridge.close();
   });
 
   it("drops stalled input audio and rate-limits aggregate warnings", async () => {
@@ -385,7 +397,7 @@ describe("OpenAI realtime voice bridge connection", () => {
         2,
         "OpenAI realtime input audio backpressure; droppedFrames=2",
       );
-      bridge.close();
+      await bridge.close();
     } finally {
       vi.useRealTimers();
     }
@@ -412,7 +424,7 @@ describe("OpenAI realtime voice bridge connection", () => {
     expect(logger.warn).toHaveBeenCalledWith(
       "OpenAI realtime input audio backpressure; droppedFrames=1",
     );
-    bridge.close();
+    await bridge.close();
   });
 
   it("discards audio closed before the first connection and reconnects fresh", async () => {
@@ -420,8 +432,8 @@ describe("OpenAI realtime voice bridge connection", () => {
     const bridge = createNativeBridge({ onClose });
 
     bridge.sendAudio(Buffer.from("queued-before-connect"));
-    bridge.close();
-    bridge.close();
+    void bridge.close();
+    void bridge.close();
     bridge.sendAudio(Buffer.from("sent-after-close"));
 
     expect(FakeWebSocket.instances).toHaveLength(0);
@@ -436,7 +448,7 @@ describe("OpenAI realtime voice bridge connection", () => {
       parseSent(socket).filter((event) => event.type === "input_audio_buffer.append"),
     ).toHaveLength(0);
 
-    bridge.close();
+    void bridge.close();
     expect(onClose).toHaveBeenCalledOnce();
     expect(onClose).toHaveBeenCalledWith("completed");
   });
@@ -448,7 +460,7 @@ describe("OpenAI realtime voice bridge connection", () => {
     await Promise.resolve();
 
     bridge.sendAudio(Buffer.from("queued-before-close"));
-    bridge.close();
+    void bridge.close();
     await firstConnect;
     bridge.sendAudio(Buffer.from("sent-after-close"));
 
@@ -460,7 +472,7 @@ describe("OpenAI realtime voice bridge connection", () => {
     expect(
       parseSent(secondSocket).filter((event) => event.type === "input_audio_buffer.append"),
     ).toHaveLength(0);
-    bridge.close();
+    await bridge.close();
   });
 
   it("shares an in-flight connection until session readiness", async () => {
@@ -476,7 +488,7 @@ describe("OpenAI realtime voice bridge connection", () => {
 
     await Promise.all([firstConnect, secondConnect]);
     expect(onReady).toHaveBeenCalledOnce();
-    bridge.close();
+    await bridge.close();
   });
 
   it("fails terminally when the readiness callback throws", async () => {
@@ -500,7 +512,7 @@ describe("OpenAI realtime voice bridge connection", () => {
     await vi.advanceTimersByTimeAsync(0);
     const immediateConnectError = connectError;
 
-    bridge.close();
+    await bridge.close();
     await observedConnect;
 
     expect(immediateConnectError).toBe(readyError);
@@ -725,6 +737,83 @@ describe("OpenAI realtime voice bridge connection", () => {
     },
   );
 
+  it("routes registered GPT-Live Gateway PCM to the pre-connected output port and drains final transcripts", async () => {
+    const { port1, port2 } = new MessageChannel();
+    const state = new SharedArrayBuffer(4);
+    const onAudio = vi.fn();
+    const onReady = vi.fn();
+    const onClose = vi.fn();
+    const onTranscript = vi.fn();
+    const runAgentConsult = vi.fn(async () => ({ text: "Delegated answer" }));
+    const bridge = buildOpenAIRealtimeVoiceProvider().createBridge({
+      providerConfig: { apiKey: "fixture-key", model: "gpt-live-1" },
+      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+      onAudio,
+      onClearAudio: vi.fn(),
+      onReady,
+      onClose,
+      onTranscript,
+      runAgentConsult,
+    });
+    try {
+      expect(bridge).toBeInstanceOf(OpenAIQuicksilverGatewayBridge);
+      if (!bridge.setAudioOutputPort) {
+        throw new Error("registered GPT-Live bridge lacks its audio output endpoint");
+      }
+      bridge.setAudioOutputPort({ port: port1, state });
+      expect(FakeWebSocket.instances).toHaveLength(0);
+      const connecting = bridge.connect();
+      await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+      const socket = requireSocket();
+      openSocket(socket);
+      await vi.waitFor(() =>
+        expect(parseSent(socket)).toContainEqual(
+          expect.objectContaining({ type: "session.start" }),
+        ),
+      );
+      expect(onReady).not.toHaveBeenCalled();
+      emitServerEvent(socket, { type: "session.started", session: {} });
+      await connecting;
+      expect(onReady).toHaveBeenCalledOnce();
+      expect(bridge.isConnected()).toBe(true);
+      const pcm = Buffer.alloc(960, 1);
+      const output = once(port2, "message");
+      emitServerEvent(socket, {
+        type: "session.output_audio.delta",
+        delta: pcm.toString("base64"),
+      });
+      expect((await output)[0]).toEqual({ type: "audio", audio: new Uint8Array(pcm) });
+      expect(onAudio).not.toHaveBeenCalled();
+      const closing = bridge.close({ disposition: "detach" });
+      expect(closing).toBeInstanceOf(Promise);
+      expect(Atomics.load(new Int32Array(state), 0)).toBe(1);
+      expect(onClose).not.toHaveBeenCalled();
+      expect(socket.closed).toBe(false);
+      emitServerEvent(socket, {
+        type: "session.input_transcript.delta",
+        delta: "Trailing words.",
+        start_ms: 0,
+        end_ms: 100,
+      });
+      emitServerEvent(socket, { type: "session.closed", reason: "close_requested" });
+      await closing;
+      expect(onTranscript).toHaveBeenCalledWith("user", "Trailing words.", true);
+      expect(onClose).toHaveBeenCalledExactlyOnceWith("completed");
+      expect(socket.closed).toBe(true);
+      expect(runAgentConsult).not.toHaveBeenCalled();
+      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+    } finally {
+      const closing = bridge.close();
+      const socket = FakeWebSocket.instances[0];
+      if (socket && !socket.closed) {
+        emitServerEvent(socket, { type: "session.closed", reason: "close_requested" });
+      }
+      await Promise.allSettled([closing]);
+      port1.close();
+      port2.close();
+    }
+  });
+
   it("can request PCM16 24 kHz realtime audio for Chrome command-pair bridges", async () => {
     const bridge = createNativeBridge({
       audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
@@ -747,8 +836,8 @@ describe("OpenAI realtime voice bridge connection", () => {
     const bridge = createNativeBridge({ onClose });
     const { connecting, socket } = beginBridgeConnection(bridge);
 
-    bridge.close();
-    bridge.close();
+    void bridge.close();
+    void bridge.close();
 
     await expect(connecting).resolves.toBeUndefined();
     expect(socket.closed).toBe(true);

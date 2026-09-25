@@ -13,7 +13,11 @@ import { readRuntimePromptImageOrder } from "../../media/media-facts.js";
 import { finalizeRuntimePromptImages } from "../../media/runtime-prompt-image-provenance.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
-import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabaseByPathAsync,
+  closeOpenClawAgentDatabasesAsync,
+  disposeOpenClawAgentDatabaseByPath,
+} from "../../state/openclaw-agent-db.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 
 const thinkingMocks = vi.hoisted(() => ({
@@ -22,7 +26,14 @@ const thinkingMocks = vi.hoisted(() => ({
 const streamMocks = vi.hoisted(() => ({
   streamSimple: vi.fn(),
 }));
-const sdkSessionTempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sdkSessionTempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    for (const dir of sdkSessionTempDirs.dirs) {
+      await closeOpenClawAgentDatabasesAsync(dir);
+    }
+    cleanup();
+  }),
+);
 
 vi.mock("../../auto-reply/thinking.js", () => ({
   resolveThinkingDefaultForModel: thinkingMocks.resolveThinkingDefaultForModel,
@@ -130,6 +141,7 @@ describe("createAgentSession runtime ownership", () => {
       );
       session.dispose();
     } finally {
+      await closeOpenClawAgentDatabaseByPathAsync(databasePath);
       disposeOpenClawAgentDatabaseByPath(databasePath);
     }
   });
@@ -847,6 +859,44 @@ describe("createAgentSession thinking level defaults", () => {
   beforeEach(() => {
     thinkingMocks.resolveThinkingDefaultForModel.mockReset();
     thinkingMocks.resolveThinkingDefaultForModel.mockReturnValue("medium");
+  });
+
+  it.each([
+    "openai-completions",
+    "openai-responses",
+    "azure-openai-responses",
+    "openai-chatgpt-responses",
+  ] as const)("records declared max thinking in a new embedded %s session", async (api) => {
+    const sessionManager = SessionManager.inMemory();
+    const { session } = await createAgentSessionForEmbeddedRunner(
+      {
+        model: {
+          ...testModel,
+          id: "custom-reasoner",
+          api,
+          reasoning: true,
+          thinkingLevelMap: { off: null, minimal: null },
+          compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
+        },
+        thinkingLevel: "max",
+        resourceLoader: createResourceLoader(),
+        sessionManager,
+        settingsManager: SettingsManager.inMemory(),
+        modelRegistry: createTestModelRegistry(),
+      },
+      {},
+    );
+    try {
+      expect({
+        level: session.thinkingLevel,
+        recorded: sessionManager
+          .getEntries()
+          .filter((entry) => entry.type === "thinking_level_change")
+          .map((entry) => entry.thinkingLevel),
+      }).toEqual({ level: "max", recorded: ["max"] });
+    } finally {
+      session.dispose();
+    }
   });
 
   it("uses the provider-specific thinking default for new sessions", async () => {

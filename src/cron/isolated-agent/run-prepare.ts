@@ -1,14 +1,13 @@
 /** Session identity and context preparation for isolated cron runs. */
 import { isDeepStrictEqual } from "node:util";
 import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope.js";
+import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   loadPublishedGatewayReplyDispatchRuntime,
-  PreparedModelRuntimeOwnerNotPublishedError,
   type PreparedModelRuntimeLease,
 } from "../../agents/prepared-model-runtime.js";
-import { preparedModelRuntimeConfigsMatch } from "../../agents/prepared-model-runtime.owner.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
@@ -21,6 +20,7 @@ import {
   AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
   isAgentHarnessSessionKey,
 } from "../../sessions/agent-harness-session-key.js";
+import type { InputProvenance } from "../../sessions/input-provenance.js";
 import {
   beginSessionWorkAdmission,
   type SessionWorkAdmissionLease,
@@ -85,14 +85,12 @@ import {
   resolveEffectiveAgentRuntime,
   resolveCronStyleNow,
   resolveHookExternalContentSource,
-  isThinkingLevelSupported,
-  resolveSupportedThinkingLevel,
   resolveSessionRuntimeOverrideForProvider,
-  resolveThinkingDefault,
+  resolveThinkingSelection,
 } from "./run.runtime.js";
 import type { RunCronAgentTurnResult } from "./run.types.js";
 import { resolveCronAgentSessionKey } from "./session-key.js";
-import { loadCronSessionEntryLatest, resolveCronSession } from "./session.js";
+import { loadCronSessionEntryLatest, prepareCronSession } from "./session.js";
 
 export type PreparedCronRunContext = {
   input: RunCronAgentTurnParams;
@@ -110,6 +108,7 @@ export type PreparedCronRunContext = {
   workspaceDir: string;
   executionRoot?: RunCronAgentTurnParams["executionRoot"];
   commandBody: string;
+  inputProvenance?: InputProvenance;
   cronSession: MutableCronSession;
   sessionWorkAdmission: SessionWorkAdmissionLease;
   persistSessionEntry: PersistCronSessionEntry;
@@ -119,6 +118,8 @@ export type PreparedCronRunContext = {
   deliveryPlan: CronDeliveryPlan;
   resolvedDelivery: ResolvedCronDeliveryTarget;
   deliveryRequested: boolean;
+  /** Trusted delivery-channel formatting metadata; absent without a resolved chat delivery. */
+  deliverySystemPrompt?: string;
   sourceDelivery: SourceDeliveryPlan;
   suppressExecNotifyOnExit: boolean;
   skillsSnapshot: SkillSnapshot;
@@ -162,8 +163,13 @@ export async function prepareCronRunContext(params: {
     { agentId: requiredAgentId },
     tryResolveAmbientOwnerAgentId(requestedRuntimeCfg),
   );
+  const publishedRuntime = await loadPublishedGatewayReplyDispatchRuntime({
+    agentId: initialAgentId,
+    abortSignal: input.abortSignal ?? input.signal,
+  });
   const modelOwner = await resolveCronModelSelectionOwner({
     cfg: requestedRuntimeCfg,
+    publishedRuntime,
     ...(requiredAgentId
       ? {
           agentId: initialAgentId,
@@ -174,19 +180,6 @@ export async function prepareCronRunContext(params: {
       : {}),
   });
   const { agentId, agentDir } = modelOwner;
-  const publishedRuntime = await loadPublishedGatewayReplyDispatchRuntime({
-    agentId,
-    abortSignal: input.abortSignal ?? input.signal,
-  });
-  if (
-    publishedRuntime &&
-    (publishedRuntime.pluginGeneration.pluginMetadataSnapshot !== modelOwner.metadataSnapshot ||
-      !preparedModelRuntimeConfigsMatch(publishedRuntime.config, modelOwner.config))
-  ) {
-    throw new PreparedModelRuntimeOwnerNotPublishedError(
-      "cron model runtime generation was superseded during preparation",
-    );
-  }
   const agentConfigOverride = requiredAgentId
     ? resolveAgentConfig(modelOwner.config, agentId)
     : undefined;
@@ -238,7 +231,7 @@ export async function prepareCronRunContext(params: {
   const isGmailHook = hookExternalContentSource === "gmail";
   const now = Date.now();
   const sandbox = resolveCreatorSandbox(runtimeCfg, { actor: input.job.createdActor });
-  const cronSession = resolveCronSession({
+  const cronSession = await prepareCronSession({
     cfg: runtimeCfg,
     sessionKey: agentSessionKey,
     sourceSessionKey,
@@ -299,6 +292,11 @@ export async function prepareCronRunContext(params: {
         throw new CronSessionLifecycleClaimError(agentSessionKey, archivedSessionError);
       }
     },
+  });
+
+  clearBootstrapSnapshotOnSessionRollover({
+    sessionKey: agentSessionKey,
+    previousSessionId: cronSession.previousSessionId,
   });
 
   let preparedModelRuntimeLease: PreparedModelRuntimeLease | undefined;
@@ -420,15 +418,6 @@ export async function prepareCronRunContext(params: {
       };
     }
     const { provider, model, modelFallbacksOverride, runtimePluginCandidates } = preflight;
-    const thinkingSelection = await resolveCronThinkingSelection({
-      cfg: cfgWithAgentDefaults,
-      owner: modelOwner,
-      provider,
-      model,
-      jobThinking: input.job.payload.kind === "agentTurn" ? input.job.payload.thinking : undefined,
-      hookThinking: isGmailHook ? runtimeCfg.hooks?.gmail?.thinking : undefined,
-      sessionThinking: cronSession.sessionEntry.thinkingLevel,
-    });
     const effectiveAgentRuntime = resolveEffectiveAgentRuntime({
       cfg: cfgWithAgentDefaults,
       provider,
@@ -437,39 +426,63 @@ export async function prepareCronRunContext(params: {
       sessionKey: agentSessionKey,
       sessionEntry: cronSession.sessionEntry,
     });
-    let requestedThinkLevel = thinkingSelection.requestedThinkLevel;
-    if (!requestedThinkLevel) {
-      requestedThinkLevel = resolveThinkingDefault({
-        cfg: cfgWithAgentDefaults,
-        agentId: modelOwner.agentId,
-        provider,
-        model,
-        catalog: thinkingSelection.catalog,
-        agentRuntime: effectiveAgentRuntime,
-      });
+    const thinkingSelection = await resolveCronThinkingSelection({
+      cfg: cfgWithAgentDefaults,
+      owner: modelOwner,
+      provider,
+      model,
+      agentRuntime: effectiveAgentRuntime,
+      jobThinking: input.job.payload.kind === "agentTurn" ? input.job.payload.thinking : undefined,
+      hookThinking: isGmailHook ? runtimeCfg.hooks?.gmail?.thinking : undefined,
+      sessionThinking: cronSession.sessionEntry.thinkingLevel,
+    });
+    const {
+      requestedLevel: requestedThinkLevel,
+      level: fallbackThinkLevel,
+      supported: thinkingLevelSupported,
+    } = resolveThinkingSelection({
+      cfg: cfgWithAgentDefaults,
+      agentId: modelOwner.agentId,
+      provider,
+      model,
+      level: thinkingSelection.requestedThinkLevel,
+      catalog: thinkingSelection.catalog,
+      agentRuntime: effectiveAgentRuntime,
+    });
+    if (!thinkingLevelSupported && fallbackThinkLevel !== requestedThinkLevel) {
+      logWarn(
+        `[cron:${input.job.id}] Thinking level "${requestedThinkLevel}" is not supported for ${provider}/${model}; using "${fallbackThinkLevel}" for this candidate.`,
+      );
     }
-    if (
-      !isThinkingLevelSupported({
-        provider,
-        model,
-        level: requestedThinkLevel,
-        catalog: thinkingSelection.catalog,
-        agentRuntime: effectiveAgentRuntime,
-      })
-    ) {
-      const fallbackThinkLevel = resolveSupportedThinkingLevel({
-        provider,
-        model,
-        level: requestedThinkLevel,
-        catalog: thinkingSelection.catalog,
-        agentRuntime: effectiveAgentRuntime,
-      });
-      if (fallbackThinkLevel !== requestedThinkLevel) {
-        logWarn(
-          `[cron:${input.job.id}] Thinking level "${requestedThinkLevel}" is not supported for ${provider}/${model}; using "${fallbackThinkLevel}" for this candidate.`,
-        );
-      }
-    }
+
+    preparedModelRuntimeLease = await acquireAgentRunPreparedModelRuntime(
+      {
+        // Admit the selected runtime before auth/session preparation can publish a replacement.
+        // Every later side effect and embedded execution retains this exact derived generation.
+        config: cfgWithAgentDefaults,
+        agentId,
+        agentDir,
+        workspaceDir,
+        allowGatewaySubagentBinding: true,
+        runtimePluginSelections: runtimePluginCandidates.map((candidate) => {
+          const runtime = resolveSessionRuntimeOverrideForProvider({
+            provider: candidate.provider,
+            entry: cronSession.sessionEntry,
+            cfg: cfgWithAgentDefaults,
+          });
+          return runtime
+            ? { provider: candidate.provider, modelId: candidate.model, runtime, agentId }
+            : { provider: candidate.provider, modelId: candidate.model, agentId };
+        }),
+      },
+      {
+        catalogMode: "static",
+        ...(publishedRuntime
+          ? { pluginGeneration: publishedRuntime.pluginGeneration }
+          : { pluginMetadataSnapshot: modelOwner.metadataSnapshot }),
+        abortSignal: input.abortSignal ?? input.signal,
+      },
+    );
 
     const explicitTimeoutSeconds =
       input.job.payload.kind === "agentTurn" ? input.job.payload.timeoutSeconds : undefined;
@@ -499,12 +512,17 @@ export async function prepareCronRunContext(params: {
       agentRuntime: effectiveAgentRuntime,
       toolsAllowProvenance: input.job.toolsAllowProvenance,
     });
-    const { deliveryPlan, deliveryRequested, resolvedDelivery, sourceDelivery } =
-      await resolveCronDeliveryContext({
-        cfg: cfgWithAgentDefaults,
-        job: input.job,
-        agentId,
-      });
+    const {
+      deliveryPlan,
+      deliveryRequested,
+      resolvedDelivery,
+      sourceDelivery,
+      deliverySystemPrompt,
+    } = await resolveCronDeliveryContext({
+      cfg: cfgWithAgentDefaults,
+      job: input.job,
+      agentId,
+    });
 
     const { formattedTime, timeLine } = resolveCronStyleNow(runtimeCfg, now);
     // Current jobs stay detached; a bounded tail preserves context without transcript continuation.
@@ -520,7 +538,8 @@ export async function prepareCronRunContext(params: {
     const message = currentConversationContext
       ? `${currentConversationContext}\n\n${resolveCronAgentTurnMessage(input)}`
       : resolveCronAgentTurnMessage(input);
-    const base = `[cron:${input.job.id} ${input.job.name}] ${message}`.trim();
+    const sourcePromptPrefix = `[cron:${input.job.id} ${input.job.name}]`;
+    const base = `${sourcePromptPrefix} ${message}`.trim();
     const isExternalHook =
       hookExternalContentSource !== undefined || isExternalHookSession(baseSessionKey);
     const allowUnsafeExternalContent =
@@ -591,6 +610,7 @@ export async function prepareCronRunContext(params: {
       cronSession,
     });
     const authSelection = await resolveCronAuthSelection({
+      agentId,
       cfg: cfgWithAgentDefaults,
       provider,
       modelId: model,
@@ -615,34 +635,6 @@ export async function prepareCronRunContext(params: {
       authProfileId,
       authProfileIdSource: authSelection?.source,
     };
-    preparedModelRuntimeLease = await acquireAgentRunPreparedModelRuntime(
-      {
-        // Embedded execution borrows this exact per-agent config projection.
-        // Keep the published generation pinned without dropping cron's defaults.
-        config: cfgWithAgentDefaults,
-        agentId,
-        agentDir,
-        workspaceDir,
-        allowGatewaySubagentBinding: true,
-        runtimePluginSelections: runtimePluginCandidates.map((candidate) => {
-          const runtime = resolveSessionRuntimeOverrideForProvider({
-            provider: candidate.provider,
-            entry: cronSession.sessionEntry,
-            cfg: cfgWithAgentDefaults,
-          });
-          return runtime
-            ? { provider: candidate.provider, modelId: candidate.model, runtime, agentId }
-            : { provider: candidate.provider, modelId: candidate.model, agentId };
-        }),
-      },
-      {
-        catalogMode: "static",
-        ...(publishedRuntime
-          ? { pluginGeneration: publishedRuntime.pluginGeneration }
-          : { pluginMetadataSnapshot: modelOwner.metadataSnapshot }),
-        abortSignal: input.abortSignal ?? input.signal,
-      },
-    );
     const runContinuationSession = usesExactRunSession
       ? createCronRunContinuationSession({
           cronSession,
@@ -661,6 +653,7 @@ export async function prepareCronRunContext(params: {
           toolsAllowExecTarget: input.job.toolsAllowExecTarget,
           toolsAllowExecTargetRequirement: input.job.toolsAllowExecTargetRequirement,
           cliSessionBindingFacts: {
+            extraSystemPromptStatic: deliverySystemPrompt,
             sourceReplyDeliveryMode: sourceDelivery.sourceReplyDeliveryMode,
             requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
           },
@@ -687,6 +680,17 @@ export async function prepareCronRunContext(params: {
         workspaceDir,
         executionRoot: input.executionRoot,
         commandBody,
+        inputProvenance:
+          agentPayload && !isExternalHook
+            ? {
+                kind: "internal_system",
+                sourceTool: "cron",
+                sourcePromptPrefix,
+                jobId: input.job.id,
+                runId: runSessionId,
+                sourceSessionKey: runSessionKey,
+              }
+            : undefined,
         cronSession,
         sessionWorkAdmission,
         persistSessionEntry,
@@ -696,6 +700,7 @@ export async function prepareCronRunContext(params: {
         deliveryPlan,
         resolvedDelivery,
         deliveryRequested,
+        deliverySystemPrompt,
         sourceDelivery,
         suppressExecNotifyOnExit: deliveryPlan.mode === "none",
         skillsSnapshot,
@@ -711,8 +716,11 @@ export async function prepareCronRunContext(params: {
       },
     };
   } catch (error) {
-    preparedModelRuntimeLease?.release();
-    sessionWorkAdmission.release();
-    throw error;
+    try {
+      await using _ = preparedModelRuntimeLease;
+      throw error;
+    } finally {
+      sessionWorkAdmission.release();
+    }
   }
 }

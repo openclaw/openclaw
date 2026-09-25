@@ -8,11 +8,12 @@ import {
   SANDBOX_CONTAINERS_DIR,
   SANDBOX_REGISTRY_PATH,
 } from "../agents/sandbox/constants.js";
-import {
-  insertSandboxBrowserRegistryEntryIfMissing,
-  insertSandboxRegistryEntryIfMissing,
-} from "../agents/sandbox/registry.js";
+import { browserEntryToRow, containerEntryToRow } from "../agents/sandbox/registry.kernel.js";
 import { withFileLock } from "../infra/file-lock.js";
+import { createSqliteWorkerWriteAdmission } from "../infra/sqlite-worker-store.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
+import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
 
 const RegistryEntrySchema = z
@@ -117,14 +118,18 @@ async function readShardedEntriesDetailed(dir: string): Promise<ShardedRegistryR
   };
 }
 
-async function quarantineLegacyRegistry(registryPath: string): Promise<string> {
+async function quarantineLegacyRegistry(registryPath: string): Promise<string | null> {
   const quarantinePath = `${registryPath}.invalid-${Date.now()}`;
-  await fs.rename(registryPath, quarantinePath).catch(async (error: unknown) => {
+  try {
+    await fs.rename(registryPath, quarantinePath);
+  } catch (error) {
     const code = (error as { code?: string } | null)?.code;
-    if (code !== "ENOENT") {
-      await fs.rm(registryPath, { force: true });
+    if (code === "ENOENT") {
+      return null;
     }
-  });
+    // Failed quarantine must leave the original bytes available for repair.
+    throw error;
+  }
   return quarantinePath;
 }
 
@@ -147,31 +152,45 @@ async function quarantineInvalidShards(
   return quarantineDir;
 }
 
-function writeLegacyEntryIfMissing(kind: LegacyRegistryKind, entry: RegistryEntryPayload): void {
-  if (kind === "containers") {
-    insertSandboxRegistryEntryIfMissing({
-      ...entry,
-      containerName: entry.containerName,
-      sessionKey: typeof entry.sessionKey === "string" ? entry.sessionKey : "",
-      createdAtMs: typeof entry.createdAtMs === "number" ? entry.createdAtMs : 0,
-      lastUsedAtMs: typeof entry.lastUsedAtMs === "number" ? entry.lastUsedAtMs : 0,
-      image: typeof entry.image === "string" ? entry.image : "",
-    });
-    return;
-  }
-  insertSandboxBrowserRegistryEntryIfMissing({
+async function writeLegacyEntryIfMissing(
+  context: OpenClawStateWorkerContext,
+  kind: LegacyRegistryKind,
+  entry: RegistryEntryPayload,
+): Promise<void> {
+  const normalized = {
     ...entry,
     containerName: entry.containerName,
     sessionKey: typeof entry.sessionKey === "string" ? entry.sessionKey : "",
     createdAtMs: typeof entry.createdAtMs === "number" ? entry.createdAtMs : 0,
     lastUsedAtMs: typeof entry.lastUsedAtMs === "number" ? entry.lastUsedAtMs : 0,
     image: typeof entry.image === "string" ? entry.image : "",
-    cdpPort: typeof entry.cdpPort === "number" ? entry.cdpPort : 0,
-  });
+  };
+  const row =
+    kind === "containers"
+      ? containerEntryToRow(normalized)
+      : browserEntryToRow({
+          ...normalized,
+          cdpPort: typeof entry.cdpPort === "number" ? entry.cdpPort : 0,
+        });
+  const assertCurrent = () => {
+    context.admission.assertCurrent();
+    context.maintenanceScope?.assertAdmission();
+  };
+  await runOpenClawStateWorkerOperation(
+    context,
+    (scope) => scope.execute({ type: "sandboxRegistry.insertIfMissing", input: row }),
+    {
+      assertCurrent,
+      createAdmission: createSqliteWorkerWriteAdmission(assertCurrent, [
+        context.admission.databasePath,
+      ]),
+    },
+  );
 }
 
 async function migrateMonolithicIfNeeded(
   target: LegacyRegistryTarget,
+  context: OpenClawStateWorkerContext,
 ): Promise<LegacySandboxRegistryMigrationResult> {
   const { registryPath } = target;
   try {
@@ -194,6 +213,9 @@ async function migrateMonolithicIfNeeded(
       const registry = await readLegacyRegistryFile(registryPath);
       if (!registry) {
         const quarantinePath = await quarantineLegacyRegistry(registryPath);
+        if (quarantinePath === null) {
+          return { kind: target.kind, status: "missing" };
+        }
         return {
           kind: target.kind,
           status: "quarantined-invalid",
@@ -206,7 +228,7 @@ async function migrateMonolithicIfNeeded(
         return { kind: target.kind, status: "removed-empty" };
       }
       for (const entry of registry.entries) {
-        writeLegacyEntryIfMissing(target.kind, entry);
+        await writeLegacyEntryIfMissing(context, target.kind, entry);
       }
       await fs.rm(registryPath, { force: true });
       return {
@@ -220,6 +242,7 @@ async function migrateMonolithicIfNeeded(
 
 async function migrateShardedIfNeeded(
   target: LegacyRegistryTarget,
+  context: OpenClawStateWorkerContext,
 ): Promise<LegacySandboxRegistryMigrationResult> {
   let dirExists = false;
   try {
@@ -237,7 +260,7 @@ async function migrateShardedIfNeeded(
   const { entries, invalidFiles } = await readShardedEntriesDetailed(target.shardedDir);
   if (invalidFiles.length > 0) {
     for (const entry of entries) {
-      writeLegacyEntryIfMissing(target.kind, entry);
+      await writeLegacyEntryIfMissing(context, target.kind, entry);
     }
     const quarantinePath = await quarantineInvalidShards(target.shardedDir, invalidFiles);
     await fs.rm(target.shardedDir, { recursive: true, force: true });
@@ -253,7 +276,7 @@ async function migrateShardedIfNeeded(
     return { kind: target.kind, status: "removed-empty" };
   }
   for (const entry of entries) {
-    writeLegacyEntryIfMissing(target.kind, entry);
+    await writeLegacyEntryIfMissing(context, target.kind, entry);
   }
   await fs.rm(target.shardedDir, { recursive: true, force: true });
   return { kind: target.kind, status: "migrated", entries: entries.length };
@@ -359,10 +382,11 @@ export async function inspectLegacySandboxRegistryFiles(): Promise<
 export async function migrateLegacySandboxRegistryFiles(): Promise<
   LegacySandboxRegistryMigrationResult[]
 > {
+  const context = captureOpenClawStateWorkerContext();
   const results: LegacySandboxRegistryMigrationResult[] = [];
   for (const target of legacyRegistryTargets()) {
-    const sharded = await migrateShardedIfNeeded(target);
-    const monolithic = await migrateMonolithicIfNeeded(target);
+    const sharded = await migrateShardedIfNeeded(target, context);
+    const monolithic = await migrateMonolithicIfNeeded(target, context);
     results.push(combineMigrationResults(target, monolithic, sharded));
   }
   return results;

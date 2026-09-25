@@ -2,6 +2,53 @@ import { describe, expect, it, vi } from "vitest";
 import { createChannelProgressDraftCompositor } from "./progress-draft-compositor.js";
 
 describe("progress draft plan lifecycle", () => {
+  it("keeps the native update callback's unformatted text contract", async () => {
+    const tryNativeUpdate = vi.fn(() => Promise.resolve(true));
+    const progress = createChannelProgressDraftCompositor({
+      entry: { streaming: { mode: "progress", progress: { label: false, toolProgress: true } } },
+      mode: "progress",
+      active: true,
+      seed: "native-literal",
+      update: () => true,
+      tryNativeUpdate,
+    });
+    try {
+      await progress.pushPlanProgress([], {
+        explanation: "Use **literal**.",
+        explanationFormat: "plain",
+      });
+      await progress.pushToolProgress("Reading", { startImmediately: true });
+      expect(tryNativeUpdate).toHaveBeenCalledWith(expect.stringContaining("Use **literal**."));
+    } finally {
+      progress.cancel();
+    }
+  });
+
+  it("repaints identical text when authored Markdown replaces a prepared note", async () => {
+    const update = vi.fn(() => true);
+    const progress = createChannelProgressDraftCompositor({
+      entry: { streaming: { mode: "progress", progress: { label: false, commentary: false } } },
+      mode: "progress",
+      active: true,
+      seed: "literal-handoff",
+      formatPlainText: (text) => text,
+      update,
+    });
+    try {
+      await progress.pushPlanProgress([], {
+        explanation: "**literal**",
+        explanationFormat: "plain",
+      });
+      expect(progress.getSnapshot().statusHeadlineFormat).toBe("plain");
+      await progress.pushPreambleHeadline("**literal**");
+      expect(update).toHaveBeenCalledTimes(2);
+      expect(progress.getSnapshot().statusHeadline).toBe("**literal**");
+      expect(progress.getSnapshot().statusHeadlineFormat).toBeUndefined();
+      expect(progress.getSnapshot().planExplanationFormat).toBe("plain");
+    } finally {
+      progress.cancel();
+    }
+  });
   it.each(["partial", "block", "progress"] as const)(
     "preserves the plan across message and answer boundaries in %s mode",
     async (mode) => {
@@ -267,7 +314,8 @@ describe("progress draft plan lifecycle", () => {
   );
 
   it("returns detached structured state for channel-native renderers", async () => {
-    const update = vi.fn<Parameters<typeof createChannelProgressDraftCompositor>[0]["update"]>();
+    const update =
+      vi.fn<NonNullable<Parameters<typeof createChannelProgressDraftCompositor>[0]["update"]>>();
     const progress = createChannelProgressDraftCompositor({
       mode: "progress",
       active: true,

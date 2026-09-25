@@ -13,6 +13,7 @@ import {
   validateChannelsPairingDismissParams,
   validateChannelsPairingListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveChannelAccount } from "../../channels/account-resolution.js";
 import { resolveChannelDmPolicy } from "../../channels/plugins/dm-access.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import { notifyPairingApproved } from "../../channels/plugins/pairing.js";
@@ -28,7 +29,6 @@ import {
   listChannelPairingRequests,
   resolveChannelPairingRequestId,
 } from "../../pairing/pairing-store.js";
-import { resolveGatewayPluginConfig } from "../runtime-plugin-config.js";
 import { formatForLog } from "../ws-log.js";
 import { respondUnavailable, respondUnavailableOnThrow } from "./response.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
@@ -96,7 +96,7 @@ async function listPairingAccounts(params: {
       if (requestedAccount && accountId.toLowerCase() !== requestedAccount) {
         continue;
       }
-      const account = plugin.config.resolveAccount(params.cfg, accountId);
+      const account = await resolveChannelAccount({ plugin, cfg: params.cfg, accountId });
       const configured = plugin.config.isConfigured
         ? await plugin.config.isConfigured(account, params.cfg)
         : asRecord(account)?.configured !== false;
@@ -211,7 +211,7 @@ export const channelPairingHandlers: GatewayRequestHandlers = {
     }
     try {
       const parsed = params as ChannelsPairingListParams;
-      const cfg = resolveGatewayPluginConfig({ config: context.getRuntimeConfig() });
+      const cfg = context.getRuntimeConfig();
       const accounts = await listPairingAccounts({
         cfg,
         ...(parsed.channel ? { channel: parsed.channel } : {}),
@@ -259,7 +259,7 @@ export const channelPairingHandlers: GatewayRequestHandlers = {
     let cfg: OpenClawConfig;
     let account: PairingAccount | null;
     try {
-      cfg = resolveGatewayPluginConfig({ config: context.getRuntimeConfig() });
+      cfg = context.getRuntimeConfig();
       account = await resolvePairingAccount({
         cfg,
         channel: parsed.channel,
@@ -360,7 +360,7 @@ export const channelPairingHandlers: GatewayRequestHandlers = {
     const parsed = params as ChannelsPairingDismissParams;
     let account: PairingAccount | null;
     try {
-      const cfg = resolveGatewayPluginConfig({ config: context.getRuntimeConfig() });
+      const cfg = context.getRuntimeConfig();
       account = await resolvePairingAccount({
         cfg,
         channel: parsed.channel,

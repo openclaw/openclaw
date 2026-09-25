@@ -4,11 +4,15 @@ import type { RouteId } from "../../app-route-paths.ts";
 import { inferControlUiPublicAssetPath } from "../../app/public-assets.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import { registerAppsEnglish } from "../../i18n/locales/en-apps.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { COMMUNITY_DISCORD_URL } from "../../lib/product-links.ts";
 import "../../styles/apps.css";
+import "../../components/native-chrome-setup.ts";
 import { brandIcons } from "../about/brand-icons.ts";
 import { appsBrandIcons } from "./brand-icons.ts";
+
+registerAppsEnglish();
 
 type AppsProps = {
   onNavigate: (routeId: RouteId) => void;
@@ -182,7 +186,7 @@ const APP_SECTIONS: readonly AppSection[] = [
       {
         id: "plugins",
         gradient: ["#fb7185", "#9f1239"],
-        icon: icons.puzzle,
+        icon: icons.plug,
         title: () => t("appsPage.cards.plugins.title"),
         desc: () => t("appsPage.cards.plugins.desc"),
         ctas: [
@@ -258,13 +262,16 @@ function renderAppCard(card: AppCard, props: AppsProps) {
         </div>
         <p class="apps-card__desc">${card.desc()}</p>
         <div class="apps-card__ctas">
-          ${macGatewayLaunchUrl
-            ? html`<a class="apps-card__cta apps-card__cta--primary" href=${macGatewayLaunchUrl}>
-                ${t("appsPage.ctaOpenMac")}
-              </a>`
-            : nothing}
+          ${
+            macGatewayLaunchUrl
+              ? html`<a class="apps-card__cta apps-card__cta--primary" href=${macGatewayLaunchUrl}>
+                  ${t("appsPage.ctaOpenMac")}
+                </a>`
+              : nothing
+          }
           ${card.ctas.map((cta, index) => renderCta(cta, index + (macGatewayLaunchUrl ? 1 : 0), props))}
         </div>
+        ${card.id === "chrome-extension" ? html`<openclaw-native-chrome-setup></openclaw-native-chrome-setup>` : nothing}
       </div>
     </article>
   `;
@@ -276,9 +283,7 @@ function renderSection(section: AppSection, props: AppsProps) {
       ? html`
           <p class="apps-pair-hint">
             ${t("appsPage.havePhone")}
-            <button type="button" @click=${props.onPairDevice}>
-              ${t("appsPage.pairDevice")}
-            </button>
+            <button type="button" @click=${props.onPairDevice}>${t("appsPage.pairDevice")}</button>
           </p>
         `
       : nothing;

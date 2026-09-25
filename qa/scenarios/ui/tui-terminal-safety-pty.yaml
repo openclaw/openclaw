@@ -36,7 +36,9 @@ scenario:
     - src/tui/osc8-hyperlinks.ts
   execution:
     kind: script
-    parallelSafe: true
+    # Keep the synchronized-frame oracle isolated from other PTY producers so
+    # scheduler load cannot consume its bounded terminal-settle window.
+    parallelSafe: false
     path: test/e2e/qa-lab/tui/tui-pty-evidence-producer.ts
     summary: Runs independently matched real-PTY rendering and output-safety assertions and authenticates their fresh Vitest results.
     timeoutMs: 180000

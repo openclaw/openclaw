@@ -8,10 +8,6 @@ import {
   normalizeWindowsPathPreservingCase,
 } from "./path-guards.js";
 
-function setPlatform(platform: NodeJS.Platform): void {
-  mockProcessPlatform(platform);
-}
-
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -77,7 +73,7 @@ describe("isPathInside", () => {
   });
 
   it("uses win32 path semantics for windows containment checks", () => {
-    setPlatform("win32");
+    mockProcessPlatform("win32");
 
     for (const [basePath, targetPath, expected] of [
       [String.raw`C:\workspace\root`, String.raw`C:\workspace\root`, true],
@@ -102,7 +98,7 @@ describe("isPathStrictlyInside", () => {
   });
 
   it("uses win32 path semantics for strict containment checks", () => {
-    setPlatform("win32");
+    mockProcessPlatform("win32");
 
     for (const [basePath, targetPath, expected] of [
       [String.raw`C:\workspace\root`, String.raw`C:\workspace\root`, false],

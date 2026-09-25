@@ -10,10 +10,19 @@ sidebarTitle: "Command policy"
 
 ## Command policy
 
-Node commands must pass two gates before they can be invoked:
+After device pairing, node commands must satisfy three requirements before they
+can be invoked:
 
 1. The node must declare the command in its authenticated connect metadata (`connect.commands`).
-2. The gateway's platform-and-approval-derived allowlist must include the declared command.
+2. The command must be in the node's approved command surface on its paired-device record.
+3. The Gateway's platform-and-approval-derived allowlist must include the declared command.
+
+Use `openclaw nodes pending` and `openclaw nodes approve <nodeRequestId>` to
+approve a pending surface. This request ID differs from the device request ID.
+An initial unapproved surface has no effective commands. During a pending
+expansion, only previously approved commands that remain declared and allowed
+stay effective. Local exec approvals and operating-system permissions still
+apply after these checks.
 
 Default allowlists by platform (before plugin defaults and `commands.allow`/`commands.deny` overrides):
 
@@ -41,13 +50,16 @@ plugin defaults.
 
 `talk.ptt.start`, `talk.ptt.stop`, `talk.ptt.cancel`, and `talk.ptt.once` are allowed by default for any node that advertises the `talk` capability or declares `talk.*` commands, independent of platform label.
 
-Desktop host commands (`system.run`, `system.run.prepare`, `system.which`, `browser.proxy`, `browser.proxy.upload.v1`, `mcp.tools.call.v1`, and `screen.snapshot` on macOS/Windows/Linux) are not part of the static platform-default table above. They become available once the operator approves a pairing request that declares them, after which the node's approved command set carries them forward on reconnect.
+Desktop host commands (`system.run`, `system.run.prepare`, `system.which`, `browser.proxy`, `browser.proxy.upload.v1`, `mcp.tools.call.v1`, `screen.snapshot`, and `desktop.stream` on macOS/Windows/Linux) are not part of the static platform-default table above. They become available once the operator approves a pairing request that declares them, after which the node's approved command set carries them forward on reconnect. Desktop sharing is enabled by default on desktop nodes; the Mac app exposes its local switch under **Settings → This Mac → Capabilities → Desktop sharing**.
 
-Dangerous or privacy-heavy commands require a one-time persistent opt-in with `gateway.nodes.commands.allow`, even if a node declares them: `camera.snap`, `camera.clip`, `camera.ptz.control`, `desktop.stream`, `screen.record`, `contacts.add`, `calendar.add`, `reminders.add`, `health.summary`, `sms.send`, `sms.search`. `gateway.nodes.commands.deny` always wins over defaults and extra allowlist entries. See [Paired node desktops](/gateway/config-browser-ui-desktop#paired-node-desktops), [HealthKit summaries](/platforms/ios-healthkit), and [Computer use](/nodes/computer-use) for the local enablement, pairing, capability, and tool-policy gates around desktop access.
+Dangerous or privacy-heavy commands require a one-time persistent opt-in with `gateway.nodes.commands.allow`, even if a node declares them: `camera.snap`, `camera.clip`, `camera.ptz.control`, `screen.record`, `contacts.add`, `calendar.add`, `reminders.add`, `health.summary`, `sms.send`, `sms.search`. `gateway.nodes.commands.deny` always wins over defaults and extra allowlist entries. See [Paired node desktops](/gateway/config-browser-ui-desktop#paired-node-desktops), [HealthKit summaries](/platforms/ios-healthkit), and [Computer use](/nodes/computer-use) for the local enablement, pairing, capability, and tool-policy gates around desktop access.
 
 Plugin-owned node commands can add a Gateway node-invoke policy. That policy runs after the allowlist check and before forwarding to the node, so raw `node.invoke`, CLI helpers, and dedicated agent tools share the same plugin permission boundary. Dangerous plugin node commands still require explicit `gateway.nodes.commands.allow` opt-in.
 
-After a node changes its declared command list, reconnect it, inspect `openclaw nodes pending`, and approve the widened surface with `openclaw nodes approve <requestId>` so the Gateway stores the updated command snapshot.
+After a node expands its declared commands, capabilities, or permissions,
+reconnect it, inspect `openclaw nodes pending`, and approve the widened surface
+with `openclaw nodes approve <nodeRequestId>`. Removing declarations does not
+grant new access or require approval for an expansion.
 
 ## Config (`openclaw.json`)
 
@@ -78,7 +90,7 @@ Node-related settings live under `gateway.nodes` and `tools.exec`:
       },
       // Persistently enable dangerous/privacy-heavy node commands.
       commands: {
-        allow: ["camera.snap", "desktop.stream", "screen.record"],
+        allow: ["camera.snap", "screen.record"],
         // Block exact command names even if defaults or commands.allow include them.
         deny: ["camera.clip"],
       },
@@ -88,8 +100,8 @@ Node-related settings live under `gateway.nodes` and `tools.exec`:
     exec: {
       // Default exec host: "node" routes all exec calls to a paired node.
       host: "node",
-      // Security mode for node exec: allow only approved/allowlisted commands.
-      security: "allowlist",
+      // Exec policy mode for node exec: allow only approved/allowlisted commands.
+      mode: "allowlist",
       // Pin exec to a specific node (id or name). Omit to allow any node.
       node: "build-node",
     },

@@ -33,6 +33,7 @@ describe("SnapshotSchema", () => {
         SnapshotSchema,
         snapshotWithPresence({
           ts: 1,
+          clientId: "openclaw-tui",
           onlineSince: 0,
           lastActivityAt: 1,
           user: { id: "alice@example.com", email: "alice@example.com" },

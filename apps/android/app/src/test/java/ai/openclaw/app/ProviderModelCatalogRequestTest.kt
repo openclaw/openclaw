@@ -32,10 +32,10 @@ class ProviderModelCatalogRequestTest {
           .parseToJsonElement(
             """
             [
-              {"id":"missing","provider":"synthetic","available":false,"unavailableReason":"missing-auth"},
-              {"id":"failed","provider":"synthetic","available":false,"unavailableReason":"auth-failed"},
-              {"id":"cooling","provider":"synthetic","available":false,"unavailableReason":"cooldown"},
-              {"id":"future","provider":"synthetic","available":false,"unavailableReason":"future-reason"}
+              {"id":"missing","name":"Missing","provider":"synthetic","available":false,"unavailableReason":"missing-auth"},
+              {"id":"failed","name":"Failed","provider":"synthetic","available":false,"unavailableReason":"auth-failed"},
+              {"id":"cooling","name":"Cooling","provider":"synthetic","available":false,"unavailableReason":"cooldown"},
+              {"id":"future","name":"Future","provider":"synthetic","available":false,"unavailableReason":"future-reason"}
             ]
             """.trimIndent(),
           ).jsonArray,

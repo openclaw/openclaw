@@ -389,6 +389,23 @@ describe("tool-card extraction", () => {
     expect(cards[0]?.outputText).toBeUndefined();
   });
 
+  it.each([
+    { name: "number", args: 42, expected: "42" },
+    { name: "boolean", args: false, expected: "false" },
+    { name: "nonfinite number", args: Number.NaN, expected: "null" },
+    { name: "bigint", args: 42n, expected: "42" },
+    { name: "symbol", args: Symbol("input"), expected: undefined },
+    { name: "boxed symbol", args: Object(Symbol("input")), expected: "{}" },
+    { name: "boxed bigint", args: Object(42n), expected: "[object BigInt]" },
+  ])("preserves $name tool input display", ({ args, expected }) => {
+    const [card] = extractToolCards({
+      role: "assistant",
+      content: [{ type: "toolcall", id: "input-display", name: "example", arguments: args }],
+    });
+    expect(card).toBeDefined();
+    expect(card?.inputText).toBe(expected);
+  });
+
   it("preserves tool-call input payloads from tool_use blocks", () => {
     const cards = extractToolCards({
       role: "assistant",
@@ -852,27 +869,13 @@ describe("tool-card canvas URLs", () => {
   });
 });
 
-describe("isRunningToolCard", () => {
-  it("marks only live uncompleted cards as running while a run is active", async () => {
-    const { isRunningToolCard } = await import("./chat-tool-cards.ts");
-    const liveCard = { id: "t:1", name: "bash", live: true } as const;
-    const historicalCard = { id: "t:2", name: "bash" } as const;
-
-    expect(isRunningToolCard(liveCard, true)).toBe(true);
-    // Partial streamed output must not end the running state; only the final
-    // result event does.
-    expect(isRunningToolCard({ ...liveCard, outputText: "partial…" }, true)).toBe(true);
-    expect(isRunningToolCard({ ...liveCard, completed: true, outputText: "" }, true)).toBe(false);
-    // Historical transcript calls without results (e.g. aborted runs) must
-    // stay inert when a later run is active in the same session.
-    expect(isRunningToolCard(historicalCard, true)).toBe(false);
-    expect(isRunningToolCard(liveCard, false)).toBe(false);
-  });
-
+describe("tool card outcomes", () => {
   it("derives a closed outcome from result presence and error state", () => {
     const call = { id: "t:call", name: "edit" } as const;
 
     expect(resolveToolCardOutcome(call, false)).toBe("unknown");
+    expect(resolveToolCardOutcome(call, true)).toBe("unknown");
+    expect(resolveToolCardOutcome({ ...call, live: true }, false)).toBe("unknown");
     expect(resolveToolCardOutcome({ ...call, live: true }, true)).toBe("running");
     expect(resolveToolCardOutcome({ ...call, completed: true, outputText: "" }, false)).toBe(
       "succeeded",

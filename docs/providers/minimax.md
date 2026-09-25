@@ -6,7 +6,7 @@ read_when:
 title: "MiniMax"
 ---
 
-The bundled `minimax` plugin registers two providers plus five capabilities: chat, image generation, music generation, video generation, image understanding, speech (T2A v2), and web search.
+The bundled `minimax` plugin registers two chat providers plus six capabilities: image generation, music generation, video generation, image understanding, speech (T2A v2), and web search.
 
 | Provider ID      | Auth    | Capabilities                                                                                        |
 | ---------------- | ------- | --------------------------------------------------------------------------------------------------- |
@@ -30,6 +30,8 @@ Referral link for MiniMax Coding Plan (10% off): [MiniMax Coding Plan](https://p
 | `MiniMax-Hailuo-2.3`     | Video generation | Text-to-video and image-to-video flows   |
 
 Model refs follow the auth path: `minimax/<model>` for API-key setups, `minimax-portal/<model>` for OAuth setups.
+
+MiniMax M3 is a preferred [Code Mode](/tools/code-mode) model on both API-key and OAuth routes. With no global Code Mode setting, the automatic tier can engage it; explicit agent or model settings still take precedence.
 
 ## Getting started
 
@@ -135,6 +137,7 @@ Model refs follow the auth path: `minimax/<model>` for API-key setups, `minimax-
                 name: "MiniMax M3",
                 reasoning: true,
                 input: ["text", "image"],
+                compat: { codeMode: "preferred" },
                 cost: { input: 0.6, output: 2.4, cacheRead: 0.12, cacheWrite: 0 },
                 contextWindow: 1000000,
                 maxTokens: 131072,

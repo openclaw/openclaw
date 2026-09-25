@@ -62,7 +62,7 @@ describe("status-overview-rows", () => {
     expect(findRowValue(rows, "Telemetry")).toBe("muted(disabled · update checks only)");
     expect(findRowValue(rows, "Host desktop")).toBe("muted(disabled)");
     expect(findRowValue(rows, "Sessions")).toBe(
-      "2 active · default gpt-5.5 (12k ctx) · store.json",
+      "2 stored · default gpt-5.5 (12k ctx) · store.json",
     );
   });
 
@@ -218,9 +218,16 @@ describe("status-overview-rows", () => {
     expect(findRowValue(rows, "Degraded plugins")).toBe("warn(1 configured-unavailable · discord)");
   });
 
-  it.each(["default", "all"])("surfaces startup migration warnings in %s output", (mode) => {
+  it.each([
+    ["default", "startupMigrationWarning", "Startup migrations"],
+    ["all", "startupMigrationWarning", "Startup migrations"],
+    ["default", "startupRecoveryWarning", "Session recovery"],
+    ["all", "startupRecoveryWarning", "Session recovery"],
+    ["default", "installationReplacementWarning", "Installation replaced"],
+    ["all", "installationReplacementWarning", "Installation replaced"],
+  ] as const)("surfaces %s %s output", (mode, field, label) => {
     const params = createStatusCommandOverviewRowsParams();
-    params.summary.startupMigrationWarning = "Retained legacy state. Run openclaw doctor --fix.";
+    params.summary[field] = "Inspect the affected state. Run openclaw doctor.";
     const rows =
       mode === "default"
         ? buildStatusCommandOverviewRows(params)
@@ -229,9 +236,7 @@ describe("status-overview-rows", () => {
             configPath: "/tmp/openclaw.json",
             secretDiagnosticsCount: 0,
           });
-    expect(findRowValue(rows, "Startup migrations")).toContain(
-      params.summary.startupMigrationWarning,
-    );
+    expect(findRowValue(rows, label)).toContain(params.summary[field]);
   });
 
   it("builds status-all overview rows from the shared surface", () => {
@@ -281,7 +286,6 @@ describe("status-overview-rows", () => {
         totalSessions: 2,
         agents: [{ id: "main", lastActiveAgeMs: 60_000 }],
       },
-      tailscaleBackendState: "Running",
     });
 
     expect(findRowValue(rows, "Version")).toBe(VERSION);

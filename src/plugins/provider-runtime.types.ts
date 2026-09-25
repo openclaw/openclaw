@@ -150,6 +150,8 @@ export type ProviderPreparedRuntimeAuth = {
  * token blob, read a legacy credential file, or pick between aliases).
  */
 export type ProviderResolveUsageAuthContext = {
+  /** Cancel provider-owned work when the usage collection deadline expires. */
+  signal?: AbortSignal;
   config: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
@@ -172,6 +174,8 @@ export type ProviderResolveUsageAuthContext = {
 
 export type ProviderUsageAuthToken = {
   token: string;
+  /** Provider-owned grant family used to authorize the usage endpoint. */
+  authFlow?: string;
   accountId?: string;
   /** Non-secret plan metadata from the resolved credential (e.g. Claude "max"). */
   subscriptionType?: string;
@@ -203,12 +207,15 @@ export type ProviderResolvedUsageAuth = ProviderUsageAuthToken | { handled: true
  * owns the provider-specific HTTP request + response normalization.
  */
 export type ProviderFetchUsageSnapshotContext = {
+  /** Custom transports must preserve this signal; fetchFn already includes it. */
+  signal?: AbortSignal;
   config: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
   provider: string;
   token: string;
+  authFlow?: string;
   accountId?: string;
   authProfileId?: string;
   /** Non-secret plan metadata from the resolved credential (e.g. Claude "max"). */
@@ -249,6 +256,8 @@ export type ProviderPrepareExtraParamsContext = {
   agentDir?: string;
   workspaceDir?: string;
   agentId?: string;
+  /** Selected credential facts; excludes credential material. */
+  auth?: { mode: string; authFlow?: string };
   nativeWebSearchAllowedByToolPolicy?: boolean;
   provider: string;
   modelId: string;

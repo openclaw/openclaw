@@ -25,7 +25,12 @@ export function createMeetingStatusCallSource(options: MeetingStatusCallSourceOp
   let audioOutputDeviceLabel;
   let audioOutputRouteError;
   let audioOutputRouteRetryable = false;
-  if (inCall && allowMicrophone && navigator.mediaDevices?.enumerateDevices) {
+  const remoteCapture = window.__openclawMeetingRemoteAudio;
+  if (remoteCapture && remoteCapture.sessionId === sessionId && remoteCapture.isCurrent()) {
+    if (canMutateSession) remoteCapture.scan();
+    audioOutputRouted = remoteCapture.isCurrent();
+    audioOutputDeviceLabel = "Isolated browser playback";
+  } else if (inCall && allowMicrophone && navigator.mediaDevices?.enumerateDevices) {
     const media = [...document.querySelectorAll("audio, video")].filter(
       (element) =>
         typeof element.setSinkId === "function" &&

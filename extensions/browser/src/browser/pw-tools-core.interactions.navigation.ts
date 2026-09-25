@@ -1,5 +1,5 @@
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import type { Frame, Page } from "playwright-core";
-import { toErrorObject } from "../infra/errors.js";
 import { BROWSER_ACTION_NAVIGATION_GRACE_MS } from "./act-policy.js";
 import {
   assertBrowserNavigationResultAllowed,
@@ -24,6 +24,7 @@ export type InteractionTargetOptions = {
   cdpUrl: string;
   browserFilesystemLocal?: boolean;
   targetId?: string;
+  assertCurrent?: () => void | Promise<void>;
 };
 
 export type NavigationTargetOptions = InteractionTargetOptions & BrowserNavigationPolicyOptions;
@@ -33,6 +34,30 @@ export type ElementInteractionOptions = GuardedInteractionOptions & {
   selector?: string;
   timeoutMs?: number;
 };
+
+export class BrowserInteractionAuthorityError extends Error {
+  constructor(error: unknown) {
+    const cause = toErrorObject(error, "Browser interaction authority changed");
+    super(cause.message, { cause });
+    this.name = "BrowserInteractionAuthorityError";
+  }
+}
+
+export function assertInteractionCurrent(
+  opts: Pick<InteractionTargetOptions, "assertCurrent">,
+): void | Promise<void> {
+  const reject = (error: unknown): never => {
+    // Authority loss is fatal even inside a batch configured to continue on errors.
+    throw new BrowserInteractionAuthorityError(error);
+  };
+  try {
+    // Preserve a resident assertion's synchronous fence through native action dispatch.
+    const assertion = opts.assertCurrent?.();
+    return assertion ? assertion.catch(reject) : undefined;
+  } catch (error) {
+    reject(error);
+  }
+}
 
 export function interactionNavigationPolicy(
   opts: BrowserNavigationPolicyOptions,
@@ -77,7 +102,9 @@ export async function getRestoredPageForTarget(opts: InteractionTargetOptions) {
 }
 
 export function toFriendlyInteractionError(err: unknown, label: string): Error {
-  return isBrowserObservedDialogBlockedError(err) ? err : toAIFriendlyError(err, label);
+  return isBrowserObservedDialogBlockedError(err) || err instanceof BrowserInteractionAuthorityError
+    ? err
+    : toAIFriendlyError(err, label);
 }
 
 export function reconcileRemoteDialogAfterActionSettled(page: Page, signal?: AbortSignal): void {
@@ -121,6 +148,7 @@ export async function runCancellablePageInteraction<T>(
         page,
         ...interactionNavigationPolicy(opts),
         targetId: opts.targetId,
+        assertCurrent: opts.assertCurrent,
       },
       abortPromise,
       opts.signal,
@@ -149,24 +177,7 @@ export async function runCancellablePageInteraction<T>(
 // fragment — do not cause a network request and must not trigger SSRF checks.
 function didCrossDocumentUrlChange(page: { url(): string }, previousUrl: string): boolean {
   const currentUrl = page.url();
-  if (currentUrl === previousUrl) {
-    return false;
-  }
-  try {
-    const prev = new URL(previousUrl);
-    const curr = new URL(currentUrl);
-    if (
-      prev.origin === curr.origin &&
-      prev.pathname === curr.pathname &&
-      prev.search === curr.search
-    ) {
-      // Only the fragment changed — same-document navigation, no fetch.
-      return false;
-    }
-  } catch {
-    // Non-parseable URL; fall through to string comparison.
-  }
-  return true;
+  return currentUrl !== previousUrl && !isHashOnlyNavigation(currentUrl, previousUrl);
 }
 
 // Returns true when a framenavigated event represents only a hash-only
@@ -324,7 +335,7 @@ function scheduleDelayedInteractionNavigationGuard(
   if (!hasInteractionNavigationPolicy(navigationPolicy)) {
     return Promise.resolve();
   }
-  const page = opts.page as unknown as NavigationObservablePage;
+  const page: NavigationObservablePage = opts.page;
   if (didCrossDocumentUrlChange(page, opts.previousUrl)) {
     return assertPageNavigationCompletedSafely({
       cdpUrl: opts.cdpUrl,
@@ -416,7 +427,7 @@ async function assertInteractionNavigationCompletedSafely<T>(
   // action so navigations triggered mid-click or mid-evaluate are not missed.
   // Using a fixed pre-action timer would expire before the action finishes for
   // slow interactions, silently bypassing the SSRF guard.
-  const navPage = opts.page as unknown as NavigationObservablePage;
+  const navPage: NavigationObservablePage = opts.page;
   let navigatedDuringAction = false;
   const subframeNavigationsDuringAction: string[] = [];
   const onFrameNavigated = (frame: Frame) => {
@@ -533,6 +544,7 @@ export async function awaitNavigationGuardedInteraction<T>(
     cdpUrl: string;
     page: Page;
     targetId?: string;
+    assertCurrent?: InteractionTargetOptions["assertCurrent"];
   } & BrowserNavigationPolicyOptions,
   abortPromise?: Promise<never>,
   signal?: AbortSignal,
@@ -580,6 +592,13 @@ export async function awaitNavigationGuardedInteraction<T>(
           ...opts,
           action: async () => {
             try {
+              // Preserve native dispatch ordering for callers without an authority check.
+              if (opts.assertCurrent) {
+                const assertion = assertInteractionCurrent(opts);
+                if (assertion) {
+                  await assertion;
+                }
+              }
               throwIfInteractionAborted(signal);
               return await opts.action();
             } finally {

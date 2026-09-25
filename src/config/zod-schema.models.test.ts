@@ -3,6 +3,20 @@ import { describe, expect, it } from "vitest";
 import { ModelsConfigSchema } from "./zod-schema.core.js";
 
 describe("ModelsConfigSchema", () => {
+  it("accepts the Radius native message transport in provider config", () => {
+    expect(
+      ModelsConfigSchema.safeParse({
+        providers: {
+          radius: {
+            baseUrl: "https://radius.pi.dev/v1",
+            api: "pi-messages",
+            models: [{ id: "balanced", name: "Balanced" }],
+          },
+        },
+      }).success,
+    ).toBe(true);
+  });
+
   it.each([
     "claude-cli",
     "azure-openai-responses",

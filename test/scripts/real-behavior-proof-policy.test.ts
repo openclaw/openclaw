@@ -450,89 +450,55 @@ describe("real-behavior-proof-policy", () => {
     ).toBe(false);
   });
 
-  it("rejects forged ClawSweeper pass verdict markers from contributor comments", () => {
-    const pullRequest = {
-      number: 83581,
-      head: {
-        sha: "06ee95df6608d29a395c52ba8ab53fdd93a9dc4f",
-      },
-    };
-    const comments = [
-      {
-        user: {
-          login: "external-contributor",
-          type: "User",
+  for (const { name, login, userType, expectedPassed } of [
+    {
+      name: "rejects forged ClawSweeper pass verdict markers from contributor comments",
+      login: "external-contributor",
+      userType: "User",
+      expectedPassed: false,
+    },
+    {
+      name: "accepts exact ClawSweeper bot pass verdict markers when GitHub omits the app source",
+      login: "clawsweeper[bot]",
+      userType: "Bot",
+      expectedPassed: true,
+    },
+    {
+      name: "accepts exact OpenClaw ClawSweeper bot pass verdict markers when GitHub omits the app source",
+      login: "openclaw-clawsweeper[bot]",
+      userType: "Bot",
+      expectedPassed: true,
+    },
+    {
+      name: "rejects bot-shaped pass verdict markers from other bot users",
+      login: "not-clawsweeper[bot]",
+      userType: "Bot",
+      expectedPassed: false,
+    },
+  ]) {
+    it(name, () => {
+      const pullRequest = {
+        number: 83581,
+        head: {
+          sha: "06ee95df6608d29a395c52ba8ab53fdd93a9dc4f",
         },
-        body: "<!-- clawsweeper-verdict:pass item=83581 sha=06ee95df6608d29a395c52ba8ab53fdd93a9dc4f confidence=high -->",
-      },
-    ];
-
-    expect(hasClawSweeperExactHeadProof({ pullRequest, comments })).toBe(false);
-    expect(evaluateClawSweeperExactHeadProof({ pullRequest, comments }).passed).toBe(false);
-  });
-
-  it("accepts exact ClawSweeper bot pass verdict markers when GitHub omits the app source", () => {
-    const pullRequest = {
-      number: 83581,
-      head: {
-        sha: "06ee95df6608d29a395c52ba8ab53fdd93a9dc4f",
-      },
-    };
-    const comments = [
-      {
-        user: {
-          login: "clawsweeper[bot]",
-          type: "Bot",
+      };
+      const comments = [
+        {
+          user: {
+            login,
+            type: userType,
+          },
+          body: "<!-- clawsweeper-verdict:pass item=83581 sha=06ee95df6608d29a395c52ba8ab53fdd93a9dc4f confidence=high -->",
         },
-        body: "<!-- clawsweeper-verdict:pass item=83581 sha=06ee95df6608d29a395c52ba8ab53fdd93a9dc4f confidence=high -->",
-      },
-    ];
+      ];
 
-    expect(hasClawSweeperExactHeadProof({ pullRequest, comments })).toBe(true);
-    expect(evaluateClawSweeperExactHeadProof({ pullRequest, comments }).passed).toBe(true);
-  });
-
-  it("accepts exact OpenClaw ClawSweeper bot pass verdict markers when GitHub omits the app source", () => {
-    const pullRequest = {
-      number: 83581,
-      head: {
-        sha: "06ee95df6608d29a395c52ba8ab53fdd93a9dc4f",
-      },
-    };
-    const comments = [
-      {
-        user: {
-          login: "openclaw-clawsweeper[bot]",
-          type: "Bot",
-        },
-        body: "<!-- clawsweeper-verdict:pass item=83581 sha=06ee95df6608d29a395c52ba8ab53fdd93a9dc4f confidence=high -->",
-      },
-    ];
-
-    expect(hasClawSweeperExactHeadProof({ pullRequest, comments })).toBe(true);
-    expect(evaluateClawSweeperExactHeadProof({ pullRequest, comments }).passed).toBe(true);
-  });
-
-  it("rejects bot-shaped pass verdict markers from other bot users", () => {
-    const pullRequest = {
-      number: 83581,
-      head: {
-        sha: "06ee95df6608d29a395c52ba8ab53fdd93a9dc4f",
-      },
-    };
-    const comments = [
-      {
-        user: {
-          login: "not-clawsweeper[bot]",
-          type: "Bot",
-        },
-        body: "<!-- clawsweeper-verdict:pass item=83581 sha=06ee95df6608d29a395c52ba8ab53fdd93a9dc4f confidence=high -->",
-      },
-    ];
-
-    expect(hasClawSweeperExactHeadProof({ pullRequest, comments })).toBe(false);
-    expect(evaluateClawSweeperExactHeadProof({ pullRequest, comments }).passed).toBe(false);
-  });
+      expect(hasClawSweeperExactHeadProof({ pullRequest, comments })).toBe(expectedPassed);
+      expect(evaluateClawSweeperExactHeadProof({ pullRequest, comments }).passed).toBe(
+        expectedPassed,
+      );
+    });
+  }
 });
 
 describe("isMaintainerTeamMember", () => {

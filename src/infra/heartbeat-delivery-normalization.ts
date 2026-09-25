@@ -1,9 +1,9 @@
+import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";
 import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import { replaceGenericExternalRunFailureText } from "../agents/failover/user-copy.js";
-import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import type { HeartbeatTerminalToolFailure } from "../auto-reply/heartbeat-reply-payload.js";
 import {
   getHeartbeatToolNotificationText,
@@ -190,9 +190,11 @@ export function classifyHeartbeatAgentOutcome(params: {
       mediaUrls: undefined,
     });
   const shouldSkipMain =
-    normalized.shouldSkip &&
-    !normalized.hasMedia &&
-    (!hasStructuredReplyContent || normalized.isInternalPlaceholderOnly);
+    // A completed quiet turn also suppresses tool warnings and media; a later crash does not.
+    (!agentRunFailed && heartbeatToolResponse?.notify === false) ||
+    (normalized.shouldSkip &&
+      !normalized.hasMedia &&
+      (!hasStructuredReplyContent || normalized.isInternalPlaceholderOnly));
   if (hasExplicitFailure) {
     return {
       kind: "failure",

@@ -481,6 +481,36 @@ describe("resolveSelectedClawHubPublishablePluginPackages", () => {
 });
 
 describe("collectPluginClawHubReleasePlan", () => {
+  it("consumes completed package observations without another ClawHub read", async () => {
+    const repoDir = createTempPluginRepo({ requiredLatestDependencyVersion: "1.2.3" });
+    const forbidden = vi.fn(async () => {
+      throw new Error("unplanned registry read");
+    });
+    const resolvePackageState = vi.fn(async () => ({
+      packageExists: false,
+      alreadyPublished: false,
+      hasTrustedPublisher: false,
+      trustedPublisher: null,
+    }));
+    const plan = await collectPluginClawHubReleasePlan({
+      rootDir: repoDir,
+      selectionMode: "all-publishable",
+      resolveLatestVersion: () => "1.2.3",
+      resolvePackageState,
+      fetchImpl: forbidden,
+    });
+    expect(plan.bootstrapCandidates.map((entry) => entry.packageName)).toEqual([
+      "@openclaw/demo-plugin",
+    ]);
+    expect(plan.candidates).toEqual([]);
+    expect(plan.warnings).toEqual([]);
+    expect(resolvePackageState).toHaveBeenCalledExactlyOnceWith(
+      "@openclaw/demo-plugin",
+      "2026.4.1",
+    );
+    expect(forbidden).not.toHaveBeenCalled();
+  });
+
   it("bounds parallel ClawHub package-state reads and preserves plan order", async () => {
     const extraExtensionIds = Array.from({ length: 11 }, (_, index) => `demo-${index + 2}`);
     const repoDir = createTempPluginRepo({ extraExtensionIds });
@@ -1466,6 +1496,65 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
     });
   });
 
+  it.each([undefined, '{"unusedPreparedArtifact":true}'])(
+    "returns a zero-dispatch plan without reading ClawHub when the release track excludes it (%s)",
+    async (preparedArtifact) => {
+      const plan = await buildOpenClawReleaseClawHubPlan(
+        {
+          bootstrapWorkflowRef: "main",
+          bootstrapWorkflowSha: "d".repeat(40),
+          releaseTag: "v2026.6.35",
+          releaseSha: "a".repeat(40),
+          releasePublishBranch: "main",
+          releasePublishFullRef: "refs/heads/main",
+          releasePublishRunAttempt: "1",
+          releasePublishRunId: "12345",
+          pluginPublishScope: "all-publishable",
+          plugins: [],
+          skipClawHub: true,
+          ...(preparedArtifact ? { preparedArtifact } : {}),
+        },
+        {
+          fetchImpl: () => {
+            throw new Error("ClawHub must not be queried for an excluded release track.");
+          },
+        },
+      );
+
+      expect(plan.normal).toMatchObject({ shouldDispatch: false, packages: [] });
+      expect(plan.bootstrap).toMatchObject({ shouldDispatch: false, packages: [] });
+      expect(plan.summary).toEqual({
+        normalCount: 0,
+        bootstrapCount: 0,
+        missingTrustedPublisherCount: 0,
+        normalPlugins: "",
+        bootstrapPlugins: "",
+        missingTrustedPlugins: "",
+      });
+      expect(
+        parseOpenClawReleaseClawHubPlanArgs([
+          "--bootstrap-workflow-ref",
+          "main",
+          "--bootstrap-workflow-sha",
+          "d".repeat(40),
+          "--release-tag",
+          "v2026.6.35",
+          "--release-sha",
+          "a".repeat(40),
+          "--release-publish-branch",
+          "main",
+          "--release-publish-full-ref",
+          "refs/heads/main",
+          "--release-publish-run-attempt",
+          "1",
+          "--release-publish-run-id",
+          "12345",
+          "--skip-clawhub",
+        ]).skipClawHub,
+      ).toBe(true);
+    },
+  );
+
   it("rejects incompatible all-publishable plugin selection args", () => {
     expect(() =>
       parseOpenClawReleaseClawHubPlanArgs([
@@ -1708,7 +1797,7 @@ describe("plugin-clawhub-publish.sh", () => {
 
     expect(output.trim()).toBe(
       [
-        "usage: bash scripts/plugin-clawhub-publish.sh [--dry-run|--publish|--pack] <package-dir>",
+        "usage: bash scripts/plugin-clawhub-publish.sh [--dry-run|--publish|--pack] <package-dir> [--metadata-root <trusted-checkout>]",
         "       bash scripts/plugin-clawhub-publish.sh [--validate-packed|--publish-packed] <clawpack.tgz>",
       ].join("\n"),
     );

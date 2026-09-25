@@ -6,6 +6,9 @@ import {
   hasSessionProjectionAcceptedFinal,
   findUniqueSnapshotTerminalMatch,
   isUnsequencedLiveTerminal,
+  isSessionProjectionToolContinuation,
+  isToolUsePersistedFinalRow,
+  readFinalContentIdentity,
   readSessionProjectionFinalMessageIdentity,
 } from "./session-projection-final-identity.js";
 import {
@@ -13,12 +16,16 @@ import {
   isSessionProjectionErrorMessage,
 } from "./session-projection-message-content.js";
 import {
+  createSessionProjectionEntry as createEntry,
+  isLocallyOptimisticSessionMessage,
+  sameTranscriptIdentity,
   normalizeSessionProjectionRunId,
   readAssistantStreamSegmentIdentity,
-  readSessionMessageIdentity,
+  sameAssistantPersistenceReceipt,
   readSessionProjectionString as readNonemptyString,
   type SessionMessageEnvelope,
   type SessionMessageIdentity,
+  type SessionProjectionEntry,
 } from "./session-projection-message-identity.js";
 import { retainSessionProjectionRuns } from "./session-projection-run-retention.js";
 export {
@@ -32,13 +39,18 @@ export {
 } from "./session-projection-run-event.js";
 
 export {
+  isLocallyOptimisticSessionMessage,
   normalizeSessionProjectionRunId,
   readAssistantStreamSegmentIdentity,
   readSessionMessageIdentity,
   readSessionMessageSequence,
 } from "./session-projection-message-identity.js";
-export { isSessionProjectionErrorMessage } from "./session-projection-message-content.js";
+export {
+  isSessionProjectionErrorMessage,
+  projectSessionTerminalReplyMessage,
+} from "./session-projection-message-content.js";
 export type {
+  SessionProjectionEntry,
   SessionMessageEnvelope,
   SessionMessageIdentity,
 } from "./session-projection-message-identity.js";
@@ -76,15 +88,6 @@ export type SessionProjectionRun = {
   stopReason?: string;
   errorKind?: string;
   errorMessage?: string;
-};
-
-export type SessionProjectionEntry = {
-  message: unknown;
-  identity: SessionMessageIdentity | null;
-  afterSequence?: number | null;
-  live: boolean;
-  pending: boolean;
-  pendingRunId: string | null;
 };
 
 export type SessionProjectionState = {
@@ -135,36 +138,6 @@ export type SessionProjectionEvent = ScopedSessionProjectionEvent &
     | { type: "transportGap" }
     | { type: "reconnected" }
   );
-
-/** Local turns have no durable transcript metadata beyond their own optional send key. */
-export function isLocallyOptimisticSessionMessage(message: unknown): boolean {
-  const identity = readSessionMessageIdentity(message);
-  if (!identity || (identity.role !== "user" && identity.role !== "assistant")) {
-    return false;
-  }
-  const metadata = readRecord(readRecord(message)?.["__openclaw"]);
-  return !metadata || Object.keys(metadata).every((key) => key === "idempotencyKey");
-}
-
-function createEntry(
-  message: unknown,
-  options?: { envelope?: SessionMessageEnvelope; live?: boolean; pendingRunId?: string | null },
-): SessionProjectionEntry {
-  const identity = readSessionMessageIdentity(message, options?.envelope);
-  const inferredPendingRunId =
-    options?.live !== true && isLocallyOptimisticSessionMessage(message) ? identity?.runId : null;
-  const pendingRunId = normalizeSessionProjectionRunId(
-    options?.pendingRunId ?? inferredPendingRunId,
-  );
-  return {
-    message,
-    identity,
-    afterSequence: options?.envelope?.afterSequence,
-    live: options?.live === true,
-    pending: pendingRunId !== null,
-    pendingRunId,
-  };
-}
 
 function createProjectionEntries(messages: readonly unknown[]): SessionProjectionEntry[] {
   let pendingUserRunId: string | null = null;
@@ -219,38 +192,31 @@ function readEventScope(event: ScopedSessionProjectionEvent): SessionProjectionS
   return scope;
 }
 
-function sameTranscriptIdentity(
-  left: SessionMessageIdentity | null,
-  right: SessionMessageIdentity | null,
-): boolean {
-  if (!left || !right || left.role !== right.role) {
-    return false;
-  }
-  if (left.isImported || right.isImported) {
-    if (!left.isImported || !right.isImported) {
-      return false;
-    }
-    if (left.externalSource || right.externalSource) {
-      return Boolean(left.externalSource && left.externalSource === right.externalSource);
-    }
-    // Partial provider IDs are unsafe, but a same-scope persisted sequence is authoritative.
-    return left.sequence !== null && right.sequence !== null && left.sequence === right.sequence;
-  }
-  if (left.id || right.id) {
-    // A missing durable ID cannot adopt another canonical row by sequence alone.
-    return Boolean(left.id && right.id && left.id === right.id);
-  }
-  // A run can publish several durable messages; its ID identifies ownership, not a row.
-  return left.sequence !== null && right.sequence !== null && left.sequence === right.sequence;
-}
-
 function entryMatches(
   left: SessionProjectionEntry,
   right: SessionProjectionEntry,
   allowSnapshotPromotion = false,
 ): boolean {
+  const leftSegment = readAssistantStreamSegmentIdentity(left.message);
+  const rightSegment = readAssistantStreamSegmentIdentity(right.message);
+  // One transcript row can contain separate commentary and tool display parts.
+  if (leftSegment?.itemId !== rightSegment?.itemId) {
+    return false;
+  }
   if (sameTranscriptIdentity(left.identity, right.identity)) {
     return true;
+  }
+  if (sameAssistantPersistenceReceipt(left.identity, right.identity)) {
+    return true;
+  }
+  if (
+    left.identity?.role === "assistant" &&
+    right.identity?.role === "assistant" &&
+    left.identity.idempotencyKey &&
+    right.identity.idempotencyKey &&
+    left.identity.idempotencyKey !== right.identity.idempotencyKey
+  ) {
+    return false;
   }
   const durableEntry = left.identity?.id ? left : right.identity?.id ? right : null;
   const provisionalEntry = durableEntry === left ? right : durableEntry === right ? left : null;
@@ -262,8 +228,8 @@ function entryMatches(
     !provisionalEntry.identity.isImported &&
     !provisionalEntry.identity.id
   ) {
-    const durableSegment = readAssistantStreamSegmentIdentity(durableEntry.message);
-    const provisionalSegment = readAssistantStreamSegmentIdentity(provisionalEntry.message);
+    const durableSegment = durableEntry === left ? leftSegment : rightSegment;
+    const provisionalSegment = durableEntry === left ? rightSegment : leftSegment;
     // Terminal cleanup can materialize commentary before cursor history catches up.
     // Adopt its exact item/run without joining distinct durable rows or equal prose.
     if (
@@ -274,10 +240,20 @@ function entryMatches(
     ) {
       return true;
     }
-    // History changes retention, not identity: a hydrated row still owns its
-    // unsequenced run projection. Item-keyed commentary remains separate.
+    // Commentary and tool continuations cannot own an unkeyed final answer.
     if (
       provisionalEntry.live &&
+      !durableSegment &&
+      !isSessionProjectionToolContinuation(durableEntry.message) &&
+      // Admitting a text-only toolUse-persisted final must not let it merge
+      // with a *different* same-run answer in either direction: the kept side
+      // suppresses or replaces the other without any content comparison
+      // downstream. Scope the content requirement to that newly admitted
+      // class only; pre-existing matches (identity promotions, non-toolUse
+      // rows) keep their established semantics.
+      (!isToolUsePersistedFinalRow(durableEntry.message) ||
+        readFinalContentIdentity(durableEntry.message) ===
+          readFinalContentIdentity(provisionalEntry.message)) &&
       provisionalEntry.identity.sequence === null &&
       (provisionalEntry.afterSequence === undefined ||
         (provisionalEntry.afterSequence !== null &&
@@ -384,11 +360,12 @@ function insertEntry(
 }
 
 export function projectLiveSessionMessage(
-  state: SessionProjectionState,
+  initialState: SessionProjectionState,
   message: unknown,
   envelope?: SessionMessageEnvelope,
   scope: SessionProjectionScope = {},
 ): SessionProjectionState {
+  let state = initialState;
   if (!scopesMatch(state.scope, scope)) {
     return state;
   }
@@ -400,6 +377,37 @@ export function projectLiveSessionMessage(
   const existing =
     matches.find((entry) => sameTranscriptIdentity(entry.identity, incoming.identity)) ??
     (matches.length === 1 ? matches[0] : undefined);
+  if (
+    existing &&
+    !sameTranscriptIdentity(existing.identity, incoming.identity) &&
+    !sameAssistantPersistenceReceipt(existing.identity, incoming.identity)
+  ) {
+    const durable = existing.identity?.id ? existing : incoming.identity.id ? incoming : null;
+    const provisional = durable === existing ? incoming : existing;
+    if (durable && isToolUsePersistedFinalRow(durable.message)) {
+      // Exact durable identities and persistence receipts never need inference.
+      // For provisional adoption,
+      // use the snapshot owner in both arrival orders, excluding the live copy
+      // itself from the history that can contradict the terminal position.
+      const history = state.entries.filter((entry) => entry !== provisional);
+      const snapshot = durable === incoming ? insertEntry(history, durable) : history;
+      const runId = provisional.identity?.runId;
+      const run = runId ? state.runs[runId] : undefined;
+      const terminalMatch = findUniqueSnapshotTerminalMatch(provisional, [durable], run, snapshot);
+      if (!terminalMatch) {
+        return withEntries(state, insertEntry(state.entries, incoming, state.runs));
+      }
+      if (terminalMatch.inferred && durable.identity && runId && run) {
+        // Keep the original live entry until authoritative history confirms
+        // the inference or restores it after revealing a later assistant row.
+        const inferredSnapshotTerminal = { entry: provisional, matchedIdentity: durable.identity };
+        state = {
+          ...state,
+          runs: { ...state.runs, [runId]: { ...run, inferredSnapshotTerminal } },
+        };
+      }
+    }
+  }
   if (!existing) {
     return withEntries(state, insertEntry(state.entries, incoming, state.runs));
   }
@@ -433,11 +441,7 @@ export function projectLiveSessionMessage(
         : state.entries.toSpliced(existingIndex, 1, incoming),
     );
   }
-  return withEntries(state, [
-    ...state.entries.slice(0, existingIndex),
-    incoming,
-    ...state.entries.slice(existingIndex + 1),
-  ]);
+  return withEntries(state, state.entries.toSpliced(existingIndex, 1, incoming));
 }
 
 /** Only observed live events and this client's pending turns may survive an older snapshot. */
@@ -463,9 +467,15 @@ export function reconcileSessionProjectionSnapshot(
       continue;
     }
     const matches = entries.filter((entry) => entryMatches(entry, current, true));
+    const uniqueMatch = matches.length === 1 ? matches[0] : undefined;
     const run = current.identity?.runId ? runs[current.identity.runId] : undefined;
     const terminalMatch = findUniqueSnapshotTerminalMatch(current, matches, run, entries);
-    if ((matches.length === 1 && !isUnsequencedLiveTerminal(current, run)) || terminalMatch) {
+    if (
+      (uniqueMatch &&
+        (sameAssistantPersistenceReceipt(uniqueMatch.identity, current.identity) ||
+          !isUnsequencedLiveTerminal(current, run))) ||
+      terminalMatch
+    ) {
       if (
         terminalMatch?.inferred &&
         terminalMatch.entry.identity &&

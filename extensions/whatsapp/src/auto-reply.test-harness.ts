@@ -11,8 +11,13 @@ import path from "node:path";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
 import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawStateDatabaseAsync,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeAll, beforeEach, vi, type Mock } from "vitest";
+import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import type { WebChannelStatus } from "./auto-reply/types.js";
 import type { WebInboundCallbackMessage, WebListenerCloseReason } from "./inbound.js";
 import type { WhatsAppSendResult } from "./inbound/send-result.js";
@@ -136,8 +141,6 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
     )?.identity,
   resolveIdentityNamePrefix: (cfg: { messages?: { responsePrefix?: string } }, _agentId: string) =>
     cfg.messages?.responsePrefix,
-  resolveMessagePrefix: (_cfg: unknown, _agentId: string, opts?: { configured?: string }) =>
-    opts?.configured,
   runEmbeddedAgent: vi.fn(),
 }));
 
@@ -145,6 +148,8 @@ async function rmDirWithRetries(
   dir: string,
   opts?: { attempts?: number; delayMs?: number },
 ): Promise<void> {
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
   const attempts = opts?.attempts ?? 10;
   const delayMs = opts?.delayMs ?? 5;
   // Some tests can leave async session-store writes in-flight; recursive deletion can race and throw ENOTEMPTY.
@@ -200,6 +205,8 @@ export function installWebAutoReplyTestHomeHooks() {
   });
 
   afterEach(async () => {
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
     process.env.HOME = previousHome;
     tempHome = undefined;
   });
@@ -346,14 +353,6 @@ export function createWebInboundDeliverySpies(): AnyExport {
   };
 }
 
-function createWebAutoReplyRuntime(): WebAutoReplyRuntime {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  };
-}
-
 export function startWebAutoReplyMonitor(params: {
   monitorWebChannelFn: (...args: unknown[]) => Promise<unknown>;
   listenerFactory: unknown;
@@ -367,7 +366,7 @@ export function startWebAutoReplyMonitor(params: {
   accountId?: string;
   statusSink?: (status: WebChannelStatus) => void;
 }): WebAutoReplyMonitorHarness {
-  const runtime = createWebAutoReplyRuntime();
+  const runtime: WebAutoReplyRuntime = createRuntimeSpies();
   const controller = new AbortController();
   const run = params.monitorWebChannelFn(
     false,

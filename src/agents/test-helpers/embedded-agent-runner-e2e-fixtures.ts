@@ -148,6 +148,7 @@ export function createResolvedEmbeddedRunnerModel(
   options?: { baseUrl?: string },
 ) {
   return {
+    logicalRef: { provider, model: modelId },
     model: {
       id: modelId,
       name: modelId,

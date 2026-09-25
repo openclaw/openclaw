@@ -3,7 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openDesktopFocus } from "../../components/desktop/desktop-focus-window.ts";
 import { formatTimeAgo } from "../../lib/format.ts";
-import type { InventoryRemovalRequest } from "../../lib/nodes/index.ts";
+import type { InventoryRemovalRequest } from "../../lib/nodes/page-operations.ts";
 import { showToast } from "../../lib/toast.ts";
 import { createOfflineDeviceNode, deviceSystemInfo } from "../../test-helpers/devices-fixtures.ts";
 import {
@@ -322,8 +322,8 @@ describe("devices inventory rendering", () => {
       const row = getSettingsRow(container, "Studio");
       expect(row.querySelector(".device-entry__desktop")).toBeNull();
       const chip = row.querySelector('[aria-disabled="true"]');
-      expect(chip?.getAttribute("title")).toContain("desktop.host.enabled: true");
-      expect(chip?.getAttribute("title")).toContain("gateway.nodes.commands.allow");
+      expect(chip?.getAttribute("title")).toContain("Desktop sharing");
+      expect(chip?.getAttribute("title")).toContain("pending desktop capability request");
       expect(row.querySelector(".device-entry__facts")?.textContent).toContain("desktop.stream");
     },
   );

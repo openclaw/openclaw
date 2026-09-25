@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { collectChangedPaths } from "./config-change-paths.js";
 import { applyUnsetPathsForWrite } from "./config-path-mutation.js";
-import { restoreEnvRefsFromMap, resolveWriteEnvSnapshotForPath } from "./env-preserve.js";
+import { resolveWriteEnvSnapshotForPath } from "./env-preserve.js";
 import { createConfigValidationFailedError } from "./io.write-errors.js";
 import { resolvePersistCandidateForWrite } from "./io.write-prepare.js";
 import { tryResolveLegacyCompatibilityAgentId } from "./legacy.default-agent-owner.js";
@@ -1317,13 +1317,20 @@ describe("config io write prepare", () => {
     ).toEqual({ agents: { defaults, entries: { main: {}, ops: {} } }, gateway: { mode: "local" } });
   });
 
-  it("preserves authored Google model params under normalized config keys", () => {
+  it.each([
+    ["google/gemini-3-pro-preview", "google/gemini-3.1-pro-preview"],
+    ["together/moonshotai/Kimi-K2.5", "together/moonshotai/Kimi-K2.6"],
+    ["custom/custom/model", "custom/custom/model"],
+  ])("preserves separate authored model params when writing %s", (authored, canonical) => {
     const params = { thinking: { level: "high" } };
     const sourceConfig = {
       agents: {
         defaults: {
-          model: { primary: "google/gemini-3-pro-preview" },
-          models: { "google/gemini-3-pro-preview": { alias: "Gemini", params } },
+          model: { primary: authored, fallbacks: ["custom/model"] },
+          models: {
+            [authored]: { alias: "Selected", params },
+            "custom/model": { alias: "Control" },
+          },
         },
       },
     };
@@ -1332,9 +1339,10 @@ describe("config io write prepare", () => {
         runtimeConfig: {
           agents: {
             defaults: {
-              model: { primary: "google/gemini-3.1-pro-preview" },
+              model: { primary: canonical, fallbacks: ["custom/model"] },
               models: {
-                "google/gemini-3.1-pro-preview": { alias: "Gemini", params },
+                [canonical]: { alias: "Selected", params },
+                "custom/model": { alias: "Control" },
               },
             },
           },
@@ -1343,8 +1351,8 @@ describe("config io write prepare", () => {
         nextConfig: {
           agents: {
             defaults: {
-              model: { primary: "google/gemini-3.1-pro-preview" },
-              models: { "google/gemini-3.1-pro-preview": {} },
+              model: { primary: canonical, fallbacks: ["custom/model"] },
+              models: { [canonical]: {}, "custom/model": { alias: "Control" } },
             },
           },
         },
@@ -1352,8 +1360,8 @@ describe("config io write prepare", () => {
     ).toEqual({
       agents: {
         defaults: {
-          model: { primary: "google/gemini-3-pro-preview" },
-          models: { "google/gemini-3.1-pro-preview": { params } },
+          model: { primary: authored, fallbacks: ["custom/model"] },
+          models: { [canonical]: { params }, "custom/model": { alias: "Control" } },
         },
       },
     });
@@ -1580,12 +1588,48 @@ describe("config io write prepare", () => {
       tools: { alsoAllow: ["exec", "fetch", "read"] },
     };
     const before = structuredClone(input);
+    const result = applyUnsetPathsForWrite(input, [
+      ["commands", "ownerDisplay"],
+      ["tools", "alsoAllow", "1"],
+    ]);
+    expect(result).toEqual({ gateway: { mode: "local" }, tools: { alsoAllow: ["exec", "read"] } });
+    expect(result).not.toBe(input);
+    expect(result.gateway).toBe(input.gateway);
+    expect(result.tools).not.toBe(input.tools);
+    expect(input).toEqual(before);
+  });
+
+  it.each([
+    {
+      name: "prunes empty objects inside arrays",
+      values: [{ value: "remove" }, { value: "keep" }],
+      paths: [["0", "value"]],
+      expected: [{ value: "keep" }],
+    },
+    {
+      name: "retains emptied arrays",
+      values: ["remove"],
+      paths: [["0"]],
+      expected: [],
+    },
+    {
+      name: "interprets successive indexes against the updated array",
+      values: ["first", "second", "third"],
+      paths: [["0"], ["1"]],
+      expected: ["second"],
+    },
+  ])("$name during explicit unsets", ({ values, paths, expected }) => {
+    const input = { plugins: { entries: { example: { config: { values } } } } };
+    const before = structuredClone(input);
+    const prefix = ["plugins", "entries", "example", "config", "values"];
     expect(
-      applyUnsetPathsForWrite(input, [
-        ["commands", "ownerDisplay"],
-        ["tools", "alsoAllow", "1"],
-      ]),
-    ).toEqual({ gateway: { mode: "local" }, tools: { alsoAllow: ["exec", "read"] } });
+      applyUnsetPathsForWrite(
+        input,
+        paths.map((parts) => [...prefix, ...parts]),
+      ),
+    ).toEqual({
+      plugins: { entries: { example: { config: { values: expected } } } },
+    });
     expect(input).toEqual(before);
   });
 
@@ -1619,78 +1663,6 @@ describe("config io write prepare", () => {
     expect(message).toContain('openclaw config set channels.telegram.dmPolicy "pairing"');
   });
 
-  it("preserves env refs on unchanged paths while keeping changed paths resolved", () => {
-    const unchanged = {
-      plugins: { entries: { acme: { config: { env: { API_KEY: "secret" } } } } },
-    };
-    const before = { ...unchanged, gateway: { port: 18789 } };
-    const after = { ...unchanged, gateway: { port: 18789, auth: { mode: "token" } } };
-    const changedPaths = new Set<string>();
-    collectChangedPaths(before, after, "", changedPaths);
-    expect(
-      restoreEnvRefsFromMap(
-        after,
-        "",
-        new Map([["plugins.entries.acme.config.env.API_KEY", "${ACME_API_KEY}"]]),
-        changedPaths,
-      ),
-    ).toEqual({
-      plugins: { entries: { acme: { config: { env: { API_KEY: "${ACME_API_KEY}" } } } } },
-      gateway: { port: 18789, auth: { mode: "token" } },
-    });
-  });
-
-  it("preserves env refs in arrays while keeping appended entries resolved", () => {
-    const config = (args: string[]) => ({ plugins: { entries: { acme: { config: { args } } } } });
-    const changedPaths = new Set<string>();
-    collectChangedPaths(
-      config(["${USER_ID}", "123"]),
-      config(["${USER_ID}", "123", "456"]),
-      "",
-      changedPaths,
-    );
-    expect(
-      restoreEnvRefsFromMap(
-        config(["999", "123", "456"]),
-        "",
-        new Map([["plugins.entries.acme.config.args[0]", "${USER_ID}"]]),
-        changedPaths,
-      ),
-    ).toEqual(config(["${USER_ID}", "123", "456"]));
-  });
-
-  it.each([
-    {
-      name: "does not overwrite identity-restored env refs with positional map entries",
-      agents: [
-        { id: "b", token: "${TOKEN_B}" },
-        { id: "a", token: "${TOKEN_A}" },
-      ],
-      refs: [
-        ["agents[0].token", "${TOKEN_A}"],
-        ["agents[1].token", "${TOKEN_B}"],
-      ] as const,
-    },
-    {
-      name: "does not overwrite identity-restored escaped refs with positional map entries",
-      agents: [
-        { id: "real", token: "${TOKEN}" },
-        { id: "literal", token: "$${TOKEN}" },
-      ],
-      refs: [["agents[1].token", "${TOKEN}"]] as const,
-    },
-  ])("$name", ({ agents, refs }) => {
-    expect(
-      restoreEnvRefsFromMap(
-        { agents },
-        "",
-        new Map<string, string>(refs),
-        new Set(["agents[0].id", "agents[1].id"]),
-        new Set(["agents[0].token", "agents[1].token"]),
-      ),
-    ).toEqual({ agents });
-  });
-
   it("ignores prototype-chain keys when collecting changed paths", () => {
     const base = { safe: { mode: "local" }, collision: { mode: "owned-base" } };
     const target = Object.create({ collision: { mode: "inherited-target" } }) as Record<
@@ -1701,38 +1673,6 @@ describe("config io write prepare", () => {
     const changedPaths = new Set<string>();
     collectChangedPaths(base, target, "", changedPaths);
     expect([...changedPaths].toSorted()).toEqual(["collision", "safe.mode"]);
-  });
-
-  it("restores unchanged paths even when their values equal another authored template", () => {
-    expect(
-      restoreEnvRefsFromMap(
-        {
-          included: {
-            first: "${SECOND}",
-            second: "second-secret",
-            third: "$${SECOND}",
-            escaped: "$${SECOND}",
-          },
-          gateway: { port: 18790 },
-        },
-        "",
-        new Map([
-          ["included.first", "${FIRST}"],
-          ["included.second", "${SECOND}"],
-          ["included.third", "${THIRD}"],
-          ["included.escaped", "$${SECOND}"],
-        ]),
-        new Set(["gateway.port"]),
-      ),
-    ).toEqual({
-      included: {
-        first: "${FIRST}",
-        second: "${SECOND}",
-        third: "${THIRD}",
-        escaped: "$${SECOND}",
-      },
-      gateway: { port: 18790 },
-    });
   });
 
   it.each([

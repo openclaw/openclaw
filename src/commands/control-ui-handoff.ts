@@ -244,8 +244,8 @@ export async function waitForControlUiDocument(params: {
         if (request.response.status !== 503 || !retryAfter || params.waitForPending === false) {
           let detail: string | undefined;
           if (request.response.status === 503 && !retryAfter) {
-            // HEAD has no body; one bounded, credential-free GET preserves the
-            // Gateway owner's configured-root/build-failure repair diagnostic.
+            // One bounded, credential-free GET may add the Gateway owner's repair
+            // diagnostic; a failed request or body must preserve the HEAD result.
             const diagnostic = await requestDocument("GET", Math.max(1, deadline - now())).catch(
               () => undefined,
             );
@@ -261,7 +261,7 @@ export async function waitForControlUiDocument(params: {
                     maxBytes: CONTROL_UI_DOCUMENT_ERROR_MAX_BYTES,
                     maxChars: CONTROL_UI_DOCUMENT_ERROR_MAX_BYTES,
                     timeoutMs: CONTROL_UI_DOCUMENT_REQUEST_TIMEOUT_MS,
-                  });
+                  }).catch(() => undefined);
                   detail = snippet ? sanitizeTerminalText(snippet) : undefined;
                 }
               } finally {

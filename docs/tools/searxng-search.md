@@ -24,6 +24,10 @@ Advantages:
     ```bash
     openclaw plugins install @openclaw/searxng-plugin
     ```
+
+    Installation applies to a running Gateway automatically; otherwise it takes effect
+    on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
+
   </Step>
   <Step title="Run a SearXNG instance">
     ```bash

@@ -1,6 +1,6 @@
 /** Protects node policy, real pinned Codex stdio framing, and child cleanup. */
 import { EventEmitter, once } from "node:events";
-import { access, readFile, realpath } from "node:fs/promises";
+import { access, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -9,6 +9,7 @@ import type {
   OpenClawPluginNodeHostCommand,
   OpenClawPluginNodeInvokePolicyContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setManagedCodexPluginRoot } from "./app-server/managed-binary.js";
@@ -20,7 +21,7 @@ import {
 type JsonRpcRecord = Record<string, unknown>;
 const CODEX_NODE_EXEC_SERVER_COMMAND = "codex.exec-server.stdio.v1";
 
-function createManagedWorkspaceInvocation(cwd: string) {
+function createManagedWorkspaceInvocation(cwd: string, homeDir?: string) {
   const placement = {
     cwd,
     environmentId: "paired-environment",
@@ -29,8 +30,8 @@ function createManagedWorkspaceInvocation(cwd: string) {
     sessionKey: "agent:main:paired-session",
   };
   const release = vi.fn();
-  const acquireManagedWorkspace = vi.fn(
-    (request: {
+  const acquireManagedWorkspaceAsync = vi.fn(
+    async (request: {
       workspaceDir: string;
       environmentId: string;
       sessionId: string;
@@ -46,16 +47,16 @@ function createManagedWorkspaceInvocation(cwd: string) {
       ) {
         throw new Error("node placement does not own the requested workspace");
       }
-      return { workspaceDir: cwd, release };
+      return { workspaceDir: cwd, ...(homeDir ? { homeDir } : {}), release };
     },
   );
   const context = {
     sessionKey: placement.sessionKey,
     sendNodeEvent: async () => undefined,
-    acquireManagedWorkspace,
+    acquireManagedWorkspaceAsync,
     prepareExecAuthorization: () => () => {},
   } satisfies NonNullable<Parameters<OpenClawPluginNodeHostCommand["handle"]>[2]>;
-  return { placement, context, acquireManagedWorkspace, release };
+  return { placement, context, acquireManagedWorkspaceAsync, release };
 }
 
 function createNodeFrames(testSignal?: AbortSignal) {
@@ -153,9 +154,14 @@ async function readNodeProcessNotifications(
       matching().length >= count,
   );
   expect(matching()).toHaveLength(count);
-  return matching().toSorted(
+  const notifications = matching().toSorted(
     (left, right) => (left.params as { seq: number }).seq - (right.params as { seq: number }).seq,
   );
+  expect(notifications.map((message) => (message.params as { seq: number }).seq)).toEqual(
+    Array.from({ length: count }, (_, index) => index + 1),
+  );
+  expect(notifications.at(-1)?.method).toBe("process/closed");
+  return notifications;
 }
 
 let pendingNodeProof: Promise<void> | undefined;
@@ -173,38 +179,6 @@ afterEach(async () => {
 });
 
 describe("Codex node exec-server", () => {
-  it("reports an unconfirmed transport stop instead of treating its result object as success", async () => {
-    const transport = await import("./app-server/transport.js");
-    const close = transport.closeCodexAppServerTransportAndWait;
-    const failedClose = vi
-      .spyOn(transport, "closeCodexAppServerTransportAndWait")
-      .mockImplementation(async (...args) => {
-        await close(...args);
-        return { exited: false, cleanup: "uncertain" };
-      });
-    const command = createCodexNodeExecServerCommand();
-    const frames = createNodeFrames();
-    const workspace = createManagedWorkspaceInvocation(process.cwd());
-    const invocation = command.handle(
-      JSON.stringify({ placement: workspace.placement, authorization: "human-approved" }),
-      frames.io,
-      workspace.context,
-    );
-    const outcome = invocation.catch((error: unknown) => error);
-    try {
-      await Promise.race([frames.ready, invocation]);
-      frames.controller.abort(new Error("node cleanup fixture disconnected"));
-      await expect(outcome).resolves.toMatchObject({
-        message: "Codex node exec-server process tree did not terminate.",
-      });
-      await expect(command.onDisconnect?.()).rejects.toThrow("did not terminate");
-    } finally {
-      frames.controller.abort();
-      await outcome;
-      failedClose.mockRestore();
-    }
-  });
-
   it("uses admitted Full launch authority without asking for a human decision", async () => {
     const { placement } = createManagedWorkspaceInvocation(process.cwd());
     const request = vi.fn(async () => ({ decision: "deny" as const }));
@@ -448,7 +422,7 @@ describe("Codex node exec-server", () => {
         sessionKey: "agent:main:different-session",
       }),
     ).rejects.toThrow("active managed placement authority");
-    expect(workspace.acquireManagedWorkspace).not.toHaveBeenCalled();
+    expect(workspace.acquireManagedWorkspaceAsync).not.toHaveBeenCalled();
     for (const replacement of [
       { cwd: path.parse(process.cwd()).root },
       { environmentId: "other-environment" },
@@ -479,6 +453,94 @@ describe("Codex node exec-server", () => {
     frames.controller.abort(new Error("malformed-frame fixture closed"));
     await expect(invocation).rejects.toThrow("malformed-frame fixture closed");
     expect(workspace.release).toHaveBeenCalledOnce();
+    expect(command.hasActiveWork?.() ?? false).toBe(false);
+  });
+
+  it("uses prepared HOME with the actual pinned binary while keeping Codex state private", async ({
+    signal,
+  }) => {
+    pendingNodeProof = withTempWorkspace(
+      { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "codex-prepared-home-" },
+      async ({ dir }) => {
+        const cwd = await realpath(dir);
+        const homeDir = path.join(cwd, "prepared-home");
+        await mkdir(homeDir);
+        await writeFile(path.join(homeDir, "prepared-cache"), "retained build state");
+        const frames = createNodeFrames(signal);
+        const command = createCodexNodeExecServerCommand();
+        const workspace = createManagedWorkspaceInvocation(cwd, homeDir);
+        const invocation = command.handle(
+          JSON.stringify({ placement: workspace.placement, authorization: "human-approved" }),
+          frames.io,
+          workspace.context,
+        );
+        void invocation.catch((error: unknown) => frames.controller.abort(error));
+        let isolatedCodexHome: string | undefined;
+        try {
+          await Promise.race([frames.ready, invocation]);
+          await frames.send({
+            id: 1,
+            method: "initialize",
+            params: { clientName: "openclaw-node" },
+          });
+          await readNodeResponse(frames, 1);
+          await frames.send({ method: "initialized", params: {} });
+          const script = `const fs = require('node:fs'); const path = require('node:path');
+process.stdout.write(JSON.stringify({home: process.env.HOME, codexHome: process.env.CODEX_HOME,
+  cached: fs.existsSync(path.join(process.env.HOME ?? '.', 'prepared-cache'))}) + '\\n');`;
+          await frames.send({
+            id: 2,
+            method: "process/start",
+            params: {
+              processId: "prepared-home",
+              argv: [process.execPath, "-e", script],
+              cwd: pathToFileURL(cwd).href,
+              env: {},
+              envPolicy: {
+                inherit: "all",
+                ignoreDefaultExcludes: true,
+                exclude: [],
+                set: {},
+                includeOnly: [],
+              },
+              tty: false,
+              pipeStdin: false,
+              arg0: null,
+            },
+          });
+          await readNodeResponse(frames, 2);
+          const notifications = await readNodeProcessNotifications(frames, "prepared-home", 3);
+          const output = notifications.find(
+            (message) => message.method === "process/output",
+          )?.params;
+          if (!isRecord(output) || typeof output.chunk !== "string") {
+            throw new Error("Pinned exec-server omitted process output");
+          }
+          const observed: unknown = JSON.parse(
+            Buffer.from(output.chunk, "base64").toString("utf8"),
+          );
+          expect(observed).toMatchObject({ home: homeDir, cached: true });
+          if (!isRecord(observed) || typeof observed.codexHome !== "string") {
+            throw new Error("Pinned exec-server omitted its private Codex home");
+          }
+          isolatedCodexHome = observed.codexHome;
+          expect(isolatedCodexHome).not.toBe(path.join(homeDir, ".codex"));
+        } finally {
+          frames.controller.abort(new Error("prepared-home proof completed"));
+          await expect(invocation).rejects.toBe(frames.io.signal.reason);
+          await command.onDisconnect?.();
+          expect(workspace.release).toHaveBeenCalledOnce();
+        }
+        expect(await readFile(path.join(homeDir, "prepared-cache"), "utf8")).toBe(
+          "retained build state",
+        );
+        if (!isolatedCodexHome) {
+          throw new Error("Private Codex home was not observed");
+        }
+        await expect(access(isolatedCodexHome)).rejects.toMatchObject({ code: "ENOENT" });
+      },
+    );
+    await pendingNodeProof;
   });
 
   it("relays the actual pinned Codex binary, isolates credentials, and removes its private home", async (context) => {
@@ -510,8 +572,31 @@ describe("Codex node exec-server", () => {
           (error: unknown) => frames.controller.abort(error),
         );
         let isolatedHome: string | undefined;
+        const outputGate = createServer((_request, response) => {
+          void frames
+            .waitForMessage(
+              (message) =>
+                message.method === "process/exited" &&
+                (message.params as { processId?: string }).processId === "node-proof",
+            )
+            .then(
+              () => response.end(),
+              () => response.destroy(),
+            );
+        });
 
         try {
+          outputGate.listen(0, "127.0.0.1");
+          await once(outputGate, "listening");
+          const gateAddress = outputGate.address();
+          if (!gateAddress || typeof gateAddress === "string") {
+            throw new Error("Late-output fixture did not bind a TCP port.");
+          }
+          const lateOutputScript = `require('node:http').get(
+            'http://127.0.0.1:${gateAddress.port}/', response => {
+              response.resume();
+              response.once('end', () => process.stdout.write(process.argv[1] + '\\n'));
+            });`;
           await Promise.race([frames.ready, invocation]);
           // Codex deliberately omits jsonrpc:"2.0" from every wire envelope.
           await frames.send({
@@ -562,7 +647,7 @@ describe("Codex node exec-server", () => {
 
           const script = [
             "process.stdin.once('data', input => {",
-            "process.stdout.write(JSON.stringify({",
+            "const output = JSON.stringify({",
             "input: input.toString().trim(),",
             "ordinary: process.env.NODE_EXEC_ORDINARY ?? null,",
             "home: process.env.HOME ?? null,",
@@ -574,7 +659,10 @@ describe("Codex node exec-server", () => {
             "forge: process.env.GITHUB_TOKEN ?? null,",
             "ssh: process.env.SSH_AUTH_SOCK ?? null,",
             "injection: process.env.NODE_OPTIONS ?? null",
-            "}) + '\\n', () => process.exit(0))",
+            "})",
+            // Keep the inherited output pipes open until the test observes the parent's exit.
+            `require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(lateOutputScript)}, output],`,
+            "{ stdio: ['ignore', 'inherit', 'inherit'] }).once('spawn', () => process.exit(0))",
             "})",
           ].join("\n");
           await frames.send({
@@ -609,12 +697,19 @@ describe("Codex node exec-server", () => {
           });
           await readNodeResponse(frames, 9);
           const notifications = await readNodeProcessNotifications(frames, "node-proof", 3);
-          expect(notifications.map((message) => message.method)).toEqual([
-            "process/output",
-            "process/exited",
-            "process/closed",
-          ]);
-          const output = notifications[0]?.params as { chunk: string; seq: number };
+          // Codex drains output independently of exit; only closed is terminal in seq order.
+          expect(
+            notifications
+              .map((message) => message.method)
+              .toSorted((left, right) => String(left).localeCompare(String(right))),
+          ).toEqual(["process/closed", "process/exited", "process/output"]);
+          expect(
+            notifications.find((message) => message.method === "process/exited"),
+          ).toMatchObject({
+            params: { exitCode: 0, sandboxDenied: false },
+          });
+          const output = notifications.find((message) => message.method === "process/output")
+            ?.params as { chunk: string };
           const observed = JSON.parse(Buffer.from(output.chunk, "base64").toString("utf8")) as {
             input: string;
             ordinary: string;
@@ -880,6 +975,10 @@ describe("Codex node exec-server", () => {
             cause: closed,
           });
         } finally {
+          outputGate.closeAllConnections();
+          await new Promise<void>((resolve, reject) => {
+            outputGate.close((error) => (error ? reject(error) : resolve()));
+          });
           frames.controller.abort(new Error("paired-device attempt completed"));
           await expect(invocation).rejects.toBe(frames.io.signal.reason);
           await command.onDisconnect?.();

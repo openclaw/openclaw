@@ -326,6 +326,8 @@ enum SessionMenuPreviewLoader {
             return SessionMenuPreviewSnapshot(items: items, status: .empty)
         case "missing":
             return SessionMenuPreviewSnapshot(items: items, status: .error("Thread missing"))
+        case "cold":
+            return SessionMenuPreviewSnapshot(items: [], status: .error("History archived; open chat to restore"))
         default:
             return SessionMenuPreviewSnapshot(items: items, status: .error("Preview unavailable"))
         }

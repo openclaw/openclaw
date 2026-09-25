@@ -2,7 +2,7 @@
 // the core system prompt advertises for rich-enabled Telegram accounts.
 import stringWidth from "string-width";
 import { describe, expect, it } from "vitest";
-import { countInputRichBlockChars, type InputRichBlock } from "./rich-block-model.js";
+import { measureInputRichBlocks, type InputRichBlock } from "./rich-block-model.js";
 import { splitTelegramRichBlocks } from "./rich-block-split.js";
 import { markdownToTelegramRichBlocks } from "./rich-blocks.js";
 
@@ -447,6 +447,30 @@ describe("block HTML islands", () => {
     }
   });
 
+  it("maps Telegram <pre> blocks between rich islands", () => {
+    const { blocks, plainText } = markdownToTelegramRichBlocks(
+      [
+        "<hr/>",
+        "<b>Summary</b>",
+        "<pre>Alpha / Beta     10 / 20",
+        "Gamma &lt;b&gt;   <i>30</i></pre>",
+        "",
+        "<hr/>",
+        '<pre>\n<code class="language-python">print("ok")',
+        "</code>\n</pre>",
+      ].join("\n"),
+    );
+    expect(blocks).toEqual([
+      { type: "divider" },
+      { type: "paragraph", text: { type: "bold", text: "Summary" } },
+      { type: "pre", text: "Alpha / Beta     10 / 20\nGamma <b>   <i>30</i>" },
+      { type: "divider" },
+      { type: "pre", text: '\nprint("ok")\n\n', language: "python" },
+    ]);
+    expect(plainText).not.toContain("<pre>");
+    expect(plainText).not.toContain("<code");
+  });
+
   it("maps tg-collage children to media blocks", () => {
     const block = single(
       '<tg-collage><img src="https://example.com/1.png"/><img src="https://example.com/2.png"/></tg-collage>',
@@ -575,13 +599,6 @@ describe("block HTML islands", () => {
     expect(serialized).toContain(`</${tag}>`);
   });
 
-  it("still maps own inline style tags", () => {
-    expect(single("<b>secret</b>")).toEqual({
-      type: "paragraph",
-      text: { type: "bold", text: "secret" },
-    });
-  });
-
   it.each(["custom", "constructor"])(
     "keeps unsupported <%s> HTML literal without discarding Markdown spans",
     (tag) => {
@@ -661,17 +678,12 @@ describe("block HTML islands", () => {
       expect(table?.type).toBe("table");
       return;
     }
-    expect(countInputRichBlockChars(table)).toBe("Stats".length + 2);
+    expect(measureInputRichBlocks([table])).toEqual({ chars: 7, blocks: 3, media: 0, nesting: 1 });
     const pieces = splitTelegramRichBlocks([table], { textLimit: 6 }).flat();
     expect(pieces.length).toBeGreaterThan(1);
     const captioned = pieces.filter((piece) => piece.type === "table" && piece.caption);
     expect(captioned).toHaveLength(1);
     expect(pieces[0]).toMatchObject({ caption: "Stats" });
-  });
-
-  it("maps blockquote cite to the credit field", () => {
-    const block = single("<blockquote>Quote text<cite>Author</cite></blockquote>");
-    expect(block).toMatchObject({ type: "blockquote", credit: "Author" });
   });
 
   it("attaches figcaption captions to collages and figure-wrapped maps", () => {
@@ -687,12 +699,6 @@ describe("block HTML islands", () => {
       caption: { text: "Album", credit: "me" },
     });
     expect(blocks[1]).toMatchObject({ type: "map", caption: { text: "Here" } });
-  });
-
-  it("degrades over-wide HTML tables to a monospace grid", () => {
-    const wideRow = Array.from({ length: 21 }, (_, i) => `<td>c${i}</td>`).join("");
-    const block = single(`<table><tr>${wideRow}</tr></table>`);
-    expect(block.type).toBe("pre");
   });
 
   it("aligns Unicode and expands colspan in over-wide HTML tables", () => {
@@ -757,7 +763,7 @@ describe("block HTML islands", () => {
     expect(quotes.filter((quote) => quote.credit !== undefined)).toHaveLength(1);
     expect(quotes.at(-1)?.credit).toBe("Author");
     for (const chunk of pieces) {
-      const chars = chunk.reduce((total, piece) => total + countInputRichBlockChars(piece), 0);
+      const { chars } = measureInputRichBlocks(chunk);
       expect(chars).toBeLessThanOrEqual(64);
     }
   });

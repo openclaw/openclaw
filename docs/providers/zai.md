@@ -7,7 +7,8 @@ title: "Z.AI"
 ---
 
 Z.AI is the API platform for **GLM** models. It provides REST APIs for GLM and
-uses API keys for authentication. Create your API key in the Z.AI console.
+uses API keys for authentication. Create your API key in the
+[Z.AI console](https://z.ai/manage-apikey/apikey-list).
 OpenClaw uses the `zai` provider with a Z.AI API key.
 
 | Property | Value                                        |
@@ -163,7 +164,7 @@ listing can show known GLM rows without loading provider runtime:
 openclaw models list --all --provider zai
 ```
 
-The manifest-backed catalog currently includes:
+The manifest-backed catalog includes:
 
 | Model ref           | Notes                                              |
 | ------------------- | -------------------------------------------------- |

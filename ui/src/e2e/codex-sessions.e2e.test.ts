@@ -1,6 +1,5 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import type { SessionsCatalogHostEvent } from "../../../packages/gateway-protocol/src/index.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
@@ -12,14 +11,16 @@ import {
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 import { readTextTone } from "../test-helpers/rendered-colors.ts";
-import { createControlUiE2eSuite, tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eSuite,
+  expandCodingSection,
+} from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Codex native session catalog",
   startServerBeforeBrowser: true,
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
-
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const catalogGroupingStorageKey = "openclaw:sidebar:sessions:catalog-grouping";
 const collapsedSessionSectionsStorageKey = "openclaw:sidebar:sessions:collapsed-sections";
@@ -29,26 +30,6 @@ beforeEach(() => {
     uiProofArtifactDir = createControlUiE2eArtifactDir("native-session-discovery");
   }
 });
-
-async function expandCodingSection(page: Page, required = false) {
-  const toggle = page.locator('[data-session-section="work"] .sidebar-session-group-toggle');
-  if (required) {
-    await toggle.waitFor({ state: "visible" });
-  } else {
-    await page.waitForFunction(() =>
-      Boolean(
-        document.querySelector('[data-session-section="work"]') ??
-        document.querySelector('[data-session-section^="catalog:"]'),
-      ),
-    );
-    if ((await toggle.count()) === 0) {
-      return;
-    }
-  }
-  if ((await toggle.getAttribute("aria-expanded")) === "false") {
-    await toggle.click();
-  }
-}
 
 suite.define(() => {
   it("omits empty native session catalogs from the sidebar", async () => {
@@ -677,184 +658,6 @@ suite.define(() => {
         await section.screenshot({
           animations: "disabled",
           path: path.join(uiProofArtifactDir, "03-content-bearing-session-hosts.png"),
-        });
-      }
-    } finally {
-      await page.close();
-    }
-  });
-
-  it("explains node-list failures and exposes independent discovery settings", async () => {
-    const page = await suite.browser.newPage({ viewport: { height: 1100, width: 1440 } });
-    await installMockGateway(page, {
-      featureMethods: [
-        "chat.metadata",
-        "chat.startup",
-        "config.get",
-        "config.schema",
-        "sessions.catalog.list",
-      ],
-      methodResponses: {
-        "config.get": {
-          config: {
-            plugins: {
-              entries: {
-                anthropic: { config: { sessionCatalog: { enabled: false } } },
-                codex: { config: { sessionCatalog: { enabled: true } } },
-              },
-            },
-          },
-          hash: "native-session-discovery-e2e",
-        },
-        "config.schema": {
-          schema: {
-            type: "object",
-            properties: {
-              plugins: {
-                type: "object",
-                properties: {
-                  entries: {
-                    type: "object",
-                    properties: {
-                      anthropic: {
-                        type: "object",
-                        properties: {
-                          config: {
-                            type: "object",
-                            properties: {
-                              sessionCatalog: {
-                                type: "object",
-                                properties: { enabled: { type: "boolean", default: true } },
-                              },
-                            },
-                          },
-                        },
-                      },
-                      codex: {
-                        type: "object",
-                        properties: {
-                          config: {
-                            type: "object",
-                            properties: {
-                              sessionCatalog: {
-                                type: "object",
-                                properties: { enabled: { type: "boolean", default: true } },
-                              },
-                            },
-                          },
-                        },
-                      },
-                    },
-                  },
-                },
-              },
-            },
-          },
-          uiHints: {
-            "plugins.entries.anthropic.config.sessionCatalog.enabled": {
-              label: "Discover Claude Code Sessions",
-              help: "List native Claude Code sessions in the sidebar from this Gateway and eligible paired nodes.",
-            },
-            "plugins.entries.codex.config.sessionCatalog.enabled": {
-              label: "Discover Codex Sessions",
-              help: "List native Codex sessions in the sidebar from this Gateway and eligible paired nodes.",
-            },
-          },
-          version: "e2e",
-          generatedAt: "2026-07-14T00:00:00.000Z",
-        },
-        "sessions.catalog.list": {
-          catalogs: [
-            {
-              id: "codex",
-              label: "Codex",
-              capabilities: { continueSession: true, archive: true },
-              hosts: [
-                {
-                  hostId: "node:registry",
-                  label: "Paired nodes",
-                  kind: "node",
-                  connected: false,
-                  sessions: [],
-                  error: {
-                    code: "NODE_LIST_FAILED",
-                    message: "Paired nodes could not be listed: pairing database is locked",
-                  },
-                },
-              ],
-            },
-          ],
-        },
-      },
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await expandCodingSection(page);
-      const warning = page.locator(
-        '[data-session-section="catalog:codex"] .sidebar-session-group-toggle',
-      );
-      await warning.waitFor({ state: "visible" });
-      await expect.poll(() => tooltipTitleText(warning)).toContain("[NODE_LIST_FAILED]");
-      await expect.poll(() => tooltipTitleText(warning)).toContain("pairing database is locked");
-      await expect
-        .poll(() => tooltipTitleText(warning))
-        .toContain("Settings > Automation > Plugins");
-      expect(await page.locator('[data-session-catalog-host="node:registry"]').count()).toBe(0);
-
-      if (captureUiProofEnabled) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(uiProofArtifactDir, "01-actionable-sidebar-error.png"),
-        });
-      }
-
-      await page.goto(`${suite.server.baseUrl}settings/automation?section=plugins&advanced=1`);
-      const expandPluginSetting = async (pluginLabel: string) => {
-        const pluginGroup = page
-          .getByText(pluginLabel, { exact: true })
-          .locator("xpath=ancestor::details[1]");
-        await pluginGroup.locator(":scope > summary").click();
-        const configGroup = pluginGroup
-          .getByText("Config", { exact: true })
-          .locator("xpath=ancestor::details[1]");
-        await configGroup.locator(":scope > summary").click();
-        const catalogGroup = configGroup
-          .getByText("Session Catalog", { exact: true })
-          .locator("xpath=ancestor::details[1]");
-        await catalogGroup.locator(":scope > summary").click();
-      };
-      await expandPluginSetting("Anthropic");
-      await expandPluginSetting("Codex");
-      const codexSetting = page.locator(".settings-row", { hasText: "Discover Codex Sessions" });
-      const claudeSetting = page.locator(".settings-row", {
-        hasText: "Discover Claude Code Sessions",
-      });
-      await codexSetting.waitFor({ state: "visible" });
-      await claudeSetting.waitFor({ state: "visible" });
-      expect(await codexSetting.getByText("eligible paired nodes.", { exact: false }).count()).toBe(
-        1,
-      );
-      expect(
-        await claudeSetting.getByText("eligible paired nodes.", { exact: false }).count(),
-      ).toBe(1);
-      expect(
-        await codexSetting
-          .locator("wa-switch")
-          .evaluate((element) => (element as HTMLElement & { checked: boolean }).checked),
-      ).toBe(true);
-      expect(
-        await claudeSetting
-          .locator("wa-switch")
-          .evaluate((element) => (element as HTMLElement & { checked: boolean }).checked),
-      ).toBe(false);
-
-      if (captureUiProofEnabled) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(uiProofArtifactDir, "02-independent-settings-toggles.png"),
         });
       }
     } finally {

@@ -1,6 +1,7 @@
 import type { ProviderCatalogContext } from "openclaw/plugin-sdk/plugin-entry";
 import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterAll, afterEach, assert, describe, expect, it, vi } from "vitest";
+import { cancelTrackedTextResponse } from "../../test-support/streaming-error-response.js";
 import plugin from "../index.js";
 import { fetchLmstudioModels } from "./models.fetch.js";
 import { discoverLmstudioProvider } from "./setup.js";
@@ -130,32 +131,10 @@ describe("LM Studio catalog acquisition", () => {
 });
 
 describe("LM Studio model response release", () => {
-  const cancelTrackedResponse = (
-    text: string,
-    init: ResponseInit,
-  ): {
-    response: Response;
-    wasCanceled: () => boolean;
-  } => {
-    let canceled = false;
-    const stream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode(text));
-      },
-      cancel() {
-        canceled = true;
-      },
-    });
-    return {
-      response: new Response(stream, init),
-      wasCanceled: () => canceled,
-    };
-  };
-
   it.each([false, true])(
     "releases guarded non-ok discovery without waiting for capture (retained clone: %s)",
     async (retainCaptureClone) => {
-      const tracked = cancelTrackedResponse("unavailable", { status: 503 });
+      const tracked = cancelTrackedTextResponse("unavailable", { status: 503 });
       const captureClone = retainCaptureClone ? tracked.response.clone() : undefined;
       const release = vi.fn(async () => undefined);
       fetchWithSsrFGuardMock.mockResolvedValue({ response: tracked.response, release });

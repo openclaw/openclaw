@@ -152,20 +152,81 @@ describe("Markdown table interactions", () => {
     expect(shell.classList.contains("markdown-table--can-scroll-right")).toBe(false);
   });
 
-  it("copies TSV and updates the copy label", async () => {
-    vi.useFakeTimers();
-    const { owner } = interactiveOwner();
-    const copy = owner.querySelector<HTMLButtonElement>(".markdown-table__copy")!;
-    copy.click();
+  it("updates a retained table without measuring neighboring tables or its own controls", async () => {
+    restoreProperty(globalThis, "MutationObserver", mutationObserverDescriptor);
+    const { owner, shell, viewport } = interactiveOwner(`${markdown}\n\n${markdown}`);
+    const otherViewport = owner.querySelectorAll(".markdown-table__viewport")[1]!;
+    const otherWidth = vi.fn(() => 300);
+    const changedWidth = vi.fn(() => 100);
+    Object.defineProperty(otherViewport, "scrollWidth", {
+      configurable: true,
+      get: otherWidth,
+    });
+    Object.defineProperty(viewport, "scrollWidth", { configurable: true, get: changedWidth });
 
-    expect(writeText).toHaveBeenCalledWith("Name\tValue\nAlpha\tOne");
-    await vi.advanceTimersByTimeAsync(0);
-    expect(copy.getAttribute("aria-label")).toBe("Copied!");
-    expect(copy.querySelector("svg path")?.getAttribute("d")).toBe("M20 6 9 17l-5-5");
-    await vi.advanceTimersByTimeAsync(1500);
-    expect(copy.getAttribute("aria-label")).toBe("Copy table");
-    expect(copy.querySelector("svg rect")).not.toBeNull();
+    try {
+      shell.querySelector("td")!.firstChild!.textContent = "Shorter";
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(shell.classList.contains("markdown-table--can-scroll-right")).toBe(false);
+      expect(changedWidth).toHaveBeenCalled();
+      expect(otherWidth).not.toHaveBeenCalled();
+
+      changedWidth.mockClear();
+      shell.querySelector(".markdown-table__copy")!.replaceChildren(document.createElement("span"));
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(changedWidth).not.toHaveBeenCalled();
+      expect(otherWidth).not.toHaveBeenCalled();
+    } finally {
+      releaseMarkdownTables(owner);
+    }
   });
+
+  it.each([true, false])(
+    "shows a failed current table copy without stale success (previous success: %s)",
+    async (previousSuccess) => {
+      vi.useFakeTimers();
+      const execDescriptor = Object.getOwnPropertyDescriptor(document, "execCommand");
+      const legacyCopy = vi.fn(() => false);
+      Object.defineProperty(document, "execCommand", { configurable: true, value: legacyCopy });
+      try {
+        const { owner } = interactiveOwner();
+        const copy = owner.querySelector<HTMLButtonElement>(".markdown-table__copy")!;
+        if (previousSuccess) {
+          copy.click();
+          await vi.advanceTimersByTimeAsync(0);
+          expect(copy.getAttribute("aria-label")).toBe("Copied!");
+          expect(copy.querySelector("svg path")?.getAttribute("d")).toBe("M20 6 9 17l-5-5");
+        }
+
+        writeText.mockRejectedValueOnce(
+          new DOMException("Clipboard access denied", "NotAllowedError"),
+        );
+        copy.click();
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(writeText).toHaveBeenLastCalledWith("Name\tValue\nAlpha\tOne");
+        expect(legacyCopy).toHaveBeenCalledExactlyOnceWith("copy");
+        expect(copy.getAttribute("aria-label")).toBe("Copy failed");
+        expect(copy.querySelector("svg rect")).not.toBeNull();
+        await vi.advanceTimersByTimeAsync(1500);
+        expect(copy.getAttribute("aria-label")).toBe("Copy failed");
+
+        copy.click();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(copy.getAttribute("aria-label")).toBe("Copied!");
+        expect(copy.querySelector("svg path")?.getAttribute("d")).toBe("M20 6 9 17l-5-5");
+        await vi.advanceTimersByTimeAsync(500);
+        expect(copy.getAttribute("aria-label")).toBe("Copied!");
+        await vi.advanceTimersByTimeAsync(1000);
+        expect(copy.getAttribute("aria-label")).toBe("Copy table");
+        expect(copy.querySelector("svg rect")).not.toBeNull();
+      } finally {
+        restoreProperty(document, "execCommand", execDescriptor);
+      }
+    },
+  );
 
   it("restores focus after the table dialog closes", async () => {
     const { owner } = interactiveOwner();

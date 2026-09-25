@@ -1,4 +1,6 @@
 // Memory Core tests cover dreaming plugin behavior.
+import fs from "node:fs/promises";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -21,7 +23,8 @@ import {
 } from "openclaw/plugin-sdk/system-event-runtime";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { registerShortTermPromotionDreaming } from "./dreaming.js";
-import { createMemoryCoreTestHarness } from "./test-helpers.js";
+import { recordShortTermRecalls } from "./short-term-promotion.js";
+import { createMemoryCoreTestHarness, shortTermTestState } from "./test-helpers.js";
 
 // `runDreamingSweepPhases` is the only binding the dreaming trigger imports from this module.
 const runDreamingSweepPhasesMock = vi.hoisted(() =>
@@ -1313,6 +1316,260 @@ describe("dreaming service reconciliation", () => {
       reason: "memory-core: short-term dreaming degraded",
     });
     expectLogContains(logger.warn, "failed=0, degraded=1, narrativesPending=0");
+  });
+
+  it.each([
+    { label: "all rejected", rejected: 1, promoted: 0 },
+    { label: "mixed outcomes", rejected: 1, promoted: 1 },
+    { label: "many private candidates", rejected: 40, promoted: 0 },
+  ])(
+    "reports bounded rejection counts through the cron hook: $label",
+    async ({ rejected, promoted }) => {
+      const workspaceDir = await createTempWorkspace("openclaw-dreaming-rejections-");
+      const nowMs = Date.now();
+      const sourcePath = `memory/.dreams/session-corpus/${new Date(nowMs).toISOString().slice(0, 10)}.txt`;
+      const snippets = Array.from(
+        { length: rejected + promoted },
+        (_, index) => `Private project detail number ${index}: keep the release checklist current.`,
+      );
+      await fs.mkdir(path.dirname(path.join(workspaceDir, sourcePath)), { recursive: true });
+      await fs.writeFile(path.join(workspaceDir, sourcePath), snippets.join("\n"));
+      const originalMemory = "# Long-Term Memory\n\nKeep this existing preference.\n";
+      await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), originalMemory);
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "private synthetic query",
+        nowMs,
+        results: snippets.map((snippet, index) => ({
+          path: sourcePath,
+          source: "memory",
+          startLine: index + 1,
+          endLine: index + 1,
+          score: 0.95,
+          snippet,
+          provenance: {
+            originClass: "agent",
+            sessionKind: index >= rejected ? "interactive" : "cron",
+            observedAt: nowMs,
+          },
+        })),
+      });
+      const store = await shortTermTestState.readRecallStore(
+        workspaceDir,
+        new Date(nowMs).toISOString(),
+      );
+      expect(Object.keys(store.entries)).toHaveLength(rejected + promoted);
+      const { api, harness, logger } = createDreamingTestContext({
+        config: createDreamingConfig(
+          {
+            enabled: true,
+            timezone: "UTC",
+            phases: {
+              light: { enabled: false },
+              rem: { enabled: false },
+              deep: { limit: 50, minScore: 0, minRecallCount: 0, minUniqueQueries: 0 },
+            },
+          },
+          { agents: { defaults: { workspace: workspaceDir } } },
+        ),
+      });
+      registerShortTermPromotionDreamingForTest(api);
+      await triggerDreamingServiceStart(api, { config: api.config, getCron: () => harness.cron });
+      const payload = requireAgentTurnPayload(requireAddCall(harness, 0).payload);
+      await getBeforeAgentReplyHandler(api.on)(
+        { cleanedBody: payload.message },
+        { trigger: "cron", agentId: "main", workspaceDir },
+      );
+      expect(logger.error).not.toHaveBeenCalled();
+      const reportDir = path.join(workspaceDir, "memory", "dreaming", "deep");
+      const reports = await fs.readdir(reportDir);
+      expect(reports).toHaveLength(1);
+      const report = await fs.readFile(
+        path.join(reportDir, expectDefined(reports[0], "deep report filename")),
+        "utf-8",
+      );
+      expect(report).toContain(
+        `- Ranked ${rejected + promoted} candidate(s) for durable promotion.`,
+      );
+      expect(report).toContain(`- Promoted ${promoted} candidate(s) into MEMORY.md.`);
+      expect(report).toContain(
+        `- Not promoted: ${rejected} candidate(s) (consolidation origin/session: ${rejected}).`,
+      );
+      expect(report.split("\n").filter((line) => line.startsWith("- Not promoted:"))).toHaveLength(
+        1,
+      );
+      expect(report.length).toBeLessThan(400);
+      for (const privateValue of [...snippets, sourcePath, ...Object.keys(store.entries)]) {
+        expect(report).not.toContain(privateValue);
+      }
+      expect(report).not.toMatch(/score=|threshold|sessionKind|originClass/);
+      const memory = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+      if (promoted === 0) {
+        expect(memory).toBe(originalMemory);
+      } else {
+        expect(memory).toContain(expectDefined(snippets[rejected], "promoted snippet"));
+      }
+      for (const snippet of snippets.slice(0, rejected)) {
+        expect(memory).not.toContain(snippet);
+      }
+    },
+  );
+
+  it.each([
+    {
+      label: "no changes",
+      counts: [0, 0, 0],
+      rewrite: false,
+      stale: false,
+      changed: false,
+      expected: null,
+    },
+    {
+      label: "rewrite without removals",
+      counts: [0, 0, 0],
+      rewrite: true,
+      stale: false,
+      changed: true,
+      expected: "rewrote recall store",
+    },
+    {
+      label: "invalid only",
+      counts: [2, 0, 0],
+      rewrite: true,
+      stale: false,
+      changed: true,
+      expected: "rewrote recall store (-2 invalid)",
+    },
+    {
+      label: "dangling only",
+      counts: [0, 3, 0],
+      rewrite: true,
+      stale: false,
+      changed: true,
+      expected: "rewrote recall store (-3 dangling)",
+    },
+    {
+      label: "overflow only",
+      counts: [0, 0, 4],
+      rewrite: true,
+      stale: false,
+      changed: true,
+      expected: "rewrote recall store (-4 overflow)",
+    },
+    {
+      label: "nonadjacent counts",
+      counts: [2, 0, 4],
+      rewrite: true,
+      stale: false,
+      changed: true,
+      expected: "rewrote recall store (-2 invalid, -4 overflow)",
+    },
+    {
+      label: "all counts and lock",
+      counts: [2, 3, 4],
+      rewrite: true,
+      stale: true,
+      changed: true,
+      expected:
+        "rewrote recall store (-2 invalid, -3 dangling, -4 overflow), removed stale promotion lock",
+    },
+    {
+      label: "stale lock only",
+      counts: [0, 0, 0],
+      rewrite: false,
+      stale: true,
+      changed: true,
+      expected: "removed stale promotion lock",
+    },
+    {
+      label: "synthetic changed counts without rewrite",
+      counts: [2, 3, 4],
+      rewrite: false,
+      stale: false,
+      changed: true,
+      expected: "",
+    },
+  ] as const)(
+    "formats recall repair log and report: $label",
+    async ({ counts, rewrite, stale, changed, expected }) => {
+      const workspaceDir = await createTempWorkspace("openclaw-dreaming-repair-summary-");
+      const producer = await import("./short-term-promotion-artifacts.js");
+      const repairSpy = vi.spyOn(producer, "repairShortTermPromotionArtifacts").mockResolvedValue({
+        changed,
+        removedInvalidEntries: counts[0],
+        removedDanglingEntries: counts[1],
+        removedOverflowEntries: counts[2],
+        rewroteStore: rewrite,
+        removedStaleLock: stale,
+      });
+      try {
+        const { api, harness, logger } = createDreamingTestContext({
+          config: createDreamingConfig(
+            {
+              enabled: true,
+              limit: 5,
+              phases: { light: { enabled: false }, rem: { enabled: false } },
+            },
+            { agents: { defaults: { workspace: workspaceDir } } },
+          ),
+        });
+        registerShortTermPromotionDreamingForTest(api);
+        await triggerDreamingServiceStart(api, { config: api.config, getCron: () => harness.cron });
+        await getBeforeAgentReplyHandler(api.on)(
+          { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
+          { trigger: "cron", agentId: "main", workspaceDir },
+        );
+        expect(logger.error).not.toHaveBeenCalled();
+        const summaryLines = mockStringMessages(logger.info).filter((line) =>
+          line.startsWith("memory-core: normalized recall artifacts before dreaming"),
+        );
+        const reportDir = path.join(workspaceDir, "memory", "dreaming", "deep");
+        if (expected === null) {
+          expect(summaryLines).toEqual([]);
+          await expect(fs.access(reportDir)).rejects.toThrow();
+        } else {
+          expect(summaryLines).toEqual([
+            `memory-core: normalized recall artifacts before dreaming (${expected}) [workspace=${workspaceDir}].`,
+          ]);
+          const reports = await fs.readdir(reportDir);
+          expect(reports).toHaveLength(1);
+          const report = await fs.readFile(
+            path.join(reportDir, expectDefined(reports[0], "deep report filename")),
+            "utf-8",
+          );
+          expect(
+            report.split("\n").filter((line) => line.startsWith("- Repaired recall artifacts:")),
+          ).toEqual([`- Repaired recall artifacts: ${expected}.`]);
+        }
+      } finally {
+        repairSpy.mockRestore();
+      }
+    },
+  );
+
+  it("does not create memory/ or DREAMS.md on an empty workspace sweep", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-empty-sweep-");
+    const { api, harness } = createDreamingTestContext({
+      config: createDreamingConfig(
+        {
+          enabled: true,
+          limit: 5,
+          phases: { light: { enabled: false }, rem: { enabled: false } },
+        },
+        { agents: { defaults: { workspace: workspaceDir } } },
+      ),
+    });
+
+    registerShortTermPromotionDreamingForTest(api);
+    await triggerDreamingServiceStart(api, { config: api.config, getCron: () => harness.cron });
+
+    await getBeforeAgentReplyHandler(api.on)(
+      { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
+      { trigger: "cron", agentId: "main", workspaceDir },
+    );
+
+    await expect(fs.access(path.join(workspaceDir, "memory"))).rejects.toThrow();
+    await expect(fs.access(path.join(workspaceDir, "DREAMS.md"))).rejects.toThrow();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

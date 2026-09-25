@@ -1,8 +1,8 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { createInterface } from "node:readline";
-import { Type } from "typebox";
 import { releaseChildProcessOutputAfterExit } from "../../../process/child-process.js";
+import { waitForCommandSpawn } from "../../../process/exec-spawn.js";
 import { spawnCommand } from "../../../process/exec.js";
 /**
  * Built-in find session tool.
@@ -25,6 +25,7 @@ import {
 } from "./render-utils.js";
 import type { FindToolDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
+import { findSchema } from "./tool-schemas.js";
 import { DEFAULT_MAX_BYTES, formatSize, truncateHead } from "./truncate.js";
 
 function isInsideGitRepository(searchPath: string): boolean {
@@ -40,13 +41,6 @@ function isInsideGitRepository(searchPath: string): boolean {
   }
 }
 
-const findSchema = Type.Object({
-  pattern: Type.String({
-    description: "File glob, e.g. **/*.ts.",
-  }),
-  path: Type.Optional(Type.String({ description: "Search dir; default cwd." })),
-  limit: Type.Optional(Type.Integer({ description: "Max results; default 1000." })),
-});
 const DEFAULT_LIMIT = 1000;
 
 /**
@@ -293,17 +287,28 @@ export function createFindToolDefinition(
               reject: false,
               stdio: ["ignore", "pipe", "pipe"],
             });
-            releaseChildProcessOutputAfterExit(child.nodeChildProcess);
-            const rl = createInterface({ input: child.stdout });
-            let stderr = "";
-            let stderrDroppedBytes = 0;
-            const lines: string[] = [];
-
-            stopChild = () => {
+            const stop = () => {
               if (!child.nodeChildProcess.killed) {
                 child.kill();
               }
             };
+            stopChild = stop;
+            if (child.pid === undefined) {
+              await waitForCommandSpawn(child);
+            }
+            if (settled) {
+              stop();
+              return;
+            }
+            releaseChildProcessOutputAfterExit(child.nodeChildProcess);
+            if (!child.stdout) {
+              const result = await child;
+              throw result instanceof Error ? result : new Error("fd stdout is unavailable");
+            }
+            const rl = createInterface({ input: child.stdout });
+            let stderr = "";
+            let stderrDroppedBytes = 0;
+            const lines: string[] = [];
 
             const cleanup = () => {
               rl.close();

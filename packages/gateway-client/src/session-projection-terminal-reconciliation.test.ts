@@ -24,6 +24,116 @@ function createAssistantMessage(text: string, metadata?: Record<string, unknown>
 }
 
 describe("terminal snapshot reconciliation", () => {
+  it("adopts a durable answer when its live terminal also carries a status notice", () => {
+    const runId = "fallback-status-run";
+    const answer = "The workspace check is complete.";
+    const user = {
+      role: "user",
+      content: [{ type: "text", text: "Check the workspace." }],
+      __openclaw: { id: "fallback-user", seq: 1, idempotencyKey: `${runId}:user` },
+    };
+    const streamed = {
+      role: "assistant",
+      content: [{ type: "text", text: answer }],
+      openclawStreamFallback: {
+        itemId: "fallback-answer-item",
+        replacementText: answer,
+        runId,
+        source: "segment",
+      },
+    };
+    const terminal = {
+      role: "assistant",
+      content: [
+        { type: "text", text: "Model Fallback: backup/model", openclawStatusNotice: true },
+        { type: "text", text: answer },
+      ],
+    };
+    const durable = createAssistantMessage(answer, {
+      id: "fallback-answer",
+      seq: 2,
+      runId,
+      runTerminal: true,
+    });
+    let state = createSessionProjection(scope, [user, streamed]);
+    state = reduceSessionProjection(state, {
+      type: "runTerminal",
+      runId,
+      status: "completed",
+      message: terminal,
+    });
+    state = projectLiveSessionMessage(state, terminal, { runId });
+
+    expect(state.messages).toEqual([user, streamed, terminal]);
+    expect(
+      reduceSessionProjection(state, {
+        type: "messagePersisted",
+        message: durable,
+        envelope: { runId },
+      }).messages,
+    ).toEqual([user, streamed, durable]);
+  });
+
+  it.each([
+    ["live", "toolUse"],
+    ["snapshot", "toolUse"],
+    ["live", undefined],
+    ["snapshot", "stop"],
+  ])(
+    "keeps item identity after %s commentary and tool history (stopReason=%s)",
+    (arrival, stopReason) => {
+      const runId = "refreshed-run";
+      const metadata = { id: "commentary-and-tool", seq: 2, runId };
+      const commentary = ["first", "second"].map((itemId) => ({
+        role: "assistant",
+        content: [{ type: "text", text: "17" }],
+        __openclaw: metadata,
+        openclawStreamFallback: { source: "segment", itemId },
+      }));
+      const tool = {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "read-1", name: "read", arguments: { path: "note.txt" } },
+        ],
+        stopReason,
+        __openclaw: metadata,
+      };
+      const history = [...commentary, tool];
+      const final = createAssistantMessage("17", { id: "final", seq: 4, runId, runTerminal: true });
+      let state = createSessionProjection(scope);
+      // These are the same reducer events used by Control UI history and Gateway delivery.
+      if (arrival === "snapshot") {
+        state = reduceSessionProjection(state, { type: "snapshotLoaded", messages: history });
+      } else {
+        for (const message of history) {
+          state = reduceSessionProjection(state, { type: "messagePersisted", message });
+        }
+      }
+      state = reduceSessionProjection(state, { type: "messagePersisted", message: final });
+      const unkeyedFinal = createAssistantMessage("17");
+      state = reduceSessionProjection(state, {
+        type: "runTerminal",
+        runId,
+        status: "completed",
+        message: unkeyedFinal,
+      });
+      state = reduceSessionProjection(state, {
+        type: "messagePersisted",
+        message: unkeyedFinal,
+        runId,
+      });
+      expect(state.messages).toEqual([...history, final]);
+      state = reduceSessionProjection(state, {
+        type: "snapshotLoaded",
+        messages: structuredClone([...history, final]),
+      });
+      for (const message of [...history, final]) {
+        state = reduceSessionProjection(state, { type: "messagePersisted", message });
+      }
+      expect(state.messages).toEqual([...history, final]);
+    },
+  );
+
   it("promotes the actual terminal when history contains an earlier same-run tool boundary", () => {
     const runId = "tool-heavy-run";
     const toolBoundary = {

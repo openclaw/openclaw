@@ -248,6 +248,7 @@ export async function resolveOnboardCommandOptions(
   return {
     workspace: readStringValue(opts.workspace),
     agentName: readStringValue(opts.agentName),
+    team: opts.team === true ? true : undefined,
     nonInteractive: Boolean(opts.nonInteractive),
     acceptRisk: Boolean(opts.acceptRisk),
     classic: Boolean(opts.classic),
@@ -298,7 +299,8 @@ export function registerOnboardCommand(program: Command): void {
       "--workspace <dir>",
       "Workspace proposal for guided setup; persisted by classic/non-interactive setup",
     )
-    .option("--agent-name <name>", "Name for the first agent (default: main)")
+    .option("--agent-name <name>", "Name for the first agent (or team coordinator)")
+    .option("--team", "Create a coordinator with researcher, writer, and reviewer specialists")
     .option(
       "--reset",
       "Reset config + credentials + sessions before running onboard (workspace only with --reset-scope full)",
@@ -337,7 +339,7 @@ export function registerOnboardCommand(program: Command): void {
         const { onboardRecommendationsCommand } =
           await import("../../commands/onboard-recommendations.js");
         const agent = resolveRecommendationAgentOption(recommendationsCommand);
-        onboardRecommendationsCommand(
+        await onboardRecommendationsCommand(
           { json, ...(agent !== undefined ? { agent } : {}) },
           defaultRuntime,
         );
@@ -361,7 +363,7 @@ export function registerOnboardCommand(program: Command): void {
         const { acknowledgeOnboardRecommendationsCommand } =
           await import("../../commands/onboard-recommendations.js");
         const agent = resolveRecommendationAgentOption(acknowledgeCommand);
-        acknowledgeOnboardRecommendationsCommand(
+        await acknowledgeOnboardRecommendationsCommand(
           { retry: opts.retry, ...(agent !== undefined ? { agent } : {}) },
           defaultRuntime,
         );
@@ -384,7 +386,10 @@ export function registerOnboardCommand(program: Command): void {
         const { refreshOnboardRecommendationsCommand } =
           await import("../../commands/onboard-recommendations.js");
         const agent = resolveRecommendationAgentOption(refreshCommand);
-        refreshOnboardRecommendationsCommand(agent !== undefined ? { agent } : {}, defaultRuntime);
+        await refreshOnboardRecommendationsCommand(
+          agent !== undefined ? { agent } : {},
+          defaultRuntime,
+        );
       });
     });
 

@@ -1,5 +1,6 @@
 {
   "id": "kilocode",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },
@@ -8,6 +9,9 @@
   "modelPricing": {
     "providers": {
       "kilocode": {
+        "modelsDev": {
+          "passthroughProviderModel": true
+        },
         "openRouter": {
           "passthroughProviderModel": true
         },

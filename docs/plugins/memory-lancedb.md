@@ -65,12 +65,17 @@ with the current memory provider.
 }
 ```
 
-Restart the Gateway after installation, then verify it loaded:
+Installation applies to a running Gateway automatically, and configuration
+changes apply with the default hybrid reload mode. If the Gateway is offline,
+start it after configuration. Check the application result and inspect the
+plugin's runtime registration:
 
 ```bash
-openclaw gateway restart
-openclaw plugins list
+openclaw plugins inspect memory-lancedb --runtime --json
 ```
+
+See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect)
+and [Hot reload](/gateway/configuration/hot-reload).
 
 ## Embedding config
 
@@ -104,10 +109,10 @@ remain unchanged.
 
 <Warning>
 `embedding.provider`, `embedding.model`, and `embedding.dimensions` define the
-persisted LanceDB index identity and do not change live. Before restarting with
-a new identity, plan a LanceDB re-embedding or rebuild so every stored row uses
-the new vector space and dimensions. The plugin does not re-embed existing rows
-automatically.
+persisted LanceDB index identity. Before changing any of them, plan a LanceDB
+re-embedding or rebuild so every stored row uses the new vector space and
+dimensions. Automatic plugin reload creates a new instance with the changed
+identity; it does not re-embed existing rows.
 </Warning>
 
 OpenAI Codex / ChatGPT OAuth is not an OpenAI Platform embeddings credential.
@@ -247,6 +252,10 @@ mutating rows. An agent with `memory.search.enabled: false` in its `agents.entri
 entry, or one inheriting a disabled top-level search, also gets none of the `memory_recall`, `memory_store`,
 or `memory_forget` tools and does not participate in automatic recall or
 capture, even when the plugin-level `autoRecall`/`autoCapture` flags are on.
+
+Incognito sessions skip automatic recall and capture. Their prompts are not
+sent to the embedding provider for automatic recall, and `memory_store` refuses
+to save them. Explicit tool calls still follow their normal data-handling rules.
 
 ## Commands
 

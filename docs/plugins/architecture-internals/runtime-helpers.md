@@ -41,7 +41,7 @@ Notes:
 - `listVoices` is optional per provider. Use it for vendor-owned voice pickers or setup flows.
 - Core passes a resolved request deadline to provider `listVoices` hooks; provider-specific timeout settings may override it.
 - Voice listings can include richer metadata such as locale, gender, and personality tags for provider-aware pickers.
-- OpenAI and ElevenLabs support telephony today. Microsoft does not.
+- Telephony needs a provider that implements `synthesizeTelephony`; core skips providers without it and reports `unsupported_for_telephony`. Bundled providers that implement it: `azure-speech`, `elevenlabs`, `fish-audio-speech`, `google`, `gradium`, `inworld`, `openai`, `tts-local-cli`, and `xai`. `microsoft` does not.
 
 Plugins can also register speech providers via `api.registerSpeechProvider(...)`.
 
@@ -108,9 +108,10 @@ const video = await api.runtime.mediaUnderstanding.describeVideoFile({
   cfg: api.config,
 });
 
+// receiptImageBuffer is your own image bytes, not an SDK-provided value.
 const extraction = await api.runtime.mediaUnderstanding.extractStructuredWithModel({
   provider: "codex",
-  model: "gpt-5.6-sol",
+  model: "gpt-6-astra",
   input: [
     {
       type: "image",

@@ -42,6 +42,11 @@ describe("public session document", () => {
         content:
           '<tool_call>{"name":"read","arguments":{"text":"private inline tool payload"}}</tool_call>',
       },
+      {
+        role: "assistant",
+        content:
+          ']<]minimax[>[<tool_call>]<]minimax[>[<invoke name="read">private encoded tool payload</invoke>]<]minimax[>[</tool_call>',
+      },
       { role: "assistant", content: "NO_REPLY" },
       { role: "assistant", content: "HEARTBEAT_OK" },
       { role: "user", content: "[OpenClaw heartbeat poll]" },

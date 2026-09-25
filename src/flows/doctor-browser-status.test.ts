@@ -7,7 +7,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { maybeRepairOwnedChromeExtensionNativeHosts } from "../commands/doctor-browser.js";
 import { createDoctorPrompter } from "../commands/doctor-prompter.js";
 import { useAutoCleanupTempDirTracker } from "../plugin-sdk/test-env.js";
-import { loadBundledPluginPublicSurface } from "../plugin-sdk/test-helpers/public-surface-loader.js";
+import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { CORE_HEALTH_CHECKS } from "./doctor-core-checks.js";
 import { runBrowserHealth } from "./doctor-health-contribution-runners.gateway.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
@@ -21,9 +21,9 @@ vi.mock(import("../plugin-sdk/facade-loader.js"), async (importOriginal) => ({
 }));
 // Load the real public artifact through the shared test loader, keeping plugin
 // implementation types out of the core typecheck graph.
-const browserDoctor = await loadBundledPluginPublicSurface<
-  typeof import("../commands/doctor-browser.js")
->({ pluginId: "browser", artifactBasename: "browser-doctor.js" });
+const browserDoctor = await loadBundledPluginFacade<typeof import("../commands/doctor-browser.js")>(
+  { pluginId: "browser", artifactBasename: "browser-doctor.js" },
+);
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => {

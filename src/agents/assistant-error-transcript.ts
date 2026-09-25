@@ -24,21 +24,53 @@ type TranscriptTarget = NonNullable<ReturnType<SessionManager["getSessionTarget"
 
 /** Holds attempt failures until the logical run decides whether recovery succeeded. */
 export function createAssistantErrorTranscript(params: { runId: string; config?: OpenClawConfig }) {
+  const streamOutputs = new WeakMap<AgentMessage, (visible: boolean) => void>();
   let pending:
-    | { message: AssistantMessage; target: TranscriptTarget; assertActive: () => void }
+    | {
+        message: AssistantMessage;
+        source: AgentMessage;
+        target: TranscriptTarget;
+        assertActive: () => void;
+        replaceStream?: (visible: boolean) => void;
+      }
     | undefined;
+  const clear = () => {
+    const failure = pending;
+    pending = undefined;
+    failure?.replaceStream?.(false);
+  };
   return {
-    clear(): void {
-      pending = undefined;
+    clear,
+    bindStream(source: AgentMessage, replaceStream: (visible: boolean) => void): void {
+      if (pending?.source === source) {
+        pending.replaceStream = replaceStream;
+      } else {
+        streamOutputs.set(source, replaceStream);
+      }
     },
-    record(message: AssistantMessage, target: TranscriptTarget): AssistantMessage | undefined {
+    snapshot(): typeof pending {
+      return pending;
+    },
+    restore(snapshot: typeof pending): void {
+      clear();
+      pending = snapshot;
+      pending?.replaceStream?.(true);
+    },
+    record(
+      message: AssistantMessage,
+      target: TranscriptTarget,
+      source: AgentMessage = message,
+    ): AssistantMessage | undefined {
       // A recovered reply supersedes partial text (including stray "I"/"agree"
       // fragments). Facts must be appended now, before dependent tool results.
       pending = {
         message,
+        source,
         target: withOwnedSessionTranscriptWriterFence(target),
         assertActive: captureOwnedTranscriptWriteAssertion(target),
+        replaceStream: streamOutputs.get(source),
       };
+      streamOutputs.delete(source);
       const displayContent = readAssistantDisplayContent(message);
       if (
         !hasAssistantDisplayableNonTextContent(message) &&
@@ -89,9 +121,13 @@ export function createAssistantErrorTranscript(params: { runId: string; config?:
       };
     },
     async settle(failed: boolean): Promise<void> {
+      if (!failed) {
+        clear();
+        return;
+      }
       const failure = pending;
       pending = undefined;
-      if (!failed || !failure) {
+      if (!failure) {
         return;
       }
       const { message, target, assertActive } = failure;

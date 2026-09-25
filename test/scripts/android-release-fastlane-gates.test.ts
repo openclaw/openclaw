@@ -46,15 +46,15 @@ describe("Android Fastlane release upload gates", () => {
 
     expect(readFileSync(rubyVersionPath, "utf8")).toBe("3.4.10\n");
     expect(gemfile).toContain('ruby "3.4.10"');
-    expect(gemfile).toContain('gem "fastlane", "2.238.0"');
-    expect(lockfile).toContain("fastlane (2.238.0)");
+    expect(gemfile).toContain('gem "fastlane", "2.240.1"');
+    expect(lockfile).toContain("fastlane (2.240.1)");
     expect(lockfile).toContain("arm64-darwin");
     expect(lockfile).toContain("x86_64-darwin");
     expect(lockfile).toContain("aarch64-linux");
     expect(lockfile).toContain("x86_64-linux");
     expect(lockfile).toContain("CHECKSUMS");
-    expect(lockfile).toContain("RUBY VERSION\n   ruby 3.4.10");
-    expect(lockfile).toContain("BUNDLED WITH\n   2.6.9");
+    expect(lockfile).toContain("RUBY VERSION\n  ruby 3.4.10");
+    expect(lockfile).toContain("BUNDLED WITH\n  4.0.21");
   });
 
   it("publishes Wear releases to the matching form-factor track", () => {

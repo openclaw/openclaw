@@ -4,6 +4,7 @@ import {
   resolveClaudeMythos5ModelIdentity,
   resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
+  resolveClaudeThinkingProfile,
 } from "openclaw/plugin-sdk/claude-model-runtime";
 /**
  * Thinking-level policy for Claude models on Amazon Bedrock. It maps Bedrock
@@ -122,14 +123,15 @@ export function resolveBedrockClaudeThinkingProfile(
   const trimmed = modelId.trim();
   const canonicalModelId = resolveClaudeModelIdentity({ id: trimmed, params });
   const modelRefs = [trimmed, canonicalModelId];
+  const fableModelId = resolveClaudeFable5ModelIdentity({ id: trimmed, params });
   if (
-    resolveClaudeFable5ModelIdentity({ id: trimmed, params }) ||
+    fableModelId ||
     resolveClaudeMythos5ModelIdentity({ id: trimmed, params }) ||
     resolveClaudeSonnet5ModelIdentity({ id: trimmed, params })
   ) {
     return {
       levels: [...BASE_CLAUDE_THINKING_LEVELS, { id: "xhigh" }, { id: "adaptive" }, { id: "max" }],
-      defaultLevel: "high",
+      defaultLevel: fableModelId ? resolveClaudeThinkingProfile(fableModelId).defaultLevel : "high",
       preserveWhenCatalogReasoningFalse: true,
     };
   }

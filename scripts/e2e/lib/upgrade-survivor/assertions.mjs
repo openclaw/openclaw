@@ -5,13 +5,18 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { validatePrepublishPluginRegistryArtifact } from "../../../prepublish-plugin-registry-artifact.mjs";
+import { UPGRADE_SURVIVOR_ASSERTION_SCENARIOS } from "../../../lib/upgrade-survivor-policy.mjs";
+import {
+  inspectNpmPackageTarball,
+  validatePrepublishPluginRegistryArtifact,
+} from "../../../prepublish-plugin-registry-artifact.mjs";
 import { readPluginInstallIndex } from "../plugin-index-sqlite.mjs";
-import { readPostCoreSnapshot } from "./diagnostics.mjs";
+import { recordSuccessfulUpdateCheck } from "./diagnostics.mjs";
 import {
   assertExecApprovalPolicySurvived,
   seedLegacyExecApprovalPolicy,
 } from "./exec-approval-fixture.mjs";
+import * as sessionSourceFixture from "./session-source-fixture.mjs";
 import { assertUpgradeVolumeMigrated, seedUpgradeVolume } from "./sqlite-volume.mjs";
 
 const command = process.argv[2];
@@ -21,30 +26,7 @@ const legacyOperator =
   command?.includes("legacy-operator")
     ? await import("./legacy-operator-state.mjs")
     : undefined;
-const SCENARIOS = new Set([
-  "base",
-  "abandoned-update",
-  "legacy-operator-state",
-  "mobile-pairing-reconnect",
-  "acpx-openclaw-tools-bridge",
-  "feishu-channel",
-  "bootstrap-persona",
-  "channel-post-core-restore",
-  "codex-allowlist-survival",
-  "plugin-deps-cleanup",
-  "configured-plugin-installs",
-  "stale-source-plugin-shadow",
-  "prerelease-plugin-registry",
-  "tilde-log-path",
-  "meeting-transcripts-sqlite",
-  "versioned-runtime-deps",
-  "cron-scheduled-authority",
-  "sqlite-volume",
-  "recovery-cleanup",
-  "auth-profile-v2026-7-2-beta-5",
-  "watchos-direct-node",
-]);
-
+const SCENARIOS = new Set(UPGRADE_SURVIVOR_ASSERTION_SCENARIOS);
 const PERSONA_FILES = new Map([
   ["BOOTSTRAP.md", "# Existing Bootstrap\n\nDo not overwrite me during update.\n"],
   ["SOUL.md", "# Existing Soul\n\nKeep this voice intact.\n"],
@@ -55,6 +37,23 @@ const PERSONA_FILES = new Map([
 const LEGACY_SESSION_MAIN_ID = "upgrade-main-session";
 const LEGACY_SESSION_DIRECT_ID = "upgrade-direct-session";
 const LEGACY_SESSION_GROUP_ID = "upgrade-group-session";
+const LEGACY_ACP_META = {
+  backend: "acpx",
+  agent: "codex",
+  runtimeSessionName: "upgrade-acp-session",
+  identity: {
+    state: "resolved",
+    acpxRecordId: "upgrade-acpx-record",
+    acpxSessionId: "upgrade-acpx-session",
+    agentSessionId: "upgrade-agent-session",
+    source: "ensure",
+    lastUpdatedAt: 1710000000000,
+  },
+  mode: "persistent",
+  runtimeOptions: { model: "gpt-5.5", runtimeMode: "plan", thinking: "low" },
+  state: "idle",
+  lastActivityAt: 1710000000000,
+};
 const PLUGIN_DECLARED_SURFACE_GROUPS = [
   "channels",
   "providers",
@@ -80,46 +79,11 @@ function readJson(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
-function readUpdateJson(file, observationRoot) {
+function readUpdateJson(file) {
   const raw = fs.readFileSync(file, "utf8");
-  // April baselines print a pretty-printed core result before their fresh child
-  // inherits stdout and prints finalization. Never discard a failed/truncated child.
   const jsonStart = raw.indexOf("{");
   assert(jsonStart !== -1, "update reported no JSON result");
-  const reports = raw
-    .slice(jsonStart)
-    .trim()
-    .split(/\n(?=\{)/u)
-    .map((text) => JSON.parse(text));
-  assert(reports.length <= 2, "update reported unexpected extra results");
-  const [core, continuation] = reports;
-  let result = core;
-  if (continuation) {
-    assert(core.status === "ok", "historical core update did not succeed");
-    assert(continuation.mode === "unknown", "unexpected historical continuation mode");
-    assert(
-      Array.isArray(continuation.steps) && continuation.steps.length === 0,
-      "unexpected historical continuation steps",
-    );
-    assert(continuation.after === undefined, "historical continuation replaced the core result");
-    result = {
-      ...core,
-      status: continuation.status,
-      reason: continuation.reason,
-      postUpdate: continuation.postUpdate,
-    };
-  }
-  if (result.postUpdate !== undefined || !observationRoot) {
-    return result;
-  }
-  // April 23 omits the child result from stdout. Consume only this invocation's
-  // complete exit snapshot; explicit CLI results and nonzero child exits win.
-  const snapshot = readPostCoreSnapshot(observationRoot);
-  if (snapshot === null) {
-    return result;
-  }
-  assert(snapshot.childExitCode === 0, "historical post-core child did not exit successfully");
-  return { ...result, postUpdate: { plugins: snapshot.result } };
+  return JSON.parse(raw.slice(jsonStart));
 }
 
 function isCapabilityConsentReason(value) {
@@ -211,6 +175,7 @@ function seedLegacySessionMetadata(stateDir, perAgent) {
       updatedAt: baseUpdatedAt + 200,
       lastChannel: "slack",
       lastTo: "CUPGRADE",
+      ...(getScenario() === "acpx-openclaw-tools-bridge" ? { acp: LEGACY_ACP_META } : {}),
     },
   });
   for (const sessionId of [
@@ -352,11 +317,7 @@ function acceptsIntent(coverage, id) {
   if (!coverage) {
     return true;
   }
-  return (
-    Array.isArray(coverage.acceptedIntents) &&
-    coverage.acceptedIntents.includes(id) &&
-    !coverage.skippedIntents?.includes(id)
-  );
+  return Array.isArray(coverage.acceptedIntents) && coverage.acceptedIntents.includes(id);
 }
 
 function hasCoverage(coverage) {
@@ -397,6 +358,7 @@ function seedState() {
   });
   // Volume imports start in per-agent JSON; other scenarios cover the older shared-store move.
   seedLegacySessionMetadata(stateDir, scenario === "sqlite-volume");
+  sessionSourceFixture.recordLegacySessionSources(stateDir);
   seedLegacyExecApprovalPolicy(stateDir);
   if (scenario === "meeting-transcripts-sqlite") {
     seedLegacyMeetingTranscripts(stateDir);
@@ -441,7 +403,7 @@ function seedState() {
     );
   }
   if (scenario === "versioned-runtime-deps") {
-    const version = process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION || "2026.4.24";
+    const version = requireEnv("OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION");
     for (const plugin of ["discord", "feishu", "telegram", "whatsapp"]) {
       writeJson(
         path.join(
@@ -513,6 +475,30 @@ function assertConfigSurvived() {
   if (acceptsIntent(coverage, "models")) {
     assert(config.models?.providers?.openai, "OpenAI model provider missing");
   }
+  for (const [providerId, api, baseUrl, keyEnv] of [
+    ["anthropic", "anthropic-messages", "https://api.anthropic.com", "ANTHROPIC_API_KEY"],
+    [
+      "google",
+      "google-generative-ai",
+      "https://generativelanguage.googleapis.com/v1beta",
+      "GEMINI_API_KEY",
+    ],
+  ]) {
+    // Frozen recipes without coverage receipts predate these provider specimens.
+    if (!hasCoverage(coverage) || !acceptsIntent(coverage, `models-${providerId}`)) {
+      continue;
+    }
+    const provider = config.models?.providers?.[providerId];
+    assert(provider, `${providerId} model provider missing`);
+    assert(provider.api === api, `${providerId} model provider API changed`);
+    assert(provider.baseUrl === baseUrl, `${providerId} model provider URL changed`);
+    assert(
+      provider.apiKey?.source === "env" &&
+        provider.apiKey.provider === "default" &&
+        provider.apiKey.id === keyEnv,
+      `${providerId} model provider env credential reference changed`,
+    );
+  }
 
   if (acceptsIntent(coverage, "agents")) {
     const legacyAgents = config.agents?.list ?? [];
@@ -522,9 +508,7 @@ function assertConfigSurvived() {
       config.agents?.entries?.ops ?? legacyAgents.find((agent) => agent?.id === "ops");
     assert(mainAgent, "main agent missing");
     assert(opsAgent, "ops agent missing");
-    if (!hasCoverage(coverage) || !coverage.skippedIntents?.includes("agent-modern-preferences")) {
-      assert(opsAgent.fastModeDefault === true, "ops fastModeDefault changed");
-    }
+    assert(opsAgent.fastModeDefault === true, "ops fastModeDefault changed");
   }
 
   if (acceptsIntent(coverage, "skills")) {
@@ -721,7 +705,7 @@ function assertStateSurvived() {
     );
   }
   if (scenario === "versioned-runtime-deps") {
-    const version = process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION || "2026.4.24";
+    const version = requireEnv("OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION");
     for (const plugin of ["discord", "feishu", "telegram", "whatsapp"]) {
       const sentinel = path.join(
         legacyRuntimeRoot,
@@ -1060,18 +1044,21 @@ function assertSessionMetadataMigrated(stateDir, stage) {
   const legacyStorePath = path.join(stateDir, "sessions", "sessions.json");
   const agentSessionsDir = path.join(stateDir, "agents", "main", "sessions");
   const targetStorePath = path.join(agentSessionsDir, "sessions.json");
-  assert(
-    !fs.existsSync(legacyStorePath),
-    `legacy sessions.json survived migration: ${legacyStorePath}`,
-  );
-
   const { source, store } = readMigratedSessionStore(stateDir, targetStorePath);
+  sessionSourceFixture.assertLegacySessionSourceDisposition(legacyStorePath, source);
   const main = store["agent:main:main"];
   const direct = store["agent:main:+15551234567"];
   const group = store["agent:main:slack:channel:cupgrade"];
   assert(main?.sessionId === LEGACY_SESSION_MAIN_ID, "main legacy session row missing");
   assert(direct?.sessionId === LEGACY_SESSION_DIRECT_ID, "direct legacy session row missing");
   assert(group?.sessionId === LEGACY_SESSION_GROUP_ID, "channel legacy session row missing");
+  if (getScenario() === "acpx-openclaw-tools-bridge") {
+    assertStrict.deepEqual(
+      group.acp,
+      LEGACY_ACP_META,
+      "saved ACP session or model selection changed",
+    );
+  }
   const migratedSessions = [
     [LEGACY_SESSION_MAIN_ID, main],
     [LEGACY_SESSION_DIRECT_ID, direct],
@@ -1208,14 +1195,15 @@ function readInstalledPluginIndex() {
   return index;
 }
 
-function assertBaselinePlugin([expectedVersion]) {
-  const record = readInstalledPluginIndex().installRecords.discord;
-  assert(record?.source === "npm", "baseline Discord plugin was not installed from npm");
-  assert(record.spec === "@openclaw/discord@latest", "baseline plugin selector became pinned");
+function assertBaselinePlugin([expectedVersion, pluginId, tag]) {
+  assert(["latest", "beta", "alpha"].includes(tag), "baseline plugin selector is not moving");
+  const record = readInstalledPluginIndex().installRecords[pluginId];
+  assert(record?.source === "npm", "baseline plugin was not installed from npm");
+  assert(record.spec === `@openclaw/${pluginId}@${tag}`, "baseline plugin selector changed");
   const installed = readJson(path.join(resolveHomePath(record.installPath), "package.json"));
-  assert(installed.name === "@openclaw/discord", "baseline plugin package identity changed");
+  assert(installed.name === `@openclaw/${pluginId}`, "baseline plugin package identity changed");
   assert(installed.version === expectedVersion, "baseline plugin is not the baseline version");
-  console.log(`Baseline npm plugin: @openclaw/discord@${expectedVersion}, selector=latest.`);
+  console.log(`Baseline npm plugin: @openclaw/${pluginId}@${expectedVersion}, selector=${tag}.`);
 }
 
 function assertExternalPluginInstall(records, pluginId, packageName) {
@@ -1326,6 +1314,7 @@ function assertNpmPluginInstall([
   pendingUpdateFile,
   observationRoot,
   baselineVersion,
+  publishedCompanionTarball,
 ]) {
   assert(
     pluginId && packageName && expectedVersion,
@@ -1368,7 +1357,16 @@ function assertNpmPluginInstall([
     requiredPackages: [packageName],
   });
   const artifact = manifest.packages.find((entry) => entry.name === packageName);
-  const archive = fs.readFileSync(path.join(artifactDir, artifact.tarball));
+  let expectedTarball = path.join(artifactDir, artifact.tarball);
+  if (publishedCompanionTarball) {
+    const published = inspectNpmPackageTarball(publishedCompanionTarball).packageJson;
+    assert(
+      published.name === packageName && published.version === expectedVersion,
+      "published companion identity must match the unchanged candidate version",
+    );
+    expectedTarball = publishedCompanionTarball;
+  }
+  const archive = fs.readFileSync(expectedTarball);
   const integrity = `sha512-${createHash("sha512").update(archive).digest("base64")}`;
   assert(record.integrity === integrity, `${pluginId} plugin registry artifact integrity changed`);
 }
@@ -1520,8 +1518,8 @@ function assertStatusJson([file]) {
   assert(/running|connected|ok|ready/u.test(text), "gateway status did not report a healthy state");
 }
 
-function assertRecoverableUpdateJson([file, expectedVersion, observationRoot, baselineVersion]) {
-  const result = readUpdateJson(file, observationRoot);
+function assertRecoverableUpdateJson([file, expectedVersion, , baselineVersion]) {
+  const result = readUpdateJson(file);
   assertStrict.ok(baselineVersion, "Expected baseline version is required.");
   assertStrict.ok(result.status === "error" || result.status === "ok");
   assertStrict.equal(result.mode, "npm");
@@ -1530,10 +1528,7 @@ function assertRecoverableUpdateJson([file, expectedVersion, observationRoot, ba
   assertStrict.equal(result.after?.version, expectedVersion);
   assertStrict.ok(result.steps?.length > 0);
   assertStrict.ok(result.steps.every((step) => step.exitCode === 0));
-  // April warning-only updaters predate the separately reported install swap.
-  for (const name of result.status === "ok"
-    ? ["global update"]
-    : ["global update", "global install swap"]) {
+  for (const name of ["global update", "global install swap"]) {
     assertStrict.ok(result.steps.some((step) => step.name === name));
   }
   const plugins = result.postUpdate?.plugins;
@@ -1596,15 +1591,103 @@ function assertRecoverableUpdateJson([file, expectedVersion, observationRoot, ba
   return denied;
 }
 
+function assertExpectedMissingCodexOutcomes(result, expectedVersion) {
+  const plugins = result.postUpdate?.plugins;
+  assert(result.before?.version === "2026.9.2", "missing Codex fixture used the wrong baseline");
+  assert(result.run?.status === "succeeded", "missing Codex update run did not finish");
+  assert(plugins?.status === "warning", "missing Codex update omitted its final plugin warning");
+  const failures = plugins.npm?.outcomes?.filter((outcome) => outcome?.status === "error") ?? [];
+  assert(
+    failures.length === 1 || failures.length === 2,
+    "missing Codex update must retain only its named failed source history",
+  );
+  const failure = failures.at(-1);
+  const missingNpmPackage =
+    `Failed to install missing configured plugin "codex" from @openclaw/codex: ` +
+    `Package not found on npm: @openclaw/codex@${expectedVersion}.`;
+  const missingClawHubPackage =
+    'Failed to install missing configured plugin "codex" from clawhub:@openclaw/codex: Package not found on ClawHub.';
+  assert(
+    failure.pluginId === "codex" &&
+      failure.code === undefined &&
+      typeof failure.message === "string" &&
+      (failure.message.startsWith(missingNpmPackage) || failure.message === missingClawHubPackage),
+    "missing Codex update retained an unexpected plugin failure",
+  );
+  if (failures.length === 2) {
+    // The updater retains the failed source transition before the final attempt.
+    const transition = failures[0];
+    assert(
+      failure.message === missingClawHubPackage &&
+        transition.pluginId === "codex" &&
+        transition.code === undefined &&
+        transition.message ===
+          "@openclaw/codex unavailable; using clawhub:@openclaw/codex instead.",
+      "missing Codex update retained an unexpected source transition",
+    );
+  }
+  const repairCommand = "openclaw plugins update codex";
+  for (const outcome of failures) {
+    assert(
+      plugins.warnings?.some(
+        (warning) =>
+          warning.pluginId === "codex" &&
+          warning.reason === outcome.message &&
+          warning.guidance?.includes(repairCommand) &&
+          warning.message?.includes(`Run \`${repairCommand}\``),
+      ),
+      "missing Codex update omitted matching actionable recovery guidance",
+    );
+  }
+  return failures;
+}
+
 function assertSuccessfulUpdateJson([file, expectedVersion, observationRoot]) {
-  assert(file && expectedVersion, "assert-successful-update-json requires a path and version");
-  const result = readUpdateJson(file, observationRoot);
+  let result;
+  let outcome = "failed";
+  let message;
+  try {
+    assert(file && expectedVersion, "assert-successful-update-json requires a path and version");
+    result = readUpdateJson(file);
+    assertSuccessfulUpdateResult(result, expectedVersion);
+    outcome = "passed";
+  } catch (error) {
+    message = error instanceof Error ? error.message : String(error);
+    throw error;
+  } finally {
+    recordSuccessfulUpdateCheck(observationRoot, {
+      outcome,
+      message,
+      plugins: result?.postUpdate?.plugins ?? null,
+    });
+  }
+}
+
+function assertSuccessfulUpdateResult(result, expectedVersion) {
   const plugins = result?.postUpdate?.plugins;
   assert(result?.status === "ok", `update did not report ok: ${String(result?.status)}`);
+  if (
+    ["projects-doctor", "projects-startup-migration", "taskflow-restoration"].includes(
+      getScenario(),
+    )
+  ) {
+    assertStrict.equal(
+      result.before?.version,
+      "2026.9.4",
+      "Worker cell used the wrong published driver",
+    );
+  }
+  const expectedMissingPluginFailures =
+    getScenario() === "missing-configured-plugin-migration"
+      ? assertExpectedMissingCodexOutcomes(result, expectedVersion)
+      : [];
   assert(
     plugins?.status !== "error" &&
       !plugins?.sync?.errors?.length &&
-      !plugins?.npm?.outcomes?.some((outcome) => outcome?.status === "error") &&
+      !plugins?.npm?.outcomes?.some(
+        (outcome) =>
+          outcome?.status === "error" && !expectedMissingPluginFailures.includes(outcome),
+      ) &&
       !plugins?.integrityDrifts?.length,
     "successful update failed plugin convergence",
   );
@@ -1617,7 +1700,14 @@ function assertSuccessfulUpdateJson([file, expectedVersion, observationRoot]) {
     `successful update version changed: ${String(result?.after?.version)}`,
   );
   assert(
-    Array.isArray(result?.steps) && result.steps.every((step) => step?.exitCode === 0),
+    Array.isArray(result?.steps) &&
+      result.steps.every(
+        (step) =>
+          step?.exitCode === 0 ||
+          (step?.name === "openclaw doctor" &&
+            step.exitCode === 86 &&
+            step.advisory?.kind === "package-post-install-doctor"),
+      ),
     "successful update contained a failed core step",
   );
 }
@@ -1630,161 +1720,6 @@ function assertRepairJson([file]) {
   assert(result?.restart === false, "update repair unexpectedly restarted the Gateway");
   assert(result?.postUpdate?.doctor?.status === "ok", "update repair doctor did not pass");
   assert(result?.postUpdate?.plugins?.status === "ok", "update repair plugins did not pass");
-}
-
-function parseStableVersion(version) {
-  const match = /^(\d+)\.(\d+)\.(\d+)(?:-(\d+))?$/u.exec(version ?? "");
-  assert(match, `invalid stable package version: ${String(version)}`);
-  return match.slice(1).map((part) => Number(part ?? 0));
-}
-
-function compareStableVersions(left, right) {
-  const leftParts = parseStableVersion(left);
-  const rightParts = parseStableVersion(right);
-  for (let index = 0; index < Math.max(leftParts.length, rightParts.length); index += 1) {
-    const difference = (leftParts[index] ?? 0) - (rightParts[index] ?? 0);
-    if (difference !== 0) {
-      return difference;
-    }
-  }
-  return 0;
-}
-
-function normalizeSystemctlInvocation(line) {
-  const parts = String(line ?? "")
-    .trim()
-    .split(/\s+/u)
-    .filter(Boolean);
-  const normalized = [];
-  for (let index = 0; index < parts.length; index += 1) {
-    const part = parts[index];
-    if (["--user", "--quiet", "--no-page", "--no-pager", "--now"].includes(part)) {
-      continue;
-    }
-    if (part === "--property") {
-      index += 1;
-      continue;
-    }
-    normalized.push(part);
-  }
-  return normalized.join(" ");
-}
-
-function assertUpdateRunSelfUpgrade([file]) {
-  assert(file, "assert-update-run-self-upgrade requires a summary path");
-  const summary = readJson(file);
-  const sourceVersion = summary?.source?.version;
-  const targetVersion = summary?.target?.resolvedVersion;
-  const updateRpc = summary?.updateRpcResult;
-  const sentinel = summary?.restartSentinel;
-  const qaChannelInstallRecord = summary?.qaChannelInstallRecord;
-  const targetQaChannelInstallRecord = summary?.targetPluginIndex?.installRecords?.["qa-channel"];
-  const gatewayStatus = summary?.gateway?.status;
-  const qaAccounts = summary?.qaChannel?.status?.channelAccounts?.["qa-channel"];
-  const targetServiceStarts = (summary?.supervisorHandoff?.systemctlInvocations ?? [])
-    .map(normalizeSystemctlInvocation)
-    .filter((invocation) => invocation === "start openclaw-gateway.service");
-
-  assert(summary?.status === "passed", "update.run self-upgrade summary did not pass");
-  assert(sourceVersion === "2026.4.26", `unexpected source version: ${String(sourceVersion)}`);
-  assert(summary?.source?.spec === "openclaw@2026.4.26", "source package spec was not exact");
-  assert(summary?.target?.tag === "latest", "target tag was not latest");
-  assert(
-    compareStableVersions(targetVersion, sourceVersion) > 0,
-    `target version did not advance beyond source: ${String(sourceVersion)} -> ${String(targetVersion)}`,
-  );
-  assert(
-    summary?.installedVersion === targetVersion,
-    `installed version mismatch: expected ${String(targetVersion)}, got ${String(summary?.installedVersion)}`,
-  );
-  assert(qaChannelInstallRecord?.source === "path", "QA channel was not path-installed");
-  assert(
-    typeof qaChannelInstallRecord?.sourcePath === "string" &&
-      qaChannelInstallRecord.sourcePath.includes("/extensions/qa-channel"),
-    "QA channel install record omitted its source path",
-  );
-  assert(
-    typeof qaChannelInstallRecord?.installPath === "string" &&
-      qaChannelInstallRecord.installPath.includes("/dist/extensions/qa-channel"),
-    "QA channel install record omitted its compiled local install path",
-  );
-  assert(
-    qaChannelInstallRecord?.version === "2026.4.25",
-    "QA channel install record version mismatch",
-  );
-  assert(
-    summary?.sourcePluginInspect?.plugin?.status === "loaded",
-    "source package did not load the compiled QA channel plugin",
-  );
-  assert(
-    targetQaChannelInstallRecord?.source === "path" &&
-      targetQaChannelInstallRecord?.installPath === qaChannelInstallRecord?.installPath,
-    "target SQLite index did not preserve the QA channel path install record",
-  );
-
-  assert(updateRpc?.ok === true, `update.run RPC did not report ok: ${JSON.stringify(updateRpc)}`);
-  assert(updateRpc?.result?.status === "ok", "update.run did not execute the package update");
-  assert(
-    updateRpc?.result?.before?.version === sourceVersion,
-    "update.run source version mismatch",
-  );
-  assert(updateRpc?.result?.after?.version === targetVersion, "update.run target version mismatch");
-  assert(
-    Array.isArray(updateRpc?.result?.steps) && updateRpc.result.steps.length > 0,
-    "update.run reported no executed update steps",
-  );
-  assert(updateRpc?.restart, "update.run did not schedule a Gateway restart");
-  assert(
-    updateRpc?.sentinel?.payload?.message === summary.expectedRestartNote,
-    "update.run response sentinel note mismatch",
-  );
-
-  assert(sentinel?.kind === "update", "final restart sentinel kind was not update");
-  assert(sentinel?.status === "ok", "final restart sentinel did not report ok");
-  assert(sentinel?.message === summary.expectedRestartNote, "final restart sentinel note mismatch");
-  assert(
-    sentinel?.stats?.before?.version === sourceVersion,
-    "restart sentinel source version mismatch",
-  );
-  assert(
-    sentinel?.stats?.after?.version === targetVersion,
-    "restart sentinel target version mismatch",
-  );
-  assert(
-    Number.isSafeInteger(summary?.supervisorHandoff?.servicePid) &&
-      summary.supervisorHandoff.servicePid > 1,
-    "supervisor handoff did not record the target service PID",
-  );
-  assert(targetServiceStarts.length === 1, "systemctl shim did not start the target exactly once");
-  assert(
-    summary?.supervisorHandoff?.monitorEvents?.some((line) =>
-      line.includes("source Gateway exited through supervised update handoff"),
-    ),
-    "supervisor monitor did not prove the source supervised handoff",
-  );
-
-  assert(
-    summary?.gateway?.healthz?.body?.ok === true &&
-      summary?.gateway?.healthz?.body?.status === "live",
-    "post-restart /healthz was not live",
-  );
-  assert(summary?.gateway?.readyz?.body?.ready === true, "post-restart /readyz was not ready");
-  assert(
-    gatewayStatus?.rpc?.ok === true &&
-      gatewayStatus?.rpc?.version === targetVersion &&
-      gatewayStatus?.gateway?.version === targetVersion &&
-      gatewayStatus?.cli?.version === targetVersion,
-    `post-restart Gateway did not report target version ${String(targetVersion)}`,
-  );
-  assert(Array.isArray(qaAccounts), "post-restart channels.status omitted qa-channel");
-  assert(
-    qaAccounts.some((account) => account?.running === true && account?.restartPending !== true),
-    "post-restart QA channel account was not running",
-  );
-  assert(
-    Number(summary?.qaChannel?.busPollsAfterRestart) > 0,
-    "QA channel did not poll its bus after the target Gateway restart",
-  );
 }
 
 function assertMobilePairingEvidence(files) {
@@ -1867,6 +1802,8 @@ function assertMobilePairingEvidence(files) {
 
 if (command === "list-scenarios") {
   process.stdout.write(`${JSON.stringify([...SCENARIOS])}\n`);
+} else if (command === "missing-load-path") {
+  await import("./missing-load-path.mjs");
 } else if (command === "seed") {
   seedState();
 } else if (command === "seed-legacy-operator") {
@@ -1929,8 +1866,6 @@ if (command === "list-scenarios") {
   assertSuccessfulUpdateJson(process.argv.slice(3));
 } else if (command === "assert-repair-json") {
   assertRepairJson(process.argv.slice(3));
-} else if (command === "assert-update-run-self-upgrade") {
-  assertUpdateRunSelfUpgrade(process.argv.slice(3));
 } else if (command === "assert-mobile-pairing-evidence") {
   assertMobilePairingEvidence(process.argv.slice(3));
 } else {

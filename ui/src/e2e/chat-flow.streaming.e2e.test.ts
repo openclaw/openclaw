@@ -17,7 +17,7 @@ const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
   it.each([
-    { label: "desktop hover", mobile: false, viewport: { height: 900, width: 1280 } },
+    { label: "desktop hover", mobile: false, viewport: { height: 900, width: 1440 } },
     { label: "mobile tap", mobile: true, viewport: { height: 844, width: 390 } },
   ])("shows turn metadata only after completion on $label", async ({ mobile, viewport }) => {
     const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
@@ -35,6 +35,11 @@ suite.define(() => {
     const gateway = await installMockGateway(page, {
       historyMessages: [
         { role: "assistant", content: "Earlier completed reply.", timestamp: Date.now() - 60_000 },
+        {
+          role: "assistant",
+          content: "Earlier final summary.\n\n[Source](https://example.com)",
+          timestamp: Date.now() - 59_000,
+        },
       ],
     });
 
@@ -47,18 +52,32 @@ suite.define(() => {
           const style = getComputedStyle(element);
           return { opacity: style.opacity, pointerEvents: style.pointerEvents };
         });
+      const actionOpacities = (group: typeof earlierAssistant) =>
+        group
+          .locator(".chat-group-footer-actions button")
+          .evaluateAll((buttons) => buttons.map((button) => getComputedStyle(button).opacity));
       await page.mouse.move(0, 0);
+      await expect
+        .poll(() => actionOpacities(earlierAssistant))
+        .toEqual(mobile ? ["1", "1"] : ["0", "0"]);
       await expect
         .poll(() => footerPresentation(earlierAssistant))
         .toEqual(
           mobile
-            ? { opacity: "0", pointerEvents: "none" }
-            : { opacity: "1", pointerEvents: "auto" },
+            ? { opacity: "1", pointerEvents: "auto" }
+            : { opacity: "0", pointerEvents: "none" },
         );
+      await expect
+        .poll(() =>
+          earlierAssistant
+            .locator(".chat-message-actions-row button")
+            .evaluateAll((buttons) => buttons.map((button) => getComputedStyle(button).opacity)),
+        )
+        .toEqual(["0", "0"]);
       if (artifactDir && !mobile) {
         await page.screenshot({
           fullPage: true,
-          path: path.join(artifactDir, "before-user-follow-up-actions-visible.png"),
+          path: path.join(artifactDir, "before-user-follow-up-metadata-hidden.png"),
         });
       }
       await page.locator(".agent-chat__composer-combobox textarea").fill("show turn metadata");
@@ -71,7 +90,7 @@ suite.define(() => {
       if (artifactDir && !mobile) {
         await page.screenshot({
           fullPage: true,
-          path: path.join(artifactDir, "after-user-follow-up-actions-hidden.png"),
+          path: path.join(artifactDir, "after-user-follow-up-metadata-hidden.png"),
         });
       }
       const runId = requireString(
@@ -147,7 +166,10 @@ suite.define(() => {
       }
       expect(await activeGroup.locator(".chat-group-footer").count()).toBe(0);
 
-      await gateway.emitChatFinal({ runId, text: "The turn is complete." });
+      await gateway.emitChatFinal({
+        runId,
+        text: "The turn is complete.\n\n[Source](https://example.com)",
+      });
       await activeGroup.getByText("The turn is complete.", { exact: true }).waitFor();
       if (heldTouch) {
         await heldTouch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
@@ -166,15 +188,98 @@ suite.define(() => {
         .poll(() => footerPresentation(activeGroup))
         .toEqual(
           mobile
-            ? { opacity: "0", pointerEvents: "none" }
-            : { opacity: "1", pointerEvents: "auto" },
+            ? { opacity: "1", pointerEvents: "auto" }
+            : { opacity: "0", pointerEvents: "none" },
         );
+      await expect
+        .poll(() => actionOpacities(activeGroup))
+        .toEqual(mobile ? ["1", "1"] : ["0", "0"]);
+      expect(await footer.locator(".chat-sender-name").textContent()).toBe("OpenClaw");
+      const timestamp = requireString(
+        await footer.locator(".chat-group-timestamp").textContent(),
+        "assistant timestamp",
+      ).trim();
+      expect(timestamp).toBeTruthy();
+      const accessibleFooter = await footer.ariaSnapshot();
+      expect(accessibleFooter).toContain("OpenClaw");
+      expect(accessibleFooter).toContain(timestamp);
+      expect(
+        await footer.evaluate((element) => element.getBoundingClientRect().height),
+      ).toBeGreaterThan(0);
       await reveal();
+      await expect
+        .poll(async () =>
+          (await actionOpacities(activeGroup)).map((opacity) => Number(opacity) > 0),
+        )
+        .toEqual([true, true]);
       await expect
         .poll(() => footer.evaluate((element) => getComputedStyle(element).opacity))
         .toBe("1");
-      expect(await footer.locator(".chat-sender-name").textContent()).toBe("OpenClaw");
-      expect(await footer.locator(".chat-group-timestamp").count()).toBe(1);
+      for (const group of [earlierAssistant, activeGroup]) {
+        const height = await group.evaluate((element) => element.getBoundingClientRect().height);
+        if (mobile) {
+          await group.locator(".chat-bubble").last().tap();
+        } else {
+          await group.locator(".chat-bubble").last().hover();
+        }
+        await expect
+          .poll(async () => (await actionOpacities(group)).map((opacity) => Number(opacity) > 0))
+          .toEqual([true, true]);
+        await expect
+          .poll(() => footerPresentation(group))
+          .toEqual({ opacity: "1", pointerEvents: "auto" });
+        expect(await group.evaluate((element) => element.getBoundingClientRect().height)).toBe(
+          height,
+        );
+        await page.mouse.move(0, 0);
+        const actions = group.locator(".chat-group-footer-actions button");
+        const focusedActionOpacities = mobile ? ["1", "1"] : ["0.6", "0.6"];
+        await actions.first().focus();
+        await page.keyboard.press("Shift+Tab");
+        await expect
+          .poll(() =>
+            group
+              .getByRole("link", { name: "Source", exact: true })
+              .evaluate((link) => link.matches(":focus-visible")),
+          )
+          .toBe(true);
+        await expect.poll(() => actionOpacities(group)).toEqual(focusedActionOpacities);
+        await expect
+          .poll(() => footerPresentation(group))
+          .toEqual({ opacity: "1", pointerEvents: "auto" });
+        if (group === earlierAssistant) {
+          await expect
+            .poll(() =>
+              group
+                .locator(".chat-message-actions-row button")
+                .evaluateAll((buttons) =>
+                  buttons.map((button) => getComputedStyle(button).opacity),
+                ),
+            )
+            .toEqual(focusedActionOpacities);
+        }
+        await page.keyboard.press("Tab");
+        await expect
+          .poll(() => actions.first().evaluate((button) => button.matches(":focus-visible")))
+          .toBe(true);
+        await actions.nth(1).focus();
+        await expect
+          .poll(() => actions.nth(1).evaluate((button) => button.matches(":focus-visible")))
+          .toBe(true);
+        await expect.poll(() => actionOpacities(group)).toEqual(focusedActionOpacities);
+        await page.keyboard.press("Shift+Tab");
+        await expect
+          .poll(() => actions.first().evaluate((button) => button.matches(":focus-visible")))
+          .toBe(true);
+        await expect.poll(() => actionOpacities(group)).toEqual(focusedActionOpacities);
+        await expect
+          .poll(() => footerPresentation(group))
+          .toEqual({ opacity: "1", pointerEvents: "auto" });
+        expect(await group.evaluate((element) => element.getBoundingClientRect().height)).toBe(
+          height,
+        );
+        await page.locator(".agent-chat__composer-combobox textarea").focus();
+      }
     } finally {
       await suite.closeBrowserContext(context);
     }
@@ -420,7 +525,9 @@ suite.define(() => {
           .poll(() => page.evaluate(() => navigator.clipboard.readText()))
           .toBe(errorText);
         expect(await details.getAttribute("open")).not.toBeNull();
-        expect(await alert.getByRole("button").count()).toBe(1);
+        expect(await alert.getByRole("button", { name: /^(Copy error|Copied!)$/u }).count()).toBe(
+          1,
+        );
         await summary.press("Space");
         await alert.locator("pre").waitFor({ state: "hidden" });
         if (label === "mobile") {
@@ -731,7 +838,7 @@ suite.define(() => {
     }
   });
 
-  it("keeps live assistant stream text before the matching tool card", async () => {
+  it("keeps one live assistant message growing through tool activity", async () => {
     const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page);
@@ -778,11 +885,11 @@ suite.define(() => {
       const toolBubble = page.locator('[data-message-id^="tool:assistant:call-read"]');
       await toolBubble.waitFor({ timeout: 10_000 });
 
-      const nextStream = "```ts\nconst answer = 42;";
+      const nextStream = "\n\n```ts\nconst answer = 42;";
       await gateway.emitGatewayEvent("chat", {
         deltaText: nextStream,
         message: {
-          content: [{ text: nextStream, type: "text" }],
+          content: [{ text: initialStream + nextStream, type: "text" }],
           role: "assistant",
           timestamp: Date.now(),
         },
@@ -794,26 +901,62 @@ suite.define(() => {
         .poll(() => page.locator(".chat-bubble.streaming code.language-ts").textContent())
         .toContain("const answer = 42;");
 
-      const composedGroup = transcript
-        .locator(".chat-group.assistant")
-        .filter({ hasText: "I will inspect the file." });
-      expect(await composedGroup.count()).toBe(1);
-      const visibleOrder = await composedGroup.evaluate((group: Element) =>
-        Array.from(group.querySelectorAll(".chat-bubble")).flatMap((bubble: Element) => {
-          if ((bubble.textContent ?? "").includes("I will inspect the file.")) {
-            return ["assistant stream"];
-          }
-          if (bubble.matches('[data-message-id^="tool:assistant:call-read"]')) {
-            return ["tool card"];
-          }
-          if ((bubble.textContent ?? "").includes("const answer = 42;")) {
-            return ["assistant continuation"];
-          }
-          return [];
-        }),
-      );
+      const stream = transcript.locator(".chat-bubble.streaming");
+      expect(await stream.count()).toBe(1);
+      expect(await stream.textContent()).toContain("I will inspect the file.");
+      expect(await stream.textContent()).toContain("const answer = 42;");
+      expect(await toolBubble.count()).toBe(1);
+      expect(await transcript.getByText("I will inspect the file.").count()).toBe(1);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
 
-      expect(visibleOrder).toEqual(["assistant stream", "tool card", "assistant continuation"]);
+  it("preserves normalized content across cumulative browser updates", async () => {
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page);
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.locator(".agent-chat__composer-combobox textarea").fill("prove prefix reuse");
+      await page.getByRole("button", { name: "Send message" }).click();
+      const sendRequest = await gateway.waitForRequest("chat.send");
+      const runId = requireString(
+        requireRecord(sendRequest.params).idempotencyKey,
+        "chat send idempotency key",
+      );
+      const chunks = ["## reuse-proof\r\n", "second-line\u2028", "third-line\r", "\nfourth-line"];
+      let cumulative = "";
+      for (const chunk of chunks) {
+        cumulative += chunk;
+        await gateway.emitGatewayEvent("chat", {
+          deltaText: chunk,
+          message: {
+            content: [{ text: cumulative, type: "text" }],
+            role: "assistant",
+            timestamp: Date.now(),
+          },
+          runId,
+          sessionKey: "main",
+          state: "delta",
+        });
+        const expectedTail = chunk
+          .replace(/\r\n?|[\u2028\u2029]/g, "\n")
+          .trim()
+          .replace(/^## /, "");
+        await expect
+          .poll(() => page.locator(".chat-bubble.streaming").textContent())
+          .toContain(expectedTail);
+      }
+
+      const stream = page.locator(".chat-bubble.streaming");
+      await expect.poll(() => stream.textContent()).toContain("fourth-line");
+      await expect.poll(() => stream.locator("h2").textContent()).toBe("reuse-proof");
+      console.info(
+        "stream-normalization-browser-proof",
+        JSON.stringify({ cumulativeLength: cumulative.length, updates: chunks.length }),
+      );
     } finally {
       await suite.closeBrowserContext(context);
     }

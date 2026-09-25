@@ -191,12 +191,6 @@ function createGatewayCallModuleMock() {
   };
 }
 
-function createInProcessGatewayModuleMock() {
-  return {
-    callAgentToolGatewayRequest: (opts: unknown) => agentToolGatewayCallMock(opts),
-  };
-}
-
 function createConfigModuleMock() {
   return {
     getRuntimeConfig: () => mockConfig,
@@ -326,7 +320,10 @@ function createCommandsStatusRuntimeModuleMock() {
 
 vi.mock("../config/sessions.js", createSessionsModuleMock);
 vi.mock("../gateway/call.js", createGatewayCallModuleMock);
-vi.mock("./tools/in-process-gateway.js", createInProcessGatewayModuleMock);
+vi.mock("./tools/in-process-gateway.js", () => ({
+  callAgentToolGatewayRequest: (opts: unknown) => agentToolGatewayCallMock(opts),
+  hasGatewayToolRoutingContext: () => false,
+}));
 vi.mock("../config/config.js", createConfigModuleMock);
 vi.mock("../agents/prepared-model-catalog.js", createModelCatalogModuleMock);
 vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
@@ -363,9 +360,6 @@ vi.mock("../auto-reply/group-activation.js", () => ({
 vi.mock("../auto-reply/reply/queue.js", () => ({
   getFollowupQueueDepth: () => 0,
   resolveQueueSettings: resolveQueueSettingsMock,
-}));
-vi.mock("../auto-reply/status.js", () => ({
-  buildStatusMessage: buildStatusMessageMock,
 }));
 vi.mock("../tasks/task-owner-access.js", () => ({
   listTasksForRelatedSessionKeyForOwner: (params: {
@@ -2727,6 +2721,41 @@ describe("session_status tool", () => {
     expect(saved.modelOverrideSource).toBe("default");
     expect(saved.authProfileOverride).toBeUndefined();
     expect(saved.liveModelSwitchPending).toBe(true);
+  });
+
+  it("rejects a colliding provider-wildcard model change without writing the session", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "s1",
+        updatedAt: 10,
+        providerOverride: "custom/team",
+        modelOverride: "Reader",
+        modelOverrideSource: "user",
+      },
+    });
+    mockConfig = {
+      ...createMockConfig(),
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          models: {},
+          modelPolicy: { allow: ["custom/*"] },
+        },
+      },
+    };
+
+    await expect(
+      getSessionStatusTool().execute("literal-denied", { model: "Reader" }),
+    ).rejects.toThrow('Model "custom/team/Reader" is not allowed.');
+    expect(updateSessionStoreMock).not.toHaveBeenCalled();
+
+    await getSessionStatusTool().execute("literal-allowed", { model: "custom/team/Reader" });
+    const saved = latestMockCallArg(updateSessionStoreMock, 1) as Record<string, SessionEntry>;
+    expect(saved.main).toMatchObject({
+      providerOverride: "custom",
+      modelOverride: "team/Reader",
+      modelOverrideSource: "user",
+    });
   });
 
   it("resolves a model alias configured only on the target agent", async () => {

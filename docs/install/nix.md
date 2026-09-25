@@ -30,7 +30,8 @@ The [nix-openclaw](https://github.com/openclaw/nix-openclaw) repo is the source 
     Use the agent-first template from the nix-openclaw repo:
     ```bash
     mkdir -p ~/code/openclaw-local
-    # Copy templates/agent-first/flake.nix from the nix-openclaw repo
+    git clone https://github.com/openclaw/nix-openclaw.git /tmp/nix-openclaw
+    cp /tmp/nix-openclaw/templates/agent-first/flake.nix ~/code/openclaw-local/flake.nix
     ```
   </Step>
   <Step title="Configure secrets">

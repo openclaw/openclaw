@@ -27,8 +27,10 @@ This page covers the Perplexity **provider** setup. For the Perplexity **tool** 
 
 ```bash
 openclaw plugins install @openclaw/perplexity-plugin
-openclaw gateway restart
 ```
+
+Installation applies to a running Gateway automatically; otherwise it takes effect
+on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 ## Getting started
 
@@ -85,7 +87,7 @@ with `plugins.entries.perplexity.config.webSearch.model`.
 | `language`                           | ISO 639-1 language code (`en`, `fr`, `zh`)                                              | Native only |
 | `date_after` / `date_before`         | Published-date range in `YYYY-MM-DD`                                                    | Native only |
 | `domain_filter`                      | Max 20 domains; allowlist or `-`-prefixed denylist, never mixed                         | Native only |
-| `max_tokens` / `max_tokens_per_page` | Content budget across all results / per page                                            | Native only |
+| `max_tokens` / `max_tokens_per_page` | Content budget across all results / per page; `max_tokens` max 1000000                  | Native only |
 
 Native-only filters return a descriptive error on the chat-completions path.
 `freshness` cannot be combined with `date_after`/`date_before`.

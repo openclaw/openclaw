@@ -1,12 +1,18 @@
 // Coverage for Google prompt-cache creation, reuse, and request rewriting.
 import crypto from "node:crypto";
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
+import {
+  SYSTEM_PROMPT_CACHE_BOUNDARY,
+  SYSTEM_PROMPT_RELOCATABLE_BOUNDARY,
+  SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END,
+} from "@openclaw/ai/internal/shared";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
 import type { Context } from "../../llm/types.js";
 import { isSecretValueRegisteredForRedaction } from "../../logging/secret-redaction-registry.js";
+import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { mintSecretSentinel, resolveSecretSentinel } from "../../secrets/sentinel.js";
 import { prepareGooglePromptCacheStreamFn } from "./google-prompt-cache.js";
 import {
@@ -141,10 +147,10 @@ describe("google prompt cache", () => {
   });
 
   it.each([200, 503])(
-    "preserves the final assembled prompt when cache creation returns %s",
+    "strips markers from the cached prefix and preserves inline fallback when creation returns %s",
     async (statusCode) => {
       const stablePrompt = "hook-before\nbase";
-      const systemPrompt = `${stablePrompt}${SYSTEM_PROMPT_CACHE_BOUNDARY}hook-after`;
+      const systemPrompt = `hook-before${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY}base${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END}${SYSTEM_PROMPT_CACHE_BOUNDARY}hook-after`;
       const fetchMock = vi.fn(
         async () =>
           new Response(
@@ -323,6 +329,20 @@ describe("google prompt cache", () => {
       expireTime,
     });
     const { streamFn: innerStreamFn, getCapturedPayload } = createCapturingStreamFn();
+    const providerMetadata = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "google",
+          providers: ["google"],
+          providerEndpoints: [
+            {
+              endpointClass: "google-generative-ai",
+              hosts: ["generativelanguage.googleapis.com"],
+            },
+          ],
+        },
+      ],
+    });
 
     const wrapped = await preparePromptCacheStream({
       fetchMock,
@@ -333,7 +353,7 @@ describe("google prompt cache", () => {
 
     expect(wrapped).toBeTypeOf("function");
     expect(fetchMock).not.toHaveBeenCalled();
-    await Promise.resolve(
+    await withPluginMetadataSnapshotScope(providerMetadata, () =>
       wrapped?.(
         makeGoogleModel(),
         {

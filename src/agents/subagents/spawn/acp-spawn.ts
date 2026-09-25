@@ -11,9 +11,14 @@ import {
   loadSessionEntryReadOnly,
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
-import { buildSessionCreationStamp } from "../../../config/sessions/session-entry-provenance.js";
+import {
+  buildSessionCreationStamp,
+  inheritSessionGitContributorProfileIds,
+} from "../../../config/sessions/session-entry-provenance.js";
+import { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { resolveGatewaySessionStoreTarget } from "../../../gateway/session-utils-store-lookup.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { resolveEventSessionRoutingPolicy } from "../../../infra/event-session-routing.js";
 import {
@@ -23,14 +28,14 @@ import {
 } from "../../../infra/outbound/session-binding-service.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import {
+  isIncognitoSessionKey,
   normalizeOptionalAgentId,
   resolveAgentIdFromSessionKey,
 } from "../../../routing/session-key.js";
-import {
-  recordSessionCreated,
-  recordSubagentSpawned,
-} from "../../../sessions/session-state-events.js";
-import { deliveryContextFromSession } from "../../../utils/delivery-context.shared.js";
+import { recordSessionCreated } from "../../../sessions/session-created.js";
+import { waitForSessionParticipantRecording } from "../../../sessions/session-participant-recording.js";
+import { recordSubagentSpawned } from "../../../sessions/session-state-events.js";
+import { deliveryContextFromSession } from "../../../utils/delivery-context.read.js";
 import { resolveSessionAgentId } from "../../agent-scope.js";
 import { reserveChildAdmissionSlot } from "../../child-admission.js";
 import {
@@ -289,6 +294,21 @@ export async function spawnAcpDirect(
     targetAgentId,
     ctx,
   });
+  const ownership = resolveSubagentSpawnOwnership({
+    cfg,
+    agentSessionKey: ctx.agentSessionKey,
+    completionOwnerKey: ctx.completionOwnerKey,
+  });
+  const requesterTarget = resolveGatewaySessionStoreTarget({
+    cfg,
+    key: ownership.completionRequesterSessionKey,
+    agentId: ctx.requesterAgentIdOverride,
+  });
+  const completionRequesterSessionId = loadSessionEntryReadOnly({
+    storePath: requesterTarget.storePath,
+    sessionKey: requesterTarget.canonicalKey,
+    clone: false,
+  })?.sessionId;
   const hasSubagentEnvelope = isSubagentEnvelopeSession(requesterInternalKey, {
     cfg,
     store: subagentStore,
@@ -418,11 +438,6 @@ export async function spawnAcpDirect(
     ? resolveEventSessionRoutingPolicy({ cfg, sessionKey: parentSessionKey })
     : undefined;
   const gatewayAttachments = toGatewayImageAttachments(params.attachments);
-  const ownership = resolveSubagentSpawnOwnership({
-    cfg,
-    agentSessionKey: ctx.agentSessionKey,
-    completionOwnerKey: ctx.completionOwnerKey,
-  });
   const requesterOrigin = requesterState.origin;
   const progressOrigin = {
     channel: requesterOrigin?.channel,
@@ -440,9 +455,37 @@ export async function spawnAcpDirect(
   };
   const adapter: SpawnBackendAdapter<AcpBackendState> = {
     async initialize() {
+      const parentTarget = resolveGatewaySessionStoreTarget({
+        cfg,
+        key: requesterInternalKey,
+        agentId: requesterAgentId,
+      });
+      await waitForSessionParticipantRecording({
+        agentId: requesterAgentId,
+        sessionKey: parentTarget.canonicalKey,
+        storePath: parentTarget.storePath,
+      });
+      ctx.assertActive?.();
+      const inheritedGitContributorProfileIds = isIncognitoSessionKey(requesterInternalKey)
+        ? undefined
+        : await withSessionEntryReadOnlyInWorker(
+            {
+              agentId: requesterAgentId,
+              sessionKey: parentTarget.canonicalKey,
+              storePath: parentTarget.storePath,
+            },
+            () => ctx.assertActive?.(),
+            async (read) => {
+              if (!read.ok) {
+                throw read.error;
+              }
+              return inheritSessionGitContributorProfileIds(read.value);
+            },
+          );
       const creationStamp = buildSessionCreationStamp({
         via: "spawn",
         actor: { type: "agent", id: requesterAgentId },
+        inheritedGitContributorProfileIds,
       });
       const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: targetAgentId });
       const childSessionPatch = admission.childSessionPatch
@@ -482,6 +525,7 @@ export async function spawnAcpDirect(
         resumeSessionId: params.resumeSessionId,
         runtimeOptions: runtimeOptionsResult.runtimeOptions,
         modelExplicit: runtimeOptionsResult.modelExplicit,
+        thinkingExplicit: runtimeOptionsResult.thinkingExplicit,
         cwd: runtimeCwd,
       });
       closeRuntimeOnFailure = initializedSession.initialized.closeRuntimeOnFailure;
@@ -511,7 +555,7 @@ export async function spawnAcpDirect(
       });
       // ACP bypasses the native adapter, so seed the same child lineage before dispatch.
       if (childCreationEntry) {
-        recordSessionCreated({
+        recordSessionCreated(cfg, {
           sessionKey,
           agentId: targetAgentId,
           entry: childCreationEntry,
@@ -528,6 +572,7 @@ export async function spawnAcpDirect(
           ? startAcpSpawnParentStreamRelay({
               runId,
               parentSessionKey,
+              requesterAgentId,
               childSessionKey: sessionKey,
               childSessionId: state.initializedSession.sessionId,
               agentId: targetAgentId,
@@ -618,6 +663,7 @@ export async function spawnAcpDirect(
         childSessionKey: sessionKey,
         controllerSessionKey,
         requesterSessionKey: ownership.completionRequesterSessionKey,
+        completionRequesterSessionId,
         requesterOrigin,
         progressOrigin,
         requesterDisplayKey: ownership.completionRequesterDisplayKey,
@@ -630,6 +676,8 @@ export async function spawnAcpDirect(
         runTimeoutSeconds,
         expectsCompletionMessage,
         spawnMode,
+        // ACP's Gateway manager publishes the task; avoid a second registry projection.
+        taskRowOwnership: "gateway_best_effort",
       };
     },
   });

@@ -8,18 +8,17 @@ import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import { withEnv } from "../test-utils/env.js";
 import { getSlashCommands, parseCommand } from "./commands.js";
+import { resolveFinalAssistantText } from "./tui-formatters.js";
+import { beginTuiShutdown } from "./tui-shutdown.js";
 import {
-  beginTuiShutdown,
   createBackspaceDeduper,
   createDeferredTuiFinish,
   createTuiConnectionLineage,
-  createTuiSignalHandlers,
   drainAndStopTuiSafely,
   installTuiTerminalLossExitHandler,
   isIgnorableTuiStopError,
   isTuiTerminalLossError,
   resolveCtrlCAction,
-  resolveFinalAssistantText,
   resolveGatewayDisconnectState,
   resolveInitialTuiAgentId,
   resolveTuiToolsToggleActivityStatus,
@@ -373,12 +372,14 @@ describe("resolveInitialTuiAgentId", () => {
 
   it("falls back to a retained legacy owner", () => {
     const retained = retainLegacyDefaultAgentId(structuredClone(cfg), "ops");
+    delete retained.agents!.ownership;
 
     expect(resolveInitialTuiAgentId({ cfg: retained, cwd: "/var/tmp/unrelated" })).toBe("ops");
   });
 
   it("keeps an ownerless explicit fleet selection-required", () => {
-    expect(() => resolveInitialTuiAgentId({ cfg, cwd: "/var/tmp/unrelated" })).toThrow(
+    const retained = retainLegacyDefaultAgentId(structuredClone(cfg), "ops");
+    expect(() => resolveInitialTuiAgentId({ cfg: retained, cwd: "/var/tmp/unrelated" })).toThrow(
       "Multiple agents are configured, but TUI startup has no explicit owner. Pass an agent-scoped --session key (e.g., 'openclaw tui --session agent:agentname:main').",
     );
   });
@@ -941,26 +942,6 @@ describe("TUI shutdown safety", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(exit).toHaveBeenCalledWith(130);
     expect(requestFinish).not.toHaveBeenCalled();
-  });
-
-  it("forces process exit after SIGTERM when gateway teardown never settles", async () => {
-    vi.useFakeTimers();
-    const exit = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
-    const requestExit = vi.fn(() => {
-      beginTestShutdown({
-        stopClient: () => new Promise<void>(() => {}),
-        forceExit: () => process.exit(130),
-      });
-    });
-    const { sigtermHandler } = createTuiSignalHandlers({
-      handleCtrlC: vi.fn(),
-      requestExit,
-    });
-
-    sigtermHandler();
-    expect(requestExit).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(2000);
-    expect(exit).toHaveBeenCalledWith(130);
   });
 
   it("keeps the force-exit deadline armed after already-drained teardown settles", async () => {

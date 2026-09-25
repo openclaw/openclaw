@@ -136,6 +136,9 @@ function createHarness(
     },
   );
   const transport: NodeWorkerSupervisorTransport = {
+    async getCurrentNode(nodeId) {
+      return (await this.listCurrentNodes()).find((entry) => entry.nodeId === nodeId);
+    },
     hasCurrentRunner: () => false,
     listCurrentNodes: async () => [params.node ?? node],
     getBundleStatus: () => currentBundleStatus,
@@ -766,6 +769,7 @@ describe("node workspace retain coordinator", () => {
       };
     });
     const transport: NodeWorkerSupervisorTransport = {
+      getCurrentNode: async (nodeId) => nodes.find((entry) => entry.nodeId === nodeId),
       listCurrentNodes: async () => nodes,
       hasCurrentRunner: () => true,
       isCurrent: () => true,

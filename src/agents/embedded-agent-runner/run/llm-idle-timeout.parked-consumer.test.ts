@@ -6,6 +6,8 @@ import {
 } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { StreamFn } from "../../runtime/index.js";
+import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
+import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import { wrapStreamFnRepairMalformedToolCallArguments } from "./attempt.tool-call-argument-repair.js";
 import { streamWithIdleTimeout } from "./llm-idle-timeout.js";
 
@@ -79,23 +81,14 @@ describe("streamWithIdleTimeout parked consumer", () => {
   it("preserves argument fragments when the producer completes while the consumer is parked", async () => {
     vi.useFakeTimers();
     const source = createAssistantMessageEventStream();
-    const message: AssistantMessage = {
-      role: "assistant",
+    const message: AssistantMessage = makeAgentAssistantMessage({
       content: [{ type: "toolCall", id: "call_read", name: "read", arguments: {} }],
       api: "openai-chatgpt-responses",
-      provider: "openai",
       model: "test",
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
+      usage: createZeroUsageFixture(),
       stopReason: "toolUse",
       timestamp: 1,
-    };
+    });
     let requestSignal: AbortSignal | undefined;
     const baseFn: StreamFn = (_model, _context, options) => {
       requestSignal = options?.signal;
@@ -156,23 +149,12 @@ describe("streamWithIdleTimeout parked consumer", () => {
           stream.push({
             type: "done",
             reason: "stop",
-            message: {
-              role: "assistant",
+            message: makeAgentAssistantMessage({
               content: [{ type: "text", text: "first" }],
-              api: "openai-responses",
-              provider: "openai",
               model: "test",
-              usage: {
-                input: 0,
-                output: 0,
-                cacheRead: 0,
-                cacheWrite: 0,
-                totalTokens: 0,
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-              },
-              stopReason: "stop",
+              usage: createZeroUsageFixture(),
               timestamp: 1,
-            },
+            }),
           });
           stream.end();
         }, 10);

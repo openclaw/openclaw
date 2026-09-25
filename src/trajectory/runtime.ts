@@ -1,19 +1,13 @@
 // Trajectory runtime records bounded session events into SQLite-backed storage.
-import path from "node:path";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { createDiagnosticRecord } from "@openclaw/ai/internal/shared";
 import { sanitizeDiagnosticPayload } from "../agents/payload-redaction.js";
 import type {
   QueuedFileWriter,
   QueuedFileWriterDiagnostics,
 } from "../agents/queued-file-writer.js";
-import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
-import {
-  loadSessionEntry,
-  type SessionTranscriptRuntimeTarget,
-} from "../config/sessions/session-accessor.js";
+import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { redactSecrets } from "../logging/redact.js";
-import { parseAgentSessionKey } from "../routing/session-key.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
@@ -21,7 +15,7 @@ import {
   TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES,
   TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
 } from "./paths.js";
-import { appendSqliteTrajectoryRuntimeEvents } from "./runtime-store.sqlite.js";
+import { createSqliteTrajectoryRuntimeSink } from "./runtime-store-writer.js";
 import type { TrajectoryEvent, TrajectoryToolDefinition } from "./types.js";
 
 type TrajectoryRuntimeInit = {
@@ -33,6 +27,7 @@ type TrajectoryRuntimeInit = {
   sessionKey?: string;
   sessionFile?: string;
   sessionTarget?: SessionTranscriptRuntimeTarget;
+  assertCommitAllowed?: () => void;
   provider?: string;
   modelId?: string;
   modelApi?: string | null;
@@ -168,11 +163,11 @@ function truncateOversizedTrajectoryEvent(
 }
 
 function truncatedTrajectoryValue(reason: string, details: Record<string, unknown> = {}): unknown {
-  return {
-    truncated: true,
-    reason,
-    ...details,
-  };
+  const record = createDiagnosticRecord();
+  record.truncated = true;
+  record.reason = reason;
+  Object.assign(record, details);
+  return record;
 }
 
 function limitTrajectoryPayloadValue(
@@ -218,7 +213,7 @@ function limitTrajectoryPayloadValue(
   }
   const record = value as Record<string, unknown>;
   const keys = Object.keys(record);
-  const limited: Record<string, unknown> = {};
+  const limited = createDiagnosticRecord();
   for (const key of keys.slice(0, TRAJECTORY_RUNTIME_DATA_OBJECT_MAX_KEYS)) {
     limited[key] = limitTrajectoryPayloadValue(record[key], depth + 1, seen);
   }
@@ -294,110 +289,6 @@ function createFileTrajectoryRuntimeSink(writer: TrajectoryRuntimeWriter): Traje
   };
 }
 
-function createSqliteTrajectoryRuntimeSink(params: {
-  env: NodeJS.ProcessEnv;
-  maxRuntimeFileBytes: number;
-  sessionFile?: string;
-  sessionId: string;
-  sessionKey?: string;
-  sessionTarget?: SessionTranscriptRuntimeTarget;
-}): TrajectoryRuntimeSink | null {
-  const target = params.sessionTarget
-    ? {
-        agentId: normalizeOptionalString(params.sessionTarget.agentId),
-        sessionId: normalizeOptionalString(params.sessionTarget.sessionId),
-        sessionKey: normalizeOptionalString(params.sessionTarget.sessionKey),
-        storePath: normalizeOptionalString(params.sessionTarget.storePath),
-      }
-    : undefined;
-  const legacyMarker = parseSqliteSessionFileMarker(params.sessionFile);
-  const completeTarget = Boolean(
-    target?.agentId && target.sessionId && target.sessionKey && target.storePath,
-  );
-  const targetKeyAgentId = parseAgentSessionKey(target?.sessionKey)?.agentId;
-  const requestedSessionKey = normalizeOptionalString(params.sessionKey);
-  const completeTargetKeyEntry =
-    completeTarget && target?.agentId && target.sessionKey && target.storePath
-      ? loadSessionEntry({
-          agentId: target.agentId,
-          sessionKey: target.sessionKey,
-          storePath: target.storePath,
-        })
-      : undefined;
-  // A prepared runtime target may precede its metadata row. Treat an absent
-  // row as uncommitted, while rejecting an existing conflicting mapping.
-  if (
-    completeTarget &&
-    ((requestedSessionKey && target?.sessionKey !== requestedSessionKey) ||
-      (targetKeyAgentId && target?.agentId !== targetKeyAgentId) ||
-      (completeTargetKeyEntry && completeTargetKeyEntry.sessionId !== target?.sessionId))
-  ) {
-    return null;
-  }
-  const targetKeyEntry =
-    target?.sessionKey && legacyMarker && !completeTarget
-      ? loadSessionEntry({
-          agentId: legacyMarker.agentId,
-          sessionKey: target.sessionKey,
-          storePath: legacyMarker.storePath,
-        })
-      : undefined;
-  if (
-    target &&
-    !completeTarget &&
-    legacyMarker &&
-    ((target.agentId && target.agentId !== legacyMarker.agentId) ||
-      (target.sessionId && target.sessionId !== legacyMarker.sessionId) ||
-      (targetKeyAgentId && targetKeyAgentId !== legacyMarker.agentId) ||
-      (target.sessionKey && targetKeyEntry?.sessionId !== legacyMarker.sessionId) ||
-      (target.storePath && path.resolve(target.storePath) !== path.resolve(legacyMarker.storePath)))
-  ) {
-    return null;
-  }
-  const marker =
-    target?.agentId && target.sessionId && target.sessionKey && target.storePath
-      ? {
-          agentId: target.agentId,
-          sessionId: target.sessionId,
-          sessionKey: target.sessionKey,
-          storePath: target.storePath,
-        }
-      : legacyMarker;
-  if (!marker || marker.sessionId !== params.sessionId) {
-    return null;
-  }
-  let pendingEvents: TrajectoryEvent[] = [];
-  let queuedBytes = 0;
-  return {
-    describeFlushState: () =>
-      pendingEvents.length > 0
-        ? `pendingRows=${pendingEvents.length} queuedBytes=${queuedBytes} activeOperation=sqlite-append`
-        : undefined,
-    flush: async () => {
-      if (pendingEvents.length === 0) {
-        return;
-      }
-      const events = pendingEvents;
-      pendingEvents = [];
-      queuedBytes = 0;
-      appendSqliteTrajectoryRuntimeEvents(
-        {
-          agentId: marker.agentId,
-          env: params.env,
-          maxRuntimeBytes: params.maxRuntimeFileBytes,
-          sessionId: marker.sessionId,
-          storePath: marker.storePath,
-        },
-        events,
-      );
-    },
-    write: (event, line) => {
-      pendingEvents.push(event);
-      queuedBytes += Buffer.byteLength(line, "utf8") + 1;
-    },
-  };
-}
-
 export function toTrajectoryToolDefinitions(
   tools: ReadonlyArray<{ name?: string; description?: string; parameters?: unknown }>,
 ): TrajectoryToolDefinition[] {
@@ -433,7 +324,7 @@ export function createTrajectoryRuntimeRecorder(
     1,
     Math.floor(params.maxRuntimeFileBytes ?? TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES),
   );
-  const sink = params.writer
+  const sink: TrajectoryRuntimeSink | null = params.writer
     ? createFileTrajectoryRuntimeSink(params.writer)
     : createSqliteTrajectoryRuntimeSink({
         env,
@@ -442,6 +333,7 @@ export function createTrajectoryRuntimeRecorder(
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
         sessionTarget: params.sessionTarget,
+        assertCommitAllowed: params.assertCommitAllowed,
       });
   if (!sink) {
     return null;

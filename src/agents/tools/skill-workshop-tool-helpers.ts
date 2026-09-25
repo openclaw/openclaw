@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { autonomousSkillSizeError } from "../../skills/workshop/collection-contracts.js";
 import {
   readProposalFrontmatter,
+  resolveDraftedSkillDescription,
   resolveSkillProposalName,
   stripProposalFrontmatterForSkill,
 } from "../../skills/workshop/frontmatter.js";
@@ -16,9 +17,8 @@ import type {
   SkillProposalRecord,
   SkillProposalStatus,
   SkillProposalSupportFileInput,
-  SkillWorkshopProposalReviewCompletion,
 } from "../../skills/workshop/types.js";
-import { readPositiveIntegerParam, readToolStringParam, ToolInputError } from "./common.js";
+import { readToolStringParam, ToolInputError } from "./common.js";
 import { textResult } from "./tool-results.js";
 
 export function assertAutonomousSkillSize(
@@ -28,9 +28,15 @@ export function assertAutonomousSkillSize(
   currentContent: string | undefined,
   maxSkillBytes: number,
 ): void {
+  const label = description ?? readProposalFrontmatter(currentContent ?? "")?.description ?? name;
   const draft = prepareSkillProposalDraft({
     name,
-    description: description ?? readProposalFrontmatter(currentContent ?? "")?.description ?? name,
+    description: label,
+    skillDescription: resolveDraftedSkillDescription({
+      content,
+      ...(currentContent ? { fallbackContent: currentContent } : {}),
+      label,
+    }),
     content,
     fallbackFrontmatterContent: currentContent,
     date: new Date().toISOString(),
@@ -44,56 +50,6 @@ export function assertAutonomousSkillSize(
   if (sizeError) {
     throw new ToolInputError(sizeError);
   }
-}
-
-export function skillWorkshopAgentEventActor(agentId?: string) {
-  return { type: "agent" as const, ...(agentId ? { id: agentId } : {}) };
-}
-
-export function beginProposalReviewMutation(
-  completion: SkillWorkshopProposalReviewCompletion | undefined,
-): (() => void) | undefined {
-  if (!completion) {
-    return undefined;
-  }
-  if (completion.phase !== "open") {
-    throw new ToolInputError("this Skill Workshop review is already completing or complete");
-  }
-  let release!: () => void;
-  const done = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const activeMutations = completion.activeMutations ?? new Set<Promise<void>>();
-  completion.activeMutations = activeMutations;
-  activeMutations.add(done);
-  return () => {
-    activeMutations.delete(done);
-    release();
-  };
-}
-
-export async function completeProposalReview(completion: SkillWorkshopProposalReviewCompletion) {
-  const { phase } = completion;
-  if (phase === "completed") {
-    return completionResult();
-  }
-  if (phase === "completing") {
-    throw new ToolInputError("this Skill Workshop review is already completing");
-  }
-  completion.phase = "completing";
-  try {
-    await Promise.all(Array.from(completion.activeMutations ?? []));
-    await completion.complete();
-    completion.phase = "completed";
-    return completionResult();
-  } catch (error) {
-    completion.phase = "open";
-    throw error;
-  }
-}
-
-function completionResult() {
-  return textResult("Completed Skill Workshop review.", { completed: true });
 }
 
 export function proposalMutationText(action: string, record: SkillProposalRecord): string {
@@ -150,13 +106,6 @@ export function proposalResult(
   };
 }
 
-export function readLifecycleProposalIdParam(params: Record<string, unknown>): string {
-  return readToolStringParam(params, "proposal_id", {
-    required: true,
-    label: "proposal_id",
-  });
-}
-
 export async function readProposalForInspect(
   params: Record<string, unknown>,
   workspaceDir: string,
@@ -193,10 +142,6 @@ export function readProposalStatusParam(
     throw new ToolInputError(`status must be one of ${statuses.join(", ")}`);
   }
   return status as SkillProposalStatus;
-}
-
-export function readListLimitParam(params: Record<string, unknown>): number {
-  return readPositiveIntegerParam(params, "limit") ?? 20;
 }
 
 export function readSupportFilesParam(

@@ -223,7 +223,9 @@ export class SystemAgentChatEngine {
     const overview = await (this.options.deps?.loadOverview ?? loadSystemAgentOverview)({
       agentId: route.agentId,
     });
-    return { ...overview, defaultModel: route.modelLabel };
+    return route.modelTarget === "utility"
+      ? { ...overview, setupModel: route.modelLabel }
+      : { ...overview, defaultModel: route.modelLabel };
   }
 
   async planGreeting(params: {

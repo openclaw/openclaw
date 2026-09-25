@@ -98,6 +98,7 @@ describe("normalizeSlackOutboundText", () => {
 
     expect(normalizeSlackOutboundText(input)).toBe(expected);
     expect(markdownToSlackMrkdwnChunks(input, 4000)).toEqual([expected]);
+    expect(markdownToSlackMrkdwnChunks(input, Number.POSITIVE_INFINITY)).toEqual([expected]);
     expect(normalizeSlackOutboundText(expected)).toBe(expected);
     expect(normalizeSlackOutboundText(`intro\n${input}`)).toBe(`\`Assistant:\` intro\n${input}`);
     expect(normalizeSlackOutboundText("<!date^0^user[Thu 2026-07-02]|safe> authorize")).toBe(
@@ -243,6 +244,28 @@ describe("normalizeSlackOutboundText", () => {
         .filter((chunk) => chunk.length > 8),
     ).toStrictEqual([]);
   });
+
+  it("includes transcript protection when a native token exactly fills the chunk budget", () => {
+    expect(markdownToSlackMrkdwnChunks("<@U|user[t]>", 12)).toEqual(["&lt;@U|user[", "t]&gt;"]);
+  });
+
+  it.each(["<@U|user[t]>", "<!date^0^user[t]|safe>", "<!date^0^safe|user[t]>"])(
+    "protects %s when an oversized link prevents any fitting split",
+    (header) => {
+      const href = `https://example.com/${"a".repeat(100)}`;
+      expect(markdownToSlackMrkdwnChunks(`[x](${href})\n${header}`, 32)).toEqual([
+        `\`Assistant:\` <${href}|x>\n${header}`,
+      ]);
+    },
+  );
+
+  it.each([1, 1.9, 0, -1, Number.NaN, Number.NEGATIVE_INFINITY])(
+    "preserves complete code points with normalized chunk limit %s",
+    (limit) => {
+      expect(markdownToSlackMrkdwnChunks("😀x", limit)).toEqual(["😀", "x"]);
+      expect(markdownToSlackMrkdwnChunks("", limit)).toEqual([]);
+    },
+  );
 
   it("keeps unsafe emphasis boundaries plain when chunking", () => {
     expect(markdownToSlackMrkdwnChunks("これは*重要*です。", 100)).toEqual(["これは重要です。"]);

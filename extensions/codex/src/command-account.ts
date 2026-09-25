@@ -12,29 +12,22 @@ import {
   findNormalizedProviderValue,
   resolveAuthProfileOrder,
 } from "openclaw/plugin-sdk/provider-auth";
-import {
-  normalizeOptionalString,
-  normalizeUniqueStringEntries,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
-import { CODEX_CONTROL_METHODS, type CodexControlMethod } from "./app-server/capabilities.js";
-import { isJsonObject, type JsonValue } from "./app-server/protocol.js";
+import { normalizeUniqueStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
+import type { JsonValue } from "./app-server/protocol.js";
+import { formatRelativeDuration } from "./app-server/rate-limit-time.js";
 import {
   summarizeCodexAccountUsage,
   type CodexAccountUsageSummary,
 } from "./app-server/rate-limits.js";
-import type { CodexControlRequestOptions, SafeValue } from "./command-rpc.js";
+import type {
+  SafeCodexControlRequestFn as SafeCodexControlRequest,
+  SafeValue,
+} from "./command-rpc.js";
 
 const OPENAI_PROVIDER_ID = "openai";
-const OPENAI_CODEX_PROVIDER_ID = OPENAI_PROVIDER_ID;
 
 type AuthProfileOrderConfig = Parameters<typeof resolveAuthProfileOrder>[0]["cfg"];
-
-type SafeCodexControlRequest = (
-  pluginConfig: unknown,
-  method: CodexControlMethod,
-  requestParams: JsonValue | undefined,
-  options?: CodexControlRequestOptions,
-) => Promise<SafeValue<JsonValue | undefined>>;
 
 type CodexAccountAuthRow = {
   profileId: string;
@@ -42,7 +35,6 @@ type CodexAccountAuthRow = {
   kind: string;
   status: string;
   active: boolean;
-  usage?: string;
   billingNote?: string;
 };
 
@@ -57,43 +49,44 @@ export type CodexAccountAuthOverview = {
 export async function readCodexAccountAuthOverview(params: {
   ctx: PluginCommandContext;
   agentDir: string;
+  authProfileId: string | null | undefined;
   pluginConfig: unknown;
   safeCodexControlRequest: SafeCodexControlRequest;
   account: SafeValue<JsonValue | undefined>;
   limits: SafeValue<JsonValue | undefined>;
 }): Promise<CodexAccountAuthOverview | undefined> {
+  if (!params.account.ok && !params.limits.ok) {
+    return undefined;
+  }
   const config = params.ctx.config;
   const agentDir = params.agentDir;
   const store = ensureAuthProfileStore(agentDir, {
     allowKeychainPrompt: false,
     config,
   });
-  const { order, explicit: explicitOrder } = resolveDisplayAuthOrder({ config, store });
+  const order = resolveDisplayAuthOrder({ config, store });
+  const activeProfileId = params.authProfileId ?? undefined;
+  if (activeProfileId && !order.includes(activeProfileId)) {
+    order.unshift(activeProfileId);
+  }
   if (order.length === 0) {
     return undefined;
   }
 
   const now = Date.now();
-  const activeProfileId = resolveActiveProfileId({
-    store,
-    order,
-    explicitOrder,
-    config,
-    account: params.account,
-    limits: params.limits,
-    now,
-  });
   const activeIsSubscription =
     activeProfileId !== undefined && isChatGptSubscriptionProfile(store.profiles[activeProfileId]);
   const subscriptionProfileId = activeIsSubscription
     ? activeProfileId
-    : order.find((profileId) => isChatGptSubscriptionProfile(store.profiles[profileId]));
+    : activeProfileId
+      ? order.find((profileId) => isChatGptSubscriptionProfile(store.profiles[profileId]))
+      : undefined;
   const activeUsage =
     activeIsSubscription && params.limits.ok
       ? summarizeCodexAccountUsage(params.limits.value, now)
       : undefined;
   const subscriptionUsage =
-    subscriptionProfileId && (!activeIsSubscription || subscriptionProfileId !== activeProfileId)
+    subscriptionProfileId && !activeIsSubscription
       ? await readSubscriptionUsage({
           ...params,
           agentDir,
@@ -102,18 +95,12 @@ export async function readCodexAccountAuthOverview(params: {
           now,
         })
       : activeUsage;
-  if (!params.account.ok && !params.limits.ok && !subscriptionUsage) {
-    return undefined;
-  }
-
-  const rows = order.map((profileId, index) =>
+  const rows = order.map((profileId) =>
     buildProfileRow({
       store,
       config,
       profileId,
       activeProfileId,
-      activeIndex: activeProfileId ? order.indexOf(activeProfileId) : -1,
-      index,
       now,
       usage: profileId === subscriptionProfileId ? subscriptionUsage : undefined,
     }),
@@ -121,7 +108,6 @@ export async function readCodexAccountAuthOverview(params: {
   const activeRow = rows.find((row) => row.active);
   if (!activeRow) {
     return {
-      currentLine: "OpenAI credentials: no working credential",
       orderTitle: "Auth order",
       rows,
     };
@@ -130,9 +116,7 @@ export async function readCodexAccountAuthOverview(params: {
   const activeIsApiKey = activeCredential?.type === "api_key";
   const subscriptionLabel = subscriptionProfileId
     ? formatProfileLabel(subscriptionProfileId, store.profiles[subscriptionProfileId])
-    : activeIsSubscription
-      ? activeRow.label
-      : undefined;
+    : undefined;
   const subscriptionUsageLine = formatSubscriptionUsageLine(subscriptionUsage);
   return {
     ...(activeIsApiKey ? { currentLine: buildApiKeyActiveLine(activeRow, subscriptionUsage) } : {}),
@@ -143,187 +127,21 @@ export async function readCodexAccountAuthOverview(params: {
   };
 }
 
-type DisplayAuthOrder = {
-  readonly order: string[];
-  readonly explicit: boolean;
-};
-
 function resolveDisplayAuthOrder(params: {
   config: AuthProfileOrderConfig;
   store: AuthProfileStore;
-}): DisplayAuthOrder {
-  const codexOrder =
-    resolveOrder(params.store.order, OPENAI_CODEX_PROVIDER_ID) ??
-    resolveOrder(params.config?.auth?.order, OPENAI_CODEX_PROVIDER_ID);
-  if (codexOrder && codexOrder.length > 0) {
-    return { order: normalizeUniqueStringEntries(codexOrder), explicit: true };
-  }
-  const order = resolveAuthProfileOrder({
-    cfg: params.config,
-    store: params.store,
-    provider: OPENAI_CODEX_PROVIDER_ID,
-  });
-  return { order, explicit: hasExplicitOpenAiAuthOrder(params) };
-}
-
-function hasExplicitOpenAiAuthOrder(params: {
-  config: AuthProfileOrderConfig;
-  store: AuthProfileStore;
-}): boolean {
-  const sources = [params.store.order, params.config?.auth?.order];
-  for (const source of sources) {
-    const codex = resolveOrder(source, OPENAI_CODEX_PROVIDER_ID);
-    if (codex && codex.length > 0) {
-      return true;
-    }
-    const openai = resolveOrder(source, OPENAI_PROVIDER_ID);
-    if (openai && openai.length > 0) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function resolveOrder(
-  order: Record<string, string[]> | undefined,
-  provider: string,
-): string[] | undefined {
-  return findNormalizedProviderValue(order, provider);
-}
-
-function resolveActiveProfileId(params: {
-  store: AuthProfileStore;
-  order: string[];
-  explicitOrder: boolean;
-  config: AuthProfileOrderConfig;
-  account: SafeValue<JsonValue | undefined>;
-  limits: SafeValue<JsonValue | undefined>;
-  now: number;
-}): string | undefined {
-  const liveProfileId = resolveLiveAccountProfileId({
-    account: params.account,
-    store: params.store,
-    order: params.order,
-  });
-  if (liveProfileId) {
-    return liveProfileId;
-  }
-  // Explicit auth order (`models auth order set` or `config.auth.order`) is
-  // authoritative for the status display and overrides `lastGood`/usage
-  // heuristics, matching the core `resolveAuthProfileOrder` precedence so the
-  // display does not silently disagree with the runtime resolver. When no
-  // fully-usable candidate exists return undefined — marking an ineligible
-  // profile as active would misrepresent what the runtime resolver can use.
-  if (params.explicitOrder) {
-    return params.order.find(
-      (profileId) =>
-        isActiveProfileCandidate(params, profileId) &&
-        resolveAuthProfileEligibility({
-          cfg: params.config,
-          store: params.store,
-          provider: OPENAI_CODEX_PROVIDER_ID,
-          profileId,
-          now: params.now,
-        }).eligible,
-    );
-  }
-  const lastGood = [
-    params.store.lastGood?.[OPENAI_PROVIDER_ID],
-    params.store.lastGood?.[OPENAI_CODEX_PROVIDER_ID],
-  ].find(
-    (profileId): profileId is string =>
-      typeof profileId === "string" &&
-      params.order.includes(profileId) &&
-      isActiveProfileCandidate(params, profileId),
-  );
-  if (lastGood) {
-    return lastGood;
-  }
-  const mostRecent = params.order
-    .map((profileId) => ({
-      profileId,
-      lastUsed: params.store.usageStats?.[profileId]?.lastUsed ?? 0,
-    }))
-    .filter((entry) => entry.lastUsed > 0 && isActiveProfileCandidate(params, entry.profileId))
-    .toSorted((left, right) => right.lastUsed - left.lastUsed)[0]?.profileId;
-  if (mostRecent) {
-    return mostRecent;
-  }
-  if (shouldInferApiKeyActiveFromRateLimitProbe(params.limits)) {
-    const apiKeyProfile = params.order.find(
-      (profileId) => params.store.profiles[profileId]?.type === "api_key",
-    );
-    if (apiKeyProfile) {
-      return apiKeyProfile;
-    }
+}): string[] {
+  const explicitOrder =
+    findNormalizedProviderValue(params.store.order, OPENAI_PROVIDER_ID) ??
+    findNormalizedProviderValue(params.config?.auth?.order, OPENAI_PROVIDER_ID);
+  if (explicitOrder && explicitOrder.length > 0) {
+    return normalizeUniqueStringEntries(explicitOrder);
   }
   return resolveAuthProfileOrder({
     cfg: params.config,
     store: params.store,
-    provider: OPENAI_CODEX_PROVIDER_ID,
-  })[0];
-}
-
-function isActiveProfileCandidate(
-  params: { store: AuthProfileStore; now: number },
-  profileId: string,
-): boolean {
-  const unusableUntil = resolveProfileUnusableUntilForDisplay(params.store, profileId);
-  return !isActiveUntil(unusableUntil ?? undefined, params.now);
-}
-
-function resolveLiveAccountProfileId(params: {
-  account: SafeValue<JsonValue | undefined>;
-  store: AuthProfileStore;
-  order: string[];
-}): string | undefined {
-  if (!params.account.ok || !isJsonObject(params.account.value)) {
-    return undefined;
-  }
-  const account = isJsonObject(params.account.value.account)
-    ? params.account.value.account
-    : params.account.value;
-  const type = normalizeOptionalString(account.type)?.toLowerCase();
-  if (type === "chatgpt") {
-    const email = normalizeOptionalString(account.email)?.toLowerCase();
-    const accountId = normalizeOptionalString(account.accountId ?? account.chatgptAccountId);
-    const subscriptionProfiles = params.order.filter((profileId) =>
-      isChatGptSubscriptionProfile(params.store.profiles[profileId]),
-    );
-    if (accountId) {
-      const exactWorkspace = subscriptionProfiles.find((profileId) => {
-        const credential = params.store.profiles[profileId];
-        return credential && "accountId" in credential && credential.accountId === accountId;
-      });
-      if (exactWorkspace) {
-        return exactWorkspace;
-      }
-    }
-    const matchingProfiles = email
-      ? subscriptionProfiles.filter((profileId) => {
-          const credential = params.store.profiles[profileId];
-          const profileEmail =
-            credential?.email?.trim().toLowerCase() ?? extractEmailFromProfileId(profileId);
-          return profileEmail?.toLowerCase() === email;
-        })
-      : subscriptionProfiles;
-    const lastGood = params.store.lastGood?.[OPENAI_PROVIDER_ID];
-    return (
-      (lastGood && matchingProfiles.includes(lastGood) ? lastGood : undefined) ??
-      matchingProfiles[0] ??
-      subscriptionProfiles[0]
-    );
-  }
-  if (type === "apikey" || type === "api_key") {
-    return params.order.find((profileId) => params.store.profiles[profileId]?.type === "api_key");
-  }
-  return undefined;
-}
-
-function shouldInferApiKeyActiveFromRateLimitProbe(
-  limits: SafeValue<JsonValue | undefined>,
-): boolean {
-  return !limits.ok && limits.error.toLowerCase().includes("chatgpt authentication required");
+    provider: OPENAI_PROVIDER_ID,
+  });
 }
 
 async function readSubscriptionUsage(params: {
@@ -356,8 +174,6 @@ function buildProfileRow(params: {
   config: AuthProfileOrderConfig;
   profileId: string;
   activeProfileId?: string;
-  activeIndex: number;
-  index: number;
   now: number;
   usage?: CodexAccountUsageSummary;
 }): CodexAccountAuthRow {
@@ -368,14 +184,13 @@ function buildProfileRow(params: {
   const status = active
     ? "active now"
     : params.usage?.blocked
-      ? formatUsageBlockedStatus(params.usage)
+      ? "rate-limited"
       : describeInactiveProfileStatus({
           store: params.store,
           config: params.config,
           profileId: params.profileId,
           credential,
           now: params.now,
-          afterActive: params.activeIndex >= 0 && params.index > params.activeIndex,
         });
   return {
     profileId: params.profileId,
@@ -384,12 +199,7 @@ function buildProfileRow(params: {
     status,
     active,
     ...(credential?.type === "api_key" && active ? { billingNote: "billed per token" } : {}),
-    ...(params.usage?.usageLine ? { usage: params.usage.usageLine } : {}),
   };
-}
-
-function formatUsageBlockedStatus(usage: CodexAccountUsageSummary): string {
-  return usage.blocked ? "rate-limited" : "available if needed";
 }
 
 function describeInactiveProfileStatus(params: {
@@ -398,12 +208,11 @@ function describeInactiveProfileStatus(params: {
   profileId: string;
   credential?: AuthProfileCredential;
   now: number;
-  afterActive: boolean;
 }): string {
   const stats = params.store.usageStats?.[params.profileId];
   const blockedUntil = stats?.blockedUntil;
   if (isActiveUntil(blockedUntil, params.now)) {
-    return `rate-limited - resets ${formatRelativeReset(blockedUntil, params.now)}`;
+    return `rate-limited - resets in ${formatRelativeDuration(Math.max(60_000, blockedUntil - params.now))}`;
   }
   const unusableUntil = resolveProfileUnusableUntilForDisplay(params.store, params.profileId);
   if (isActiveUntil(unusableUntil ?? undefined, params.now)) {
@@ -412,7 +221,7 @@ function describeInactiveProfileStatus(params: {
   const eligibility = resolveAuthProfileEligibility({
     cfg: params.config,
     store: params.store,
-    provider: OPENAI_CODEX_PROVIDER_ID,
+    provider: OPENAI_PROVIDER_ID,
     profileId: params.profileId,
     now: params.now,
   });
@@ -568,21 +377,4 @@ function describeEligibilityStatus(
 
 function isActiveUntil(value: number | undefined, now: number): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > now;
-}
-
-function formatRelativeReset(untilMs: number, nowMs: number): string {
-  const durationMs = Math.max(1_000, untilMs - nowMs);
-  const minuteMs = 60_000;
-  const hourMs = 60 * minuteMs;
-  const dayMs = 24 * hourMs;
-  if (durationMs < hourMs) {
-    const minutes = Math.ceil(durationMs / minuteMs);
-    return `in ${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
-  }
-  if (durationMs < dayMs) {
-    const hours = Math.ceil(durationMs / hourMs);
-    return `in ${hours} ${hours === 1 ? "hour" : "hours"}`;
-  }
-  const days = Math.ceil(durationMs / dayMs);
-  return `in ${days} ${days === 1 ? "day" : "days"}`;
 }

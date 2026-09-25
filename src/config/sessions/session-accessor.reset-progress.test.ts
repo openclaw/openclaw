@@ -1,6 +1,7 @@
 /** A fresh conversation must not inherit the prior task's progress card. */
 import path from "node:path";
 import { expect, it } from "vitest";
+import { readBoardHtml } from "../../boards/board-store.test-support.js";
 import { SqliteBoardStore } from "../../boards/sqlite-board-store.js";
 import {
   readSessionProgressCard,
@@ -53,12 +54,12 @@ it.each(
       const boards = new SqliteBoardStore({
         resolveSession: () => ({ agentId: "main", path: database.path, sessionKey }),
       });
-      boards.putWidget({
+      await boards.putWidget({
         sessionKey,
         name: "retained-widget",
         content: { kind: "html", html: "<p>Keep this dashboard</p>" },
       });
-      const boardBefore = boards.getSnapshot({ sessionKey });
+      const boardBefore = await boards.getSnapshot({ sessionKey });
       const historyBefore = await loadTranscriptEvents(scope);
       const entryBefore = loadSessionEntry(scope);
       const input =
@@ -122,8 +123,8 @@ it.each(
       expect(readSessionProgressCard(database.path, sessionKey)).toEqual(
         context === "clear" && !rollback ? null : before,
       );
-      expect(boards.getSnapshot({ sessionKey })).toEqual(boardBefore);
-      expect(boards.readWidgetHtml({ sessionKey }, "retained-widget")?.html).toBe(
+      expect(await boards.getSnapshot({ sessionKey })).toEqual(boardBefore);
+      expect((await readBoardHtml(boards, { sessionKey }, "retained-widget"))?.html).toBe(
         "<p>Keep this dashboard</p>",
       );
       if (context === "clear" && !rollback) {

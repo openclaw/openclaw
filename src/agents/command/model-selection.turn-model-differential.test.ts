@@ -19,11 +19,10 @@ vi.mock("../agent-scope.js", () => ({
   hasSessionAutoModelFallbackProvenance: () => false,
   resolveAutoFallbackPrimaryProbe: () => undefined,
   resolveAgentConfig: () => undefined,
-  resolveAgentEffectiveModelPrimary: () => undefined,
+  resolveNativeModelPrimary: () => undefined,
 }));
 vi.mock("../../auto-reply/thinking.js", () => ({
   formatThinkingLevels: () => "",
-  isThinkingLevelSupported: () => true,
   normalizeThinkLevel: (value: string | undefined) => value,
 }));
 vi.mock("../../channels/model-overrides.js", () => ({
@@ -87,17 +86,18 @@ vi.mock("../model-selection.js", () => ({
       : { provider: TURN_MODEL_DEFAULT_REF.provider, model: raw };
   },
   resolveModelAliasFromPair: () => null,
-  resolveThinkingDefault: () => "off",
 }));
 vi.mock("../model-thinking-default.js", () => ({
   resolveConfiguredThinkingDefault: () => undefined,
+  resolveThinkingSelection: () => ({ requestedLevel: "off", level: "off", supported: true }),
 }));
 vi.mock("../model-visibility-policy.js", () => ({
   createModelVisibilityPolicy: () => ({
     allowAny: true,
+    catalog: [],
     allowedCatalog: [],
     selectionAliasIndex: { byAlias: new Map(), byKey: new Map() },
-    allowsKey: () => true,
+    allows: () => true,
     resolveSelection: (ref: { provider: string; model: string }) => ref,
   }),
 }));
@@ -111,7 +111,7 @@ vi.mock("../session-runtime-compat.js", () => ({
   resolveSessionRuntimeOverrideForProvider: () => undefined,
 }));
 vi.mock("../thinking-runtime.js", () => ({
-  hasResolvedThinkingCatalogEntry: () => false,
+  needsThinkHydration: () => false,
   normalizeThinkingCatalogProviders: (catalog: unknown) => catalog,
   resolveEffectiveAgentRuntime: () => undefined,
 }));
@@ -129,11 +129,6 @@ vi.mock("./attempt-execution.shared.js", () => ({
   persistAgentSession: async ({ entry }: { entry?: SessionEntry }) => entry,
 }));
 vi.mock("./model-ref.js", () => ({
-  normalizeAgentCommandDefaultModelRef: (
-    _cfg: OpenClawConfig,
-    provider: string,
-    model: string,
-  ) => ({ provider, model }),
   normalizeAgentCommandModelRef: (_cfg: OpenClawConfig, provider: string, model: string) => ({
     provider,
     model,

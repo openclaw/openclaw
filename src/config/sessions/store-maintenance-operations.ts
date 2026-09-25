@@ -1,6 +1,7 @@
 // Storage-neutral session maintenance operations for the file-backed session store.
 import path from "node:path";
-import { enforceSessionDiskBudget, type SessionDiskBudgetSweepResult } from "./disk-budget.js";
+import { enforceSessionDiskBudget } from "./disk-budget.js";
+import type { SessionDiskBudgetSweepResult } from "./disk-budget.types.js";
 import { planSessionEntryMaintenance } from "./store-maintenance-plan.js";
 import { collectSessionMaintenancePreserveKeysForStore } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
@@ -220,7 +221,7 @@ async function applyEnforcedMaintenance(params: {
     maintenance: params.maintenance,
     initialUnarchivedCount: countUnarchivedSessionEntries(params.operation.store),
     forceMaintenance: params.forceMaintenance,
-    preserveKeys: params.preserveSessionKeys,
+    readPreserveKeys: () => params.preserveSessionKeys,
     readAgeCandidates: () => params.operation.store,
     readCapCandidates: () => ({
       store: params.operation.store,

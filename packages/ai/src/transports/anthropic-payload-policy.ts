@@ -6,12 +6,13 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { getAiTransportHost } from "../host.js";
 import type { AnthropicContextManagementOptions } from "../provider-options.js";
 import { isAnthropicOAuthApiKey } from "../providers/anthropic-auth-headers.js";
-import { ANTHROPIC_CLAUDE_CODE_BILLING_SYSTEM_BLOCK } from "../providers/anthropic-model-contract.js";
+import { ANTHROPIC_CLAUDE_CODE_VERSION } from "../providers/anthropic-model-contract.js";
 import { resolveCacheRetention } from "../providers/cache-retention.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import {
   splitSystemPromptCacheBoundary,
   stripSystemPromptCacheBoundary,
+  stripSystemPromptRelocatableBoundary,
 } from "../utils/system-prompt-cache-boundary.js";
 /**
  * Anthropic-family request payload policy helpers.
@@ -194,6 +195,7 @@ export function buildAnthropicSystemBlocks(
   systemPrompt: string | undefined,
   isOAuthToken: boolean,
   cacheControl: AnthropicEphemeralCacheControl | undefined,
+  claudeCodeVersion = ANTHROPIC_CLAUDE_CODE_VERSION,
 ): TextBlockParam[] | undefined {
   const blocks: TextBlockParam[] = systemPrompt
     ? [{ type: "text", text: sanitizeSurrogates(systemPrompt) }]
@@ -212,7 +214,10 @@ export function buildAnthropicSystemBlocks(
       ? undefined
       : cacheControl;
     blocks.unshift(
-      { type: "text", text: ANTHROPIC_CLAUDE_CODE_BILLING_SYSTEM_BLOCK },
+      {
+        type: "text",
+        text: `x-anthropic-billing-header: cc_version=${claudeCodeVersion}; cc_entrypoint=sdk-cli;`,
+      },
       {
         type: "text",
         text: "You are Claude Code, Anthropic's official CLI for Claude.",
@@ -265,11 +270,16 @@ function applyAnthropicCacheControlToSystem(
       continue;
     }
     const record = block as Record<string, unknown>;
-    if (record.type !== "text" || typeof record.text !== "string") {
+    const blockText = record.text;
+    if (record.type !== "text" || typeof blockText !== "string") {
       normalizedBlocks.push(block);
       continue;
     }
-    const split = splitSystemPromptCacheBoundary(record.text);
+    // This transport relocates nothing, so the relocatable marker must not
+    // survive into the payload; the cache boundary stays for the breakpoint.
+    const text = stripSystemPromptRelocatableBoundary(blockText);
+    record.text = text;
+    const split = splitSystemPromptCacheBoundary(text);
     if (!split) {
       if (record.cache_control === undefined) {
         record.cache_control = cacheControl;

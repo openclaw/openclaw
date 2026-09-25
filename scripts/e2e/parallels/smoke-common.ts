@@ -260,6 +260,49 @@ export function npmRegistryEnv(registry?: string): Record<string, string> {
   return registry ? { NPM_CONFIG_REGISTRY: registry, npm_config_registry: registry } : {};
 }
 
+export function posixAgentTurnScript(input: {
+  command: string;
+  sessionIdExpression: string;
+  retrySessionIdExpression: string;
+  printOutput: "cat" | "print_log_tail";
+}): string {
+  return `agent_ok=false
+for attempt in 1 2; do
+  session_id=${input.sessionIdExpression}
+  if [ "$attempt" -gt 1 ]; then session_id=${input.retrySessionIdExpression}; fi
+  rm -f "$HOME/.openclaw/agents/main/sessions/$session_id.jsonl"
+  output_file="$(mktemp)"
+  set +e
+  ${input.command} >"$output_file" 2>&1
+  rc=$?
+  set -e
+  ${input.printOutput} "$output_file"
+  if [ "$rc" -ne 0 ]; then
+    if [ "$attempt" -lt 2 ] && repair_missing_codex_platform_package "$output_file"; then
+      rm -f "$output_file"
+      echo "agent turn attempt $attempt hit a missing Codex platform package; retrying"
+      continue
+    fi
+    rm -f "$output_file"
+    exit "$rc"
+  fi
+  if grep -Eq '"finalAssistant(Raw|Visible)Text"[[:space:]]*:[[:space:]]*"OK"' "$output_file"; then
+    agent_ok=true
+    rm -f "$output_file"
+    break
+  fi
+  rm -f "$output_file"
+  if [ "$attempt" -lt 2 ]; then
+    echo "agent turn attempt $attempt finished without OK response; retrying"
+    sleep 3
+  fi
+done
+if [ "$agent_ok" != true ]; then
+  echo "openclaw agent finished without OK response" >&2
+  exit 1
+fi`;
+}
+
 export function posixStopGatewayScript(managedCommand?: string): string {
   // Embedded turns require exclusive state ownership. Unmanaged stop sends
   // SIGTERM without waiting; Darwin pads the run loop's process title with spaces.

@@ -10,11 +10,15 @@ import {
   LEGACY_UPDATE_COMPAT_CHUNKS,
   listFirstHopSourceVersions,
   markFutureUpdateFixture,
+  packFirstHopUpdateFixture,
   packFutureUpdateFixture,
+  packUnsupportedAdmissionFixture,
   removeLegacyUpdateCompatChunks,
 } from "../../scripts/e2e/lib/update-first-hop-package-fixtures.mjs";
+import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
 import { UPDATE_COMPATIBILITY_CHUNK_HEADER } from "../../scripts/lib/update-compat-contract.mjs";
 import { inspectControlUiRootAssets } from "../../src/infra/control-ui-assets.js";
+import { collectPackageDistContentInventoryErrors } from "../../src/infra/package-dist-inventory.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -30,6 +34,7 @@ function makePackageFixture() {
     name: "openclaw",
     version: "2026.8.1",
     dependencies: { "@openclaw/ai": "2026.8.1" },
+    openclaw: { schemaVersions: { state: 1, agent: 1 }, updateAdmissionProtocol: 1 },
   });
   writeJson(path.join(root, "dist", "build-info.json"), {
     version: "2026.8.1",
@@ -51,6 +56,35 @@ function makePackageFixture() {
 }
 
 describe("first-hop package fixtures", () => {
+  it.each([
+    "first-hop-tarball",
+    "future-tarball",
+    "negative-tarball",
+    "unsupported-admission-tarball",
+    "future",
+    "negative",
+  ])("keeps modern content inventories valid for %s", async (method) => {
+    const root = tempDirs.make("openclaw-fixture-content-inventory-");
+    const packageRoot = path.join(root, "package");
+    fs.cpSync(makePackageFixture(), packageRoot, { recursive: true });
+    await writePackageDistInventory(packageRoot);
+    let transformedRoot = packageRoot;
+    const args = ["scripts/e2e/lib/update-first-hop-package-fixtures.mjs", method];
+    if (method.endsWith("-tarball")) {
+      const source = path.join(root, "source.tgz");
+      const output = path.join(root, "transformed.tgz");
+      execFileSync("tar", ["-czf", source, "-C", root, "package"]);
+      execFileSync(process.execPath, [...args, source, output]);
+      const extracted = path.join(root, "extracted");
+      fs.mkdirSync(extracted);
+      execFileSync("tar", ["-xzf", output, "-C", extracted]);
+      transformedRoot = path.join(extracted, "package");
+    } else {
+      execFileSync(process.execPath, [...args, packageRoot]);
+    }
+    expect(await collectPackageDistContentInventoryErrors(transformedRoot)).toEqual([]);
+  });
+
   it("selects recorded baselines and verifies their bytes before choosing restart controls", () => {
     const root = makePackageFixture();
     const createSource = (version: string) => {
@@ -98,6 +132,13 @@ describe("first-hop package fixtures", () => {
     });
     expect(listFirstHopSourceVersions(root)).toEqual(
       Object.values(sources).map(({ version }) => version),
+    );
+    expect(listFirstHopSourceVersions(root, "2026.9.3, 2026.9.1")).toEqual([
+      "2026.9.1",
+      "2026.9.3",
+    ]);
+    expect(() => listFirstHopSourceVersions(root, "2026.9.2 2026.9.9")).toThrow(
+      "first-hop sources are not recorded in the candidate: 2026.9.9",
     );
     const inspect = ({ version, tarball }: ReturnType<typeof createSource>) =>
       inspectFirstHopSource(root, tarball, { version });
@@ -148,6 +189,17 @@ describe("first-hop package fixtures", () => {
     const native = "current-runtime-12345678.mjs";
     const stable = "new-runtime.js";
     const metadata = "dist/update-compat-inventory.json";
+    const inventoryPath = path.join(root, "dist/postinstall-inventory.json");
+    const legacyPaths = new Set(LEGACY_UPDATE_COMPAT_CHUNKS.map((name) => `dist/${name}`));
+    writeJson(
+      inventoryPath,
+      JSON.parse(fs.readFileSync(inventoryPath, "utf8")).filter(
+        (entry: string) => !legacyPaths.has(entry),
+      ),
+    );
+    for (const name of LEGACY_UPDATE_COMPAT_CHUNKS) {
+      fs.rmSync(path.join(root, "dist", name));
+    }
     writeJson(path.join(root, metadata), {
       releases: [{ chunks: [{ path: bridge }, { path: stable }, { path: native }] }],
     });
@@ -158,7 +210,6 @@ describe("first-hop package fixtures", () => {
       path.join(root, "dist", bridge),
       `${UPDATE_COMPATIBILITY_CHUNK_HEADER}\nexport {};\n`,
     );
-    const inventoryPath = path.join(root, "dist/postinstall-inventory.json");
     writeJson(inventoryPath, [
       ...JSON.parse(fs.readFileSync(inventoryPath, "utf8")),
       metadata,
@@ -216,59 +267,138 @@ describe("first-hop package fixtures", () => {
     }
   });
 
-  it("packs distinct self-update targets without changing the candidate artifact", () => {
-    const root = tempDirs.make("openclaw-same-schema-fixtures-");
-    fs.cpSync(makePackageFixture(), path.join(root, "package"), { recursive: true });
-    const uiFiles = {
-      "index.html": `<html data-openclaw-control-ui-build-id="old-build-${"a".repeat(64)}"><script src="./assets/startup.js"></script></html>`,
-      "assets/startup.js": 'globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO = { buildId: "old-build" };',
-      "sw.js": 'const EMBEDDED_CACHE_VERSION = "old-build";',
-    };
-    for (const [relative, contents] of Object.entries(uiFiles)) {
-      const file = path.join(root, "package", "dist", "control-ui", relative);
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(file, contents);
-    }
-    const candidate = path.join(root, "candidate.tgz");
-    execFileSync("tar", ["-czf", candidate, "-C", root, "package"]);
-    const original = fs.readFileSync(candidate);
-    const receipts = [0, 1].map((sequence) => {
-      const output = path.join(root, `future-${sequence}.tgz`);
-      const receipt = packFutureUpdateFixture(candidate, output, sequence);
-      const pkg = JSON.parse(
-        execFileSync("tar", ["-xOf", output, "package/package.json"], { encoding: "utf8" }),
-      );
-      expect(pkg.version).toBe(receipt.targetVersion);
-      expect(pkg.dependencies).toEqual({ "@openclaw/ai": "2026.8.1" });
-      expect(
-        execFileSync("tar", ["-xOf", output, "package/dist/index.js"], { encoding: "utf8" }),
-      ).toBe("export {};\n");
-      expect(receipt.sourceVersion).toBe("2026.8.1");
-      const unpacked = path.join(root, `unpacked-${sequence}`);
-      fs.mkdirSync(unpacked);
-      execFileSync("tar", ["-xzf", output, "-C", unpacked]);
-      const buildInfo = JSON.parse(
-        fs.readFileSync(path.join(unpacked, "package", "dist", "build-info.json"), "utf8"),
-      );
-      expect(buildInfo.version).toBe(receipt.targetVersion);
-      const uiRoot = path.join(unpacked, "package", "dist", "control-ui");
-      expect(inspectControlUiRootAssets(uiRoot, buildInfo.buildId)).toMatchObject({
-        kind: "ready",
-      });
-      for (const [relative, contents] of Object.entries(uiFiles)) {
-        expect(fs.readFileSync(path.join(uiRoot, relative), "utf8")).toBe(contents);
+  it.each(["corrupt member", "missing advertised inventory"])(
+    "does not hide %s when producing future fixtures",
+    async (fault) => {
+      const root = makePackageFixture();
+      await writePackageDistInventory(root);
+      if (fault === "missing advertised inventory") {
+        fs.rmSync(path.join(root, "dist/postinstall-content-inventory.json"));
+        expect(() => markFutureUpdateFixture(root)).toThrow("ENOENT");
+      } else {
+        fs.writeFileSync(path.join(root, "dist/index.js"), "export const unexpected = true;\n");
+        markFutureUpdateFixture(root);
+        expect(await collectPackageDistContentInventoryErrors(root)).not.toEqual([]);
       }
-      return receipt;
-    });
-    expect(receipts.map((receipt) => receipt.targetVersion)).toEqual([
-      "2026.9.99-first-hop.0",
-      "2026.9.99-first-hop.1",
-    ]);
-    expect(new Set(receipts.map((receipt) => receipt.targetSha256)).size).toBe(2);
-    expect(fs.readFileSync(candidate)).toEqual(original);
-    expect(() => packFutureUpdateFixture(candidate, candidate)).toThrow("new tarball path");
-    expect(fs.readFileSync(candidate)).toEqual(original);
-  });
+    },
+  );
+
+  it.each([false, true])(
+    "packs distinct self-update targets without changing the candidate artifact (content inventory: %s)",
+    async (contentInventory) => {
+      const root = tempDirs.make("openclaw-same-schema-fixtures-");
+      fs.cpSync(makePackageFixture(), path.join(root, "package"), { recursive: true });
+      const uiFiles = {
+        "index.html": `<html data-openclaw-control-ui-build-id="old-build-${"a".repeat(64)}"><script src="./assets/startup.js"></script></html>`,
+        "assets/startup.js":
+          'globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO = { buildId: "old-build" };',
+        "sw.js": 'const EMBEDDED_CACHE_VERSION = "old-build";',
+      };
+      for (const [relative, contents] of Object.entries(uiFiles)) {
+        const file = path.join(root, "package", "dist", "control-ui", relative);
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, contents);
+      }
+      if (contentInventory) {
+        await writePackageDistInventory(path.join(root, "package"));
+      }
+      const candidate = path.join(root, "candidate.tgz");
+      execFileSync("tar", ["-czf", candidate, "-C", root, "package"]);
+      const original = fs.readFileSync(candidate);
+      const receipts: ReturnType<typeof packFirstHopUpdateFixture>[] = [];
+      for (const sequence of [0, 1, 2]) {
+        const output = path.join(root, `future-${sequence}.tgz`);
+        const input = sequence === 0 ? candidate : path.join(root, `future-${sequence - 1}.tgz`);
+        const receipt =
+          sequence === 0
+            ? packFirstHopUpdateFixture(input, output, sequence)
+            : sequence === 1
+              ? packFutureUpdateFixture(input, output, sequence)
+              : packUnsupportedAdmissionFixture(input, output, sequence);
+        const unpacked = path.join(root, `unpacked-${sequence}`);
+        fs.mkdirSync(unpacked);
+        execFileSync("tar", ["-xzf", output, "-C", unpacked]);
+        expect(
+          await collectPackageDistContentInventoryErrors(path.join(unpacked, "package")),
+        ).toEqual([]);
+        expect(
+          fs.existsSync(path.join(unpacked, "package", "dist/postinstall-content-inventory.json")),
+        ).toBe(contentInventory);
+        const pkg = JSON.parse(
+          execFileSync("tar", ["-xOf", output, "package/package.json"], { encoding: "utf8" }),
+        );
+        expect(pkg.version).toBe(receipt.targetVersion);
+        expect(pkg.dependencies).toEqual({ "@openclaw/ai": "2026.8.1" });
+        expect(pkg.openclaw).toEqual({
+          schemaVersions: { state: 1, agent: 1 },
+          ...(sequence === 2 ? {} : { updateAdmissionProtocol: 1 }),
+        });
+        expect(
+          execFileSync("tar", ["-xOf", output, "package/dist/index.js"], { encoding: "utf8" }),
+        ).toBe("export {};\n");
+        expect(receipt.sourceVersion).toBe(
+          sequence === 0 ? "2026.8.1" : `2026.9.99-first-hop.${sequence - 1}`,
+        );
+        expect(receipt.members.changes.map((entry: { path: string }) => entry.path)).toEqual(
+          [
+            "dist/build-info.json",
+            "package.json",
+            ...(contentInventory ? ["dist/postinstall-content-inventory.json"] : []),
+            ...(sequence === 1
+              ? [
+                  "dist/postinstall-inventory.json",
+                  ...LEGACY_UPDATE_COMPAT_CHUNKS.map((name) => `dist/${name}`),
+                ]
+              : []),
+          ].toSorted((left, right) => left.localeCompare(right)),
+        );
+        const members = execFileSync("tar", ["-tzf", output], { encoding: "utf8" });
+        for (const change of receipt.members.changes) {
+          const entry = `package/${change.path}`;
+          const beforeBytes = execFileSync("tar", ["-xOf", input, entry]);
+          expect(change.before).toBe(createHash("sha256").update(beforeBytes).digest("hex"));
+          expect(change.after).toBe(
+            members.split("\n").includes(entry)
+              ? createHash("sha256")
+                  .update(execFileSync("tar", ["-xOf", output, entry]))
+                  .digest("hex")
+              : null,
+          );
+        }
+        for (const bridge of LEGACY_UPDATE_COMPAT_CHUNKS) {
+          expect(members.includes(`package/dist/${bridge}`)).toBe(sequence === 0);
+          if (sequence === 0) {
+            expect(execFileSync("tar", ["-xOf", output, `package/dist/${bridge}`])).toEqual(
+              execFileSync("tar", ["-xOf", candidate, `package/dist/${bridge}`]),
+            );
+          }
+        }
+        const buildInfo = JSON.parse(
+          fs.readFileSync(path.join(unpacked, "package", "dist", "build-info.json"), "utf8"),
+        );
+        expect(buildInfo.version).toBe(receipt.targetVersion);
+        const uiRoot = path.join(unpacked, "package", "dist", "control-ui");
+        expect(inspectControlUiRootAssets(uiRoot, buildInfo.buildId)).toMatchObject({
+          kind: "ready",
+        });
+        for (const [relative, contents] of Object.entries(uiFiles)) {
+          expect(fs.readFileSync(path.join(uiRoot, relative), "utf8")).toBe(contents);
+        }
+        receipts.push(receipt);
+      }
+      expect(receipts.map((receipt) => receipt.targetVersion)).toEqual([
+        "2026.9.99-first-hop.0",
+        "2026.9.99-first-hop.1",
+        "2026.9.99-first-hop.2",
+      ]);
+      expect(new Set(receipts.map((receipt) => receipt.targetSha256)).size).toBe(3);
+      expect(receipts[1]?.sourceSha256).toBe(receipts[0]?.targetSha256);
+      expect(receipts[2]?.sourceSha256).toBe(receipts[1]?.targetSha256);
+      expect(fs.readFileSync(candidate)).toEqual(original);
+      expect(() => packFutureUpdateFixture(candidate, candidate)).toThrow("new tarball path");
+      expect(fs.readFileSync(candidate)).toEqual(original);
+    },
+  );
 
   it.each([0, 1])(
     "packs the runtime plugin in future cohort %s without changing its payload",
@@ -417,8 +547,20 @@ describe("first-hop package fixtures", () => {
       fs.mkdirSync(bin);
       fs.cpSync(makePackageFixture(), path.join(root, "package"), { recursive: true });
       const sourceTarballs: Record<string, string> = {};
+      let releases: Array<{
+        version: string;
+        integrity: string;
+        chunks: Array<{
+          path: string;
+          imports: Array<{ owner: string; exports: string[] }>;
+        }>;
+      }> = [];
       if (sourceMode === "recorded") {
-        const releases = ["2026.9.1", "2026.9.2", "2026.9.3"].map((version) => {
+        releases = ["2026.9.1", "2026.9.2", "2026.9.3"].map((version, index) => {
+          const expectedChunk = LEGACY_UPDATE_COMPAT_CHUNKS[index];
+          if (!expectedChunk) {
+            throw new Error(`missing recorded compatibility chunk fixture ${index}`);
+          }
           const sourceRoot = path.join(root, version);
           writeJson(path.join(sourceRoot, "package/package.json"), { name: "openclaw", version });
           writeJson(path.join(sourceRoot, "package/dist/build-info.json"), { version });
@@ -428,11 +570,21 @@ describe("first-hop package fixtures", () => {
           return {
             version,
             integrity: `sha512-${createHash("sha512").update(fs.readFileSync(sourceTarball)).digest("base64")}`,
-            chunks: [],
+            chunks: [
+              {
+                path: expectedChunk,
+                imports: [
+                  {
+                    owner: "src/cli/update-cli/update-command-service-command.ts",
+                    exports: ["resolveNodeRunner"],
+                  },
+                ],
+              },
+            ],
           };
         });
-        writeJson(path.join(root, "package/dist/update-compat-inventory.json"), { releases });
       }
+      writeJson(path.join(root, "package/dist/update-compat-inventory.json"), { releases });
       execFileSync("tar", ["-czf", tarball, "-C", root, "package"]);
       writeJson(path.join(registry, "prepublish-plugin-registry.json"), {
         candidateVersion: "2026.8.1",
@@ -444,12 +596,22 @@ describe("first-hop package fixtures", () => {
         `#!${process.execPath}
 import fs from "node:fs";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 if (process.argv[2] === "run") {
   const args = process.argv.slice(3);
   fs.appendFileSync(process.env.DOCKER_ARGS_FILE, JSON.stringify(args) + "\\n");
   const artifact = args.find(arg => arg.endsWith(":/tmp/openclaw-update-first-hop-artifacts")).split(":")[0];
   const source = JSON.parse(fs.readFileSync(path.join(artifact, "source.json"), "utf8"));
-  fs.writeFileSync(path.join(artifact, "summary.json"), JSON.stringify({ source }));
+  const inspect = (name) => {
+    const mount = args.find(arg => arg.endsWith(":/tmp/openclaw-update-first-hop-" + name + ".tgz:ro"));
+    if (!mount) return undefined;
+    const archive = mount.split(":")[0];
+    const manifest = JSON.parse(execFileSync("tar", ["-xOf", archive, "package/package.json"], { encoding: "utf8" }));
+    const entries = execFileSync("tar", ["-tzf", archive], { encoding: "utf8" }).trim().split("\\n");
+    return { version: manifest.version, entries };
+  };
+  fs.writeFileSync(path.join(artifact, "summary.json"), JSON.stringify({ source,
+    candidate: inspect("candidate"), negative: inspect("negative"), future: inspect("future"), original: inspect("original") }));
 }
 `,
         { mode: 0o755 },
@@ -493,12 +655,64 @@ process.stdout.write(JSON.stringify([{ filename }]));
         .split("\n")
         .map((line) => JSON.parse(line));
       expect(invocations).toHaveLength(sourceMode === "explicit" ? 1 : 3);
+      const firstFixture = JSON.parse(
+        fs.readFileSync(path.join(root, "artifacts/first-hop-fixture.json"), "utf8"),
+      );
+      const secondFixture = JSON.parse(
+        fs.readFileSync(path.join(root, "artifacts/second-hop-fixture.json"), "utf8"),
+      );
+      expect(firstFixture.sourceSha256).toBe(
+        createHash("sha256").update(fs.readFileSync(tarball)).digest("hex"),
+      );
+      expect(firstFixture.members.changes.map((entry: { path: string }) => entry.path)).toEqual([
+        "dist/build-info.json",
+        "package.json",
+      ]);
+      expect(secondFixture.sourceSha256).toBe(firstFixture.targetSha256);
+      expect(secondFixture.removedCompatibilityChunks).toEqual([]);
+      expect(secondFixture.retainedLegacyCompatibilityChunks).toEqual(LEGACY_UPDATE_COMPAT_CHUNKS);
+      const recorded = JSON.parse(
+        fs.readFileSync(path.join(root, "artifacts/summary.json"), "utf8"),
+      );
+      const packages = sourceMode === "recorded" ? recorded.sources : [recorded];
+      for (const artifact of packages) {
+        const fixtureDirectory =
+          sourceMode === "recorded"
+            ? path.join(root, "artifacts", artifact.source.version)
+            : path.join(root, "artifacts");
+        const negativeFixture = JSON.parse(
+          fs.readFileSync(path.join(fixtureDirectory, "negative-fixture.json"), "utf8"),
+        );
+        expect(
+          JSON.parse(
+            fs.readFileSync(path.join(fixtureDirectory, "second-hop-fixture.json"), "utf8"),
+          ),
+        ).toEqual(secondFixture);
+        expect(negativeFixture.sourceSha256).toBe(firstFixture.targetSha256);
+        expect(negativeFixture.sourceVersion).toBe(negativeFixture.targetVersion);
+        expect(negativeFixture.removedCompatibilityChunks).toEqual([
+          `dist/${artifact.source.expectedMissingChunk}`,
+        ]);
+        expect(artifact.candidate.version).toBe("2026.9.99-first-hop.0");
+        expect(artifact.negative.version).toBe("2026.9.99-first-hop.0");
+        expect(artifact.future.version).toBe("2026.9.99-first-hop.1");
+        expect(artifact.original.version).toBe("2026.8.1");
+        for (const bridge of LEGACY_UPDATE_COMPAT_CHUNKS) {
+          expect(artifact.candidate.entries).toContain(`package/dist/${bridge}`);
+          if (bridge === artifact.source.expectedMissingChunk) {
+            expect(artifact.negative.entries).not.toContain(`package/dist/${bridge}`);
+          } else {
+            expect(artifact.negative.entries).toContain(`package/dist/${bridge}`);
+          }
+          expect(artifact.future.entries).toContain(`package/dist/${bridge}`);
+        }
+      }
       for (const args of invocations) {
         expect(args[args.indexOf("--entrypoint") + 1]).toBe(
           "/opt/openclaw-e2e/scripts/e2e/lib/prepublish-plugin-registry.sh",
         );
         expect(args).toContain(`${registry}:/tmp/openclaw-prepublish-plugin-registry:ro`);
-        expect(args).toContain(`${tarball}:/tmp/openclaw-update-first-hop-candidate.tgz:ro`);
+        expect(args).toContain(`${tarball}:/tmp/openclaw-update-first-hop-original.tgz:ro`);
         expect(args).toContain("OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION=2026.8.1");
         expect(args).toContain("bash");
         expect(args).toContain("scripts/e2e/lib/upgrade-survivor/update-first-hop-compat.sh");
@@ -511,10 +725,15 @@ process.stdout.write(JSON.stringify([{ filename }]));
           summary.sources.map((entry: { source: { version: string } }) => entry.source.version),
         ).toEqual(["2026.9.1", "2026.9.2", "2026.9.3"]);
         expect(
-          invocations.every((args) =>
-            args.includes("OPENCLAW_UPDATE_FIRST_HOP_EXPECTED_MISSING_CHUNK="),
+          invocations.map((args) =>
+            args.find((arg) => arg.startsWith("OPENCLAW_UPDATE_FIRST_HOP_EXPECTED_MISSING_CHUNK=")),
           ),
-        ).toBe(true);
+        ).toEqual(
+          summary.sources.map(
+            (entry: { source: { expectedMissingChunk: string } }) =>
+              `OPENCLAW_UPDATE_FIRST_HOP_EXPECTED_MISSING_CHUNK=${entry.source.expectedMissingChunk}`,
+          ),
+        );
       }
     },
   );

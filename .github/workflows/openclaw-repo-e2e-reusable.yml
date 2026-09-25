@@ -3,6 +3,11 @@ name: OpenClaw Repo E2E (Reusable)
 on:
   workflow_call:
     inputs:
+      runner_group:
+        description: Optional dedicated release runner group; empty retains the current labels
+        required: false
+        default: ""
+        type: string
       ref:
         required: true
         type: string
@@ -19,9 +24,6 @@ on:
         required: true
         type: string
       use_github_hosted_runners:
-        required: true
-        type: boolean
-      advisory:
         required: true
         type: boolean
       allow_unreleased_changelog:
@@ -42,13 +44,15 @@ env:
   OPENCLAW_VITEST_MAX_WORKERS: "2"
   OPENCLAW_DOCKER_E2E_ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog }}
   OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: ${{ inputs.allow_frozen_target_scenario_omissions && '1' || '0' }}
+  OPENCLAW_SELECTED_SHA: ${{ inputs.ref }}
+  OPENCLAW_TOOLING_SHA: ${{ inputs.workflow_sha }}
+  OPENCLAW_DOCKER_E2E_REPO_ROOT: ${{ github.workspace }}
   OPENCLAW_UPGRADE_SURVIVOR_TARGET_ROOT: ${{ github.workspace }}
 
 jobs:
   build:
     name: Build repo E2E (${{ inputs.build_profile }})
-    continue-on-error: ${{ inputs.advisory }}
-    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON(inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404'))) || (inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404') }}
     timeout-minutes: 90
     outputs:
       artifact_id: ${{ steps.upload.outputs.artifact-id }}
@@ -69,12 +73,17 @@ jobs:
           path: .release-harness
           fetch-depth: 1
           persist-credentials: false
-          sparse-checkout: scripts
+          # The native artifact entrypoint imports the shared private-plugin policy.
+          sparse-checkout: |
+            /package.json
+            /scripts/
+            /src/shared/non-packaged-plugin-dirs.ts
+          sparse-checkout-cone-mode: false
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
           cache-mode: restore
-          node-version: "24.19.0"
+          node-version: "24.21.0"
           install-bun: "true"
           build-all-cache-scope: full
       - name: Build dist for repo E2E
@@ -106,8 +115,7 @@ jobs:
   test:
     name: Repo E2E (${{ matrix.name }})
     needs: build
-    continue-on-error: ${{ inputs.advisory }}
-    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON(inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404'))) || (inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404') }}
     timeout-minutes: 90
     strategy:
       fail-fast: false
@@ -121,7 +129,7 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           cache-mode: restore
-          node-version: "24.19.0"
+          node-version: "24.21.0"
           install-bun: "true"
       - name: Download repo E2E build
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8

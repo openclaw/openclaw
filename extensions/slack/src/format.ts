@@ -1,6 +1,7 @@
 // Slack helper module supports format behavior.
 import { eastAsianWidthType } from "get-east-asian-width";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
+import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import {
   chunkTextForOutbound,
   FormatCapabilityProfile,
@@ -210,7 +211,10 @@ function tokenizeSlackMrkdwn(text: string): string[] {
       index += 3;
       continue;
     }
-    const entity = ["&amp;", "&lt;", "&gt;"].find((candidate) => text.startsWith(candidate, index));
+    const entity =
+      text[index] === "&"
+        ? ["&amp;", "&lt;", "&gt;"].find((candidate) => text.startsWith(candidate, index))
+        : undefined;
     if (entity) {
       tokens.push(entity);
       index += entity.length;
@@ -419,11 +423,8 @@ function buildSlackRenderOptions({ enclosingStyle, mentions }: SlackMarkdownOpti
   };
 }
 
-export function normalizeSlackOutboundText(
-  markdown: string,
-  options: SlackMarkdownOptions = {},
-): string {
-  const ir = makeSlackEmphasisStylesSafe(
+function prepareSlackMarkdownIR(markdown: string, options: SlackMarkdownOptions): MarkdownIR {
+  return makeSlackEmphasisStylesSafe(
     markdownToIR(markdown ?? "", {
       assistantTranscriptRoleHeaders: true,
       linkify: false,
@@ -433,6 +434,13 @@ export function normalizeSlackOutboundText(
       tableMode: options.tableMode,
     }),
   );
+}
+
+export function normalizeSlackOutboundText(
+  markdown: string,
+  options: SlackMarkdownOptions = {},
+): string {
+  const ir = prepareSlackMarkdownIR(markdown, options);
   return protectSlackAssistantTranscriptRoleHeaders(
     renderMarkdownWithMarkers(ir, buildSlackRenderOptions(options), SLACK_FORMAT_PROFILE),
   );
@@ -518,24 +526,25 @@ export function markdownToSlackMrkdwnChunks(
   limit: number,
   options: SlackMarkdownOptions = {},
 ): string[] {
-  const ir = makeSlackEmphasisStylesSafe(
-    markdownToIR(markdown ?? "", {
-      assistantTranscriptRoleHeaders: true,
-      linkify: false,
-      autolink: false,
-      headingStyle: "rich",
-      blockquotePrefix: "> ",
-      tableMode: options.tableMode,
-    }),
-  );
+  const ir = prepareSlackMarkdownIR(markdown, options);
   const renderOptions = buildSlackRenderOptions();
+  const normalizedLimit =
+    limit === Number.POSITIVE_INFINITY ? limit : resolveIntegerOption(limit, 1, { min: 1 });
   return renderMarkdownIRChunksWithinLimit({
     ir,
-    limit,
-    renderChunk: (chunk) =>
-      protectSlackAssistantTranscriptRoleHeaders(
-        renderMarkdownWithMarkers(chunk, renderOptions, SLACK_FORMAT_PROFILE),
-      ),
+    limit: normalizedLimit,
+    renderChunk: (chunk) => {
+      const rendered = renderMarkdownWithMarkers(chunk, renderOptions, SLACK_FORMAT_PROFILE);
+      // Protection only adds a prefix, so an oversized probe cannot become a fit.
+      return rendered.length > normalizedLimit
+        ? rendered
+        : protectSlackAssistantTranscriptRoleHeaders(rendered);
+    },
     measureRendered: (rendered) => rendered.length,
-  }).map(({ rendered }) => rendered);
+  }).map(({ rendered }) =>
+    // Unsplittable safety fallbacks still need protection before leaving Slack.
+    rendered.length > normalizedLimit
+      ? protectSlackAssistantTranscriptRoleHeaders(rendered)
+      : rendered,
+  );
 }

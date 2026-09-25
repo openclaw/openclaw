@@ -6,6 +6,7 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as loggingConfigModule from "../logging/config.js";
+import { prepareModelVisibleToolTextBlock } from "../logging/redact.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { castAgentMessage } from "./test-helpers/agent-message-fixtures.js";
@@ -73,6 +74,131 @@ const OPENAI_REASONING_REPLAY_METADATA = {
 } as const;
 
 describe("redactTranscriptMessage", () => {
+  it.each(["addition", "eviction", "reset"] as const)(
+    "rechecks prepared tool text after a secret registry %s",
+    (change) => {
+      resetSecretRedactionRegistryForTest();
+      const config = cfg("tools", ["unrelated-value"]);
+      const loggingConfig = vi
+        .spyOn(loggingConfigModule, "readLoggingConfig")
+        .mockReturnValue(config.logging);
+      try {
+        if (change === "eviction") {
+          for (let index = 0; index < 512; index += 1) {
+            registerSecretValueForRedaction(`registry-fill-${index.toString().padStart(3, "0")}`);
+          }
+        } else if (change === "reset") {
+          registerSecretValueForRedaction("previous-registry-value");
+        }
+        const secret = "abcdefghijklmnopqrst";
+        const prepared = prepareModelVisibleToolTextBlock({
+          type: "text",
+          text: `unclassified(${secret})`,
+          apiKey: "private",
+        });
+        const message: AgentMessage = {
+          role: "toolResult",
+          toolCallId: "late-registration-call",
+          toolName: "lookup",
+          content: [prepared],
+          isError: false,
+          timestamp: 0,
+        };
+        const ownedClone = redactTranscriptMessage(message, config);
+        expect(msgContent(ownedClone)).toEqual([
+          { type: "text", text: `unclassified(${secret})`, apiKey: "***" },
+        ]);
+        if (change === "reset") {
+          resetSecretRedactionRegistryForTest();
+        }
+        registerSecretValueForRedaction(secret);
+        for (const candidate of [message, ownedClone]) {
+          expect(msgContent(redactTranscriptMessage(candidate, config))).toEqual([
+            { type: "text", text: "unclassified(abcdef…qrst)", apiKey: "***" },
+          ]);
+        }
+      } finally {
+        loggingConfig.mockRestore();
+        resetSecretRedactionRegistryForTest();
+      }
+    },
+  );
+
+  it("revalidates prepared tool text against explicit and mutated pattern policies", () => {
+    const patterns = [String.raw`/opaque\(([^)]+)\)/g`];
+    const config = cfg("tools", patterns);
+    const loggingConfig = vi
+      .spyOn(loggingConfigModule, "readLoggingConfig")
+      .mockReturnValue(config.logging);
+    try {
+      const prepared = prepareModelVisibleToolTextBlock({
+        type: "text",
+        text: "opaque(abcdefghijklmnopqrst) extra(01234567890123456789)",
+      });
+      const message: AgentMessage = {
+        role: "toolResult",
+        toolCallId: "policy-call",
+        toolName: "lookup",
+        content: [prepared],
+        isError: false,
+        timestamp: 0,
+      };
+      expect(msgContent(redactTranscriptMessage(message, cfg("tools", [...patterns])))).toEqual([
+        { type: "text", text: "opaque(abcdef…qrst) extra(01234567890123456789)" },
+      ]);
+      const extraPattern = String.raw`/extra\(([^)]+)\)/g`;
+      expect(msgContent(redactTranscriptMessage(message, cfg("tools", [extraPattern])))).toEqual([
+        { type: "text", text: "opaque(abcdef…qrst) extra(012345…6789)" },
+      ]);
+      patterns.push(extraPattern);
+      expect(msgContent(redactTranscriptMessage(message, config))).toEqual([
+        { type: "text", text: "opaque(***) extra(012345…6789)" },
+      ]);
+    } finally {
+      loggingConfig.mockRestore();
+    }
+  });
+
+  it("reuses only byte-matching owned tool text, not fresh copies or changed text", () => {
+    const config = cfg("tools", [String.raw`/opaque\(([^)]+)\)/g`]);
+    const loggingConfig = vi
+      .spyOn(loggingConfigModule, "readLoggingConfig")
+      .mockReturnValue(config.logging);
+    try {
+      const raw = "opaque(abcdefghijklmnopqrst)";
+      const prepared = prepareModelVisibleToolTextBlock({
+        type: "text",
+        text: raw,
+        apiKey: "private",
+      });
+      const message: AgentMessage = {
+        role: "toolResult",
+        toolCallId: "lookup-call",
+        toolName: "lookup",
+        content: [prepared],
+        isError: false,
+        timestamp: 0,
+      };
+      const persisted = redactTranscriptMessage(message, config);
+      const expected = [{ type: "text", text: "opaque(abcdef…qrst)", apiKey: "***" }];
+      expect(msgContent(persisted)).toEqual(expected);
+      expect(msgContent(redactTranscriptMessage(persisted, config))).toEqual(expected);
+      const copied: AgentMessage = {
+        ...message,
+        content: structuredClone(message.content),
+      };
+      expect(msgContent(redactTranscriptMessage(copied, config))).toEqual([
+        { type: "text", text: "opaque(***)", apiKey: "***" },
+      ]);
+      prepared.text = raw;
+      expect(msgContent(redactTranscriptMessage(message, config))).toEqual([
+        { type: "text", text: "opaque(abcdef…qrst)", apiKey: "***" },
+      ]);
+    } finally {
+      loggingConfig.mockRestore();
+    }
+  });
+
   it.each(["private-prefix", "person"])(
     "drops human mention bindings when redacting %s without mutating source metadata",
     (pattern) => {
@@ -661,17 +787,37 @@ describe("redactTranscriptMessage", () => {
     expect(JSON.stringify(result)).not.toContain("sk-abcdef1234567890xyz");
   });
 
-  it("preserves validated Anthropic compaction state while redacting its summary", () => {
-    const msg = castAgentMessage({
-      role: "assistant",
-      api: "anthropic-messages",
-      model: "claude-sonnet-4-6",
-      provider: "anthropic",
-      content: [{ type: "text", text: "visible" }],
-      providerReplay: {
+  it.each([undefined, null, CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES])(
+    "preserves validated Anthropic compaction state and opaque metadata %s while redacting its summary",
+    (encryptedContent) => {
+      const msg = castAgentMessage({
+        role: "assistant",
+        api: "anthropic-messages",
+        model: "claude-sonnet-4-6",
+        provider: "anthropic",
+        content: [{ type: "text", text: "visible" }],
+        providerReplay: {
+          v: 1,
+          type: "anthropic-compaction",
+          data: "summary containing sk-abcdef1234567890xyz",
+          replayIndex: 0,
+          provider: "anthropic",
+          api: "anthropic-messages",
+          model: "claude-sonnet-4-6",
+          baseUrlHash: "ozhevd1smnk8s",
+          sessionHash: "171dzdv17gum5g",
+          authProfileHash: "oe8bkr3r8947",
+          ...(encryptedContent !== undefined ? { encryptedContent } : {}),
+          secret: "sk-another-secret-value",
+        },
+      });
+
+      const result = redactTranscriptMessage(msg, cfg("tools"));
+
+      expect(result).toHaveProperty("providerReplay", {
         v: 1,
         type: "anthropic-compaction",
-        data: "summary containing sk-abcdef1234567890xyz",
+        data: expect.stringContaining("summary containing"),
         replayIndex: 0,
         provider: "anthropic",
         api: "anthropic-messages",
@@ -679,29 +825,12 @@ describe("redactTranscriptMessage", () => {
         baseUrlHash: "ozhevd1smnk8s",
         sessionHash: "171dzdv17gum5g",
         authProfileHash: "oe8bkr3r8947",
-        secret: "sk-another-secret-value",
-      },
-    });
-
-    const result = redactTranscriptMessage(msg, cfg("tools")) as unknown as {
-      providerReplay: Record<string, unknown>;
-    };
-
-    expect(result.providerReplay).toMatchObject({
-      v: 1,
-      type: "anthropic-compaction",
-      replayIndex: 0,
-      provider: "anthropic",
-      api: "anthropic-messages",
-      model: "claude-sonnet-4-6",
-      baseUrlHash: "ozhevd1smnk8s",
-      sessionHash: "171dzdv17gum5g",
-      authProfileHash: "oe8bkr3r8947",
-    });
-    expect(result.providerReplay.data).toContain("summary containing");
-    expect(JSON.stringify(result)).not.toContain("sk-abcdef1234567890xyz");
-    expect(result.providerReplay).not.toHaveProperty("secret");
-  });
+        ...(encryptedContent !== undefined ? { encryptedContent } : {}),
+      });
+      expect(JSON.stringify(result)).not.toContain("sk-abcdef1234567890xyz");
+      expect(result).not.toHaveProperty("providerReplay.secret");
+    },
+  );
 
   it("preserves Anthropic suppression and drops malformed or foreign replay state", () => {
     const base = {
@@ -722,14 +851,18 @@ describe("redactTranscriptMessage", () => {
           api: "anthropic-messages",
           model: "claude-sonnet-4-6",
           baseUrlHash: "ozhevd1smnk8s",
+          encryptedContent: CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES,
         },
       }),
       cfg("tools"),
-    ) as unknown as { providerReplay: Record<string, unknown> };
-    expect(suppression.providerReplay).toMatchObject({
-      type: "anthropic-compaction-suppression",
-      data: "rejected",
+    );
+    expect(suppression).toMatchObject({
+      providerReplay: {
+        type: "anthropic-compaction-suppression",
+        data: "rejected",
+      },
     });
+    expect(suppression).not.toHaveProperty("providerReplay.encryptedContent");
 
     for (const providerReplay of [
       {
@@ -750,6 +883,16 @@ describe("redactTranscriptMessage", () => {
         model: "claude-sonnet-4-6",
         baseUrlHash: "ozhevd1smnk8s",
       },
+      ...[42, "not an opaque token"].map((encryptedContent) => ({
+        v: 1,
+        type: "anthropic-compaction",
+        data: "summary",
+        provider: "anthropic",
+        api: "anthropic-messages",
+        model: "claude-sonnet-4-6",
+        baseUrlHash: "ozhevd1smnk8s",
+        encryptedContent,
+      })),
     ]) {
       const result = redactTranscriptMessage(
         castAgentMessage({ ...base, providerReplay }),

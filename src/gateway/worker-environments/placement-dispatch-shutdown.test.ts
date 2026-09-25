@@ -1,7 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
-import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import {
+  createWorkerPlacementInitialRecovery,
+  installWorkerPlacementReconcileGuard,
+} from "../server-worker-placement-reconcile-guard.js";
 import { WorkerDispatchTargetChangedError } from "../server-worker-placement-session-target.js";
+import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
 import {
   MANIFEST_REF,
   REQUEST,
@@ -21,7 +29,10 @@ describe("worker placement shutdown replay", () => {
   it("retains interrupted fresh provisioning and activates the same operation after restart", async () => {
     support.testState.prepareInstallation = async () => ({
       ...support.BUNDLE_ARTIFACT,
-      protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+      protocolFeatures: [
+        WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+        WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+      ],
     });
     const interrupted = createDeferredCore<never>();
     const provisionStarted = createDeferredCore();
@@ -87,12 +98,34 @@ describe("worker placement shutdown replay", () => {
       stop: vi.fn(),
     }));
     const attach = vi.spyOn(restarted, "attachSession");
-    const recovery = createRecoveryService(placements, restarted);
+    const recovery = coordinateWorkerPlacementDispatch(
+      createRecoveryService(placements, restarted),
+      (_request, run) => run(),
+      createWorkerPlacementInitialRecovery({
+        placements,
+        environments: restarted,
+        isStopping: () => false,
+      }),
+    );
+    const uninstallGuard = installWorkerPlacementReconcileGuard({
+      placements,
+      environments: restarted,
+      dispatch: recovery,
+      isStopping: () => false,
+    });
     const owner = placements.get(REQUEST.sessionId)!;
     if (owner.state !== "provisioning") {
       throw new Error("restart lost its provisioning owner");
     }
-    await recovery.resumeProvisioning(owner, () => restarted.reconcileEnvironment(environmentId));
+    try {
+      const ready = await Promise.all([
+        recovery.waitForInitialPlacement(owner),
+        recovery.waitForInitialPlacement(owner),
+      ]);
+      expect(ready).toEqual([placements.get(REQUEST.sessionId), placements.get(REQUEST.sessionId)]);
+    } finally {
+      await uninstallGuard();
+    }
 
     expect(placements.get(REQUEST.sessionId)).toMatchObject({ state: "active", environmentId });
     expect(support.testState.store.get(environmentId)).toMatchObject({
@@ -116,7 +149,7 @@ describe("worker placement shutdown replay", () => {
       const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
       const environments = support.createService(support.createProvider());
       const intent = deriveEnvironmentIntent(`session-dispatch:${REQUEST.sessionId}:1`);
-      support.testState.store.createIntent({
+      await support.testState.store.createIntent({
         ...intent,
         providerId: "fake",
         profileId: "development",
@@ -163,7 +196,7 @@ describe("worker placement shutdown replay", () => {
     new WorkerDispatchTargetChangedError("session runtime changed"),
   ])("tears down an invalid recovery owner during shutdown: %s", async (error) => {
     const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
-    const harness = createHarness(placements, {
+    const harness = createHarness(support.testState.stateDb, placements, {
       isShuttingDown: () => true,
       recoveryBarrierError: error,
     });
@@ -199,7 +232,7 @@ describe("worker placement shutdown replay", () => {
             .list()
             .find((record) => record.provisionOperationId === operationId)!;
           if (destroyRequested) {
-            support.testState.store.requestDestroy({
+            await support.testState.store.requestDestroy({
               environmentId: environment.environmentId,
               state: environment.state,
             });

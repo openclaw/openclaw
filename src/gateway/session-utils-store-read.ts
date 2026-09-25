@@ -1,12 +1,17 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import type { SessionEntry } from "../config/sessions.js";
+import { ok, type Result } from "@openclaw/normalization-core/result";
 import {
   listSessionEntriesCore as listAccessorSessionEntries,
   listSessionEntriesReadOnly as listAccessorSessionEntriesReadOnly,
   loadExactSessionEntryCandidates,
   loadExactSessionEntryCandidatesReadOnlyBatch,
-  type SessionEntryListScope,
 } from "../config/sessions/session-accessor.js";
+import type {
+  CapturedSessionEntryReadSource,
+  SessionEntryListScope,
+  SessionEntryReadSource,
+} from "../config/sessions/session-accessor.types.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 
 /**
  * Request-scoped store reuse.
@@ -18,31 +23,48 @@ import {
  * request, so cached stores are read-only to their holder; the cache is never
  * process-global, so it cannot serve a later request stale rows.
  */
-export type GatewaySessionStoreCache = Map<string, Record<string, SessionEntry>>;
+type GatewaySessionStoreView = {
+  store: Record<string, SessionEntry>;
+  readSource?: SessionEntryReadSource;
+  capturedReadSource?: CapturedSessionEntryReadSource;
+};
+
+export type GatewaySessionStoreCache = Map<string, GatewaySessionStoreView>;
 
 export type GatewaySessionStoreRead = {
   storePath: string;
   clone?: boolean;
   agentId?: string;
   options: NonNullable<Parameters<typeof loadGatewaySessionLookupStore>[3]>;
-  store?: Record<string, SessionEntry>;
+  result?: Result<Record<string, SessionEntry>, unknown>;
+  readSource?: SessionEntryReadSource;
+  capturedReadSource?: CapturedSessionEntryReadSource;
 };
 
 /** Single-target resolution keeps its original lazy read and failure order. */
 export function readGatewaySessionStore(
   read: GatewaySessionStoreRead,
 ): Record<string, SessionEntry> {
-  return (read.store ??= loadGatewaySessionLookupStore(
-    read.storePath,
-    read.clone,
-    read.agentId,
-    read.options,
-  ));
+  if (read.result === undefined) {
+    const loaded = loadGatewaySessionLookupStore(
+      read.storePath,
+      read.clone,
+      read.agentId,
+      read.options,
+    );
+    read.result = ok(loaded.store);
+    read.readSource = loaded.readSource;
+    read.capturedReadSource = loaded.capturedReadSource;
+  }
+  if (!read.result.ok) {
+    throw read.result.error;
+  }
+  return read.result.value;
 }
 
 /** Populate exact logical lookups without materializing unrelated store entries. */
 export function loadGatewaySessionStoreReads(reads: readonly GatewaySessionStoreRead[]): void {
-  const pending = reads.filter((read) => read.store === undefined);
+  const pending = reads.filter((read) => read.result === undefined);
   const results = loadExactSessionEntryCandidatesReadOnlyBatch(
     pending.map((read) => ({
       agentId: read.agentId,
@@ -50,14 +72,20 @@ export function loadGatewaySessionStoreReads(reads: readonly GatewaySessionStore
       projection: read.options.projection,
       clone: false,
       sessionKeys: expectDefined(read.options.exactKeys, "exact batch lookup keys"),
+      onReadSource: (source) => {
+        read.readSource = source;
+      },
     })),
   );
   for (const [index, read] of pending.entries()) {
     const result = expectDefined(results[index], "exact batch lookup result");
-    // Preserve the existing per-logical-target unreadable-store behavior.
-    read.store = result.ok
-      ? Object.fromEntries(result.value.map(({ sessionKey, entry }) => [sessionKey, entry]))
-      : {};
+    // Consume failures per logical target so prepared callers retain independent results.
+    read.result = result.ok
+      ? ok(Object.fromEntries(result.value.map(({ sessionKey, entry }) => [sessionKey, entry])))
+      : result;
+    if (!result.ok) {
+      read.readSource = undefined;
+    }
   }
 }
 
@@ -69,12 +97,15 @@ function loadGatewaySessionLookupStore(
     readOnly?: boolean;
     cache?: GatewaySessionStoreCache;
     exactKeys?: readonly string[];
+    listKeys?: readonly string[];
     projection?: SessionEntryListScope["projection"];
+    readConsistency?: SessionEntryListScope["readConsistency"];
+    readSource?: SessionEntryReadSource;
   } = {},
-): Record<string, SessionEntry> {
+): GatewaySessionStoreView {
   const cache = options.cache;
   const cacheKey = cache
-    ? `${storePath}\u0000${agentId ?? ""}\u0000${clone === false ? "0" : "1"}\u0000${options.readOnly}\u0000${options.projection ?? "full"}\u0000${options.exactKeys?.join("\u0001") ?? ""}`
+    ? `${storePath}\u0000${agentId ?? ""}\u0000${clone === false ? "0" : "1"}\u0000${options.readOnly}\u0000${options.projection ?? "full"}\u0000${options.readConsistency ?? ""}\u0000${options.exactKeys?.join("\u0001") ?? ""}\u0000${options.listKeys ? JSON.stringify(options.listKeys) : ""}`
     : "";
   if (cache) {
     const cached = cache.get(cacheKey);
@@ -91,38 +122,53 @@ function loadGatewaySessionLookupStoreUncached(
   storePath: string,
   clone: boolean | undefined,
   agentId?: string,
-  options: {
-    exactKeys?: readonly string[];
-    readOnly?: boolean;
-    projection?: SessionEntryListScope["projection"];
-  } = {},
-): Record<string, SessionEntry> {
-  try {
-    if (options.exactKeys) {
-      // Borrowed listing views and probes never create stores; ordinary owned reads may.
-      return Object.fromEntries(
-        loadExactSessionEntryCandidates({
+  options: NonNullable<Parameters<typeof loadGatewaySessionLookupStore>[3]> = {},
+): GatewaySessionStoreView {
+  if (options.exactKeys) {
+    // Borrowed listing views and probes never create stores; ordinary owned reads may.
+    let readSource: SessionEntryReadSource | undefined;
+    let capturedReadSource: CapturedSessionEntryReadSource | undefined;
+    const target = options.readSource
+      ? { readSource: options.readSource, readOnly: true as const }
+      : {
           ...(agentId ? { agentId } : {}),
-          clone: false,
-          projection: options.projection,
-          sessionKeys: options.exactKeys,
-          readOnly: options.readOnly !== false || clone === false,
           storePath,
-        }).map(({ sessionKey, entry }) => [sessionKey, entry]),
-      );
-    }
-    const listEntries = options.readOnly
-      ? listAccessorSessionEntriesReadOnly
-      : listAccessorSessionEntries;
-    return Object.fromEntries(
+          readOnly: options.readOnly !== false || clone === false,
+        };
+    const entries = loadExactSessionEntryCandidates({
+      ...target,
+      projection: options.projection,
+      sessionKeys: options.exactKeys,
+      onReadSource: (source, physical) => {
+        readSource = source;
+        capturedReadSource = physical
+          ? {
+              ...source,
+              databaseIdentity: physical.identity,
+              databaseBirthtime: physical.birthtime,
+            }
+          : undefined;
+      },
+    });
+    return {
+      store: Object.fromEntries(entries.map(({ sessionKey, entry }) => [sessionKey, entry])),
+      ...(readSource ? { readSource } : {}),
+      ...(capturedReadSource ? { capturedReadSource } : {}),
+    };
+  }
+  const listEntries = options.readOnly
+    ? listAccessorSessionEntriesReadOnly
+    : listAccessorSessionEntries;
+  return {
+    store: Object.fromEntries(
       listEntries({
         ...(agentId ? { agentId } : {}),
         ...(clone === false ? { clone: false } : {}),
         ...(options.projection ? { projection: options.projection } : {}),
+        ...(options.readConsistency ? { readConsistency: options.readConsistency } : {}),
+        ...(options.listKeys ? { sessionKeys: options.listKeys } : {}),
         storePath,
       }).map(({ sessionKey, entry }) => [sessionKey, entry]),
-    );
-  } catch {
-    return {};
-  }
+    ),
+  };
 }

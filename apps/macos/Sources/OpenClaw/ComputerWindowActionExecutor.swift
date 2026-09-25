@@ -271,6 +271,10 @@ final class ComputerWindowActionExecutor {
     private func getWindowState(
         _ params: OpenClawComputerActParams) async throws -> OpenClawComputerActResult
     {
+        guard params.includeScreenshot != false else {
+            throw ComputerActionService.ComputerActionError.invalidRequest(
+                "includeScreenshot:false is unsupported by Peekaboo; use CUA for capture-free window observations")
+        }
         let windowRef = try Self.require(params.windowRef, field: "windowRef")
         let target = try self.resolveWindow(windowRef)
         let limits = try Self.observationLimits(params)

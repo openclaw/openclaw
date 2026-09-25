@@ -25,6 +25,8 @@ The pages below are the deep end: the trust model, what the audit checks, and ho
   users or hosts.
 </Note>
 
+Agents with message-tool access can send across conversations and channel providers by default. If your deployment needs messaging confined to the current provider or conversation, configure [cross-provider messaging restrictions](/gateway/security/tool-permissions#cross-provider-messaging).
+
 ## Security pages
 
 Understand the model:
@@ -32,6 +34,7 @@ Understand the model:
 - [Security trust model](/gateway/security/trust-model) - One trust boundary per gateway, the boundary matrix, and the findings closed as no-action.
 - [Running the security audit](/gateway/security/running-the-audit) - What `openclaw security audit` checks and the order to fix findings in.
 - [Security audit checks](/gateway/security/audit-checks) - Reference catalog of every `checkId`, its severity, and its auto-fix support.
+- [Threat model](/security/THREAT-MODEL-ATLAS) - Adversarial threats to the OpenClaw platform and ClawHub, mapped to MITRE ATLAS.
 
 Harden a deployment:
 
@@ -48,8 +51,14 @@ Harden a deployment:
 Expose and operate:
 
 - [Gateway exposure runbook](/gateway/security/exposure-runbook) - Pre-flight and rollback checklist before exposing the Gateway beyond loopback.
+- [Trusted proxy auth](/gateway/trusted-proxy-auth) - Running the Gateway behind a reverse proxy that supplies the operator identity.
 - [Rate limiting](/gateway/security/rate-limiting) - Every Gateway rate limit: lockouts, throttles, caps, and cooldowns.
 - [Operator incident response](/gateway/security/operator-incident-response) - Contain, rotate, audit, and collect evidence after a suspected compromise.
+
+Run it from the CLI:
+
+- [`openclaw security`](/cli/security) - Run the audit, read findings, and apply the supported auto-fixes.
+- [`openclaw policy`](/cli/policy) - Inspect and test the tool policy the guidance above configures.
 
 ## Where each section moved
 

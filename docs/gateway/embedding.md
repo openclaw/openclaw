@@ -13,7 +13,7 @@ replaceable runtime. This keeps process ownership, readiness, failure recovery,
 and upgrades explicit without depending on OpenClaw's private state layout.
 
 For client authentication and reconnect state, read
-[Building a Gateway client](https://docs.openclaw.ai/gateway/clients).
+[Building a Gateway client](/gateway/clients).
 
 ## Start the child with an embedding preset
 
@@ -161,7 +161,7 @@ bundle, or vendor selected extension files.
 
 ## Related
 
-- [Building a Gateway client](https://docs.openclaw.ai/gateway/clients)
-- [Gateway protocol](https://docs.openclaw.ai/gateway/protocol)
-- [Gateway CLI](https://docs.openclaw.ai/cli/gateway)
-- [Gateway integrations for external apps](https://docs.openclaw.ai/gateway/external-apps)
+- [Building a Gateway client](/gateway/clients)
+- [Gateway protocol](/gateway/protocol)
+- [Gateway CLI](/cli/gateway)
+- [Gateway integrations for external apps](/gateway/external-apps)

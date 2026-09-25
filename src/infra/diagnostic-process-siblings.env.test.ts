@@ -1,8 +1,12 @@
-import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import fs, { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { forceFreePort, forceFreePortAndWait } from "../cli/ports.js";
+import { setLoggerOverride } from "../logging/logger.js";
+import { loggingState } from "../logging/state.js";
 import {
   createDiagnosticFixtureRouting,
   diagnosticCanaries,
@@ -13,7 +17,13 @@ import { readActiveGatewayLockIdentity } from "./gateway-lock.js";
 import { cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } from "./restart-stale-pids.js";
 import { spawnPsSync } from "./spawn-ps.js";
 
-const mocks = vi.hoisted(() => ({ exec: vi.fn(), spawn: vi.fn(), probe: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  exec: vi.fn(),
+  spawn: vi.fn(),
+  probe: vi.fn(),
+  darwinCommand: vi.fn(),
+}));
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
   execFileSync: mocks.exec,
@@ -21,17 +31,93 @@ vi.mock("node:child_process", async (importOriginal) => ({
 }));
 vi.mock("./ports-lsof.js", () => ({ resolveLsofCommandSync: () => "lsof" }));
 vi.mock("./ports-probe.js", () => ({ probePortUsage: mocks.probe }));
+vi.mock("../process/supervisor/darwin-process-command.js", () => ({
+  readDarwinProcessCommand: mocks.darwinCommand,
+}));
 
 afterEach(() => {
   vi.restoreAllMocks();
   vi.resetAllMocks();
 });
 
+it("enforces the lock observation deadline after native argv inspection", async () => {
+  const root = tempDirs.make("lock-argv-budget-");
+  await writeFile(
+    path.join(root, "gateway.state.lock"),
+    JSON.stringify({
+      pid: 424242,
+      port: 43123,
+      createdAt: "2026-09-03T00:00:00Z",
+      configPath: path.join(root, "openclaw.json"),
+    }),
+  );
+  vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+  vi.spyOn(process, "kill").mockReturnValue(true);
+  let elapsedMs = 0;
+  vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
+  mocks.darwinCommand.mockImplementation(() => {
+    elapsedMs += 125;
+    return { argv: ["openclaw-gateway"] };
+  });
+
+  await expect(
+    readActiveGatewayLockIdentity({
+      lockDir: root,
+      env: { OPENCLAW_STATE_DIR: root },
+      requireInspection: true,
+      timeoutMs: 125,
+    }),
+  ).rejects.toThrow();
+  expect(elapsedMs).toBe(125);
+});
+
+it("stops a canceled lock observation before process inspection resumes", async () => {
+  const root = tempDirs.make("lock-observation-cancel-");
+  const lockPath = path.join(root, "gateway.state.lock");
+  const entered = createDeferred();
+  const released = createDeferred<string>();
+  const readFile = fs.readFile;
+  vi.spyOn(fs, "readFile").mockImplementation(async (filePath, options) => {
+    if (filePath === lockPath) {
+      entered.resolve();
+      return await released.promise;
+    }
+    return await readFile(filePath, options);
+  });
+  const readProcessStartTime = vi.fn(() => 111);
+  const controller = new AbortController();
+  const observed = readActiveGatewayLockIdentity({
+    env: { OPENCLAW_STATE_DIR: root },
+    lockDir: root,
+    requireInspection: true,
+    signal: controller.signal,
+    readProcessStartTime,
+  }).catch((error: unknown) => error);
+  try {
+    await entered.promise;
+    const reason = new Error("observation canceled");
+    controller.abort(reason);
+    released.resolve(
+      JSON.stringify({
+        pid: process.pid,
+        createdAt: "2026-09-03T00:00:00Z",
+        configPath: path.join(root, "openclaw.json"),
+        startTime: 111,
+        port: 48789,
+      }),
+    );
+    expect(await observed).toBe(reason);
+    expect(readProcessStartTime).not.toHaveBeenCalled();
+  } finally {
+    released.resolve("");
+    await observed;
+  }
+});
+
 it.each([
   "shared ps",
   "restart scan",
   "restart poll",
-  "lock argv",
   "CLI lsof",
   "CLI netstat",
   "CLI fuser",
@@ -50,13 +136,23 @@ it.each([
   vi.spyOn(process, "platform", "get").mockReturnValue(
     surface === "CLI netstat" ? "win32" : surface.startsWith("CLI fuser") ? "linux" : "darwin",
   );
+  mocks.darwinCommand.mockImplementation((pid: number) =>
+    pid === 424242 ? { argv: ["openclaw-gateway"] } : undefined,
+  );
   const killMock = vi.spyOn(process, "kill").mockImplementation(() => {
     if (surface === "restart poll") {
       throw Object.assign(new Error("gone"), { code: "ESRCH" });
     }
     return true;
   });
+  const previousLoggerOverride = loggingState.overrideSettings;
   try {
+    // Logical platform mocks must not initialize a host-specific logging temp root.
+    setLoggerOverride({
+      file: path.join(root, "diagnostic.log"),
+      level: "silent",
+      consoleLevel: "silent",
+    });
     await withSyntheticDiagnosticEnv(routing, async () => {
       const reports: Array<{ command: string; report: unknown }> = [];
       const capture = (command: string, env?: NodeJS.ProcessEnv) => {
@@ -112,19 +208,6 @@ it.each([
       } else if (surface === "restart poll") {
         expect(cleanStaleGatewayProcessesSync(43123)).toEqual([]);
         expect(lsofCalls).toBe(2);
-      } else if (surface === "lock argv") {
-        await writeFile(
-          path.join(root, "gateway.state.lock"),
-          JSON.stringify({
-            pid: 424242,
-            port: 43123,
-            createdAt: "2026-09-03T00:00:00Z",
-            configPath: path.join(root, "openclaw.json"),
-          }),
-        );
-        expect(
-          await readActiveGatewayLockIdentity({ lockDir: root, env: { OPENCLAW_STATE_DIR: root } }),
-        ).toMatchObject({ pid: 424242, port: 43123 });
       } else if (surface.startsWith("CLI fuser")) {
         mocks.probe.mockResolvedValue("busy");
         const beforeSignal = vi.fn();
@@ -163,12 +246,13 @@ it.each([
       expect(reports.length).toBeGreaterThan(0);
       for (const { command, report } of reports) {
         expect.soft(report, `${command} inherited canary presence`).toEqual({
-          present: Object.fromEntries(Object.keys(diagnosticCanaries).map((key) => [key, false])),
+          defined: Object.fromEntries(Object.keys(diagnosticCanaries).map((key) => [key, false])),
           routingPreserved: true,
         });
       }
     });
   } finally {
+    setLoggerOverride(previousLoggerOverride as Parameters<typeof setLoggerOverride>[0]);
     await rm(root, { recursive: true, force: true });
   }
 });

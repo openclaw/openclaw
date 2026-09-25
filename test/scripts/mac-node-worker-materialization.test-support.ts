@@ -11,6 +11,7 @@ import {
 import { chmod, cp, link, mkdir, rename, symlink } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect } from "vitest";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { artifactFixture, write } from "./mac-elevation-artifact.test-support.js";
 import {
   compiledMacNativeFixtures,
@@ -20,7 +21,13 @@ import {
 } from "./mac-native-fixtures.test-support.js";
 import { createMacScriptTest, type MacScriptFixture } from "./mac-script-fixture.test-support.js";
 const systemPath = "/usr/bin:/bin:/usr/sbin:/sbin";
+const testNodeExecPath = resolveTestNodeExecPath();
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+const packageTimeouts = {
+  OPENCLAW_DOCKER_PACKAGE_INVENTORY_TIMEOUT_MS: "123456",
+  OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS: "234567",
+  OPENCLAW_DOCKER_PACKAGE_TARBALL_CHECK_TIMEOUT_MS: "900000",
+};
 const materializer = "scripts/materialize-mac-node-worker.py";
 const inventory = "scripts/lib/mac-native-inventory.py";
 
@@ -31,6 +38,7 @@ type WorkerScratchObservation = {
   createdDirectory: string;
   privateRoot: string | null;
   privateRootMode: number | null;
+  packageTimeouts: Record<string, string>;
   product: string;
   productDevice: string;
   productInode: string;
@@ -148,6 +156,19 @@ async function stagingFixture(mac: MacScriptFixture) {
   await write(path.join(root, "operator-sentinel"), "ambient home must remain untouched");
   await write(path.join(tmp, "other-task/sentinel"), "unrelated scratch must survive");
   await cp("scripts/stage-mac-node-worker.sh", path.join(scripts, "stage-mac-node-worker.sh"));
+  await write(path.join(scripts, "tsx.mjs"), "");
+  await write(
+    path.join(scripts, "prune-mac-node-worker.ts"),
+    `
+const fs = require('node:fs');
+const path = require('node:path');
+const runtime = process.argv[2];
+fs.rmSync(path.join(runtime, 'lib/node_modules/openclaw/dist/control-ui'), {
+  force: true,
+  recursive: true,
+});
+`,
+  );
   await cp(materializer, path.join(scripts, path.basename(materializer)));
   await write(path.join(scripts, "lib/mac-native-inventory.py"), readFileSync(inventory));
   await write(path.join(root, "dist/build-info.json"), '{"buildId":"unchanged-build"}');
@@ -163,6 +184,9 @@ module.exports = (phase, product) => {
   assert(fs.statSync(home).isDirectory(), 'child HOME must already exist');
   assert(!fs.existsSync(path.join(home, 'operator-sentinel')), 'ambient HOME leaked');
   assert.equal(process.env.OPENCLAW_STATE_DIR, undefined, 'ambient state leaked');
+  assert.equal(process.env.OPENCLAW_GATEWAY_TOKEN, undefined, 'ambient credential leaked');
+  assert.equal(process.env.NODE_OPTIONS, undefined, 'ambient Node options leaked');
+  assert.equal(process.env.OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS, undefined, 'unused build control leaked');
   const temporary = fs.realpathSync(os.tmpdir());
   const component = path.relative(${JSON.stringify(tmp)}, temporary).split(path.sep)[0];
   const privateRoot = component && component !== '..' ? path.join(${JSON.stringify(tmp)}, component) : null;
@@ -173,6 +197,8 @@ module.exports = (phase, product) => {
   const info = fs.statSync(product, { bigint: true });
   fs.appendFileSync(${JSON.stringify(scratchLog)}, JSON.stringify({
     phase, home, temporary, createdDirectory, privateRoot,
+    packageTimeouts: Object.fromEntries(${JSON.stringify(Object.keys(packageTimeouts))}.flatMap(name =>
+      process.env[name] ? [[name, process.env[name]]] : [])),
     privateRootMode: privateRoot === null ? null : fs.statSync(privateRoot).mode & 0o777,
     product, productDevice: info.dev.toString(), productInode: info.ino.toString(),
   }) + '\\n');
@@ -200,9 +226,11 @@ console.log(target);
     `
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import path from 'node:path';
 import recordScratch from './record-scratch.cjs';
 assert.equal(process.argv[3], ${JSON.stringify(path.join(root, "dist/build-info.json"))});
 assert.equal(fs.readFileSync(process.argv[2]+'/build-info.json', 'utf8'), fs.readFileSync(process.argv[3], 'utf8'));
+assert.equal(fs.existsSync(path.join(process.argv[2], 'lib/node_modules/openclaw/dist/control-ui')), false, 'worker retained Control UI');
 recordScratch('verify', process.argv[2]);
 if (process.argv[2].includes('/x86_64/') && fs.existsSync(${JSON.stringify(path.join(root, "reject-verification"))})) process.exit(42);
 `,
@@ -221,6 +249,14 @@ if (process.argv[2].includes('/x86_64/') && fs.existsSync(${JSON.stringify(path.
       "// preserve Windows source\n",
       0o755,
     );
+    await write(
+      path.join(canonical, "lib/node_modules/openclaw/dist/control-ui/index.html"),
+      "<!doctype html>\n",
+    );
+    await write(
+      path.join(canonical, "lib/node_modules/openclaw/dist/control-ui/assets/app.js"),
+      "// Gateway-owned UI\n",
+    );
     await cp(path.join(root, "dist/build-info.json"), path.join(canonical, "build-info.json"));
     // The fixture Node is an explicit execution mock; no native payload is launched.
     await write(
@@ -230,7 +266,7 @@ set -euo pipefail
 if [[ "$1" == -e ]]; then exit 0; fi
 [[ "$1" == ${quote(path.join(scripts, "verify-mac-node-worker.mjs"))} ]] || exit 97
 printf '%s|%s|%s\\n' "$0" "$2" "$3" >> ${quote(calls)}
-exec ${quote(process.execPath)} "$@"
+exec ${quote(testNodeExecPath)} "$@"
 `,
       0o755,
     );
@@ -245,8 +281,8 @@ install_node() {
   local selected="$2"
   [[ "$selected" != x64 ]] || selected=x86_64
   mkdir -p "$PREFIX"
-  cp -R ${quote(path.join(root, "canonical"))}/"$selected" "$(node_dir)"
-  ${quote(process.execPath)} ${quote(path.join(scripts, "record-scratch.cjs"))} install "$PREFIX"
+  cp -pR ${quote(path.join(root, "canonical"))}/"$selected" "$(node_dir)"
+  ${quote(testNodeExecPath)} ${quote(path.join(scripts, "record-scratch.cjs"))} install "$PREFIX"
 }
 install_openclaw() { [[ "$(cat "$OPENCLAW_VERSION")" == "inert package mock" ]]; }
 `,
@@ -266,7 +302,7 @@ install_openclaw() { [[ "$(cat "$OPENCLAW_VERSION")" == "inert package mock" ]];
             .map((line) => JSON.parse(line) as WorkerScratchObservation)
         : [];
     },
-    async run(variant: string, tempRoot = tmp) {
+    async run(variant: string, tempRoot = tmp, overrides = {}) {
       return await mac.run(
         "/bin/bash",
         [path.join(scripts, "stage-mac-node-worker.sh"), destination, "arm64", "x86_64"],
@@ -276,8 +312,12 @@ install_openclaw() { [[ "$(cat "$OPENCLAW_VERSION")" == "inert package mock" ]];
             HOME: root,
             TMPDIR: tempRoot,
             OPENCLAW_STATE_DIR: path.join(root, "operator-state"),
-            PATH: `${path.dirname(process.execPath)}:${systemPath}`,
+            PATH: `${path.dirname(testNodeExecPath)}:${systemPath}`,
             OPENCLAW_MAC_SIGNING_VARIANT: variant,
+            OPENCLAW_GATEWAY_TOKEN: "synthetic-do-not-forward",
+            NODE_OPTIONS: "--no-warnings",
+            OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS: "345678",
+            ...overrides,
           },
         },
       );
@@ -296,13 +336,21 @@ function expectWorkerScratchCleaned(fixture: Awaited<ReturnType<typeof stagingFi
 export function registerMacWorkerMaterializationTests() {
   describe.skipIf(process.platform !== "darwin")("Mac worker materialization", () => {
     const it = createMacScriptTest();
-    it.for(["standard", "elevation-host"])(
-      "keeps %s worker scratch in caller temp and publishes runtimes by same-volume moves",
-      (variant, { mac }) =>
+    it.for(
+      ["standard", "elevation-host"].flatMap((variant) =>
+        [false, true].map((overrideBudgets) => ({ variant, overrideBudgets })),
+      ),
+    )(
+      "isolates $variant worker staging and preserves package budgets ($overrideBudgets)",
+      ({ variant, overrideBudgets }, { mac }) =>
         mac.lifetime.run(async () => {
           const fixture = await stagingFixture(mac);
           const before = snapshot(path.join(fixture.root, "canonical"));
-          const result = await fixture.run(variant);
+          const result = await fixture.run(
+            variant,
+            fixture.tmp,
+            overrideBudgets ? packageTimeouts : {},
+          );
           expect(result.status, result.stderr).toBe(0);
           expect(snapshot(path.join(fixture.root, "canonical"))).toEqual(before);
           const observations = fixture.readScratchObservations();
@@ -315,6 +363,9 @@ export function registerMacWorkerMaterializationTests() {
           ]);
           expect(new Set(observations.map(({ privateRoot }) => privateRoot)).size).toBe(1);
           for (const observation of observations) {
+            expect(observation.packageTimeouts).toEqual(
+              observation.phase === "pack" && overrideBudgets ? packageTimeouts : {},
+            );
             expect(observation.privateRoot).not.toBeNull();
             expect(path.dirname(observation.privateRoot!)).toBe(fixture.tmp);
             expect(observation.privateRootMode).toBe(0o700);
@@ -353,7 +404,9 @@ export function registerMacWorkerMaterializationTests() {
             ).toBe(verified!.productInode);
             expect(snapshot(path.join(fixture.destination, arch))).toEqual(
               snapshot(path.join(fixture.root, "canonical", arch)).filter(
-                (entry) => !["foreign.node", "opposite.node"].includes(entry.path),
+                (entry) =>
+                  !["foreign.node", "opposite.node"].includes(entry.path) &&
+                  !entry.path.startsWith("lib/node_modules/openclaw/dist/control-ui"),
               ),
             );
           }
@@ -427,6 +480,34 @@ export function registerMacWorkerMaterializationTests() {
           );
           expect(fixture.readScratchObservations()).toHaveLength(5);
           expectWorkerScratchCleaned(fixture);
+        }),
+    );
+
+    it.for(["arm64", "x86_64"])(
+      "omits the Gateway Control UI subtree from the %s private worker",
+      (arch, { mac }) =>
+        mac.lifetime.run(async () => {
+          const fixture = await materializationFixture(mac);
+          const uiRoot = path.join(fixture.source, "lib/node_modules/openclaw/dist/control-ui");
+          await write(path.join(uiRoot, "index.html"), "<!doctype html>\n");
+          await write(path.join(uiRoot, "assets/app.js"), "// Gateway-owned UI\n");
+          await write(
+            path.join(fixture.source, "lib/node_modules/openclaw/dist/entry.js"),
+            "// private worker entry\n",
+          );
+          const before = snapshot(fixture.source);
+
+          const result = await fixture.run(arch);
+
+          expect(result.status, result.stderr).toBe(0);
+          expect(snapshot(fixture.source)).toEqual(before);
+          expect(
+            existsSync(path.join(fixture.destination, "lib/node_modules/openclaw/dist/entry.js")),
+          ).toBe(true);
+          expect(
+            existsSync(path.join(fixture.destination, "lib/node_modules/openclaw/dist/control-ui")),
+          ).toBe(false);
+          expect(result.stderr).toContain("unused Control UI entries");
         }),
     );
 

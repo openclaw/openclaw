@@ -1,5 +1,7 @@
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, onTestFinished, test, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { createReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
+import { isReplyRunEvidenceStale } from "../../../auto-reply/reply/reply-run-registry.state.js";
 import {
   getAgentEventLifecycleGeneration,
   resetAgentEventsForTest,
@@ -13,7 +15,6 @@ import {
   claimAgentRunContext,
   clearAgentRunContext,
   getAgentRunContext,
-  readAgentRunIndexVersion,
   registerAgentRunContext,
   sweepStaleRunContexts,
 } from "../../../infra/agent-run-registry.js";
@@ -24,6 +25,7 @@ import {
 } from "../../../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../../process/command-queue.test-support.js";
 import { onSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
+import { sessionChanges } from "../../../sessions/session-row-changes.js";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import { installSessionPlacementAdmissionProvider } from "../../session-placement-admission.js";
 import type { EmbeddedAgentRunResult } from "../types.js";
@@ -156,7 +158,12 @@ describe("queued embedded run context liveness", () => {
     const registeredAt = 1_000;
     const admissionAt = registeredAt + CONTEXT_TTL_MS + 1;
     const clock = vi.spyOn(Date, "now").mockReturnValue(registeredAt);
-    const { controller, params } = createRunController();
+    const replyOperation = createReplyOperation({
+      sessionId: "queued-session",
+      sessionKey: "agent:main:subagent:queued",
+      resetTriggered: false,
+    });
+    const { controller, params } = createRunController({ replyOperation });
     registerAgentRunContext(params.runId, {
       agentId: "main",
       isControlUiVisible: false,
@@ -191,6 +198,7 @@ describe("queued embedded run context liveness", () => {
       expect(getCommandLaneSnapshot(GLOBAL_LANE).activeCount).toBe(1);
 
       clock.mockReturnValue(admissionAt);
+      expect(isReplyRunEvidenceStale(replyOperation)).toBe(false);
       expect(sweepStaleRunContexts()).toBe(0);
       expect(getAgentRunContext(params.runId)).toMatchObject({
         agentId: "main",
@@ -201,6 +209,7 @@ describe("queued embedded run context liveness", () => {
 
       admitPlacement?.();
       await run;
+      expect(replyOperation.phase).toBe("queued");
       expect(getAgentRunContext(params.runId)).toMatchObject({
         agentId: "main",
         isControlUiVisible: false,
@@ -216,6 +225,7 @@ describe("queued embedded run context liveness", () => {
       admitPlacement?.();
       uninstallPlacement();
       await run.catch(() => {});
+      replyOperation.complete();
     }
   });
 
@@ -230,7 +240,8 @@ describe("queued embedded run context liveness", () => {
       registeredAt,
       sessionKey: "agent:main:subagent:queued",
     });
-    const versionBeforeQueue = readAgentRunIndexVersion();
+    const changed = vi.fn();
+    onTestFinished(sessionChanges.subscribe(changed));
 
     const placementEntered = createDeferred();
     const placementAdmitted = createDeferred();
@@ -254,7 +265,12 @@ describe("queued embedded run context liveness", () => {
     try {
       await placementEntered.promise;
       expect(onLaneWait).not.toHaveBeenCalledWith(expect.objectContaining({ waiting: false }));
-      expect(readAgentRunIndexVersion()).toBe(versionBeforeQueue);
+      expect(changed).toHaveBeenCalledExactlyOnceWith({
+        sessionKey: "agent:main:subagent:queued",
+        agentId: undefined,
+        scope: "runtime",
+      });
+      changed.mockClear();
       clock.mockReturnValue(admissionAt);
       expect(sweepStaleRunContexts()).toBe(0);
       expect(getAgentRunContext(params.runId)).toBeDefined();
@@ -267,7 +283,10 @@ describe("queued embedded run context liveness", () => {
         waiting: false,
       });
       expect(getAgentRunContext(params.runId)?.lastActiveAt).toBe(admissionAt);
-      expect(readAgentRunIndexVersion()).toBe(versionBeforeQueue + 1);
+      expect(changed.mock.calls).toEqual([
+        [{ sessionKey: "agent:main:subagent:queued", agentId: undefined, scope: "runtime" }],
+        [{ sessionKey: "agent:main:subagent:queued", agentId: undefined, scope: "runtime" }],
+      ]);
       expect(localTurn).not.toHaveBeenCalled();
 
       clock.mockReturnValue(admissionAt + CONTEXT_TTL_MS + 1);
@@ -409,7 +428,8 @@ describe("queued embedded run context liveness", () => {
         const replacementGeneration = rotateAgentEventLifecycleGeneration();
         expect(sweepStaleRunContexts()).toBe(1);
         expect(getAgentRunContext(params.runId)).toBeUndefined();
-        const versionBeforeAdmission = readAgentRunIndexVersion();
+        const changed = vi.fn();
+        onTestFinished(sessionChanges.subscribe(changed));
 
         setCommandLaneConcurrency(GLOBAL_LANE, 1);
         await run;
@@ -418,7 +438,7 @@ describe("queued embedded run context liveness", () => {
           lastActiveAt: admissionAt,
           sessionId: params.sessionId,
         });
-        expect(readAgentRunIndexVersion()).toBe(versionBeforeAdmission + 1);
+        expect(changed).toHaveBeenCalledExactlyOnceWith({ all: true, scope: "agent-runs" });
         expect(localTurn).toHaveBeenCalledTimes(execution === "local" ? 1 : 0);
 
         clock.mockReturnValue(admissionAt + CONTEXT_TTL_MS);
@@ -471,7 +491,8 @@ describe("queued embedded run context liveness", () => {
           sessionId: "replacement-session",
           sessionKey: "agent:main:replacement",
         });
-        const versionBeforeRejectedAdmission = readAgentRunIndexVersion();
+        const changed = vi.fn();
+        onTestFinished(sessionChanges.subscribe(changed));
 
         resumePlacement.resolve();
         await expect(run).rejects.toThrow("stale gateway lifecycle");
@@ -480,7 +501,7 @@ describe("queued embedded run context liveness", () => {
           sessionId: "replacement-session",
           sessionKey: "agent:main:replacement",
         });
-        expect(readAgentRunIndexVersion()).toBe(versionBeforeRejectedAdmission);
+        expect(changed).not.toHaveBeenCalled();
         expect(localTurn).not.toHaveBeenCalled();
       } finally {
         resumePlacement.resolve();

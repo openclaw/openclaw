@@ -54,6 +54,23 @@ tests use focused subpaths such as `plugin-sdk/plugin-test-runtime`,
 `plugin-sdk/channel-test-helpers`, `plugin-sdk/channel-target-testing`,
 `plugin-sdk/test-env`, and `plugin-sdk/test-fixtures`.
 
+### Credential prompt builder
+
+`buildCredentialSafetyPrompt` remains available from
+`openclaw/plugin-sdk/agent-harness-runtime`. With an options object whose
+`controlToolsAvailable` is set from the callable `openclaw` and `gateway` tools, it
+returns guidance to use or store user-shared credentials as asked, complete the
+task, and briefly acknowledge their use or storage in the final reply without
+repeating their values. The acknowledgment stays factual and non-alarming. It also
+returns the private login-code handoff guidance and the terminal setup route when
+neither control tool is available.
+
+The legacy string argument is deprecated from 2026-09-09 and remains supported
+through 2026-11-30. It is accepted and ignored: availability is unknown, so the
+helper returns only the private handoff line. Replace strings with
+`{ controlToolsAvailable }`; the string form is eligible for removal starting
+2026-12-01. The helper itself is not deprecated.
+
 ## Migration reference
 
 These mappings cover both removed July 2026 surfaces and later-window active

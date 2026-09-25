@@ -184,6 +184,10 @@ describe("setup-pnpm-store-cache ensure-node", () => {
       writeFakeNode(activeBin, "20.20.0");
       const toolcacheBin = join(root, "toolcache", "node", "24.16.0", "x64", "bin");
       const toolcacheNode = writeFakeNode(toolcacheBin, "24.16.0");
+      writeFakeNode(
+        join(root, "toolcache", "node", "26.1.0", "x64", "lib", "node_modules", "bundled", "bin"),
+        "24.16.0",
+      );
       const result = runEnsureNode(root, "24.16.0", {
         PATH: `${activeBin}:${process.env.PATH ?? ""}`,
         RUNNER_TOOL_CACHE: join(root, "toolcache"),
@@ -417,7 +421,7 @@ exit 1
       expect(curlCalls).toHaveLength(3);
       for (const call of curlCalls) {
         expect(call).toContain(
-          "-fsSL --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2",
+          "-fSL --no-progress-meter --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2",
         );
       }
       expect(curlCalls[0]).toContain("https://nodejs.org/dist/index.json");

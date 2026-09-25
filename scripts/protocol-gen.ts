@@ -2,7 +2,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ProtocolSchemas } from "../packages/gateway-protocol/src/schema/protocol-schemas.js";
-import { listCoreGatewayMethodMetadata } from "../src/gateway/methods/core-descriptors.js";
+import { listCoreGatewayMethodMetadata } from "../src/gateway/methods/core-method-policy.js";
 import { writeGeneratedOutput } from "./lib/generated-output-utils.mts";
 import {
   assertProtocolSchemaDocument,

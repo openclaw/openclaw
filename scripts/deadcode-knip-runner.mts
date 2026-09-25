@@ -298,3 +298,19 @@ export async function runKnip(knipArgs: string[], params: KnipRunParams = {}) {
     });
   });
 }
+
+export async function runKnipScans<T extends { name: string; args: readonly string[] }>(
+  scans: readonly T[],
+  commonArgs: readonly string[],
+  report: (scan: T, result: KnipRunResult) => boolean,
+): Promise<void> {
+  const results = await Promise.all(
+    scans.map(async (scan) => {
+      const result = await runKnip([...scan.args, ...commonArgs], { scanName: scan.name });
+      return report(scan, result);
+    }),
+  );
+  if (results.includes(false)) {
+    process.exitCode = 1;
+  }
+}

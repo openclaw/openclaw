@@ -7,6 +7,7 @@ import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createRuntimeConfigCapability } from "../config/runtime-config-capability.ts";
 import { searchClawHub } from "./clawhub-search.ts";
+import { createDeferredRequestQueue, type TestRequest } from "./index.test-support.ts";
 import {
   clawhubVerdictKey,
   installFromClawHub,
@@ -23,8 +24,6 @@ import {
 } from "./index.ts";
 
 type SkillsState = Parameters<typeof loadSkills>[0];
-
-type TestRequest = (method: string, payload?: unknown) => Promise<unknown>;
 
 function createState(): { state: SkillsState; request: ReturnType<typeof vi.fn<TestRequest>> } {
   const request = vi.fn<TestRequest>();
@@ -55,6 +54,10 @@ function createState(): { state: SkillsState; request: ReturnType<typeof vi.fn<T
     skillsLoading: false,
     skillsReport: null,
     skillsError: null,
+    skillsFilter: "",
+    skillsStatusFilter: "all",
+    skillsDetailKey: null,
+    skillsDetailTab: "overview",
     skillOperation: null,
     skillEdits: {},
     skillMessages: {},
@@ -62,6 +65,7 @@ function createState(): { state: SkillsState; request: ReturnType<typeof vi.fn<T
     clawhubSearchResults: [
       {
         score: 0.9,
+        registry: "https://clawhub.ai",
         slug: "github",
         displayName: "GitHub",
         summary: "Previous result",
@@ -70,6 +74,7 @@ function createState(): { state: SkillsState; request: ReturnType<typeof vi.fn<T
     ],
     clawhubSearchLoading: false,
     clawhubSearchError: "old error",
+    clawhubIconUrls: {},
     clawhubDetail: null,
     clawhubDetailRef: null,
     clawhubDetailLoading: false,
@@ -84,21 +89,6 @@ function createState(): { state: SkillsState; request: ReturnType<typeof vi.fn<T
     skillCardErrors: {},
   };
   return { state, request };
-}
-
-function createDeferredRequestQueue(request: ReturnType<typeof vi.fn<TestRequest>>) {
-  const resolvers: Array<(value: unknown) => void> = [];
-  request.mockImplementation(
-    () =>
-      new Promise((resolve) => {
-        resolvers.push(resolve);
-      }),
-  );
-  return {
-    resolveNext(value: unknown) {
-      resolvers.shift()?.(value);
-    },
-  };
 }
 
 function mockSkillMutationRequests(
@@ -682,12 +672,17 @@ describe("loadSkillCard", () => {
 });
 
 describe("searchClawHub", () => {
-  it("skips the RPC when the query is empty", async () => {
+  it("requests the discovery feed when the query is empty", async () => {
     const { state, request } = createState();
+    request.mockResolvedValue({ results: [] });
 
     await expect(searchClawHub(state.client!, "   ")).resolves.toEqual([]);
 
-    expect(request).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalledWith(
+      "skills.search",
+      { query: undefined, limit: 20 },
+      { signal: undefined },
+    );
   });
 
   it("returns search results and forwards cancellation", async () => {
@@ -697,6 +692,7 @@ describe("searchClawHub", () => {
       results: [
         {
           score: 0.95,
+          registry: "https://clawhub.ai",
           slug: "github-new",
           displayName: "GitHub New",
           summary: "Fresh result",
@@ -857,7 +853,6 @@ describe("skill mutations", () => {
           name: "GitHub",
           installId: "install-123",
           dangerouslyForceUnsafeInstall: true,
-          timeoutMs: 120000,
         },
       ],
       expectedMessage: "Installed from registry",
@@ -892,7 +887,7 @@ describe("skill mutations", () => {
     },
   );
 
-  it("serializes skill changes after pending settings drafts and refreshes both owners", async () => {
+  it("config.set serializes skill changes after pending settings drafts and refreshes both owners", async () => {
     const { state, request } = createState();
     const methods: string[] = [];
     let storedConfig: Record<string, unknown> = { count: 1 };
@@ -911,7 +906,7 @@ describe("skill mutations", () => {
       if (method === "config.set") {
         storedConfig = JSON.parse((params as { raw: string }).raw) as Record<string, unknown>;
         hash = "hash-2";
-        return { hash };
+        return { config: storedConfig, hash };
       }
       if (method === "skills.update") {
         storedConfig = { ...storedConfig, skillEnabled: true };
@@ -946,7 +941,7 @@ describe("skill mutations", () => {
     }
   });
 
-  it("does not dispatch a queued skill update after access changes", async () => {
+  it("config.set does not dispatch a queued skill update after access changes", async () => {
     const { state, request } = createState();
     const firstSet = createDeferred<unknown>();
     const methods: string[] = [];
@@ -990,7 +985,7 @@ describe("skill mutations", () => {
       const mutation = updateSkillEnabled(state, "github", true, () => canDispatch);
       await waitForFast(() => expect(methods).toEqual(["config.set"]));
       canDispatch = false;
-      firstSet.resolve({ hash: "hash-2" });
+      firstSet.resolve({ config: { count: 2 }, hash: "hash-2" });
       await mutation;
 
       expect(methods).toEqual(["config.set"]);
@@ -1230,7 +1225,6 @@ describe("skill mutations", () => {
       name: "GitHub",
       installId: "install-123",
       dangerouslyForceUnsafeInstall: true,
-      timeoutMs: 120000,
     });
   });
 
@@ -1311,7 +1305,6 @@ describe("skill mutations", () => {
         name: "GitHub",
         installId: "install-123",
         dangerouslyForceUnsafeInstall: false,
-        timeoutMs: 120000,
       },
     },
     {

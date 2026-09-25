@@ -139,7 +139,7 @@ export class RealtimeVoiceSessionLifecycle {
     if (this.isReady()) {
       return Promise.resolve();
     }
-    if (this.connectPromise) {
+    if (this.connectPromise && this.state.phase !== "terminal") {
       return this.connectPromise;
     }
     const connection = this.createFreshConnection();

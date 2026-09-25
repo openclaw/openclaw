@@ -11,11 +11,11 @@ import {
   assertOwnedServicePath,
   directoryIdentityIsStable,
   ensureOwnedCodexHome,
-  ownedServiceParentIsStable,
   prepareOwnedServiceParent,
   readRealDirectoryIdentity,
 } from "./computer-use-service-path.js";
 import { resolveMacOSDesktopCodexComputerUseServiceAppCandidates } from "./desktop-app-paths.js";
+import { waitForCodexDesktopGeneration } from "./desktop-generation.js";
 
 const SERVICE_APP_NAME = "Codex Computer Use.app";
 const SERVICE_BUNDLE_ID = "com.openai.sky.CUAService";
@@ -201,7 +201,14 @@ async function ensureCodexComputerUseServiceAppOnce(params: {
     }
     const stagedSnapshot = await readServiceAppSnapshot(stagedPath, inspectServiceApp);
     const currentSourceIdentity = await inspectServiceApp(sourcePath);
+    // ditto can notify the source watcher without changing its generation. Settle
+    // those events before the original generation's synchronous publication guard.
+    await waitForCodexDesktopGeneration();
     await assertOwnedServiceParentStable(ownedParent);
+    await assertDirectoryIdentityStable(
+      stagingRootIdentity,
+      "Computer Use service staging directory",
+    );
     if (!currentSourceIdentity || !identitiesMatch(currentSourceIdentity, sourceIdentity)) {
       throw new Error("Selected Computer Use service source changed during refresh.");
     }
@@ -312,7 +319,7 @@ async function ensureCodexComputerUseServiceAppOnce(params: {
   } catch (error) {
     if (
       backupCreated &&
-      (await ownedServiceParentIsStable(ownedParent)) &&
+      (await directoryIdentityIsStable(ownedParent)) &&
       !(await pathExists(operationTargetPath))
     ) {
       await assertOwnedServiceParentStable(ownedParent);
@@ -322,7 +329,7 @@ async function ensureCodexComputerUseServiceAppOnce(params: {
     throw error;
   } finally {
     if (
-      (await ownedServiceParentIsStable(ownedParent)) &&
+      (await directoryIdentityIsStable(ownedParent)) &&
       (await directoryIdentityIsStable(stagingRootIdentity))
     ) {
       await fs.rm(stagingRoot, { recursive: true, force: true });
@@ -426,23 +433,12 @@ function identitiesMatch(
   );
 }
 
-async function hasExecutableClient(appPath: string): Promise<boolean> {
-  try {
-    await fs.access(path.join(appPath, CLIENT_RELATIVE_PATH), fsConstants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 async function inspectTrustedServiceApp(
   appPath: string,
 ): Promise<CodexComputerUseServiceIdentity | undefined> {
-  if (!(await hasExecutableClient(appPath))) {
-    return undefined;
-  }
   const clientAppPath = path.join(appPath, CLIENT_APP_RELATIVE_PATH);
   try {
+    await fs.access(path.join(appPath, CLIENT_RELATIVE_PATH), fsConstants.X_OK);
     await verifyTrustedBundle(appPath, SERVICE_BUNDLE_ID, true);
     await verifyTrustedBundle(clientAppPath, CLIENT_BUNDLE_ID, false);
     const [info, serviceSignature, clientSignature] = await Promise.all([

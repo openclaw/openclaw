@@ -143,7 +143,7 @@ describe("buildPromptSection", () => {
     });
     expect(result[0]).toBe("## Memory Recall");
     expect(result[1]).toContain("run memory_search");
-    expect(result[1]).toContain("then use memory_get");
+    expect(result[1]).toContain("for memory-file hits, use memory_get");
     expect(result).toContain(
       "Citations: include Source: <path#line> when it helps the user verify memory snippets.",
     );
@@ -166,6 +166,36 @@ describe("buildPromptSection", () => {
     expect(result[0]).toBe("## Memory Recall");
     expect(result[1]).toContain("run memory_get");
     expect(result[1]).not.toContain("run memory_search");
+  });
+
+  it.each([
+    [[], [], ["sessions_search", "sessions_history"]],
+    [["sessions_search"], ["sessions_search"], ["sessions_history"]],
+    [["sessions_history"], ["sessions_history"], ["sessions_search"]],
+    [["sessions_search", "sessions_history"], ["sessions_search", "sessions_history"], []],
+  ])("offers only available session follow-up tools: %j", (sessionTools, included, excluded) => {
+    const { search, promptBuilder } = captureMemoryModelContract({
+      agents: { list: [{ id: "main", default: true }] },
+    });
+    const prompt = promptBuilder({
+      availableTools: new Set(["memory_search", "memory_get", ...sessionTools]),
+      agentId: "main",
+    }).join("\n");
+    const modelVisibleText = `${search.description}\n${prompt}`;
+    for (const name of included) {
+      expect(modelVisibleText).toContain(name);
+    }
+    for (const name of excluded) {
+      expect(modelVisibleText).not.toContain(name);
+    }
+    expect(prompt).toContain("Session search line numbers are not history offsets");
+    expect(prompt).toContain("Never read raw transcript files");
+    if (sessionTools.length === 0) {
+      expect(prompt).toContain("exact session history is unavailable");
+    }
+    if (sessionTools.length === 2) {
+      expect(prompt).toContain("returned sessionKey, messageId, and sessionId");
+    }
   });
 
   it("includes citations-off instruction when citationsMode is off", () => {
@@ -225,9 +255,8 @@ describe("buildPromptSection", () => {
       expect(text.includes("configured extra paths")).toBe(sourceCase.extraPaths.length > 0);
       expect(text.length).toBeLessThan(3_000);
     }
-    expect(lazy.search.description.includes("indexed session transcripts")).toBe(
-      sourceCase.sessions,
-    );
+    const defaultSearchScope = lazy.search.description.split(" before answering", 1)[0] ?? "";
+    expect(defaultSearchScope.includes("indexed session transcripts")).toBe(sourceCase.sessions);
     expect(lazy.get.description).not.toContain("indexed session transcripts");
     expect(lazy.search.description).toContain("Corpus outcomes cover each requested corpus");
     expect(lazy.search.description).toContain("results are partial");
@@ -334,8 +363,13 @@ describe("memory-core plugin runtime registration", () => {
         runtime: hostRuntime,
         logger: { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn },
         registerTool(factory, options) {
-          if (options?.names?.includes("intent") && typeof factory === "function") {
-            intentFactory = factory as typeof intentFactory;
+          if (
+            options?.names?.includes("intent") &&
+            typeof factory !== "function" &&
+            "contextVersion" in factory
+          ) {
+            expect(factory.contextVersion).toBe(2);
+            intentFactory = (ctx) => factory.create({ ...ctx, assertInvocationCurrent: () => {} });
           }
         },
       }),

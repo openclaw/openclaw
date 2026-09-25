@@ -6,9 +6,9 @@ import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-age
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
   deliveryContextFromSession,
-  normalizeSessionDeliveryState,
   sessionDeliveryOrigin,
-} from "../../utils/delivery-context.shared.js";
+} from "../../utils/delivery-context.read.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { isInternalSessionEffectsKey } from "./internal-session-key.js";
 import type { SessionEntrySummary } from "./session-accessor.sqlite-contract.js";
 import { projectSqliteSessionOwner } from "./session-accessor.sqlite-owner-projection.js";

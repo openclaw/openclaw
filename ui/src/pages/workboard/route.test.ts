@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createApplicationRouter, startApplicationRouter, type RouteId } from "../../app-routes.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../../app/context.ts";
+import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { resolveWorkboardRouteLocation } from "./route-location.ts";
 
 function routeFixture(
@@ -38,6 +39,17 @@ function routeFixture(
   const redirects: Promise<void>[] = [];
   const context = {
     basePath,
+    gateway: createApplicationGateway({
+      phase: "stopped",
+      client: null,
+      offlineStable: false,
+      hello: null,
+      canvasPluginSurfaceUrl: null,
+      assistantAgentId: null,
+      sessionKey: "agent:main:main",
+      lastError: null,
+      lastErrorCode: null,
+    }).gateway,
     runtimeConfig: {
       ensureLoaded: () => metadata.promise,
     },

@@ -660,7 +660,7 @@ describe("gateway agent handler", () => {
     expect(error.message).not.toMatch(/^Error:/u);
   });
 
-  it("preserves requested delivery when best effort has no external channel", async () => {
+  it("preserves requested delivery without inventing a source channel", async () => {
     mocks.agentCommand.mockClear();
     primeMainAgentRun();
     const respond = vi.fn();
@@ -694,7 +694,12 @@ describe("gateway agent handler", () => {
     });
     const rejected = respond.mock.calls.find((call: unknown[]) => call[0] === false);
     expect(rejected).toBeUndefined();
-    expect(callArgs).toMatchObject({ deliver: true, channel: "webchat" });
+    expect(callArgs).toMatchObject({
+      deliver: true,
+      channel: undefined,
+      messageChannel: undefined,
+      runContext: { messageChannel: undefined },
+    });
     expect(logInfo).toHaveBeenCalledTimes(1);
     expect(mockCallArg(logInfo)).toContain(
       "agent delivery unresolved (bestEffortDeliver); final delivery will report",
@@ -1201,7 +1206,7 @@ describe("gateway agent handler", () => {
     ).toBeUndefined();
   });
 
-  it("releases an exec approval handoff when setup fails before dispatch", async () => {
+  it("releases an exec approval handoff when input admission fails", async () => {
     const sessionKey = "agent:main:telegram:direct:123";
     const registration = registerExecApprovalFollowupRuntimeHandoff({
       approvalId: "req-output-setup-failure",
@@ -1217,21 +1222,7 @@ describe("gateway agent handler", () => {
       lastChannel: "telegram",
       lastTo: "123",
     });
-    mocks.getLatestSubagentRunByChildSessionKey.mockReturnValueOnce({
-      runId: "previous-run",
-      childSessionKey: sessionKey,
-      controllerSessionKey: sessionKey,
-      ownerKey: sessionKey,
-      scopeKind: "session",
-      requesterDisplayKey: "main",
-      task: "old task",
-      cleanup: "keep",
-      createdAt: 1,
-      startedAt: 2,
-      endedAt: 3,
-      outcome: { status: "ok" },
-    });
-    mocks.replaceSubagentRunAfterSteer.mockRejectedValueOnce(new Error("reactivate boom"));
+    mocks.stageSessionPendingInput.mockRejectedValueOnce(new Error("input admission failed"));
 
     const respond = await invokeAgent(
       {
@@ -1252,11 +1243,7 @@ describe("gateway agent handler", () => {
       },
     );
 
-    const errorCall = respond.mock.calls.find((call: unknown[]) => call[0] === false);
-    expectRecordFields(requireValue(errorCall, "error response missing")[1], {
-      runId: registration.idempotencyKey,
-      status: "error",
-    });
+    expectRespondError(respond, { message: "input admission failed" });
     expect(mocks.agentCommand).toHaveBeenCalledTimes(agentCommandCallsBefore);
     expect(
       claimExecApprovalFollowupRuntimeHandoff({

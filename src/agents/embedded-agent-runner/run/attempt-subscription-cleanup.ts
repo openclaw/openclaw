@@ -3,6 +3,7 @@ import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-
 import { isFastTestRuntimeEnv } from "../../../infra/test-runtime-env.js";
 import { recordAgentCleanupFailure, runAgentCleanupStep } from "../../run-cleanup-timeout.js";
 import { log } from "../logger.js";
+import type { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 
 // Invalid overrides retain the normal/test defaults; partial numeric parsing
 // must not silently widen cleanup waits.
@@ -10,14 +11,7 @@ const EMBEDDED_ABORT_SETTLE_TIMEOUT_MS =
   parseStrictPositiveInteger(process.env.OPENCLAW_EMBEDDED_ABORT_SETTLE_TIMEOUT_MS) ??
   (isFastTestRuntimeEnv() ? 250 : 2_000);
 
-type IdleAwareAgent = {
-  waitForIdle?: (() => Promise<void>) | undefined;
-};
-
-type ToolResultFlushManager = {
-  flushPendingToolResults?: (() => void) | undefined;
-  clearPendingToolResults?: (() => void) | undefined;
-};
+type ToolResultFlushOptions = Parameters<typeof flushPendingToolResultsAfterIdle>[0];
 
 export async function waitForEmbeddedAbortSettle(params: {
   promise: Promise<unknown> | null | undefined;
@@ -43,20 +37,17 @@ export async function waitForEmbeddedAbortSettle(params: {
 
 /**
  * Tears down per-attempt resources after the transcript lifecycle has drained:
- * remove guards, settle aborted prompts, flush tool results, then dispose runtimes.
+ * remove guards, settle aborted prompts, join cleanup writes, then dispose runtimes.
  */
 export async function cleanupEmbeddedAttemptResources(params: {
   removeToolResultContextGuard?: () => void;
-  flushPendingToolResultsAfterIdle: (params: {
-    agent: IdleAwareAgent | null | undefined;
-    sessionManager: ToolResultFlushManager | null | undefined;
-    timeoutMs?: number;
-  }) => Promise<void>;
-  session?: { agent?: unknown; dispose(): void };
-  sessionManager: unknown;
+  flushPendingToolResultsAfterIdle: typeof flushPendingToolResultsAfterIdle;
+  session?: { agent?: ToolResultFlushOptions["agent"]; dispose(): void };
+  sessionManager: ToolResultFlushOptions["sessionManager"];
   bundleMcpRuntime?: { dispose(): Promise<void> | void };
   bundleLspRuntime?: { dispose(): Promise<void> | void };
   aborted?: boolean;
+  abortSignal?: AbortSignal;
   abortSettlePromise?: Promise<unknown> | null;
   runId?: string;
   sessionId?: string;
@@ -75,9 +66,10 @@ export async function cleanupEmbeddedAttemptResources(params: {
   }
   try {
     await params.flushPendingToolResultsAfterIdle({
-      agent: params.session?.agent as IdleAwareAgent | null | undefined,
-      sessionManager: params.sessionManager as ToolResultFlushManager | null | undefined,
+      agent: params.session?.agent,
+      sessionManager: params.sessionManager,
       ...(params.aborted ? { timeoutMs: 0 } : {}),
+      ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
     });
   } catch {
     recordAgentCleanupFailure();

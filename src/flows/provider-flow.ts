@@ -76,6 +76,7 @@ function resolveInstallCatalogProviderSetupFlowContributions(
           pluginId: entry.pluginId,
           option: {
             value: entry.choiceId,
+            ...(entry.modelTarget ? { modelTarget: entry.modelTarget } : {}),
             label: entry.choiceLabel,
             ...(entry.choiceHint ? { hint: entry.choiceHint } : {}),
             ...(entry.assistantPriority !== undefined
@@ -119,6 +120,7 @@ function resolveManifestProviderSetupFlowContributions(
           pluginId: choice.pluginId,
           option: {
             value: choice.choiceId,
+            ...(choice.modelTarget ? { modelTarget: choice.modelTarget } : {}),
             label: choice.choiceLabel,
             ...(choice.choiceHint ? { hint: choice.choiceHint } : {}),
             ...(choice.assistantPriority !== undefined

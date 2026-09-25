@@ -5,7 +5,7 @@ read_when:
 title: "Slack"
 ---
 
-Slack support covers DMs and channels via Slack app integrations. Default transport is Socket Mode; HTTP Request URLs are also supported. Relay mode is for managed deployments where a trusted router owns Slack ingress.
+Slack support covers DMs and channels via Slack app integrations. Default transport is Socket Mode. HTTP Request URLs are also supported. Relay mode is for managed deployments where a trusted router owns Slack ingress.
 
 <CardGroup cols={3}>
   <Card title="Pairing" icon="link" href="/channels/pairing">
@@ -118,13 +118,13 @@ Primary reference: [Configuration reference - Slack](/gateway/config-channels#sl
 
 - mode/auth: `postAs`, `mode`, `botToken`, `appToken`, `userToken`, `signingSecret`, `webhookPath`, `accounts.*`
 - DM access: `dm.enabled`, `dmPolicy`, `allowFrom` (legacy: `dm.policy`, `dm.allowFrom`), `dm.groupEnabled`, `dm.groupChannels`
-- compatibility toggle: `dangerouslyAllowNameMatching` (break-glass; keep off unless needed)
+- compatibility toggle: `dangerouslyAllowNameMatching` (break-glass, keep off unless needed)
 - channel access: `groupPolicy`, `channels.*`, `channels.*.users`, `channels.*.requireMention`, `implicitMentions.*`
 - group introductions: `joinIntro`, `accounts.*.joinIntro` (default: `true`)
 - threading/history: `replyToMode`, `replyToModeByChatType`, `thread.*`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
-- presence wakes: `presenceEvents.mode`, `presenceEvents.prompt`, `channels.*.presenceEvents.*` (`off|auto|on`; default `off`)
+- presence wakes: `presenceEvents.mode`, `presenceEvents.prompt`, `channels.*.presenceEvents.*` (`off|auto|on`, default `off`)
 - delivery: `textChunkLimit`, `streaming.chunkMode`, `mediaMaxMb`, `streaming`, `streaming.nativeTransport`, `streaming.preview.toolProgress`
-- unfurls: `unfurlLinks` (default: `false`), `unfurlMedia` for `chat.postMessage` link/media preview control; set `unfurlLinks: true` to opt back into link previews
+- unfurls: `unfurlLinks` (default: `false`), `unfurlMedia` for `chat.postMessage` link/media preview control. Set `unfurlLinks: true` to opt back into link previews
 - ops/features: `configWrites`, `commands.native`, `slashCommand.*`, `actions.*`, `userToken`, `userTokenReadOnly`
 
 </Accordion>
@@ -134,6 +134,9 @@ Primary reference: [Configuration reference - Slack](/gateway/config-channels#sl
 <CardGroup cols={2}>
   <Card title="Pairing" icon="link" href="/channels/pairing">
     Pair a Slack user to the gateway.
+  </Card>
+  <Card title="Reactions" icon="thumbs-up" href="/tools/reactions">
+    Emoji reaction semantics for the `message` tool.
   </Card>
   <Card title="Groups" icon="users" href="/channels/groups">
     Channel and group DM behavior.

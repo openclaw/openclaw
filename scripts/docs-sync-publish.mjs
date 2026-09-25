@@ -8,7 +8,6 @@ import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { renderDocsHeadingMap } from "./docs-list.js";
 import { requireOptionArgument } from "./lib/arg-utils.runtime.mjs";
-import { repairMintlifyAccordionIndentation } from "./lib/mintlify-accordion.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 
 const ROOT = resolveRepoRoot(import.meta.url);
@@ -18,7 +17,7 @@ const SLUGIFY_PACKAGE = "@sindresorhus/slugify";
 const INTERNAL_DOCS_DIRS = ["internal"];
 const DEFAULT_CLAWHUB_SOURCE_REPO = "openclaw/clawhub";
 const CLAWHUB_DOCS_TARGET_DIR = "clawhub";
-const CLAWHUB_REPO_ENV = "OPENCLAW_DOCS_SYNC_CLAWHUB_REPO";
+export const CLAWHUB_REPO_ENV = "OPENCLAW_DOCS_SYNC_CLAWHUB_REPO";
 const DEFAULT_CLAWHUB_REPO_CANDIDATES = [
   path.resolve(ROOT, "..", "clawhub-docs-clawhub"),
   path.resolve(ROOT, "..", "clawhub"),
@@ -57,10 +56,6 @@ const SYNC_SUPPORT_FILES = [
   {
     source: path.join(ROOT, "scripts", "tsx.mjs"),
     target: path.join(".openclaw-sync", "tsx.mjs"),
-  },
-  {
-    source: path.join(ROOT, "scripts", "lib", "mintlify-accordion.mjs"),
-    target: path.join(".openclaw-sync", "lib", "mintlify-accordion.mjs"),
   },
   {
     source: path.join(ROOT, ".github", "codex", "prompts", "docs-mdx-repair.md"),
@@ -165,10 +160,6 @@ const GENERATED_LOCALES = [
     navFile: "fa-navigation.json",
     tmFile: "fa.tm.jsonl",
     navMode: "clone-en",
-    // Mintlify does not currently accept `fa` in navigation.languages.
-    // Keep generated docs and translation memory so the locale stays available
-    // once the docs host accepts it.
-    navigation: false,
   },
   {
     language: "tr",
@@ -204,10 +195,6 @@ const GENERATED_LOCALES = [
     navFile: "th-navigation.json",
     tmFile: "th.tm.jsonl",
     navMode: "clone-en",
-    // Mintlify does not currently accept `th` in navigation.languages.
-    // Keep generated docs and translation memory so the locale stays available
-    // once the docs host accepts it.
-    navigation: false,
   },
   {
     language: "ru",
@@ -515,6 +502,9 @@ function composeLocaleNav(locale, englishNav) {
   }
   const overlayPath = path.join(SOURCE_DOCS_DIR, ".i18n", locale.navFile);
   if (!fs.existsSync(overlayPath)) {
+    console.warn(
+      `docs-sync-publish: missing navigation overlay ${locale.navFile} for locale ${locale.language}; publishing the English sidebar labels for that locale.`,
+    );
     return cloned;
   }
   return applyLocaleNavLabelOverlay(cloned, readJson(overlayPath));
@@ -529,14 +519,10 @@ export function composeDocsConfig() {
   }
 
   const englishNav = languages.find((entry) => entry?.language === "en");
-  const generatedLanguageSet = new Set(
-    GENERATED_LOCALES.filter((entry) => entry.navigation !== false).map((entry) => entry.language),
-  );
+  const generatedLanguageSet = new Set(GENERATED_LOCALES.map((entry) => entry.language));
   const withoutGenerated = languages.filter((entry) => !generatedLanguageSet.has(entry?.language));
   const enIndex = withoutGenerated.findIndex((entry) => entry?.language === "en");
-  const generated = GENERATED_LOCALES.filter((entry) => entry.navigation !== false).map((entry) =>
-    composeLocaleNav(entry, englishNav),
-  );
+  const generated = GENERATED_LOCALES.map((entry) => composeLocaleNav(entry, englishNav));
   if (enIndex === -1) {
     withoutGenerated.push(...generated);
   } else {
@@ -579,26 +565,6 @@ export function reportOrphanLocaleDocs(targetDocsDir) {
     console.log(`Deferred ${orphaned} orphan localized doc(s) to translation finalization.`);
   }
   return orphaned;
-}
-
-function repairGeneratedLocaleDocs(targetDocsDir) {
-  let repaired = 0;
-  for (const locale of GENERATED_LOCALES) {
-    const localeDir = path.join(targetDocsDir, locale.dir);
-    for (const filePath of walkMarkdownFiles(localeDir)) {
-      const raw = fs.readFileSync(filePath, "utf8");
-      const repairedRaw = repairMintlifyAccordionIndentation(raw);
-      if (repairedRaw === raw) {
-        continue;
-      }
-      fs.writeFileSync(filePath, repairedRaw);
-      repaired += 1;
-    }
-  }
-
-  if (repaired > 0) {
-    console.log(`Repaired Mintlify accordion indentation in ${repaired} generated locale doc(s).`);
-  }
 }
 
 function pruneInternalDocs(targetDocsDir) {
@@ -827,7 +793,6 @@ function syncDocsTree(targetRoot, options = {}) {
     sourceSha: options.clawhubSourceSha,
   });
   reportOrphanLocaleDocs(targetDocsDir);
-  repairGeneratedLocaleDocs(targetDocsDir);
   writeJson(path.join(targetDocsDir, "docs.json"), composeDocsConfig());
   return { clawhub: clawhubSource };
 }

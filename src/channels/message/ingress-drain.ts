@@ -10,6 +10,7 @@ import {
   retainGatewayRootWorkAdmissionContinuation,
   runOutsideGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
+import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
 import {
   createIngressDrainOwnerId,
   deregisterLiveIngressDrainInstance,
@@ -30,7 +31,10 @@ import {
   type ActiveHandlerState,
   type ChannelIngressDrainDispatchResult,
 } from "./ingress-drain-state.js";
-import { supersedeActiveStatesIfNeeded } from "./ingress-drain-supersede.js";
+import {
+  supersedeActiveStatesIfNeeded,
+  type IngressSupersedeDecision,
+} from "./ingress-drain-supersede.js";
 import type {
   ChannelIngressQueue,
   ChannelIngressQueueClaim,
@@ -66,12 +70,13 @@ export type CreateChannelIngressDrainOptions<
     lifecycle: ChannelIngressDispatchLifecycle,
   ) => Promise<ChannelIngressDrainDispatchResult | void> | ChannelIngressDrainDispatchResult | void;
   resolveNonRetryableFailure?: (err: unknown) => IngressNonRetryableFailure | null;
+  /** A returned guard is checked synchronously before cancelling pre-adoption work. */
   shouldSupersedePending?: (
     newEvent:
       | ChannelIngressQueueRecord<TPayload, TMetadata>
       | ChannelIngressQueueClaim<TPayload, TMetadata>,
     pendingEvent: ChannelIngressQueueClaim<TPayload, TMetadata>,
-  ) => boolean | Promise<boolean>;
+  ) => IngressSupersedeDecision | Promise<IngressSupersedeDecision>;
   deriveLaneKey?: (record: ChannelIngressQueueRecord<TPayload, TMetadata>) => string | undefined;
   reconcileStoredLaneKey?: (
     record: ChannelIngressQueueRecord<TPayload, TMetadata>,
@@ -361,11 +366,12 @@ export function createChannelIngressDrain<
         }
       },
       onDeferredHeartbeat: () => {
-        // Abort also covers disposal; retired callbacks cannot restart the watchdog.
-        if (state.phase === "deferred" && !state.abortController.signal.aborted) {
+        // A cleared watchdog marks adoption finalization or retired ownership.
+        if ((state.phase === "dispatching" || state.phase === "deferred") && state.stallTimer) {
           armStallWatchdog(state);
         }
       },
+      deferredHeartbeatIntervalMs: Math.max(1, Math.floor(adoptionStallTimeoutMs / 3)),
       onAdoptionFinalizing: () => {
         if (state.phase !== "dispatching" && state.phase !== "deferred") {
           return;
@@ -445,8 +451,10 @@ export function createChannelIngressDrain<
     // settles; when the inherited root is already released, dispatch outside it
     // so the dead lease cannot make session admission refuse the turn as
     // draining. A real restart drain still refuses both paths at admission.
+    // Dispatches and queued followups outlive the pump's async work scope.
+    // Leave that scope so its closure cannot reject their later tracked work.
     const releaseRootWork = retainGatewayRootWorkAdmissionContinuation();
-    state.task = (async () => {
+    state.task = runOutsideAsyncWorkScope(async () => {
       try {
         const result = await (releaseRootWork
           ? options.dispatchClaimedEvent(claim, lifecycle)
@@ -517,7 +525,7 @@ export function createChannelIngressDrain<
       } finally {
         releaseRootWork?.();
       }
-    })();
+    });
 
     activeByClaim.set(activeClaimKey(claim), state);
     laneOwnerByKey.set(laneKey, state);

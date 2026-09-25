@@ -1,4 +1,3 @@
-// Telegram plugin module implements caption behavior.
 import { countTelegramHtmlVisibleCharacters, resolveTelegramHtmlVisibleText } from "./format.js";
 
 export const TELEGRAM_MAX_CAPTION_LENGTH = 1024;

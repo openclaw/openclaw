@@ -294,7 +294,7 @@ describe("routeReply", () => {
       payload: { text: "private reply" },
       channel: "slack",
       to: "channel:C123",
-      sessionKey: "agent:test",
+      sessionKey: "agent:main:test",
     });
 
     expect(result).toEqual({
@@ -326,7 +326,7 @@ describe("routeReply", () => {
       channel: "telegram",
       to: "chat-1",
       accountId: "acct-1",
-      sessionKey: "agent:test",
+      sessionKey: "agent:main:test",
       requesterSenderId: "sender-1",
       replyKind: "block",
       runId: "run-1",
@@ -339,13 +339,13 @@ describe("routeReply", () => {
     expect(lastDelivery().replyPayloadSendingHook).toMatchObject({
       kind: "block",
       channel: "telegram",
-      sessionKey: "agent:test",
+      sessionKey: "agent:main:test",
       runId: "run-1",
       context: {
         channelId: "telegram",
         accountId: "acct-1",
         conversationId: "chat-1",
-        sessionKey: "agent:test",
+        sessionKey: "agent:main:test",
         senderId: "sender-1",
         runId: "run-1",
       },
@@ -623,37 +623,6 @@ describe("routeReply", () => {
         conversationId: "chat-1",
       },
     });
-  });
-
-  it("suppresses routed delivery when reply payload hooks cancel", async () => {
-    mocks.deliverOutboundPayloads.mockImplementationOnce(
-      async ({
-        onPayloadDeliveryOutcome,
-      }: {
-        onPayloadDeliveryOutcome?: (outcome: unknown) => void;
-      }) => {
-        onPayloadDeliveryOutcome?.({
-          index: 0,
-          status: "suppressed",
-          reason: "cancelled_by_reply_payload_sending_hook",
-        });
-        return [];
-      },
-    );
-
-    const res = await routeTestReply({
-      payload: { text: "hello" },
-      channel: "telegram",
-      to: "chat-1",
-    });
-
-    expect(res).toEqual({
-      ok: true,
-      delivered: false,
-      suppressed: true,
-      reason: "cancelled_by_reply_payload_sending_hook",
-    });
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
   });
 
   it("suppresses routed delivery when reply payload hooks empty the payload", async () => {

@@ -228,7 +228,15 @@ describe("describeImageWithModelCore", () => {
         authProfileId: "github-copilot:backup",
       }),
     );
-    const [completionModel] = expectDefined(completeMock.mock.calls[0], "complete call 0");
+    const [completionModel, , completionOptions] = expectDefined(
+      completeMock.mock.calls[0],
+      "complete call 0",
+    );
+    const requestSignal = acquireAgentRunPreparedModelRuntimeMock.mock.calls[0]?.[1].abortSignal;
+    expect(requestSignal).toBeInstanceOf(AbortSignal);
+    expect(resolveModelAsyncMock.mock.calls[0]?.[4].abortSignal).toBe(requestSignal);
+    expect(resolveModelAsyncMock.mock.calls[1]?.[4].abortSignal).toBe(requestSignal);
+    expect(completionOptions.signal).toBe(requestSignal);
     expect(completionModel).toEqual(
       expect.objectContaining({
         contextWindow: 1_050_000,
@@ -568,11 +576,8 @@ describe("describeImageWithModelCore", () => {
       expect.objectContaining({
         workspaceDir: "/tmp/openclaw-workspace",
         loadRuntimePlugins: true,
-        runtimePluginSelections: [
-          { provider: "google", modelId: "gemini-2.5-flash", agentId: "vision-agent" },
-        ],
       }),
-      { catalogMode: "static", abortSignal: expect.any(AbortSignal) },
+      expect.objectContaining({ catalogMode: "static", abortSignal: expect.any(AbortSignal) }),
     );
     expect(resolveModelAsyncMock).toHaveBeenCalledWith(
       "google",
@@ -604,7 +609,7 @@ describe("describeImageWithModelCore", () => {
           modelRegistry: {},
         }),
       },
-      release: releasePreparedModelRuntimeMock,
+      [Symbol.asyncDispose]: releasePreparedModelRuntimeMock,
     });
     discoverModelsMock.mockReturnValue({
       find: vi.fn(() => ({

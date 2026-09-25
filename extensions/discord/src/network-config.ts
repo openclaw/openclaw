@@ -1,6 +1,7 @@
 // Discord helper module supports network config behavior.
 import * as dns from "node:dns";
 import type { LookupFunction } from "node:net";
+import { resolvePinnedHostnameWithPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 
 const DISCORD_DNS_HOSTS = ["discord.com", "discord.gg", "gateway.discord.gg"];
 
@@ -76,5 +77,24 @@ export function createDiscordDnsLookup(): LookupFunction {
       }
       callback(null, first.address, first.family);
     });
+  };
+}
+
+export function createDiscordEndpointDnsLookup(endpointHostname: string): LookupFunction {
+  const normalizedEndpointHostname = normalizeHostname(endpointHostname);
+  if (!normalizedEndpointHostname) {
+    throw new Error("Discord endpoint Gateway hostname is required");
+  }
+  const policy = {
+    allowedHostnames: [normalizedEndpointHostname],
+    hostnameAllowlist: [normalizedEndpointHostname],
+  };
+  return (hostname, options, callback) => {
+    void resolvePinnedHostnameWithPolicy(hostname, { policy }).then(
+      (pinned) => pinned.lookup(pinned.hostname, options, callback),
+      (error: unknown) => {
+        callback(error instanceof Error ? error : new Error(String(error)), "", 4);
+      },
+    );
   };
 }

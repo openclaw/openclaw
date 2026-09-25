@@ -495,10 +495,7 @@ describe("subscribeEmbeddedAgentSession", () => {
     emit({ type: "message_end", message: assistantMessage });
     await Promise.resolve();
 
-    expect(onBlockReply.mock.calls.map((call) => call[0]?.text)).toEqual([
-      "Answer ends with",
-      "<fi",
-    ]);
+    expect(onBlockReply.mock.calls.map((call) => call[0]?.text)).toEqual(["Answer ends with <fi"]);
   });
 
   it("preserves literal trailing tag-prefix text from message end fallback", () => {

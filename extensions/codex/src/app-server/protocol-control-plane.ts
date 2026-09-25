@@ -23,6 +23,12 @@ export type CodexPluginSummary = {
   mustShowInstallationInterstitial?: boolean | null;
   authPolicy?: string;
   availability?: string;
+  disabledReason?:
+    | "disabled_by_admin"
+    | "plan_not_eligible"
+    | "required_app_unavailable"
+    | "unknown"
+    | null;
   interface?: JsonValue;
 };
 
@@ -212,10 +218,6 @@ type CodexSkillsListEntry = {
 
 export type CodexSkillsListResponse = {
   data: CodexSkillsListEntry[];
-};
-
-export type CodexHooksListParams = {
-  cwds: string[];
 };
 
 export type CodexHooksListResponse = {

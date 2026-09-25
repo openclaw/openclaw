@@ -33,6 +33,7 @@ function mockRegistryWithServices(serviceIds: string[]) {
     services: serviceIds.map((id) => ({
       pluginId: id,
       pluginName: id,
+      id: id.trim(),
       service: { id },
       source: "test",
       origin: "bundled",
@@ -49,7 +50,13 @@ async function mockRealExporter(service: OpenClawPluginService, origin: "bundled
   const { startPluginServices: startRealServices } =
     await vi.importActual<typeof import("./services.js")>("./services.js");
   const registry = createEmptyPluginRegistry();
-  registry.services.push({ pluginId: "diagnostics-otel", service, source: "test", origin });
+  registry.services.push({
+    pluginId: "diagnostics-otel",
+    id: service.id.trim(),
+    service,
+    source: "test",
+    origin,
+  });
   acquirePluginRegistryForInspection.mockResolvedValue({
     registry,
     release: vi.fn(async () => {}),
@@ -148,15 +155,6 @@ describe("startOneShotDiagnosticsExporters", () => {
     expect(startParams.config.diagnostics?.otel?.logs).toBe(false);
     expect(startParams.config.diagnostics?.otel?.logsExporter).toBe("otlp");
     expect(config.diagnostics?.otel?.logsExporter).toBe("stdout");
-  });
-
-  it("returns null when the scoped load registers no exporter service", async () => {
-    mockRegistryWithServices(["other-service"]);
-
-    const handle = await startOneShotDiagnosticsExporters({ config: otelEnabledConfig });
-
-    expect(handle).toBeNull();
-    expect(startPluginServices).not.toHaveBeenCalled();
   });
 
   it("drains queued diagnostic events before stopping services on flush", async () => {

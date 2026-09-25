@@ -297,7 +297,7 @@ export function renderConfig(props: ConfigProps) {
               stroke="currentColor"
               stroke-width="2"
             >
-              <polyline points="6 9 12 15 18 9"></polyline>
+              <polyline points="9 6 15 12 9 18"></polyline>
             </svg>
           </summary>
           <div class="config-diff__content">
@@ -653,6 +653,7 @@ export function renderConfig(props: ConfigProps) {
                                   )}
                                 </div>`
                               : html`<textarea
+                                  aria-label=${t("configView.rawConfig")}
                                   placeholder=${t("configView.rawConfig")}
                                   .value=${props.raw}
                                   ?disabled=${configBusy || !mutationAllowed}

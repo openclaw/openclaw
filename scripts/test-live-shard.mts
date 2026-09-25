@@ -39,11 +39,13 @@ const OPTIONAL_LIVE_SHARD_FILE_ENVS = new Map([
   ["src/agents/subagents/announce/subagent-announce.live.test.ts", ["OPENCLAW_LIVE_SUBAGENT_E2E"]],
   ["src/agents/tools/image-tool.ollama.live.test.ts", ["OPENCLAW_LIVE_OLLAMA_IMAGE"]],
   ["src/agents/tools/image-tool.providers.live.test.ts", ["OPENCLAW_LIVE_IMAGE_TOOL_TEST"]],
+  ["extensions/openai/realtime-meeting.live.test.ts", ["OPENCLAW_LIVE_GPT_LIVE"]],
   [
     "extensions/openai/realtime-quicksilver-gateway-bridge.live.test.ts",
     ["OPENCLAW_LIVE_GPT_LIVE"],
   ],
   ["extensions/openai/realtime-quicksilver.live.test.ts", ["OPENCLAW_LIVE_GPT_LIVE"]],
+  ["extensions/openai/realtime-talk-defaults.live.test.ts", ["OPENCLAW_LIVE_GPT_LIVE"]],
   ["src/skills/workshop/experience-review.live.test.ts", ["OPENCLAW_LIVE_SKILL_EXPERIENCE_REVIEW"]],
   ["src/system-agent/rescue-channel.live.test.ts", ["OPENCLAW_LIVE_SYSTEM_AGENT_RESCUE_CHANNEL"]],
   ["src/gateway/android-node.capabilities.live.test.ts", ["OPENCLAW_LIVE_ANDROID_NODE"]],
@@ -55,6 +57,7 @@ const OPTIONAL_LIVE_SHARD_FILE_ENVS = new Map([
   ["src/gateway/gateway-openai-long-context.live.test.ts", ["OPENCLAW_LIVE_OPENAI_LONG_CONTEXT"]],
   ["src/gateway/gateway-trajectory-export.live.test.ts", ["OPENCLAW_LIVE_CODEX_HARNESS"]],
   ["src/infra/push-apns-http2.live.test.ts", ["OPENCLAW_LIVE_APNS_REACHABILITY"]],
+  ["test/e2e/crabbox-sandbox.live.test.ts", ["OPENCLAW_E2E_CRABBOX"]],
   ["test/image-generation.infer-cli.live.test.ts", ["OPENCLAW_LIVE_INFER_CLI_TEST"]],
 ]);
 const SKIPPED_ASSERTION_STATUSES = new Set(["disabled", "pending", "skipped", "todo"]);
@@ -309,7 +312,7 @@ export function selectLiveShardFiles(shard: string, files = collectAllLiveTestFi
     case "native-live-src-gateway-backends":
       return files.filter(isGatewayBackendLiveTest);
     case "native-live-src-infra":
-      return files.filter((file) => file.startsWith("src/infra/"));
+      return files.filter((file) => file.startsWith("src/infra/") || file.startsWith("src/cli/"));
     case "native-live-test":
       return files.filter((file) => file.startsWith("test/"));
     case "native-live-extensions-a-k":
@@ -410,6 +413,7 @@ export function resolveLiveShardPreparation(files: string[]): LiveShardPreparati
   if (
     files.some(isSourceGatewayLiveTest) ||
     files.some((file) => file.startsWith("test/e2e/qa-lab/runtime/")) ||
+    files.includes("src/infra/heartbeat-runner.live.test.ts") ||
     files.includes("src/agents/tools/image-tool.providers.live.test.ts") ||
     files.includes("extensions/openai/openai.live.test.ts")
   ) {

@@ -1,0 +1,31 @@
+{
+  "gateway": {
+    "mode": "local",
+    "auth": {
+      "mode": "token",
+      "token": "FAKE_CONFIG_CORPUS_CREDENTIAL"
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": "openai/gpt-5.5"
+    },
+    "entries": {
+      "main": {}
+    }
+  },
+  "plugins": {
+    "entries": {
+      "openai": {
+        "enabled": true
+      }
+    }
+  },
+  "models": {
+    "providers": {
+      "openai": {
+        "apiKey": "FAKE_CONFIG_CORPUS_CREDENTIAL"
+      }
+    }
+  }
+}

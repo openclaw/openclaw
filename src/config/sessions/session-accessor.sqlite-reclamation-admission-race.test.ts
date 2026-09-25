@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -5,7 +6,12 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import * as nodeSqlite from "../../infra/node-sqlite.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../state/openclaw-agent-db.js";
+import { loadSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.sqlite.js";
+import { createTrajectoryRuntimeRecorder } from "../../trajectory/runtime.js";
 import {
   deleteSessionEntryLifecycle,
   loadSessionEntry,
@@ -38,25 +44,59 @@ vi.mock("./session-accessor.sqlite-archive.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./session-accessor.sqlite-archive.js")>();
   return {
     ...actual,
-    runSqliteTranscriptArchiveWorkerOperation: (
-      params: Parameters<typeof actual.runSqliteTranscriptArchiveWorkerOperation>[0],
-    ) =>
-      actual.runSqliteTranscriptArchiveWorkerOperation({
-        ...params,
-        onCommitRequest: params.onCommitRequest
-          ? () => {
-              archiveMaterializationHook.beforeCommitRequest?.();
-              params.onCommitRequest?.();
-              archiveMaterializationHook.afterCommitRequest?.();
-            }
-          : undefined,
-      }),
     materializeSessionStateDeletePlans: async (
       ...args: Parameters<typeof actual.materializeSessionStateDeletePlans>
     ) => {
       await archiveMaterializationHook.beforeMaterialize?.();
       return await actual.materializeSessionStateDeletePlans(...args);
     },
+  };
+});
+
+vi.mock("./session-accessor.sqlite-reclamation-worker.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("./session-accessor.sqlite-reclamation-worker.js")>();
+  return {
+    ...actual,
+    withSqliteReclamationWorker: ((options, claim, run, assertRequestCurrent, signal) =>
+      actual.withSqliteReclamationWorker(
+        options,
+        claim,
+        async (worker) => {
+          const originalRun = worker.run.bind(worker);
+          let inWriteAdmission: ReturnType<typeof AsyncLocalStorage.snapshot> | undefined;
+          const spy = vi.spyOn(worker, "run").mockImplementation((params) => {
+            if (params.plan.kind !== "entry" && params.plan.kind !== "historical-generation") {
+              return originalRun(params);
+            }
+            return originalRun({
+              ...params,
+              withWriteAdmission: (performWrite, diagnostics) =>
+                params.withWriteAdmission((refusal) => {
+                  // Bound Worker messages otherwise run outside the active writer context.
+                  inWriteAdmission = AsyncLocalStorage.snapshot();
+                  return performWrite(refusal);
+                }, diagnostics),
+              onCommitRequest: () => {
+                if (!inWriteAdmission) {
+                  throw new Error("Worker requested commit without writer admission");
+                }
+                inWriteAdmission(() => archiveMaterializationHook.beforeCommitRequest?.());
+                const errors = params.onCommitRequest();
+                archiveMaterializationHook.afterCommitRequest?.();
+                return errors;
+              },
+            });
+          });
+          try {
+            return await run(worker);
+          } finally {
+            spy.mockRestore();
+          }
+        },
+        assertRequestCurrent,
+        signal,
+      )) satisfies typeof actual.withSqliteReclamationWorker,
   };
 });
 
@@ -69,13 +109,78 @@ describe("SQLite reclamation admission races", () => {
     storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     archiveMaterializationHook.beforeMaterialize = undefined;
     archiveMaterializationHook.beforeReclaim = undefined;
     archiveMaterializationHook.beforeCommitRequest = undefined;
     archiveMaterializationHook.afterCommitRequest = undefined;
     vi.restoreAllMocks();
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
+  });
+
+  it("queues unrelated trajectory flushes while the worker awaits commit authorization", async () => {
+    const sessionKey = "agent:main:reclamation-trajectory";
+    const sessionId = "reclamation-trajectory";
+    const unrelated = {
+      agentId: "main",
+      sessionKey: "agent:main:trajectory-writer",
+      sessionId: "trajectory-writer",
+      storePath,
+    };
+    const updatedAt = Date.now();
+    await replaceSessionEntry({ sessionKey, storePath }, { sessionId, updatedAt });
+    await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, [
+      { type: "session", id: sessionId, content: "retire this session" },
+    ]);
+    await replaceSessionEntry(unrelated, { sessionId: unrelated.sessionId, updatedAt });
+    const recorders = [0, 1, 2].map((index) => {
+      const recorder = createTrajectoryRuntimeRecorder({
+        sessionId: unrelated.sessionId,
+        sessionTarget: unrelated,
+        runId: `trajectory-writer-${index}`,
+      });
+      if (!recorder) {
+        throw new Error("expected SQLite trajectory recorder");
+      }
+      recorder.recordEvent("admission-proof", { index });
+      return recorder;
+    });
+    const writes: Promise<void>[] = [];
+    let pendingBeforeAuthorization: Array<string | undefined> = [];
+    archiveMaterializationHook.beforeCommitRequest = vi.fn(() => {
+      // Start real asynchronous producers in the observed order, but leave the
+      // parent free to authorize the worker whose transaction already owns SQLite.
+      for (const recorder of recorders) {
+        for (let flush = 0; flush < 2; flush += 1) {
+          const write = recorder.flush();
+          void write.catch(() => {});
+          writes.push(write);
+        }
+      }
+      pendingBeforeAuthorization = recorders.map((recorder) => recorder.describeFlushState());
+    });
+    const deletion = await deleteSessionEntryLifecycle({
+      archiveTranscript: true,
+      commitGuard: () => {},
+      storePath,
+      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+    }).then(
+      (result) => ({ result }),
+      (error: unknown) => ({ error }),
+    );
+    const outcomes = await Promise.allSettled(writes);
+    expect(deletion).toMatchObject({ result: { deleted: true } });
+    expect(archiveMaterializationHook.beforeCommitRequest).toHaveBeenCalledOnce();
+    expect(pendingBeforeAuthorization).toEqual(
+      recorders.map(() => expect.stringContaining("pendingRows=1")),
+    );
+    expect(writes).toHaveLength(6);
+    expect(outcomes).toEqual(writes.map(() => ({ status: "fulfilled", value: undefined })));
+    expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
+    const events = await loadSqliteTrajectoryRuntimeEvents(unrelated);
+    expect(events.map((event) => event.data?.index)).toEqual([0, 1, 2]);
+    expect(loadSessionEntry(unrelated)).toMatchObject({ sessionId: unrelated.sessionId });
   });
 
   it.runIf(process.platform !== "win32")(

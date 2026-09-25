@@ -11,6 +11,7 @@ import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-tes
 import { upsertSessionUpstreamLink } from "openclaw/plugin-sdk/session-catalog";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { readVisibleSessionTranscriptMessageEntries } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { createStageTimingTracker } from "openclaw/plugin-sdk/time-runtime";
 import { continueLocalCodexSession } from "../session-catalog-adoption.js";
 import { createCodexSessionCatalogControl } from "../session-catalog-control.js";
 import { codexSessionCatalogRuntime } from "../session-catalog.js";
@@ -26,7 +27,6 @@ import {
   resolveCodexSupervisionAppServerRuntimeOptions,
   type CodexPluginConfig,
 } from "./config.js";
-import { createCodexDynamicToolBuildStageTracker } from "./dynamic-tool-build.js";
 import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
@@ -108,14 +108,14 @@ export async function createCanonicalForkFixture(params: {
     env: { HOME: workspaceDir, CODEX_HOME: path.join(workspaceDir, "primary-codex-home") },
   });
   const home = expectDefined(
-    controls
-      .homesForAgent("main")
-      .find((candidate) => candidate.localSessionsRoot === native.sessionsRoot),
+    (await controls.homesForAgent("main")).find(
+      (candidate) => candidate.localSessionsRoot === native.sessionsRoot,
+    ),
     "native fixture home",
   );
   const fingerprint = buildCodexAppServerConnectionFingerprint(home.appServer, agentDir);
   const control = expectDefined(
-    controls.forUpstream("main", fingerprint),
+    await controls.forUpstream("main", fingerprint),
     "native fixture control",
   );
   const storePath = resolveStorePath(config.session?.store, { agentId: "main" });
@@ -242,7 +242,7 @@ export async function createCanonicalForkFixture(params: {
             params: attempt,
             attemptClientFactory: getLeasedSharedCodexAppServerClient,
             startupClientAuthProfileId: null,
-            preDynamicStartupStages: createCodexDynamicToolBuildStageTracker(),
+            preDynamicStartupStages: createStageTimingTracker(),
             mutable: { startupBinding },
             resolvedWorkspace: workspaceDir,
             effectiveWorkspace: workspaceDir,
@@ -346,10 +346,7 @@ export async function createCanonicalForkFixture(params: {
           startup?.turnRoute.release();
           startup?.releaseSharedClientLease();
           runAbortController.abort();
-          await preparedTools.disposeMcpTools();
-          for (const cleanup of preparedTools.runCleanups) {
-            await cleanup("fixture complete");
-          }
+          await preparedTools.disposeTools("fixture complete");
         }
       });
     } finally {

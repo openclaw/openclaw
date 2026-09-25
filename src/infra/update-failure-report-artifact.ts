@@ -1,8 +1,111 @@
 /** Filesystem lifecycle for a non-authoritative, sanitized update report body. */
-import { createHash } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
+import { z } from "zod";
+import {
+  sanitizeTriageUpdateFailure,
+  type TriageUpdateFailure,
+} from "../commands/triage-update.js";
+import { resolveStateDir } from "../config/paths.js";
+import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
+import { classifyUpdateOutcome } from "../shared/update-outcome.js";
+import { sha256Hex } from "./crypto-digest.js";
+import { formatErrorMessage } from "./errors.js";
+import { writeTextAtomic } from "./json-files.js";
+import { formatUpdateDoctorLintFinding } from "./update-doctor-lint.js";
 import type { PreparedUpdateFailureReport } from "./update-failure-report-prepare.js";
+import type { UpdateRunReport } from "./update-run-report.js";
+import type { UpdateRunResult } from "./update-runner-types.js";
+
+function updateDiagnosticArtifactName(kind: "lint" | "failure", id: string = randomUUID()): string {
+  // Shipped support redactors must not mistake a numeric UUID tail for an account ID.
+  return `openclaw-update-${kind}-${id.replaceAll("-", "_")}.json`;
+}
+
+/** Complete sanitized inventories are named artifacts, never restored-runtime input. */
+async function writeUpdateFailureLintArtifact(
+  inventory: TriageUpdateFailure,
+  directory: string,
+): Promise<string> {
+  const outputPath = path.join(directory, updateDiagnosticArtifactName("lint"));
+  await writeTextAtomic(outputPath, `${JSON.stringify(inventory)}\n`, {
+    mode: 0o600,
+    dirMode: 0o700,
+  });
+  return outputPath;
+}
+
+export async function writeTriageUpdateFailure(
+  failure: TriageUpdateFailure,
+  options: { env?: NodeJS.ProcessEnv; outputPath?: string } = {},
+): Promise<string> {
+  const env = options.env ?? process.env;
+  const stateDir = resolveStateDir(env);
+  const outputPath =
+    options.outputPath ??
+    path.join(stateDir, "logs", "support", updateDiagnosticArtifactName("failure"));
+  const inventory = sanitizeTriageUpdateFailure(failure, { env, stateDir }, "inventory");
+  if ("result" in inventory && inventory.result.steps.some((step) => step.doctorLintFindings)) {
+    const detail = await writeUpdateFailureLintArtifact(inventory, path.dirname(outputPath)).then(
+      (inventoryPath) => `Complete Doctor lint inventory: ${inventoryPath}`,
+      (error: unknown) =>
+        `Complete Doctor lint inventory unavailable: ${formatErrorMessage(error)}`,
+    );
+    // The released reader strips new fields and successful steps. Its error text retains
+    // this diagnostic link even after a later plugin failure or another CLI handoff.
+    inventory.error = `${inventory.error ?? inventory.result.reason ?? "Update failed"}. ${detail}`;
+  }
+  const sanitized = sanitizeTriageUpdateFailure(inventory, { env, stateDir }, "artifact");
+  const body = `${JSON.stringify(sanitized)}\n`;
+  // The managed helper's private handoff keeps the latest complete outcome after cleanup.
+  await writeTextAtomic(outputPath, body, { mode: 0o600, dirMode: 0o700 });
+  return outputPath;
+}
+
+/** Terminal exports never write into state retained by an unresolved recovery owner. */
+export async function writeUpdateRunReportArtifact(params: {
+  result: UpdateRunResult;
+  report: Pick<UpdateRunReport, "markdown">;
+  env?: NodeJS.ProcessEnv;
+  detached?: boolean;
+}): Promise<string> {
+  const env = params.env ?? process.env;
+  const stateDir = resolveStateDir(env);
+  const id = (!params.detached && z.uuid().safeParse(params.result.runId).data) || randomUUID();
+  // Atomic writes enforce their parent mode; never apply private report permissions
+  // to the shared temporary root. Returned reports remain available to the operator.
+  const directory = params.detached
+    ? await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-report-"))
+    : path.join(stateDir, "update-reports");
+  const outputPath = path.join(directory, `${id}.md`);
+  const failurePath =
+    classifyUpdateOutcome(params.result) === "failed"
+      ? await writeTriageUpdateFailure(
+          { result: params.result },
+          {
+            env,
+            outputPath: params.detached
+              ? path.join(directory, updateDiagnosticArtifactName("failure", id))
+              : undefined,
+          },
+        )
+      : undefined;
+  const findings = params.result.steps.flatMap((step) => step.doctorLintFindings ?? []);
+  const body = [
+    params.report.markdown,
+    `\n## Complete Doctor lint findings (${findings.length})\n`,
+    ...findings.map((finding) => `- ${formatUpdateDoctorLintFinding(finding, env)}`),
+    failurePath ? `\nBounded diagnostic JSON: ${path.relative(directory, failurePath)}` : "",
+  ].join("\n");
+  await writeTextAtomic(
+    outputPath,
+    redactSupportString(body, { env, stateDir }, { maxLength: Number.MAX_SAFE_INTEGER }),
+    { mode: 0o600, dirMode: 0o700 },
+  );
+  return outputPath;
+}
 
 export type SavedUpdateFailureReport = {
   reportCreated: boolean;
@@ -16,9 +119,7 @@ export function bindSavedReportArtifact(
   previewDigest = prepared.previewDigest,
 ): PreparedUpdateFailureReport {
   const parsed = path.parse(prepared.savedReportPath);
-  const artifactKey = createHash("sha256")
-    .update(`${reservationId}\0${previewDigest}`)
-    .digest("hex");
+  const artifactKey = sha256Hex(`${reservationId}\0${previewDigest}`);
   return {
     ...prepared,
     savedReportPath: path.join(parsed.dir, `${parsed.name}.${artifactKey}${parsed.ext}`),

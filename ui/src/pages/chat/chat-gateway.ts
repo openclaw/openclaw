@@ -114,6 +114,9 @@ function resolveGatewayErrorText(
 ): string {
   const errorText = payload.errorMessage?.trim();
   if (errorText) {
+    if (payload.state === "error" && payload.errorKind === "state_contention") {
+      return errorText;
+    }
     const summary =
       errorText.startsWith("⚠️") || errorText.startsWith("Error:")
         ? errorText
@@ -144,10 +147,14 @@ function appendCachedChatMessage(
   );
 }
 
-function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
-  if (!payload) {
+function handleChatEvent(state: ChatState, incoming?: ChatEventPayload) {
+  if (!incoming) {
     return null;
   }
+  const payload =
+    incoming.state === "aborted" && incoming.stopReason === "auth-revoked"
+      ? { ...incoming, errorMessage: t("chat.providerAccessRemoved") }
+      : incoming;
   const normalizedFinalMessage =
     payload.state === "final" ? normalizeFinalAssistantMessage(payload.message) : null;
   const hadActiveRunBeforeEvent = state.chatRunId !== null;
@@ -276,9 +283,11 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
           state,
           resolveGatewayErrorText(payload, null),
           payload.runId,
-          payload.errorDetail?.providerRuntimeFailureKind === "auth_refresh"
-            ? "auth_refresh"
-            : undefined,
+          payload.state === "error" && payload.errorKind === "state_contention"
+            ? "state_contention"
+            : payload.errorDetail?.providerRuntimeFailureKind === "auth_refresh"
+              ? "auth_refresh"
+              : undefined,
         );
       }
       if (payload.state === "error") {
@@ -521,9 +530,11 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       state,
       resolveGatewayErrorText(payload, projectedErrorMessage ? visiblePayloadMessage : null),
       payload.runId,
-      payload.errorDetail?.providerRuntimeFailureKind === "auth_refresh"
-        ? "auth_refresh"
-        : undefined,
+      payload.state === "error" && payload.errorKind === "state_contention"
+        ? "state_contention"
+        : payload.errorDetail?.providerRuntimeFailureKind === "auth_refresh"
+          ? "auth_refresh"
+          : undefined,
     );
   }
   if (payload.state !== "delta") {

@@ -89,14 +89,20 @@ semantics, use [Tools and custom providers](/gateway/config-tools).
 | Human input             | Pause for a structured decision owned by the user, or obtain a credential without seeing it  | `ask_user`, `secrets`                                                                                               | [Ask user](/tools/ask-user), [Secrets](/tools/secrets)                                                                        |
 | Web                     | Search the web, search X posts, or fetch readable page content                               | `web_search`, `x_search`, `web_fetch`                                                                               | [Web tools](/tools/web), [Web fetch](/tools/web-fetch)                                                                        |
 | Browser                 | Operate a browser session                                                                    | `browser`                                                                                                           | [Browser](/tools/browser)                                                                                                     |
-| Operator UI             | Arrange connected Control UI panes, panels, and navigation                                   | `screen`                                                                                                            | [Screen](/tools/screen)                                                                                                       |
+| Operator UI             | Arrange Control UI panes and panels, or select and create appearance themes                  | `screen`, `theme`                                                                                                   | [Screen](/tools/screen), [Theme](/tools/theme)                                                                                |
 | Session progress        | Update the parent session's durable progress card; unavailable to sub-agents                 | `progress_card`                                                                                                     | [Progress card](/tools/progress-card)                                                                                         |
 | Messaging and channels  | Send replies or channel actions                                                              | `message`                                                                                                           | [Agent send](/tools/agent-send)                                                                                               |
 | Sessions and agents     | Inspect sessions, delegate work, orchestrate collectors, steer another run, or report status | `sessions_*`, `agents_wait`, `subagents`, `agents_list`, `session_status`, `get_goal`, `create_goal`, `update_goal` | [Goal](/tools/goal), [Swarm](/tools/swarm), [Sub-agents](/tools/subagents), [Session tool](/concepts/session-tool)            |
 | Automation              | Schedule work or respond to background events                                                | `cron`, `heartbeat_respond`                                                                                         | [Automation](/automation)                                                                                                     |
 | Gateway and nodes       | Inspect Gateway state or paired target devices                                               | `gateway`, `nodes`                                                                                                  | [Gateway configuration](/gateway/configuration), [Nodes](/nodes)                                                              |
+| Plugin lifecycle        | Inspect, install, enable, disable, remove, or reload plugins                                 | `plugins`                                                                                                           | [Agent plugin management](/plugins/manage-plugins#manage-plugins-from-an-agent-conversation)                                  |
 | Media                   | Analyze, generate, or speak media                                                            | `view_image`, `image_generate`, `music_generate`, `video_generate`, `tts`                                           | [Media overview](/tools/media-overview)                                                                                       |
 | Large OpenClaw catalogs | Search, call, and combine many eligible tools without sending every schema to the model      | `exec`, `wait`, `tool_search_code`, `tool_search`, `tool_describe`                                                  | [Code Mode](/tools/code-mode), [Tool Search](/tools/tool-search)                                                              |
+
+On multi-user Gateways, `personal_instructions` reads and updates
+the authenticated requester’s personal `USER.md` through the Gateway, even when
+the chat uses a project worktree. It is included in the coding and messaging
+profiles; it does not widen general file-tool access. See [User model](/concepts/user-model#personal-user-files-on-a-shared-gateway).
 
 The `edit` tool supports targeted formatting changes, including removing trailing
 spaces or replacing Unicode quotes, dashes, and spaces. These changes are applied
@@ -214,6 +220,7 @@ the current turn:
   creation
 - [Tool Search](/tools/tool-search) for compact OpenClaw tool catalog
   discovery
-- [Code Mode](/tools/code-mode) for compact JavaScript or TypeScript workflows
+- [Code Mode](/tools/code-mode) for compact JavaScript workflows
   over a hidden OpenClaw tool catalog
 - [Swarm](/tools/swarm) for structured fan-out and collection from Code Mode
+- [Tools invoke API](/gateway/tools-invoke-http-api) — call these tools over HTTP

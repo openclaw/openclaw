@@ -113,10 +113,12 @@ describe("echo cache — message ID type canary (#47830)", () => {
     echoCache.remember(scope, { text: "test", messageId: "p:0/abc-def-123" });
 
     // An inbound SQLite row ID (numeric string) should NOT match the GUID
-    expect(echoCache.has(scope, { text: "different", messageId: "200" })).toBe(false);
+    expect(await echoCache.has(scope, { text: "different", messageId: "200" })).toBe(false);
 
     // The original GUID should still match
-    expect(echoCache.has(scope, { text: "different", messageId: "p:0/abc-def-123" })).toBe(true);
+    expect(await echoCache.has(scope, { text: "different", messageId: "p:0/abc-def-123" })).toBe(
+      true,
+    );
   });
 
   it('falls back to text when outbound messageId was junk ("ok")', async () => {
@@ -128,7 +130,7 @@ describe("echo cache — message ID type canary (#47830)", () => {
 
     // Inbound has a numeric SQLite ID that does not exist in cache. Since this
     // scope has no real cached IDs, has() must still fall through to text match.
-    expect(echoCache.has(scope, { text: "text-only fallback", messageId: "200" })).toBe(true);
+    expect(await echoCache.has(scope, { text: "text-only fallback", messageId: "200" })).toBe(true);
   });
 
   it("keeps ID short-circuit when scope has real outbound GUID IDs", async () => {
@@ -138,7 +140,7 @@ describe("echo cache — message ID type canary (#47830)", () => {
     echoCache.remember(scope, { text: "guid-backed", messageId: "p:0/abc-def-123" });
 
     // Different inbound numeric ID should still short-circuit to false.
-    expect(echoCache.has(scope, { text: "guid-backed", messageId: "200" })).toBe(false);
+    expect(await echoCache.has(scope, { text: "guid-backed", messageId: "200" })).toBe(false);
   });
 });
 
@@ -154,12 +156,12 @@ describe("echo cache — backward compat for channels without messageId", () => 
     { label: "within TTL", elapsed: 2000, text: "no id message", expected: true },
     { label: "after TTL expiry", elapsed: 5000, text: "no id message", expected: false },
     { label: "for different text", elapsed: 1000, text: "totally different text", expected: false },
-  ])("matches text-only echoes $label: $expected", ({ elapsed, text, expected }) => {
+  ])("matches text-only echoes $label: $expected", async ({ elapsed, text, expected }) => {
     useFakeTimersAt();
     const echoCache = createSentMessageCache();
     echoCache.remember(SELF_CHAT_SCOPE, { text: "no id message" });
     vi.advanceTimersByTime(elapsed);
-    expect(echoCache.has(SELF_CHAT_SCOPE, { text })).toBe(expected);
+    expect(await echoCache.has(SELF_CHAT_SCOPE, { text })).toBe(expected);
   });
 });
 
@@ -268,12 +270,12 @@ describe("self-chat dedupe — #47830", () => {
     { elapsed: 3000, messageId: undefined, expected: true },
   ])(
     "matches a text-only lookup after $elapsed ms (send ID $messageId): $expected",
-    ({ elapsed, messageId, expected }) => {
+    async ({ elapsed, messageId, expected }) => {
       useFakeTimersAt();
       const echoCache = createSentMessageCache();
       echoCache.remember(SELF_CHAT_SCOPE, { text: "Hello there", messageId });
       vi.advanceTimersByTime(elapsed);
-      expect(echoCache.has(SELF_CHAT_SCOPE, { text: "Hello there" })).toBe(expected);
+      expect(await echoCache.has(SELF_CHAT_SCOPE, { text: "Hello there" })).toBe(expected);
     },
   );
 });
@@ -676,10 +678,14 @@ describe("self-chat is_from_me=true handling (Bruce Phase 2 fix)", () => {
 
     // Text matches but ID is a SQLite row (format mismatch). With skipIdShortCircuit=true,
     // text matching should still fire.
-    expect(echoCache.has(scope, { text: "Cached reply", messageId: "123799" }, true)).toBe(true);
+    expect(await echoCache.has(scope, { text: "Cached reply", messageId: "123799" }, true)).toBe(
+      true,
+    );
 
     // With skipIdShortCircuit=false (default), ID mismatch causes early return false.
-    expect(echoCache.has(scope, { text: "Cached reply", messageId: "123799" }, false)).toBe(false);
+    expect(await echoCache.has(scope, { text: "Cached reply", messageId: "123799" }, false)).toBe(
+      false,
+    );
   });
 });
 
@@ -688,7 +694,7 @@ describe("echo cache — text fallback for null-id inbound messages", () => {
     const echoCache = createSentMessageCache();
     const selfChatCache = createSelfChatCache();
     const scope = SELF_CHAT_SCOPE;
-    rememberPersistedIMessageEcho({
+    await rememberPersistedIMessageEcho({
       scope,
       text: "same pending text",
       ttlMs: 155_000,
@@ -716,7 +722,7 @@ describe("echo cache — text fallback for null-id inbound messages", () => {
     const echoCache = createSentMessageCache();
     const selfChatCache = createSelfChatCache();
     const scope = SELF_CHAT_SCOPE;
-    rememberPersistedIMessageEcho({
+    await rememberPersistedIMessageEcho({
       scope,
       text: "pending self-chat reply",
       ttlMs: 155_000,
@@ -778,7 +784,7 @@ describe("echo cache — mixed GUID and text-only scopes", () => {
     echoCache.remember(scope, { text: "older guid-backed", messageId: "p:0/GUID-older" });
     echoCache.remember(scope, { text: "latest text-only", messageId: "unknown" });
 
-    expect(echoCache.has(scope, { text: "latest text-only", messageId: "200" })).toBe(true);
+    expect(await echoCache.has(scope, { text: "latest text-only", messageId: "200" })).toBe(true);
   });
 
   it("still short-circuits when the latest copy of a text was GUID-backed", async () => {
@@ -788,6 +794,6 @@ describe("echo cache — mixed GUID and text-only scopes", () => {
     echoCache.remember(scope, { text: "same text", messageId: "unknown" });
     echoCache.remember(scope, { text: "same text", messageId: "p:0/GUID-newer" });
 
-    expect(echoCache.has(scope, { text: "same text", messageId: "200" })).toBe(false);
+    expect(await echoCache.has(scope, { text: "same text", messageId: "200" })).toBe(false);
   });
 });

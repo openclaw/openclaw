@@ -8,8 +8,8 @@ or publication work. Treat backport discovery and preparation as an ability of
 this release skill, not as a separate release workflow.
 
 The backport flow covers mainline inventory, private-security reconciliation,
-approval, the staging PR, and proof handoff. After it lands, use the sequence
-below. Never route `.33+` through regular beta/stable release steps.
+approval, the staging PR, and proof handoff. After it lands, use the shared
+release pipeline with the extended-stable track inputs below.
 
 Extended-stable requires a visible **SDK/config backport warning** whenever a
 candidate changes the public plugin SDK or a config/default/schema/migration
@@ -20,16 +20,16 @@ Read `extended-stable-backports.md`; a clean cherry-pick, green
 release checks, or a regenerated baseline does not by itself explain the
 maintenance risk.
 
-Use this path only for the trailing completed month's `.33+` Gateway
-distribution: the `openclaw` npm package, official npm plugins, and matching
-Docker Gateway images. Treat
+Use this path only for a `.33+` Gateway distribution from either of the two
+trailing completed months: the `openclaw` npm package, official npm plugins,
+and matching Docker Gateway images. Treat
 `docs/reference/RELEASING.md`,
 `scripts/openclaw-npm-extended-stable-release.mjs`, and the release workflows
 on pinned current `main` as the exact command and validation contract.
 
 1. On `extended-stable/YYYY.M.33`, verify the root and every publishable official
    plugin have the intended version. Generate and commit the complete
-   `## YYYY.M.P` changelog section with `### Highlights`, `### Changes`, and
+   `CHANGELOG/YYYY.M.P.md` entry with `### Highlights`, `### Changes`, and
    `### Fixes`. Carry the full current-main Docker
    release-channel unit: workflow, promoter, policy, shared classifier, tests,
    and workflow validation. Run focused checks and freeze the untagged tip SHA.
@@ -37,35 +37,50 @@ on pinned current `main` as the exact command and validation contract.
    Release Validation derives `npm_dist_tag=extended-stable` from the version.
 3. Run complete Full Release Validation against the canonical branch with
    `release_profile=stable`; save its run ID and successful `run_attempt`.
-   Prefer the trusted main-pinned harness, which attests the immutable target
-   SHA in its manifest. Current manifests include qualified npm and prepared
-   Docker artifacts; use that same run ID for npm preflight evidence. Historical
-   manifests without them still need a separate npm preflight. Any candidate
+   Use the trusted main-pinned helper's canonical `release-ci/*` producer,
+   which attests the immutable target SHA in its manifest. Direct branch/main
+   producers do not satisfy protected-tag shared publication. Current manifests
+   include qualified npm and prepared Docker artifacts; use that same run ID
+   and attempt for npm preflight publication evidence. Also run the supplemental
+   trusted-main preflight described in `release-openclaw-ci`; that validation-only
+   run does not replace the integrated publication artifact. Any candidate
    branch change invalidates both gates.
 4. Require the tip still equals the frozen SHA, then create signed `vYYYY.M.P`.
    Never move or delete a final tag; later source changes need a new patch.
 5. Require the saved validation run to be complete and successful, bind its
-   manifest target SHA and attempt to the tag, and accept a direct run from the
-   canonical branch, a direct current-`main` run whose workflow SHA is still
-   reachable from main, or a trusted main-pinned `release-ci/*` harness. Reject
-   narrow reruns.
-6. Dispatch `plugin-npm-release.yml` from the same branch with
-   `publish_scope=all-publishable`, the full release SHA as `ref`, and
-   `npm_dist_tag=extended-stable`. Require complete exact-version and selector
-   readback, then save the successful plugin run ID.
-7. Publish core with the tag, `npm_dist_tag=extended-stable`, all three run IDs,
-   and `full_release_validation_run_attempt=<saved-attempt>`. Normally dispatch
-   from the canonical branch. For a workflow-only recovery after the candidate
-   is immutable, dispatch trusted current `main` with
-   `release_candidate_branch=extended-stable/YYYY.M.33`; it still publishes the
-   tag checkout and accepts canonical-branch, current-main, or trusted-pinned
-   validation evidence; the prepared tarball and every evidence identity must
-   still match the candidate SHA.
+   manifest target SHA and attempt to the tag, and require the canonical
+   `release-ci/<sha12>-<epoch>` producer with trusted tooling identity. Reject
+   direct canonical-branch/main producers and narrow reruns.
+6. With publication/tag-push authority, create and push a protected lightweight
+   `release-publish/<tooling-sha12>-<epoch>` tag at the frozen trusted-main
+   Tooling SHA, using the commands in `docs/reference/RELEASING.md`. Dispatch
+   `OpenClaw Release Publish` with `--ref` set to that tooling tag, the product
+   release tag as `tag`, `npm_dist_tag=extended-stable`,
+   `publish_openclaw_npm=true`, the saved
+   preflight and Full Release Validation run IDs, and the saved validation run
+   attempt. The parent derives `release_candidate_branch`, creates the draft,
+   publishes every official npm plugin and core under `extended-stable`,
+   attaches release evidence, skips ClawHub/native publication, publishes
+   Docker, and finalizes the release with `latest=false`.
+7. If core npm already published, resume the parent from the same protected
+   tooling tag with `openclaw_npm_resume_run_id` bound to the successful original core publish.
+   It verifies the registry tarball against preflight before resuming evidence,
+   Docker, and finalization. Docker-only recovery may dispatch from `main` with
+   `publish_openclaw_npm=false` and `publish_docker_only=true`; that path does
+   not attach evidence or finalize the release.
 8. From a clean current-`main` checkout, run
    `node --import tsx scripts/openclaw-npm-postpublish-verify.ts YYYY.M.P`.
    Verify signatures, provenance, inventories, exact versions, and selectors.
-   Use the generated repair only for the root selector; repair other selectors
-   with approved credential-isolated tooling. Never republish a version.
+   To promote an already-published core version to `extended-stable`, use
+   `promote_extended_stable` in the `openclaw/releases` dist-tag workflow
+   from that repository's `main`, after openclaw/releases#27 is merged. Follow
+   [registry selector recovery](publication-recovery.md#registry-selectors),
+   not the publication/resume path. The target must be a final extended-stable
+   version with patch `33` or higher and no suffix; fixes increment the patch.
+   Stable/beta promotion and sync reject that
+   patch range. The same action can select an older extended-stable version
+   for rollback. Repair other selectors separately with
+   approved credential-isolated tooling. Never republish a version.
 9. Require `Docker Release` to verify default, slim, browser, and architecture
    images in GHCR and Docker Hub, including attestations and platform versions.
    It must advance only
@@ -73,5 +88,61 @@ on pinned current `main` as the exact command and validation contract.
    digest and refuse automatic rollback. For alias repair, dispatch the
    approval-gated `docker-channel-promote.yml` from current `main` with the exact
    tag; never rebuild or move the release tag.
-10. Do not create a GitHub Release or publish macOS, Windows, mobile, website,
-    ClawHub, or private dist-tag artifacts from this path.
+10. Verify the non-Latest GitHub Release and its dependency, validation, and
+    postpublish evidence. Do not publish macOS, Windows, mobile, website,
+    ClawHub, regular npm `latest`, or private dist-tag artifacts from this path.
+
+## Trusted-main npm recovery
+
+Use this route when the frozen candidate's publishing tooling is the failure,
+for example an obsolete check rejecting validated dependency pins because npm
+`latest` advanced. Keep the candidate and its successful qualification unchanged.
+A product defect, known vulnerable dependency, or changed candidate needs its
+own repair and fresh qualification; workflow recovery does not waive those gates.
+
+Use this lower-level route only for an approved workflow recovery, not normal
+shared publication. It does not itself attach evidence or finalize the GitHub
+Release. Retain both child identities and their evidence for approved closeout;
+a direct-main recovery run is not automatically interchangeable with the
+protected parent's core-resume receipt.
+
+In `gh workflow run`, `--ref main` selects trusted publishing **tooling**.
+The plugin input `-f ref=<release-sha>` selects the exact **package source**;
+never replace it with `main`, a branch name, or the tooling SHA.
+
+After the publication prerequisites above pass, dispatch:
+
+```bash
+gh workflow run plugin-npm-release.yml --repo openclaw/openclaw \
+  --ref main \
+  -f publish_scope=all-publishable \
+  -f ref=<exact-40-character-release-sha> \
+  -f npm_dist_tag=extended-stable
+```
+
+Leave `plugins` empty and `preflight_only=false` (the default). A successful
+artifact or trusted-publisher preflight is not a successful publication run.
+The source must still equal the canonical `extended-stable/YYYY.M.33` tip;
+the workflow rechecks that tip immediately before each OIDC npm publish after
+the environment approval. Branch movement requires reassessing the candidate
+and replacing its qualification, not substituting a new SHA into old evidence.
+Keep final tags immutable and use a new patch for source changes after tagging.
+
+Save the successful plugin publication run ID after exact-version and selector
+readback. Dispatch `openclaw-npm-release.yml` with `--ref main` and the existing
+core recovery inputs:
+
+- `tag=vYYYY.M.P`, `preflight_only=false`, and `npm_dist_tag=extended-stable`.
+- `release_candidate_branch=extended-stable/YYYY.M.33`, including for patches
+  above `.33`; this is a core input, not a plugin input.
+- `plugin_npm_run_id=<successful-plugin-publication-run-id>` from this recovery.
+- Preserve `preflight_run_id`, `full_release_validation_run_id`, and
+  `full_release_validation_run_attempt` for the unchanged candidate. Current
+  qualified manifests supply both run IDs from the same successful validation.
+
+Core verifies the plugin workflow's identity, trusted-main ancestry, and exact
+candidate binding. Record both workflows' actual tooling SHAs and run IDs in
+the release handoff. Required environment approvals, immutable artifact checks,
+and registry readback still apply; extended-stable token bootstrap is prohibited.
+Reuse already-published versions and verified bytes. If only core failed, retain
+the successful plugin run instead of dispatching plugin publication again.

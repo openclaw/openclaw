@@ -3,6 +3,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import {
+  getEffectiveQaEvidenceEntries,
+  projectQaEvidenceScenarioOutcomes,
   validateQaEvidenceSummaryJson,
   type QaEvidenceScorecardJson,
   type QaEvidenceStatus,
@@ -15,9 +17,11 @@ import {
   qaMaturityCoverageCategoryKey,
   qaMaturityScoreObjectForScore,
   qaMaturityTaxonomyLevelMap,
+  qaMaturityTaxonomyIdentity,
   readQaMaturityTaxonomySource,
   readValidatedQaMaturityScoreSources,
   type QaMaturityCoverageScores,
+  type QaMaturityDecision,
   type QaMaturityScoreObject,
   type QaMaturityScoreSurface,
   type QaMaturityScoreSurfaceLts,
@@ -28,6 +32,10 @@ import {
 } from "../../extensions/qa-lab/src/scorecard-taxonomy.js";
 import { parseDocsDocument, resolveDocsFragment } from "../lib/docs-markdown.mjs";
 import { collectMirroredDocsRoutes } from "../lib/docs-published-routes.mts";
+import {
+  collectChannelMaturityInventory,
+  MATURITY_CHANNEL_COHORT_SURFACE_IDS,
+} from "./maturity-inventory.mts";
 
 const DEFAULT_TAXONOMY_PATH = "taxonomy.yaml";
 const DEFAULT_SCORES_PATH = "qa/maturity-scores.yaml";
@@ -51,9 +59,11 @@ type EvidenceSummary = {
   generatedAt: string;
   profile: string;
   entryCount: number;
+  unresolvedCount: number;
   statuses: StatusCounts;
   blockingResults: string[];
   scorecard?: QaEvidenceScorecardJson;
+  taxonomyStatus: "current" | "unknown" | "mismatch";
 };
 
 type StatusCounts = Record<QaEvidenceStatus, number>;
@@ -208,12 +218,31 @@ function markdownSlug(value: string): string {
 }
 
 const legacySurfaceAnchors: Readonly<Record<string, readonly string[]>> = {
+  "app-sdk": ["openclaw-app-sdk"],
   automation: ["automation-cron-hooks-tasks-polling"],
+  containers: ["docker-and-podman-hosting"],
+  "community-channels": ["mattermost-line-irc-nextcloud-talk-nostr-twitch-tlon-synology-chat"],
   "control-ui": ["gateway-web-app"],
   "imessage-bluebubbles": ["imessage-and-bluebubbles"],
+  "session-memory": ["session-memory-and-context-engine"],
   "small-linux": ["raspberry-pi-and-small-linux-devices"],
   "windows-app": ["native-windows-companion-app"],
+  "regional-channels": ["feishu-qq-bot-wechat-yuanbao-zalo-zalo-personal-regional-channels"],
 };
+
+function renderCatalogMembers(surfaceId: string): string[] {
+  if (!MATURITY_CHANNEL_COHORT_SURFACE_IDS.has(surfaceId)) {
+    return [];
+  }
+  const members = collectChannelMaturityInventory().membersBySurface.get(surfaceId) ?? [];
+  if (members.length === 0) {
+    return [];
+  }
+  return [
+    `**Current catalog members:** ${members.map((member) => `[${markdownEscape(member.label)}](${member.docsPath})`).join(", ")}`,
+    "",
+  ];
+}
 
 function normalizeRoutePath(route: string): string {
   return route.replace(/^\/+/, "").replace(/\/+$/, "");
@@ -305,7 +334,7 @@ function validateTaxonomyDocsReferences(
           continue;
         }
         const anchor = redirectAnchor ?? sourceAnchor;
-        const ids = localDocsRouteIds(resolvedRoute, docsRouteIndex);
+        const ids = anchor ? localDocsRouteIds(resolvedRoute, docsRouteIndex) : undefined;
         if (anchor && (!ids || !resolveDocsFragment(`#${anchor}`, ids))) {
           const reason = ids
             ? "targets a missing docs anchor"
@@ -504,6 +533,63 @@ function maturityLevelPillFromText(value: string): string {
 function indentMarkdown(lines: string[], spaces = 4): string[] {
   const prefix = " ".repeat(spaces);
   return lines.map((line) => (line ? `${prefix}${line}` : ""));
+}
+
+type DecisionContext = {
+  label: string;
+  current: QaMaturityDecision["value"] | undefined;
+  decision?: QaMaturityDecision;
+};
+
+function renderDecisionContext(entries: DecisionContext[]): string[] {
+  // The docs publisher renders HTML/Markdown, not JSX expressions. Keep authored text literal.
+  const text = (value: string | number | boolean) =>
+    `<span>${String(value)
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replace(/[{}|`*_[\]\\]/gu, (character) => `&#${character.charCodeAt(0)};`)
+      .replace(/\r\n?|\n/gu, "<br />")}</span>`;
+  return [
+    "<details>",
+    "<summary>Decision context</summary>",
+    "<p>Missing history is unknown. Differences are non-gating and do not change current values.</p>",
+    ...entries.map(({ label, current, decision }) => {
+      const context = decision
+        ? [
+            `Recorded value: ${decision.value}`,
+            ...(decision.value !== current ? ["Non-gating mismatch"] : []),
+            `Rationale: ${decision.rationale}`,
+            `Reviewer: ${decision.reviewer}`,
+            `Evidence: ${decision.evidence_refs.join("; ")}`,
+            `Revalidate when: ${decision.revalidate_when}`,
+          ]
+            .map((field) => `<div>${text(field)}</div>`)
+            .join("")
+        : text("Unknown (not recorded)");
+      return `<div><p><strong>${text(label)}</strong></p><p>Current value: ${text(current ?? "Unknown")}</p><div>Recorded decision: ${context}</div></div>`;
+    }),
+    "</details>",
+  ];
+}
+
+function surfaceDecisionContext(
+  surface: QaMaturityTaxonomySurface,
+  scoreSurface: QaMaturityScoreSurface | undefined,
+): DecisionContext[] {
+  return [
+    { label: "Level", current: surface.level, decision: surface.level_decision },
+    {
+      label: "Quality",
+      current: scoreSurface?.scores.quality.score,
+      decision: scoreSurface?.scores.quality.decision,
+    },
+    {
+      label: "Completeness",
+      current: scoreSurface?.scores.completeness.score,
+      decision: scoreSurface?.scores.completeness.decision,
+    },
+  ];
 }
 
 function renderSurfaceRows({
@@ -760,6 +846,10 @@ function resultCountsText(statuses: StatusCounts): string {
   return parts.join(", ");
 }
 
+function unresolvedInstancesText(count: number): string {
+  return `${count} unresolved scheduled ${count === 1 ? "instance" : "instances"}`;
+}
+
 function readinessStatusText(status: string): string {
   if (status === "fulfilled") {
     return "Ready";
@@ -780,18 +870,36 @@ function followUpText(missingCoverageIds: readonly string[]): string {
   return `${missingCoverageIds.length} capability ${missingCoverageIds.length === 1 ? "gap" : "gaps"}`;
 }
 
-function readEvidenceSummaries(evidenceDir?: string): EvidenceSummary[] {
+function readEvidenceSummaries(
+  taxonomy: QaMaturityTaxonomy,
+  evidenceDir?: string,
+): EvidenceSummary[] {
+  const identity = qaMaturityTaxonomyIdentity(taxonomy);
   return collectQaEvidenceFiles(evidenceDir).map((filePath) => {
     const payload = validateQaEvidenceSummaryJson(JSON.parse(fs.readFileSync(filePath, "utf8")));
+    const entries = getEffectiveQaEvidenceEntries(payload);
+    // Rows retain diagnostics; the canonical root projection also exposes scheduled gaps.
+    const unresolved = projectQaEvidenceScenarioOutcomes(payload).filter(
+      (item) => item.status === null,
+    );
     return {
       sourcePath: filePath,
       path: path.relative(process.cwd(), filePath),
       generatedAt: payload.generatedAt,
       profile: payload.profile ?? "",
-      entryCount: payload.entries.length,
-      statuses: countStatuses(payload.entries),
-      blockingResults: blockingResultLabels(payload.entries),
+      entryCount: entries.length,
+      unresolvedCount: unresolved.length,
+      statuses: countStatuses(entries),
+      blockingResults: blockingResultLabels(entries).concat(
+        unresolved.map((item) => `${item.scenarioId} (unresolved)`),
+      ),
       scorecard: payload.scorecard,
+      taxonomyStatus: !payload.profilePlan?.taxonomyIdentity
+        ? "unknown"
+        : payload.profilePlan.taxonomyIdentity.version === identity.version &&
+            payload.profilePlan.taxonomyIdentity.sha256 === identity.sha256
+          ? "current"
+          : "mismatch",
     };
   });
 }
@@ -803,11 +911,12 @@ function rejectBlockingEvidence(evidenceSummaries: EvidenceSummary[]): void {
   }
   throw new Error(
     [
-      "maturity docs require passing QA evidence; failing or blocked QA entries cannot be rendered into the scorecard.",
+      "maturity docs require passing QA evidence; failing or blocked QA entries and unresolved scheduled instances cannot be rendered into the scorecard.",
       ...blocked.map((item) => {
         const counts = [
           item.statuses.fail > 0 ? `${item.statuses.fail} failed` : undefined,
           item.statuses.blocked > 0 ? `${item.statuses.blocked} blocked` : undefined,
+          item.unresolvedCount > 0 ? unresolvedInstancesText(item.unresolvedCount) : undefined,
         ]
           .filter(Boolean)
           .join(", ");
@@ -836,14 +945,24 @@ function deriveCoverageScores(
   taxonomy: QaMaturityTaxonomy,
   evidenceSummaries: EvidenceSummary[],
 ): DerivedCoverageScores {
-  const warnings: string[] = [];
-  const coverageSummary = latestCoverageScorecard(evidenceSummaries);
+  const warnings = evidenceSummaries.flatMap((item) =>
+    !item.scorecard || item.taxonomyStatus === "current"
+      ? []
+      : [
+          `${item.path}: semantic taxonomy identity is ${item.taxonomyStatus === "unknown" ? "missing" : "mismatched"}; historical evidence cannot supply current coverage`,
+        ],
+  );
+  const current = evidenceSummaries.filter((item) => item.taxonomyStatus === "current");
+  const coverageSummary = latestCoverageScorecard(current);
   if (!coverageSummary) {
+    if (latestCoverageScorecard(evidenceSummaries)) {
+      return { categories: new Map(), surfaces: new Map(), rollups: {}, warnings };
+    }
     throw new Error(
       "maturity scorecard rendering requires all or release profile qa-evidence.json with a scorecard field; pass --evidence-dir with QA evidence artifacts",
     );
   }
-  const selectedProfileScorecardSummaries = evidenceSummaries.filter(
+  const selectedProfileScorecardSummaries = current.filter(
     (item) => item.profile === coverageSummary.profile && item.scorecard,
   );
   if (selectedProfileScorecardSummaries.length > 1) {
@@ -990,16 +1109,42 @@ function renderEvidenceSection(
       '  <div className="maturity-evidence-card">',
       `    <span className="maturity-evidence-title">${markdownEscape(checkSetTitle(item.profile))}</span>`,
       `    <span>${markdownEscape(item.generatedAt)}</span>`,
+      `    <span>${item.taxonomyStatus === "current" ? "Current taxonomy evidence" : `Historical evidence: taxonomy identity ${item.taxonomyStatus}`}</span>`,
       `    <span>${item.entryCount} checks - ${markdownEscape(resultCountsText(item.statuses))}</span>`,
+      ...(item.unresolvedCount > 0
+        ? [`    <span>${unresolvedInstancesText(item.unresolvedCount)}</span>`]
+        : []),
       `    <span>${markdownEscape(countText(scorecard?.categories))} areas - ${markdownEscape(countText(scorecard?.features))} features - ${markdownEscape(countText(scorecard?.coverageIds))} coverage IDs</span>`,
       "  </div>",
     );
   }
   lines.push("</div>", "");
 
-  const categoryRows = scorecardSummaries.flatMap((item) =>
-    (item.scorecard?.categoryReports ?? []).map((category) => ({ item, category })),
-  );
+  const historical = scorecardSummaries.filter((item) => item.taxonomyStatus !== "current");
+  if (historical.length > 0) {
+    lines.push(
+      "### Historical category evidence",
+      "",
+      "These recorded categories describe the original run and do not contribute to current coverage.",
+      "",
+      "| Profile | Recorded category | ID | Outcome | Features | Coverage IDs |",
+      "| --- | --- | --- | --- | --- | --- |",
+    );
+    for (const item of historical) {
+      for (const category of item.scorecard?.categoryReports ?? []) {
+        lines.push(
+          `| ${markdownEscape(item.profile)} | ${markdownEscape(category.name)} | ${markdownEscape(category.id)} | ${markdownEscape(category.status)} | ${markdownEscape(countText(category.features))} | ${markdownEscape(countText(category.coverageIds))} |`,
+        );
+      }
+    }
+    lines.push("");
+  }
+
+  const categoryRows = scorecardSummaries
+    .filter((item) => item.taxonomyStatus === "current")
+    .flatMap((item) =>
+      (item.scorecard?.categoryReports ?? []).map((category) => ({ item, category })),
+    );
   if (categoryRows.length > 0) {
     const grouped = new Map<string, Array<(typeof categoryRows)[number]>>();
     for (const row of categoryRows) {
@@ -1112,8 +1257,18 @@ function renderMaturityScorecard({
     "",
     ...renderSurfaceTabs({ coverage, levels, scoreSurfaces, surfaces }),
     "",
-    ...renderEvidenceSection(evidenceSummaries, surfaceNames),
+    "## Decision context",
+    "",
   );
+  for (const surface of surfaces) {
+    lines.push(
+      `### ${markdownEscape(surface.name)}`,
+      "",
+      ...renderDecisionContext(surfaceDecisionContext(surface, scoreSurfaces.get(surface.id))),
+      "",
+    );
+  }
+  lines.push(...renderEvidenceSection(evidenceSummaries, surfaceNames));
   if (updatedDate) {
     lines.push(`> Last updated: ${updatedDate}`, "");
   }
@@ -1231,9 +1386,34 @@ function renderTaxonomy({
         "",
         `    ${markdownEscape(surface.rationale ?? "")}`,
         "",
+        ...indentMarkdown(renderCatalogMembers(surface.id), 4),
         ...indentMarkdown(
           [
             `<div className="maturity-surface-rollup"><span>Coverage ${scoreLabel(coverage.surfaces.get(surface.id))}</span><span>Quality ${scoreLabel(scoreSurface?.scores?.quality)}</span><span>Completeness ${scoreLabel(scoreSurface?.scores?.completeness)}</span><span>${maturityLtsBadge(scoreSurface?.lts)}</span></div>`,
+            "",
+            ...renderDecisionContext([
+              ...surfaceDecisionContext(surface, scoreSurface),
+              ...surface.categories.flatMap((category): DecisionContext[] => {
+                const score = categoryScores.get(category.name);
+                return [
+                  {
+                    label: `${category.name} / Quality`,
+                    current: score?.quality.score,
+                    decision: score?.quality.decision,
+                  },
+                  {
+                    label: `${category.name} / Completeness`,
+                    current: score?.completeness.score,
+                    decision: score?.completeness.decision,
+                  },
+                  {
+                    label: `${category.name} / LTS`,
+                    current: score?.lts.supported,
+                    decision: score?.lts.decision,
+                  },
+                ];
+              }),
+            ]),
             "",
             ...categoryLines,
             "",
@@ -1323,7 +1503,7 @@ function main(): void {
 
   validateTaxonomyDocsReferences(taxonomy, docsRouteIndex);
 
-  const evidenceSummaries = readEvidenceSummaries(args.evidenceDir);
+  const evidenceSummaries = readEvidenceSummaries(taxonomy, args.evidenceDir);
   if (!args.allowFailures) {
     rejectBlockingEvidence(evidenceSummaries);
   }

@@ -1,7 +1,9 @@
 import MarkdownIt, { type MarkdownIt as MarkdownItParser, type Token } from "markdown-it";
+import markdownItCjkFriendly from "markdown-it-cjk-friendly";
 import markdownItTaskLists from "markdown-it-task-lists";
 import { t } from "../i18n/index.ts";
 import { fileKindForPath, shortestFileLabels } from "./file-kind.ts";
+import { isGitHubHost } from "./github-link-eligibility.ts";
 import {
   decodeGitHubPathSegment,
   parseGitHubItemPath,
@@ -20,6 +22,7 @@ import {
   splitMarkdownFileLineSuffix,
 } from "./markdown-file-links.ts";
 import { installMarkdownGitHubRefs } from "./markdown-github-refs.ts";
+import { installMarkdownHumanMentions } from "./markdown-human-mentions.ts";
 import { hasMarkdownLinkBoundaries } from "./markdown-link-boundary.ts";
 import type { MarkdownRenderEnv } from "./markdown-render-options.ts";
 import { installMarkdownSessionLinks, SESSION_LINK_SCAN_RE } from "./markdown-session-links.ts";
@@ -46,11 +49,6 @@ const BARE_URL_CLASS = "markdown-bare-url";
 // generated label exactly like linkify output.
 const CODE_SPAN_LINK_MARKUP = "code-span-url";
 const CODE_SPAN_URL_BREAK_RE = /[\s\p{Cc}]/u;
-
-function isGitHubHost(hostname: string): boolean {
-  const host = hostname.toLowerCase();
-  return host === "github.com" || host === "www.github.com";
-}
 
 // Inline-code file links are rendered by the code_inline rule, which runs after
 // every core rule. The core rule therefore parks the resolved target here so the
@@ -85,6 +83,9 @@ function renderRawMarkdownHtml(
   const content = token.content;
   if (progressBars) {
     return PROGRESS_HTML_RE.test(content.trim()) ? content : "";
+  }
+  if (/^<br\s*\/?>$/iu.test(content.trim())) {
+    return block ? "<br>\n" : "<br>";
   }
   return escapeMarkdownHtml(content) + (block ? "\n" : "");
 }
@@ -127,14 +128,20 @@ function formatGitHubLinkLabel(url: URL): string {
   if (segments.length === 2) {
     return segments.map((segment) => decodeGitHubPathSegment(segment) ?? segment).join("/");
   }
-  if (segments[2] === "blob" && segments.length > 4) {
-    const filename = decodeGitHubPathSegment(segments.at(-1) ?? "");
-    if (filename) {
-      return filename;
+  if ((segments[2] === "blob" || segments[2] === "tree") && segments.length > 4) {
+    const basename = decodeGitHubPathSegment(segments.at(-1) ?? "");
+    if (basename) {
+      // Tree URLs can contain slash-separated refs, not just folder paths.
+      // Show the omission rather than presenting the suffix as a folder name.
+      return segments[2] === "tree"
+        ? `${segments
+            .slice(0, 2)
+            .map((segment) => decodeGitHubPathSegment(segment) ?? segment)
+            .join("/")}/…/${basename}`
+        : basename;
     }
   }
-  const fallbackSegments = segments.length > 2 ? segments.slice(2) : segments;
-  const path = fallbackSegments.map((segment) => decodeGitHubPathSegment(segment) ?? segment);
+  const path = segments.map((segment) => decodeGitHubPathSegment(segment) ?? segment);
   return ["github.com", ...path].join("/");
 }
 
@@ -144,6 +151,7 @@ export function createMarkdownParser(): MarkdownItParser {
     breaks: true,
     linkify: true,
   });
+  markdownParser.use(markdownItCjkFriendly);
   const defaultCodeInlineRenderer = markdownParser.renderer.rules.code_inline!;
 
   // Enable GFM strikethrough (~~text~~) to match original marked.js behavior.
@@ -733,5 +741,6 @@ export function createMarkdownParser(): MarkdownItParser {
     });
   };
 
+  installMarkdownHumanMentions(markdownParser);
   return markdownParser;
 }

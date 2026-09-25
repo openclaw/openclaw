@@ -4,7 +4,11 @@
  * Transport adapters use this module to turn provider-specific response bodies,
  * request ids, and binary payload guardrails into stable OpenClaw error shapes.
  */
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { mediaKindFromMime } from "@openclaw/media-core/constants";
+import {
+  asOptionalObjectRecord,
+  asOptionalRecord,
+} from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { normalizeOptionalString as trimToUndefined } from "../../packages/normalization-core/src/string-coerce.js";
 import {
@@ -12,6 +16,7 @@ import {
   readResponseWithLimit,
   type ReadResponseTextPrefixOptions,
 } from "../infra/http-body.js";
+import { parseRetryAfterHeaderSeconds } from "../infra/retry-after.js";
 import { redactSensitiveText, redactToolPayloadText } from "../logging/redact.js";
 import type { ModelProviderRequestTransportOverrides } from "./provider-request-config.js";
 import { redactProviderResponseErrorText } from "./provider-request-header-redaction.js";
@@ -115,6 +120,8 @@ function readProviderResponseBytes(
 /** Options for bounded provider error-body normalization. */
 type ProviderHttpErrorOptions = {
   statusPrefix?: string;
+  signal?: AbortSignal;
+  maxBodyBytes?: number;
   bodyTimeoutMs?: ReadResponseTextPrefixOptions["timeoutMs"];
   onBodyTimeout?: NonNullable<ReadResponseTextPrefixOptions["onTimeout"]>;
   /** Scrub reflected request credentials before retaining response diagnostics. */
@@ -131,6 +138,23 @@ class ProviderErrorBodyTimeout extends Error {
     this.name = "ProviderErrorBodyTimeout";
     this.timeoutError = timeoutError;
   }
+}
+
+/** Summarizes transport failures before the logger applies diagnostic redaction. */
+export function summarizeProviderTransportError(error: unknown): string {
+  const record = asOptionalObjectRecord(error);
+  if (!record) {
+    return `type=${typeof error}`;
+  }
+  const cause = asOptionalObjectRecord(record.cause);
+  const read = (value: unknown) => (typeof value === "string" ? value : typeof value);
+  return [
+    `name=${read(record.name)}`,
+    `code=${read(record.code)}`,
+    `causeName=${read(cause?.name)}`,
+    `causeCode=${read(cause?.code)}`,
+    `message=${error instanceof Error ? error.message : read(record.message)}`,
+  ].join(" ");
 }
 
 /** Trims provider error details to a log- and prompt-safe preview length. */
@@ -219,6 +243,7 @@ export function formatProviderErrorPayload(payload: unknown): string | undefined
 type ProviderHttpErrorInfo = ProviderErrorPayloadMetadata & {
   body?: string;
   requestId?: string;
+  retryAfterMs?: number;
 };
 
 /** Extracts normalized provider error metadata while keeping the raw body bounded and redacted. */
@@ -227,7 +252,8 @@ async function extractProviderErrorInfo(
   options?: ProviderHttpErrorOptions,
 ): Promise<ProviderHttpErrorInfo> {
   const bodyTimeoutMs = options?.bodyTimeoutMs;
-  const prefix = await readResponseTextPrefix(response, 16 * 1024, {
+  const prefix = await readResponseTextPrefix(response, options?.maxBodyBytes ?? 16 * 1024, {
+    signal: options?.signal,
     chunkTimeoutMs: 10_000,
     onIdleTimeout: ({ chunkTimeoutMs }) =>
       new Error(`error body read stalled for ${chunkTimeoutMs}ms`),
@@ -247,6 +273,7 @@ async function extractProviderErrorInfo(
           new Error(`Provider error body timed out after ${params.timeoutMs}ms`),
       ),
   }).catch((error: unknown) => {
+    options?.signal?.throwIfAborted();
     if (error instanceof ProviderErrorBodyTimeout) {
       throw error.timeoutError;
     }
@@ -256,14 +283,18 @@ async function extractProviderErrorInfo(
     }
     return undefined;
   });
+  options?.signal?.throwIfAborted();
   const rawRequestId = extractProviderRequestId(response);
   const requestId =
     rawRequestId && options?.requestHeaders
       ? redactProviderResponseErrorText(rawRequestId, options.requestHeaders)
       : rawRequestId;
   const rawBody = trimToUndefined(prefix?.text);
+  const retryAfterSeconds = parseRetryAfterHeaderSeconds(response.headers.get("Retry-After"));
+  const headerRetryAfterMs =
+    retryAfterSeconds === undefined ? undefined : Math.ceil(retryAfterSeconds * 1000);
   if (!rawBody) {
-    return { requestId };
+    return { requestId, retryAfterMs: headerRetryAfterMs };
   }
   // Redact before metadata extraction or preview truncation can split a credential.
   const safeBody = options?.requestHeaders
@@ -279,6 +310,7 @@ async function extractProviderErrorInfo(
       detail: (metadata.detail && redactSensitiveText(metadata.detail)) || body,
       code: metadata.code,
       type: metadata.type,
+      retryAfterMs: headerRetryAfterMs,
       body,
       requestId,
     };
@@ -287,6 +319,7 @@ async function extractProviderErrorInfo(
       detail: body,
       body,
       requestId,
+      retryAfterMs: headerRetryAfterMs,
     };
   }
 }
@@ -308,6 +341,7 @@ export function extractProviderRequestId(response: Response): string | undefined
 export class ProviderHttpError extends Error {
   readonly status: number;
   readonly statusCode: number;
+  retryAfterMs?: number;
   readonly code?: string;
   readonly errorCode?: string;
   readonly errorType?: string;
@@ -322,6 +356,7 @@ export class ProviderHttpError extends Error {
       type?: string;
       body?: string;
       requestId?: string;
+      retryAfterMs?: number;
     },
   ) {
     super(message);
@@ -333,6 +368,7 @@ export class ProviderHttpError extends Error {
     this.errorType = params.type;
     this.errorBody = params.body;
     this.requestId = params.requestId;
+    this.retryAfterMs = params.retryAfterMs;
   }
 }
 
@@ -357,7 +393,7 @@ export async function createProviderHttpError(
   response: Response,
   label: string,
   options?: ProviderHttpErrorOptions,
-): Promise<Error> {
+): Promise<ProviderHttpError> {
   const info = await extractProviderErrorInfo(response, options);
   return new ProviderHttpError(
     formatProviderHttpErrorMessage({
@@ -373,6 +409,7 @@ export async function createProviderHttpError(
       type: info.type,
       body: info.body,
       requestId: info.requestId,
+      retryAfterMs: info.retryAfterMs,
     },
   );
 }
@@ -453,25 +490,41 @@ export async function readProviderJsonArrayFieldResponse(
   return value;
 }
 
-function normalizeContentType(response: Response): string | undefined {
-  const contentType = response.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase();
-  return contentType || undefined;
-}
+// One HTTP media type, with token or quoted parameters (including escaped codec
+// commas) and empty parameter slots. Fetch combines repeated headers with commas
+// outside those quotes.
+const providerMediaContentTypePattern =
+  /^[!#$%&'*+.^_`|~\da-z-]+\/[!#$%&'*+.^_`|~\da-z-]+(?:[ \t]*;(?:[ \t]*[!#$%&'*+.^_`|~\da-z-]+[ \t]*=[ \t]*(?:[!#$%&'*+.^_`|~\da-z-]+|"(?:[\t !#-[\]-~\x80-\xff]|\\[\t !-~\x80-\xff])*"))?)*[ \t]*$/iu;
 
-/** Rejects text or JSON responses on provider endpoints that should return binary bytes. */
+/** Rejects non-binary responses and mismatched provider-owned audio/video families. */
 export function assertProviderBinaryResponseContent(
   response: Response,
   label: string,
   kind = "binary",
 ): void {
-  const contentType = normalizeContentType(response);
-  if (!contentType) {
+  const rawContentType = response.headers.get("content-type");
+  if (rawContentType === null) {
+    return;
+  }
+  const contentType = rawContentType.split(";")[0]?.trim().toLowerCase();
+  const requiresMediaFamily = kind === "audio" || kind === "video";
+  // Ogg may be declared without an audio family; generic binary aliases also
+  // leave the media family to the provider endpoint's existing contract.
+  const unspecifiedMedia =
+    contentType === "application/octet-stream" ||
+    contentType === "binary/octet-stream" ||
+    (kind === "audio" && contentType === "application/ogg");
+  if (!contentType && !requiresMediaFamily) {
     return;
   }
   if (
+    !contentType ||
     contentType === "application/json" ||
     contentType.endsWith("+json") ||
-    contentType.startsWith("text/")
+    contentType.startsWith("text/") ||
+    (requiresMediaFamily &&
+      (!providerMediaContentTypePattern.test(rawContentType.trim()) ||
+        (!unspecifiedMedia && mediaKindFromMime(contentType) !== kind)))
   ) {
     throw new Error(`${label}: malformed ${kind} response`);
   }

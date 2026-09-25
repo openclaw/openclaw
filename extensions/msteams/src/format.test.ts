@@ -169,9 +169,19 @@ describe("formatMSTeamsMarkdown", () => {
     expect(parser.renderInline(formatMSTeamsMarkdown(markdown, "off"))).toBe(html);
   });
 
-  it("keeps raw tables when table conversion is disabled", () => {
-    const table = ["| Name | State |", "|---|---|", "| deploy | ready |"].join("\n");
+  it.each(["", "  ", "> "])("keeps raw table prefix %j when conversion is disabled", (prefix) => {
+    const table = ["| Name | State |", "|---|---|", "| deploy | ready |"]
+      .map((line) => prefix + line)
+      .join("\n");
     expect(formatMSTeamsMarkdown(table, "off")).toBe(table);
+  });
+
+  it("keeps separate raw tables after lone carriage-return line endings", () => {
+    const table = "| A | B |\r|---|---|\r| x | y |";
+    const source = `# Before\r\r${table}\r\r# After\r\r${table}`;
+    expect(formatMSTeamsMarkdown(source, "off")).toBe(
+      `**Before**\n\n${table}\n\n**After**\n\n${table}`,
+    );
   });
 
   it("keeps one-column raw tables when table conversion is disabled", () => {
@@ -310,11 +320,6 @@ describe("formatMSTeamsMarkdown", () => {
     const table = ["| Name | State |", "|---|---|", "| deploy | ready |"].join("\n");
     const before = `# Status\n\n${table}\n\n- next`;
     expect(formatMSTeamsMarkdown(before, "off")).toBe(`**Status**\n\n${table}\n\n• next`);
-  });
-
-  it("keeps blockquoted tables raw when table conversion is disabled", () => {
-    const table = ["> | Name | State |", "> |---|---|", "> | deploy | ready |"].join("\n");
-    expect(formatMSTeamsMarkdown(table, "off")).toBe(table);
   });
 
   const collisionUuid = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";

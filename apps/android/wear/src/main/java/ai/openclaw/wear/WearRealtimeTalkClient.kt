@@ -27,6 +27,7 @@ import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
@@ -129,6 +130,8 @@ internal class WearRealtimeTalkClient(
             generation = attemptGeneration.incrementAndGet(),
             resources = checkNotNull(resources),
           )
+        // A completed startup callback is not authority to capture after cancellation.
+        currentCoroutineContext().ensureActive()
         activate(attempt)
         activatedAttempt = attempt
         resources = null
@@ -137,7 +140,9 @@ internal class WearRealtimeTalkClient(
         snapshot
       } catch (err: Throwable) {
         closeChannel(resources)
-        activatedAttempt?.let(::closeLocal)
+        // A failed start owes Voice the same audio error a failed restart publishes.
+        // Cancellation cannot reach here: nothing suspends between activate and return.
+        activatedAttempt?.let { closeLocal(it, failed = true) }
         if (channelOpened) {
           // Finish ambiguous-start cleanup before another attempt can acquire
           // the lifecycle lock and create a replacement relay for this Watch.
@@ -150,14 +155,13 @@ internal class WearRealtimeTalkClient(
   suspend fun stop(): WearRealtimeTalkSnapshot =
     lifecycleLock.withLock {
       val attempt = activeAttempt
-      try {
-        if (attempt == null) {
-          WearRealtimeTalkSnapshot()
-        } else {
-          repository.stopRealtimeTalk(attempt.nodeId, attempt.attemptId)
-        }
-      } finally {
-        closeLocal(attempt)
+      // Stop Watch-owned audio before waiting for the phone. A slow or lost
+      // Stop response must never keep the microphone or speaker alive.
+      closeLocal(attempt)
+      if (attempt == null) {
+        WearRealtimeTalkSnapshot()
+      } else {
+        repository.stopRealtimeTalk(attempt.nodeId, attempt.attemptId)
       }
     }
 
@@ -266,9 +270,11 @@ internal class WearRealtimeTalkClient(
             .build(),
         ).setBufferSizeInBytes(maxOf(minimumBuffer * 2, frameBytes * 4))
         .build()
-    check(recorder.state == AudioRecord.STATE_INITIALIZED)
     audioRecord = recorder
+    check(recorder.state == AudioRecord.STATE_INITIALIZED)
     recorder.startRecording()
+    // Native start failure can return normally while the recorder remains stopped.
+    check(recorder.recordingState == AudioRecord.RECORDSTATE_RECORDING)
     _isCapturing.value = true
     captureJob =
       scope.launch {
@@ -295,9 +301,14 @@ internal class WearRealtimeTalkClient(
         } catch (_: Throwable) {
           handleChannelFailure(attempt)
         } finally {
-          runCatching { recorder.stop() }
-          runCatching { recorder.release() }
-          if (audioRecord === recorder) audioRecord = null
+          synchronized(audioLock) {
+            // pauseCaptureLocked may already have taken and released this recorder.
+            if (audioRecord === recorder) {
+              audioRecord = null
+              runCatching { recorder.stop() }
+              runCatching { recorder.release() }
+            }
+          }
         }
       }
   }
@@ -448,17 +459,17 @@ internal class WearRealtimeTalkClient(
     mouthJob = null
     mouthLevelAccumulator.reset()
     _mouthLevel.value = 0f
-    runCatching {
-      audioTrack?.pause()
-      audioTrack?.flush()
-      audioTrack?.stop()
-      audioTrack?.release()
-    }
+    val track = audioTrack
     audioTrack = null
+    runCatching { track?.pause() }
+    runCatching { track?.flush() }
+    runCatching { track?.stop() }
+    runCatching { track?.release() }
     _isPlaying.value = false
     audioFocus.abandon()
     if (resumeCapture && attempt != null && isCurrent(attempt)) {
       runCatching { startCaptureLocked(attempt) }
+        .onFailure { handleChannelFailure(attempt) }
     }
   }
 
@@ -488,28 +499,30 @@ internal class WearRealtimeTalkClient(
   private fun closeLocal(
     expected: ActiveAttempt? = activeAttempt,
     failed: Boolean = false,
-  ): Boolean {
-    val attempt =
-      synchronized(audioLock) {
-        val current = activeAttempt ?: return false
-        if (expected != null && current.generation != expected.generation) return false
-        activeAttempt = null
-        if (failed) _channelFailed.value = true
-        readJob?.cancel()
-        readJob = null
-        pauseCaptureLocked()
-        clearOutputLocked(attempt = null, resumeCapture = false)
-        current
-      }
-    scope.launch { closeChannel(attempt.resources) }
-    return true
-  }
+  ): Boolean =
+    synchronized(audioLock) {
+      val current = activeAttempt ?: return false
+      if (expected != null && current.generation != expected.generation) return false
+      activeAttempt = null
+      if (failed) _channelFailed.value = true
+      readJob?.cancel()
+      readJob = null
+      pauseCaptureLocked()
+      clearOutputLocked(attempt = null, resumeCapture = false)
+      // Keep teardown serialized: a concurrent shutdown must not return and
+      // cancel scope while another closeLocal still owns open streams.
+      closeChannel(current.resources)
+      true
+    }
 
-  private suspend fun closeChannel(resources: ChannelResources?) {
+  private fun closeChannel(resources: ChannelResources?) {
     if (resources == null) return
+    // Closing streams unblocks the reader; dispatching this into scope loses
+    // cleanup when shutdown immediately cancels that scope. The Play services
+    // Task owns the channel-close acknowledgment, not our canceled coroutine.
     resources.input.closeQuietly()
     resources.output.closeQuietly()
-    runCatching { channelClient.close(resources.channel).awaitRealtimeTask() }
+    runCatching { channelClient.close(resources.channel) }
   }
 
   private fun isCurrent(attempt: ActiveAttempt): Boolean = activeAttempt?.generation == attempt.generation
@@ -533,15 +546,6 @@ internal fun wearRealtimeAudioChannelPath(
   } else {
     // v2026.7.2 shipped the fixed path. Keep it for staggered phone/Watch updates.
     WearProtocol.LEGACY_REALTIME_AUDIO_CHANNEL_PATH
-  }
-
-internal fun pcm16LeMouthLevels(
-  pcm: ByteArray,
-  sampleRateHz: Int = WearProtocol.REALTIME_AUDIO_SAMPLE_RATE_HZ,
-  frameMillis: Int = MOUTH_FRAME_MILLIS,
-): List<Float> =
-  Pcm16MouthLevelAccumulator(sampleRateHz, frameMillis).run {
-    append(pcm) + flush()
   }
 
 internal class Pcm16MouthLevelAccumulator(

@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveConfiguredAgentId } from "../agents/agent-scope-config.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { getRuntimeConfig, resolveStateDir } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { assertNotUpdateCapturePath } from "../infra/update-capture-paths.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { createLocalSqliteSnapshotProvider } from "../snapshot/local-repository.js";
@@ -88,7 +89,7 @@ export async function backupSqliteCreateCommand(
       snapshotPath: result.ref.path,
       manifest: result.manifest,
     };
-    recordBackupOutcomeBestEffort(runtime, {
+    await recordBackupOutcomeBestEffort(runtime, {
       kind: "sqlite-snapshot",
       archivePath: report.snapshotPath,
       status: "ok",
@@ -96,7 +97,7 @@ export async function backupSqliteCreateCommand(
     writeCreateResult(runtime, options, report);
     return report;
   } catch (error) {
-    recordBackupOutcomeBestEffort(runtime, {
+    await recordBackupOutcomeBestEffort(runtime, {
       kind: "sqlite-snapshot",
       archivePath: repositoryPath,
       status: "failed",
@@ -172,14 +173,17 @@ async function resolveSnapshotDatabase(
     throw new Error("Choose a SQLite snapshot source: --global or --agent <id>.");
   }
   if (options.global === true) {
+    const selectedPath = resolveOpenClawStateSqlitePath();
+    assertNotUpdateCapturePath(selectedPath, resolveStateDir());
     return {
-      path: await fs.realpath(resolveOpenClawStateSqlitePath()),
+      path: await fs.realpath(selectedPath),
       identity: { role: "global" },
     };
   }
   const config = getRuntimeConfig({ skipPluginValidation: true });
   const agentId = resolveConfiguredAgentId(config, normalizeAgentId(rawAgentId));
   const agentRoot = await resolveBackupAgentRoot(config, agentId);
+  assertNotUpdateCapturePath(agentRoot.databasePath, resolveStateDir());
   return {
     path: await fs.realpath(agentRoot.databasePath),
     identity: { role: "agent", agentId },

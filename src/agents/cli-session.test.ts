@@ -1,6 +1,6 @@
 /**
  * Regression coverage for CLI session persistence helpers.
- * Verifies provider-keyed bindings, legacy Claude state, and reuse invalidation.
+ * Verifies provider-keyed bindings, legacy cleanup, and reuse invalidation.
  */
 import { describe, expect, it } from "vitest";
 import type { CliSessionReseedReceipt, SessionEntry } from "../config/sessions.js";
@@ -23,7 +23,7 @@ import { FailoverError } from "./failover-error.js";
 import { FAILOVER_REASONS } from "./failover/signal.js";
 
 describe("cli-session helpers", () => {
-  it("persists binding metadata alongside legacy session ids", () => {
+  it("persists binding metadata without recreating the retired Claude field", () => {
     const entry: SessionEntry = {
       sessionId: "openclaw-session",
       updatedAt: Date.now(),
@@ -50,7 +50,7 @@ describe("cli-session helpers", () => {
     });
 
     expect(entry.cliSessionIds?.["claude-cli"]).toBe("cli-session-1");
-    expect(entry.claudeCliSessionId).toBe("cli-session-1");
+    expect(entry).not.toHaveProperty("claudeCliSessionId");
     expect(getCliSessionBinding(entry, "claude-cli")).toEqual({
       sessionId: "cli-session-1",
       forceReuse: true,
@@ -207,7 +207,18 @@ describe("cli-session helpers", () => {
     ).toEqual({ mode: "reuse", sessionId: "cli-session-1" });
   });
 
-  it("keeps legacy bindings reusable until richer metadata is persisted", () => {
+  it("leaves the Claude-only field to Doctor instead of selecting it for resume", () => {
+    const entry: SessionEntry = {
+      sessionId: "local-session",
+      updatedAt: 1,
+      claudeCliSessionId: "Legacy-Conversation",
+    };
+
+    expect(getCliSessionBinding(entry, " CLAUDE-CLI ")).toBeUndefined();
+    expect(entry.claudeCliSessionId).toBe("Legacy-Conversation");
+  });
+
+  it("keeps provider-keyed bindings reusable until richer metadata is persisted", () => {
     const entry: SessionEntry = {
       sessionId: "openclaw-session",
       updatedAt: Date.now(),
@@ -625,14 +636,21 @@ describe("cli-session helpers", () => {
     expect(hashCliSessionText("")).toBeUndefined();
   });
 
-  it("shares failed reused-session cleanup policy across CLI entry points", () => {
+  it("preserves reusable bindings for aborts and clears only invalid sessions", () => {
     const abort = Object.assign(new Error("aborted"), { name: "AbortError" });
 
     const binding = { sessionId: "reused" };
     const forkBinding = { sessionId: "fork-source", forkNextResume: true as const };
 
-    expect(shouldClearFailedCliSessionBinding({ error: abort, binding })).toBe(true);
+    expect(shouldClearFailedCliSessionBinding({ error: abort, binding })).toBe(false);
     expect(shouldClearFailedCliSessionBinding({ error: abort, binding: forkBinding })).toBe(false);
+    expect(
+      shouldClearFailedCliSessionBinding({
+        error: abort,
+        binding: { sessionId: "replacement" },
+        bindingReplacedDuringRun: true,
+      }),
+    ).toBe(true);
     expect(
       shouldClearFailedCliSessionBinding({
         error: new FailoverError("session expired", {

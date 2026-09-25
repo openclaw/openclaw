@@ -42,8 +42,8 @@ async function gap(above: Locator, below: Locator) {
 suite.define(() => {
   for (const width of [1440, 390]) {
     it.each(neighbors)(
-      `matches paragraph rhythm before $name at ${width}px`,
-      async ({ markdown }) => {
+      `preserves attachment spacing around $name at ${width}px`,
+      async ({ name, markdown }) => {
         await suite.withPage({ viewport: { width, height: 900 } }, async ({ page }) => {
           await installMockGateway(page, {
             historyMessages: [
@@ -59,15 +59,20 @@ suite.define(() => {
           await page.goto(`${suite.server.baseUrl}chat/main`);
           const bubble = page.locator(".chat-bubble").filter({ hasText: "Reference one." });
           const card = bubble.locator(".chat-assistant-attachment-card");
-          const blocks = bubble.locator(".chat-text > *");
+          const blocks = bubble
+            .locator(".chat-text > *")
+            .filter({ hasNot: page.locator(".chat-assistant-attachments") });
           await blocks.last().waitFor();
           const reference = await gap(blocks.nth(1), blocks.nth(2));
           expect(reference).toBeGreaterThan(0);
+          const expectedBefore = reference * (name === "heading" ? 1.5 : 1);
+          // Wide desktop tables reserve extra space after their compact toolbar/table block.
+          const expectedAfter = name === "table" && width === 1440 ? 24 : reference;
           await expect
             .poll(async () =>
               Math.max(
-                Math.abs((await gap(card, blocks.first())) - reference),
-                Math.abs((await gap(blocks.first(), blocks.nth(1))) - reference),
+                Math.abs((await gap(card, blocks.first())) - expectedBefore),
+                Math.abs((await gap(blocks.first(), blocks.nth(1))) - expectedAfter),
               ),
             )
             .toBeLessThanOrEqual(1);
@@ -76,7 +81,7 @@ suite.define(() => {
     );
   }
 
-  it("keeps multiple files in a column with the text rhythm on mobile", async () => {
+  it("keeps user files outside the painted text and preserves column rhythm", async () => {
     const count = 5;
     await suite.withPage({ viewport: { width: 390, height: 900 } }, async ({ page }) => {
       await installMockGateway(page, {
@@ -95,6 +100,11 @@ suite.define(() => {
       const paragraphs = page.locator(".chat-text > p");
       await paragraphs.last().waitFor();
       await expect.poll(() => cards.count()).toBe(count);
+      expect(
+        await page
+          .locator(".chat-group.user .chat-bubble")
+          .evaluate((node) => getComputedStyle(node).backgroundColor),
+      ).toBe("rgba(0, 0, 0, 0)");
       const reference = await gap(paragraphs.nth(0), paragraphs.nth(1));
       for (let index = 1; index < count; index += 1) {
         expect(
@@ -102,13 +112,84 @@ suite.define(() => {
         ).toBeLessThanOrEqual(1);
       }
       expect(
-        Math.abs((await gap(cards.last(), paragraphs.first())) - reference),
+        Math.abs((await gap(cards.last(), page.locator(".chat-text"))) - reference),
       ).toBeLessThanOrEqual(1);
       expect(
         await page
           .locator(".chat-thread")
           .evaluate((element) => element.scrollWidth <= element.clientWidth),
       ).toBe(true);
+    });
+  });
+
+  it.each([
+    { self: true, name: "own" },
+    { self: false, name: "peer" },
+  ])("aligns visible media with the $name participant's text bubble", async ({ self }) => {
+    await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
+      const url = await page.evaluate(() => {
+        const canvas = document.createElement("canvas");
+        canvas.width = 640;
+        canvas.height = 360;
+        return canvas.toDataURL();
+      });
+      const users = ["Riley", "Colin"].map((name, index) => ({
+        id: name,
+        name,
+        self: index === 0,
+        identity: { type: "profile" as const, id: name },
+      }));
+      const sender = users[self ? 0 : 1]!;
+      await installMockGateway(page, {
+        presenceUsers: users,
+        historyMessages: [
+          {
+            role: "user",
+            content: [
+              { type: "image", url },
+              attachment(),
+              {
+                type: "text",
+                text: "Please compare the screenshot and attached logs with the expected release notes.",
+              },
+            ],
+            __openclaw: {
+              senderId: sender.id,
+              senderIdentity: sender.identity,
+              senderName: sender.name,
+            },
+          },
+        ],
+      });
+      await page.goto(`${suite.server.baseUrl}chat/main`);
+      const group = page.locator(".chat-group.user");
+      await group.locator(".chat-text").waitFor();
+      await group
+        .locator("img.chat-message-image")
+        .evaluate((node: HTMLImageElement) => node.decode());
+      const layout = await group.evaluate((node) => {
+        const text = node.querySelector(".chat-text")!;
+        const rect = (element: Element) => {
+          const { left, right, top, bottom } = element.getBoundingClientRect();
+          return { left, right, top, bottom };
+        };
+        return {
+          shellPaint: getComputedStyle(node.querySelector(".chat-bubble")!).backgroundColor,
+          textPaint: getComputedStyle(text).backgroundColor,
+          text: rect(text),
+          media: [
+            ...node.querySelectorAll(".chat-message-image, .chat-assistant-attachment-card"),
+          ].map(rect),
+        };
+      });
+      expect(layout.shellPaint).toBe("rgba(0, 0, 0, 0)");
+      expect(layout.textPaint).not.toBe("rgba(0, 0, 0, 0)");
+      expect(layout.media).toHaveLength(2);
+      const edge = self ? "right" : "left";
+      for (const media of layout.media) {
+        expect(Math.abs(media[edge] - layout.text[edge])).toBeLessThanOrEqual(1);
+        expect(media.bottom).toBeLessThan(layout.text.top);
+      }
     });
   });
 
@@ -138,7 +219,7 @@ suite.define(() => {
       );
       const card = page.locator(".chat-assistant-attachment-card");
       for (const [above, below] of [
-        [card, text.locator(":scope > pre")],
+        [card, text],
         [text.locator("blockquote > p").first(), nestedCode],
         [nestedCode, text.locator("blockquote > p").last()],
       ] as const) {

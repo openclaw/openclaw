@@ -49,12 +49,13 @@ extension DashboardManager {
             return try await testProfileEndpointProvider(profileID)
         }
         #endif
-        return try await MacGatewayProfileStore.shared.endpoint(profileID: profileID)
+        return try await MacGatewayProfileStore.shared.dashboardEndpoint(profileID: profileID)
     }
 
     static func gatewayConnection(for target: DashboardGatewayTarget) async -> GatewayConnection {
         switch target {
         case .primary: GatewayConnection.shared
+        case .local: await MacGatewayConnectionFleet.shared.localConnection()
         case let .profile(id): await MacGatewayConnectionFleet.shared.connection(profileID: id)
         }
     }
@@ -102,14 +103,7 @@ extension DashboardManager {
         }
 
         if mode == .local {
-            let config = GatewayEndpointStore.localConfig()
-            return GatewayConnection.EndpointSnapshot(
-                config: config,
-                tls: GatewayTLSRoute.resolve(
-                    url: config.url,
-                    connectionMode: mode,
-                    configuredFingerprint: nil),
-                routeAuthority: nil)
+            return try? GatewayEndpointStore.localEndpoint(hostingBesideRemotePrimary: false)
         }
 
         return nil
@@ -187,10 +181,34 @@ extension DashboardManager {
 }
 
 extension DashboardManager {
+    func frontmostDashboard()
+        -> (target: DashboardGatewayTarget, controller: DashboardWindowController)?
+    {
+        let controllers = self.dashboardControllers().filter(\.controller.isWindowOpen)
+        if let key = controllers.first(where: { $0.controller.window?.isKeyWindow == true }) {
+            return key
+        }
+        for window in NSApp.orderedWindows {
+            if let match = controllers.first(where: { $0.controller.window === window }) {
+                return match
+            }
+        }
+        return controllers.last
+    }
+}
+
+extension DashboardManager {
     func presentSetPrimaryConfirmation(
         _ target: DashboardGatewayTarget,
         source: DashboardWindowController?)
     {
+        if target == .local {
+            self.presentGatewayError(
+                DashboardPrimaryGatewayError.notPromotable,
+                title: String(localized: "Could Not Set Primary Gateway"),
+                over: source?.window)
+            return
+        }
         guard case let .profile(profileID) = target,
               let entry = gatewayEntries.first(where: { $0.id == target.bridgeID }),
               entry.canPromote
@@ -221,5 +239,49 @@ extension DashboardManager {
             alert,
             over: source?.window ?? self.frontmostDashboard()?.controller.window,
             completion: apply)
+    }
+}
+
+extension DashboardManager {
+    func handleGatewayRequest(_ request: DashboardGatewaysRequest, from source: DashboardWindowController) {
+        // Retained WebViews may still emit callbacks after their window closes or document is replaced.
+        guard self.target(for: source) != nil, source.isWindowOpen else { return }
+        switch request {
+        case let .select(target):
+            self.switchTarget(target, in: source)
+        case let .openWindow(target):
+            self.openNewDashboardWindow(for: target)
+        case let .setPrimary(target):
+            guard self.target(for: source) == target else { return }
+            self.presentSetPrimaryConfirmation(target, source: source)
+        case let .reconnect(target):
+            guard self.target(for: source) == target else { return }
+            source.reconnectGateway(target)
+        case let .reconnectCancel(target):
+            guard self.target(for: source) == target else { return }
+            source.cancelGatewayReconnect(target)
+        case let .reconnectBrowser(target, attempt):
+            guard self.target(for: source) == target else { return }
+            source.openGatewaySignInBrowser(target, attempt: attempt)
+        case .openSettings:
+            AppNavigationActions.openConnection(tab: .gateways)
+        }
+    }
+
+    func handleGatewaySetup(_ link: GatewayConnectDeepLink) {
+        NSApp.activate(ignoringOtherApps: true)
+        let coordinator = DashboardGatewaySetupCoordinator(
+            adapter: DashboardPrimaryGatewayAdapter(state: AppStateStore.shared),
+            confirm: { title, message in
+                let alert = DashboardWindowController.makeGatewaySetupAlert(title: title, message: message)
+                return alert.runModal() == .alertFirstButtonReturn
+            },
+            presentError: { [weak self] title, message in
+                self?.presentGatewayError(title: title, message: message)
+            },
+            openConnectionSettings: {
+                AppNavigationActions.openConnection()
+            })
+        coordinator.handle(link)
     }
 }

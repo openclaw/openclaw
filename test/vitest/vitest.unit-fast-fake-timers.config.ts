@@ -1,8 +1,9 @@
 // Vitest unit fast fake timers config wires the unit fast fake timers test shard.
 import { defineConfig } from "vitest/config";
+import { intersectIncludePatterns } from "./vitest.include-patterns.ts";
 import {
-  intersectIncludePatterns,
   loadPatternListFromEnv,
+  matchesVitestGlob,
   narrowIncludePatternsForCli,
 } from "./vitest.pattern-file.ts";
 import {
@@ -11,6 +12,7 @@ import {
   sharedVitestConfig,
 } from "./vitest.shared.config.ts";
 import { getUnitFastTimerTestFiles } from "./vitest.unit-fast-paths.mjs";
+import { unitTestIncludePatterns } from "./vitest.unit-paths.mjs";
 
 export function createUnitFastFakeTimersVitestConfig(
   env: Record<string, string | undefined> = process.env,
@@ -19,8 +21,14 @@ export function createUnitFastFakeTimersVitestConfig(
   const sharedTest = sharedVitestConfig.test ?? {};
   const sharedSequence = (sharedTest as { sequence?: { groupOrder?: number } }).sequence;
   const selectedPatterns = loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
-  const unitFastTimerTestFiles = getUnitFastTimerTestFiles(selectedPatterns);
-  const includeFromEnv = intersectIncludePatterns(unitFastTimerTestFiles, selectedPatterns);
+  const discoveryPatterns =
+    selectedPatterns ?? narrowIncludePatternsForCli(unitTestIncludePatterns, options.argv);
+  const unitFastTimerTestFiles = getUnitFastTimerTestFiles(discoveryPatterns);
+  const includeFromEnv = intersectIncludePatterns(
+    unitFastTimerTestFiles,
+    selectedPatterns,
+    matchesVitestGlob,
+  );
   const cliInclude = narrowIncludePatternsForCli(unitFastTimerTestFiles, options.argv);
 
   return defineConfig({

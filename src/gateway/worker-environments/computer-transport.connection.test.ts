@@ -31,7 +31,7 @@ import {
   type WorkerConnectionService,
 } from "../server/ws-connection/worker-connection.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
-import { createWorkerComputerService } from "./computer-transport.js";
+import { createWorkerComputerService } from "./computer-service.js";
 import {
   COMPUTER_USE,
   connectionIdentity,
@@ -82,7 +82,7 @@ describe("worker computer connection lifetime", () => {
       if (!computer) {
         throw new Error("Expected session computer");
       }
-      computer.bind(h.run);
+      computer.bind(h.run, h.workerSource);
       const identity = {
         ...connectionIdentity(h),
         protocolFeatures: [...WORKER_PROTOCOL_FEATURES],
@@ -138,7 +138,9 @@ describe("worker computer connection lifetime", () => {
           send: (frame) => {
             if (socket.readyState === WebSocket.OPEN) {
               socket.send(JSON.stringify(frame));
+              return { kind: "sent" };
             }
+            return { kind: "unavailable" };
           },
           close: (code, reason) => socket.close(code, reason),
           isClosed: () => closed,

@@ -80,6 +80,26 @@ describe("session catalog SDK", () => {
         { threadIdMaxLength: 32, threadIdPattern: /^(?!-)[a-z0-9-]+$/u, messages },
       ),
     ).toThrow("bad thread");
+    const nativeCursor = "a".repeat(200);
+    const readOptions = { threadIdMaxLength: 32, threadIdPattern: /^thread-\d+$/u, messages };
+    expect(() =>
+      sessionCatalogPaging.parseReadParams(
+        { threadId: "thread-1", cursor: nativeCursor },
+        readOptions,
+      ),
+    ).toThrow("cursor is invalid");
+    expect(
+      sessionCatalogPaging.parseReadParams(
+        { threadId: "thread-1", cursor: nativeCursor },
+        { ...readOptions, cursorMaxLength: 200 },
+      ),
+    ).toEqual({ threadId: "thread-1", limit: 20, cursor: nativeCursor });
+    expect(() =>
+      sessionCatalogPaging.parseReadParams(
+        { threadId: "thread-1", cursor: `${nativeCursor}a` },
+        { ...readOptions, cursorMaxLength: 200 },
+      ),
+    ).toThrow("cursor is invalid");
   });
 
   it.each([
@@ -261,6 +281,160 @@ describe("session catalog SDK", () => {
       provider.continueSession({ hostId: "gateway", threadId: "local-thread" }),
     ).resolves.toEqual({ sessionKey: "agent:main:created" });
   });
+
+  it.each(["local", "nodes"] as const)(
+    "does not start node work when the owner retires during %s discovery",
+    async (stage) => {
+      const { provider, options } = createFamilyFixture();
+      const entered = createDeferred();
+      const release = createDeferred();
+      const controller = new AbortController();
+      const project = vi.fn(options.capabilities.project);
+      options.capabilities.project = project;
+      if (stage === "local") {
+        const original = options.local.list;
+        options.local.list = async (query) => {
+          entered.resolve();
+          await release.promise;
+          return original(query);
+        };
+      } else {
+        const listNodes = vi.mocked(options.runtime.nodes.list);
+        const original = listNodes.getMockImplementation()!;
+        listNodes.mockImplementation(async (query) => {
+          entered.resolve();
+          await release.promise;
+          return original(query);
+        });
+      }
+      const pending = provider.list({ agentId: "main", signal: controller.signal });
+      await entered.promise;
+      const reason = new Error("catalog owner retired");
+      controller.abort(reason);
+      release.resolve();
+      await expect(pending).rejects.toBe(reason);
+
+      expect(options.runtime.nodes.invoke).not.toHaveBeenCalled();
+      if (stage === "local") {
+        expect(project).not.toHaveBeenCalled();
+        expect(options.runtime.nodes.list).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("delivers owner retirement to an active node invocation", async () => {
+    const { provider, options } = createFamilyFixture();
+    const entered = createDeferred();
+    const release = createDeferred();
+    const controller = new AbortController();
+    let transportRetired = false;
+    vi.mocked(options.runtime.nodes.invoke).mockImplementation(async ({ signal }) => {
+      const retire = () => {
+        transportRetired = true;
+        release.resolve();
+      };
+      signal?.addEventListener("abort", retire, { once: true });
+      entered.resolve();
+      try {
+        await release.promise;
+        return { payloadJSON: JSON.stringify({ sessions: [] }) };
+      } finally {
+        signal?.removeEventListener("abort", retire);
+      }
+    });
+    const pending = provider.list({
+      agentId: "main",
+      hostIds: ["node:node-1"],
+      signal: controller.signal,
+    });
+    try {
+      await entered.promise;
+      controller.abort(new Error("catalog owner retired"));
+      expect(transportRetired).toBe(true);
+    } finally {
+      release.resolve();
+      await pending.catch(() => []);
+    }
+  });
+
+  it("does not retry local publication as a discovery failure", async () => {
+    const { provider, options } = createFamilyFixture();
+    const reason = new Error("publication failed");
+    const onHost = vi.fn(() => {
+      throw reason;
+    });
+
+    await expect(provider.list({ onHost })).rejects.toBe(reason);
+
+    expect(onHost).toHaveBeenCalledTimes(1);
+    expect(options.runtime.nodes.list).not.toHaveBeenCalled();
+  });
+
+  it.each(["retirement", "publication failure"] as const)(
+    "joins all started node work before rejecting on %s",
+    async (failure) => {
+      const { provider, options } = createFamilyFixture();
+      const entered = createDeferred();
+      const fast = createDeferred();
+      const slow = createDeferred();
+      const reason = new Error(failure);
+      const controller = new AbortController();
+      vi.mocked(options.runtime.nodes.list).mockResolvedValue({
+        nodes: ["fast", "slow"].map((nodeId) => ({
+          nodeId,
+          connected: true,
+          commands: ["family.list"],
+        })),
+      });
+      let started = 0;
+      vi.mocked(options.runtime.nodes.invoke).mockImplementation(async ({ nodeId }) => {
+        if (++started === 2) {
+          entered.resolve();
+        }
+        await (nodeId === "fast" ? fast.promise : slow.promise);
+        return { payloadJSON: JSON.stringify({ sessions: [] }) };
+      });
+      const onHost = vi.fn((host: { hostId: string }) => {
+        if (failure === "publication failure" && host.hostId === "node:fast") {
+          throw reason;
+        }
+      });
+      let settled = false;
+      const pending = provider.list({
+        hostIds: ["node:fast", "node:slow"],
+        signal: controller.signal,
+        onHost,
+      });
+      void pending.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+      try {
+        await entered.promise;
+        if (failure === "retirement") {
+          controller.abort(reason);
+        }
+        fast.resolve();
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(settled).toBe(false);
+        if (failure === "retirement") {
+          expect(onHost).not.toHaveBeenCalled();
+        }
+        slow.resolve();
+        await expect(pending).rejects.toBe(reason);
+      } finally {
+        fast.resolve();
+        slow.resolve();
+        await pending.catch(() => []);
+      }
+    },
+  );
 
   it.each([
     { joinDuring: "lookup", firstAgentId: "main", secondAgentId: "main" },

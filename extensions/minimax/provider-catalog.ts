@@ -4,26 +4,25 @@ import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import {
-  DEFAULT_MINIMAX_MAX_TOKENS,
-  MINIMAX_API_BASE_URL,
-  resolveMinimaxApiCost,
-} from "./model-definitions.js";
-import { MINIMAX_TEXT_MODEL_CATALOG, MINIMAX_TEXT_MODEL_ORDER } from "./provider-models.js";
+import { MINIMAX_API_BASE_URL, buildMinimaxApiModelDefinition } from "./model-definitions.js";
+import { MINIMAX_TEXT_MODEL_ORDER } from "./provider-models.js";
 
 export function buildMinimaxModelDiscovery(
+  { baseUrl, api }: Pick<ModelProviderConfig, "baseUrl" | "api">,
   authMode: "api_key" | "oauth" = "api_key",
 ): OpenAICompatibleModelDiscoveryOptions {
+  const usesOpenAI = api === "openai-completions";
+  const basePath = new URL(baseUrl).pathname.replace(/\/+$/, "");
   return {
-    endpointPath: "v1/models",
-    // API-key discovery follows MiniMax's documented X-Api-Key contract;
-    // portal OAuth keeps the Bearer scheme used by its inference transport.
+    endpointPath: usesOpenAI || basePath.endsWith("/v1") ? "models" : "v1/models",
+    // Anthropic API keys use X-Api-Key; OpenAI-compatible catalogs and portal
+    // OAuth use Bearer authentication.
     buildRequestHeaders: ({ apiKey, discoveryApiKey }): HeadersInit => {
       const requestApiKey = discoveryApiKey ?? apiKey;
       if (!requestApiKey) {
         return {};
       }
-      return authMode === "oauth"
+      return usesOpenAI || authMode === "oauth"
         ? { Authorization: `Bearer ${requestApiKey}` }
         : { "X-Api-Key": requestApiKey };
     },
@@ -49,18 +48,7 @@ export function resolveMinimaxCatalogBaseUrl(env: NodeJS.ProcessEnv = process.en
 }
 
 function buildMinimaxCatalog(): ModelDefinitionConfig[] {
-  return MINIMAX_TEXT_MODEL_ORDER.map((id) => {
-    const model = MINIMAX_TEXT_MODEL_CATALOG[id];
-    return {
-      id,
-      name: model.name,
-      reasoning: model.reasoning,
-      input: [...model.input],
-      cost: resolveMinimaxApiCost(id),
-      contextWindow: model.contextWindow,
-      maxTokens: DEFAULT_MINIMAX_MAX_TOKENS,
-    };
-  });
+  return MINIMAX_TEXT_MODEL_ORDER.map(buildMinimaxApiModelDefinition);
 }
 
 export function buildMinimaxProvider(env?: NodeJS.ProcessEnv): ModelProviderConfig {

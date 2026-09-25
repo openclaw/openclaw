@@ -1,4 +1,3 @@
-// Msteams plugin module implements probe behavior.
 import { isFutureDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   normalizeStringEntries,
@@ -109,7 +108,7 @@ export async function probeMSTeams(cfg?: MSTeamsConfig): Promise<ProbeMSTeamsRes
     let delegatedAuth: ProbeMSTeamsResult["delegatedAuth"];
     if (cfg?.delegatedAuth?.enabled) {
       try {
-        const tokens = loadDelegatedTokens();
+        const tokens = await loadDelegatedTokens();
         if (tokens) {
           const isExpired = !isFutureDateTimestampMs(tokens.expiresAt);
           delegatedAuth = {

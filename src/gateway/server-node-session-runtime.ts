@@ -22,7 +22,7 @@ import type {
   SessionMessageSubscriberRegistry,
 } from "./server-chat-state.js";
 import { createNodeSubscriptionManager } from "./server-node-subscriptions.js";
-import { hasConnectedTalkNode } from "./server-talk-nodes.js";
+import { hasConnectedTalkNode } from "./talk/nodes.js";
 
 // Node session runtime owns connected node registry state, session event
 // subscriptions, and voice-wake fanout helpers for the gateway process.
@@ -49,6 +49,13 @@ export function createGatewayNodeSessionRuntime(params: {
           params.resolveCurrentPairingState ?? resolveCurrentPairedDeviceNodeBinding,
         isPairingStateCurrent: params.isPairingStateCurrent ?? isPairedDeviceNodeBindingCurrent,
         onPairingInvalidated: params.onPairingInvalidated,
+        onDesktopAvailabilityChanged: (nodeId) => {
+          params.broadcast(
+            GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED,
+            { nodeId },
+            { dropIfSlow: true },
+          );
+        },
         onPairingGenerationChanged: (change) => {
           nodeSubscriptions.updatePairingGeneration({
             ...change,
@@ -156,6 +163,7 @@ export function createGatewayNodeSessionRuntime(params: {
     nodePresenceTimers,
     sessionEventSubscribers,
     sessionMessageSubscribers,
+    nodeHasSessionSubscribers: nodeSubscriptions.hasSubscribers,
     nodeSendToSession,
     nodeSendToAllSubscribed,
     nodeSubscribe,

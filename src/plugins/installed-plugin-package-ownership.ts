@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { Result } from "@openclaw/normalization-core/result";
+import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveUserPath } from "../utils.js";
 import {
@@ -51,6 +52,18 @@ export type InstalledPluginLifecycleOwnership =
       pluginIds: [];
     };
 
+export type OperatorManagedPluginUpdate = {
+  kind: "operator-managed";
+  pluginIds: [string];
+  source?: string;
+  rootDir: string;
+  shadowedInstallOwner?: string;
+  shadowedInstallRecord?: Pick<
+    InstalledPluginInstallRecordInfo,
+    "source" | "spec" | "installPath" | "sourcePath"
+  >;
+};
+
 type InstalledPluginPackageOwnershipResult = Result<InstalledPluginPackageOwnership, string>;
 
 type InstalledPluginLifecycleOwnershipResult = Result<InstalledPluginLifecycleOwnership, string>;
@@ -60,7 +73,7 @@ function ownershipError(pluginId: string, detail: string): InstalledPluginPackag
     ok: false,
     error:
       `Plugin "${pluginId}" ${detail}. ` +
-      "Refresh the plugin registry, then reinstall the package or run openclaw doctor before retrying.",
+      "Package maintenance requires an unambiguous install record and its discovered package owner. Refresh the plugin registry and run openclaw plugins doctor to inspect the install record before retrying.",
   };
 }
 
@@ -85,6 +98,33 @@ export function createInstalledPluginOwnershipResolver(
   }
   for (const children of childrenByOwner.values()) {
     children.sort();
+  }
+  function resolveShadowedInstallOwner(target: InstalledPluginIndex["plugins"][number]) {
+    if (Object.hasOwn(index.installRecords, target.pluginId)) {
+      return target.pluginId;
+    }
+    // Discovery names multi-entry children <manifest-id>/<entry>; installs retain the manifest id.
+    const childSeparator = target.pluginId.lastIndexOf("/");
+    if (childSeparator <= 0) {
+      return undefined;
+    }
+    const parentId = target.pluginId.slice(0, childSeparator);
+    const record = index.installRecords[parentId];
+    const spec = record?.resolvedSpec ?? record?.spec;
+    const packageName =
+      record?.resolvedName ??
+      (spec ? parseRegistryNpmSpec(spec)?.name : undefined) ??
+      record?.clawhubPackage;
+    return target.packageName && packageName === target.packageName ? parentId : undefined;
+  }
+  const updateTargets = new Map(targets);
+  for (const target of targets.values()) {
+    if (target.origin === "config" && !resolveInstalledPluginIndexInstallOwner(target)) {
+      const owner = resolveShadowedInstallOwner(target);
+      if (owner && !updateTargets.has(owner)) {
+        updateTargets.set(owner, target);
+      }
+    }
   }
   const realpathCache = new Map<string, string>();
   let duplicateOwners: Set<string> | undefined;
@@ -172,7 +212,84 @@ export function createInstalledPluginOwnershipResolver(
       value: { kind: "orphan", installOwner: pluginId, installRecord, pluginIds: [] },
     };
   }
-  return { resolvePackage, resolveLifecycle };
+  function resolveUpdate(
+    pluginId: string,
+  ): Result<InstalledPluginLifecycleOwnership | OperatorManagedPluginUpdate, string> {
+    const target = updateTargets.get(pluginId);
+    const shadowedInstallOwner = target ? resolveShadowedInstallOwner(target) : undefined;
+    if (
+      target?.origin === "config" &&
+      !isInstalledPluginIndexInstallOwnerAmbiguous(target) &&
+      !resolveInstalledPluginIndexInstallOwner(target) &&
+      (!shadowedInstallOwner || !duplicates().has(shadowedInstallOwner))
+    ) {
+      const record = shadowedInstallOwner ? index.installRecords[shadowedInstallOwner] : undefined;
+      return {
+        ok: true,
+        value: {
+          kind: "operator-managed",
+          pluginIds: [target.pluginId],
+          source: target.source,
+          rootDir: target.rootDir,
+          shadowedInstallOwner,
+          ...(record
+            ? {
+                shadowedInstallRecord: {
+                  source: record.source,
+                  spec: record.spec,
+                  installPath: record.installPath,
+                  sourcePath: record.sourcePath,
+                },
+              }
+            : {}),
+        },
+      };
+    }
+    return resolveLifecycle(pluginId);
+  }
+  function resolveReload(
+    pluginId: string,
+  ): Result<
+    | InstalledPluginLifecycleOwnership
+    | { kind: "discovered"; pluginIds: [string]; installOwner?: never },
+    string
+  > {
+    const target = targets.get(pluginId);
+    // Reload can replace a discovered runtime without mutating its source files.
+    // Any recorded ID, path, or ownership claim still requires strict package validation.
+    if (
+      target &&
+      !isInstalledPluginIndexInstallOwnerAmbiguous(target) &&
+      !resolveInstalledPluginIndexInstallOwner(target) &&
+      !Object.hasOwn(index.installRecords, pluginId) &&
+      !Object.values(index.installRecords).some((record) =>
+        installRecordPathMatchesPluginRoot(record, target.rootDir, env, realpathCache),
+      )
+    ) {
+      return { ok: true, value: { kind: "discovered", pluginIds: [pluginId] } };
+    }
+    return resolveLifecycle(pluginId);
+  }
+  function isSourceInUse(sourcePath: string, loadPaths: readonly string[]): boolean {
+    const target = safeRealpathSync(sourcePath, realpathCache) ?? path.resolve(sourcePath);
+    const paths = [
+      ...loadPaths,
+      ...Object.values(index.installRecords).flatMap((record) => [
+        record.installPath,
+        record.sourcePath,
+      ]),
+      ...index.plugins.flatMap((entry) => [entry.rootDir, entry.source, entry.manifestPath]),
+    ];
+    return paths.some((candidate) => {
+      if (!candidate?.trim()) {
+        return false;
+      }
+      const resolved = path.resolve(resolveUserPath(candidate, env));
+      const current = safeRealpathSync(resolved, realpathCache) ?? resolved;
+      return isPathInside(target, current) || isPathInside(current, target);
+    });
+  }
+  return { resolvePackage, resolveLifecycle, resolveUpdate, resolveReload, isSourceInUse };
 }
 
 function installRecordPathMatchesPluginRoot(

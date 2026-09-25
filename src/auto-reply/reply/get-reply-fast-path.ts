@@ -75,9 +75,6 @@ export function resolveGetReplyConfig(params: {
       "Fast reply tests must pass with withFastReplyConfig()/markCompleteReplyConfig(); set OPENCLAW_ALLOW_SLOW_REPLY_TESTS=1 to opt out.",
     );
   }
-  if (params.isFastTestEnv && isCompleteReplyConfig(configOverride)) {
-    return configOverride;
-  }
   if (isCompleteReplyConfig(configOverride)) {
     return configOverride;
   }
@@ -215,6 +212,7 @@ export function initFastReplySessionState(params: {
     ...(normalizeOptionalString(ctx.GroupChannel)
       ? { groupChannel: normalizeOptionalString(ctx.GroupChannel) }
       : {}),
+    topicName: normalizeOptionalString(ctx.TopicName) ?? existingEntry?.topicName,
   };
   sessionStore[sessionKey] = sessionEntry;
   const sessionEntryHandle = createReplySessionEntryHandle({

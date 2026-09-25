@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isHiddenAssistantStreamText } from "../../lib/chat/message-visibility.ts";
 import { visibleAssistantStreamParts } from "./stream-reconciliation.ts";
+import { reconcilePersistedAssistantStream } from "./stream-segment-pruning.ts";
 import {
   createHost,
   TOOL_STREAM_TEST_NOW,
@@ -92,6 +93,39 @@ describe("keyed commentary after an unphased live stream", () => {
     },
   );
 
+  it("keeps already-owned bytes retired when a pending item is shortened", () => {
+    const host = createHost({ chatRunId: "run-1", chatStream: "Checking tests" });
+    preamble(host, "item-a", "Checking tests now", 1);
+    preamble(host, "item-a", "Checking", 2);
+    expect(visibleParts(host)).toEqual([{ text: "Checking", itemId: "item-a" }]);
+    host.chatStream += "\n\nA later observation.";
+    preamble(host, "item-a", "Checking", 3);
+    expect(visibleParts(host)).toEqual([
+      { text: "Checking", itemId: "item-a" },
+      { text: "A later observation.", itemId: undefined },
+    ]);
+  });
+
+  it("completes the owned prefix when the same pending item revises its text", () => {
+    const host = createHost({ chatRunId: "run-1", chatStream: "Checking" });
+    preamble(host, "item-a", "Checking files.", 1);
+    preamble(host, "item-a", "Checking tests.", 2);
+    host.chatStream = "Checking tests.";
+    preamble(host, "item-a", "Checking tests.", 3);
+    expect(visibleParts(host)).toEqual([{ text: "Checking tests.", itemId: "item-a" }]);
+  });
+
+  it("does not acquire a later occurrence for an item that never owned the earlier stream", () => {
+    const host = createHost({ chatRunId: "run-1", chatStream: "Different text." });
+    preamble(host, "item-a", COMMENTARY, 1);
+    host.chatStream = COMMENTARY;
+    preamble(host, "item-a", COMMENTARY, 2);
+    expect(visibleParts(host)).toEqual([
+      { text: COMMENTARY, itemId: "item-a" },
+      { text: COMMENTARY, itemId: undefined },
+    ]);
+  });
+
   it("does not let a late item update consume a later identical occurrence", () => {
     const host = createHost({ chatRunId: "run-1", chatStream: `${COMMENTARY}\n\n` });
     preamble(host, "item-a", COMMENTARY, 1);
@@ -176,7 +210,17 @@ describe("keyed commentary after an unphased live stream", () => {
   it("keeps earlier different cumulative text visible when a later occurrence becomes keyed", () => {
     useToolStreamFakeTimers();
     const earlier = "The first observation stays visible.";
-    const host = createHost({ chatRunId: "run-1", chatStream: `${earlier}\n\n` });
+    const saved = {
+      role: "assistant",
+      content: earlier,
+      __openclaw: { id: "earlier", seq: 1, runId: "run-1" },
+    };
+    const host = createHost({
+      chatRunId: "run-1",
+      chatStream: `${earlier}\n\n`,
+      chatMessages: [saved],
+    });
+    reconcilePersistedAssistantStream(host);
     handleAgentEvent(host, {
       runId: "run-1",
       seq: 1,
@@ -187,10 +231,8 @@ describe("keyed commentary after an unphased live stream", () => {
     });
     host.chatStream = `${earlier}\n\n${COMMENTARY}\n\n`;
     preamble(host, "item-a", COMMENTARY, 2);
-    expect(visibleParts(host)).toEqual([
-      { text: earlier, itemId: undefined },
-      { text: COMMENTARY, itemId: "item-a" },
-    ]);
+    expect(host.chatMessages).toEqual([saved]);
+    expect(visibleParts(host)).toEqual([{ text: COMMENTARY, itemId: "item-a" }]);
   });
   it("completes a keyed handoff when the last chat chunk arrives between update and end", () => {
     const text =

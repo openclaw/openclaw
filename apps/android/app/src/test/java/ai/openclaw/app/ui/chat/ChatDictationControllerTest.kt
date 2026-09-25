@@ -7,6 +7,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -66,12 +67,23 @@ class ChatDictationControllerTest {
 
       val result = async { controller.start() }
       runCurrent()
+      assertEquals(ChatDictationState.Starting, controller.state.value)
+      recognizer.emit(ChatDictationRecognitionEvent.Ready)
       assertEquals(ChatDictationState.Listening, controller.state.value)
+      recognizer.emit(ChatDictationRecognitionEvent.PartialTranscript(" hello "))
+      assertEquals("hello", controller.partialTranscript.value)
+      assertFalse(result.isCompleted)
+      recognizer.emit(ChatDictationRecognitionEvent.EndOfSpeech)
+      assertEquals(ChatDictationState.Transcribing, controller.state.value)
+      recognizer.emit(ChatDictationRecognitionEvent.Ready)
+      assertEquals(ChatDictationState.Transcribing, controller.state.value)
+      assertEquals(0, released)
 
       recognizer.emit(ChatDictationRecognitionEvent.Transcript("  hello world  "))
 
       assertEquals("hello world", result.await())
       assertEquals(ChatDictationState.Idle, controller.state.value)
+      assertEquals("", controller.partialTranscript.value)
       assertEquals(1, acquired)
       assertEquals(1, released)
     }
@@ -103,11 +115,44 @@ class ChatDictationControllerTest {
       val result = async { controller.start() }
       runCurrent()
 
+      recognizer.emit(ChatDictationRecognitionEvent.Ready)
       controller.finish()
+      assertEquals(ChatDictationState.Transcribing, controller.state.value)
       recognizer.emit(ChatDictationRecognitionEvent.Transcript("done"))
 
       assertEquals(1, recognizer.finishCount)
       assertEquals("done", result.await())
+    }
+
+  @Test
+  fun cancellingFinalizationClearsPreviewAndRejectsLateCallbacksAfterRestart() =
+    runTest {
+      val recognizer = FakeRecognizer()
+      var released = 0
+      val controller = controller(recognizer, releaseMic = { released += 1 })
+      val cancelled = async { controller.start() }
+      runCurrent()
+      val oldListener = requireNotNull(recognizer.listener)
+      recognizer.emit(ChatDictationRecognitionEvent.Ready)
+      recognizer.emit(ChatDictationRecognitionEvent.PartialTranscript("old draft"))
+      controller.finish()
+      assertNull(controller.start())
+      assertEquals(1, recognizer.startCount)
+      controller.finish()
+      assertNull(cancelled.await())
+      assertEquals("", controller.partialTranscript.value)
+      assertEquals(1, released)
+
+      val restarted = async { controller.start() }
+      runCurrent()
+      oldListener(ChatDictationRecognitionEvent.Ready)
+      oldListener(ChatDictationRecognitionEvent.PartialTranscript("stale draft"))
+      oldListener(ChatDictationRecognitionEvent.Transcript("stale result"))
+      assertEquals(ChatDictationState.Starting, controller.state.value)
+      assertEquals("", controller.partialTranscript.value)
+      recognizer.emit(ChatDictationRecognitionEvent.Transcript("new result"))
+      assertEquals("new result", restarted.await())
+      assertEquals(2, released)
     }
 
   @Test

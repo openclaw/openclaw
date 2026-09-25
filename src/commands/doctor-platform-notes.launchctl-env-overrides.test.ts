@@ -21,7 +21,7 @@ vi.mock("../daemon/service.js", () => ({
 vi.mock("../daemon/launchd.js", () => ({ findStaleOpenClawUpdateLaunchdJobs: mocks.findJobs }));
 
 import {
-  collectMacGatewayPlatformWarnings,
+  collectGatewayPlatformWarnings,
   noteMacLaunchctlGatewayEnvOverrides,
   noteMacStaleOpenClawUpdateLaunchdJobs,
 } from "./doctor-platform-notes.js";
@@ -169,7 +169,7 @@ describe("noteMacStaleOpenClawUpdateLaunchdJobs", () => {
       environment: serviceEnv,
     });
 
-    await collectMacGatewayPlatformWarnings({});
+    await collectGatewayPlatformWarnings({});
 
     expect(mocks.readCommand).toHaveBeenCalledTimes(1);
     expect(mocks.findJobs).toHaveBeenCalledWith(
@@ -234,19 +234,19 @@ describe("noteMacStaleOpenClawUpdateLaunchdJobs", () => {
   });
 });
 
-describe("collectMacGatewayPlatformWarnings", () => {
+describe("collectGatewayPlatformWarnings", () => {
   it("collects guidance when launch agent writes are disabled", async () => {
     vi.mocked(fs.existsSync).mockImplementation(
       (candidate) => candidate === "/tmp/openclaw-doctor-host/.openclaw/disable-launchagent",
     );
     mocks.readCommand.mockResolvedValue({ environment: { HOME: "/tmp/openclaw-doctor-service" } });
-    const warnings = await collectMacGatewayPlatformWarnings({});
+    const warnings = await collectGatewayPlatformWarnings({});
 
     expect(warnings).toEqual([expect.stringContaining("LaunchAgent writes are disabled")]);
     expect(warnings[0]).toContain("disable-launchagent");
   });
 
   it("does nothing when launch agent writes are not disabled", async () => {
-    await expect(collectMacGatewayPlatformWarnings({})).resolves.toEqual([]);
+    await expect(collectGatewayPlatformWarnings({})).resolves.toEqual([]);
   });
 });

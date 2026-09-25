@@ -19,6 +19,7 @@ import type {
 import type { ReplyPayload } from "../types.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
+import type { ReplyModelLevelResolver } from "./reply-model-levels.js";
 import type { TypingController } from "./typing.js";
 
 /** Normalized command metadata derived from an inbound message. */
@@ -29,6 +30,8 @@ export type CommandContext = {
   accountId?: string;
   ownerList: string[];
   senderIsOwner: boolean;
+  /** Captured host owner capability, rechecked by handlers at awaited effect boundaries. */
+  assertOwnerCurrent?: () => void;
   isAuthorizedSender: boolean;
   senderId?: string;
   abortKey?: string;
@@ -96,6 +99,12 @@ export type HandleCommandsParams = {
   /** Session generation captured when a host-bound compaction capability was admitted. */
   compactionSessionEntry?: SessionEntry;
 };
+
+/** Dispatch can handle reset before asking for model-derived command settings. */
+export type CommandDispatchParams = Omit<
+  HandleCommandsParams,
+  "resolvedThinkLevel" | "resolvedReasoningLevel"
+> & { resolveModelLevels: ReplyModelLevelResolver };
 
 /** Result returned by a command handler. */
 export type CommandHandlerResult = {

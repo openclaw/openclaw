@@ -1,38 +1,35 @@
-// Source install helpers install skills from source directories and repositories.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
+import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { acquireGitSource } from "../../infra/git-source.js";
 import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
 import { withInstallWorkspace } from "../../infra/install-source-utils.js";
-import { writeJson } from "../../infra/json-files.js";
 import { isImmutableGitCommitRef, parseGitPluginSpec } from "../../plugins/git-install.js";
 import type { InstallSafetyOverrides } from "../../plugins/install-security-scan.types.js";
 import { resolveUserPath } from "../../utils.js";
 import { parseSkillFrontmatter } from "../loading/frontmatter.js";
-import { installExtractedSkillRoot, validateRequestedSkillSlug } from "./archive-install.js";
-import { untrackClawHubSkill } from "./clawhub.js";
+import { installExtractedSkillRoot } from "./archive-install.js";
+import { validateRequestedSkillSlug } from "./install-paths.js";
+import { recordSkillSourceInstall, type SkillSourceOrigin } from "./source-install-metadata.js";
 
 type Logger = {
   info?: (message: string) => void;
   warn?: (message: string) => void;
 };
 
-type SkillSourceOrigin = {
-  version: 1;
-  source: "path" | "git";
+type SkillSourceInstallParams = {
+  workspaceDir: string;
   spec: string;
-  slug: string;
-  installedAt: number;
-  git?: {
-    url: string;
-    ref?: string;
-    commit?: string;
-    resolvedAt: string;
-  };
+  slug?: string;
+  force?: boolean;
+  timeoutMs?: number;
+  logger?: Logger;
+  config?: OpenClawConfig;
+  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
 };
 
 type SkillSourceInstallResult =
@@ -44,8 +41,6 @@ type SkillSourceInstallResult =
       git?: SkillSourceOrigin["git"];
     }
   | { ok: false; error: string };
-
-const SKILL_SOURCE_ORIGIN_RELATIVE_PATH = path.join(".openclaw", "source-origin.json");
 
 function createGitCommandEnv(): NodeJS.ProcessEnv {
   return sanitizeHostExecEnv({
@@ -68,10 +63,6 @@ async function readSkillNameFromFrontmatter(skillDir: string): Promise<string | 
   }
 }
 
-function resolveFallbackSlugFromPath(sourcePath: string): string {
-  return path.basename(path.resolve(sourcePath)).trim();
-}
-
 async function resolveSkillInstallSlug(params: {
   sourceDir: string;
   fallbackLabel: string;
@@ -92,19 +83,6 @@ async function resolveSkillInstallSlug(params: {
   }
 
   return validateRequestedSkillSlug(params.fallbackLabel);
-}
-
-async function writeSkillSourceOrigin(targetDir: string, origin: SkillSourceOrigin): Promise<void> {
-  await writeJson(path.join(targetDir, SKILL_SOURCE_ORIGIN_RELATIVE_PATH), origin, {
-    trailingNewline: true,
-  });
-}
-
-async function removeClawHubInstallMetadata(targetDir: string): Promise<void> {
-  await Promise.all([
-    fs.rm(path.join(targetDir, ".clawhub"), { recursive: true, force: true }),
-    fs.rm(path.join(targetDir, ".clawdhub"), { recursive: true, force: true }),
-  ]);
 }
 
 async function copyGitWorktreeExport(params: {
@@ -141,6 +119,12 @@ async function installLocalSkillDir(params: {
     fallbackLabel: params.fallbackLabel,
     slug: params.slug,
   });
+  const workspaceAccess = getAgentWorkspaceAccess(params.workspaceDir, "loadSkills");
+  const access = workspaceAccess?.loadSkills ? workspaceAccess : undefined;
+  if (access && !access.recordSkillSourceInstall) {
+    return { ok: false, error: "Remote workspace skill source tracking is unavailable" };
+  }
+  const recordInstall = access?.recordSkillSourceInstall ?? recordSkillSourceInstall;
   const install = await installExtractedSkillRoot({
     workspaceDir: params.workspaceDir,
     slug,
@@ -174,16 +158,18 @@ async function installLocalSkillDir(params: {
     return { ok: false, error: install.error };
   }
 
-  await removeClawHubInstallMetadata(install.targetDir);
-  await writeSkillSourceOrigin(install.targetDir, {
-    version: 1,
-    source: params.source,
-    spec: params.sourceSpec,
-    slug,
-    installedAt: Date.now(),
-    ...(params.git ? { git: params.git } : {}),
+  await recordInstall({
+    workspaceDir: params.workspaceDir,
+    targetDir: install.targetDir,
+    origin: {
+      version: 1,
+      source: params.source,
+      spec: params.sourceSpec,
+      slug,
+      installedAt: Date.now(),
+      ...(params.git ? { git: params.git } : {}),
+    },
   });
-  await untrackClawHubSkill(params.workspaceDir, slug);
 
   return {
     ok: true,
@@ -194,16 +180,9 @@ async function installLocalSkillDir(params: {
   };
 }
 
-async function installGitSkill(params: {
-  workspaceDir: string;
-  spec: string;
-  slug?: string;
-  force?: boolean;
-  timeoutMs?: number;
-  logger?: Logger;
-  config?: OpenClawConfig;
-  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
-}): Promise<SkillSourceInstallResult> {
+async function installGitSkill(
+  params: SkillSourceInstallParams,
+): Promise<SkillSourceInstallResult> {
   const parsed = parseGitPluginSpec(params.spec);
   if (!parsed) {
     return { ok: false, error: `Unsupported git skill spec: ${params.spec}` };
@@ -254,16 +233,9 @@ async function installGitSkill(params: {
   });
 }
 
-async function installPathSkill(params: {
-  workspaceDir: string;
-  spec: string;
-  slug?: string;
-  force?: boolean;
-  timeoutMs?: number;
-  logger?: Logger;
-  config?: OpenClawConfig;
-  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
-}): Promise<SkillSourceInstallResult> {
+async function installPathSkill(
+  params: SkillSourceInstallParams,
+): Promise<SkillSourceInstallResult> {
   const sourceDir = resolveUserPath(params.spec);
   let stat;
   try {
@@ -279,7 +251,7 @@ async function installPathSkill(params: {
     sourceDir,
     sourceSpec: params.spec,
     source: "path",
-    fallbackLabel: resolveFallbackSlugFromPath(sourceDir),
+    fallbackLabel: path.basename(path.resolve(sourceDir)).trim(),
     slug: params.slug,
     force: params.force,
     timeoutMs: params.timeoutMs,
@@ -300,16 +272,9 @@ export function isSkillSourceInstallSpec(raw: string): boolean {
   );
 }
 
-export async function installSkillFromSource(params: {
-  workspaceDir: string;
-  spec: string;
-  slug?: string;
-  force?: boolean;
-  timeoutMs?: number;
-  logger?: Logger;
-  config?: OpenClawConfig;
-  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
-}): Promise<SkillSourceInstallResult> {
+export async function installSkillFromSource(
+  params: SkillSourceInstallParams,
+): Promise<SkillSourceInstallResult> {
   const spec = params.spec.trim();
   if (spec.toLowerCase().startsWith("git:")) {
     return await installGitSkill({ ...params, spec });

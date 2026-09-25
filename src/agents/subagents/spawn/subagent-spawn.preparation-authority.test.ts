@@ -1,7 +1,15 @@
 /** Pending native preparation must transfer only live invocation authority to the child owner. */
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import {
+  installSpawnAuthorityFixture,
+  installSpawnThreadBindingFixture,
+  installSpawnAttachmentFixture,
+} from "./subagent-spawn.authority.test-support.js";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import "./subagent-spawn-model.mocks.shared.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { forkSessionEntryFromParent } from "../../../auto-reply/reply/session-fork.js";
 import {
@@ -43,12 +51,8 @@ import {
 } from "../../tools/gateway-caller-context.js";
 import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
+import { resolveSubagentAttachmentDir } from "../subagent-attachment-paths.js";
 import { enqueueSwarmRun } from "../swarm/swarm-scheduler.js";
-import {
-  installSpawnAuthorityFixture,
-  installSpawnThreadBindingFixture,
-  installSpawnAttachmentFixture,
-} from "./subagent-spawn.authority.test-support.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
 
 const fixture = installSpawnAuthorityFixture();
@@ -103,10 +107,14 @@ describe("pending spawn preparation authority", () => {
       spawnTesting.setDepsForTest({
         forkSessionEntryFromParent: async (params) => {
           // Hold a genuine preceding database writer, then enqueue the real fork owner.
-          blocker = runExclusiveSqliteSessionWrite(resolveSqliteStoreScope(storePath), async () => {
-            writerEntered.resolve();
-            await releaseWriter.promise;
-          });
+          blocker = runExclusiveSqliteSessionWrite(
+            resolveSqliteStoreScope(storePath),
+            async () => {
+              writerEntered.resolve();
+              await releaseWriter.promise;
+            },
+            "session.transcript.batch",
+          );
           await writerEntered.promise;
           const initial = loadSessionEntry({ storePath, sessionKey: params.sessionKey })!;
           const pending = forkSessionEntryFromParent(params);
@@ -262,7 +270,14 @@ describe("pending spawn preparation authority", () => {
           const details = (outcome as { details: { attachments: { relDir: string } } }).details;
           expect(
             await fs.readFile(
-              path.join(fixture.stateDir, details.attachments.relDir, "synthetic.txt"),
+              path.join(
+                resolveSubagentAttachmentDir(
+                  "main",
+                  childSessionKey,
+                  path.basename(details.attachments.relDir),
+                ),
+                "synthetic.txt",
+              ),
               "utf8",
             ),
           ).toBe("synthetic attachment");
@@ -598,7 +613,7 @@ describe("pending spawn preparation authority", () => {
         .toEqual([]);
       expect(bindingFixture?.bindings ?? []).toEqual([]);
       for (const directory of attachmentFixture?.attachmentDirs ?? []) {
-        await expect(fs.stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(fs.stat(directory), directory).rejects.toMatchObject({ code: "ENOENT" });
       }
       expect(deleted).toEqual([childSessionKey]);
       expect(loadSessionEntry({ storePath, sessionKey: childSessionKey })).toBeUndefined();

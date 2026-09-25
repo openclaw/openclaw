@@ -4,11 +4,11 @@ import type { IncomingMessage } from "node:http";
 import type { Result } from "@openclaw/normalization-core/result";
 import {
   normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { listAgentIds } from "../agents/agent-scope-config.js";
+import { listAgentIds, tryResolveAgentOperationAgentId } from "../agents/agent-scope-config.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
-import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import {
   type PersistedSessionStoreOwner,
   resolvePersistedSessionStoreOwnerForKey,
@@ -80,7 +80,7 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
     throw new Error("hooks.path may not be '/'");
   }
   const mappings = resolveHookMappings(cfg.hooks);
-  const defaultAgentId = tryResolveLegacyCompatibilityAgentId(cfg);
+  const defaultAgentId = tryResolveAgentOperationAgentId(cfg);
   // Global hook runs write a literal shared row, whose durable owner must win
   // over ambient hook defaults after migration sidecar state is gone.
   const globalSessionStoreOwner =
@@ -89,7 +89,7 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
       : { kind: "none" as const };
   const knownAgentIds = resolveKnownAgentIds(cfg, defaultAgentId);
   const allowedAgentIds = resolveAllowedAgentIds(cfg.hooks?.allowedAgentIds);
-  const defaultSessionKey = resolveSessionKey(cfg.hooks?.defaultSessionKey);
+  const defaultSessionKey = normalizeOptionalString(cfg.hooks?.defaultSessionKey);
   const allowedSessionKeyPrefixes = resolveAllowedSessionKeyPrefixes(
     cfg.hooks?.allowedSessionKeyPrefixes,
   );
@@ -170,22 +170,13 @@ function resolveKnownAgentIds(cfg: OpenClawConfig, defaultAgentId?: string): Set
   return known;
 }
 
-function resolveSessionKey(raw: string | undefined): string | undefined {
-  return normalizeOptionalString(raw);
-}
-
-function normalizeSessionKeyPrefix(raw: string): string | undefined {
-  const value = normalizeLowercaseStringOrEmpty(raw);
-  return value ? value : undefined;
-}
-
 function resolveAllowedSessionKeyPrefixes(raw: string[] | undefined): string[] | undefined {
   if (!Array.isArray(raw)) {
     return undefined;
   }
   const set = new Set<string>();
   for (const prefix of raw) {
-    const normalized = normalizeSessionKeyPrefix(prefix);
+    const normalized = normalizeOptionalLowercaseString(prefix);
     if (!normalized) {
       continue;
     }
@@ -348,9 +339,6 @@ export type HookAgentDispatchPayload = Omit<HookAgentPayload, "sessionKey"> & {
 
 const listHookChannelValues = () => ["last", ...listChannelPlugins().map((plugin) => plugin.id)];
 
-/** Channel values accepted by hook agent dispatch. */
-
-const getHookChannelSet = () => new Set<string>(listHookChannelValues());
 /** Render the current hook channel validation error from registered channel plugins. */
 export const getHookChannelError = () => `channel must be ${listHookChannelValues().join("|")}`;
 
@@ -363,7 +351,7 @@ export function resolveHookChannel(raw: unknown): HookMessageChannel | null {
     return null;
   }
   const normalized = normalizeMessageChannel(raw);
-  if (!normalized || !getHookChannelSet().has(normalized)) {
+  if (!normalized || !listHookChannelValues().includes(normalized)) {
     return null;
   }
   return normalized as HookMessageChannel;
@@ -558,15 +546,15 @@ export function resolveEffectiveHookTargetAgentId(
   }
   if (
     persistedOwner.kind === "configured" &&
-    resolvedAgentId &&
-    resolvedAgentId !== persistedOwner.agentId
+    selectedAgentId &&
+    selectedAgentId !== persistedOwner.agentId
   ) {
     return {
       ok: false,
       code: "owner-conflict",
-      agentId: resolvedAgentId,
+      agentId: selectedAgentId,
       ownerAgentId: persistedOwner.agentId,
-      error: `agentId "${resolvedAgentId}" conflicts with global session-store owner "${persistedOwner.agentId}"; use agentId "${persistedOwner.agentId}" or update agents.defaults.sessionStore.agentId`,
+      error: `agentId "${selectedAgentId}" conflicts with global session-store owner "${persistedOwner.agentId}"; use agentId "${persistedOwner.agentId}" or update agents.defaults.sessionStore.agentId`,
     };
   }
   const effectiveAgentId =
@@ -610,7 +598,7 @@ export function resolveHookSessionKey(params: {
   sessionKey?: string;
   idFactory?: () => string;
 }): Result<string, string> {
-  const requested = resolveSessionKey(params.sessionKey);
+  const requested = normalizeOptionalString(params.sessionKey);
   if (requested) {
     if (
       (params.source === "request" || params.source === "mapping-templated") &&

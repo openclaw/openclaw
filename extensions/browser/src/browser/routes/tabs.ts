@@ -16,6 +16,7 @@ import {
   assertBrowserNavigationResultAllowed,
 } from "../navigation-guard.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
+import { isManagedOnlyBrowserRequest } from "../request-policy.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import { isProfileRestartRequiredError } from "../server-context.lifecycle.js";
 import { clearSnapshotKeysForTab } from "../snapshot-delta-cache.js";
@@ -61,6 +62,7 @@ async function runTabsProfileRoute<T>(params: {
     return await runProfileRouteOperation({
       profileCtx,
       signal: params.req.signal,
+      assertCurrent: params.req.assertCurrent,
       run: async (signal) => await params.run(profileCtx, signal),
     });
   } catch (err) {
@@ -267,7 +269,12 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
           ...browserNavigationPolicyForProfile(ctx, profileCtx),
         });
         await profileCtx.ensureBrowserAvailable({ signal });
-        const opened = await profileCtx.openTab(url, { label, signal });
+        await req.assertCurrent?.(profileCtx.profile);
+        const opened = await profileCtx.openTab(url, {
+          label,
+          signal,
+          ...(isManagedOnlyBrowserRequest(req) ? { requireDurableOwnership: true } : {}),
+        });
         return { ...opened, resolvedProfile: profileCtx.profile.name };
       },
     });
@@ -307,7 +314,14 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
           });
         }
         signal.throwIfAborted();
-        await profileCtx.focusTab(resolved.targetId, { exactTargetId: true, signal });
+        const requestAssertCurrent = req.assertCurrent;
+        await profileCtx.focusTab(resolved.targetId, {
+          exactTargetId: true,
+          signal,
+          ...(requestAssertCurrent
+            ? { assertCurrent: () => requestAssertCurrent(profileCtx.profile) }
+            : {}),
+        });
         return resolved.targetId;
       },
     });
@@ -430,7 +444,14 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
           });
         }
         signal.throwIfAborted();
-        await profileCtx.focusTab(target.targetId, { exactTargetId: true, signal });
+        const requestAssertCurrent = req.assertCurrent;
+        await profileCtx.focusTab(target.targetId, {
+          exactTargetId: true,
+          signal,
+          ...(requestAssertCurrent
+            ? { assertCurrent: () => requestAssertCurrent(profileCtx.profile) }
+            : {}),
+        });
         return { ok: true, targetId: target.targetId };
       },
     });

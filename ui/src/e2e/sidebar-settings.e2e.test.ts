@@ -4,6 +4,7 @@ import {
   installMockGateway,
   waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
+import { compactCronJobFixture } from "../test-helpers/cron.ts";
 import { deviceSystemInfo } from "../test-helpers/devices-fixtures.ts";
 import { installNativeWebChrome } from "./native-nav.test-support.ts";
 import {
@@ -16,7 +17,7 @@ const suite = createSidebarCustomizationSuite("Control UI sidebar settings mocke
 
 const FAILED_CRON_RESPONSE = {
   jobs: [
-    {
+    compactCronJobFixture({
       id: "failed-settings-transition",
       name: "Failed settings transition",
       enabled: true,
@@ -27,7 +28,7 @@ const FAILED_CRON_RESPONSE = {
       wakeMode: "now",
       payload: { kind: "agentTurn", message: "test" },
       state: { lastRunStatus: "error", lastError: "Provider request failed" },
-    },
+    }),
   ],
   snapshotRevision: "settings-transition-attention",
   total: 1,
@@ -59,6 +60,7 @@ suite.define(() => {
     const page = await context.newPage();
     await page.clock.setFixedTime(Date.now());
     const gateway = await installMockGateway(page, {
+      presenceUsers: [{ self: true, id: "alice", name: "Alice" }],
       methodResponses: {
         "cron.list": FAILED_CRON_RESPONSE,
         "models.authStatus": MISSING_AUTH_RESPONSE,
@@ -142,7 +144,7 @@ suite.define(() => {
     }
   });
 
-  it("refreshes stale auth attention after returning while the first auth read is pending", async () => {
+  it("refreshes stale auth attention after metadata changes while the first read is pending", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -167,6 +169,10 @@ suite.define(() => {
         }
       });
       expect(await gateway.getRequests("models.authStatus")).toHaveLength(1);
+      for (let index = 0; index < 20; index++) {
+        await gateway.emitGatewayEvent("chat.metadata.changed", {});
+      }
+      expect(await gateway.getRequests("models.authStatus")).toHaveLength(1);
       await gateway.deferNext("models.authStatus");
       await gateway.resolveDeferred("models.authStatus", MISSING_AUTH_RESPONSE);
       await gateway.waitForRequest("models.authStatus", { after: 1 });
@@ -190,6 +196,8 @@ suite.define(() => {
       }
       await gateway.setMethodResponse("models.authStatus", MISSING_AUTH_RESPONSE);
       await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+      expect(await gateway.getRequests("models.authStatus")).toHaveLength(2);
+      await gateway.emitGatewayEvent("chat.metadata.changed", {});
       await authWarning.waitFor({ state: "visible" });
       expect(await gateway.getRequests("models.authStatus")).toHaveLength(3);
     } finally {
@@ -382,7 +390,7 @@ suite.define(() => {
       await waitForControlUiSettingsTakeover(page);
       await page.locator('.settings-sidebar__item[href="/settings/connection"]').click();
       await page.getByLabel("Gateway secret", { exact: true }).fill("replacement-owner-token");
-      await page.getByRole("button", { name: "Connect", exact: true }).click();
+      await page.getByRole("button", { name: "Apply and reconnect", exact: true }).click();
       await expect
         .poll(() =>
           page.evaluate(() => {
@@ -501,11 +509,14 @@ suite.define(() => {
       await gateway.deferNext("connect");
       await gateway.closeLatest(1012, "synthetic reconnect");
       const notice = page.locator('.connection-action-block[role="status"]');
-      await notice.waitFor();
+      await expect.poll(() => credential.getAttribute("type")).toBe("password");
+      expect(await notice.count()).toBe(0);
+      for (const input of [gatewayUrl, credential, sessionKey]) {
+        expect(await input.isEditable()).toBe(true);
+      }
       expect(await credential.getAttribute("type")).toBe("password");
       await gateway.waitForRequest("connect", { after: connections });
       await gateway.resolveDeferred("connect");
-      await notice.waitFor({ state: "hidden" });
       await gateway.waitForRequest("system.info", { after: reads });
       expect(await credential.getAttribute("type")).toBe("password");
 

@@ -17,88 +17,89 @@ import type {
   GoogleMeetLatestConferenceRecordResult,
 } from "./meet.js";
 
-export function writeArtifactsSummary(result: GoogleMeetArtifactsResult): void {
+export function renderArtifactsSummary(result: GoogleMeetArtifactsResult): string {
+  const lines: string[] = [];
   if (result.input) {
-    writeStdoutLine("input: %s", result.input);
+    lines.push(`input: ${result.input}`);
   }
   if (result.space) {
-    writeStdoutLine("space: %s", result.space.name);
+    lines.push(`space: ${result.space.name}`);
   }
-  writeStdoutLine("conference records: %d", result.conferenceRecords.length);
+  lines.push(`conference records: ${result.conferenceRecords.length}`);
   for (const entry of result.artifacts) {
-    writeStdoutLine("");
-    writeStdoutLine("record: %s", entry.conferenceRecord.name);
-    writeStdoutLine("started: %s", formatOptional(entry.conferenceRecord.startTime));
-    writeStdoutLine("ended: %s", formatOptional(entry.conferenceRecord.endTime));
-    writeStdoutLine("participants: %d", entry.participants.length);
-    writeStdoutLine("recordings: %d", entry.recordings.length);
-    writeStdoutLine("transcripts: %d", entry.transcripts.length);
-    writeStdoutLine(
-      "transcript entries: %d",
-      entry.transcriptEntries.reduce((count, transcript) => count + transcript.entries.length, 0),
+    lines.push("");
+    lines.push(`record: ${entry.conferenceRecord.name}`);
+    lines.push(`started: ${formatOptional(entry.conferenceRecord.startTime)}`);
+    lines.push(`ended: ${formatOptional(entry.conferenceRecord.endTime)}`);
+    lines.push(`participants: ${entry.participants.length}`);
+    lines.push(`recordings: ${entry.recordings.length}`);
+    lines.push(`transcripts: ${entry.transcripts.length}`);
+    lines.push(
+      `transcript entries: ${entry.transcriptEntries.reduce(
+        (count, transcript) => count + transcript.entries.length,
+        0,
+      )}`,
     );
-    writeStdoutLine("smart notes: %d", entry.smartNotes.length);
+    lines.push(`smart notes: ${entry.smartNotes.length}`);
     if (entry.smartNotesError) {
-      writeStdoutLine("smart notes warning: %s", entry.smartNotesError);
+      lines.push(`smart notes warning: ${entry.smartNotesError}`);
     }
     for (const recording of entry.recordings) {
-      writeStdoutLine("- recording: %s", recording.name);
+      lines.push(`- recording: ${recording.name}`);
     }
     for (const transcript of entry.transcripts) {
-      writeStdoutLine("- transcript: %s", transcript.name);
+      lines.push(`- transcript: ${transcript.name}`);
       if (transcript.documentTextError) {
-        writeStdoutLine("- transcript document body warning: %s", transcript.documentTextError);
+        lines.push(`- transcript document body warning: ${transcript.documentTextError}`);
       }
     }
     for (const transcriptEntries of entry.transcriptEntries) {
       if (transcriptEntries.entriesError) {
-        writeStdoutLine(
-          "- transcript entries warning: %s: %s",
-          transcriptEntries.transcript,
-          transcriptEntries.entriesError,
+        lines.push(
+          `- transcript entries warning: ${transcriptEntries.transcript}: ${transcriptEntries.entriesError}`,
         );
       }
     }
     for (const smartNote of entry.smartNotes) {
-      writeStdoutLine("- smart note: %s", smartNote.name);
+      lines.push(`- smart note: ${smartNote.name}`);
       if (smartNote.documentTextError) {
-        writeStdoutLine("- smart note document body warning: %s", smartNote.documentTextError);
+        lines.push(`- smart note document body warning: ${smartNote.documentTextError}`);
       }
     }
   }
+  return `${lines.join("\n")}\n`;
 }
 
-export function writeAttendanceSummary(result: GoogleMeetAttendanceResult): void {
+export function renderAttendanceSummary(result: GoogleMeetAttendanceResult): string {
+  const lines: string[] = [];
   if (result.input) {
-    writeStdoutLine("input: %s", result.input);
+    lines.push(`input: ${result.input}`);
   }
   if (result.space) {
-    writeStdoutLine("space: %s", result.space.name);
+    lines.push(`space: ${result.space.name}`);
   }
-  writeStdoutLine("conference records: %d", result.conferenceRecords.length);
-  writeStdoutLine("attendance rows: %d", result.attendance.length);
+  lines.push(`conference records: ${result.conferenceRecords.length}`);
+  lines.push(`attendance rows: ${result.attendance.length}`);
   for (const row of result.attendance) {
     const identity = row.displayName || row.user || row.participant;
-    writeStdoutLine("");
-    writeStdoutLine("participant: %s", identity);
-    writeStdoutLine("record: %s", row.conferenceRecord);
-    writeStdoutLine("resource: %s", row.participant);
-    writeStdoutLine("participants merged: %d", row.participants?.length ?? 1);
-    writeStdoutLine("first joined: %s", formatOptional(row.firstJoinTime ?? row.earliestStartTime));
-    writeStdoutLine("last left: %s", formatOptional(row.lastLeaveTime ?? row.latestEndTime));
-    writeStdoutLine("duration: %s", formatDuration(row.durationMs));
-    writeStdoutLine("late: %s", row.late ? formatDuration(row.lateByMs) : "no");
-    writeStdoutLine("early leave: %s", row.earlyLeave ? formatDuration(row.earlyLeaveByMs) : "no");
-    writeStdoutLine("sessions: %d", row.sessions.length);
+    lines.push("");
+    lines.push(`participant: ${identity}`);
+    lines.push(`record: ${row.conferenceRecord}`);
+    lines.push(`resource: ${row.participant}`);
+    lines.push(`participants merged: ${row.participants?.length ?? 1}`);
+    lines.push(`first joined: ${formatOptional(row.firstJoinTime ?? row.earliestStartTime)}`);
+    lines.push(`last left: ${formatOptional(row.lastLeaveTime ?? row.latestEndTime)}`);
+    lines.push(`duration: ${formatDuration(row.durationMs)}`);
+    lines.push(`late: ${row.late ? formatDuration(row.lateByMs) : "no"}`);
+    lines.push(`early leave: ${row.earlyLeave ? formatDuration(row.earlyLeaveByMs) : "no"}`);
+    lines.push(`sessions: ${row.sessions.length}`);
     for (const session of row.sessions) {
-      writeStdoutLine(
-        "- %s: %s -> %s",
-        session.name,
-        formatOptional(session.startTime),
-        formatOptional(session.endTime),
+      lines.push(
+        `- ${session.name}: ${formatOptional(session.startTime)} -> ${formatOptional(session.endTime)}`,
       );
     }
   }
+  return `${lines.join("\n")}\n`;
 }
 
 export function writeLatestConferenceRecordSummary(

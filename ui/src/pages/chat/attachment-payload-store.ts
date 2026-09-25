@@ -1,31 +1,24 @@
+import { estimateBase64DecodedBytes, isValidBase64 } from "@openclaw/media-core/base64";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
-import { requestVideoPoster } from "../../lib/media/video-poster.ts";
+import {
+  payloads,
+  releaseChatAttachmentPayload,
+  releaseChatAttachmentPayloads,
+  releaseVideoPoster,
+  revokeObjectUrl,
+  type AttachmentPayload,
+} from "./attachment-payload-lifecycle.ts";
 
-type AttachmentPayload = {
-  blob?: Blob;
-  dataUrl?: string;
-  previewUrl?: string;
-  videoPoster?: {
-    controller: AbortController;
-    promise: Promise<string | null>;
-    url?: string;
-  };
-};
-
-const payloads = new Map<string, AttachmentPayload>();
+export {
+  releaseChatAttachmentPayload,
+  releaseChatAttachmentPayloads,
+} from "./attachment-payload-lifecycle.ts";
 
 function createObjectUrl(blob: Blob): string | undefined {
   if (typeof URL === "undefined" || typeof URL.createObjectURL !== "function") {
     return undefined;
   }
   return URL.createObjectURL(blob);
-}
-
-function revokeObjectUrl(url: string | undefined): void {
-  if (!url || typeof URL === "undefined" || typeof URL.revokeObjectURL !== "function") {
-    return;
-  }
-  URL.revokeObjectURL(url);
 }
 
 export function registerChatAttachmentPayload(params: {
@@ -56,20 +49,26 @@ export function getChatAttachmentVideoPosterUrl(
   if (!(payload?.blob instanceof File) || payload.blob.size > 512 * 1024 * 1024) {
     return null;
   }
-  const src = createObjectUrl(payload.blob);
+  const file = payload.blob;
+  const src = createObjectUrl(file);
   if (!src) {
     return null;
   }
   const controller = new AbortController();
   const poster: NonNullable<AttachmentPayload["videoPoster"]> = {
     controller,
-    promise: requestVideoPoster({
-      key: payload.blob,
-      src,
-      width: 54,
-      height: 54,
-      signal: controller.signal,
-    })
+    promise: import("../../lib/media/video-poster.ts")
+      .then(
+        ({ requestVideoPoster }) =>
+          requestVideoPoster({
+            key: file,
+            src,
+            width: 54,
+            height: 54,
+            signal: controller.signal,
+          }),
+        () => null,
+      )
       .then((blob) => {
         if (!blob || payloads.get(attachment.id)?.videoPoster !== poster) {
           return null;
@@ -81,11 +80,6 @@ export function getChatAttachmentVideoPosterUrl(
   };
   payload.videoPoster = poster;
   return poster.promise;
-}
-
-function releaseVideoPoster(payload: AttachmentPayload): void {
-  payload.videoPoster?.controller.abort();
-  revokeObjectUrl(payload.videoPoster?.url);
 }
 
 function blobFromDataUrl(dataUrl: string): Blob | null {
@@ -151,22 +145,6 @@ export function cloneChatAttachmentsForIndependentOwner(
   });
 }
 
-export function releaseChatAttachmentPayload(id: string): void {
-  const payload = payloads.get(id);
-  if (!payload) {
-    return;
-  }
-  releaseVideoPoster(payload);
-  revokeObjectUrl(payload.previewUrl);
-  payloads.delete(id);
-}
-
-export function releaseChatAttachmentPayloads(attachments: readonly ChatAttachment[] = []): void {
-  for (const attachment of attachments) {
-    releaseChatAttachmentPayload(attachment.id);
-  }
-}
-
 /**
  * Releases displaced attachments except ids still referenced by a retained
  * owner (live composer, surviving fallbacks). Attachments are backups of
@@ -189,8 +167,8 @@ export function generateAttachmentId(): string {
 // size-bounded inline images come back; a corrupt transcript entry is skipped,
 // never fatal. 5 MiB decoded matches the gateway media cap (MEDIA_MAX_BYTES).
 const RESTORED_IMAGE_MIME = /^image\/[\w.+-]+$/u;
-const BASE64_PAYLOAD = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u;
-const RESTORED_ATTACHMENT_MAX_BASE64_CHARS = Math.ceil((5 * 1024 * 1024) / 3) * 4;
+const RESTORED_ATTACHMENT_MAX_BYTES = 5 * 1024 * 1024;
+const RESTORED_ATTACHMENT_MAX_BASE64_CHARS = Math.ceil(RESTORED_ATTACHMENT_MAX_BYTES / 3) * 4;
 
 export function replaceChatAttachmentsFromEditor(
   current: readonly ChatAttachment[],
@@ -199,9 +177,9 @@ export function replaceChatAttachmentsFromEditor(
   releaseChatAttachmentPayloads(current);
   return restored.flatMap(({ mimeType, data }) =>
     RESTORED_IMAGE_MIME.test(mimeType) &&
-    data.length > 0 &&
     data.length <= RESTORED_ATTACHMENT_MAX_BASE64_CHARS &&
-    BASE64_PAYLOAD.test(data)
+    isValidBase64(data) &&
+    estimateBase64DecodedBytes(data) <= RESTORED_ATTACHMENT_MAX_BYTES
       ? [
           {
             id: generateAttachmentId(),

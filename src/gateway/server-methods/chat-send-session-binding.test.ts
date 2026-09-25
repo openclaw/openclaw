@@ -14,6 +14,10 @@ import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import {
+  addSessionMember,
+  removeSessionMember,
+} from "../../config/sessions/session-sharing-store.native.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import * as sessionAdmission from "../../sessions/session-lifecycle-admission.js";
@@ -21,14 +25,16 @@ import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "../chat-abort.js";
 import { createChatRunState } from "../server-chat-state.js";
+import { handleGatewayRequest } from "../server-methods.js";
 import { resolveSessionMutationAuthorization } from "../session-sharing.js";
 import * as chatDispatch from "./chat-send-agent-dispatch.js";
+import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
 import { handleChatSend } from "./chat-send-handler.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 type DispatchOptions = Parameters<typeof dispatch.dispatchInboundMessageWithProjectedDispatcher>[0];
 
-it.each([
+const admissionScenarios = [
   "removed",
   "replaced",
   "aborted",
@@ -39,9 +45,30 @@ it.each([
   "foreign-agent-global-timeout",
   "timeout-during-work-admission",
   "timeout-during-work-admission-fails",
-] as const)(
-  "keeps prepared-session binding with its exact admission and isolates foreign global timeouts: %s",
-  async (closure) => {
+  "narrow-first-send",
+  "dashboard",
+  "dashboard-writer",
+  "dashboard-credential-revoked",
+  "dashboard-member-revoked",
+  "dashboard-unattested",
+  "dashboard-internal",
+] as const;
+
+it.each(admissionScenarios)(
+  "keeps prepared-session binding with its exact admission: %s",
+  async (scenario) => {
+    const dashboard = scenario.startsWith("dashboard");
+    const directDashboard = dashboard && scenario !== "dashboard-internal";
+    const dashboardReadAllowed = directDashboard && scenario !== "dashboard-unattested";
+    const membershipRequired = scenario === "dashboard-member-revoked";
+    const closure =
+      scenario === "narrow-first-send"
+        ? "rotated"
+        : scenario === "dashboard-writer"
+          ? "aborted"
+          : dashboard
+            ? "released"
+            : scenario;
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const runId = "retained-preparation";
       const timeoutDuringAdmission = closure.startsWith("timeout-during-work-admission");
@@ -55,7 +82,11 @@ it.each([
           agents: { ...cfg.agents, entries: { main: { default: true }, work: {} } },
         });
       }
-      const sessionKey = foreignGlobalTimeout ? "global" : "agent:main:binding";
+      const sessionKey = foreignGlobalTimeout
+        ? "global"
+        : scenario === "dashboard"
+          ? "agent:main:main"
+          : "agent:main:binding";
       const scope = { agentId: "main", sessionKey };
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey: "agent:main:unrelated" },
@@ -71,8 +102,35 @@ it.each([
             entry.sessionId === "unrelated-session",
         ).length;
       const profile = ensureProfileForEmail("authoring-binding@example.test");
+      const owner = membershipRequired
+        ? ensureProfileForEmail("authoring-owner@example.test")
+        : profile;
+      const initialSessionId = membershipRequired ? "member-session" : runId;
+      const createdActor = { type: "human", source: "profile", id: owner.id } as const;
+      if (membershipRequired) {
+        await upsertSessionEntryCore(scope, {
+          sessionId: initialSessionId,
+          updatedAt: Date.now(),
+          visibility: "suggest",
+          createdActor,
+        });
+        addSessionMember(scope, { identityId: profile.id, addedBy: owner.id });
+      }
+      const connection = new AbortController();
+      const hasCurrentClientAuthority = vi.fn(() => true);
       const client: GatewayClient = {
         connId: "authoring-binding",
+        connectionSignal: connection.signal,
+        ...(dashboard && scenario !== "dashboard-unattested"
+          ? {
+              internal: {
+                authenticatedControlUi: true as const,
+                ...(scenario !== "dashboard-writer" && !membershipRequired
+                  ? { controlUiAdmin: true as const }
+                  : {}),
+              },
+            }
+          : {}),
         authenticatedUserProfile: {
           profileId: profile.id,
           displayName: null,
@@ -83,8 +141,17 @@ it.each([
           minProtocol: 1,
           maxProtocol: 1,
           role: "operator",
-          scopes: ["operator.read", "operator.write", "operator.admin"],
-          client: { id: "cli", version: "test", platform: "test", mode: "cli" },
+          scopes:
+            scenario === "narrow-first-send"
+              ? ["operator.sessions.write"]
+              : scenario === "dashboard-writer" || membershipRequired
+                ? ["operator.write"]
+                : dashboard
+                  ? ["operator.admin"]
+                  : ["operator.read", "operator.write", "operator.admin"],
+          client: dashboard
+            ? { id: "openclaw-control-ui", version: "test", platform: "web", mode: "webchat" }
+            : { id: "cli", version: "test", platform: "test", mode: "cli" },
         },
       };
       const namespaceRun = prepareSystemAgentRunAdmission({}, runId, "main", "test");
@@ -162,7 +229,8 @@ it.each([
       try {
         const respond = vi.fn();
         const params = {
-          sessionKey,
+          // Exercise the ordinary dashboard alias without an explicit agentId.
+          sessionKey: scenario === "dashboard" ? "main" : sessionKey,
           message: "Keep this user turn in its session",
           idempotencyKey: runId,
           ...(foreignGlobalTimeout ? { agentId: "main" } : {}),
@@ -174,15 +242,25 @@ it.each([
           requestParams: params,
         });
         expect(authorization.error).toBeNull();
-        handling = handleChatSend({
+        const sendChat = directDashboard ? handleDirectExternalChatSend : handleChatSend;
+        const request = {
           params,
-          req: { type: "req", id: runId, method: "chat.send" },
+          req: { type: "req" as const, id: runId, method: "chat.send", params },
           respond,
           context,
           client,
+          hasCurrentClientAuthority,
           sessionMutationAuthorization: authorization.authorization,
           isWebchatConnect: () => false,
-        });
+        };
+        if (scenario === "narrow-first-send") {
+          handling = handleGatewayRequest({
+            ...request,
+            extraHandlers: { "chat.send": handleChatSend },
+          });
+        } else {
+          handling = sendChat(request);
+        }
         void handling.catch(() => {});
         if (foreignGlobalTimeout) {
           // The foreign promise remains unresolved throughout this bounded check.
@@ -210,11 +288,15 @@ it.each([
         await handling;
         expect(respond).toHaveBeenCalledWith(
           true,
-          { runId, status: "started" },
+          dashboard
+            ? expect.objectContaining({ runId, status: "started" })
+            : { runId, status: "started" },
           undefined,
           expect.anything(),
         );
         options = await entered.promise;
+        const dashboardRead = options.replyOptions?.dashboardReadAdmission;
+        expect(Boolean(dashboardRead)).toBe(dashboardReadAllowed);
         owned = observeDispatch.mock.calls.at(-1)?.[0];
         if (foreignGlobalTimeout) {
           expect(owned?.session.sessionKey).toBe("global");
@@ -248,11 +330,13 @@ it.each([
           withGatewayToolCallerIdentity(caller, () => capability.invoke({ action: "list" }));
         const { admission, userTurn } = owned;
         const original = admission.activeRunAbort.entry;
-        expect(original?.sessionId).toBe(runId);
+        expect(original?.sessionId).toBe(initialSessionId);
         // This focused test controls preparation; the native WS test proves its real producer.
         await upsertSessionEntryCore(scope, {
-          sessionId: "committed-session",
+          sessionId: membershipRequired ? initialSessionId : "committed-session",
           updatedAt: Date.now(),
+          createdActor,
+          ...(membershipRequired ? { visibility: "suggest" as const } : {}),
         });
         const committed = loadExactSessionEntryReadOnly(scope);
         if (!committed) {
@@ -266,10 +350,31 @@ it.each([
         prepared(binding);
         prepared(binding);
         prepared({ ...binding, sessionKey: "agent:main:unrelated", sessionId: "foreign" });
+        if (dashboardRead) {
+          expect(admission.admittedSessionId).toBe(initialSessionId);
+          expect(dashboardRead.sessionId).toBe(binding.sessionId);
+          dashboardRead.assertCurrent();
+        }
         clone.mockClear();
         runStarted(runId);
         expect.soft(unrelatedCloneCount()).toBe(0);
         await expect(readLibrary()).resolves.toMatchObject({ profileId: profile.id });
+        if (dashboardRead) {
+          connection.abort();
+          expect(admission.activeRunAbort.controller.signal.aborted).toBe(false);
+          expect(dashboardRead.assertCurrent).not.toThrow();
+          if (scenario === "dashboard-credential-revoked") {
+            hasCurrentClientAuthority.mockReturnValue(false);
+            expect(dashboardRead.assertCurrent).toThrow(
+              "Dashboard message read admission is no longer active.",
+            );
+          } else if (membershipRequired) {
+            removeSessionMember(scope, profile.id, undefined, binding.sessionId);
+            expect(admission.activeRunAbort.controller.signal.aborted).toBe(false);
+            expect(hasCurrentClientAuthority()).toBe(true);
+            expect(dashboardRead.assertCurrent).toThrow("session is suggest for this connection");
+          }
+        }
 
         if (closure === "queued") {
           expect(original?.sessionId).toBe(binding.sessionId);
@@ -311,6 +416,9 @@ it.each([
         }
         // No await after closure: release must fence even before its promise settles.
         expect(() => prepared({ ...binding, sessionId: "late-session" })).toThrow();
+        if (dashboardRead) {
+          expect(dashboardRead.assertCurrent).toThrow();
+        }
         expect(original?.sessionId).toBe(binding.sessionId);
         expect(successor?.entry?.sessionId).toBe(
           closure === "replaced" ? "successor-session" : undefined,

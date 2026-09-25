@@ -8,6 +8,7 @@ export type SharedCodexAppServerClientEntry = {
   readonly key: string;
   client?: CodexAppServerClient;
   startup?: SharedCodexAppServerClientStartup;
+  startupTransport?: Promise<CodexAppServerClient>;
   activeLeases: number;
   // Anonymous releases cannot consume explicit native-subagent retains.
   anonymousLeases: number;
@@ -41,7 +42,7 @@ export type SharedCodexAppServerClientState = {
 type CodexAppServerClientStartMetadata = {
   requestedStartOptions: CodexAppServerStartOptions;
   startOptions: CodexAppServerStartOptions;
-  agentDir: string;
+  agentDir?: string;
   nativeCommand?: string;
   desktopGeneration?: CodexDesktopGeneration;
 };
@@ -64,6 +65,25 @@ export const getSharedCodexAppServerClientState = defineCodexBuildState(
     startMetadata: new WeakMap(),
   }),
 );
+
+export function hasActiveSharedCodexAppServerWork(): boolean {
+  const state = getSharedCodexAppServerClientState();
+  if (state.startup.pending.size > 0 || state.startup.controller.signal.aborted) {
+    return true;
+  }
+  for (const entry of state.clients.values()) {
+    if (entry.activeLeases > 0 || entry.pendingAcquires > 0) {
+      return true;
+    }
+  }
+  for (const client of state.liveClients) {
+    const entry = state.entriesByClient.get(client);
+    if (entry && (entry.activeLeases > 0 || entry.pendingAcquires > 0)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 export function getCurrentSharedClientEntry(
   client: CodexAppServerClient | undefined,
@@ -149,7 +169,7 @@ export function closeRetiredSharedClientEntryIfIdle(
   return closeRetiredSharedClientEntry(entry);
 }
 
-export function closeRetiredSharedClientEntry(entry: SharedCodexAppServerClientEntry): boolean {
+function closeRetiredSharedClientEntry(entry: SharedCodexAppServerClientEntry): boolean {
   const client = entry.client;
   if (!client) {
     return false;
@@ -157,4 +177,35 @@ export function closeRetiredSharedClientEntry(entry: SharedCodexAppServerClientE
   entry.client = undefined;
   client.close();
   return true;
+}
+
+export function retirePendingSharedClientEntryIfUnclaimed(
+  entry: SharedCodexAppServerClientEntry,
+): void {
+  if (entry.activeLeases > 0 || entry.pendingAcquires > 0) {
+    return;
+  }
+  entry.startupAbort?.abort(new Error("Codex app-server startup was abandoned"));
+  entry.closeWhenIdle = true;
+  const state = getSharedCodexAppServerClientState();
+  if (state.clients.get(entry.key) === entry) {
+    state.clients.delete(entry.key);
+  }
+  if (!entry.client) {
+    return;
+  }
+  closeRetiredSharedClientEntry(entry);
+}
+
+/** Failed final claimants join physical cleanup; healthy peers keep their startup. */
+export async function waitForUnclaimedSharedClientStartup(
+  entry: SharedCodexAppServerClientEntry,
+): Promise<void> {
+  if (!entry.startupTransport || entry.activeLeases > 0 || entry.pendingAcquires > 0) {
+    return;
+  }
+  await entry.startupTransport.then(
+    (client) => client.closeAndWait(),
+    () => {},
+  );
 }

@@ -16,12 +16,7 @@ import {
 } from "../fixtures/mock-openai-config.mjs";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
 import { hasExpectedPluginUninstallConfigState } from "../plugin-uninstall-assertions.mjs";
-import {
-  ERROR_DETAIL_TAIL_BYTES,
-  fileContainsText,
-  readJson,
-} from "../release-assertion-files.mjs";
-import { readTextFileTail } from "../text-file-utils.mjs";
+import { assertFileContainsText, readJson } from "../release-assertion-files.mjs";
 
 function clickClackHttpTimeoutMs() {
   return readPositiveInt(
@@ -173,10 +168,7 @@ function assertAgentTurn() {
 function assertFileContains() {
   const file = process.argv[3];
   const needle = process.argv[4];
-  assert(
-    fileContainsText(file, needle),
-    `${file} did not contain ${needle}. Output tail: ${readTextFileTail(file, ERROR_DETAIL_TAIL_BYTES)}`,
-  );
+  assertFileContainsText(file, needle, assert);
 }
 
 function rememberPluginInstallPath() {

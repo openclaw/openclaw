@@ -2,7 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ProjectCloneFailureCause } from "../../packages/gateway-protocol/src/index.js";
-import { executeGitCommand, requireGitCommandOutput } from "../infra/git-exec.js";
+import {
+  executeGitCommand,
+  gitNullConfigPath,
+  requireGitCommandOutput,
+} from "../infra/git-exec.js";
+import { withGitNetworkRetry } from "../infra/git-network-retry.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 
 const PROJECT_CLONE_TIMEOUT_MS = 10 * 60_000;
@@ -30,7 +35,7 @@ function cloneCommandEnv(token: string | undefined, env: NodeJS.ProcessEnv): Nod
     ...env,
     GIT_TERMINAL_PROMPT: "0",
     GIT_CONFIG_NOSYSTEM: "1",
-    GIT_CONFIG_GLOBAL: os.devNull,
+    GIT_CONFIG_GLOBAL: gitNullConfigPath(),
     GIT_TEMPLATE_DIR: "",
     GIT_EDITOR: "",
     GIT_SEQUENCE_EDITOR: "",
@@ -117,14 +122,28 @@ export async function cloneProjectCheckout(
     );
   }
   await fs.mkdir(path.dirname(input.target), { recursive: true });
-  const result = await runCommandWithTimeout(
-    ["git", "clone", "--no-recurse-submodules", "--", input.url, input.target],
+  const commandEnv = cloneCommandEnv(options.token, env);
+  const result = await withGitNetworkRetry(
+    "clone",
     {
-      env: cloneCommandEnv(options.token, env),
       timeoutMs: options.timeoutMs ?? PROJECT_CLONE_TIMEOUT_MS,
       signal: options.signal,
-      killProcessTree: true,
-      maxOutputBytes: 256 * 1024,
+    },
+    async (timeoutMs) => {
+      const attempt = await runCommandWithTimeout(
+        ["git", "clone", "--no-recurse-submodules", "--", input.url, input.target],
+        {
+          env: commandEnv,
+          timeoutMs,
+          signal: options.signal,
+          killProcessTree: true,
+          maxOutputBytes: 256 * 1024,
+        },
+      );
+      if (attempt.code !== 0 || attempt.termination !== "exit") {
+        await fs.rm(input.target, { recursive: true, force: true }).catch(() => {});
+      }
+      return attempt;
     },
   );
   if (result.code === 0 && result.termination === "exit") {
@@ -138,7 +157,6 @@ export async function cloneProjectCheckout(
     }
     return;
   }
-  await fs.rm(input.target, { recursive: true, force: true }).catch(() => {});
   throw classifyProjectGitFailure({
     output: `${result.stderr}\n${result.stdout}`,
     operation: "clone",

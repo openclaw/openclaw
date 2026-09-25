@@ -1,358 +1,398 @@
-// Owns Chrome MCP session creation, sharing, leasing, and shutdown.
-import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { toErrorObject } from "../infra/errors.js";
-import { createChromeMcpSession, waitForChromeMcpReady } from "./chrome-mcp-connect.js";
+// Owns Chrome MCP attachment, admission, and retained cleanup per profile configuration.
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import {
+  createChromeMcpSession,
+  setChromeMcpSessionFactoryForTest,
+  waitForChromeMcpPendingSession,
+  waitForChromeMcpReady,
+} from "./chrome-mcp-connect.js";
 import type {
   ChromeMcpCallOptions,
-  ChromeMcpOptionsInput,
-  ChromeMcpProcessCleanupDeps,
   ChromeMcpSession,
-  ChromeMcpSessionFactory,
   ChromeMcpSessionLease,
-  PendingChromeMcpSession,
-  PendingChromeMcpSessionLease,
+  NormalizedChromeMcpProfileOptions,
 } from "./chrome-mcp-contracts.js";
 import { redactChromeMcpProfileLabelForDiagnostic } from "./chrome-mcp-diagnostics.js";
+import { buildChromeMcpSessionCacheKey } from "./chrome-mcp-options.js";
 import {
-  buildChromeMcpSessionCacheKey,
-  cacheKeyMatchesProfileName,
-  normalizeChromeMcpOptions,
-} from "./chrome-mcp-options.js";
-import {
-  abortPendingChromeMcpSession,
-  createSharedPendingChromeMcpSession,
-  drainCancelledChromeMcpPendingSession,
-  forgetCachedChromeMcpSessionIfCurrent,
-  forgetPendingChromeMcpSessionIfCurrent,
-  waitForSharedPendingChromeMcpSession,
-} from "./chrome-mcp-pending.js";
-import {
-  closeTrackedChromeMcpSession,
-  drainRetainedChromeMcpCleanup,
+  cleanupTarget,
+  closeChromeMcpSessionHandle,
+  setChromeMcpProcessCleanupDepsForTest,
 } from "./chrome-mcp-process.js";
-import {
-  pendingChromeMcpSessions as pendingSessions,
-  retainedChromeMcpCleanupSessions as retainedCleanupSessions,
-  setChromeMcpProcessCleanupDeps,
-  setChromeMcpSessionFactory,
-  chromeMcpSessions as sessions,
-} from "./chrome-mcp-state.js";
 import { BrowserProfileUnavailableError } from "./errors.js";
 
-async function drainChromeMcpCleanupForKey(cacheKey: string): Promise<void> {
-  const pending = pendingSessions.get(cacheKey);
-  if (pending?.state.cancelled) {
-    await drainCancelledChromeMcpPendingSession(pending);
+export { setChromeMcpProcessCleanupDepsForTest, setChromeMcpSessionFactoryForTest };
+
+const owners = new Map<string, ChromeMcpSessionOwner>();
+
+type PendingAttach = ReturnType<typeof createChromeMcpSession> & {
+  controller: AbortController;
+  waiters: number;
+  settled: boolean;
+  cancelled: boolean;
+  cleanupSettled: boolean;
+  session?: ChromeMcpSession;
+};
+
+class ChromeMcpSessionOwner {
+  private session?: ChromeMcpSession;
+  private pending?: PendingAttach;
+  private readonly retired = new Map<ChromeMcpSession, Promise<void> | undefined>();
+  private temporary = 0;
+  private admissions = 0;
+
+  constructor(
+    readonly profileName: string,
+    readonly options: NormalizedChromeMcpProfileOptions,
+    private readonly key: string,
+  ) {}
+
+  private forgetIfEmpty(): void {
+    if (
+      !this.session &&
+      !this.pending &&
+      !this.retired.size &&
+      !this.temporary &&
+      !this.admissions &&
+      owners.get(this.key) === this
+    ) {
+      owners.delete(this.key);
+    }
   }
-  await drainRetainedChromeMcpCleanup(cacheKey);
-}
 
-function hasChromeMcpCleanupForKey(cacheKey: string): boolean {
-  return (
-    pendingSessions.get(cacheKey)?.state.cancelled === true ||
-    (retainedCleanupSessions.get(cacheKey)?.size ?? 0) > 0
-  );
-}
+  isCurrent(session: ChromeMcpSession): boolean {
+    return this.session?.transport === session.transport;
+  }
 
-async function closeChromeMcpSessionsForProfile(
-  profileName: string,
-  keepKey?: string,
-): Promise<boolean> {
-  let closed = false;
-  let firstError: Error | undefined;
-  const keys = new Set([
-    ...pendingSessions.keys(),
-    ...sessions.keys(),
-    ...retainedCleanupSessions.keys(),
-  ]);
-  for (const key of keys) {
-    if (key === keepKey || !cacheKeyMatchesProfileName(key, profileName)) {
-      continue;
+  get pid(): number | null {
+    if (this.session) {
+      return this.session.transport.pid ?? null;
     }
-    closed = true;
-    const pending = pendingSessions.get(key);
-    if (pending) {
-      abortPendingChromeMcpSession(pending, new Error("Chrome MCP profile session was replaced"));
-      try {
-        await drainCancelledChromeMcpPendingSession(pending);
-      } catch (err) {
-        firstError ??= toErrorObject(err, "Chrome MCP pending-session cleanup failed.");
-        continue;
-      }
+    const retained = this.retired.keys().next().value;
+    const target = retained?.processCleanup && cleanupTarget(retained.processCleanup);
+    return target?.root.pid ?? retained?.transport.pid ?? null;
+  }
+
+  close(session: ChromeMcpSession): Promise<void> {
+    if (this.session?.transport === session.transport) {
+      this.session = undefined;
     }
+    if (session.processCleanup?.status === "closed") {
+      this.retired.delete(session);
+      this.forgetIfEmpty();
+      return Promise.resolve();
+    }
+    const existing = this.retired.get(session);
+    if (existing) {
+      return existing;
+    }
+    // Revoke sends and publish the exact handle before process discovery yields.
+    session.transport.send = async () => {
+      throw new Error("Chrome MCP session is closing");
+    };
+    owners.set(this.key, this);
+    const cleanup = closeChromeMcpSessionHandle(session)
+      .then(() => {
+        this.retired.delete(session);
+      })
+      .finally(() => {
+        if (this.retired.has(session)) {
+          this.retired.set(session, undefined);
+        }
+        this.forgetIfEmpty();
+      });
+    this.retired.set(session, cleanup);
+    void cleanup.catch(() => {});
+    return cleanup;
+  }
+
+  private cancel(pending: PendingAttach, reason?: unknown): void {
+    pending.cancelled = true;
+    if (!pending.settled) {
+      pending.controller.abort(
+        reason ?? new Error("Chrome MCP session attach no longer has active waiters"),
+      );
+    }
+  }
+
+  private async drainRetired(): Promise<void> {
+    const results = await Promise.allSettled(
+      [...this.retired.keys()].map((session) => this.close(session)),
+    );
+    const failed = results.find((result) => result.status === "rejected");
+    if (failed?.status === "rejected") {
+      throw failed.reason;
+    }
+  }
+
+  private async drainPending(pending: PendingAttach): Promise<void> {
+    const settled = pending.cleanupSettled;
     try {
-      await drainRetainedChromeMcpCleanup(key);
-    } catch (err) {
-      firstError ??= toErrorObject(err, "Chrome MCP retained-session cleanup failed.");
-      continue;
-    }
-    const session = sessions.get(key);
-    if (session) {
-      sessions.delete(key);
-      try {
-        await closeTrackedChromeMcpSession(key, session);
-      } catch (err) {
-        firstError ??= toErrorObject(err, "Chrome MCP session cleanup failed.");
+      await pending.cleanup;
+    } catch (error) {
+      // Concurrent waiters observe the original failure; later admission retries its retained handle.
+      if (!settled) {
+        throw error;
       }
+      await this.drainRetired();
+    }
+    if (this.pending === pending) {
+      this.pending = undefined;
     }
   }
 
-  if (firstError) {
-    throw firstError;
-  }
-  return closed;
-}
-
-async function getSession(
-  profileName: string,
-  profileOptions?: ChromeMcpOptionsInput,
-  timeoutMs?: number,
-  signal?: AbortSignal,
-): Promise<ChromeMcpSession> {
-  const options = normalizeChromeMcpOptions(profileOptions);
-  const cacheKey = buildChromeMcpSessionCacheKey(profileName, options);
-  signal?.throwIfAborted();
-  await closeChromeMcpSessionsForProfile(profileName, cacheKey);
-  if (hasChromeMcpCleanupForKey(cacheKey)) {
-    await drainChromeMcpCleanupForKey(cacheKey);
-  }
-  if (signal?.aborted) {
-    throw signal.reason ?? new Error("aborted");
+  async stop(): Promise<boolean> {
+    const active = Boolean(this.pending || this.session || this.retired.size);
+    if (this.pending) {
+      this.cancel(this.pending, new Error("Chrome MCP profile session was replaced"));
+      await this.drainPending(this.pending);
+    }
+    await this.drainRetired();
+    if (this.session) {
+      await this.close(this.session);
+    }
+    this.forgetIfEmpty();
+    return active;
   }
 
-  let staleReadySessionRetries = 0;
-  for (;;) {
-    let session = sessions.get(cacheKey);
-    if (session && session.transport.pid === null) {
-      sessions.delete(cacheKey);
-      await closeTrackedChromeMcpSession(cacheKey, session);
-      session = undefined;
-    }
-
-    let pendingLease: PendingChromeMcpSessionLease | undefined;
-    let leasedPending: PendingChromeMcpSession | undefined;
-    const pending = pendingSessions.get(cacheKey);
-    if (pending?.state.cancelled) {
-      await drainCancelledChromeMcpPendingSession(pending);
-      continue;
-    }
-    if (pending) {
-      leasedPending = pending;
-      pendingLease = await waitForSharedPendingChromeMcpSession(pending, signal);
-      session = pendingLease.session;
-    }
-
-    if (!session) {
-      const createdPending = createSharedPendingChromeMcpSession(cacheKey, profileName, options);
-      pendingSessions.set(cacheKey, createdPending);
-      leasedPending = createdPending;
-      pendingLease = await waitForSharedPendingChromeMcpSession(createdPending, signal);
-      session = pendingLease.session;
-    }
-
-    try {
-      await waitForChromeMcpReady(session, profileName, timeoutMs, signal);
-      if (session.transport.pid === null) {
-        forgetCachedChromeMcpSessionIfCurrent(cacheKey, session);
-        if (leasedPending) {
-          forgetPendingChromeMcpSessionIfCurrent(cacheKey, leasedPending);
-        }
-        if (pendingLease) {
-          await pendingLease.release(true);
-          pendingLease = undefined;
-        }
-        staleReadySessionRetries += 1;
-        if (staleReadySessionRetries > 1) {
-          throw new BrowserProfileUnavailableError(
-            `Chrome MCP existing-session attach failed for profile "${redactChromeMcpProfileLabelForDiagnostic(profileName)}". ` +
-              "The Chrome MCP subprocess exited before it became usable.",
-          );
-        }
-        continue;
-      }
-      return session;
-    } catch (err) {
-      if (signal?.aborted && pendingLease) {
-        await pendingLease.release(true);
-        pendingLease = undefined;
-      } else if (pendingLease && leasedPending && leasedPending.state.waiters > 1) {
-        await pendingLease.release(false);
-        pendingLease = undefined;
-      } else {
-        forgetCachedChromeMcpSessionIfCurrent(cacheKey, session);
-        if (leasedPending) {
-          forgetPendingChromeMcpSessionIfCurrent(cacheKey, leasedPending);
-        }
-        if (pendingLease) {
-          await pendingLease.release(true);
-          pendingLease = undefined;
+  private start(): PendingAttach {
+    const controller = new AbortController();
+    const creation = createChromeMcpSession(
+      this,
+      this.profileName,
+      this.options,
+      controller.signal,
+    );
+    const pending: PendingAttach = {
+      ...creation,
+      controller,
+      waiters: 0,
+      settled: false,
+      cancelled: false,
+      cleanupSettled: false,
+    };
+    this.pending = pending;
+    owners.set(this.key, this);
+    pending.promise = creation.promise
+      .then(async (session) => {
+        pending.session = session;
+        if (this.pending === pending) {
+          this.session = session;
         } else {
-          await closeTrackedChromeMcpSession(cacheKey, session);
+          await this.close(session);
+        }
+        return session;
+      })
+      .finally(() => {
+        pending.settled = true;
+      });
+    pending.cleanup = creation.cleanup.finally(() => {
+      pending.cleanupSettled = true;
+    });
+    void pending.promise.catch(() => {});
+    void pending.cleanup.catch(() => {});
+    return pending;
+  }
+
+  private async join(
+    pending: PendingAttach,
+    options: ChromeMcpCallOptions,
+  ): Promise<ChromeMcpSession> {
+    pending.waiters++;
+    let released = false;
+    const release = async (close: boolean) => {
+      if (released) {
+        return;
+      }
+      released = true;
+      if (--pending.waiters !== 0) {
+        return;
+      }
+      if (!pending.settled) {
+        this.cancel(pending, options.signal?.reason);
+        await this.drainPending(pending);
+      } else if (close && pending.session) {
+        this.cancel(pending, options.signal?.reason);
+        await this.close(pending.session);
+      }
+      if (this.pending === pending) {
+        this.pending = undefined;
+      }
+      this.forgetIfEmpty();
+    };
+    let abortRelease: Promise<void> | undefined;
+    const abort = () => {
+      // Last-waiter cancellation publishes its cleanup barrier during the abort event.
+      abortRelease ??= release(true);
+      void abortRelease.catch(() => {});
+    };
+    options.signal?.addEventListener("abort", abort, { once: true });
+    if (options.signal?.aborted) {
+      abort();
+    }
+    try {
+      const session = await waitForChromeMcpPendingSession(pending.promise, options.signal);
+      await waitForChromeMcpReady(session, this.profileName, options.timeoutMs, options.signal);
+      return session;
+    } catch (error) {
+      await (abortRelease ?? release(options.signal?.aborted === true || pending.waiters <= 1));
+      throw error;
+    } finally {
+      options.signal?.removeEventListener("abort", abort);
+      await release(false);
+    }
+  }
+
+  async lease(options: ChromeMcpCallOptions): Promise<ChromeMcpSessionLease> {
+    this.admissions++;
+    // A caller arriving on a live session must not reconnect after queued cleanup overtakes it.
+    const admittedSession =
+      !this.pending && this.session?.transport.pid !== null ? this.session : undefined;
+    try {
+      if (!options.ephemeral) {
+        await stopOwners(this.profileName, this);
+      }
+      options.signal?.throwIfAborted();
+      return await this.acquire(options, admittedSession);
+    } finally {
+      this.admissions--;
+      this.forgetIfEmpty();
+    }
+  }
+
+  private async acquire(
+    options: ChromeMcpCallOptions,
+    admittedSession?: ChromeMcpSession,
+  ): Promise<ChromeMcpSessionLease> {
+    for (let retry = 0; ; retry++) {
+      if (!admittedSession) {
+        if (this.pending?.cancelled) {
+          await this.drainPending(this.pending);
+        }
+        await this.drainRetired();
+        options.signal?.throwIfAborted();
+        if (this.session?.transport.pid === null) {
+          await this.close(this.session);
+        }
+        if (this.pending?.cancelled) {
+          continue;
         }
       }
-      throw err;
-    } finally {
-      await pendingLease?.release(false);
+      const temporary = Boolean(
+        !admittedSession && options.ephemeral && (this.pending || !this.session),
+      );
+      let session = admittedSession ?? (this.pending ? undefined : this.session);
+      if (temporary) {
+        this.temporary++;
+        const creation = createChromeMcpSession(
+          this,
+          this.profileName,
+          this.options,
+          options.signal,
+        );
+        try {
+          session = await creation.promise;
+          await waitForChromeMcpReady(session, this.profileName, options.timeoutMs, options.signal);
+        } catch (error) {
+          try {
+            await creation.cleanup;
+            if (session) {
+              await this.close(session);
+            }
+          } finally {
+            this.temporary--;
+            this.forgetIfEmpty();
+          }
+          throw error;
+        }
+      } else if (session) {
+        try {
+          await waitForChromeMcpReady(session, this.profileName, options.timeoutMs, options.signal);
+        } catch (error) {
+          if (!options.ephemeral || !options.signal?.aborted) {
+            await this.close(session);
+          }
+          throw error;
+        }
+      } else {
+        session = await this.join(this.pending ?? this.start(), options);
+      }
+      if (!admittedSession && !options.ephemeral && session.transport.pid === null) {
+        if (this.pending?.session === session) {
+          this.pending = undefined;
+        }
+        await this.close(session);
+        if (retry === 0) {
+          continue;
+        }
+        throw new BrowserProfileUnavailableError(
+          `Chrome MCP existing-session attach failed for profile "${redactChromeMcpProfileLabelForDiagnostic(this.profileName)}". ` +
+            "The Chrome MCP subprocess exited before it became usable.",
+        );
+      }
+      return {
+        session,
+        temporary,
+        owner: this,
+        release: async () => {
+          if (temporary) {
+            try {
+              await this.close(session);
+            } finally {
+              this.temporary--;
+              this.forgetIfEmpty();
+            }
+          }
+        },
+      };
     }
   }
 }
 
-async function getExistingSession(
-  cacheKey: string,
+export function getChromeMcpSessionOwner(
   profileName: string,
-  timeoutMs?: number,
-  signal?: AbortSignal,
-): Promise<ChromeMcpSession | null> {
-  if (pendingSessions.has(cacheKey)) {
-    return null;
+  options: NormalizedChromeMcpProfileOptions,
+): ChromeMcpSessionOwner {
+  const key = buildChromeMcpSessionCacheKey(profileName, options);
+  let owner = owners.get(key);
+  if (!owner) {
+    owner = new ChromeMcpSessionOwner(profileName, options, key);
+    owners.set(key, owner);
   }
+  return owner;
+}
 
-  let session = sessions.get(cacheKey);
-  if (session && session.transport.pid === null) {
-    sessions.delete(cacheKey);
-    await closeTrackedChromeMcpSession(cacheKey, session);
-    session = undefined;
+async function stopOwners(profileName?: string, keep?: ChromeMcpSessionOwner): Promise<boolean> {
+  const results = await Promise.allSettled(
+    [...owners.values()]
+      .filter(
+        (owner) =>
+          owner !== keep && (profileName === undefined || owner.profileName === profileName),
+      )
+      .map((owner) => owner.stop()),
+  );
+  const failed = results.find((result) => result.status === "rejected");
+  if (failed?.status === "rejected") {
+    throw toErrorObject(failed.reason, "Chrome MCP session cleanup failed.");
   }
+  return results.some((result) => result.status === "fulfilled" && result.value);
+}
 
-  if (session) {
-    try {
-      await waitForChromeMcpReady(session, profileName, timeoutMs, signal);
-      return session;
-    } catch (err) {
-      if (signal?.aborted) {
-        throw err;
-      }
-      if (forgetCachedChromeMcpSessionIfCurrent(cacheKey, session)) {
-        await closeTrackedChromeMcpSession(cacheKey, session);
-      }
-      throw err;
+export function getChromeMcpPid(profileName: string): number | null {
+  for (const owner of owners.values()) {
+    if (owner.profileName === profileName && owner.pid !== null) {
+      return owner.pid;
     }
   }
-
   return null;
 }
 
-async function createEphemeralSession(
-  profileName: string,
-  profileOptions?: ChromeMcpOptionsInput,
-  timeoutMs?: number,
-  signal?: AbortSignal,
-): Promise<ChromeMcpSession> {
-  signal?.throwIfAborted();
-  const options = normalizeChromeMcpOptions(profileOptions);
-  const cacheKey = buildChromeMcpSessionCacheKey(profileName, options);
-  const creation = createChromeMcpSession(cacheKey, profileName, options, signal);
-  let session: ChromeMcpSession | undefined;
-  try {
-    session = await creation.promise;
-    await waitForChromeMcpReady(session, profileName, timeoutMs, signal);
-    return session;
-  } catch (err) {
-    await creation.cleanup;
-    if (session) {
-      await closeTrackedChromeMcpSession(cacheKey, session);
-    }
-    throw err;
-  }
-}
-
-export async function leaseSession(
-  profileName: string,
-  profileOptions?: ChromeMcpOptionsInput,
-  options: ChromeMcpCallOptions = {},
-): Promise<ChromeMcpSessionLease> {
-  options.signal?.throwIfAborted();
-  const normalizedProfileOptions = normalizeChromeMcpOptions(profileOptions);
-  const cacheKey = buildChromeMcpSessionCacheKey(profileName, normalizedProfileOptions);
-  if (!options.ephemeral) {
-    return {
-      session: await getSession(
-        profileName,
-        normalizedProfileOptions,
-        options.timeoutMs,
-        options.signal,
-      ),
-      cacheKey,
-      temporary: false,
-    };
-  }
-
-  if (hasChromeMcpCleanupForKey(cacheKey)) {
-    await drainChromeMcpCleanupForKey(cacheKey);
-  }
-  options.signal?.throwIfAborted();
-  // Status probes should avoid seeding the shared attach session cache, but they can safely
-  // reuse a real cached session if one already exists.
-  const existingSession = await getExistingSession(
-    cacheKey,
-    profileName,
-    options.timeoutMs,
-    options.signal,
-  );
-  if (existingSession) {
-    return {
-      session: existingSession,
-      cacheKey,
-      temporary: false,
-    };
-  }
-
-  return {
-    session: await createEphemeralSession(
-      profileName,
-      normalizedProfileOptions,
-      options.timeoutMs,
-      options.signal,
-    ),
-    cacheKey,
-    temporary: true,
-  };
-}
-
-async function stopAllChromeMcpSessions(): Promise<void> {
-  const names = uniqueStrings(
-    [...pendingSessions.keys(), ...sessions.keys(), ...retainedCleanupSessions.keys()].map(
-      (key) => JSON.parse(key)[0] as string,
-    ),
-  );
-  let firstError: Error | undefined;
-  for (const name of names) {
-    try {
-      await closeChromeMcpSession(name);
-    } catch (err) {
-      firstError ??= toErrorObject(err, "Chrome MCP shutdown failed.");
-    }
-  }
-  if (firstError) {
-    throw firstError;
-  }
-}
-
 export async function closeChromeMcpSession(profileName: string): Promise<boolean> {
-  return await closeChromeMcpSessionsForProfile(profileName);
+  return await stopOwners(profileName);
 }
 
-export function setChromeMcpSessionFactoryForTest(factory: ChromeMcpSessionFactory | null): void {
-  setChromeMcpSessionFactory(factory);
-}
-
-/** Replace process cleanup hooks for focused tests. */
-export function setChromeMcpProcessCleanupDepsForTest(
-  deps: ChromeMcpProcessCleanupDeps | null,
-): void {
-  setChromeMcpProcessCleanupDeps(deps);
-}
-
-/** Reset cached sessions and test hooks. */
 export async function resetChromeMcpSessionsForTest(): Promise<void> {
-  setChromeMcpSessionFactory(null);
-  for (const pending of pendingSessions.values()) {
-    abortPendingChromeMcpSession(pending, new Error("Chrome MCP sessions reset for test"));
-  }
-  await Promise.allSettled(
-    [...pendingSessions.values()].map(drainCancelledChromeMcpPendingSession),
-  );
-  await stopAllChromeMcpSessions();
-  pendingSessions.clear();
-  setChromeMcpProcessCleanupDeps(null);
+  setChromeMcpSessionFactoryForTest(null);
+  await stopOwners();
+  setChromeMcpProcessCleanupDepsForTest(null);
 }

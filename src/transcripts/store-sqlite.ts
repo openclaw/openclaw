@@ -1,4 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
+import { toUSVString } from "node:util";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Selectable } from "kysely";
 import {
@@ -43,6 +45,21 @@ export function meetingTranscriptSessionQuery(
     .where("started_at", "=", session.startedAt);
 }
 
+export function transcriptSummaryInputRevisionFromRow(
+  row: Pick<
+    MeetingTranscriptSessionRow,
+    "next_utterance_seq" | "title" | "source_json" | "metadata_json" | "stopped_at"
+  >,
+): string {
+  return JSON.stringify({
+    next_utterance_seq: row.next_utterance_seq,
+    title: row.title,
+    source_json: row.source_json,
+    metadata_json: row.metadata_json,
+    stopped_at: row.stopped_at,
+  });
+}
+
 export function readTranscriptSummaryInputRevision(
   database: DatabaseSync,
   session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
@@ -58,7 +75,22 @@ export function readTranscriptSummaryInputRevision(
     ]),
   );
   // Export bookkeeping is not summary input and must not invalidate a reader.
-  return row ? JSON.stringify(row) : undefined;
+  return row ? transcriptSummaryInputRevisionFromRow(row) : undefined;
+}
+
+export function readStoredTranscriptSummaryRevision(
+  database: DatabaseSync,
+  session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
+): string | undefined {
+  const row = executeSqliteQueryTakeFirstSync(
+    database,
+    meetingTranscriptDb(database)
+      .selectFrom("meeting_transcript_summaries")
+      .select(["generated_at", "summary_json", "markdown", "utterance_count"])
+      .where("session_id", "=", session.sessionId)
+      .where("session_started_at", "=", session.startedAt),
+  );
+  return row ? sha256Hex(JSON.stringify(row)) : undefined;
 }
 
 export function readTranscriptSummaryKeys(database: DatabaseSync): Set<string> {
@@ -76,7 +108,7 @@ export function readRecentStoppedTranscriptSession(
   source: TranscriptSourceLocator,
   stoppedAfter: string,
   stoppedBefore: string,
-): TranscriptSessionDescriptor | undefined {
+): { session: TranscriptSessionDescriptor; inputRevision: string } | undefined {
   const row = executeSqliteQueryTakeFirstSync(
     database,
     meetingTranscriptDb(database)
@@ -102,7 +134,9 @@ export function readRecentStoppedTranscriptSession(
       .orderBy("session_id", "asc")
       .limit(1),
   );
-  return row ? sessionFromRow(row) : undefined;
+  return row
+    ? { session: sessionFromRow(row), inputRevision: transcriptSummaryInputRevisionFromRow(row) }
+    : undefined;
 }
 
 export function meetingTranscriptUtteranceQuery(
@@ -118,25 +152,37 @@ export function meetingTranscriptUtteranceQuery(
 function hasExactMeetingTranscriptUtterance(params: {
   database: DatabaseSync;
   metadataJson: string | null;
-  session: TranscriptSessionDescriptor;
+  session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">;
   utterance: TranscriptUtterance & { id: string };
 }): boolean {
-  const rows = executeSqliteQuerySync(
-    params.database,
-    meetingTranscriptUtteranceQuery(params.database, params.session)
-      .selectAll()
-      .where("utterance_id", "=", params.utterance.id),
-  ).rows;
   const utterance = params.utterance;
-  return rows.some(
-    (row) =>
-      row.started_at === (utterance.startedAt ?? null) &&
-      row.ended_at === (utterance.endedAt ?? null) &&
-      row.speaker_id === (utterance.speaker?.id ?? null) &&
-      row.speaker_label === (utterance.speaker?.label ?? null) &&
-      row.text === utterance.text &&
-      row.final === (utterance.final === undefined ? null : utterance.final ? 1 : 0) &&
-      row.metadata_json === params.metadataJson,
+  // SQLite bindings replace lone surrogates, so these cannot exactly match stored text.
+  if (
+    [
+      utterance.startedAt,
+      utterance.endedAt,
+      utterance.speaker?.id,
+      utterance.speaker?.label,
+      utterance.text,
+    ].some((value) => value != null && toUSVString(value) !== value)
+  ) {
+    return false;
+  }
+  return Boolean(
+    executeSqliteQueryTakeFirstSync(
+      params.database,
+      meetingTranscriptUtteranceQuery(params.database, params.session)
+        .select("sequence")
+        .where("utterance_id", "=", utterance.id)
+        .where("started_at", "is", utterance.startedAt ?? null)
+        .where("ended_at", "is", utterance.endedAt ?? null)
+        .where("speaker_id", "is", utterance.speaker?.id ?? null)
+        .where("speaker_label", "is", utterance.speaker?.label ?? null)
+        .where("text", "=", utterance.text)
+        .where("final", "is", utterance.final === undefined ? null : utterance.final ? 1 : 0)
+        .where("metadata_json", "is", params.metadataJson)
+        .limit(1),
+    ),
   );
 }
 
@@ -144,7 +190,7 @@ export function appendMeetingTranscriptUtterance(params: {
   database: DatabaseSync;
   metadataJson: string | null;
   now: number;
-  session: TranscriptSessionDescriptor;
+  session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">;
   utterance: TranscriptUtterance;
 }): void {
   const { database, session, utterance } = params;
@@ -194,7 +240,7 @@ export function appendMeetingTranscriptUtterance(params: {
   );
 }
 
-function parseOptionalJsonRecord(value: string | null): Record<string, unknown> | undefined {
+export function parseOptionalJsonRecord(value: string | null): Record<string, unknown> | undefined {
   if (!value) {
     return undefined;
   }

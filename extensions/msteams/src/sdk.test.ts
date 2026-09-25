@@ -1,4 +1,6 @@
 // Msteams tests cover sdk plugin behavior.
+import type { ClientOptions, RequestContext } from "@microsoft/teams.common";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { startMSTeamsQaBotFrameworkServer } from "./qa/bot-framework-server.js";
 import { sendMSTeamsActivityWithReference } from "./sdk-proactive.js";
@@ -71,7 +73,7 @@ describe("createMSTeamsApp", () => {
 
     const app = await createMSTeamsApp(creds);
     expect(app).toBeDefined();
-    expect(app.tokenManager).toBeDefined();
+    expect(app.tokenProvider).toBeDefined();
   });
 
   it("keeps private QA App options absent in production", async () => {
@@ -112,7 +114,7 @@ describe("createMSTeamsApp", () => {
     const options = (app as unknown as { options?: Record<string, unknown> }).options;
     expect(options?.skipAuth).toBe(true);
     expect(options?.clientSecret).toBe("");
-    expect(options?.client).toEqual(expect.objectContaining({ clone: expect.any(Function) }));
+    expect(options?.client).toEqual(expect.objectContaining({ interceptors: expect.any(Array) }));
     expect(options?.token).toEqual(expect.any(Function));
     const token = options?.token;
     if (typeof token !== "function") {
@@ -129,12 +131,32 @@ describe("createMSTeamsApp", () => {
       token: expect.any(Function),
     });
     expect(credentials).not.toHaveProperty("clientSecret");
-    expect(String(await app.tokenManager.getBotToken())).toBe(privateQaBotToken);
+    expect(
+      String(await app.tokenProvider.getAppToken("https://api.botframework.com/.default")),
+    ).toBe(privateQaBotToken);
   });
 
-  it("routes a private QA proactive send through the loopback Connector", async () => {
+  it.each([
+    {
+      name: "routes a private QA proactive send through the loopback Connector",
+      revokeAt: "never",
+    },
+    {
+      name: "does not dispatch a private QA send when authority closes during token acquisition",
+      revokeAt: "token",
+    },
+    {
+      name: "retains a private QA accepted receipt when authority closes before the response",
+      revokeAt: "accepted",
+    },
+  ] as const)("$name", async ({ revokeAt }) => {
     vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", "1");
     vi.stubEnv("CLIENT_SECRET", "ambient-private-qa-secret");
+    const tokenStarted = createDeferred<void>();
+    const releaseToken = createDeferred<void>();
+    const onPlatformSendDispatch = vi.fn(async () => {});
+    let active = true;
+    let pendingSend: Promise<unknown> | undefined;
     const outbound: Array<{
       activity: Record<string, unknown>;
       activityId: string;
@@ -146,6 +168,9 @@ describe("createMSTeamsApp", () => {
       nonce: "qa-nonce",
       onOutbound: async (activity) => {
         outbound.push(activity);
+        if (revokeAt === "accepted") {
+          active = false;
+        }
       },
     });
     (
@@ -169,7 +194,13 @@ describe("createMSTeamsApp", () => {
         appPassword: "test-secret",
         tenantId: "test-tenant",
       });
-      const result = await sendMSTeamsActivityWithReference(
+      const getAppToken = app.tokenProvider.getAppToken.bind(app.tokenProvider);
+      vi.spyOn(app.tokenProvider, "getAppToken").mockImplementation(async (...args) => {
+        tokenStarted.resolve();
+        await releaseToken.promise;
+        return getAppToken(...args);
+      });
+      const send = sendMSTeamsActivityWithReference(
         app,
         {
           serviceUrl: "https://smba.trafficmanager.net/qa",
@@ -183,10 +214,38 @@ describe("createMSTeamsApp", () => {
           channelId: "msteams",
         },
         { type: "message", text: "qa outbound" },
-        { threadActivityId: "thread-root" },
+        {
+          threadActivityId: "thread-root",
+          assertDirectAdapterHandoff: () => {
+            if (!active) {
+              throw new Error("private QA delivery authority closed");
+            }
+          },
+          onPlatformSendDispatch,
+        },
       );
+      pendingSend = send.catch(() => undefined);
+
+      await Promise.race([tokenStarted.promise, send]);
+      expect(outbound).toEqual([]);
+      expect(onPlatformSendDispatch).not.toHaveBeenCalled();
+      if (revokeAt === "token") {
+        active = false;
+      }
+      releaseToken.resolve();
+
+      if (revokeAt === "token") {
+        await expect(send).rejects.toThrow("private QA delivery authority closed");
+        expect(outbound).toEqual([]);
+        expect(onPlatformSendDispatch).not.toHaveBeenCalled();
+        return;
+      }
+
+      const result = await send;
 
       expect(result.id).toMatch(/^qa-outbound-/u);
+      expect(onPlatformSendDispatch).toHaveBeenCalledOnce();
+      expect(active).toBe(revokeAt === "never");
       expect(outbound).toEqual([
         {
           activity: expect.objectContaining({
@@ -199,6 +258,8 @@ describe("createMSTeamsApp", () => {
         },
       ]);
     } finally {
+      releaseToken.resolve();
+      await pendingSend;
       await connector.close();
     }
   });
@@ -422,65 +483,96 @@ describe("createMSTeamsApp", () => {
       appPassword: "test-secret",
       tenantId: "test-tenant",
     };
-    const post = vi.fn(async () => ({ data: { id: "sent-1" } }));
+    const dispatch = vi.fn(async (config: RequestContext["config"]) => ({
+      data: { id: "sent-1" },
+      status: 201,
+      statusText: "Created",
+      headers: {},
+      config,
+    }));
     const httpClient = {
-      request: vi.fn(),
-      post,
-      clone: vi.fn(() => httpClient),
-    };
+      interceptors: [
+        {
+          request: ({ config }) => {
+            config.adapter = dispatch;
+            return config;
+          },
+        },
+      ],
+    } satisfies ClientOptions;
 
     const app = await createMSTeamsApp(creds, {
       cloud: "USGov",
       serviceUrl: "https://smba.infra.gov.teams.microsoft.us/teams",
       httpClient,
     });
+    vi.spyOn(app.tokenProvider, "getAppToken").mockResolvedValue(null);
 
     await app.send("19:conversation@thread.tacv2", { type: "message", text: "hello" });
 
-    expect(post).toHaveBeenCalledWith(
+    expect(dispatch).toHaveBeenCalledOnce();
+    const [request] = dispatch.mock.calls[0]!;
+    expect(request.method).toBe("post");
+    expect(request.url).toBe(
       "https://smba.infra.gov.teams.microsoft.us/teams/v3/conversations/19:conversation@thread.tacv2/activities",
-      expect.objectContaining({
-        type: "message",
-        text: "hello",
-        conversation: { id: "19:conversation@thread.tacv2" },
-      }),
     );
+    expect(JSON.parse(request.data)).toMatchObject({
+      type: "message",
+      text: "hello",
+      conversation: { id: "19:conversation@thread.tacv2" },
+    });
   });
 });
 
 describe("createMSTeamsTokenProvider", () => {
   function createMockApp() {
     return {
-      tokenManager: {
-        getBotToken: async () => ({ toString: () => "bot-token" }),
-        getGraphToken: async () => ({ toString: () => "graph-token" }),
+      tokenProvider: {
+        getAppToken: vi.fn(async () => ({ toString: (): string => "access-token" })),
       },
-    } as unknown as import("./sdk.js").MSTeamsApp;
+    };
   }
 
-  it("returns bot token for bot framework scope", async () => {
-    const app = createMockApp();
+  it.each([
+    undefined,
+    "https://api.botframework.us/.default",
+    "https://api.botframework.azure.cn/.default",
+  ])("returns bot tokens using the configured cloud scope %s", async (botScope) => {
+    const app = { ...createMockApp(), cloud: { botScope } };
     const provider = createMSTeamsTokenProvider(app);
 
     const token = await provider.getAccessToken("https://api.botframework.com");
-    expect(token).toBe("bot-token");
+    expect(token).toBe("access-token");
+    expect(app.tokenProvider.getAppToken).toHaveBeenCalledWith(
+      botScope ?? "https://api.botframework.com/.default",
+    );
   });
 
-  it("returns graph token for graph scope", async () => {
-    const app = createMockApp();
-    const provider = createMSTeamsTokenProvider(app);
+  it.each([
+    { graphScope: undefined, tenantId: undefined },
+    { graphScope: undefined, tenantId: "configured-tenant" },
+    { graphScope: "https://graph.microsoft.us/.default", tenantId: "sovereign-tenant" },
+  ])(
+    "returns Graph tokens using cloud and tenant $graphScope $tenantId",
+    async ({ graphScope, tenantId }) => {
+      const app = { ...createMockApp(), cloud: { graphScope }, credentials: { tenantId } };
+      const provider = createMSTeamsTokenProvider(app);
 
-    const token = await provider.getAccessToken("https://graph.microsoft.com");
-    expect(token).toBe("graph-token");
-  });
+      const token = await provider.getAccessToken("https://graph.microsoft.com");
+      expect(token).toBe("access-token");
+      expect(app.tokenProvider.getAppToken).toHaveBeenCalledWith(
+        graphScope ?? "https://graph.microsoft.com/.default",
+        tenantId ?? "common",
+      );
+    },
+  );
 
   it("returns empty string when token is null", async () => {
     const app = {
-      tokenManager: {
-        getBotToken: async () => null,
-        getGraphToken: async () => null,
+      tokenProvider: {
+        getAppToken: async () => null,
       },
-    } as unknown as import("./sdk.js").MSTeamsApp;
+    };
     const provider = createMSTeamsTokenProvider(app);
 
     expect(await provider.getAccessToken("https://api.botframework.com")).toBe("");

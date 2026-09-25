@@ -16,6 +16,7 @@ import {
   captureSidebarUiProof,
   createSidebarCustomizationSuite,
   openSidebarCustomizationPage,
+  openSidebarMoreMenu,
 } from "./sidebar-customization.test-support.ts";
 
 const suite = createSidebarCustomizationSuite("Control UI sidebar interactions mocked Gateway E2E");
@@ -52,7 +53,24 @@ suite.define(() => {
                 archive: false,
                 startTerminal: true,
               },
-              hosts: [],
+              hosts: [
+                {
+                  hostId: "gateway:local",
+                  label: "Gateway Mac",
+                  kind: "gateway",
+                  connected: true,
+                  sessions: [
+                    {
+                      threadId: "cli-thread",
+                      name: "CLI plan",
+                      status: "stored",
+                      archived: false,
+                      canContinue: true,
+                      canArchive: false,
+                    },
+                  ],
+                },
+              ],
             },
           ],
         },
@@ -311,11 +329,8 @@ suite.define(() => {
     try {
       const sidebar = page.locator("openclaw-app-sidebar");
       const moreButton = sidebar.locator(".sidebar-nav__head-action");
-      await moreButton.click();
-      await sidebar
-        .locator("wa-dropdown.sidebar-more-menu")
-        .getByRole("menuitem", { name: "Edit pinned items" })
-        .click();
+      const moreMenu = await openSidebarMoreMenu(page);
+      await moreMenu.getByRole("menuitem", { name: "Edit pinned items" }).click();
       const pinItems = sidebar
         .locator(
           "wa-dropdown.sidebar-customize-menu:not(.sidebar-more-menu):not(.sidebar-agent-menu)",
@@ -354,8 +369,7 @@ suite.define(() => {
 
     try {
       const sidebar = page.locator("openclaw-app-sidebar");
-      await sidebar.locator(".sidebar-nav__head-action").click();
-      const moreMenu = sidebar.locator("wa-dropdown.sidebar-more-menu");
+      const moreMenu = await openSidebarMoreMenu(page);
       await expect
         .poll(() =>
           moreMenu
@@ -468,7 +482,7 @@ suite.define(() => {
         )
         .toBe(true);
       await expect
-        .poll(() => researchSwitch.locator("img.agent-select__avatar").getAttribute("src"))
+        .poll(() => researchSwitch.locator(".agent-select__avatar img").getAttribute("src"))
         .toContain("data:image/png;base64,");
       await expect.poll(() => menu.getByText(/^New session —/).count()).toBe(0);
       const gridLayout = await menu.evaluate((dropdown) => {

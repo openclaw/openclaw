@@ -244,7 +244,7 @@ describe("Talk device and voice wake settings", () => {
         openSystemSettings: vi.fn(),
         openPanel: vi.fn(),
         checkForUpdates: vi.fn(),
-        installChromeExtension: vi.fn(),
+        setupChromeExtension: vi.fn(),
         refresh: vi.fn(),
         dispose: vi.fn(),
       } satisfies NativeDeviceSettingsCapability;
@@ -547,7 +547,7 @@ describe("Talk device and voice wake settings", () => {
       openSystemSettings: vi.fn(),
       openPanel: vi.fn(),
       checkForUpdates: vi.fn(),
-      installChromeExtension: vi.fn(),
+      setupChromeExtension: vi.fn(),
       refresh: vi.fn(),
       dispose: vi.fn(),
     } satisfies NativeDeviceSettingsCapability;
@@ -619,7 +619,7 @@ describe("Talk device and voice wake settings", () => {
       openSystemSettings: vi.fn(),
       openPanel: vi.fn(),
       checkForUpdates: vi.fn(),
-      installChromeExtension: vi.fn(),
+      setupChromeExtension: vi.fn(),
       refresh: vi.fn(),
       dispose: vi.fn(),
     } satisfies NativeDeviceSettingsCapability;

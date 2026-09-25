@@ -104,10 +104,11 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     A setup or handshake failure before request dispatch falls back to SSE; it
     is not retried or reconnected first. After dispatch, failures with an
     unknown outcome remain replay-unsafe and fail closed. The explicit server
-    rejections `previous_response_not_found` and
-    `websocket_connection_limit_reached` are safe exceptions: OpenClaw closes
-    the failed socket and retries that turn once over SSE with full history and
-    no rejected `previous_response_id`.
+    rejections `previous_response_not_found`,
+    `websocket_connection_limit_reached`, and the Zero Data Retention
+    `unsupported_parameter` rejection of `previous_response_id` are safe
+    exceptions: OpenClaw closes the failed socket and retries that turn once
+    over SSE with full history and no rejected `previous_response_id`.
 
     ```json5
     {
@@ -142,7 +143,7 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     OpenClaw because it describes a direct provider request.
 
     When enabled on the embedded runtime, OpenClaw maps fast mode to OpenAI API
-    Fast mode (formerly Priority processing) and currently sends
+    Fast mode (formerly Priority processing) and sends
     `service_tier = "priority"`. Fast mode does not rewrite `reasoning` or
     `text.verbosity`. `fastMode: "auto"` starts new model calls fast until the
     auto cutoff, then starts later retry, fallback, tool-result, or continuation
@@ -186,7 +187,7 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
 
   <Accordion title="OpenAI API Fast mode with service_tier">
     OpenAI now calls this API product Fast mode; it was formerly Priority
-    processing. OpenClaw currently sends the wire value
+    processing. OpenClaw sends the wire value
     `service_tier = "priority"`. Set an explicit tier per
     model on the embedded OpenClaw runtime:
 
@@ -302,6 +303,13 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
 
     <Note>
     `responsesServerCompaction` only controls `context_management` injection.
+    The public OpenAI Responses API also uses `/responses/compact` by default
+    for budget-triggered compaction. Set
+    `params.responsesCompactEndpoint: false` to disable this separate endpoint.
+    Provider-confirmed overflow and endpoint failures use client-side
+    summarization. Manual compaction keeps its existing behavior unless this
+    endpoint is explicitly enabled with `params.responsesCompactEndpoint: true`.
+
     Direct OpenAI Responses models still force `store: true` unless compat
     sets `supportsStore: false`.
     </Note>

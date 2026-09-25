@@ -6,6 +6,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { build } from "esbuild";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { STATE_SCHEMA_GENERATOR_INPUTS } from "../../scripts/lib/state-schema-inline-plugin.mts";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
@@ -54,6 +55,27 @@ describe("normalizeStaticProviderModelId", () => {
     expect(normalizeStaticProviderModelId("huggingface", "huggingface/vendor/model")).toBe(
       "vendor/model",
     );
+  });
+
+  it("keeps the built-in Anthropic alias table aligned with the bundled manifest", async () => {
+    const manifest: {
+      modelIdNormalization: {
+        providers: { anthropic: { aliases: Record<string, string> } };
+      };
+    } = JSON.parse(
+      await fs.readFile(
+        new URL("../../extensions/anthropic/openclaw.plugin.json", import.meta.url),
+        "utf8",
+      ),
+    );
+    const aliases = manifest.modelIdNormalization.providers.anthropic.aliases;
+    expect(Object.keys(aliases).length).toBeGreaterThan(0);
+    for (const [alias, target] of Object.entries(aliases)) {
+      expect(
+        normalizeStaticProviderModelId("anthropic", alias, { allowManifestNormalization: false }),
+        alias,
+      ).toBe(target);
+    }
   });
 
   it("strips native Anthropic provider prefixes from static catalog ids", () => {
@@ -259,10 +281,17 @@ describe("provider model normalization bridge", () => {
       const dist = path.join(root, "dist");
       await fs.mkdir(dist, { recursive: true });
       await fs.writeFile(path.join(root, "package.json"), '{"type":"module"}');
+      for (const schema of STATE_SCHEMA_GENERATOR_INPUTS) {
+        await fs.copyFile(path.resolve(schema), path.join(dist, path.basename(schema)));
+      }
       const bridgePath = path.join(dist, "model-reference.js");
       // The bundler places this bridge at the dist root, unlike its source directory.
       await build({
-        entryPoints: [path.resolve("src/agents/provider-model-normalization.runtime.ts")],
+        stdin: {
+          contents: `export * from "./src/agents/provider-model-normalization.runtime.ts";
+            export { withPluginRuntimeGenerationScope } from "./src/plugins/runtime/generation-scope.ts";`,
+          resolveDir: process.cwd(),
+        },
         outfile: bridgePath,
         bundle: true,
         platform: "node",
@@ -272,10 +301,12 @@ describe("provider model normalization bridge", () => {
       // SAFETY: This test emits the actual typed bridge into a standalone package.
       const bridge = createRequire(import.meta.url)(
         bridgePath,
-      ) as typeof import("./provider-model-normalization.runtime.js");
+      ) as typeof import("./provider-model-normalization.runtime.js") & {
+        withPluginRuntimeGenerationScope: typeof withPluginRuntimeGenerationScope;
+      };
 
       expect(
-        withPluginRuntimeGenerationScope(createModelNormalizerGeneration(), () =>
+        bridge.withPluginRuntimeGenerationScope(createModelNormalizerGeneration(), () =>
           bridge.normalizeProviderModelIdWithRuntime({
             provider: "fixture",
             context: { provider: "fixture", modelId: "model" },

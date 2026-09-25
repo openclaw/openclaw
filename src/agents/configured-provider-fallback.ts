@@ -18,6 +18,7 @@ export function resolveConfiguredProviderFallback(params: {
   cfg: Pick<OpenClawConfig, "models">;
   defaultProvider: string;
   defaultModel: string | undefined;
+  excludedModel?: ProviderModelRef;
 }): ProviderModelRef | null {
   const configuredProviders = params.cfg.models?.providers;
   if (!configuredProviders || typeof configuredProviders !== "object") {
@@ -38,22 +39,23 @@ export function resolveConfiguredProviderFallback(params: {
   if (defaultProviderHasConfiguredModel && (!defaultModel || defaultProviderHasDefaultModel)) {
     return null;
   }
-  // Fall back to the first provider with at least one configured model, preserving
-  // config insertion order as operator preference.
-  const availableProvider = Object.entries(configuredProviders).find(
-    ([, providerCfg]) =>
-      providerCfg &&
-      Array.isArray(providerCfg.models) &&
-      providerCfg.models.length > 0 &&
-      providerCfg.models[0]?.id,
-  );
-  if (!availableProvider) {
-    return null;
+  // A utility-only row does not express primary intent. Keep the remaining
+  // provider/model insertion order as the operator's fallback preference.
+  for (const [provider, providerCfg] of Object.entries(configuredProviders)) {
+    const models = providerCfg?.models;
+    if (!Array.isArray(models) || !models[0]?.id) {
+      continue;
+    }
+    const normalizedProvider = normalizeProviderId(provider);
+    const model = models.find(
+      (entry) =>
+        entry?.id &&
+        (normalizedProvider !== params.excludedModel?.provider ||
+          entry.id !== params.excludedModel.model),
+    );
+    if (model) {
+      return { provider: normalizedProvider, model: model.id };
+    }
   }
-  const [provider, providerCfg] = availableProvider;
-  const models = providerCfg.models;
-  if (!Array.isArray(models) || !models[0]?.id) {
-    return null;
-  }
-  return { provider: normalizeProviderId(provider), model: models[0].id };
+  return null;
 }

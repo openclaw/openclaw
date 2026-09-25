@@ -15,6 +15,7 @@ import {
   type SessionTranscriptRuntimeTarget,
 } from "../../../config/sessions/session-accessor.js";
 import { resolvePersistedSessionStoreOwnerForTarget } from "../../../config/sessions/session-store-owner.js";
+import { prepareSessionEntryPresenceRead } from "../../../config/sessions/session-transcript-worker-runtime.js";
 import {
   SessionTranscriptWriterClaimReboundError,
   type InitialSessionTranscriptWriter,
@@ -27,6 +28,8 @@ import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../../../sessions/session-id-resolution.js";
+import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-admission.js";
+import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import { resolveSessionAgentId } from "../../agent-scope.js";
 import {
@@ -229,10 +232,18 @@ export function backfillSessionKey(params: {
 }
 
 /** Reserves only a missing row's first writer; no row or claim exists until lazy persistence. */
-export function prepareInitialSessionWriter(params: {
+export async function prepareInitialSessionWriter(params: {
   runParams: RunEmbeddedAgentParams;
   target: ContextEngineSessionTarget | undefined;
-}): InitialSessionTranscriptWriter | undefined {
+  onInterrupt: (reason: Error) => void;
+}): Promise<
+  | {
+      writer: InitialSessionTranscriptWriter;
+      run: <T>(run: () => Promise<T>) => Promise<T>;
+      close: () => Promise<void>;
+    }
+  | undefined
+> {
   const { runParams, target } = params;
   if (
     runParams.sessionPersistence === "detached" ||
@@ -252,30 +263,81 @@ export function prepareInitialSessionWriter(params: {
   if (!assertion) {
     return undefined;
   }
-  if (
-    loadSessionEntryReadOnly({
-      agentId: target.agentId,
-      sessionKey: target.sessionKey,
-      storePath: target.storePath,
-    })
-  ) {
-    throw new SessionTranscriptWriterClaimReboundError();
-  }
+  const ownerTarget = {
+    agentId: target.agentId,
+    sessionId: target.sessionId,
+    sessionKey: target.sessionKey,
+    storePath: target.storePath,
+  };
+  const presence = prepareSessionEntryPresenceRead(ownerTarget);
+  let interrupted: Error | undefined;
+  const assertActive = () => {
+    signal?.throwIfAborted();
+    if (interrupted) {
+      throw interrupted;
+    }
+    assertion();
+  };
+  const assertAbsent = async () => {
+    assertActive();
+    const present = await presence.read();
+    assertActive();
+    if (present) {
+      throw new SessionTranscriptWriterClaimReboundError();
+    }
+  };
+  // Existing-row callers can be inside their creation lifecycle; reject before
+  // attempting to acquire an admission that their enclosing mutation excludes.
+  await assertAbsent();
+  const admission = await beginSessionWorkAdmission({
+    scope: presence.storePath,
+    identities: [ownerTarget.sessionKey, presence.sessionKey, ownerTarget.sessionId],
+    signal,
+    assertAllowed: assertAbsent,
+    onInterrupt: (reason) => {
+      interrupted ??= reason ?? new Error("Initial session writer interrupted by lifecycle change");
+      params.onInterrupt(interrupted);
+    },
+  });
   const writerRunId = runParams.runId;
+  const writes = new AsyncWorkScope();
   let committedFence: SessionTranscriptWriterFence | undefined;
-  return Object.freeze({
+  let closed = false;
+  let closing: Promise<void> | undefined;
+  const writer: InitialSessionTranscriptWriter = Object.freeze({
     writerRunId,
     get committedFence() {
       return committedFence;
     },
     assertActive: () => {
-      signal?.throwIfAborted();
-      assertion();
+      assertActive();
+      if (!committedFence && (closed || !admission.isActive())) {
+        throw new SessionTranscriptWriterClaimReboundError();
+      }
     },
     recordCommitted: (fence: SessionTranscriptWriterFence) => {
       committedFence = Object.freeze({ ...fence });
+      admission.release();
     },
+    withTranscriptWrite: <T>(write: () => Promise<T> | T) =>
+      admission.run(() => writes.track(write)),
   });
+  return {
+    writer,
+    run: admission.run,
+    close: () =>
+      (closing ??= (async () => {
+        try {
+          await AsyncWorkScope.runWhenAllIdle(
+            () => [writes],
+            () => writes.drain(),
+          );
+        } finally {
+          closed = true;
+          admission.release();
+        }
+      })()),
+  };
 }
 
 type AgentSessionWriterAdmissionSnapshot = {
