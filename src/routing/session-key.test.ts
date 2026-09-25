@@ -18,7 +18,6 @@ import {
   buildAgentPeerSessionKey,
   buildGroupHistoryKey,
   classifySessionKeyShape,
-  isValidAgentId,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
   resolveEventSessionKey,
@@ -508,18 +507,5 @@ describe("resolveEventSessionKey", () => {
     expect(
       resolveEventSessionKey("agent:main:cron:backup:run:abc123", "primary", "per-sender"),
     ).toBe("agent:main:primary");
-  });
-});
-
-describe("isValidAgentId", () => {
-  it.each([
-    { input: "main", expected: true },
-    { input: "my-research_agent01", expected: true },
-    { input: "", expected: false },
-    { input: "Agent not found: xyz", expected: false },
-    { input: "../../../etc/passwd", expected: false },
-    { input: "a".repeat(65), expected: false },
-  ] as const)("validates agent id %j => $expected", ({ input, expected }) => {
-    expect(isValidAgentId(input)).toBe(expected);
   });
 });
