@@ -100,6 +100,28 @@ If full CI takes longer than an hour, the current run finishes while GitHub
 coalesces pending hourly children. No measured cost savings or strict completion
 interval is claimed.
 
+## Nightly Full Release Validation
+
+`Full Release Validation Nightly` (`full-release-validation-nightly.yml`) runs at
+04:00 UTC with the `stable` profile, soak and blocking performance,
+`reuse_evidence=true`, `rerun_group=all`, and `main-qualification` purpose.
+Both `ref` and `expected_sha` carry the scheduler's exact main SHA, so a main
+push after the event cannot move the target. A still-active parent for the same
+SHA shares the SHA-specific Full Release Validation concurrency group and queues
+this dispatch; a completed one is validated again and adopts its own
+exact-target evidence through reuse. The parent automatically
+uses `OPENCLAW_RELEASE_RUNNER_GROUP` when configured; the five-minute dispatcher
+stays on ordinary `ubuntu-24.04` runners.
+
+Find the parent for the SHA shown in the dispatcher summary:
+
+```bash
+gh run list --workflow full-release-validation.yml --branch main --event workflow_dispatch
+```
+
+**A successful dispatcher is not a passing validation result**; inspect the
+Full Release Validation parent and its evidence.
+
 ## OpenClaw Performance
 
 `OpenClaw Performance` is the product/runtime performance workflow. It runs daily on `main` and can be dispatched manually:

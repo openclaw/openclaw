@@ -30,6 +30,7 @@ import {
   createFilterableSelectList,
   createSearchableSelectList,
   createSettingsList,
+  modelSelectItems,
 } from "./components/selectors.js";
 import type { TuiBackend } from "./tui-backend.js";
 import { runTuiBrowserSetup } from "./tui-browser-setup.js";
@@ -103,7 +104,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     boundary: null as "new" | "reset" | null,
     epoch: 0,
   };
-  let pickerRequest: { overlay?: OverlayHandle; noticeId: string } | null = null;
+  type PickerRequest = { overlay?: OverlayHandle; refreshModels?: (agentId?: string) => void };
+  let pickerRequest: PickerRequest | null = null;
+  client.onModelsChanged = (agentId) => pickerRequest?.refreshModels?.(agentId);
 
   // Hold one owner through the full identity transition so later input cannot
   // target the session being retired while create/reset awaits the backend.
@@ -174,14 +177,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     chatLog.addSystem(`agent set to ${state.currentAgentId}; use /openclaw to return`);
   };
 
-  const beginPickerRequest = (): { overlay?: OverlayHandle; noticeId: string } => {
-    if (pickerRequest && chatLog.dismissPendingSystem(pickerRequest.noticeId)) {
-      tui.requestRender();
-    }
+  const beginPickerRequest = (): PickerRequest => {
     if (pickerRequest?.overlay) {
       closeOverlayAndRender(pickerRequest.overlay);
     }
-    return (pickerRequest = { noticeId: randomUUID() });
+    return (pickerRequest = {});
   };
 
   const closeOverlayAndRender = (handle: OverlayHandle) => {
@@ -292,61 +292,61 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     tui.requestRender();
   };
 
-  const openModelSelector = async () => {
+  const openModelSelector = () => {
     const request = beginPickerRequest();
     const { selection, isCurrent } = captureSessionIncarnation();
-    try {
-      chatLog.addPendingSystem(request.noticeId, "loading models...");
-      tui.requestRender();
-      const models = await client.listModels({ agentId: selection.agentId });
+    let models = client.getKnownModels?.({ agentId: selection.agentId }) ?? [];
+    const selector = createSearchableSelectList([], 9);
+    const update = (next: typeof models, emptyMessage = "No models available") => {
       if (request !== pickerRequest || !isCurrent()) {
         return;
       }
-      if (models.length === 0) {
-        chatLog.addSystem("no models available");
-        return;
-      }
-      const items = models.map((model) => {
-        const ref = modelKey(model.provider, model.id);
-        return {
-          value: ref,
-          label: ref,
-          description: [
-            model.name !== model.id ? model.name : "",
-            model.available === false ? (model.unavailableReason ?? "unavailable") : "",
-          ]
-            .filter(Boolean)
-            .join(" · "),
-        };
-      });
-      openSelector(
-        createSearchableSelectList(items, 9),
-        async (value) => {
-          const model = models.find((entry) => modelKey(entry.provider, entry.id) === value);
-          if (model?.available === false) {
-            const guidance =
-              model.unavailableReason === "cooldown"
-                ? "Wait and retry, or choose another model."
-                : "Run openclaw models auth login or choose another model.";
-            chatLog.addSystem(
-              `model unavailable: ${model.unavailableReason ?? "unavailable"}. ${guidance}`,
-            );
-            return;
-          }
-          await applySessionSetting({ model: value }, `model set to ${value}`, "model set failed");
-        },
-        request,
+      models = next;
+      const { modelProvider, model } = state.sessionInfo;
+      selector.setItems(
+        modelSelectItems(models),
+        emptyMessage,
+        modelProvider && model ? modelKey(modelProvider, model) : undefined,
       );
-    } catch (err) {
-      if (request !== pickerRequest || !isCurrent()) {
-        return;
+      tui.requestRender();
+    };
+    request.refreshModels = (agentId) => {
+      if (agentId === selection.agentId) {
+        const known = client.getKnownModels?.({ agentId });
+        update(known ?? [], known ? "No models available" : "Checking models...");
       }
-      chatLog.addSystem(`model list failed: ${formatTuiErrorMessage(err)}`);
-    } finally {
-      if (request === pickerRequest && chatLog.dismissPendingSystem(request.noticeId)) {
-        tui.requestRender();
-      }
-    }
+    };
+    update(models, "Checking models...");
+    openSelector(
+      selector,
+      async (value) => {
+        const model = models.find((entry) => modelKey(entry.provider, entry.id) === value);
+        if (!model) {
+          return;
+        }
+        if (model.available === false) {
+          const guidance =
+            model.unavailableReason === "cooldown"
+              ? "Wait and retry, or choose another model."
+              : "Run openclaw models auth login or choose another model.";
+          chatLog.addSystem(
+            `model unavailable: ${model.unavailableReason ?? "unavailable"}. ${guidance}`,
+          );
+          return;
+        }
+        await applySessionSetting({ model: value }, `model set to ${value}`, "model set failed");
+      },
+      request,
+    );
+    void client
+      .listModels({ agentId: selection.agentId })
+      .then(client.getKnownModels ? undefined : update, (err: unknown) => {
+        if (request === pickerRequest && isCurrent()) {
+          const message = `model list failed: ${formatTuiErrorMessage(err)}`;
+          chatLog.addSystem(message);
+          update(models, message);
+        }
+      });
   };
 
   const openAgentSelector = async () => {
@@ -594,7 +594,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       if (shouldForwardModelCommandToServer(args)) {
         await sendMessage(raw);
       } else if (!args) {
-        await openModelSelector();
+        openModelSelector();
       } else {
         await applySessionSetting(
           { model: /^default$/i.test(args) ? null : args },
@@ -612,7 +612,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         );
       }
     },
-    models: async () => await openModelSelector(),
+    models: () => openModelSelector(),
     think: async (args) => {
       const { thinkingLevels, modelProvider, model, agentRuntime } = state.sessionInfo;
       const levels = thinkingLevels?.length

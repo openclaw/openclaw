@@ -62,6 +62,11 @@ complete until `main` carries the actual shipped release state.
    closeout manifest to the GitHub release. The drill must be within 90 days;
    manual dispatch is only for repair/replay, and private rollback commands
    remain in the maintainer-only runbook.
+   Manual replay needs only `tag`: it reuses publish-accepted sealed waiver text
+   (only new operator text needs the version prefix) and repository drill variables;
+   failed non-proof lanes without a sealed lane waiver still need `lane_waiver`.
+   Push runs are never cancelled by later `main` pushes; verification serializes
+   per resolved stable tag.
 7. A macOS build pulled from Sparkle on purpose (for example a crashing
    in-app update) is a third appcast state, not a contract failure. Withdraw
    it with a `main` commit whose subject is exactly

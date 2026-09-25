@@ -204,6 +204,17 @@ type PolicyTestWatch = {
 // this inventory covers the remaining tests that changed targeting cannot
 // discover from imports alone.
 const policyTestWatches = [
+  {
+    testFile: "src/gateway/client-callsites.guard.test.ts",
+    watchGlobs: ["{src,extensions}/**/!(*.test|*.test-support|*.e2e|*.e2e.test|*.live.test).ts"],
+  },
+  ...[
+    "test/scripts/package-acceptance-workflow.test.ts",
+    "test/scripts/upgrade-survivor-missing-load-path.test.ts",
+  ].map((testFile): PolicyTestWatch => ({
+    testFile,
+    watchGlobs: ["scripts/e2e/lib/upgrade-survivor/**"],
+  })),
   ...["test/scripts/android-app-i18n.test.ts", "test/scripts/apple-app-i18n.test.ts"].map(
     (testFile): PolicyTestWatch => ({
       // Both suites read this inventory by filename, not through the import graph.
@@ -4493,7 +4504,11 @@ function createCompactNodeTestShardBundles(
         })
       );
     };
-    const bins = packNodeTestGroups(anchorGroups, canShareCompactJob, packsHostedTooling);
+    const bins = packNodeTestGroups(
+      anchorGroups,
+      canShareCompactJob,
+      options.runnerBackend === "github",
+    );
     if (options.runnerBackend === "github") {
       for (const bin of bins) {
         bin.sort((a, b) => runnerRank(b) - runnerRank(a));

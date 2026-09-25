@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Stable OpenClaw tag to replay or repair, for example v2026.6.8 or v2026.6.8-2
+        description: Stable OpenClaw tag to replay or repair, for example v2026.6.8 or v2026.6.8-2; every other input is optional
         required: false
         type: string
       rollback_drill_id:
@@ -39,7 +39,7 @@ permissions:
 
 concurrency:
   group: openclaw-stable-main-closeout-${{ github.event_name == 'workflow_dispatch' && (inputs.tag || github.run_id) || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+  cancel-in-progress: false
 
 jobs:
   resolve:
@@ -52,6 +52,8 @@ jobs:
       release_publish_run_id: ${{ steps.inputs.outputs.release_publish_run_id }}
       stable_soak_waiver: ${{ steps.inputs.outputs.stable_soak_waiver }}
       lane_waiver: ${{ steps.inputs.outputs.lane_waiver }}
+      published_stable_soak_waiver: ${{ steps.inputs.outputs.published_stable_soak_waiver }}
+      published_lane_waiver: ${{ steps.inputs.outputs.published_lane_waiver }}
       rollback_drill_date: ${{ steps.inputs.outputs.rollback_drill_date }}
       rollback_drill_id: ${{ steps.inputs.outputs.rollback_drill_id }}
       evidence_tag: ${{ steps.inputs.outputs.evidence_tag }}
@@ -352,16 +354,17 @@ jobs:
             echo "Stable closeout requires repository variables RELEASE_ROLLBACK_DRILL_ID and RELEASE_ROLLBACK_DRILL_DATE, or explicit manual overrides." >&2
             exit 1
           fi
-          # Operator inputs win; otherwise the waivers recorded in the sealed publish evidence apply.
+          # Operator inputs win; otherwise the waivers the sealed publish evidence recorded apply,
+          # and closeout accepts them exactly as the publish gate accepted them.
+          published_stable_soak_waiver="$(jq -c '.stableSoakWaiver // "" | if type == "string" then . else error("Invalid stable soak waiver") end' "$evidence_path")"
+          published_lane_waiver="$(jq -c '.laneWaiverAcknowledgement // .laneWaiver // "" | if type == "string" then . else error("Invalid lane waiver") end' "$evidence_path")"
+          stable_soak_waiver="$published_stable_soak_waiver"
           if [[ -n "${INPUT_STABLE_SOAK_WAIVER// }" ]]; then
             stable_soak_waiver="$(jq -cn --arg value "$INPUT_STABLE_SOAK_WAIVER" '$value')"
-          else
-            stable_soak_waiver="$(jq -c '.stableSoakWaiver // "" | if type == "string" then . else error("Invalid stable soak waiver") end' "$evidence_path")"
           fi
+          lane_waiver="$published_lane_waiver"
           if [[ -n "${INPUT_LANE_WAIVER// }" ]]; then
             lane_waiver="$(jq -cn --arg value "$INPUT_LANE_WAIVER" '$value')"
-          else
-            lane_waiver="$(jq -c '.laneWaiver // "" | if type == "string" then . else error("Invalid lane waiver") end' "$evidence_path")"
           fi
           {
             echo "full_release_validation_run_id=$full_release_validation_run_id"
@@ -369,6 +372,8 @@ jobs:
             echo "release_publish_run_id=$release_publish_run_id"
             echo "stable_soak_waiver=$stable_soak_waiver"
             echo "lane_waiver=$lane_waiver"
+            echo "published_stable_soak_waiver=$published_stable_soak_waiver"
+            echo "published_lane_waiver=$published_lane_waiver"
             echo "rollback_drill_date=$ROLLBACK_DRILL_DATE"
             echo "rollback_drill_id=$ROLLBACK_DRILL_ID"
             echo "evidence_tag=$evidence_source_tag"
@@ -382,6 +387,10 @@ jobs:
   verify:
     name: Verify stable main closeout
     needs: resolve
+    # Verification is keyed by the resolved stable tag, never by the main ref.
+    concurrency:
+      group: openclaw-stable-main-closeout-verify-${{ needs.resolve.outputs.tag }}
+      cancel-in-progress: false
     if: ${{ needs.resolve.outputs.should_closeout == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -470,6 +479,8 @@ jobs:
           STABLE_SOAK_WAIVER: ${{ fromJSON(needs.resolve.outputs.stable_soak_waiver) }}
           OPENCLAW_RELEASE_STABLE_SOAK_WAIVER: ${{ vars.OPENCLAW_RELEASE_STABLE_SOAK_WAIVER }}
           LANE_WAIVER: ${{ fromJSON(needs.resolve.outputs.lane_waiver) }}
+          PUBLISHED_STABLE_SOAK_WAIVER: ${{ fromJSON(needs.resolve.outputs.published_stable_soak_waiver) }}
+          PUBLISHED_LANE_WAIVER: ${{ fromJSON(needs.resolve.outputs.published_lane_waiver) }}
           RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
           GH_TOKEN: ${{ github.token }}
           EVIDENCE_TAG: ${{ needs.resolve.outputs.evidence_tag }}

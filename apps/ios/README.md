@@ -120,7 +120,7 @@ Release behavior:
 - App Store release uses manual `Apple Distribution` signing with profile names pinned in `apps/ios/Config/AppStoreSigning.json`.
 - Fastlane owns one-time Developer Portal setup, encrypted `match` signing sync to the repo/branch pinned in `apps/ios/Config/AppStoreSigning.json`, and release handling.
 - App Store release also switches the app to `OpenClawPushMode=appStore`, which derives relay transport, official distribution, the canonical production relay, production APNs, production relay profile, `appleStrict` proof, and the App-Attest-capable entitlement file.
-- `pnpm ios:release:upload` generates App Store screenshots, archives and validates the IPA, uploads release notes and the rendered `apps/ios/APP-REVIEW-NOTES.md` attachment, uploads the IPA, and waits for Apple processing.
+- `pnpm ios:release:upload` generates App Store screenshots, archives and validates the IPA, uploads release notes and the rendered `apps/ios/APP-REVIEW-NOTES-APPLE.md` attachment, uploads the IPA, and waits for Apple processing.
 - Agent-driven App Store uploads must use `pnpm ios:release:upload` as the only release path. If that command fails, stop and fix the failing screenshot, metadata, archive, validation, or upload step before trying again.
 - Do not treat `pnpm ios:release:archive`, `asc builds upload`, `asc release stage`, `asc publish appstore`, direct Fastlane lanes, or App Store Connect mutation commands as fallback upload paths after `pnpm ios:release:upload` fails.
 - The release archive is validated before upload by inspecting the exported IPA's signed entitlements, embedded App Store profile, and push mode. The upload fails if the IPA is not an App Store production relay build.

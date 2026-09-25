@@ -116,6 +116,14 @@ describe("plugin management Gateway handlers", () => {
     managementMocks.list.mockResolvedValue({
       plugins: [
         { ...workboard, clawhubPackage: "@openclaw/workboard" },
+        {
+          id: "diffs",
+          name: "Diffs",
+          installed: false,
+          enabled: false,
+          state: "not-installed",
+          clawhubPackage: "@openclaw/diffs",
+        },
         { ...workboard, id: "local-only", name: "Local only" },
       ],
       diagnostics: [],
@@ -127,11 +135,12 @@ describe("plugin management Gateway handlers", () => {
     expect(result.response).toMatchObject({
       plugins: [
         { clawhubPackage: "@openclaw/workboard", catalogId: "ch_QG9wZW5jbGF3L3dvcmtib2FyZA" },
+        { clawhubPackage: "@openclaw/diffs", catalogId: "ch_QG9wZW5jbGF3L2RpZmZz" },
         { id: "local-only" },
       ],
     });
     expect(
-      (result.response as { plugins: Array<{ catalogId?: string }> }).plugins[1]?.catalogId,
+      (result.response as { plugins: Array<{ catalogId?: string }> }).plugins[2]?.catalogId,
     ).toBeUndefined();
   });
 

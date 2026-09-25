@@ -88,6 +88,11 @@ openclaw tui --local
 
 Esc or Ctrl+C closes a picker. In the session picker, the first press clears a nonempty filter. Press again to close it.
 
+The model picker opens immediately, showing a checking state if no models are known yet.
+In Gateway mode, it reuses the selected agent's last known list while refreshing in the
+background. Catalog changes update an open picker without clearing its search or
+moving its highlighted choice when that model is still present.
+
 ## Questions
 
 When the agent calls [`ask_user`](/tools/ask-user), the TUI opens a question

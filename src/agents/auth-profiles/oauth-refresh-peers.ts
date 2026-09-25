@@ -403,14 +403,22 @@ export function failOAuthRefreshPeerClaims(params: {
   }
 }
 
-/** Remove one owner generation and its exact nonportable historical peers. */
-export async function removeOAuthRefreshGenerationPeers(params: {
+export type OAuthRefreshGenerationPeer = {
+  candidate: CandidateAuthProfileStore;
+  profileId: string;
+  credential: OAuthCredential;
+  generation: OAuthCredential;
+};
+
+/** Capture exact historical peers before removal updates their config references. */
+export async function listOAuthRefreshGenerationPeers(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   ownerDatabasePath: string;
   profileId: string;
   generation: OAuthCredential;
-}): Promise<void> {
+}): Promise<OAuthRefreshGenerationPeer[]> {
+  const peers: OAuthRefreshGenerationPeer[] = [];
   for (const candidate of await listPeerCandidates(params)) {
     const store = loadCandidateAuthProfileStore(candidate);
     if (!store) {
@@ -429,12 +437,27 @@ export async function removeOAuthRefreshGenerationPeers(params: {
     if (!removable) {
       continue;
     }
+    peers.push({
+      candidate,
+      profileId: params.profileId,
+      credential,
+      generation: params.generation,
+    });
+  }
+  return peers;
+}
+
+/** Remove only captured generations; a reconnect during config cleanup survives. */
+export function removeOAuthRefreshGenerationPeers(
+  peers: readonly OAuthRefreshGenerationPeer[],
+): void {
+  for (const { candidate, profileId, credential, generation } of peers) {
     updateCandidateAuthProfileStore({
       candidate,
       preserveProfileState: true,
-      profileId: params.profileId,
+      profileId,
       updater: (currentStore) => {
-        const current = currentStore.profiles[params.profileId];
+        const current = currentStore.profiles[profileId];
         if (current?.type !== "oauth") {
           return false;
         }
@@ -442,14 +465,14 @@ export async function removeOAuthRefreshGenerationPeers(params: {
           !isExactOAuthCredential(current, credential) ||
           !isRemovableOAuthRefreshPeer({
             store: currentStore,
-            profileId: params.profileId,
+            profileId,
             credential: current,
-            generation: params.generation,
+            generation,
           })
         ) {
           return false;
         }
-        delete currentStore.profiles[params.profileId];
+        delete currentStore.profiles[profileId];
         return true;
       },
     });

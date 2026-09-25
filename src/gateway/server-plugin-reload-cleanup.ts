@@ -60,6 +60,7 @@ export function createPluginReloadCleanup({
 }) {
   let pendingServiceCleanup: ReturnType<typeof getPluginServiceCleanupSettlement>;
   let admittedWorkDeadlineAtMs: number | undefined;
+  let retainedWorkQueued = false;
   const quiescedInstances: PluginInstanceHandle[] = [];
   const attempt = async (errors: unknown[], run: () => void | Promise<void>) => {
     try {
@@ -290,6 +291,7 @@ export function createPluginReloadCleanup({
     if (!count) {
       return;
     }
+    retainedWorkQueued = true;
     const deadlineAtMs = (admittedWorkDeadlineAtMs ??=
       Date.now() + PLUGIN_RELOAD_ADMITTED_WORK_TIMEOUT_MS);
     const reason = `Plugin replacement queued behind ${count} retained work item(s); applies when they finish within the 60s drain budget.`;
@@ -310,7 +312,6 @@ export function createPluginReloadCleanup({
           ),
         Math.max(0, deadlineAtMs - Date.now()),
       );
-      recordWarning(`Plugin replacement waited for ${count} retained work item(s) to finish.`);
     } catch (error) {
       if (error instanceof PluginHostCleanupTimeoutError) {
         throw new PluginAdmittedWorkTimeoutError(pluginIds, error);
@@ -403,6 +404,9 @@ export function createPluginReloadCleanup({
       // Sidecars release their capability consumers before finite work and callbacks drain.
       await drainRetainedWork(pluginIds, signal, reportStatus, true);
       assertCurrent();
+      if (retainedWorkQueued) {
+        recordWarning("Plugin replacement waited for retained work to finish.");
+      }
       for (const record of previousRegistry.plugins) {
         const instance = changedPluginIds.has(record.id) && getPluginInstance(record);
         if (instance && instance.quiesce()) {
