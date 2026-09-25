@@ -133,8 +133,12 @@ it.each(["delete", "retain-windows", "first-transcript"] as const)(
 );
 
 it("publishes committed registry changes while discarding a rolled-back agent removal", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const database = openOpenClawAgentDatabase({ agentId: "main" });
+    const secondary = openOpenClawAgentDatabase({
+      agentId: "main",
+      path: state.statePath("secondary", "openclaw.sqlite"),
+    });
     const target = { agentId: "main", path: database.path };
     const changes: SessionRowChange[] = [];
     const unsubscribe = sessionChanges.subscribe((change) => changes.push(change));
@@ -163,7 +167,22 @@ it("publishes committed registry changes while discarding a rolled-back agent re
       unregisterOpenClawAgentDatabase(target);
       registerOpenClawAgentDatabase(target);
       unregisterOpenClawAgentDatabases({ agentId: "main" });
-      expect(changes).toEqual(Array.from({ length: 3 }, () => ({ all: true, scope: "stores" })));
+      expect(changes).toEqual([
+        ...Array.from({ length: 2 }, () => ({
+          all: true,
+          scope: "stores",
+          stores: { agentId: "main", paths: [database.path] },
+        })),
+        {
+          all: true,
+          scope: "stores",
+          stores: {
+            agentId: "main",
+            paths: expect.arrayContaining([database.path, secondary.path]),
+          },
+        },
+      ]);
+      expect(changes[2]).toHaveProperty("stores.paths.length", 2);
     } finally {
       unsubscribe();
     }

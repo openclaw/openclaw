@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import path from "node:path";
 import { expect, onTestFinished, test, vi } from "vitest";
 import { closeGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -7,6 +9,9 @@ import {
   resolveSessionEntryAccessTarget,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import * as sessionEntryReads from "../config/sessions/session-entry-read-runtime.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   setupSessionCreateTestHarness,
   requireNonEmptyString,
@@ -28,6 +33,90 @@ const {
   openClient,
   resetConfiguredGlobalAgentSessionStore,
 } = setupSessionCreateTestHarness();
+
+test("sessions.create preserves a pending creation when another agent opens its first store", async () => {
+  const { dir } = await createSessionStoreDir();
+  testState.sessionStorePath = path.join(dir, "agents", "{agentId}", "sessions", "sessions.json");
+  testState.agentsConfig = { entries: { main: {}, ops: {} } };
+  const mainStorePath = testState.sessionStorePath.replace("{agentId}", "main");
+  const opsStorePath = testState.sessionStorePath.replace("{agentId}", "ops");
+  const mainKey = "agent:main:overlapping-create";
+  const opsKey = "agent:ops:overlapping-create";
+  const held = createDeferredCore();
+  const release = createDeferredCore();
+  const readEntries = sessionEntryReads.readSessionEntriesFromStoreInWorker;
+  let didHold = false;
+  const readSpy = vi
+    .spyOn(sessionEntryReads, "readSessionEntriesFromStoreInWorker")
+    .mockImplementation(async (input) => {
+      const result = await readEntries(input);
+      if (
+        !didHold &&
+        input.projection === "sharing" &&
+        input.agentId === "main" &&
+        input.sessionKeys.includes(mainKey)
+      ) {
+        didHold = true;
+        held.resolve();
+        await release.promise;
+      }
+      return result;
+    });
+  let connection: Awaited<ReturnType<typeof openClient>> | undefined;
+  let creatingMain: ReturnType<typeof rpcReq<{ key: string; sessionId: string }>> | undefined;
+  try {
+    connection = await openClient();
+    const opsDatabasePath = resolveSqliteTargetFromSessionStorePath(opsStorePath, {
+      agentId: "ops",
+    }).path;
+    expect(existsSync(opsDatabasePath)).toBe(false);
+    creatingMain = rpcReq<{ key: string; sessionId: string }>(connection.ws, "sessions.create", {
+      agentId: "main",
+      key: mainKey,
+    }).catch((cause: unknown) => {
+      throw new Error(`Main sessions.create RPC rejected; sharing read held: ${didHold}`, {
+        cause,
+      });
+    });
+    await Promise.race([
+      held.promise,
+      creatingMain.then((result) => {
+        throw new Error(
+          `First creation completed before its sharing read was held: ${JSON.stringify(result)}`,
+        );
+      }),
+    ]);
+    expect(existsSync(opsDatabasePath)).toBe(false);
+    const createdOps = await rpcReq<{ key: string; sessionId: string }>(
+      connection.ws,
+      "sessions.create",
+      { agentId: "ops", key: opsKey },
+    ).catch((cause: unknown) => {
+      throw new Error(`Ops sessions.create RPC rejected; sharing read held: ${didHold}`, {
+        cause,
+      });
+    });
+    expect(createdOps.ok, JSON.stringify(createdOps)).toBe(true);
+    release.resolve();
+    const createdMain = await creatingMain;
+    expect(createdMain.ok, JSON.stringify(createdMain)).toBe(true);
+    for (const [agentId, sessionKey, storePath, result] of [
+      ["main", mainKey, mainStorePath, createdMain],
+      ["ops", opsKey, opsStorePath, createdOps],
+    ] as const) {
+      const sessionId = requireNonEmptyString(result.payload?.sessionId, `${agentId} session id`);
+      expect(result.payload?.key).toBe(sessionKey);
+      expect(loadSessionEntry({ agentId, sessionKey, storePath })?.sessionId).toBe(sessionId);
+    }
+  } finally {
+    release.resolve();
+    await Promise.allSettled(creatingMain ? [creatingMain] : []);
+    readSpy.mockRestore();
+    if (connection) {
+      await closeGatewayTestWebSocket(connection.ws);
+    }
+  }
+});
 
 test.each(["rpc", "service"] as const)(
   "creates a fresh selected-agent child outside fixed global ownership through %s",

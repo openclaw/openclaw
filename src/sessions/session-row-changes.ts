@@ -40,6 +40,8 @@ export type SessionRowChange =
       all: true;
       scope: string | { agentId?: string; storePath?: string };
       factsInvalidated?: true;
+      /** Complete database locators covered by a known store topology publication. */
+      stores?: { agentId: string; paths: readonly string[] };
     };
 
 type SessionRowNotification =

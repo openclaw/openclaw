@@ -13,6 +13,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { getOpenIncognitoAgentDatabase } from "../state/openclaw-agent-db-lifecycle.js";
+import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../state/openclaw-agent-db-resources.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -513,6 +514,38 @@ it("requires an existing session before preparing sharing facts", async () => {
           aliases: new Set(["requester"]),
         })?.message,
       ).toContain("session is draft");
+    } finally {
+      prepared.release();
+    }
+  });
+});
+
+it("invalidates prepared sharing facts when the same agent registers another store", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const cfg = { agents: { entries: { main: {} } } };
+    await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
+    const sessionKey = "agent:main:store-registration";
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey },
+      { sessionId: "selected", updatedAt: 1, visibility: "shared" },
+    );
+    const otherStore = openOpenClawAgentDatabase({
+      agentId: "main",
+      path: state.statePath("other-main.sqlite"),
+    });
+    const scope = { cfg, sessionKey, agentId: "main" };
+    const prepared = await prepareSessionMutationFacts(scope);
+    try {
+      expect(prepared.readCurrent(cfg).target.entry.sessionId).toBe("selected");
+      registerOpenClawAgentDatabase({ agentId: "main", path: otherStore.path });
+      expect(() => prepared.readCurrent(cfg)).toThrow(unavailableMessage);
+      const refreshed = await prepareSessionMutationFacts(scope);
+      try {
+        expect(refreshed.readCurrent(cfg).target.entry.sessionId).toBe("selected");
+      } finally {
+        refreshed.release();
+      }
     } finally {
       prepared.release();
     }

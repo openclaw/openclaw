@@ -137,7 +137,11 @@ export function captureOpenClawAgentDatabaseRegistration(params: {
         }
       } finally {
         if (committed) {
-          sessionChanges.emit({ all: true, scope: "stores" });
+          sessionChanges.emit({
+            all: true,
+            scope: "stores",
+            stores: { agentId: params.agentId, paths: [params.agentPath] },
+          });
         }
       }
     },

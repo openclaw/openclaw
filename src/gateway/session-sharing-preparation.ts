@@ -18,7 +18,11 @@ import { prepareSessionStoreTargetInventory } from "../config/sessions/session-s
 import { withSessionHistoryWorkerReadCandidates } from "../config/sessions/session-transcript-worker-resources.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
-import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
+import {
+  isIncognitoSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../routing/session-key.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { sessionChanges, type SessionRowChange } from "../sessions/session-row-changes.js";
 import { getOpenIncognitoAgentDatabase } from "../state/openclaw-agent-db-lifecycle.js";
@@ -106,6 +110,9 @@ export async function prepareSessionMutationFacts(
   let creation: SessionEntryCreationOperation | undefined;
   let expectedPlaceholder: SessionEntryPlaceholder | undefined;
   let assertSource: () => void;
+  let isUnrelatedStoreChange:
+    | ((stores: NonNullable<Extract<SessionRowChange, { all: true }>["stores"]>) => boolean)
+    | undefined;
   const selectedPaths = new Set<string>();
   const release = () => {
     if (active) {
@@ -126,8 +133,13 @@ export async function prepareSessionMutationFacts(
   const changed = (change: SessionRowChange) => {
     if ("all" in change) {
       // RAM has its original handle/resource fence; durable discovery waits for writer promotion.
-      if (change.scope === "stores" && (beforeDiscovery || incognito)) {
-        return;
+      if (change.scope === "stores") {
+        if (beforeDiscovery || incognito) {
+          return;
+        }
+        if (!change.factsInvalidated && change.stores && isUnrelatedStoreChange?.(change.stores)) {
+          return;
+        }
       }
       if (
         typeof change.scope === "string" &&
@@ -294,6 +306,31 @@ export async function prepareSessionMutationFacts(
         candidate,
         identity: readDatabasePathIdentitySync(candidate.path).key,
       }));
+      isUnrelatedStoreChange = (stores) => {
+        if (
+          inventory.agentIds.includes(normalizeAgentId(stores.agentId)) ||
+          stores.paths.length === 0
+        ) {
+          return false;
+        }
+        try {
+          return stores.paths.every((storePath) => {
+            const changed = readDatabasePathIdentitySync(storePath);
+            // Different logical agents may share a file, hardlink, or discovered sibling family.
+            return candidateIdentities.every(
+              ({ candidate, identity }) =>
+                identity !== changed.key &&
+                !matchesAgentDatabaseReadCandidatePath(candidate, storePath) &&
+                !matchesAgentDatabaseReadCandidatePath(
+                  { ...candidate, path: candidate.physicalPath },
+                  changed.canonicalPath,
+                ),
+            );
+          });
+        } catch {
+          return false;
+        }
+      };
       for (const candidate of candidates) {
         releases.push(
           registerOpenClawAgentDatabaseReadCandidateResource({
