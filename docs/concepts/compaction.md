@@ -20,6 +20,13 @@ The built-in summarizer accounts for Chinese, Japanese, and Korean (CJK) charact
 
 The full conversation history stays on disk. Compaction only changes what the model sees on the next turn.
 
+Built-in summarization rejects responses cut short by the model's output token limit,
+even when they contain summary text. In `mode: "default"`, automatic compaction
+retries invalid summary output once; manual compaction reports the failure without
+retrying. If no valid summary is produced, the original history remains in context
+and no compaction entry is written. Branch navigation also rejects truncated
+summaries and leaves the current branch unchanged.
+
 Built-in summarization receives text, not image pixels. Omitted images and other non-text input receive markers such as `[image data omitted from summary input]`, without claiming that a model processed the data. The first eight affected messages receive at most two fixed markers each; further omissions receive one aggregate statement. These additions, including newly retained role labels and separators, total at most 847 UTF-8 bytes per summarizer request and count toward token estimates. Existing text is not capped by this omission budget. Custom compaction providers still receive the original message content.
 
 <Note>
