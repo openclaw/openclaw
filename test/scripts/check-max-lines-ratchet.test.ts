@@ -349,17 +349,29 @@ describe("check-max-lines-ratchet", () => {
     fs.writeFileSync(path.join(root, "src/a.ts"), "/* oxlint-disable max-lines */\n");
     git(root, ["add", "."]);
     git(root, ["commit", "-m", "grow release baseline"]);
-    fs.writeFileSync(path.join(root, "src/branch-change.ts"), "export const branchChange = true;\n");
+    fs.writeFileSync(
+      path.join(root, "src/branch-change.ts"),
+      "export const branchChange = true;\n",
+    );
     git(root, ["add", "."]);
     git(root, ["commit", "-m", "later release commit"]);
 
     git(root, ["checkout", "upstream"]);
-    fs.writeFileSync(path.join(root, "src/upstream-change.ts"), "export const upstreamChange = true;\n");
+    fs.writeFileSync(
+      path.join(root, "src/upstream-change.ts"),
+      "export const upstreamChange = true;\n",
+    );
     git(root, ["add", "."]);
     git(root, ["commit", "-m", "upstream update"]);
 
     git(root, ["checkout", "release"]);
-    git(root, ["merge", "--no-ff", "upstream", "-m", "Merge branch 'main' into main"]);
+    git(root, [
+      "merge",
+      "--no-ff",
+      "upstream",
+      "-m",
+      "Merge branch 'main' into main",
+    ]);
     git(root, ["checkout", "--orphan", "unrelated"]);
     fs.rmSync(path.join(root, "src"), { recursive: true, force: true });
     fs.rmSync(path.join(root, "config"), { recursive: true, force: true });
