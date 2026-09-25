@@ -2,7 +2,7 @@ import { vi } from "vitest";
 import { getTaskRegistryProcessState } from "../../../tasks/task-registry.process-state.js";
 import * as mod from "./subagent-registry.test-helpers.js";
 
-export async function flushLifecycleTaskWrites() {
+async function flushLifecycleTaskWrites() {
   await vi.dynamicImportSettled();
   // Fake-time polling does not join native worker commits. Delivery can enqueue
   // another task mutation after terminal settlement, so drain each accepted tail.
