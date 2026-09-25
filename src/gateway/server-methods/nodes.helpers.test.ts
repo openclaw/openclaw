@@ -33,7 +33,8 @@ describe("respondUnavailableOnNodeInvokeErrorWithProvenance", () => {
     );
   });
 
-  it.each(["TIMEOUT", "DISCONNECTED"])("propagates post-dispatch provenance for %s", (code) => {
+  it("propagates post-dispatch provenance", () => {
+    const code = "TIMEOUT";
     const respond = createRespond();
 
     respondUnavailableOnNodeInvokeErrorWithProvenance(

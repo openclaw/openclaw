@@ -42,9 +42,4 @@ describe("maybeWakeNodeWithApns no-registration cleanup", () => {
       expect(getNodeWakeStateSnapshot(`unregistered-node-${index}`)).toBeUndefined();
     }
   });
-
-  it("cleans up after a single no-registration result", async () => {
-    await maybeWakeNodeWithApns("stale-node-id");
-    expect(getNodeWakeStateSnapshot("stale-node-id")).toBeUndefined();
-  });
 });

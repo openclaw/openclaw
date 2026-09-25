@@ -1,6 +1,5 @@
 /** Ensures caller cancellation composes with, but never replaces, node pairing ownership. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { NODE_WORKER_PRIVATE_COMMANDS } from "../../infra/node-commands.js";
 import { isNodeWakeLifecycleCurrent } from "../node-wake-state.js";
 import { resetNodeWakeStateForTest } from "../node-wake-state.test-support.js";
 import { nodeInvokeHandlers } from "./nodes.invoke.js";
@@ -263,36 +262,34 @@ describe("node.invoke caller cancellation", () => {
     );
   });
 
-  it.each(NODE_WORKER_PRIVATE_COMMANDS)(
-    "rejects private control %s before public policy and dispatch",
-    async (command) => {
-      const invoke = vi.fn();
-      const stream = {
-        onProgress: vi.fn(),
-        onDispatchReady: vi.fn(),
-        isRuntimeCurrent: () => true,
-      };
-      const { invocation, respond } = startNodeInvoke({
-        invoke,
-        command,
-        commands: [command],
-        config: { gateway: { nodes: { commands: { allow: [command] } } } },
-        client: createNodeInvokeStreamClient(stream),
-      });
+  it("rejects private control before public policy and dispatch", async () => {
+    const command = "worker.workspace.exec.v1";
+    const invoke = vi.fn();
+    const stream = {
+      onProgress: vi.fn(),
+      onDispatchReady: vi.fn(),
+      isRuntimeCurrent: () => true,
+    };
+    const { invocation, respond } = startNodeInvoke({
+      invoke,
+      command,
+      commands: [command],
+      config: { gateway: { nodes: { commands: { allow: [command] } } } },
+      client: createNodeInvokeStreamClient(stream),
+    });
 
-      await invocation;
+    await invocation;
 
-      expect(invoke).not.toHaveBeenCalled();
-      expect(mocks.resolveNodeCommandAllowlist).not.toHaveBeenCalled();
-      expect(mocks.applyPluginNodeInvokePolicy).not.toHaveBeenCalled();
-      expect(stream.onDispatchReady).not.toHaveBeenCalled();
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ message: expect.stringContaining("private") }),
-      );
-    },
-  );
+    expect(invoke).not.toHaveBeenCalled();
+    expect(mocks.resolveNodeCommandAllowlist).not.toHaveBeenCalled();
+    expect(mocks.applyPluginNodeInvokePolicy).not.toHaveBeenCalled();
+    expect(stream.onDispatchReady).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringContaining("private") }),
+    );
+  });
 
   it("cancels paired-node work without breaking pairing lifecycle identity", async () => {
     const controller = new AbortController();

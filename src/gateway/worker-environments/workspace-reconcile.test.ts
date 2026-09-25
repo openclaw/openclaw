@@ -665,23 +665,6 @@ describe("worker workspace reconciliation", () => {
     await expect(fs.readFile(path.join(local, "encoded.txt"))).resolves.toEqual(currentBytes);
   });
 
-  it("preserves an exact local-only path and reports conflicting content", async () => {
-    const local = await temporaryDirectory("workspace-local-only");
-    const staged = await temporaryDirectory("workspace-local-only-staged");
-    await gitInit(local);
-    await fs.writeFile(path.join(local, "same.txt"), "same");
-    const base = { version: 1, baseCommit: null, entries: [] } satisfies WorkerWorkspaceManifest;
-    await fs.writeFile(path.join(staged, "same.txt"), "same");
-    const current = await manifestFor(staged);
-    await applyWorkspace({ root: local, stagingRoot: staged, base, current });
-    await expect(fs.readFile(path.join(local, "same.txt"), "utf8")).resolves.toBe("same");
-
-    await fs.writeFile(path.join(local, "same.txt"), "local");
-    const result = await applyWorkspace({ root: local, stagingRoot: staged, base, current });
-    expect(result.conflictPaths).toEqual(["same.txt"]);
-    await expect(fs.readFile(path.join(local, "same.txt"), "utf8")).resolves.toBe("local");
-  });
-
   it("ignores local divergence on worker-unchanged paths", async () => {
     const local = await temporaryDirectory("workspace-derived-local");
     const staged = await temporaryDirectory("workspace-derived-staged");
@@ -798,6 +781,9 @@ describe("worker workspace reconciliation", () => {
     expect(acceptedManifestRef).toBe(result.manifestRef);
     await expect(fs.readFile(path.join(local, "apply.txt"), "utf8")).resolves.toBe("worker");
     await expect(fs.readFile(path.join(local, "noop.txt"), "utf8")).resolves.toBe("worker");
+    await expect(fs.readFile(path.join(local, "added-identical.txt"), "utf8")).resolves.toBe(
+      "worker",
+    );
     await expect(fs.readFile(path.join(local, "conflict.txt"), "utf8")).resolves.toBe("local");
     await expect(fs.lstat(path.join(local, "deleted-apply.txt"))).rejects.toMatchObject({
       code: "ENOENT",

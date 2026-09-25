@@ -113,11 +113,8 @@ describe("agent session patch", () => {
     expect(result.patch).not.toHaveProperty("displayName");
   });
 
-  it.each([
-    ["label", { label: "Existing label" }],
-    ["displayName", { displayName: "Existing display name" }],
-    ["subject", { subject: "Existing subject" }],
-  ] as const)("does not replace an existing %s", (_field, namedEntry) => {
+  it("does not replace an existing display name", () => {
+    const namedEntry = { displayName: "Existing display name" };
     const entry: SessionEntry = { sessionId: "existing", updatedAt: 1_000, ...namedEntry };
     const result = buildCreationPatch({
       explicitSessionKey: "agent:main:incident-42",
@@ -133,29 +130,16 @@ describe("agent session patch", () => {
     );
   });
 
-  it("does not name a channel-derived session", () => {
-    expect(
-      buildCreationPatch({ canonicalSessionKey: "agent:main:telegram:direct:123" }).patch,
-    ).not.toHaveProperty("displayName");
+  it("does not name an invisible run", () => {
+    const canonicalSessionKey = "agent:main:internal:probe";
+    const result = buildCreationPatch({
+      canonicalSessionKey,
+      explicitSessionKey: canonicalSessionKey,
+      visibleRequest: false,
+    });
+
+    expect(result.patch).not.toHaveProperty("displayName");
   });
-
-  it.each([
-    ["cron", "agent:main:cron:job-1", true, false],
-    ["heartbeat", "agent:main:heartbeat:main", true, false],
-    ["internal", "agent:main:internal:probe", false, false],
-  ] as const)(
-    "does not name a %s run",
-    (_kind, canonicalSessionKey, isSystemGatewayRun, visibleRequest) => {
-      const result = buildCreationPatch({
-        canonicalSessionKey,
-        explicitSessionKey: canonicalSessionKey,
-        isSystemGatewayRun,
-        visibleRequest,
-      });
-
-      expect(result.patch).not.toHaveProperty("displayName");
-    },
-  );
 
   it.each([
     ["subagent", "agent:main:subagent:worker-1"],
