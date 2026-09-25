@@ -1213,6 +1213,7 @@ src/shared/path-array-index.ts
 src/shared/pid-alive.ts
 src/shared/regexp.ts
 src/shared/sandbox-workspace-paths.ts
+src/shared/settle-within.ts
 src/shared/update-outcome.ts
 src/skills/discovery/agent-filter.ts
 src/skills/discovery/filter.ts
