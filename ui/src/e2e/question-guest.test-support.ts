@@ -112,7 +112,7 @@ export async function createGuestQuestionFixture(deliver: (frame: unknown) => Pr
       updatedAt: profile.updatedAt,
     },
   };
-  const captured = await captureGatewayOperatorRunAuthority({
+  const operator = await captureGatewayOperatorRunAuthority({
     client: browser,
     context: { getRuntimeConfig: () => cfg },
     sourceAuthority: {
@@ -120,8 +120,8 @@ export async function createGuestQuestionFixture(deliver: (frame: unknown) => Pr
       assertCurrent: () => source.signal.throwIfAborted(),
     },
   });
-  if (!captured) {
-    throw new Error("Expected the Guest's admitted operator authority");
+  if (!operator) {
+    throw new Error("expected the Guest's admitted operator authority");
   }
   const runtime: GatewayClient = {
     ...browser,
@@ -130,7 +130,7 @@ export async function createGuestQuestionFixture(deliver: (frame: unknown) => Pr
       client: { id: "gateway-client", version: "e2e", platform: "test", mode: "backend" },
     },
     internal: {
-      operatorRunAuthority: captured.authority,
+      operatorRunAuthority: operator.authority,
       agentRuntimeIdentity: {
         kind: "agentRuntime",
         agentId: "main",
@@ -239,8 +239,8 @@ export async function createGuestQuestionFixture(deliver: (frame: unknown) => Pr
       releaseAgentRunDelegatedAuthority(requesterAuthority);
       unregister();
       manager.close();
-      captured.release();
       clearAgentRunContext(runId);
+      operator.release();
       await flushEvents();
     },
   };

@@ -10,6 +10,7 @@ import {
 } from "./candidate-stores.js";
 import { hasUsableOAuthCredential } from "./credential-state.js";
 import { isPersistedExternalCliAuthProfile } from "./external-cli-sync.js";
+import { isSafeToCopyOAuthRoutingScope } from "./oauth-identity.js";
 import { isExactOAuthCredential } from "./oauth-refresh-fence.js";
 import {
   createFailedOAuthRefreshFence,
@@ -347,6 +348,7 @@ export function settleOAuthRefreshPeerClaims(params: {
             claim.original !== undefined &&
             inherited !== undefined &&
             inherited.provider === claim.original.provider &&
+            isSafeToCopyOAuthRoutingScope(claim.original, inherited) &&
             hasUsableOAuthCredential(inherited) &&
             (hasMatchingOAuthIdentity(claim.original, inherited) ||
               (!hasOAuthIdentity(claim.original) &&
