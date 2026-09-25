@@ -26,6 +26,7 @@ import { normalizeOptionalSecretInput } from "../../utils/normalize-secret-input
 import { getAgentDir } from "../config.js";
 import { sanitizeModelHeaders } from "../embedded-agent-runner/model.inline-provider.js";
 import { hasUsableCustomProviderApiKey } from "../model-auth-provider-config.js";
+import { resolveManagedSecretRefRuntimeProviderAuth } from "../model-auth-runtime-config.js";
 import { parseModelCatalogJson } from "../model-catalog-json.js";
 import { modelTransportRoutesMatch } from "../model-compat-catalog.js";
 import { resolveModelPluginMetadataSnapshot } from "../model-discovery-context.js";
@@ -536,7 +537,13 @@ export class ModelRegistry {
               config: this.config,
               isProviderAvailable: (providerId) =>
                 this.authStorage.hasAuth(normalizeProviderId(providerId)) ||
-                hasUsableCustomProviderApiKey(this.config, providerId),
+                hasUsableCustomProviderApiKey(this.config, providerId) ||
+                Boolean(
+                  resolveManagedSecretRefRuntimeProviderAuth({
+                    cfg: this.config,
+                    provider: providerId,
+                  }),
+                ),
               parsedCatalog: parsed,
               pluginMetadataSnapshot: this.pluginMetadataSnapshot,
               providers: config.providers,
