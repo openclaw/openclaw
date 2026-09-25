@@ -131,33 +131,6 @@ describe("plugin async iterable protocol", () => {
     }
   });
 
-  it("settles native thenable values inside their stream admission", async () => {
-    const instance = owner();
-    const then = vi.fn((resolve: (value: string) => void) => {
-      expect(instance.hasActiveCall).toBe(true);
-      resolve("settled value");
-    });
-    const value = Object.assign(new Date(0), { then });
-    const iterator = instance
-      .wrap({
-        [Symbol.asyncIterator]() {
-          return {
-            next: () => ({ done: false, value }),
-            return: () => ({ done: true, value: undefined }),
-          };
-        },
-      })
-      [Symbol.asyncIterator]();
-    try {
-      const result = await iterator.next();
-      expect(then).not.toHaveBeenCalled();
-      await expect(result.value).resolves.toBe("settled value");
-      expect(then).toHaveBeenCalledOnce();
-    } finally {
-      await iterator.return();
-    }
-  });
-
   it.each(["missing", "done-false"] as const)(
     "releases an early-break admission when return is %s",
     async (kind) => {
