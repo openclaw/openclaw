@@ -521,7 +521,7 @@ export function buildOpenAICompletionsRequest(
       effectiveContextTokens !== undefined
     ) {
       const estimatedInputTokens = estimateOpenAICompletionsInputTokens(params);
-      const remainingBudget = effectiveContextTokens - estimatedInputTokens - 1;
+      const remainingBudget = Math.max(1, effectiveContextTokens - estimatedInputTokens - 1);
       if (clampedMaxTokens > remainingBudget) {
         clampedMaxTokens = remainingBudget;
         emitModelTransportDebug(
@@ -531,10 +531,9 @@ export function buildOpenAICompletionsRequest(
             `effectiveContext=${effectiveContextTokens} estimatedInput=${estimatedInputTokens}`,
         );
         if (
-          remainingBudget <= 0 ||
-          (model.reasoning &&
-            thinkingEnabled !== false &&
-            remainingBudget < MIN_USEFUL_OUTPUT_TOKENS)
+          model.reasoning &&
+          thinkingEnabled !== false &&
+          remainingBudget < MIN_USEFUL_OUTPUT_TOKENS
         ) {
           throw Object.assign(
             new Error(

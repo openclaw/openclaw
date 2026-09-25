@@ -281,7 +281,7 @@ describe("openai completions params", () => {
     },
   );
 
-  it("rejects an exhausted non-reasoning budget without changing positive short budgets", () => {
+  it("preserves non-reasoning short budgets and the exhausted-budget fallback", () => {
     const model = makeCompletionsModel({
       baseUrl: "http://localhost:8000/v1",
       reasoning: false,
@@ -289,17 +289,19 @@ describe("openai completions params", () => {
       maxTokens: 1000,
     });
     const context = emptyContext("x".repeat(3200));
-    expect(() =>
-      buildOpenAICompletionsParams({ ...model, contextTokens: 1001 }, context, undefined),
-    ).toThrowError(expect.objectContaining({ code: "context_length_exceeded" }));
-    for (const remaining of [1, 15]) {
+    for (const [remaining, expected] of [
+      [-1, 1],
+      [0, 1],
+      [1, 1],
+      [15, 15],
+    ] as const) {
       expect(
         buildOpenAICompletionsParams(
           { ...model, contextTokens: 1001 + remaining },
           context,
           undefined,
         ).max_completion_tokens,
-      ).toBe(remaining);
+      ).toBe(expected);
     }
   });
 
