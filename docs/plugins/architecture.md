@@ -186,6 +186,8 @@ Missing captured source files produce a replacement warning instead of preventin
 
 Gateway shutdown also joins actual harness, MCP, LSP, embedding, and media cleanup after their initial grace periods. When clearing the active registry, plugin host cleanup can advance to later hooks after a timeout, but registry resets and shared database closure wait for its actual completion. These waits preserve resources for cleanup; they do not restore a retired plugin's runtime authority.
 
+Shutdown closes admission before waiting for config reloads to settle. Those reloads can still defer cleanup held by existing consumers. Final Gateway close releases those consumers, joins retained cleanup, and reports its failures before another Gateway can start.
+
 Executable CLI cleanup reports each disposer that exceeds five seconds and proceeds with later cleanup without canceling the pending work. On macOS with Node's system CA support enabled, automatic exit after command completion waits for this pending cleanup to finish. Explicit command exit requests and the update exit watchdog retain their bounded behavior.
 
 Standalone plugin and Codex supervision MCP stdio services retain their discovered registrations through accepted tool work, harness cleanup, and nested SDK provider lookups. Terminal shutdown cancels and joins handlers before releasing these registrations and awaiting their resource disposers. Transport-close and registration-disposal failures reach the serving caller. Programmatic servers created from supplied tools leave those resources with the caller; closing and reconnecting the same server does not dispose them.

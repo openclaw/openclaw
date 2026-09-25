@@ -208,6 +208,12 @@ OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS="openai/gpt-5.5 anthropic/claude-opus-5 go
 pnpm test:docker:published-upgrade-survivor
 ```
 
+Source-pinned tarball runs of `base` and `sqlite-volume` verify the candidate
+commit before the update and compare the installed application payload with the
+frozen tarball afterward, before candidate probes. This distinguishes different
+builds with the same version string. npm still owns dependency reification;
+manual tarball runs without a selected source SHA retain their existing contract.
+
 Useful published-upgrade survivor variants:
 
 ```bash

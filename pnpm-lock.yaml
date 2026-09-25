@@ -204,12 +204,13 @@ overrides:
   tar: 7.5.22
   tough-cookie: 6.0.2
   tsdown>rolldown-plugin-dts: 0.28.6
+  web-component-analyzer@2.0.0>typescript: 5.9.3
   zca-js@2.2.0>tough-cookie: 6.0.2
   yauzl: 3.4.0
   protobufjs: 8.8.0
   uuid: 14.0.2
 
-packageExtensionsChecksum: sha256-rGJZONZErUhTY23oR+CnhpPu27YaHbMrdhgyPkmF6pM=
+packageExtensionsChecksum: sha256-Y7vhONQzlz51oZN7TTGWCJABkDu/F4SuqtCdf5qYwZ0=
 
 patchedDependencies:
   '@awesome.me/webawesome@3.13.0': b8ce280c2f477ef59002e971c5c6cb29a7103e607926e22453091946b719d588
@@ -649,6 +650,9 @@ importers:
       '@agentclientprotocol/codex-acp':
         specifier: 1.12.0
         version: 1.12.0
+      '@openclaw/fs-safe':
+        specifier: 0.18.2
+        version: 0.18.2
       acpx:
         specifier: 0.19.1
         version: 0.19.1
@@ -931,6 +935,9 @@ importers:
       '@openai/codex':
         specifier: 0.155.1
         version: 0.155.1
+      '@openclaw/fs-safe':
+        specifier: 0.18.2
+        version: 0.18.2
       semver:
         specifier: 7.8.5
         version: 7.8.5
@@ -987,6 +994,9 @@ importers:
 
   extensions/cua-computer:
     dependencies:
+      '@openclaw/fs-safe':
+        specifier: 0.18.2
+        version: 0.18.2
       '@trycua/cua-driver':
         specifier: 0.28.2
         version: 0.28.2
@@ -1197,6 +1207,9 @@ importers:
       '@larksuiteoapi/node-sdk':
         specifier: 1.74.0
         version: 1.74.0(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)
+      '@openclaw/fs-safe':
+        specifier: 0.18.2
+        version: 0.18.2
       mdast-util-from-markdown:
         specifier: 2.0.3
         version: 2.0.3(supports-color@10.2.2)
@@ -9755,8 +9768,8 @@ packages:
   typebox@1.3.33:
     resolution: {integrity: sha512-25XRfVMsTPaaS4RvZf+wsM8U34cKWSRHBTbHSlCvEqGkvqXNHyfrynOC1h2ma1m8A5UpCJglVRAPK5ORpfPyFg==}
 
-  typescript@5.2.2:
-    resolution: {integrity: sha512-mI4WrpHsbCIcwT9cF4FZvr80QUeKvsUsUvKDoR+X/7XHQH98xYD8YHZg7ANtz2GtZt/CBq2QJ0thkGJMHfqc1w==}
+  typescript@5.9.3:
+    resolution: {integrity: sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==}
     engines: {node: '>=14.17'}
     hasBin: true
 
@@ -15788,7 +15801,7 @@ snapshots:
       fast-glob: 3.3.3
       parse5: 5.1.0
       ts-simple-type: 2.0.0-next.0
-      typescript: 5.2.2
+      typescript: 5.9.3
       vscode-css-languageservice: 4.3.0
       vscode-html-languageservice: 3.1.0
       web-component-analyzer: 2.0.0
@@ -17673,7 +17686,7 @@ snapshots:
 
   typebox@1.3.33: {}
 
-  typescript@5.2.2: {}
+  typescript@5.9.3: {}
 
   typescript@7.0.2:
     optionalDependencies:
@@ -17915,7 +17928,7 @@ snapshots:
     dependencies:
       fast-glob: 3.3.3
       ts-simple-type: 2.0.0-next.0
-      typescript: 5.2.2
+      typescript: 5.9.3
       yargs: 17.7.3
 
   web-push@3.6.7(supports-color@10.2.2):

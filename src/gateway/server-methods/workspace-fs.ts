@@ -3,7 +3,7 @@
 // hardlink rejection) so no caller can access files outside a workspace root.
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
+import { createAsyncLock, readFileWindowFully } from "@openclaw/fs-safe/advanced";
 import { root as fsSafeRoot, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
 import { isPathInside } from "../../infra/path-guards.js";
 
@@ -16,7 +16,7 @@ type WorkspaceFilePrefixResult = Pick<ReadResult, "buffer" | "stat"> & { canonic
 /** Shared preview cap: keeps file payloads comfortably under client WS limits. */
 export const WORKSPACE_PREVIEW_MAX_BYTES = 256 * 1024;
 
-let workspaceFileUpdateQueue: Promise<void> = Promise.resolve();
+export const enqueueWorkspaceFileUpdate = createAsyncLock();
 
 export async function openWorkspaceRoot(rootDir: string): Promise<WorkspaceRoot | undefined> {
   try {
@@ -119,15 +119,6 @@ export type WorkspaceFileUpdateResult =
   | { status: "updated"; canonicalPath: string; hash: string; stat: WorkspacePathStat }
   | { status: "conflict"; currentHash: string }
   | { status: "unsafe" };
-
-export function enqueueWorkspaceFileUpdate<T>(update: () => Promise<T>): Promise<T> {
-  const result = workspaceFileUpdateQueue.then(update, update);
-  workspaceFileUpdateQueue = result.then(
-    () => undefined,
-    () => undefined,
-  );
-  return result;
-}
 
 export async function updateWorkspaceFile(
   rootDir: string,

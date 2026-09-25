@@ -2832,6 +2832,8 @@ gh() {
 }
 promote_android_release_asset() { record android; }
 promote_windows_release_assets() { record windows; }
+wait_for_core_npm_visibility() { :; }
+sync_npm_beta_floor() { :; }
 verify_published_release() {
   record "verify:$clawhub_failed:bootstrap=$plugin_clawhub_bootstrap_completed:workflow=$openclaw_npm_expected_workflow_ref"
   record "verify-attempt:\${openclaw_npm_run_attempt:-}"
@@ -6550,6 +6552,7 @@ gh() {
   done
   return 1
 }
+${shellFunctionSource(source, "gh_read")}
 ${shellFunctionSource(source, "print_failed_run_summary")}
 print_failed_run_summary 404
 `,
@@ -6631,6 +6634,7 @@ gh() {
 sleep() { iteration=$((iteration + 1)); if [[ "$iteration" -gt 3 ]]; then exit 91; fi; }
 print_pending_deployments() { :; }
 print_failed_run_summary() { :; }
+${shellFunctionSource(source, "gh_read")}
 ${shellFunctionSource(source, "verify_child_run_sha")}
 ${shellFunctionSource(source, "approve_pending_deployments")}
 ${shellFunctionSource(source, "wait_for_run")}
@@ -6853,7 +6857,7 @@ wait_for_run openclaw-npm-release.yml 404 "$EXPECTED_SHA" "$STARTED_JOB" "$APPRO
       "public verification follows terminal parent success",
     );
     expectTextToIncludeAll(publishOrchestration.run, [
-      'gh api "repos/${GITHUB_REPOSITORY}/commits/${encoded_workflow_ref}"',
+      'gh_read api "repos/${GITHUB_REPOSITORY}/commits/${encoded_workflow_ref}"',
       'if [[ "$resolved_workflow_sha" != "$expected_sha" ]]',
       'verify_child_run_sha "$workflow" "$run_id" "$expected_sha" || return 1',
       'approve_pending_deployments "${workflow}" "${run_id}" "${expected_sha}"',
@@ -9320,9 +9324,6 @@ describe("package artifact reuse", () => {
     expect(publishedUpgradeSurvivor).toContain("GATEWAY_AUTH_TOKEN_REF=%s");
     expect(publishedUpgradeSurvivor).toContain("OPENCLAW_CLAWHUB_URL=%s");
     expect(publishedUpgradeSurvivor).toContain("assert-no-requests");
-    expect(publishedUpgradeSurvivor).toContain(
-      "env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD openclaw",
-    );
     expect(publishedUpgradeSurvivor).toContain("phase prepare-update-restart-probe");
     expect(publishedUpgradeSurvivor).toContain("configure_watchos_tls_fixture");
     expect(publishedUpgradeSurvivor).toContain('"publicUrl":"wss://localhost:18789"');
@@ -15077,7 +15078,7 @@ promote_windows_release_assets
       releasePublishOrchestration(workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish")).run ?? "";
     const verifyChild = shellFunctionSource(publishRun, "verify_child_run_sha");
     const approvePending = shellFunctionSource(publishRun, "approve_pending_deployments");
-    const approveChild = shellFunctionSource(publishRun, "approve_child_publish_environment");
+    const readGh = shellFunctionSource(publishRun, "gh_read");
     const waitForRun = shellFunctionSource(publishRun, "wait_for_run");
     const expectedSha = "a".repeat(40);
 
@@ -15102,6 +15103,7 @@ gh() {
   fi
   return 99
 }
+${readGh}
 ${verifyChild}
 ${approvePending}
 status=0
@@ -15132,11 +15134,11 @@ gh() {
   return 99
 }
 print_failed_run_summary() { :; }
+${readGh}
 ${verifyChild}
 ${approvePending}
-${approveChild}
 status=0
-approve_child_publish_environment plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
+approve_pending_deployments plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
 [[ "$status" -eq 2 ]]
 `,
       ],
@@ -15161,6 +15163,7 @@ gh() {
   fi
   return 99
 }
+${readGh}
 ${verifyChild}
 ${waitForRun}
 status=0

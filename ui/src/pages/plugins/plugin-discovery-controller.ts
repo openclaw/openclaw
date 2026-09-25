@@ -17,6 +17,11 @@ const NO_CATALOG_CURSOR: string | null = null;
 type CatalogPageLoad = {
   items: PluginDiscoveryEntry[];
   overview: boolean;
+  selection: {
+    intent: PluginDiscoveryIntent;
+    category: string | null;
+    query: string;
+  };
   categories?: PluginDiscoveryCategory[];
   nextCursor?: string;
   remoteError?: string;
@@ -64,6 +69,7 @@ function appendUniqueEntries(
 
 export class PluginDiscoveryController {
   result: PluginDiscoveryResult | null = null;
+  private resultSelection: CatalogPageLoad["selection"] | null = null;
   error: string | null = null;
   remoteError: string | null = null;
   categories: PluginDiscoveryCategory[] = [];
@@ -126,6 +132,7 @@ export class PluginDiscoveryController {
           items: page.items,
           ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
         };
+        this.resultSelection = page.selection;
         this.remoteError = page.remoteError ?? null;
         if (page.overview) {
           // The overview is already fetched for cards. Use its canonical categories
@@ -186,7 +193,16 @@ export class PluginDiscoveryController {
   }
 
   get loading(): boolean {
-    return this.gateway.isConnected() && this.browseTask.status === TaskStatus.PENDING;
+    // Keep keyed cards and their open controls during a same-selection refresh.
+    // New filters must wait for their own result instead of showing the old selection.
+    return (
+      this.gateway.isConnected() &&
+      this.browseTask.status === TaskStatus.PENDING &&
+      (!this.result ||
+        this.resultSelection?.intent !== this.intent ||
+        this.resultSelection.category !== this.category ||
+        this.resultSelection.query !== this.committedQuery)
+    );
   }
 
   get categoriesLoading(): boolean {
@@ -255,6 +271,7 @@ export class PluginDiscoveryController {
     return {
       items,
       overview,
+      selection: { intent: params.intent, category: params.category, query: params.query },
       ...(page.categories ? { categories: page.categories } : {}),
       ...(page.nextCursor && !params.query ? { nextCursor: page.nextCursor } : {}),
       ...(page.remoteError ? { remoteError: page.remoteError } : {}),
@@ -276,6 +293,7 @@ export class PluginDiscoveryController {
     this.committedQuery = this.query.trim();
     void this.browseTask.run([null, this.intent, this.category, this.committedQuery, false]);
     this.result = null;
+    this.resultSelection = null;
     this.categories = [];
     this.categoriesReady = false;
     this.categoriesError = null;

@@ -27,8 +27,7 @@ jobs:
         github.event.workflow_run.head_branch == 'main' &&
         ((github.event.workflow_run.event == 'push' && vars.OPENCLAW_CI_ON_PUSH == 'true' &&
           github.event.workflow_run.actor.login != 'github-actions[bot]') ||
-         (github.event.workflow_run.event == 'workflow_dispatch' &&
-          startsWith(github.event.workflow_run.display_title, 'CI hourly-main-')))))
+         github.event.workflow_run.event == 'schedule')))
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
@@ -50,8 +49,7 @@ jobs:
             });
             const repository = `${context.repo.owner}/${context.repo.repo}`;
             const push = run.event === "push" && run.actor?.login !== "github-actions[bot]";
-            const hourly = run.event === "workflow_dispatch" &&
-              /^CI hourly-main-[1-9][0-9]*-[1-9][0-9]*$/.test(run.display_title);
+            const hourly = run.event === "schedule";
             if (run.id !== expected.id || !run.actor?.login ||
                 run.repository.full_name !== repository || run.head_repository.full_name !== repository ||
                 run.path !== ".github/workflows/ci.yml" || run.head_branch !== "main" ||

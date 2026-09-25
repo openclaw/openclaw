@@ -4,7 +4,6 @@ import {
   formatErrorMessage,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   CodexAppServerUnsafeSubscriptionError,
@@ -22,6 +21,7 @@ import {
 import {
   assertCodexThreadForkResponse,
   assertCodexThreadStartResponse,
+  readSupervisionResponseThreadId,
 } from "./protocol-validators.js";
 import type {
   CodexDynamicToolSpec,
@@ -621,11 +621,6 @@ function requireDistinctSupervisionThreadId(params: {
     );
   }
   return threadId;
-}
-
-function readSupervisionResponseThreadId(value: unknown): unknown {
-  const thread = isRecord(value) ? value.thread : undefined;
-  return isRecord(thread) ? thread.id : undefined;
 }
 
 async function recoverPendingSupervisionArtifacts(

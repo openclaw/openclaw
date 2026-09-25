@@ -175,7 +175,8 @@ async function readMemoryHostEventExportOwnership(
   };
   const identityOwned =
     storedIdentity !== undefined && sameFileIdentity(storedIdentity, exportIdentity);
-  try {
+  {
+    await using exportOwner = openedExport;
     if (openedExport.stat.size > MAX_MEMORY_HOST_PUBLIC_EXPORT_BYTES) {
       return identityOwned
         ? {
@@ -187,9 +188,7 @@ async function readMemoryHostEventExportOwnership(
           }
         : { kind: "foreign" };
     }
-    exportContent = await openedExport.handle.readFile({ encoding: "utf8" });
-  } finally {
-    await openedExport.handle.close().catch(() => undefined);
+    exportContent = await exportOwner.handle.readFile({ encoding: "utf8" });
   }
   const exportSha256 = sha256Hex(exportContent);
   const currentSha256 = (parsed as { contentSha256?: string }).contentSha256;

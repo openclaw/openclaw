@@ -11,6 +11,7 @@ import {
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { logWarn } from "../logger.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   createCombinedSessionMcpRuntime,
   mergeMcpToolCatalogs,
@@ -79,7 +80,9 @@ type BundleMcpSession = {
 const BUNDLE_MCP_FAILURE_THRESHOLD = 3;
 const BUNDLE_MCP_FAILURE_COOLDOWN_MS = 60_000;
 const BUNDLE_MCP_CATALOG_FAILURE_RETRY_MS = 5_000;
-const BUNDLE_MCP_CATALOG_LIST_TIMEOUT_MS = 1_500;
+// Tool materialization awaits catalog listing. Bound it for servers without an
+// explicit request timeout, with room for a cold remote (OAuth, HTTP) listing.
+const BUNDLE_MCP_CATALOG_LIST_TIMEOUT_MS = 10_000;
 const BUNDLE_MCP_DISPOSE_TIMEOUT_MS = 5_000;
 const BUNDLE_MCP_MAX_LIST_PAGES = 128;
 const BUNDLE_MCP_MAX_LIST_ITEMS = 16_384;
@@ -89,14 +92,7 @@ const BUNDLE_MCP_TEST_STATE_KEY = Symbol.for("openclaw.bundleMcpTestState");
 type BundleMcpTestState = { disposeTimeoutMs?: number };
 
 function getBundleMcpTestState(): BundleMcpTestState {
-  const globalStore = globalThis as Record<PropertyKey, unknown>;
-  const existing = globalStore[BUNDLE_MCP_TEST_STATE_KEY] as BundleMcpTestState | undefined;
-  if (existing) {
-    return existing;
-  }
-  const state: BundleMcpTestState = {};
-  globalStore[BUNDLE_MCP_TEST_STATE_KEY] = state;
-  return state;
+  return resolveGlobalSingleton(BUNDLE_MCP_TEST_STATE_KEY, () => ({}));
 }
 
 type McpServerBackoffState = {

@@ -7,6 +7,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
+import { fileStore } from "@openclaw/fs-safe/store";
 import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import { extensionForMime } from "@openclaw/media-core/mime";
@@ -18,7 +19,6 @@ import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { hasErrnoCode } from "../../infra/errno.js";
 import { resolveRuntimeOsLabel } from "../../infra/os-summary.js";
 import { privateFileStore } from "../../infra/private-file-store.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
@@ -288,33 +288,7 @@ async function sweepCliImageRoot(imageRoot: string): Promise<void> {
   }
   sweptCliImageRoots.add(imageRoot);
   try {
-    const cutoffMs = Date.now() - CLI_IMAGE_SWEEP_TTL_MS;
-    const entries = await fs.readdir(imageRoot, { withFileTypes: true });
-    for (const entry of entries) {
-      if (!entry.isFile()) {
-        continue;
-      }
-      const entryPath = path.join(imageRoot, entry.name);
-      const stat = await fs.stat(entryPath).catch((error: unknown) => {
-        if (hasErrnoCode(error, "ENOENT")) {
-          return undefined;
-        }
-        throw error;
-      });
-      if (!stat) {
-        continue;
-      }
-      if (stat.mtimeMs >= cutoffMs) {
-        continue;
-      }
-      try {
-        await fs.rm(entryPath, { force: true });
-      } catch (error) {
-        if (!hasErrnoCode(error, "ENOENT")) {
-          throw error;
-        }
-      }
-    }
+    await fileStore({ rootDir: imageRoot }).pruneExpired({ ttlMs: CLI_IMAGE_SWEEP_TTL_MS });
   } catch (error) {
     cliBackendLog.debug(`cli image cache sweep failed: ${String(error)}`);
   }
