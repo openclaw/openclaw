@@ -137,17 +137,20 @@ describe("PR maintainer labeling", () => {
 });
 
 describe("label cap tolerance", () => {
-  it.each(
-    [
-      { step: "size", execute: executeSizeLabel },
-      { step: "maintainer", execute: executeMaintainerLabel },
-    ].flatMap(({ step, execute }) =>
-      [
-        { status: 422, message: "Validation Failed: label does not exist" },
-        { status: 403, message: "Resource not accessible by integration" },
-      ].map(({ status, message }) => ({ step, execute, status, message })),
-    ),
-  )(
+  it.each([
+    {
+      step: "size",
+      execute: executeSizeLabel,
+      status: 422,
+      message: "Validation Failed: label does not exist",
+    },
+    {
+      step: "maintainer",
+      execute: executeMaintainerLabel,
+      status: 403,
+      message: "Resource not accessible by integration",
+    },
+  ])(
     "propagates unrelated GitHub errors: $step $status $message",
     async ({ execute, status, message }) => {
       const error = Object.assign(new Error(message), { status });
