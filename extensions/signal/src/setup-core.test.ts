@@ -141,7 +141,20 @@ describe("signalSetupAdapter", () => {
     },
   );
 
-  it("restores a generically promoted default account before writing a named account", () => {
+  it("preserves an opted-in socket when editing account setup", () => {
+    const transport = {
+      kind: "managed-native",
+      socketPath: "/tmp/signal-private/daemon.sock",
+    } as const;
+    const next = signalSetupAdapter.applyAccountConfig?.({
+      cfg: { channels: { signal: { account: "+15555550123", transport } } },
+      accountId: "default",
+      input: { signalNumber: "+15555550124", cliPath: "/opt/signal-cli" },
+    });
+    expect(next?.channels?.signal?.transport).toEqual({ ...transport, cliPath: "/opt/signal-cli" });
+  });
+
+  it("channels.add setup restores a promoted default before writing a named account", () => {
     const next = signalSetupAdapter.applyAccountConfig?.({
       cfg: {
         channels: {
@@ -162,7 +175,7 @@ describe("signalSetupAdapter", () => {
       kind: "managed-native",
       httpPort: 8080,
     });
-    expect(next?.channels?.signal?.accounts?.default).toBeUndefined();
+    expect(next?.channels?.signal?.accounts?.default).toEqual({});
     expect(next?.channels?.signal?.accounts?.work?.transport).toEqual({
       kind: "managed-native",
       httpHost: "127.0.0.1",
@@ -352,7 +365,7 @@ describe("signalSetupAdapter", () => {
     expect(next?.channels?.signal?.accounts?.default).not.toHaveProperty("transport");
   });
 
-  it("keeps the canonical root transport during a default account-only update", () => {
+  it("channels.add setup keeps root transport during a default account-only update", () => {
     const cfg: OpenClawConfig = {
       channels: {
         signal: {
@@ -377,7 +390,7 @@ describe("signalSetupAdapter", () => {
       kind: "external-native",
       url: "http://canonical-signal:8080",
     });
-    expect(next?.channels?.signal?.accounts?.default).toBeUndefined();
+    expect(next?.channels?.signal?.accounts?.default).toEqual({});
   });
 
   it("stores an explicitly selected container endpoint", () => {

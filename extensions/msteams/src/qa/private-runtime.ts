@@ -1,9 +1,10 @@
 // Private QA runtime support for the Microsoft Teams live transport adapter.
-import type { RequestConfig } from "@microsoft/teams.common";
+import type { ClientOptions, RequestContext } from "@microsoft/teams.common";
 import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedOrigin,
 } from "openclaw/plugin-sdk/ssrf-runtime";
+import { prepareMSTeamsConnectorRequest } from "../send-handoff.js";
 
 const PRIVATE_QA_BUILD_ENV = "OPENCLAW_BUILD_PRIVATE_QA";
 const PRIVATE_QA_NONCE_HEADER = "x-openclaw-msteams-qa-nonce";
@@ -17,50 +18,19 @@ type PrivateQaBootstrap = {
   botToken?: string;
 };
 
-type HttpResponse<T = unknown> = {
-  data: T;
-  status: number;
-  statusText: string;
-  headers: Record<string, string>;
-  config: RequestConfig;
-};
-
-type PrivateQaHttpClientOptions = {
-  headers?: Record<string, string>;
-  token?: string | (() => string | Promise<string>);
-};
-
-class PrivateQaHttpClient {
-  constructor(
-    private readonly connectorUrl: string,
-    private readonly nonce: string,
-    private readonly options: PrivateQaHttpClientOptions = {},
-  ) {}
-
-  clone(options: PrivateQaHttpClientOptions = {}) {
-    return new PrivateQaHttpClient(this.connectorUrl, this.nonce, {
-      ...this.options,
-      ...options,
-      headers: { ...this.options.headers, ...options.headers },
-    });
-  }
-
-  async request<T = unknown>(config: RequestConfig): Promise<HttpResponse<T>> {
+function createPrivateQaClientOptions(connectorUrl: string, nonce: string): ClientOptions {
+  const request = async (config: RequestContext["config"]) => {
     const sourceUrl = new URL(config.url ?? "", "https://smba.trafficmanager.net");
-    const targetUrl = new URL(`${sourceUrl.pathname}${sourceUrl.search}`, this.connectorUrl);
-    const headers = new Headers(this.options.headers);
+    const targetUrl = new URL(`${sourceUrl.pathname}${sourceUrl.search}`, connectorUrl);
+    const headers = new Headers();
     for (const [key, value] of Object.entries(config.headers ?? {})) {
       if (value != null) {
         headers.set(key, String(value));
       }
     }
-    headers.set(PRIVATE_QA_NONCE_HEADER, this.nonce);
-    const token =
-      typeof this.options.token === "function" ? await this.options.token() : this.options.token;
-    if (token) {
-      headers.set("authorization", `Bearer ${token}`);
-    }
+    headers.set(PRIVATE_QA_NONCE_HEADER, nonce);
     const method = String(config.method ?? "GET").toUpperCase();
+    const assertCurrent = await prepareMSTeamsConnectorRequest();
     const { response, release } = await fetchWithSsrFGuard({
       url: targetUrl.toString(),
       init: {
@@ -76,10 +46,11 @@ class PrivateQaHttpClient {
       policy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(targetUrl.toString()),
       maxRedirects: 0,
       auditContext: "msteams-private-qa-connector",
+      beforeRequest: assertCurrent,
     });
     try {
       const text = await response.text();
-      const data = text ? (JSON.parse(text) as T) : (undefined as T);
+      const data: unknown = text ? JSON.parse(text) : undefined;
       if (!response.ok) {
         throw Object.assign(
           new Error(`Microsoft Teams private QA connector returned HTTP ${response.status}`),
@@ -96,31 +67,22 @@ class PrivateQaHttpClient {
     } finally {
       await release();
     }
-  }
-
-  get<T = unknown>(url: string, config: RequestConfig = {}) {
-    return this.request<T>({ ...config, method: "GET", url });
-  }
-
-  post<T = unknown>(url: string, data?: unknown, config: RequestConfig = {}) {
-    return this.request<T>({ ...config, data, method: "POST", url });
-  }
-
-  put<T = unknown>(url: string, data?: unknown, config: RequestConfig = {}) {
-    return this.request<T>({ ...config, data, method: "PUT", url });
-  }
-
-  patch<T = unknown>(url: string, data?: unknown, config: RequestConfig = {}) {
-    return this.request<T>({ ...config, data, method: "PATCH", url });
-  }
-
-  delete<T = unknown>(url: string, config: RequestConfig = {}) {
-    return this.request<T>({ ...config, method: "DELETE", url });
-  }
+  };
+  return {
+    interceptors: [
+      {
+        request: ({ config }) => {
+          // The SDK owns token resolution, middleware and clones; only the transport is private QA.
+          config.adapter = request;
+          return config;
+        },
+      },
+    ],
+  };
 }
 
 type MSTeamsPrivateQaRuntime = {
-  client: PrivateQaHttpClient;
+  client: ClientOptions;
   listenHost: "127.0.0.1";
   skipAuth: true;
   token: () => Promise<string>;
@@ -155,7 +117,7 @@ export function resolveMSTeamsPrivateQaRuntime(
   ) {
     throw new Error("Microsoft Teams private QA connector must use loopback HTTP");
   }
-  const client = new PrivateQaHttpClient(parsedConnectorUrl.toString(), nonce);
+  const client = createPrivateQaClientOptions(parsedConnectorUrl.toString(), nonce);
   return {
     client,
     listenHost: "127.0.0.1",

@@ -1,14 +1,17 @@
-// Diagnostic support redaction helpers scrub support bundle files and paths.
 import path from "node:path";
+import { getSystemErrorMap } from "node:util";
 import { isSensitiveUrlQueryParamName } from "@openclaw/net-policy/redact-sensitive-url";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { valid as validVersion } from "semver";
+import { sanitizeForLog, stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
 import { isSecretRefShape } from "../config/redact-snapshot.secret-ref.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-import { redactSensitiveText } from "./redact.js";
+import { parseRedactPatternSource, replaceRedactPattern } from "./redact-pattern-runtime.js";
+import { AWS_SECRET_ACCESS_KEY_MATCHER, VENDOR_TOKEN_REDACT_PATTERNS } from "./redact-patterns.js";
+import { redactSensitiveText, redactText } from "./redact.js";
 
-// Redaction helpers for support bundles; preserve operational shape while removing private data.
 const SECRET_SUPPORT_FIELD_RE =
   /(?:authorization|cookie|credential|key|password|passwd|secret|token)/iu;
 const PAYLOAD_SUPPORT_FIELD_RE =
@@ -23,8 +26,9 @@ const SENSITIVE_COMMAND_ARG_RE =
 const BASIC_AUTH_RE = /\bBasic\s+[A-Za-z0-9+/]+={0,2}/giu;
 const COOKIE_HEADER_RE = /\b(Cookie|Set-Cookie)\s*:\s*[^\r\n]+/giu;
 const AWS_ACCESS_KEY_ID_RE = /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/gu;
-const AWS_SECRET_ACCESS_KEY_RE =
-  /(?<![A-Za-z0-9/+=_,-])(?<!;base64,[A-Za-z0-9+/=]*)(?=[A-Za-z0-9/+=]{40}(?![A-Za-z0-9/+=]))(?=[A-Za-z0-9/+=]{0,39}[A-Z])(?=[A-Za-z0-9/+=]{0,39}[a-z])(?=[A-Za-z0-9/+=]{0,39}[0-9/+=])(?=[A-Za-z0-9/+=]{0,39}[^A-Fa-f0-9])[A-Za-z0-9/+=]{40}(?![A-Za-z0-9/+=_,-])/gu;
+const vendorTokenPatterns = VENDOR_TOKEN_REDACT_PATTERNS.map(
+  (pattern) => new RegExp(...parseRedactPatternSource(pattern)),
+);
 const JWT_RE = /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/gu;
 const URL_USERINFO_RE = /\b([a-z][a-z0-9+.-]*:\/\/)([^/@\s:?#]+)(?::([^/@\s?#]+))?@/giu;
 const URL_PARAM_RE = /([?&])([^=&\s]+)=([^&#\s]+)/giu;
@@ -209,7 +213,26 @@ function pathCandidates(file: string): string[] {
     return [path.resolve(file)];
   }
   const resolved = path.win32.resolve(file);
-  return [resolved, resolved.replaceAll("\\", "/")];
+  const candidates = [resolved, resolved.replaceAll("\\", "/")];
+  // path.win32.resolve preserves "\\?\" / "\\.\" namespace markers, but configured
+  // prefixes never carry them; also match the unmarked spelling when one exists.
+  const marker = WINDOWS_NAMESPACE_MARKER_RE.exec(file);
+  if (marker) {
+    const stripped = file.slice(marker[0].length);
+    let unmarked: string | undefined;
+    if (/^UNC[\\/]/iu.test(stripped)) {
+      // "\\?\UNC\server\share" spells "\\server\share" without the marker.
+      unmarked = path.win32.resolve(`\\\\${stripped.slice(4)}`);
+    } else if (/^[A-Za-z]:[\\/]/u.test(stripped)) {
+      unmarked = path.win32.resolve(stripped);
+    }
+    // Device paths ("\\.\pipe\...") and other suffixes without an absolute
+    // unmarked spelling must not be resolved against the working directory.
+    if (unmarked !== undefined) {
+      candidates.push(unmarked, unmarked.replaceAll("\\", "/"));
+    }
+  }
+  return candidates;
 }
 
 function hasPathPrefix(value: string, prefix: PathRedactionPrefix): boolean {
@@ -244,8 +267,9 @@ export function redactPathForSupport(
     return file;
   }
   const candidates = pathCandidates(file);
+  const prefixes = pathRedactionPrefixes(options);
   for (const next of candidates) {
-    for (const prefix of pathRedactionPrefixes(options)) {
+    for (const prefix of prefixes) {
       const suffix = matchPathPrefix(next, prefix);
       if (suffix !== undefined) {
         return `${prefix.label}${suffix}`;
@@ -253,6 +277,21 @@ export function redactPathForSupport(
     }
   }
   return redactSensitiveTextForSupport(candidates[0] ?? file);
+}
+
+// Win32 namespace markers ("\\?\" extended-length, "\\.\" device) can precede a known
+// path prefix in raw fs error text; they must be redacted together with the path they decorate.
+const WINDOWS_NAMESPACE_MARKER_RE = /^\\\\[?.][\\/]/u;
+const WINDOWS_NAMESPACE_MARKER_LENGTH = 4;
+
+function namespaceMarkerLengthBefore(value: string, endIndex: number): number {
+  const start = endIndex - WINDOWS_NAMESPACE_MARKER_LENGTH;
+  if (start < 0) {
+    return 0;
+  }
+  return WINDOWS_NAMESPACE_MARKER_RE.test(value.slice(start, endIndex))
+    ? WINDOWS_NAMESPACE_MARKER_LENGTH
+    : 0;
 }
 
 function replaceKnownPathPrefix(value: string, prefix: PathRedactionPrefix): string {
@@ -266,7 +305,9 @@ function replaceKnownPathPrefix(value: string, prefix: PathRedactionPrefix): str
       next += value.slice(offset);
       break;
     }
-    next += value.slice(offset, index);
+    // Consume a Win32 namespace marker directly preceding the matched prefix so it is
+    // not left orphaned in front of the replacement label.
+    next += value.slice(offset, index - namespaceMarkerLengthBefore(value, index));
     next += prefix.label;
     offset = index + prefix.prefix.length;
   }
@@ -298,12 +339,17 @@ function redactSensitiveTextForSupport(value: string): string {
 }
 
 function redactCommonCredentialTextForSupport(value: string): string {
-  return value
+  const redacted = value
     .replace(BASIC_AUTH_RE, "Basic <redacted>")
     .replace(COOKIE_HEADER_RE, "$1: <redacted>")
     .replace(AWS_ACCESS_KEY_ID_RE, "<redacted-aws-key>")
-    .replace(JWT_RE, "<redacted-jwt>")
-    .replace(AWS_SECRET_ACCESS_KEY_RE, "<redacted-aws-secret-key>");
+    .replace(JWT_RE, "<redacted-jwt>");
+  // Whole vendor tokens precede bare keys; field masking must not consume the full support mask.
+  return replaceRedactPattern(
+    redactText(redacted, vendorTokenPatterns, { fullContext: true }),
+    AWS_SECRET_ACCESS_KEY_MATCHER,
+    () => "<redacted-aws-secret-key>",
+  );
 }
 
 function redactUrlSecretsForSupport(value: string): string {
@@ -351,6 +397,138 @@ export function redactSupportString(
   return `${truncateUtf16Safe(pathRedacted, maxLength)}${truncationSuffix}`;
 }
 
+/** One diagnostic line; paths never expose private suffixes in public reports. */
+export function redactSupportDiagnosticLine(
+  value: string,
+  context: SupportRedactionContext,
+  maxLength = 200,
+): string {
+  const first = sanitizeForLog(
+    stripAnsi(value)
+      .split(/[\r\n\u2028\u2029]/u)
+      .find((line) => line.trim()) ?? "",
+  );
+  const redacted = redactSupportString(first, context, { maxLength: Number.MAX_SAFE_INTEGER });
+  // Quoted paths have a known end. An unquoted path may contain spaces, so
+  // retain the diagnostic prefix and redact the rest rather than guess.
+  const paths = redacted
+    .replace(
+      /(["'`])(?:\$OPENCLAW_STATE_DIR|~[\\/]|[A-Za-z]:[\\/]|\/+|\\+)[^"'`]*\1/gu,
+      "[redacted-path]",
+    )
+    .replace(
+      /(?:file:\/\/|\$OPENCLAW_STATE_DIR|(?:^|(?<=[\s=(:[]))(?:~[\\/]|[A-Za-z]:[\\/]|\/+|\\+)).*/gu,
+      "[redacted-path]",
+    );
+  const commandRedacted = paths.replace(
+    /\b(?:Command failed:|command (?:sh|cmd|powershell|bash)\b).*/giu,
+    "[redacted-command]",
+  );
+  return truncateUtf16Safe(commandRedacted.trim(), maxLength);
+}
+
+const PUBLIC_ERROR_CODES = new Set([
+  ...Array.from(getSystemErrorMap().values(), ([code]) => code),
+  "ENOTFOUND",
+  "EOTP",
+  "ERESOLVE",
+  "E401",
+  "E403",
+  "E404",
+  "ETARGET",
+  "EUSAGE",
+  "EOVERRIDE",
+  "EINVALIDTAGNAME",
+  "EUNSUPPORTEDPROTOCOL",
+  "EBADENGINE",
+  "EINTEGRITY",
+  "ERR_MODULE_NOT_FOUND",
+  "ERR_PACKAGE_PATH_NOT_EXPORTED",
+]);
+
+/** Error-code syntax alone cannot distinguish private identifiers from known errors. */
+export function normalizeSupportDiagnosticErrorCode(value: string | undefined): string | undefined {
+  return value && PUBLIC_ERROR_CODES.has(value) ? value : undefined;
+}
+
+/** Custom SemVer labels can contain private project or host names. */
+export function redactPublicSupportVersion(version: string): string {
+  return version === "unknown" ||
+    version === "unspecified" ||
+    (validVersion(version) &&
+      /^\d+\.\d+\.\d+(?:-(?:0|(?:alpha|beta|rc|dev)(?:\.\d{1,8})?))?$/u.test(version))
+    ? version
+    : "[redacted-version]";
+}
+
+/** Public diagnostics expose recognized causes, never arbitrary prose or executable arguments. */
+export function redactPublicSupportDiagnosticLine(
+  value: string,
+  context: SupportRedactionContext,
+): string {
+  const line = redactSupportDiagnosticLine(value, context);
+  if (line.startsWith("System-scope Gateway package update cannot write its install root ")) {
+    return "System-scope Gateway package update cannot write its install root.";
+  }
+  if (
+    [
+      "The npm global install layout cannot stage a candidate. Reinstall with npm into its default global layout, then retry the update.",
+      "Cannot locate the installed updater; run `openclaw doctor` before retrying.",
+      "Managed update handoff requires a user-scope systemd unit; perform a manual system-service update.",
+      "managed update handoff requires a finite restart deadline",
+      "systemd-run is required to launch a transient user scope",
+      "managed update handoff process start identity is unavailable",
+      "managed update handoff returned an invalid readiness response",
+      "managed update handoff helper lease identity is unavailable",
+      "managed update handoff control input closed",
+      "managed update ownership transfer failed",
+      "requester-revoked",
+      "Doctor could not enter maintenance. An agent database is in use. Stop other OpenClaw processes using this state, then retry the update.",
+    ].includes(line)
+  ) {
+    return line;
+  }
+  const maintenance =
+    /^(?:(?:Error|DoctorMaintenanceRefusalError): )?Doctor could not enter maintenance\.(?: Error: The update parent owns Gateway activation\.)?/u.exec(
+      line,
+    );
+  if (maintenance) {
+    return maintenance[0];
+  }
+  const runtime =
+    /^Target package: openclaw@(\S+); Minimum Node engine: (\S+); Running Node: (\S+)$/u.exec(line);
+  if (runtime) {
+    const [target, minimum, running] = runtime.slice(1).map(redactPublicSupportVersion);
+    return truncateUtf16Safe(
+      `Target package: openclaw@${target}; Minimum Node engine: ${minimum}; Running Node: ${running}`,
+      200,
+    );
+  }
+  if (
+    /^Gateway readiness endpoint returned HTTP (?:[1-5]\d{2}|unavailable); expected HTTP 200\.$/u.test(
+      line,
+    )
+  ) {
+    return line;
+  }
+  const lines = value
+    .split(/[\r\n\u2028\u2029]/u)
+    .map((entry) => redactSupportDiagnosticLine(entry, context))
+    .join("\n");
+  const codes = (lines.match(/\b(?:E[A-Z0-9_]+)\b/gu) ?? []).filter((code) =>
+    normalizeSupportDiagnosticErrorCode(code),
+  );
+  const causes = (
+    lines.match(
+      /\b(?:[Cc]onnection (?:refused|closed|timed out)|[Pp]ermission denied|[Nn]o space left on device|MCP error -?\d{1,5}|HTTP [1-5]\d{2}|Invalid package dist content inventory|Package rollback (?:launcher backup changed|verification (?:timed out|failed))|managed update handoff (?:exited before (?:responding|signaling readiness)|did not (?:respond|signal readiness)))\b/gu,
+    ) ?? []
+  ).map((cause) => cause.replace(/^permission denied$/u, "Permission denied"));
+  return truncateUtf16Safe(
+    [...new Set([...codes, ...causes])].join("; ") || "[redacted-diagnostic]",
+    200,
+  );
+}
+
 function sanitizeCommandArguments(args: unknown[], redaction: SupportRedactionContext): unknown[] {
   let redactNext = false;
   return args.map((arg) => {
@@ -379,45 +557,7 @@ export function sanitizeSupportSnapshotValue(
   key = "",
   depth = 0,
 ): unknown {
-  if (value == null || typeof value === "boolean") {
-    return value;
-  }
-  if (typeof value === "number") {
-    return isPrivateSupportField(key) ? "<redacted>" : value;
-  }
-  if (typeof value === "string") {
-    return isPrivateSupportField(key) ? "<redacted>" : redactSupportString(value, redaction);
-  }
-  if (depth >= MAX_SUPPORT_SNAPSHOT_DEPTH) {
-    return "<truncated>";
-  }
-  if (Array.isArray(value)) {
-    const { count, items } = limitedSupportArray(value);
-    if (key === "programArguments") {
-      // Command arguments get flag-aware redaction so "--token value" redacts the following item.
-      return supportArrayResult(sanitizeCommandArguments(items, redaction), count);
-    }
-    return supportArrayResult(
-      items.map((entry) => sanitizeSupportSnapshotValue(entry, redaction, key, depth + 1)),
-      count,
-    );
-  }
-  const record = asOptionalRecord(value);
-  if (!record) {
-    return "<unsupported>";
-  }
-  if (PRIVATE_MAP_SUPPORT_FIELD_RE.test(key)) {
-    return { count: countOwnObjectEntries(record) };
-  }
-  const sanitized = createSupportRecord();
-  const { count, entries } = limitedSupportObjectEntries(record);
-  for (const { key: entryKey, value: entryValue } of entries) {
-    sanitized[entryKey] = isPrivateSupportField(entryKey)
-      ? "<redacted>"
-      : sanitizeSupportSnapshotValue(entryValue, redaction, entryKey, depth + 1);
-  }
-  addTruncationMetadata(sanitized, count);
-  return sanitized;
+  return sanitizeSupportValue(value, redaction, key, depth, false);
 }
 
 /** Sanitizes config-shaped values with stricter private field handling. */
@@ -427,23 +567,33 @@ export function sanitizeSupportConfigValue(
   key = "",
   depth = 0,
 ): unknown {
+  return sanitizeSupportValue(value, redaction, key, depth, true);
+}
+
+function sanitizeSupportValue(
+  value: unknown,
+  redaction: SupportRedactionContext,
+  key: string,
+  depth: number,
+  config: boolean,
+): unknown {
   if (value == null || typeof value === "boolean") {
     return value;
   }
+  const privateField = config ? isPrivateConfigField(key) : isPrivateSupportField(key);
   if (typeof value === "number") {
-    return isPrivateConfigField(key) ? "<redacted>" : value;
+    return privateField ? "<redacted>" : value;
   }
   if (typeof value === "string") {
-    if (value === REDACTED_SENTINEL) {
-      return "<redacted>";
-    }
-    return isPrivateConfigField(key) ? "<redacted>" : redactSupportString(value, redaction);
+    return privateField || (config && value === REDACTED_SENTINEL)
+      ? "<redacted>"
+      : redactSupportString(value, redaction);
   }
   if (depth >= MAX_SUPPORT_SNAPSHOT_DEPTH) {
     return "<truncated>";
   }
   if (Array.isArray(value)) {
-    if (isPrivateConfigField(key)) {
+    if (config && privateField) {
       return {
         redacted: true,
         count: value.length,
@@ -451,7 +601,9 @@ export function sanitizeSupportConfigValue(
     }
     const { count, items } = limitedSupportArray(value);
     return supportArrayResult(
-      items.map((entry) => sanitizeSupportConfigValue(entry, redaction, key, depth + 1)),
+      !config && key === "programArguments"
+        ? sanitizeCommandArguments(items, redaction)
+        : items.map((entry) => sanitizeSupportValue(entry, redaction, key, depth + 1, config)),
       count,
     );
   }
@@ -459,13 +611,16 @@ export function sanitizeSupportConfigValue(
   if (!record) {
     return "<unsupported>";
   }
-  if (isPrivateConfigField(key)) {
+  if (config && privateField) {
     return isSecretRefShape(record) ? sanitizeSecretRefForSupport(record) : "<redacted>";
   }
-
+  const privateMap = PRIVATE_MAP_SUPPORT_FIELD_RE.test(key);
+  if (!config && privateMap) {
+    return { count: countOwnObjectEntries(record) };
+  }
   const sanitized = createSupportRecord();
   let privateEntryIndex = 0;
-  const redactEntryKeys = PRIVATE_MAP_SUPPORT_FIELD_RE.test(key);
+  const redactEntryKeys = config && privateMap;
   const privateEntryLabel = redactEntryKeys ? privateMapEntryLabel(key) : "";
   const { count, entries } = limitedSupportObjectEntries(record);
   for (const { key: entryKey, value: entryValue } of entries) {
@@ -474,7 +629,10 @@ export function sanitizeSupportConfigValue(
       privateEntryIndex += 1;
       outputKey = `<redacted-${privateEntryLabel}-${privateEntryIndex}>`;
     }
-    sanitized[outputKey] = sanitizeSupportConfigValue(entryValue, redaction, entryKey, depth + 1);
+    sanitized[outputKey] =
+      !config && isPrivateSupportField(entryKey)
+        ? "<redacted>"
+        : sanitizeSupportValue(entryValue, redaction, entryKey, depth + 1, config);
   }
   addTruncationMetadata(sanitized, count);
   return sanitized;

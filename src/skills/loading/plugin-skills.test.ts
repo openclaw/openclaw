@@ -598,21 +598,33 @@ describe("resolvePluginSkillRoots", () => {
     await expectPathMissing(path.join(pluginSkillsDir, "stale-skill"));
   });
 
-  it("cleans up generated plugin skill links when no workspace is active", async () => {
+  it.each([
+    { state: "no workspace is active", activeWorkspace: false, config: {} },
+    {
+      state: "plugins are globally disabled",
+      activeWorkspace: true,
+      config: { plugins: { enabled: false, entries: { helper: { enabled: true } } } },
+    },
+  ])("cleans up generated plugin skill links when $state", async ({ activeWorkspace, config }) => {
     const pluginSkillsDir = await tempDirs.make("managed-plugin-skills-");
     const staleRoot = await tempDirs.make("stale-plugin-skills-");
     const staleSkill = path.join(staleRoot, "stale-skill");
     await fs.mkdir(staleSkill, { recursive: true });
     fsSync.symlinkSync(staleSkill, path.join(pluginSkillsDir, "stale-skill"), directorySymlinkType);
+    hoisted.loadPluginManifestRegistryForInstalledIndex.mockReturnValue(
+      createSinglePluginRegistry({ pluginRoot: staleRoot, skills: ["./stale-skill"] }),
+    );
 
     const roots = resolvePluginSkillRoots({
-      workspaceDir: undefined,
-      config: {} as OpenClawConfig,
+      workspaceDir: activeWorkspace ? await tempDirs.make("openclaw-") : undefined,
+      config,
       pluginSkillsDir,
     });
 
     expect(roots).toStrictEqual([]);
     await expectPathMissing(path.join(pluginSkillsDir, "stale-skill"));
+    expect((await fs.stat(staleSkill)).isDirectory()).toBe(true);
+    expect(hoisted.resolvePluginMetadataSnapshot).not.toHaveBeenCalled();
   });
 
   it("resolves Claude bundle command roots through the normal plugin skill path", async () => {

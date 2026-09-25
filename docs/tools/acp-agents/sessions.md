@@ -111,9 +111,11 @@ config-the-default error).
   normalize OpenAI refs such as `openai/gpt-5.4` to Codex ACP startup config
   before `session/new`; slash forms such as `openai/gpt-5.4/high` also set
   Codex ACP reasoning effort. When omitted, `sessions_spawn({ runtime: "acp" })`
-  uses existing subagent model defaults (`agents.defaults.subagents.model` or
-  `agents.entries.*.subagents.model`) when configured; otherwise it lets the ACP
-  harness use its own default model. Other harnesses must advertise ACP model
+  uses the target agent's `subagents.model`, then `agents.defaults.subagents.model`,
+  then the target agent's explicit `model.primary`. If none is configured, it lets
+  the ACP harness use its own default model. Native subagent spawns do not inherit
+  an ACP agent's harness primary; they use native subagent settings or the native
+  default instead. Other harnesses must advertise ACP model
   controls for an explicit selection. Without those controls, an explicit
   selection fails; an inherited default may be omitted so the harness can use
   its own default.
@@ -124,8 +126,9 @@ config-the-default error).
   reasoning-effort startup override. An explicit value takes precedence over
   a reasoning suffix in `model`, including `off`. When omitted, ACP spawns use existing
   subagent thinking defaults, the configured target agent's `thinkingDefault`, and per-model
-  `agents.defaults.models["provider/model"].params.thinking` for the selected
-  model.
+  `params.thinking` for the selected model. The target agent's
+  `agents.entries.<agent>.models["provider/model"]` setting overrides the shared
+  `agents.defaults.models["provider/model"]` setting.
 </ParamField>
 
 ## Spawn bind and thread modes

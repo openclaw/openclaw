@@ -112,11 +112,14 @@ The dispatch loop:
 
 1. Promotes dependency-ready children to `ready`.
 2. Blocks expired claims or timed-out worker runs.
-3. Records dispatch metadata on ready cards.
-4. Selects a small batch of unclaimed ready cards.
-5. Claims each selected card for the dispatcher or assigned agent.
-6. Starts a subagent worker run with bounded card context and the card claim token.
-7. Stores the worker run id, session key, task linkage when the Gateway task ledger reports it, execution status, and worker log on the card.
+3. Selects a small batch of unclaimed ready cards.
+4. Claims each selected card for the dispatcher or assigned agent.
+5. Starts a subagent worker run with bounded card context and the card claim token.
+6. Stores the worker run id, session key, task linkage when the Gateway task ledger reports it, execution status, and worker log on the card.
+
+Idle scans leave ready-card history unchanged. Existing dispatch counters and
+timestamps remain as historical values; new launches use the card's launch,
+attempt, and execution history.
 
 Selection is conservative. One dispatch starts at most three workers by default. It skips archived or already-claimed cards. It starts only one card per owner or agent in a single pass. Cards already owned by active running or review work are left for a later dispatch. Pass `--max-starts <count>` with a positive integer to change the per-pass cap. The one-card-per-owner rule still applies, so the effective number of starts can be lower.
 

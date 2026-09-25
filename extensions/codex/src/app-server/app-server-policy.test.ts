@@ -390,7 +390,35 @@ describe("Codex app-server policy", () => {
   );
 
   it.each([
+    "model_provider=openai",
+    "openai_base_url=https://api.openai.com/v1",
+    "chatgpt_base_url=https://chatgpt.com/backend-api/",
+    "model_providers.openai.base_url=https://api.openai.com/v1",
+  ])("keeps automatic review for native CLI string override: %s", (override) => {
+    const appServer = resolveCodexAppServerRuntimeOptions({
+      env: {},
+      requirementsToml: null,
+      execMode: "auto",
+      modelProvider: "openai",
+      model: "gpt-5.5",
+    });
+
+    expect(
+      resolveCodexAppServerForModelProvider({
+        appServer: {
+          ...appServer,
+          start: { ...appServer.start, args: ["app-server", "-c", override] },
+        },
+        provider: "openai",
+        model: "gpt-5.5",
+        env: {},
+      }).approvalsReviewer,
+    ).toBe("auto_review");
+  });
+
+  it.each([
     ["-c", 'openai_base_url="http://localhost:8080/v1"'],
+    ["-c", "\u0085openai_base_url=http://localhost:8080/v1"],
     ["--config", 'openai_base_url="http://localhost:8080/v1"'],
     ['--config=openai_base_url="http://localhost:8080/v1"'],
     ['-copenai_base_url="http://localhost:8080/v1"'],

@@ -1,4 +1,3 @@
-// Voice Call plugin module implements twiml policy behavior.
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { WebhookContext } from "../../types.js";
 
@@ -16,33 +15,11 @@ type TwimlRequestView = {
 /** Full TwiML policy input including manager/runtime state. */
 type TwimlPolicyInput = TwimlRequestView & {
   hasStoredTwiml: boolean;
-  isNotifyCall: boolean;
   hasActiveStreams: boolean;
   canStream: boolean;
 };
 
-/** TwiML response decision plus side effects the caller should apply. */
-type TwimlDecision =
-  | {
-      kind: "empty" | "pause" | "queue";
-      consumeStoredTwimlCallId?: string;
-      activateStreamCallSid?: string;
-    }
-  | {
-      kind: "stored";
-      consumeStoredTwimlCallId: string;
-      activateStreamCallSid?: string;
-    }
-  | {
-      kind: "stream";
-      consumeStoredTwimlCallId?: string;
-      activateStreamCallSid?: string;
-    };
-
-/** Return true for Twilio outbound call directions. */
-function isOutboundDirection(direction: string | null): boolean {
-  return direction?.startsWith("outbound") ?? false;
-}
+type TwimlDecision = "empty" | "pause" | "queue" | "stored" | "stream";
 
 /** Read the Twilio request fields needed by TwiML decision logic. */
 export function readTwimlRequestView(ctx: WebhookContext): TwimlRequestView {
@@ -63,34 +40,30 @@ export function readTwimlRequestView(ctx: WebhookContext): TwimlRequestView {
 export function decideTwimlResponse(input: TwimlPolicyInput): TwimlDecision {
   if (input.callIdFromQuery && !input.isStatusCallback) {
     if (input.hasStoredTwiml) {
-      return { kind: "stored", consumeStoredTwimlCallId: input.callIdFromQuery };
+      return "stored";
     }
-    if (input.isNotifyCall) {
-      return { kind: "empty" };
-    }
-
-    if (isOutboundDirection(input.direction)) {
-      return input.canStream ? { kind: "stream" } : { kind: "pause" };
+    if (input.direction?.startsWith("outbound")) {
+      return input.canStream ? "stream" : "pause";
     }
   }
 
   if (input.isStatusCallback) {
-    return { kind: "empty" };
+    return "empty";
   }
 
   if (input.direction === "inbound") {
     if (input.hasActiveStreams) {
-      return { kind: "queue" };
+      return "queue";
     }
     if (input.canStream && input.callSid) {
-      return { kind: "stream", activateStreamCallSid: input.callSid };
+      return "stream";
     }
-    return { kind: "pause" };
+    return "pause";
   }
 
   if (input.callStatus !== "in-progress") {
-    return { kind: "empty" };
+    return "empty";
   }
 
-  return input.canStream ? { kind: "stream" } : { kind: "pause" };
+  return input.canStream ? "stream" : "pause";
 }

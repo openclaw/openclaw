@@ -9,10 +9,73 @@ import { registerDesktopEnglish } from "../../i18n/locales/en-desktop.ts";
 import { icons } from "../icons.ts";
 import { renderPanelLoadingSkeleton } from "../panel-loading-skeleton.ts";
 import { desktopAppIcon, desktopAppLabel } from "./desktop-app-presentation.ts";
+import type { DesktopSizingMode } from "./desktop-client.ts";
 import type { DesktopPanelState } from "./desktop-panel-state.ts";
 import { desktopSourceForEnvironment } from "./desktop-source.ts";
 
 registerDesktopEnglish();
+
+export function renderDesktopPanelView(options: {
+  embedded: boolean;
+  workspaceControls?: boolean;
+  dock: "bottom" | "right";
+  height: number;
+  width: number;
+  fullscreen: boolean;
+  renderResizer: () => TemplateResult | typeof nothing;
+  renderFullscreenControl: () => TemplateResult;
+  onClose: () => void;
+  onDock: (dock: "bottom" | "right") => void;
+  onOpenWindow: () => void;
+  content: Omit<Parameters<typeof renderDesktopPanelContent>[0], "connection">;
+  connection: Omit<Parameters<typeof renderDesktopConnection>[0], "state">;
+}) {
+  const connection = renderDesktopConnection({
+    ...options.connection,
+    state: options.content.state,
+    presentationControls: options.workspaceControls
+      ? html`<button
+            class="desktop-toolbar-action"
+            type="button"
+            title=${t("desktop.openWindow")}
+            aria-label=${t("desktop.openWindow")}
+            @click=${options.onOpenWindow}
+          >
+            ${icons.externalLink}</button
+          >${options.renderFullscreenControl()}`
+      : nothing,
+  });
+  const style =
+    options.embedded || options.fullscreen
+      ? ""
+      : options.dock === "bottom"
+        ? `height:${options.height}px`
+        : `width:${options.width}px`;
+  return html`
+    <section
+      class="bp bp--${options.embedded ? "embedded" : options.dock}"
+      style=${style}
+      aria-label=${t("desktop.title")}
+    >
+      ${options.embedded ? nothing : options.renderResizer()}
+      ${
+        options.embedded
+          ? nothing
+          : renderDesktopPanelHeader({
+              dock: options.dock,
+              fullscreenControl: options.renderFullscreenControl(),
+              onDock: options.onDock,
+              onOpenWindow: options.onOpenWindow,
+              onClose: options.onClose,
+            })
+      }
+      ${renderDesktopPanelContent({
+        ...options.content,
+        connection,
+      })}
+    </section>
+  `;
+}
 
 export function renderDesktopPanelContent(options: {
   state: DesktopPanelState;
@@ -38,7 +101,7 @@ export function renderDesktopPanelContent(options: {
   `;
 }
 
-export function renderDesktopPanelHeader(options: {
+function renderDesktopPanelHeader(options: {
   dock: "bottom" | "right";
   fullscreenControl: TemplateResult;
   onClose: () => void;
@@ -100,13 +163,9 @@ export function renderDesktopPicker(options: {
 }) {
   if (options.automatic) {
     return html`<div class="desktop-status" role="status">
-      ${
-        options.loading
-          ? t("desktop.connecting")
-          : html`<button class="desktop-button" type="button" @click=${options.onRefresh}>
-              ${t("common.retry")}
-            </button>`
-      }
+      <button class="desktop-button" type="button" @click=${options.onRefresh}>
+        ${t("common.retry")}
+      </button>
     </div>`;
   }
   return html`
@@ -221,9 +280,14 @@ export function renderDesktopConnection(options: {
   environmentSelected: boolean;
   launchingApp: WorkerDesktopAppId | null;
   showApps: boolean;
+  sizing: DesktopSizingOptions;
+  pictureInPictureControl: TemplateResult;
+  audioControl?: TemplateResult;
+  presentationControls?: TemplateResult | typeof nothing;
   onDisconnect: () => void;
   onLaunch: (app: WorkerDesktopAppId) => void;
   onTakeControl: () => void;
+  onControlToggle: () => void;
 }) {
   return html`
     <div class="desktop-toolbar desktop-toolbar--connection">
@@ -257,6 +321,23 @@ export function renderDesktopConnection(options: {
           : nothing
       }
       <span class="desktop-toolbar__spacer"></span>
+      ${
+        options.controlling
+          ? html`<button
+              class="desktop-toolbar-action"
+              type="button"
+              aria-label=${t("desktop.switchToViewOnly")}
+              ?disabled=${options.state !== "connected"}
+              @click=${options.onControlToggle}
+            >
+              ${t("desktop.control")}
+            </button>`
+          : options.state === "connected"
+            ? html`<span class="desktop-toolbar-mode" role="status">${t("desktop.viewOnly")}</span>`
+            : nothing
+      }
+      ${renderDesktopSizing(options.sizing)} ${options.audioControl ?? nothing}
+      ${options.pictureInPictureControl} ${options.presentationControls ?? nothing}
       <button
         class="desktop-toolbar-action"
         type="button"
@@ -276,6 +357,7 @@ export function renderDesktopConnection(options: {
               type="button"
               title=${t("desktop.takeControl")}
               aria-label=${t("desktop.takeControl")}
+              ?disabled=${options.state !== "connected"}
               @click=${options.onTakeControl}
             ></button>`
           : nothing
@@ -286,6 +368,47 @@ export function renderDesktopConnection(options: {
           : nothing
       }
     </div>
+  `;
+}
+
+export type DesktopSizingOptions = {
+  mode: DesktopSizingMode;
+  canResize: boolean;
+  onChange: (mode: DesktopSizingMode) => void;
+};
+
+export function renderDesktopSizing(options: DesktopSizingOptions) {
+  // Keep retained Match visible during reconnects so choosing Fit changes the
+  // native selection and cancels Match before authentication completes.
+  return html`
+    <select
+      class="desktop-sizing"
+      aria-label=${t("desktop.sizing")}
+      title=${t("desktop.matchRequirement")}
+      @change=${(event: Event) => {
+        if (!(event.currentTarget instanceof HTMLSelectElement)) {
+          return;
+        }
+        const mode = event.currentTarget.value;
+        if (mode === "fit" || mode === "actual" || (mode === "match" && options.canResize)) {
+          options.onChange(mode);
+        }
+      }}
+    >
+      <option value="fit" .selected=${options.mode === "fit"}>${t("desktop.fit")}</option>
+      <option value="actual" .selected=${options.mode === "actual"}>${t("desktop.actual")}</option>
+      ${
+        options.canResize || options.mode === "match"
+          ? html`<option
+              value="match"
+              .selected=${options.mode === "match"}
+              ?disabled=${!options.canResize}
+            >
+              ${t("desktop.match")}
+            </option>`
+          : nothing
+      }
+    </select>
   `;
 }
 

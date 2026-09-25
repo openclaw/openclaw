@@ -14,7 +14,9 @@ import {
   OPENCLAW_TRANSCRIPT_ARTIFACT_API,
   OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
 } from "../../shared/transcript-only-openclaw-assistant.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { resolveSessionTranscriptPathInDir } from "./paths.js";
 import {
   loadTranscriptEvents,
@@ -33,6 +35,7 @@ import {
   appendSessionTranscriptEvent,
   appendSessionTranscriptMessage,
 } from "./transcript-append.test-support.js";
+import { transcriptMessage } from "./transcript-message.test-support.js";
 import { selectSessionTranscriptLeafControlledPath } from "./transcript-tree.js";
 import {
   bindOwnedSessionTranscriptWrites,
@@ -67,6 +70,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
         storePath,
       });
     } finally {
+      closeOpenClawAgentDatabasesForTest(tempDir);
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
@@ -221,6 +225,8 @@ describe("appendAssistantMessageToSessionTranscript", () => {
         }),
       );
     } finally {
+      closeOpenClawAgentDatabasesForTest(tempDir);
+      await cleanupSessionStateForTest({ stateDir: path.join(tempDir, "default-state") });
       if (previousStateDir === undefined) {
         deleteTestEnvValue("OPENCLAW_STATE_DIR");
       } else {
@@ -294,6 +300,8 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       expect(event.sessionKey).toBe(configuredSessionKey);
     } finally {
       emitSpy.mockRestore();
+      closeOpenClawAgentDatabasesForTest(tempDir);
+      await cleanupSessionStateForTest({ stateDir: path.join(tempDir, "default-state") });
       if (previousStateDir === undefined) {
         deleteTestEnvValue("OPENCLAW_STATE_DIR");
       } else {
@@ -1070,21 +1078,21 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       {
         updateMode: "none",
         messages: [
-          {
-            eventId: "root-user",
-            parentId: null,
-            message: { role: "user", content: "keep this branch", timestamp: 1_000 },
-          },
-          {
-            eventId: "active-reply",
-            parentId: "root-user",
-            message: { role: "assistant", content: "active answer", timestamp: 2_000 },
-          },
-          {
-            eventId: "abandoned-reply",
-            parentId: "root-user",
-            message: { role: "assistant", content: "abandoned answer", timestamp: 3_000 },
-          },
+          transcriptMessage("root-user", null, {
+            role: "user",
+            content: "keep this branch",
+            timestamp: 1_000,
+          }),
+          transcriptMessage("active-reply", "root-user", {
+            role: "assistant",
+            content: "active answer",
+            timestamp: 2_000,
+          }),
+          transcriptMessage("abandoned-reply", "root-user", {
+            role: "assistant",
+            content: "abandoned answer",
+            timestamp: 3_000,
+          }),
         ],
       },
     );

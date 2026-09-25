@@ -1,13 +1,14 @@
 /* @vitest-environment jsdom */
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import {
   createTestSessionCapability,
   sessionsResult,
 } from "../lib/sessions/session-capability.test-support.ts";
 import "../test-helpers/app-sidebar-suite.ts";
-import { createGatewayHarness, deferred, mountSidebar } from "../test-helpers/app-sidebar.ts";
+import { createGatewayHarness, mountSidebar } from "../test-helpers/app-sidebar.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import "./app-sidebar.ts";
@@ -20,7 +21,7 @@ describe("selected ancestry after an independent child-list admission", () => {
       const currentAt = initialAt + 50;
       const managedSuccessor = mode === "managed successor";
       const successor = mode !== "child metadata";
-      const key = "agent:main:subagent:child-admission";
+      const key = "agent:main:dashboard:child-admission";
       const p1 = "agent:main:child-controller";
       const p2 = "agent:main:new-navigation-parent";
       const grandparentKey = "agent:main:old-grandparent";

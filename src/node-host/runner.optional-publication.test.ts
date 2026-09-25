@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   capturedGatewayClients: [] as Array<{
     request: Mock<(method: string, params?: unknown) => Promise<unknown>>;
     stop: ReturnType<typeof vi.fn>;
+    stopAndWait: ReturnType<typeof vi.fn<() => Promise<void>>>;
     updateNodeManifest: ReturnType<typeof vi.fn>;
   }>,
   nodePluginTools: [] as Array<Record<string, unknown>>,
@@ -40,7 +41,7 @@ vi.mock("../config/config.js", () => ({
   getRuntimeConfig: vi.fn(() => ({ gateway: { handshakeTimeoutMs: 1_000 } })),
 }));
 
-vi.mock("../gateway/client-start-readiness.js", () => ({
+vi.mock("../../packages/gateway-client/src/readiness.js", () => ({
   startGatewayClientWhenEventLoopReady: mocks.startGatewayClientWhenEventLoopReady,
 }));
 
@@ -52,6 +53,7 @@ vi.mock("../gateway/client.js", async (importOriginal) => {
       const client = {
         request: vi.fn(async () => ({})),
         stop: vi.fn(),
+        stopAndWait: vi.fn(async () => {}),
         updateNodeManifest: vi.fn(),
       };
       mocks.capturedGatewayClientOptions.push(opts);
@@ -87,10 +89,12 @@ vi.mock("../infra/path-env.js", () => ({
 
 vi.mock("./config.js", () => ({
   configureNodeHost: mocks.configureNodeHost,
+  loadNodeHostConfig: async () => null,
 }));
 
 vi.mock("./plugin-node-host.js", () => ({
   ensureNodeHostPluginRegistry: vi.fn(async () => undefined),
+  notifyRegisteredNodeHostCommandDisconnect: vi.fn(async () => {}),
   listRegisteredNodeHostCapsAndCommands: vi.fn(() => ({
     commands: [...mocks.nodeHostCommands],
     caps: [...mocks.nodeHostCaps],
@@ -131,7 +135,7 @@ async function withReadyNodeHost(
     aborted: false,
     elapsedMs: 0,
   });
-  const processOnceSpy = vi.spyOn(process, "once");
+  const processOnSpy = vi.spyOn(process, "on");
   const previousExitCode = process.exitCode;
   let running: Promise<void> | undefined;
   try {
@@ -143,18 +147,18 @@ async function withReadyNodeHost(
     }
     await runTest({ client, options: mocks.capturedGatewayClientOptions.at(-1) });
   } finally {
-    const onSigterm = processOnceSpy.mock.calls.find(([event]) => event === "SIGTERM")?.[1];
+    const onSigterm = processOnSpy.mock.calls.find(([event]) => event === "SIGTERM")?.[1];
     try {
       onSigterm?.("SIGTERM");
       await running;
     } finally {
-      for (const [event, listener] of processOnceSpy.mock.calls) {
+      for (const [event, listener] of processOnSpy.mock.calls) {
         if ((event === "SIGINT" || event === "SIGTERM") && typeof listener === "function") {
           process.off(event, listener);
         }
       }
       process.exitCode = previousExitCode;
-      processOnceSpy.mockRestore();
+      processOnSpy.mockRestore();
     }
   }
 }
@@ -195,11 +199,11 @@ describe("runNodeHost connection and optional publications", () => {
         });
         options?.onConnectError?.(rejection);
         options?.onConnectError?.(rejection);
-        expect(client.stop).not.toHaveBeenCalled();
+        expect(client.stopAndWait).not.toHaveBeenCalled();
         options?.onConnectError?.(rejection);
 
         await vi.waitFor(() => expect(process.exitCode).toBe(1));
-        expect(client.stop).toHaveBeenCalledOnce();
+        expect(client.stopAndWait).toHaveBeenCalledOnce();
         expect(mocks.closeMcpManager).toHaveBeenCalledOnce();
         expect(stderr).toHaveBeenCalledWith(
           "node host gateway permanently rejected connection (proxy_attribution_required): Configure gateway.trustedProxies narrowly; exiting\n",
@@ -245,7 +249,7 @@ describe("runNodeHost connection and optional publications", () => {
         for (const transientError of transientErrors) {
           rejectTwice();
           options?.onConnectError?.(transientError);
-          expect(client.stop).not.toHaveBeenCalled();
+          expect(client.stopAndWait).not.toHaveBeenCalled();
         }
         rejectTwice();
         options?.onHelloOk?.({
@@ -263,7 +267,7 @@ describe("runNodeHost connection and optional publications", () => {
           policy: { maxPayload: 1, maxBufferedBytes: 1, tickIntervalMs: 1 },
         });
         rejectTwice();
-        expect(client.stop).not.toHaveBeenCalled();
+        expect(client.stopAndWait).not.toHaveBeenCalled();
         expect(stderr).not.toHaveBeenCalledWith(expect.stringContaining("permanently rejected"));
       } finally {
         stderr.mockRestore();

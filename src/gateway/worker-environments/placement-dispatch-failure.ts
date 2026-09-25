@@ -1,6 +1,7 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { STALE_WORKER_BUILD_REASON, supportsWorkerExecutionContextLaunch } from "./admission.js";
+import { STALE_WORKER_BUILD_REASON, supportsCurrentWorkerLaunch } from "./admission.js";
+import { DevicePlacementUnavailableError } from "./device-placement-eligibility.js";
 import { matchesWorkerPlacementTarget } from "./placement-reclaim-contract.js";
 import {
   FORCED_WORKER_ABANDONMENT_ERROR,
@@ -11,8 +12,12 @@ import type {
   createWorkerSessionPlacementStore,
   WorkerSessionPlacementRecord,
 } from "./placement-store.js";
-import type { WorkerPlacementAuthorization } from "./service-contract.js";
+import type {
+  WorkerEnvironmentServiceContract,
+  WorkerPlacementAuthorization,
+} from "./service-contract.js";
 import type { WorkerEnvironmentService } from "./service.js";
+import { isFailedWorkerPlacementEnvironmentGone } from "./session-placement-lifecycle.js";
 import { boundedWorkerError as boundedError } from "./worker-error.js";
 
 export type WorkerDispatchPlacement = WorkerSessionPlacementRecord;
@@ -34,7 +39,6 @@ type WorkerReconcilingDispatchPlacement = Extract<
 export type WorkerDispatchPlacementStore = Pick<
   ReturnType<typeof createWorkerSessionPlacementStore>,
   | "adoptActive"
-  | "acceptIdleWorkspaceReconciliation"
   | "claimReclaimWorkspaceResult"
   | "claimTurn"
   | "closeWorkerTurnToolState"
@@ -85,8 +89,7 @@ export type WorkerDispatchEnvironmentService = Pick<
   | "assertPreparedIntentCurrent"
   | "getPreparedCandidates"
   | "schedulePreparedRefill"
-  | "create"
-  | "createFromProfileSnapshot"
+  | "createWithRequest"
   | "destroy"
   | "get"
   | "reconcileEnvironment"
@@ -108,6 +111,36 @@ export type WorkerActivationBarrier = (params: {
 
 const RECOVERY_ERROR_LIMIT = 1_024;
 const log = createSubsystemLogger("gateway/worker-placement");
+
+export function canRetryDeviceDispatch(params: {
+  error: unknown;
+  deviceId: string;
+  sessionId: string;
+  sessionKey: string;
+  agentId: string;
+  attempted: WorkerDispatchPlacement | undefined;
+  current: WorkerDispatchPlacement | undefined;
+  environments: Pick<WorkerEnvironmentServiceContract, "get"> | undefined;
+}): boolean {
+  const { error, attempted, current } = params;
+  // Startup alone attests that workspace work never began. Cleanup must settle
+  // for that exact failed generation before Auto selects another host.
+  return (
+    error instanceof DevicePlacementUnavailableError &&
+    error.deviceId === params.deviceId &&
+    current?.state === "failed" &&
+    attempted?.state === "failed" &&
+    current.generation === attempted.generation &&
+    current.environmentId === attempted.environmentId &&
+    current.sessionId === params.sessionId &&
+    current.sessionKey === params.sessionKey &&
+    current.agentId === params.agentId &&
+    isFailedWorkerPlacementEnvironmentGone({
+      environmentService: params.environments,
+      placement: current,
+    })
+  );
+}
 
 export function workerDisappearanceError(
   environment: ReturnType<WorkerEnvironmentService["get"]>,
@@ -163,7 +196,7 @@ export function isCurrentActiveWorkerEnvironment(
     environment?.bootstrapReceipt?.bundleHash === placement.workerBundleHash &&
     // A persisted bundle hash can still match a worker using an older launch shape.
     // Recovery may reuse only the currently admitted execution-context dialect.
-    supportsWorkerExecutionContextLaunch(environment?.bootstrapReceipt)
+    supportsCurrentWorkerLaunch(environment?.bootstrapReceipt)
   );
 }
 
@@ -367,7 +400,7 @@ export function createPlacementFailureActions(deps: {
       environment.error === STALE_WORKER_BUILD_REASON &&
       environment.leaseId === null &&
       !placements
-        .listPendingWorkspaceResults()
+        .listPendingWorkspaceResults(placement.sessionId)
         .some((result) => result.sessionId === placement.sessionId)
     ) {
       // Retained conflict reports and staged refs survive redispatch; only pending results

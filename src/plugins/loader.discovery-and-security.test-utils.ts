@@ -114,11 +114,9 @@ describe("loadOpenClawPlugins", () => {
     const plugin = writePlugin({
       id: "hook-unknown",
       filename: "hook-unknown.cjs",
-      body: `module.exports = { id: "hook-unknown", register(api) {
-    api.on("totally_unknown_hook_name", () => ({ foo: "bar" }));
-    api.on(123, () => ({ foo: "baz" }));
-    api.on("before_model_resolve", () => ({ providerOverride: "demo-provider" }));
-  } };`,
+      registration: `api.on("totally_unknown_hook_name", () => ({ foo: "bar" }));
+      api.on(123, () => ({ foo: "baz" }));
+      api.on("before_model_resolve", () => ({ providerOverride: "demo-provider" }));`,
     });
 
     const registry = loadRegistryFromSinglePlugin({
@@ -531,11 +529,9 @@ describe("loadOpenClawPlugins", () => {
   });
 
   it("routes direct-facade indexing I/O to the configured memory slot owner", async () => {
-    const traceKey = "openclaw.test.memory-slot-runtime-owner";
-    const trace: string[] = [];
-    (globalThis as Record<PropertyKey, unknown>)[Symbol.for(traceKey)] = trace;
+    const tracePath = path.join(makePluginLoaderTempDir(), "memory-indexing.txt");
     const runtimePluginBody = (id: string, includeRecall: boolean, direct: boolean) => `
-      const trace = globalThis[Symbol.for(${JSON.stringify(traceKey)})];
+      const trace = (line) => require("node:fs").appendFileSync(${JSON.stringify(tracePath)}, line + "\\n");
       const id = ${JSON.stringify(id)};
       ${direct ? 'const { registerMemoryCapability } = require("openclaw/plugin-sdk/memory-host-core");' : ""}
       module.exports = {
@@ -545,11 +541,11 @@ describe("loadOpenClawPlugins", () => {
           const capability = {
             runtime: {
               async getMemorySearchManager() {
-                trace.push(id + ":manager");
+                trace(id + ":manager");
                 return {
                   manager: {
                     async sync(input) {
-                      trace.push(id + ":sync:" + input.reason);
+                      trace(id + ":sync:" + input.reason);
                     },
                   },
                 };
@@ -565,53 +561,52 @@ describe("loadOpenClawPlugins", () => {
         },
       };`;
 
-    try {
-      const selected = writePlugin({
-        id: "memory-lancedb",
-        body: runtimePluginBody("memory-lancedb", false, true),
-      });
-      updatePluginManifest(selected, {
-        kind: "memory",
-        configSchema: { type: "object", additionalProperties: true },
-      });
-      const bundledDir = makePluginLoaderTempDir();
-      const sidecarDir = path.join(bundledDir, "memory-core");
-      mkdirSafe(sidecarDir);
-      const sidecar = writePlugin({
-        id: "memory-core",
-        dir: sidecarDir,
-        filename: "index.cjs",
-        body: runtimePluginBody("memory-core", true, false),
-      });
-      updatePluginManifest(sidecar, { kind: "memory" });
-      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+    const selected = writePlugin({
+      id: "memory-lancedb",
+      body: runtimePluginBody("memory-lancedb", false, true),
+    });
+    updatePluginManifest(selected, {
+      kind: "memory",
+      configSchema: { type: "object", additionalProperties: true },
+    });
+    const bundledDir = makePluginLoaderTempDir();
+    const sidecarDir = path.join(bundledDir, "memory-core");
+    mkdirSafe(sidecarDir);
+    const sidecar = writePlugin({
+      id: "memory-core",
+      dir: sidecarDir,
+      filename: "index.cjs",
+      body: runtimePluginBody("memory-core", true, false),
+    });
+    updatePluginManifest(sidecar, { kind: "memory" });
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
 
-      const config = {
-        plugins: {
-          allow: [selected.id, sidecar.id],
-          load: { paths: [selected.file] },
-          slots: { memory: selected.id },
-          entries: {
-            [selected.id]: { enabled: true, config: { dreaming: { enabled: true } } },
-            [sidecar.id]: { enabled: true },
-          },
+    const config = {
+      plugins: {
+        allow: [selected.id, sidecar.id],
+        load: { paths: [selected.file] },
+        slots: { memory: selected.id },
+        entries: {
+          [selected.id]: { enabled: true, config: { dreaming: { enabled: true } } },
+          [sidecar.id]: { enabled: true },
         },
-      };
-      const registry = loadOpenClawPlugins({ cache: false, config });
-      const resolved = resolveMemoryCapabilityRegistration(registry.memoryCapabilities);
-      const acquired = await getActiveMemorySearchManagerCore({
-        cfg: config,
-        agentId: "main",
-      });
-      await acquired.manager?.sync?.({ reason: "post-compaction" });
+      },
+    };
+    const registry = loadOpenClawPlugins({ cache: false, config });
+    const resolved = resolveMemoryCapabilityRegistration(registry.memoryCapabilities);
+    const acquired = await getActiveMemorySearchManagerCore({
+      cfg: config,
+      agentId: "main",
+    });
+    await acquired.manager?.sync?.({ reason: "post-compaction" });
 
-      expect(resolved?.pluginId).toBe(selected.id);
-      expect(resolved?.capability.deterministicRecallToolName).toBeUndefined();
-      expect(resolved?.capability.supportsPrivateTranscriptRecall).toBeUndefined();
-      expect(trace).toEqual(["memory-lancedb:manager", "memory-lancedb:sync:post-compaction"]);
-    } finally {
-      delete (globalThis as Record<PropertyKey, unknown>)[Symbol.for(traceKey)];
-    }
+    expect(resolved?.pluginId).toBe(selected.id);
+    expect(resolved?.capability.deterministicRecallToolName).toBeUndefined();
+    expect(resolved?.capability.supportsPrivateTranscriptRecall).toBeUndefined();
+    expect(fs.readFileSync(tracePath, "utf8").trim().split("\n")).toEqual([
+      "memory-lancedb:manager",
+      "memory-lancedb:sync:post-compaction",
+    ]);
   });
 
   it("loads dreaming sidecar metadata through a restrictive selected-memory allowlist", async () => {
@@ -640,7 +635,7 @@ describe("loadOpenClawPlugins", () => {
       {
         label: "config load overrides bundled",
         pluginId: "shadow",
-        bundledFilename: "shadow.cjs",
+        expectedDuplicateLevel: "info",
         loadRegistry: () => {
           const bundled = writeBundledPlugin({
             id: "shadow",
@@ -760,7 +755,7 @@ describe("loadOpenClawPlugins", () => {
         expectedLoadedOrigin: "global",
         expectedDisabledOrigin: "bundled",
         expectedDisabledError: "overridden by global plugin",
-        expectDuplicateWarning: false,
+        expectedDuplicateLevel: null,
         assert: expectPluginSourcePrecedence,
       },
       {
@@ -889,7 +884,7 @@ describe("loadOpenClawPlugins", () => {
         expectedLoadedOrigin: "global",
         expectedDisabledOrigin: "bundled",
         expectedDisabledError: "overridden by global plugin",
-        expectDuplicateWarning: false,
+        expectedDuplicateLevel: null,
         assert: (
           registry: PluginRegistry,
           scenario: Parameters<typeof expectPluginSourcePrecedence>[1],
@@ -1711,21 +1706,19 @@ describe("loadOpenClawPlugins", () => {
     const plugin = writePlugin({
       id: "runtime-introspection",
       filename: "runtime-introspection.cjs",
-      body: `module.exports = { id: "runtime-introspection", register(api) {
-    const runtime = api.runtime ?? {};
-    const keys = Object.keys(runtime);
-    for (const key of ["channel", "mediaUnderstanding", "llm"]) {
-      if (!keys.includes(key)) {
-        throw new Error("runtime " + key + " key missing");
-      }
-      if (!(key in runtime)) {
-        throw new Error("runtime " + key + " missing from has check");
-      }
-      if (!Object.getOwnPropertyDescriptor(runtime, key)) {
-        throw new Error("runtime " + key + " descriptor missing");
-      }
-    }
-  } };`,
+      registration: `const runtime = api.runtime ?? {};
+      const keys = Object.keys(runtime);
+      for (const key of ["channel", "mediaUnderstanding", "llm"]) {
+        if (!keys.includes(key)) {
+          throw new Error("runtime " + key + " key missing");
+        }
+        if (!(key in runtime)) {
+          throw new Error("runtime " + key + " missing from has check");
+        }
+        if (!Object.getOwnPropertyDescriptor(runtime, key)) {
+          throw new Error("runtime " + key + " descriptor missing");
+        }
+      }`,
     });
 
     const registry = withEnv({ OPENCLAW_STATE_DIR: stateDir }, () =>

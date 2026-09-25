@@ -24,6 +24,41 @@ function requireSelection(selection: ReturnType<typeof resolveSimpleCompletionSe
 }
 
 describe("resolveSimpleCompletionSelectionForAgent", () => {
+  it("resolves explicit aliases in the selected agent scope", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: "openai/global-model",
+          models: {
+            "openai/global-model": { alias: "fast" },
+          },
+        },
+        entries: {
+          worker: {
+            models: {
+              "anthropic/worker-model": { alias: "fast" },
+            },
+          },
+        },
+      },
+    };
+
+    expect(
+      resolveSimpleCompletionSelectionForAgentBase({
+        cfg,
+        agentId: "worker",
+        modelRef: "fast",
+      }),
+    ).toMatchObject({ provider: "anthropic", modelId: "worker-model" });
+    expect(
+      resolveSimpleCompletionSelectionForAgentBase({
+        cfg,
+        agentId: "main",
+        modelRef: "fast",
+      }),
+    ).toMatchObject({ provider: "openai", modelId: "global-model" });
+  });
+
   it.each([false, true])("normalizes configured aliases once (explicit=%s)", (explicit) => {
     const cfg: OpenClawConfig = {
       agents: {
@@ -80,20 +115,38 @@ describe("resolveSimpleCompletionSelectionForAgent", () => {
     expect(selection.modelId).toBe("anthropic/claude-sonnet-4-6");
   });
 
-  it("uses the routed agent model override when present", () => {
-    const cfg = {
-      agents: {
-        defaults: { model: "anthropic/claude-opus-4-6" },
-        list: [{ id: "ops", model: "openrouter/aurora-alpha" }],
-      },
-    } as OpenClawConfig;
+  it.each([
+    {
+      model: "openrouter/aurora-alpha",
+      acp: false,
+      expected: { provider: "openrouter", modelId: "openrouter/aurora-alpha" },
+    },
+    {
+      model: "openrouter/aurora-alpha@harness-profile",
+      acp: true,
+      expected: { provider: "anthropic", modelId: "claude-opus-4-6", profileId: "native-profile" },
+    },
+    {
+      model: "harness-only[context=272k]@harness-profile",
+      acp: true,
+      expected: { provider: "anthropic", modelId: "claude-opus-4-6", profileId: "native-profile" },
+    },
+  ])(
+    "selects the native completion route for model=$model ACP=$acp",
+    ({ model, acp, expected }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: { model: "anthropic/claude-opus-4-6@native-profile" },
+          entries: { ops: { model, ...(acp ? { runtime: { type: "acp" } } : {}) } },
+        },
+      };
 
-    const selection = requireSelection(
-      resolveSimpleCompletionSelectionForAgent({ cfg, agentId: "ops" }),
-    );
-    expect(selection.provider).toBe("openrouter");
-    expect(selection.modelId).toBe("openrouter/aurora-alpha");
-  });
+      const selection = requireSelection(
+        resolveSimpleCompletionSelectionForAgent({ cfg, agentId: "ops" }),
+      );
+      expect(selection).toMatchObject(expected);
+    },
+  );
 
   it("uses the default utility model only for utility completions", () => {
     const cfg = {
@@ -238,7 +291,7 @@ describe("resolveSimpleCompletionSelectionForAgent", () => {
       resolveSimpleCompletionSelectionForAgent({ cfg, agentId: "main" }),
     );
     expect(selection.provider).toBe("openai");
-    expect(selection.modelId).toBe("gpt-5.6-sol");
+    expect(selection.modelId).toBe("gpt-6-astra");
   });
 
   it("uses the configured provider model when the runtime default is unavailable", () => {

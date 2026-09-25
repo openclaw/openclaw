@@ -1,3 +1,4 @@
+import { isHeartbeatTaskCronJob } from "../heartbeat-task.js";
 import { tryCronScheduleIdentity } from "../schedule-identity.js";
 import {
   findActiveCronRunReceiptInDatabase,
@@ -21,8 +22,8 @@ import {
   reserveQueuedCronRun,
 } from "./run-admission.js";
 import { skipCronJobsWithoutOwners } from "./run-owner.js";
-import { recomputeUnownedCronSchedules } from "./run-recovery.js";
 import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-store.js";
+import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
 import type { CronServiceState, DeferredCronNotifications } from "./state.js";
 import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
 import {
@@ -171,6 +172,8 @@ function commitStartupCatchupRows(params: {
           }
           if (ownership.markerAtMs === job.state.runningAtMs) {
             delete job.state.runningAtMs;
+            delete job.state.runningReceiptId;
+            delete job.state.runningScheduleChangeId;
             changed = true;
           }
         }
@@ -246,7 +249,7 @@ async function releaseStartupCatchupReservationsAfterFailure(
 /** Runs or defers missed startup jobs using restart catch-up limits. */
 export async function runMissedJobs(
   state: CronServiceState,
-  opts?: { skipJobIds?: ReadonlySet<string>; deferAgentTurnJobs?: boolean },
+  opts?: { skipJobIds?: ReadonlySet<string>; deferAgentWork?: boolean },
 ): Promise<void> {
   if (state.stopped) {
     return;
@@ -305,14 +308,14 @@ export async function runMissedJobs(
 
 async function planStartupCatchup(
   state: CronServiceState,
-  opts?: { skipJobIds?: ReadonlySet<string>; deferAgentTurnJobs?: boolean },
+  opts?: { skipJobIds?: ReadonlySet<string>; deferAgentWork?: boolean },
 ): Promise<StartupCatchupPlan> {
   const maxImmediate = Math.max(
     0,
     state.deps.maxMissedJobsPerRestart ?? DEFAULT_MAX_MISSED_JOBS_PER_RESTART,
   );
   return locked(state, async () => {
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoaded(state);
     if (state.stopped || !state.store) {
       return { candidates: [], deferredJobs: [] };
     }
@@ -329,12 +332,18 @@ async function planStartupCatchup(
     const sorted = missed.toSorted(
       (a, b) => (a.state.nextRunAtMs ?? 0) - (b.state.nextRunAtMs ?? 0),
     );
-    const deferredAgentJobs = opts?.deferAgentTurnJobs
-      ? sorted.filter((job) => job.payload.kind === "agentTurn")
-      : [];
-    const startupEligible = opts?.deferAgentTurnJobs
-      ? sorted.filter((job) => job.payload.kind !== "agentTurn")
-      : sorted;
+    const deferredAgentJobs: CronJob[] = [];
+    const startupEligible: CronJob[] = [];
+    for (const job of sorted) {
+      const waitsForAgent =
+        job.payload.kind === "agentTurn" ||
+        job.payload.kind === "heartbeat" ||
+        isHeartbeatTaskCronJob(job) ||
+        (job.sessionTarget === "main" &&
+          job.payload.kind === "systemEvent" &&
+          job.wakeMode === "now");
+      (opts?.deferAgentWork && waitsForAgent ? deferredAgentJobs : startupEligible).push(job);
+    }
     const startupCandidates = startupEligible.slice(0, maxImmediate);
     const deferredOverflow = startupEligible.slice(maxImmediate);
     const deferredAgentDelayMs = Math.max(
@@ -342,8 +351,7 @@ async function planStartupCatchup(
       state.deps.startupDeferredMissedAgentJobDelayMs ??
         DEFAULT_STARTUP_DEFERRED_MISSED_AGENT_JOB_DELAY_MS,
     );
-    // Agent-turn startup catch-up is deferred by default so gateway/channel
-    // startup is not blocked by model/tool bootstrap work.
+    // Heartbeat waits can be unlimited too; agent work must not own scheduler startup.
     const deferredJob = (job: CronJob, delayMs?: number): StartupDeferredJob => ({
       jobId: job.id,
       ...(delayMs === undefined ? {} : { delayMs }),
@@ -454,7 +462,7 @@ async function applyStartupCatchupOutcomes(
   await locked(state, async () => {
     // Each completed run is already durable. Reload before releasing or
     // staggering sibling reservations so their current rows stay authoritative.
-    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+    await ensureLoaded(state, { forceReload: true });
     if (!state.store) {
       return;
     }
@@ -474,11 +482,9 @@ async function applyStartupCatchupOutcomes(
       deferredJobs: plan.deferredJobs,
       staggerMs,
     });
-    const maintenance = recomputeUnownedCronSchedules(state, {
+    await recomputeUnownedCronSchedules(state, {
       repairFutureCronNextRunAtMs: false,
     });
-    runPostPersistCronNotifications(state, maintenance.notifications);
-    applyCronRuntimeRowsToState(state, maintenance.jobs);
   });
   return outcomes;
 }

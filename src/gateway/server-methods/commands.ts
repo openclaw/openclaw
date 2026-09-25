@@ -18,7 +18,7 @@ export const commandsHandlers: GatewayRequestHandlers = {
   "commands.list": defineValidatedGatewayMethod(
     "commands.list",
     validateCommandsListParams,
-    ({ params, respond, context, client }) => {
+    async ({ params, respond, context, client }) => {
       const resolved = resolveAgentIdOrRespondError({
         rawAgentId: params.agentId,
         respond,
@@ -46,19 +46,48 @@ export const commandsHandlers: GatewayRequestHandlers = {
           return;
         }
       }
-      respond(
-        true,
-        buildCommandsListResult({
-          cfg: resolved.cfg,
-          agentId: resolved.agentId,
-          provider: params.provider,
-          scope: params.scope,
-          includeArgs: params.includeArgs,
+      const result = await buildCommandsListResult({
+        cfg: resolved.cfg,
+        agentId: resolved.agentId,
+        provider: params.provider,
+        scope: params.scope,
+        includeArgs: params.includeArgs,
+        sessionKey: params.sessionKey,
+        sessionEntry: target?.entry,
+      });
+      if (target && params.sessionKey) {
+        const cfg = context.getRuntimeConfig();
+        const current = resolveSessionSharingTarget({
+          cfg,
           sessionKey: params.sessionKey,
-          sessionEntry: target?.entry,
-        }),
-        undefined,
-      );
+          agentId: resolved.agentId,
+        });
+        if (
+          !current ||
+          current.storePath !== target.storePath ||
+          current.storeKey !== target.storeKey ||
+          current.entry.sessionId !== target.entry.sessionId ||
+          current.entry.lifecycleRevision !== target.entry.lifecycleRevision ||
+          JSON.stringify(current.entry.skillLibrarySelections) !==
+            JSON.stringify(target.entry.skillLibrarySelections)
+        ) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.UNAVAILABLE,
+              "Session changed while preparing its commands. Retry the request.",
+            ),
+          );
+          return;
+        }
+        const error = authorizeSessionSharingTarget({ cfg, client, target: current });
+        if (error) {
+          respond(false, undefined, error);
+          return;
+        }
+      }
+      respond(true, result, undefined);
     },
   ),
 };

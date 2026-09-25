@@ -1,8 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseByPathAsync,
+} from "../../state/openclaw-state-db-cache.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import {
   deleteNativeHookRelayBridgeRecordIfOwned,
   pruneNativeHookRelayBridgeRecords,
@@ -15,16 +20,18 @@ import {
 let testRoot = "";
 let primaryStateDbPath = "";
 let secondaryStateDbPath = "";
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await closeOpenClawStateDatabaseAsync();
+    cleanup();
+  }),
+);
 
 beforeEach(() => {
   testRoot = tempDirs.make("openclaw-native-hook-relay-store-");
   primaryStateDbPath = path.join(testRoot, "primary.sqlite");
   secondaryStateDbPath = path.join(testRoot, "secondary.sqlite");
-});
-
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
 });
 
 function bridgeRecord(
@@ -43,7 +50,13 @@ function bridgeRecord(
 }
 
 describe("native hook relay store", () => {
-  it("upserts and reads bridge records", async () => {
+  it("persists bridge records and closes their worker without caller-thread SQLite", async () => {
+    const sql = observeMainThreadSql();
+    const close = vi.spyOn(DatabaseSync.prototype, "close");
+    expect(
+      await readNativeHookRelayBridgeRecord({ relayId: "absent", stateDbPath: primaryStateDbPath }),
+    ).toBeUndefined();
+    expect(fs.existsSync(primaryStateDbPath)).toBe(false);
     const first = bridgeRecord("relay-upsert");
     const replacement = bridgeRecord("relay-upsert", {
       pid: 101,
@@ -75,6 +88,44 @@ describe("native hook relay store", () => {
         stateDbPath: primaryStateDbPath,
       }),
     ).toStrictEqual(replacement);
+
+    expect(
+      await renewOrRestoreNativeHookRelayBridgeRecord({
+        record: { ...replacement, expiresAtMs: 40_000 },
+        stateDbPath: primaryStateDbPath,
+      }),
+    ).toBe(true);
+    expect(
+      await deleteNativeHookRelayBridgeRecordIfOwned({
+        ...replacement,
+        stateDbPath: primaryStateDbPath,
+      }),
+    ).toBe(true);
+    expect(
+      await renewOrRestoreNativeHookRelayBridgeRecord({
+        record: replacement,
+        stateDbPath: primaryStateDbPath,
+      }),
+    ).toBe(true);
+    expect(
+      await pruneNativeHookRelayBridgeRecords({
+        currentPid: replacement.pid,
+        isPidDead: () => {
+          throw new Error("Expired rows do not need a PID probe");
+        },
+        nowMs: 30_001,
+        stateDbPath: primaryStateDbPath,
+      }),
+    ).toEqual([{ relayId: replacement.relayId, pid: replacement.pid, reason: "expired" }]);
+    expect(
+      await readNativeHookRelayBridgeRecord({
+        relayId: replacement.relayId,
+        stateDbPath: primaryStateDbPath,
+      }),
+    ).toBeUndefined();
+    await closeOpenClawStateDatabaseByPathAsync(primaryStateDbPath);
+    sql.expectIdle();
+    expect(close).not.toHaveBeenCalled();
   });
 
   it("requires matching token and pid to renew or delete a bridge", async () => {

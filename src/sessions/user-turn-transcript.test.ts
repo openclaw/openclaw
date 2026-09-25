@@ -1,17 +1,15 @@
 // User turn transcript tests cover transcript extraction for user turns.
-import fs from "node:fs";
 import path from "node:path";
 import { castAgentMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
-import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
-  loadTranscriptEvents,
   persistSessionTranscriptTurn,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { transcriptMessage } from "../config/sessions/transcript-message.test-support.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { readPendingUserTurnTranscriptAdmission } from "./user-turn-transcript-admission.js";
 import {
@@ -21,7 +19,11 @@ import {
   resolvePersistedUserTurnText,
   type UserTurnInput,
 } from "./user-turn-transcript.js";
-import { persistUserTurnTranscript } from "./user-turn-transcript.test-support.js";
+import {
+  createSqliteTranscriptTarget,
+  persistUserTurnTranscript,
+  readTranscriptMessages,
+} from "./user-turn-transcript.test-support.js";
 
 describe("user turn transcript persistence", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -32,51 +34,6 @@ describe("user turn transcript persistence", () => {
     sessionKey: "agent:main:unused",
     storePath: "/tmp/openclaw-unused-sessions.json",
   };
-
-  function createSqliteTranscriptTarget(params: {
-    dir: string;
-    sessionId?: string;
-    sessionKey?: string;
-  }) {
-    const sessionId = params.sessionId ?? "session-1";
-    const sessionKey = params.sessionKey ?? "agent:main:main";
-    const storePath = path.join(params.dir, "agents", "main", "sessions", "sessions.json");
-    fs.mkdirSync(path.dirname(storePath), { recursive: true });
-    const sqliteMarker = formatSqliteSessionFileMarker({
-      agentId: "main",
-      sessionId,
-      storePath,
-    });
-    return {
-      agentId: "main",
-      cwd: params.dir,
-      sessionEntry: undefined,
-      sessionId,
-      sessionKey,
-      storePath,
-      sqliteMarker,
-    };
-  }
-
-  async function readTranscriptMessages(params: {
-    sessionId: string;
-    sessionKey: string;
-    storePath: string;
-  }): Promise<Array<Record<string, unknown>>> {
-    return (
-      await loadTranscriptEvents({
-        agentId: "main",
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        storePath: params.storePath,
-      })
-    )
-      .map((entry) => (entry as { message?: unknown }).message)
-      .filter(
-        (message): message is Record<string, unknown> =>
-          typeof message === "object" && message !== null,
-      );
-  }
 
   describe("trusted human transcript ownership", () => {
     it.each([
@@ -603,7 +560,7 @@ describe("user turn transcript persistence", () => {
         path: admission.storePath,
       });
       const work = trackSqliteStatementExecutions(db, ["fts", "size"], (sql) =>
-        sql.includes("session_transcript_fts")
+        /\bsession_transcript_fts\b/i.test(sql)
           ? "fts"
           : sql.includes("octet_length")
             ? "size"
@@ -649,17 +606,9 @@ describe("user turn transcript persistence", () => {
       );
       await persistSessionTranscriptTurn(target, {
         messages: [
-          { eventId: "root", parentId: null, message: { role: "user", content: "root" } },
-          {
-            eventId: "inactive",
-            parentId: "root",
-            message: { role: "assistant", content: "inactive" },
-          },
-          {
-            eventId: "active",
-            parentId: "root",
-            message: { role: "assistant", content: "active" },
-          },
+          transcriptMessage("root", null, { role: "user", content: "root" }),
+          transcriptMessage("inactive", "root", { role: "assistant", content: "inactive" }),
+          transcriptMessage("active", "root", { role: "assistant", content: "active" }),
         ],
         touchSessionEntry: false,
       });

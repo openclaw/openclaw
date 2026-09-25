@@ -500,7 +500,6 @@ describe("prepared harness source delivery", () => {
         shouldEmitToolResult: () => true,
         shouldEmitToolOutput: () => false,
         pendingToolTasks: new Set(),
-        resetSessionAfterRoleOrderingConflict: async () => false,
         isHeartbeat: false,
         sessionKey: "main",
         getActiveSessionEntry: () => undefined,
@@ -792,7 +791,7 @@ describe("prepared harness source delivery", () => {
       metadataSnapshot: admittedMetadataSnapshot,
     } as NonNullable<ReturnType<typeof getPreparedModelRuntimeBorrowedSnapshot>>;
     let publishedMetadataSnapshot = admittedMetadataSnapshot;
-    const release = vi.fn();
+    const release = vi.fn(async () => {});
     let servedMetadataSnapshot: unknown;
     let publishedMetadataAtAcquire: unknown;
     mockedAcquireAgentRunPreparedModelRuntime.mockClear();
@@ -815,7 +814,7 @@ describe("prepared harness source delivery", () => {
         return {
           ...baseLease,
           snapshot: borrowed as typeof baseLease.snapshot,
-          release,
+          [Symbol.asyncDispose]: release,
         };
       },
     );
@@ -874,7 +873,7 @@ describe("prepared harness source delivery", () => {
         policyHash: "isolated",
         workspaceDir,
       };
-      const release = vi.fn();
+      const release = vi.fn(async () => {});
       const acquisitionStarted = createDeferred();
       const resumeAcquisition = createDeferred();
       const queueTimeout = createDeferred<never>();
@@ -896,7 +895,7 @@ describe("prepared harness source delivery", () => {
               workspaceDir,
               metadataSnapshot: isolatedMetadataSnapshot,
             },
-            release,
+            [Symbol.asyncDispose]: release,
           };
         },
       );

@@ -28,11 +28,9 @@ agent tools, but nothing listens on the loopback control port.
 - Hooks: `POST /hooks/file-chooser`, `POST /hooks/dialog`
 - Downloads: `POST /download`, `POST /wait/download`
 - Permissions: `POST /permissions/grant`
-- Debugging: `GET /console`, `POST /pdf`
-- Debugging: `GET /errors`, `GET /requests`, `GET /dialogs`, `POST /trace/start`, `POST /trace/stop`, `POST /highlight`
+- Debugging: `GET /console`, `GET /errors`, `GET /requests`, `GET /dialogs`, `POST /pdf`, `POST /trace/start`, `POST /trace/stop`, `POST /highlight`
 - Network: `POST /response/body`
-- State: `GET /cookies`, `POST /cookies/set`, `POST /cookies/clear`
-- State: `GET /storage/:kind`, `POST /storage/:kind/set`, `POST /storage/:kind/clear`
+- State: `GET /cookies`, `POST /cookies/set`, `POST /cookies/clear`, `GET /storage/:kind`, `POST /storage/:kind/set`, `POST /storage/:kind/clear`
 - Settings: `POST /set/offline`, `POST /set/headers`, `POST /set/credentials`, `POST /set/geolocation`, `POST /set/media`, `POST /set/timezone`, `POST /set/locale`, `POST /set/device`
 
 `POST /tabs/action` is the batched form the CLI uses internally for
@@ -50,6 +48,14 @@ handles such as `t1` are also accepted. Raw CDP target ids and unique raw
 target-id prefixes still work, but they are volatile diagnostic handles.
 Tab handles are scoped to a browser host or node and profile. Keep that route
 with the handle when making follow-up requests.
+
+For profiles configured with `driver: "extension"`, `GET /tabs` and the browser
+tool can also return `webExtensionTabId`, the runtime-scoped numeric Chrome
+WebExtensions tab ID for the same tab. This field is omitted for other drivers
+or when extension metadata is unavailable. Use it only when calling a
+WebExtensions API; continue to use `suggestedTargetId` or `tabId` for OpenClaw
+browser actions because a `webExtensionTabId` can change after the browser or
+extension reconnects.
 
 The Control UI's `browser.request` Gateway method accepts `target: "host"` to
 pin the Gateway host or `target: "node"` with `node: "<node-id>"` to pin a browser
@@ -146,8 +152,8 @@ displays the latest held frame when capture mode ends.
 
 ### `/act` error contract
 
-`POST /act` uses a structured error response for route-level validation and
-policy failures:
+`POST /act` uses a structured error response for validation, policy, and
+recognized interaction failures:
 
 ```json
 { "error": "<message>", "code": "ACT_*" }
@@ -160,6 +166,7 @@ Current `code` values:
 - `ACT_SELECTOR_UNSUPPORTED` (HTTP 400): `selector` was used with an unsupported action kind.
 - `ACT_EVALUATE_DISABLED` (HTTP 403): `evaluate` (or `wait --fn`) is disabled by config.
 - `ACT_TARGET_ID_MISMATCH` (HTTP 403): top-level or batched `targetId` conflicts with request target.
+- `ACT_OPERATION_FAILED` (HTTP 500): the selected element could not perform the action, such as a noneditable input, covered control, or ambiguous ref. The message describes the interaction failure without treating it as a browser connection outage.
 - `ACT_EXISTING_SESSION_UNSUPPORTED` (HTTP 501): action is not supported for existing-session profiles.
 
 Other runtime failures may still return `{ "error": "<message>" }` without a
@@ -356,7 +363,8 @@ Notes:
   `media://inbound/<id>`, sandbox-relative `media/inbound/<id>`, or a resolved
   path inside the managed inbound media directory. Nested media refs,
   traversal, symlinks, hardlinks, and arbitrary local paths are still rejected.
-- `upload` can also set file inputs directly via `--input-ref` or `--element`.
+- `upload` can also set file inputs directly via `--input-ref` or `--element`; these operations honor the upload timeout.
+- Dialog prompt text preserves whitespace and empty strings exactly. Reading all local or session storage preserves empty keys and keys such as `__proto__`.
 
 Stable tab ids and labels survive Chromium raw-target replacement when OpenClaw
 can prove the replacement tab, such as a unique old/new pair for the same URL or
@@ -370,6 +378,8 @@ Snapshot flags at a glance:
 - `--format aria`: accessibility tree with `axN` refs. When Playwright is available, OpenClaw binds refs with backend DOM ids to the live page. Follow-up actions can then use them. Otherwise treat the output as inspection-only.
 - `--efficient` (or `--mode efficient`): compact role snapshot preset. Set `browser.snapshotDefaults.mode: "efficient"` to make this the default (see [Gateway configuration](/gateway/config-browser-ui-desktop#browser)).
 - `--interactive`, `--compact`, `--depth`, `--selector` force a role snapshot with `ref=e12` refs. `--frame "<iframe>"` scopes role snapshots to an iframe.
+- Selector- and frame-scoped role refs bind to the captured DOM controls, including shadow DOM and external `aria-owns` members. Reordering controls does not retarget those refs. Removed controls or failed bindings require a new snapshot instead of matching another control by name.
+- In scoped role snapshots, ignored nodes and unnamed generic wrappers are transparent before depth filtering. Depth counts the remaining role nodes from the selected root; wrapper lines and ref numbers can differ from older snapshots. State attributes, URL appendices, and output limits still apply.
 - A selector-scoped snapshot is a point-in-time observation. If no element matches at request time, it returns an empty snapshot immediately. It does not wait for the snapshot timeout. Use `openclaw browser wait "<selector>"` when the page is expected to add the element later.
 - `--selector` does not change the behavior of page-wide or frame-scoped transport failures. Those still use the configured snapshot timeout and diagnostics.
 - With Playwright, `--labels` adds a screenshot with overlayed ref labels
@@ -399,9 +409,10 @@ OpenClaw supports three "snapshot" styles:
   - A missing displayed name can mean an empty accessible name or one above Playwright's 900 UTF-16-unit limit. Keep using the returned ref.
   - Add `--labels` to include a screenshot with overlayed `e12` labels. On
     Playwright-backed profiles this also returns per-ref bounding-box metadata
-    (`annotations[]`).
+    (`annotations[]`). A labeled element screenshot preserves the ref and frame
+    from the snapshot that produced it.
   - Add `--urls` when link text is ambiguous and the agent needs concrete
-    navigation targets.
+    navigation targets. With `--frame`, the URL appendix comes from that frame.
 
 - **ARIA snapshot (ARIA refs like `ax12`)**: `openclaw browser snapshot --format aria`
   - Output: the accessibility tree as structured nodes.
@@ -413,7 +424,8 @@ OpenClaw supports three "snapshot" styles:
 - When the driver exposes stable document identity, consecutive AI and role
   snapshots for the same profile, tab, document, and option family append
   `[new]` to ref-bearing lines absent from the previous snapshot. Navigation
-  starts a fresh unmarked baseline. Existing-session snapshots omit deltas.
+  starts a fresh unmarked baseline, including same-URL iframe reloads when the
+  snapshot includes that frame. Existing-session snapshots omit deltas.
   The first snapshot establishes the baseline without markers. Later responses
   also expose `newElements`, and add a count footer when the value is nonzero.
   Structured `--format aria` snapshots with `axN` refs do not use delta markers.

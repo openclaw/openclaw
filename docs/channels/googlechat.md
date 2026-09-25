@@ -238,13 +238,9 @@ The webhook handler is not registered. Common causes:
    openclaw plugins list | grep googlechat
    ```
 
-   If it shows "disabled", add `plugins.entries.googlechat.enabled: true` to your config.
+   If it shows "disabled", run `openclaw plugins enable googlechat` and check the [application result](/plugins/manage-plugins#apply-changes-and-inspect).
 
-3. **Gateway not restarted** after config changes:
-
-   ```bash
-   openclaw gateway restart
-   ```
+3. **Configuration not applied**: check [hot reload](/gateway/configuration/hot-reload) status and Gateway logs. Start the Gateway if it is offline. If you changed the service environment, restart the Gateway to load it.
 
 Verify the channel is running:
 

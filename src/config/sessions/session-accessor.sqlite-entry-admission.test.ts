@@ -7,6 +7,7 @@ import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as sqlite from "../../infra/node-sqlite.js";
 import * as integrity from "../../infra/sqlite-integrity-worker.js";
 import * as writerQueue from "../../shared/store-writer-queue.js";
+import { invalidateOpenClawAgentDatabaseValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabasesAsync,
@@ -14,6 +15,7 @@ import {
   getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config.js";
 import { resolveStateDir } from "../paths.js";
@@ -176,11 +178,15 @@ it.each([
   const f = fixture();
   if (phase === "preparation") {
     closeOpenClawAgentDatabaseByPath(f.databasePath);
+    invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+    clearOpenClawAgentIntegrityVerification(f.databasePath, f.env);
   }
   const parentChecks = nativeChecks(f.databasePath);
   const update = () => {
     if (phase === "commit") {
       closeOpenClawAgentDatabaseByPath(f.databasePath);
+      invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+      clearOpenClawAgentIntegrityVerification(f.databasePath, f.env);
     }
     return { label: "updated" };
   };
@@ -304,6 +310,8 @@ it("keeps the physical database owner for logical rows in a shared store", async
 it("retains FIFO, caller context and publication across cold admission", async () => {
   const f = fixture();
   closeOpenClawAgentDatabaseByPath(f.databasePath);
+  invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+  clearOpenClawAgentIntegrityVerification(f.databasePath, f.env);
   const gate = holdNative(f.databasePath);
   const contexts = new AsyncLocalStorage<string>();
   const order: string[] = [];
@@ -374,6 +382,8 @@ it.each(["dispose", "sync replacement"] as const)(
   async (mode) => {
     const f = fixture();
     closeOpenClawAgentDatabaseByPath(f.databasePath);
+    invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+    clearOpenClawAgentIntegrityVerification(f.databasePath, f.env);
     const gate = holdNative(f.databasePath);
     const update = vi.fn(() => ({ label: "must not commit" }));
     const committed = vi.fn();
@@ -417,6 +427,8 @@ it.each(["cancel", "revoke"] as const)(
         f.scope,
         () => {
           closeOpenClawAgentDatabaseByPath(f.databasePath);
+          invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+          clearOpenClawAgentIntegrityVerification(f.databasePath, f.env);
           return { sessionId: "uncommitted" };
         },
         {

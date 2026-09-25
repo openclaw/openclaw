@@ -65,7 +65,10 @@ app-server using standard OpenAI endpoints, skill catalogs, persona files, and t
 are appended to the parent model request instructions by a private inference
 relay. Native base and catalog instructions remain unchanged; this new context
 is not written to native conversation history or automatically inherited by
-native subagents. Active `BOOTSTRAP.md` and, when memory tools are unavailable,
+native subagents. Connections without that relay carry the eligible skill catalog
+in thread developer instructions instead, preserving delivery when the model
+owns collaboration-mode instructions. See [workspace bootstrap files](/plugins/codex-harness-reference/workspace-bootstrap-files)
+for fallback refresh and inheritance semantics. Active `BOOTSTRAP.md` and, when memory tools are unavailable,
 bounded `MEMORY.md` content travel as plain turn input references. They are
 introduced on a new native thread, after a cold resume or native compaction,
 and when their rendered content changes. Consecutive warm turns omit unchanged
@@ -102,6 +105,10 @@ marked `catalogMode: "direct-only"` use `openclaw_direct`, which Codex keeps
 directly model-visible as `DirectModelOnly` instead of exposing it to nested
 Code Mode execution.
 
+Background dynamic-tool launches count as potential side effects, including
+launches from tools that normally perform read-only work. Turn recovery preserves
+that evidence so it does not repeat an already accepted background task.
+
 Tool-schema repairs preserve literal property and definition names, including
 `__proto__`. The schema advertised to Codex and the schema used to validate
 OpenClaw tool calls retain the same required fields and constraints.
@@ -120,6 +127,11 @@ through the normal OpenClaw delivery path; media generation does not require
 the legacy runtime. When Codex emits a native image-generation item with a
 `savedPath`, OpenClaw forwards that exact file through the normal reply-media
 path even if the Codex turn has no assistant text.
+
+Sending an attachment suppresses only the matching generated image on the same
+destination; other generated images remain available. Internal UI source replies
+keep their delivered attachment without adding a second generated copy. Partial
+delivery receipts do not suppress images whose delivery was not confirmed.
 
 ## Where each section moved
 

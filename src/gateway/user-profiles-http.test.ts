@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,6 +10,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { repairMergedGatewayOwnerProfile } from "../state/user-profiles-owner-migration.js";
 import { UserProfileNotFoundError } from "../state/user-profiles-schema.js";
+import { bindHttpResponseAuthority } from "./http-request-authority.js";
 import { handleUserProfileAvatarHttpRequest } from "./user-profiles-http.js";
 
 const authorizeControlUiReadRequestOrReply = vi.hoisted(() => vi.fn());
@@ -53,14 +55,24 @@ function response() {
   const writeHead = vi.fn();
   return {
     end,
-    response: { end, setHeader, writeHead } as unknown as ServerResponse,
+    response: Object.assign(new EventEmitter(), {
+      end,
+      setHeader,
+      writeHead,
+      socket: null,
+    }) as unknown as ServerResponse,
     setHeader,
     writeHead,
   };
 }
 
 function request(path: string, headers: Record<string, string> = {}) {
-  return { method: "GET", url: path, headers } as unknown as IncomingMessage;
+  return {
+    method: "GET",
+    url: path,
+    headers,
+    socket: new EventEmitter(),
+  } as unknown as IncomingMessage;
 }
 
 describe("profile avatar HTTP endpoint", () => {
@@ -70,13 +82,19 @@ describe("profile avatar HTTP endpoint", () => {
     getUserProfileListItem.mockReset();
     getRuntimeConfig.mockReset();
     resolveHostAccountAvatar.mockReset().mockResolvedValue(null);
-    authorizeControlUiReadRequestOrReply.mockResolvedValue({});
+    authorizeControlUiReadRequestOrReply.mockImplementation(({ res }: { res: ServerResponse }) =>
+      bindHttpResponseAuthority({}, res, () => true),
+    );
     getRuntimeConfig.mockReturnValue({
       gateway: { controlUi: { allowedOrigins: ["https://control.example"] } },
     });
   });
 
-  it("answers allowed credentialed cross-origin preflights without avatar auth", async () => {
+  it.each([
+    { controlUi: { allowedOrigins: ["https://control.example"] } },
+    { publicOrigin: "https://control.example" },
+  ])("answers credentialed avatar preflights with origin policy %j", async (gateway) => {
+    getRuntimeConfig.mockReturnValue({ gateway });
     const res = response();
     const req = {
       method: "OPTIONS",
@@ -551,40 +569,70 @@ describe("profile avatar HTTP endpoint", () => {
     expect(res.response.statusCode).toBe(404);
   });
 
-  it("cancels a chunked Gravatar response as soon as it exceeds the byte cap", async () => {
-    const profileId = "profile-gravatar-oversized";
-    getProfileAvatar.mockReturnValue(undefined);
-    getUserProfileListItem.mockReturnValue({
-      id: profileId,
-      emails: ["oversized-avatar@example.com"],
-      hasAvatar: false,
-    });
-    const cancel = vi.fn();
-    const body = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new Uint8Array(600_000));
-        controller.enqueue(new Uint8Array(600_000));
-      },
-      cancel,
-    });
-    const fetchImpl = vi.fn().mockResolvedValue(
-      new Response(body, {
-        status: 200,
-        headers: { "content-type": "image/png" },
-      }),
-    );
-    const res = response();
+  it.each(["resolve", "reject"])(
+    "waits for overflow cancellation to %s before releasing the reader and responding",
+    async (outcome) => {
+      const profileId = `profile-gravatar-oversized-${outcome}`;
+      getProfileAvatar.mockReturnValue(undefined);
+      getUserProfileListItem.mockReturnValue({
+        id: profileId,
+        emails: [`oversized-avatar-${outcome}@example.test`],
+        hasAvatar: false,
+      });
+      const cancellationStarted = Promise.withResolvers<void>();
+      const cancellation = Promise.withResolvers<void>();
+      const cancel = vi.fn(() => {
+        cancellationStarted.resolve();
+        return cancellation.promise;
+      });
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array(600_000));
+          controller.enqueue(new Uint8Array(600_000));
+        },
+        cancel,
+      });
+      const fetchImpl = vi.fn().mockResolvedValue(
+        new Response(body, {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+      );
+      const res = response();
+      const handling = handleUserProfileAvatarHttpRequest(
+        request("/ignored-by-handler"),
+        res.response,
+        `/api/users/${profileId}/avatar`,
+        { auth: {} as never, fetchImpl },
+      );
+      try {
+        await cancellationStarted.promise;
+        // Drain promise work so fire-and-forget cleanup cannot pass by being unobserved.
+        await new Promise<void>((resolve) => {
+          process.nextTick(resolve);
+        });
+        expect(res.end).not.toHaveBeenCalled();
+        expect(body.locked).toBe(true);
+        expect(cancel).toHaveBeenCalledExactlyOnceWith(undefined);
 
-    await handleUserProfileAvatarHttpRequest(
-      request("/ignored-by-handler"),
-      res.response,
-      `/api/users/${profileId}/avatar`,
-      { auth: {} as never, fetchImpl },
-    );
-
-    expect(cancel).toHaveBeenCalledTimes(1);
-    expect(res.response.statusCode).toBe(502);
-  });
+        if (outcome === "resolve") {
+          cancellation.resolve();
+        } else {
+          cancellation.reject(new Error("Gravatar cancellation failed"));
+        }
+        await expect(handling).resolves.toBe(true);
+        expect(res.response.statusCode).toBe(502);
+        expect(res.end).toHaveBeenCalledExactlyOnceWith(
+          JSON.stringify({ ok: false, error: { type: "avatar_upstream_unavailable" } }),
+        );
+        expect(body.locked).toBe(false);
+        expect(cancel).toHaveBeenCalledExactlyOnceWith(undefined);
+      } finally {
+        cancellation.resolve();
+        await handling;
+      }
+    },
+  );
 
   it("cancels a Gravatar response rejected by its declared byte size", async () => {
     const profileId = "profile-gravatar-declared-oversized";

@@ -154,6 +154,25 @@ async function expectHeaderCopy(page: Page, active: "plugins" | "skills" | "skil
   }[active];
   const header = page.locator(".plugins-hub-header");
   expect(await header.getByRole("heading", { level: 1 }).textContent()).toBe(expected.title);
+  // All three routes share the settings-style header. Allow subtitle wrapping
+  // to change its height, but keep the visible title and tabs left-aligned.
+  await expect
+    .poll(() =>
+      header.evaluate((element) => {
+        const title = element.querySelector(".page-title")?.getBoundingClientRect();
+        const intro = element.querySelector(".hub-page-header__title")?.getBoundingClientRect();
+        const tabs = element.querySelector(".hub-page-header__tabs")?.getBoundingClientRect();
+        if (!title || !intro || !tabs) {
+          return null;
+        }
+        return {
+          visibleTitle: title.width > 1 && title.height > 1,
+          leftAligned: Math.abs(tabs.left - title.left) <= 1,
+          tabsBelowIntro: tabs.top >= intro.bottom,
+        };
+      }),
+    )
+    .toEqual({ visibleTitle: true, leftAligned: true, tabsBelowIntro: true });
   expect(await header.locator(".page-subtitle").textContent()).toContain(expected.subtitle);
   expect(await header.getByRole("link", { name: "Learn more" }).getAttribute("href")).toBe(
     expected.docs,
@@ -196,6 +215,48 @@ async function expectActivePanelLabel(page: Page, labelId: string) {
 }
 
 suite.define(() => {
+  it("loads category filters independently of cards and recovers a failed category read", async () => {
+    const context = await createContext({ width: 1200, height: 928 });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["plugins.list", "plugins.catalog.browse", "plugins.catalog.categories"],
+      deferredMethods: ["plugins.catalog.browse", "plugins.catalog.categories"],
+      methodResponses,
+    });
+    try {
+      await page.goto(`${suite.server.baseUrl}plugins`);
+      await gateway.waitForRequest("plugins.catalog.browse");
+      const chips = page.locator(".plugin-catalog-chips");
+      await chips.locator(".plugin-catalog-chip--skeleton").first().waitFor();
+      expect(await chips.getByRole("button").count()).toBe(3);
+      expect(await chips.getByRole("button", { name: "All", exact: true }).isEnabled()).toBe(true);
+      await expectHeaderCopy(page, "plugins");
+      await gateway.rejectDeferred("plugins.catalog.categories", {
+        message: "Categories temporarily unavailable",
+      });
+      const error = page
+        .getByRole("alert")
+        .filter({ hasText: "Categories temporarily unavailable" });
+      await error.waitFor();
+      expect(await chips.locator(".plugin-catalog-chip--skeleton").count()).toBe(0);
+      await error.getByRole("button", { name: "Try again" }).click();
+      await chips.getByRole("button", { name: "Channels", exact: true }).waitFor();
+      expect(await page.locator(".plugin-catalog-grid--skeleton").count()).toBeGreaterThan(0);
+      expect(await chips.locator(".plugin-catalog-chip--skeleton").count()).toBe(0);
+      expect(await gateway.getRequests("plugins.catalog.categories")).toHaveLength(2);
+      await gateway.resolveDeferred("plugins.catalog.browse");
+      await page
+        .locator(".plugin-catalog-card:not(.plugin-catalog-card--skeleton)")
+        .first()
+        .waitFor();
+      await chips.getByRole("button", { name: "Featured", exact: true }).click();
+      await gateway.waitForRequest("plugins.catalog.browse", { match: { intent: "featured" } });
+      expect(await gateway.getRequests("plugins.catalog.categories")).toHaveLength(2);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("redirects the retired discovery URL to the Plugins workspace", async () => {
     const context = await createContext({ height: 768, width: 1366 });
     const page = await context.newPage();
@@ -224,7 +285,7 @@ suite.define(() => {
 
   it.each([
     { label: "desktop", viewport: { height: 1053, width: 2048 } },
-    { label: "laptop", viewport: { height: 768, width: 1366 } },
+    { label: "laptop", viewport: { height: 928, width: 1200 } },
     { label: "tablet", viewport: { height: 1024, width: 768 } },
     { label: "narrow", viewport: { height: 852, width: 393 } },
   ])(
@@ -258,6 +319,7 @@ suite.define(() => {
         await waitForControlUiRoute(page, { pathname: "/plugins", routeId: "plugins" });
         await page.getByRole("searchbox", { name: "Search plugins", exact: true }).waitFor();
         const pluginsHeader = await headerGeometry(page);
+        await captureScreenshot(page, `${label}-01-installed-plugins.png`);
         expect(pluginsHeader.title).toBe("Plugins");
         await expectHeaderCopy(page, "plugins");
         expect(await page.locator(".plugins-hub-tabs").getByRole("tab").count()).toBe(3);
@@ -271,16 +333,11 @@ suite.define(() => {
         const pluginTabBox = await page
           .getByRole("tab", { name: "Plugins", exact: true })
           .boundingBox();
-        const titleBox = await page.locator(".plugins-hub-header .page-title").boundingBox();
         expect(tabBox).not.toBeNull();
         expect(pluginTabBox).not.toBeNull();
-        expect(titleBox).not.toBeNull();
-        expect((tabBox?.y ?? 0) + (tabBox?.height ?? 0)).toBeLessThanOrEqual(titleBox?.y ?? 0);
-        expect(Math.abs((tabBox?.x ?? 0) - (titleBox?.x ?? 0))).toBeLessThanOrEqual(1);
         expect(pluginTabBox?.height ?? 0).toBeLessThanOrEqual(36);
         await expectActivePanelLabel(page, "plugins-tab-plugins");
         const pluginInstallPresentation = await installButtonPresentation(page);
-        await captureScreenshot(page, `${label}-01-installed-plugins.png`);
 
         await page
           .locator(".plugins-hub-tabs")
@@ -313,6 +370,9 @@ suite.define(() => {
           .getByRole("tab", { name: "Skills", exact: true })
           .click();
         await waitForControlUiRoute(page, { pathname: "/skills", routeId: "skills" });
+        expectStableHeader(await headerGeometry(page), pluginsHeader);
+        await expectHeaderCopy(page, "skills");
+        await expectActivePanelLabel(page, "plugins-tab-skills");
         await page.getByRole("tab", { name: "Plugins", exact: true }).click();
         await waitForControlUiRoute(page, { pathname: "/plugins", routeId: "plugins" });
         expectStableHeader(await headerGeometry(page), pluginsHeader);

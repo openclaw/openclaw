@@ -1,3 +1,4 @@
+import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { SessionMessageSubscription } from "../../lib/sessions/index.ts";
@@ -29,6 +30,11 @@ type ChatHistoryLoadState =
       key: string;
       sessions: ChatHistorySessions;
       promise: Promise<ObservedChatHistoryResult | undefined>;
+      refresh?: {
+        promise: Promise<ObservedChatHistoryResult | undefined>;
+        startup: boolean;
+        deferBranches: boolean;
+      };
     } & ChatHistoryLoadRequest)
   | {
       phase: "committed";
@@ -38,6 +44,7 @@ type ChatHistoryLoadState =
       sessionKey: string;
       requestAgentId: string | undefined;
       sessionInfo: ChatHistoryResult["sessionInfo"];
+      sessionId?: string | null;
     }
   | ({ phase: "failed"; message: string; retryable: boolean } & ChatHistoryLoadRequest);
 
@@ -208,7 +215,28 @@ export function getAcceptedChatHistorySession(state: ChatState) {
     : undefined;
 }
 
-/** Cached identity alone cannot admit a send before the first authoritative history result. */
+/** A successful scoped read can prove an ephemeral session is gone; roster absence cannot. */
+export function isExpiredIncognitoSession(
+  state: ChatState,
+  sessionKey = state.sessionKey,
+): boolean {
+  const accepted = chatHistoryRequests(state).acceptedHistory;
+  const creation = state.chatSubmissions?.creation;
+  return (
+    isIncognitoSessionKey(sessionKey) &&
+    accepted?.sessionId === null &&
+    state.connected &&
+    state.client === accepted.client &&
+    state.sessions === accepted.sessions &&
+    state.connectionEpoch === accepted.connectionEpoch &&
+    state.sessionKey === sessionKey &&
+    accepted.sessionKey === sessionKey &&
+    !(creation?.sessionKey === sessionKey && !creation.admitted) &&
+    !state.hasPendingInitialTurn?.(sessionKey)
+  );
+}
+
+/** Cached identity alone cannot authorize delivery before the first authoritative history result. */
 export function isInitialChatHistoryUnavailable(state: ChatState): boolean {
   const requests = chatHistoryRequests(state);
   const accepted = requests.acceptedHistory;

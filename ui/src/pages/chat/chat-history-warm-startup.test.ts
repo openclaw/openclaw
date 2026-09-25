@@ -149,6 +149,7 @@ describe("first chat startup snapshot ordering", () => {
     expect(h.request).toHaveBeenCalledExactlyOnceWith(
       "chat.startup",
       expect.objectContaining({ sessionKey, cursor: "stored-cursor" }),
+      { signal: expect.any(AbortSignal) },
     );
   });
 
@@ -166,6 +167,7 @@ describe("first chat startup snapshot ordering", () => {
     expect(h.request).toHaveBeenCalledExactlyOnceWith(
       "chat.startup",
       expect.not.objectContaining({ cursor: expect.anything() }),
+      { signal: expect.any(AbortSignal) },
     );
     expect(h.state.chatMessages).toEqual([]);
 
@@ -180,6 +182,7 @@ describe("first chat startup snapshot ordering", () => {
     expect(h.request).toHaveBeenLastCalledWith(
       "chat.startup",
       expect.objectContaining({ cursor: "live-cursor" }),
+      { signal: expect.any(AbortSignal) },
     );
     await refresh;
   });
@@ -194,6 +197,7 @@ describe("first chat startup snapshot ordering", () => {
     expect(h.request).toHaveBeenCalledExactlyOnceWith(
       "chat.startup",
       expect.not.objectContaining({ cursor: expect.anything() }),
+      { signal: expect.any(AbortSignal) },
     );
   });
 
@@ -222,7 +226,9 @@ describe("first chat startup snapshot ordering", () => {
       awaitHistory: true,
       scheduleScroll: false,
     });
-    expect(h.request).toHaveBeenCalledExactlyOnceWith("chat.history", expect.anything());
+    expect(h.request).toHaveBeenCalledExactlyOnceWith("chat.history", expect.anything(), {
+      signal: expect.any(AbortSignal),
+    });
     expect(sessions.state.result?.sessions[0]?.label).toBe(during.sessionInfo.label);
     await vi.advanceTimersByTimeAsync(299);
     expect(historyMethods()).toEqual(["chat.history"]);
@@ -232,6 +238,7 @@ describe("first chat startup snapshot ordering", () => {
     expect(h.request).toHaveBeenLastCalledWith(
       "chat.startup",
       expect.objectContaining({ cursor: "live-cursor" }),
+      { signal: expect.any(AbortSignal) },
     );
     expect(sessions.state.result?.sessions[0]?.label).toBe(after.sessionInfo.label);
     expect(h.state.chatMessages).toEqual(liveMessages);
@@ -257,7 +264,7 @@ describe("first chat startup snapshot ordering", () => {
     await expect(retired).resolves.toBeUndefined();
     await current;
     expect(h.request.mock.calls.filter(([method]) => method === "chat.startup")).toEqual([
-      ["chat.startup", expect.anything()],
+      ["chat.startup", expect.anything(), { signal: expect.any(AbortSignal) }],
     ]);
     expect(sessions.state.result).toBeNull();
     expect(replacement.state.result?.sessions[0]).toMatchObject(h.liveResult.sessionInfo);
@@ -281,6 +288,7 @@ describe("first chat startup snapshot ordering", () => {
       expect(h.request).toHaveBeenCalledExactlyOnceWith(
         "chat.startup",
         expect.objectContaining({ sessionKey: canonical, cursor: "stored-cursor" }),
+        { signal: expect.any(AbortSignal) },
       );
       expect(h.state.chatMessages).toEqual(liveMessages);
     },
@@ -324,6 +332,7 @@ describe("first chat startup snapshot ordering", () => {
     expect(h.request).toHaveBeenCalledExactlyOnceWith(
       "chat.startup",
       expect.objectContaining({ sessionKey, cursor: "stored-cursor" }),
+      { signal: expect.any(AbortSignal) },
     );
   });
 
@@ -344,6 +353,7 @@ describe("first chat startup snapshot ordering", () => {
     expect(h.request).toHaveBeenCalledExactlyOnceWith(
       "chat.startup",
       expect.not.objectContaining({ cursor: expect.anything() }),
+      { signal: expect.any(AbortSignal) },
     );
     await loading;
     record.resolve({

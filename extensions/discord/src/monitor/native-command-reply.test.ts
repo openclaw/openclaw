@@ -1,8 +1,10 @@
 // Discord tests cover native command reply plugin behavior.
+import { setImmediate } from "node:timers/promises";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { discordComponentRegistryState } from "../components-registry-state.js";
 import { resolveDiscordComponentEntryWithPersistence } from "../components-registry.js";
 import { clearDiscordComponentEntriesForTest } from "../components-registry.test-support.js";
 import { parseDiscordComponentCustomId } from "../components.js";
@@ -158,6 +160,65 @@ describe("deliverDiscordInteractionReply", () => {
           sessionKey: "agent:assistant:discord:direct:owner",
         });
         expect(entry?.messageId).toBe(preferFollowUp ? "native-message" : undefined);
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "waits for native button persistence without changing delivery on failure=%s",
+    async (fail) => {
+      const started = createDeferred<void>();
+      const registered = createDeferred<void>();
+      discordComponentRegistryState.persistentComponentStore = {
+        register: async () => {
+          started.resolve();
+          await registered.promise;
+        },
+        lookup: async () => undefined,
+        consume: async () => undefined,
+        delete: async () => false,
+      };
+      const interaction = createInteraction();
+      let completed = false;
+      const delivery = deliverDiscordInteractionReply({
+        interaction: interaction as never,
+        payload: {
+          presentation: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [{ label: "Choose", action: { type: "command", command: "/help" } }],
+              },
+            ],
+          },
+        },
+        componentRoute: {
+          accountId: "default",
+          agentId: "assistant",
+          sessionKey: "agent:assistant:discord:direct:fixture",
+        },
+        textLimit: 2000,
+        preferFollowUp: false,
+        chunkMode: "length",
+      }).then((value) => {
+        completed = true;
+        return value;
+      });
+      try {
+        await started.promise;
+        await setImmediate();
+        expect(interaction.reply).toHaveBeenCalledOnce();
+        expect(completed).toBe(false);
+        if (fail) {
+          registered.reject(new Error("synthetic persistence unavailable"));
+        } else {
+          registered.resolve();
+        }
+        expect(await delivery).toBe(true);
+        expect(discordComponentRegistryState.persistentRegistryDisabled).toBe(fail);
+      } finally {
+        registered.resolve();
+        await delivery;
       }
     },
   );

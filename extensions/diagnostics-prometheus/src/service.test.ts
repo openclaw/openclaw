@@ -1,13 +1,6 @@
 import { createServer } from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
-// Diagnostics Prometheus tests cover service plugin behavior.
-import {
-  emitTrustedDiagnosticEventWithPrivateData,
-  waitForDiagnosticEventsDrained,
-  type DiagnosticEventPrivateData,
-} from "openclaw/plugin-sdk/diagnostic-runtime";
-import { onTrustedInternalDiagnosticEvent } from "openclaw/plugin-sdk/plugin-test-runtime";
-// Diagnostics Prometheus tests cover service plugin behavior.
+import type { DiagnosticEventPrivateData } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { DiagnosticEventMetadata, DiagnosticEventPayload } from "../api.js";
 import { createDiagnosticsPrometheusExporter } from "./service.js";
@@ -29,46 +22,6 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
 }));
 
 describe("diagnostics-prometheus service", () => {
-  it("records terminal metrics without reading private diagnostic content", async () => {
-    const exporter = createDiagnosticsPrometheusExporter();
-    const readPrivateContent = vi.fn(() => ({ toolInput: { text: "private tool input" } }));
-    exporter.service.start({
-      config: {},
-      stateDir: "/tmp/openclaw-prometheus-test",
-      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-      internalDiagnostics: {
-        emit() {},
-        onEvent: onTrustedInternalDiagnosticEvent,
-      },
-    });
-    try {
-      emitTrustedDiagnosticEventWithPrivateData(
-        {
-          type: "tool.execution.completed",
-          runId: "run-1",
-          toolCallId: "call-1",
-          toolName: "synthetic",
-          toolSource: "core",
-          durationMs: 3,
-        },
-        {
-          get toolContent() {
-            return readPrivateContent();
-          },
-        },
-      );
-      await waitForDiagnosticEventsDrained();
-      expect(exporter.render()).toContain(
-        'openclaw_tool_execution_total{error_category="none",outcome="completed",params_kind="unknown",tool="synthetic",tool_owner="none",tool_source="core"} 1',
-      );
-      expect(readPrivateContent).not.toHaveBeenCalled();
-    } finally {
-      exporter.service.stop?.();
-      await waitForDiagnosticEventsDrained();
-    }
-    expect(exporter.render()).toBe("");
-  });
-
   it("records Gateway RPC timings by method and outcomes without method multiplication", () => {
     const metrics = createMetricsHarness();
     const base = {

@@ -99,7 +99,7 @@ describe("diagnostic support export", () => {
     },
   );
 
-  it("writes a shareable zip without raw chats, webhook bodies, or secrets", async () => {
+  it("writeDiagnosticSupportExport writes a shareable zip without raw chats, webhook bodies, or secrets", async () => {
     const fakeToken = "sk-test-support-export-secret-token-1234567890";
     const fakeAwsKey = ["AKIA", "IOSFODNN7EXAMPLE"].join("");
     const fakeJwt = [
@@ -280,6 +280,7 @@ describe("diagnostic support export", () => {
           },
           time: "2026-04-22T12:00:00.300Z",
         }),
+        JSON.stringify({ module: `gAAAA${"b".repeat(40_000)}` }),
         `plain fallback ${privateChat} ${fakeToken}`,
       ],
     };
@@ -404,6 +405,7 @@ describe("diagnostic support export", () => {
     expect(sanitizedLogs).toContain("<redacted-aws-key>");
     expect(sanitizedLogs).toContain("<redacted-jwt>");
     expect(sanitizedLogs).toContain('"module":"matrix-auto-reply"');
+    expect(sanitizedLogs).toContain('"module":"gAAAAb…bbbb"');
     expect(sanitizedLogs).toContain('"subsystem":"gateway/channels/matrix"');
     expect(sanitizedLogs).toContain('"logger":"gateway-runtime"');
     expect(sanitizedLogs).toContain('"level":"warn"');
@@ -753,6 +755,7 @@ describe("diagnostic support export", () => {
       env: {
         ...process.env,
         HOME: tempDir,
+        OPENCLAW_CONFIG_PATH: path.join(tempDir, "missing-config.json"),
         OPENCLAW_STATE_DIR: tempDir,
       },
       stateDir: tempDir,
@@ -775,6 +778,7 @@ describe("diagnostic support export", () => {
     });
 
     const entries = await readZipTextEntries(outputPath);
+    expect(entries["summary.md"]).toContain("config file not found");
     expect(Object.keys(entries).toSorted()).toContain("status/gateway-status.json");
     expect(Object.keys(entries).toSorted()).toContain("health/gateway-health.json");
 
@@ -858,6 +862,8 @@ describe("diagnostic support export", () => {
     expect(combined).not.toContain(fakeToken);
     expect(combined).toContain('"parseOk": false');
     expect(combined).toContain("config stat failed with token");
+    expect(entries["summary.md"]).toContain("config stat failed with token");
+    expect(entries["summary.md"]).not.toContain("config file not found");
     expect(combined).toContain("Attach this zip to the bug report");
   });
 

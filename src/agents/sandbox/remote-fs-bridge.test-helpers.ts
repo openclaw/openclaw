@@ -1,6 +1,6 @@
 // Local subprocess-backed remote bridge fixtures shared by focused sandbox tests.
 import { spawnSync } from "node:child_process";
-import { SANDBOX_CREATE_EXISTS_EXIT_CODE } from "./fs-bridge-mutation-python.js";
+import { GUEST_FILESYSTEM_CREATE_EXISTS_EXIT_CODE } from "@openclaw/fs-safe/guest";
 import type { RemoteShellSandboxHandle } from "./remote-fs-bridge.types.js";
 
 export type LocalRemoteShellSpawnResult = {
@@ -56,7 +56,7 @@ export function createLocalRemoteShellScriptRunner(params?: {
       runsPinnedMutation &&
       command.args?.[0] === "create" &&
       command.allowFailure === true &&
-      result.status === SANDBOX_CREATE_EXISTS_EXIT_CODE &&
+      result.status === GUEST_FILESYSTEM_CREATE_EXISTS_EXIT_CODE &&
       result.signal === null &&
       result.error &&
       "code" in result.error &&

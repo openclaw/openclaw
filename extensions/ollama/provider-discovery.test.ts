@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createModelProviderConfig } from "../test-support/model-provider-config.test-support.js";
 import { createModel } from "./model.test-support.js";
 import { ollamaProviderDiscovery } from "./provider-discovery.js";
 
@@ -155,17 +156,13 @@ describe("Ollama provider", () => {
 
     await withOllamaApiKey(async () => {
       const provider = await runOllamaCatalog({
-        config: {
-          models: {
-            providers: {
-              ollama: {
-                baseUrl: "http://192.168.20.14:11434/v1",
-                api: "openai-completions",
-                models: [],
-              },
-            },
+        config: createModelProviderConfig({
+          ollama: {
+            baseUrl: "http://192.168.20.14:11434/v1",
+            api: "openai-completions",
+            models: [],
           },
-        },
+        }),
         env: { OLLAMA_API_KEY: "test-key" },
       });
 
@@ -181,17 +178,13 @@ describe("Ollama provider", () => {
 
     await withOllamaApiKey(async () => {
       const provider = await runOllamaCatalog({
-        config: {
-          models: {
-            providers: {
-              ollama: {
-                baseUrl: "http://192.168.20.14:11434/v1",
-                api: "ollama",
-                models: [],
-              },
-            },
+        config: createModelProviderConfig({
+          ollama: {
+            baseUrl: "http://192.168.20.14:11434/v1",
+            api: "ollama",
+            models: [],
           },
-        },
+        }),
         env: { OLLAMA_API_KEY: "test-key" },
       });
 
@@ -337,17 +330,13 @@ describe("Ollama provider", () => {
       const explicitModels = [createConfiguredModel()];
 
       const provider = await runOllamaCatalog({
-        config: {
-          models: {
-            providers: {
-              ollama: {
-                baseUrl: "http://remote-ollama:11434/v1",
-                models: explicitModels,
-                apiKey: "config-ollama-key", // pragma: allowlist secret
-              },
-            },
+        config: createModelProviderConfig({
+          ollama: {
+            baseUrl: "http://remote-ollama:11434/v1",
+            models: explicitModels,
+            apiKey: "config-ollama-key", // pragma: allowlist secret
           },
-        },
+        }),
         env: { VITEST: "", NODE_ENV: "development" },
       });
 
@@ -369,16 +358,12 @@ describe("Ollama provider", () => {
       stubOllamaFetch(fetchMock);
 
       const provider = await runOllamaCatalog({
-        config: {
-          models: {
-            providers: {
-              ollama: {
-                baseUrl: "http://remote-ollama:11434/v1",
-                models: [createConfiguredModel()],
-              },
-            },
+        config: createModelProviderConfig({
+          ollama: {
+            baseUrl: "http://remote-ollama:11434/v1",
+            models: [createConfiguredModel()],
           },
-        },
+        }),
         env: { VITEST: "", NODE_ENV: "development" },
       });
 
@@ -396,16 +381,12 @@ describe("Ollama provider", () => {
       stubOllamaFetch(fetchMock);
 
       const provider = await runOllamaCatalog({
-        config: {
-          models: {
-            providers: {
-              ollama: {
-                baseUrl: "https://ollama.com/v1",
-                models: [createConfiguredModel()],
-              },
-            },
+        config: createModelProviderConfig({
+          ollama: {
+            baseUrl: "https://ollama.com/v1",
+            models: [createConfiguredModel()],
           },
-        },
+        }),
         env: { VITEST: "", NODE_ENV: "development" },
       });
 
@@ -423,17 +404,13 @@ describe("Ollama provider", () => {
       stubOllamaFetch(fetchMock);
 
       const provider = await runOllamaCatalog({
-        config: {
-          models: {
-            providers: {
-              ollama: {
-                baseUrl: "https://ollama.com/v1",
-                models: [createConfiguredModel()],
-                apiKey: "OLLAMA_API_KEY",
-              },
-            },
+        config: createModelProviderConfig({
+          ollama: {
+            baseUrl: "https://ollama.com/v1",
+            models: [createConfiguredModel()],
+            apiKey: "OLLAMA_API_KEY",
           },
-        },
+        }),
         env: { OLLAMA_API_KEY: "real-secret", VITEST: "", NODE_ENV: "development" },
         resolveProviderApiKey: () => ({
           apiKey: "OLLAMA_API_KEY",
@@ -455,16 +432,12 @@ describe("Ollama provider", () => {
       stubOllamaFetch(fetchMock);
 
       const provider = await runOllamaCatalog({
-        config: {
-          models: {
-            providers: {
-              ollama: {
-                baseUrl: "https://ollama.com/v1",
-                models: [createConfiguredModel()],
-              },
-            },
+        config: createModelProviderConfig({
+          ollama: {
+            baseUrl: "https://ollama.com/v1",
+            models: [createConfiguredModel()],
           },
-        },
+        }),
         env: { OLLAMA_API_KEY: "real-secret", VITEST: "", NODE_ENV: "development" },
         resolveProviderApiKey: () => ({
           apiKey: "OLLAMA_API_KEY",
@@ -486,17 +459,13 @@ describe("Ollama provider", () => {
       stubOllamaFetch(fetchMock);
 
       const provider = await runOllamaCatalog({
-        config: {
-          models: {
-            providers: {
-              ollama: {
-                baseUrl: "http://127.0.0.1:11434/v1",
-                models: [createConfiguredModel()],
-                apiKey: "OLLAMA_API_KEY",
-              },
-            },
+        config: createModelProviderConfig({
+          ollama: {
+            baseUrl: "http://127.0.0.1:11434/v1",
+            models: [createConfiguredModel()],
+            apiKey: "OLLAMA_API_KEY",
           },
-        },
+        }),
         env: { OLLAMA_API_KEY: "real-secret", VITEST: "", NODE_ENV: "development" },
         resolveProviderApiKey: () => ({
           apiKey: "OLLAMA_API_KEY",
@@ -524,22 +493,18 @@ describe("Ollama provider", () => {
       stubOllamaFetch(fetchMock);
 
       const provider = await runOllamaCatalog({
-        config: {
-          models: {
-            providers: {
-              ollama: {
-                baseUrl: "http://remote-ollama:11434/v1",
-                api: "openai-completions",
-                models: [
-                  createModel("configured-remote-model", "Configured Remote Model", {
-                    contextWindow: 8_192,
-                  }),
-                ],
-                apiKey: "config-ollama-key", // pragma: allowlist secret
-              },
-            },
+        config: createModelProviderConfig({
+          ollama: {
+            baseUrl: "http://remote-ollama:11434/v1",
+            api: "openai-completions",
+            models: [
+              createModel("configured-remote-model", "Configured Remote Model", {
+                contextWindow: 8_192,
+              }),
+            ],
+            apiKey: "config-ollama-key", // pragma: allowlist secret
           },
-        },
+        }),
         env: { VITEST: "", NODE_ENV: "development" },
       });
 

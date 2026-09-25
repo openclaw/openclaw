@@ -1,16 +1,8 @@
 // Config CLI command implementation for get/set/unset/patch/validate and secret refs.
 import type { Command } from "commander";
-import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
-import { theme } from "../../packages/terminal-core/src/theme.js";
-import { readConfigFileSnapshotWithPluginMetadata } from "../config/config.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
 import { renderConfigValidationIssueLines } from "../config/issue-location.js";
 import { CONFIG_PATH, resolveConfigPath } from "../config/paths.js";
-import { redactConfigObject } from "../config/redact-snapshot.js";
-import {
-  buildRuntimeConfigSchemaFromRegistry,
-  readBestEffortRuntimeConfigSchema,
-} from "../config/runtime-schema.js";
 import { danger, success, warn } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
@@ -23,25 +15,14 @@ import {
 import { parseConcreteConfigPathTokens } from "../shared/dot-path.js";
 import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
-import {
-  buildConfigSetOperations,
-  buildUnsetOperation,
-  configPatchModeError,
-  readConfigPatchOperations,
-  type ConfigPatchOptions,
-  type ConfigUnsetOptions,
-} from "./config-cli-input.js";
+import type { ConfigPatchOptions, ConfigUnsetOptions } from "./config-cli-input.js";
 import { getAtPath, isConfigSchemaPath, parseConfigSetPath } from "./config-cli-path.js";
-import { handleConfigMutationError, runConfigOperations } from "./config-cli-runner.js";
-import {
-  ensureValidConfigSnapshotForCli,
-  formatInvalidConfigRepairHint,
-  strictlyValidateConfigSnapshotForCli,
-} from "./config-cli-validation.js";
 import { isConfigMachineOutput, isConfigSetJsonParseOnly } from "./config-output-mode.js";
-import { parseConfigSetCurrentExpectation, type ConfigSetOptions } from "./config-set-input.js";
+import type { ConfigSetOptions } from "./config-set-input.js";
 import { formatCliJsonFailure } from "./failure-output.js";
+import { formatDocsHelp } from "./help-format.js";
 import { exitCliAfterOutput } from "./one-shot-exit.js";
+import { collectOption } from "./program/helpers.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
 import { quoteCliArg } from "./quote-cli-arg.js";
 
@@ -76,7 +57,10 @@ export async function runConfigSet(opts: {
   beforePersistentApply?: () => void;
 }) {
   const runtime = opts.runtime ?? defaultRuntime;
+  const { handleConfigMutationError, runConfigOperations } = await import("./config-cli-runner.js");
   try {
+    const { buildConfigSetOperations } = await import("./config-cli-input.js");
+    const { parseConfigSetCurrentExpectation } = await import("./config-set-input.js");
     const currentExpectation = parseConfigSetCurrentExpectation(opts.cliOptions);
     const operations = buildConfigSetOperations({
       path: opts.path,
@@ -106,7 +90,10 @@ export async function runConfigPatch(opts: {
   runtime?: RuntimeEnv;
 }) {
   const runtime = opts.runtime ?? defaultRuntime;
+  const { handleConfigMutationError, runConfigOperations } = await import("./config-cli-runner.js");
   try {
+    const { configPatchModeError, readConfigPatchOperations } =
+      await import("./config-cli-input.js");
     if (opts.cliOptions.allowExec && !opts.cliOptions.dryRun) {
       throw configPatchModeError("--allow-exec requires --dry-run.");
     }
@@ -128,18 +115,22 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
   const runtime = opts.runtime ?? defaultRuntime;
   try {
     const parsedPath = parseConfigSetPath(opts.path);
+    const { readConfigFileSnapshotWithPluginMetadata } = await import("../config/config.js");
+    const { ensureValidConfigSnapshotForCli } = await import("./config-cli-validation.js");
     const read = await readConfigFileSnapshotWithPluginMetadata({ observe: false });
     const { snapshot, pluginMetadataSnapshot } = read;
     ensureValidConfigSnapshotForCli(snapshot, runtime, { json: opts.json });
     if (!pluginMetadataSnapshot) {
       throw new Error("Config plugin metadata unavailable; refusing to display config values.");
     }
+    const { buildRuntimeConfigSchemaFromRegistry } = await import("../config/runtime-schema.js");
+    const { redactConfigObject } = await import("../config/redact-snapshot.js");
     const { schema, uiHints } = buildRuntimeConfigSchemaFromRegistry(
       pluginMetadataSnapshot.manifestRegistry,
       snapshot.sourceConfig,
     );
     const res = getAtPath(redactConfigObject(snapshot.config, uiHints), parsedPath);
-    if (!res.found) {
+    if (!res.found || res.value === undefined) {
       const message = isConfigSchemaPath(schema, parsedPath)
         ? `Config path is valid but unset: ${opts.path}. The runtime default applies until you set an authored value with ${formatCliCommand(`openclaw config set ${quoteCliArg(opts.path)} <value>`)}.`
         : `Unknown config path: ${opts.path}. Run ${formatCliCommand("openclaw config schema")} to inspect valid paths.`;
@@ -151,7 +142,7 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
       exitCliAfterOutput(runtime, 1);
     }
     if (opts.json) {
-      writeRuntimeJson(runtime, res.value ?? null);
+      writeRuntimeJson(runtime, res.value);
     } else if (
       typeof res.value === "string" ||
       typeof res.value === "number" ||
@@ -159,7 +150,7 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
     ) {
       writeRuntimeStdout(runtime, `${String(res.value)}\n`);
     } else {
-      writeRuntimeJson(runtime, res.value ?? null);
+      writeRuntimeJson(runtime, res.value);
     }
   } catch (err) {
     if (err instanceof ExitError) {
@@ -181,7 +172,9 @@ export async function runConfigUnset(opts: {
 }) {
   const runtime = opts.runtime ?? defaultRuntime;
   const cliOptions = opts.cliOptions ?? {};
+  const { handleConfigMutationError, runConfigOperations } = await import("./config-cli-runner.js");
   try {
+    const { buildUnsetOperation } = await import("./config-cli-input.js");
     if (cliOptions.allowExec && !cliOptions.dryRun) {
       throw new Error("--allow-exec can only be used with --dry-run.");
     }
@@ -218,6 +211,7 @@ async function runConfigFile(opts: { json?: boolean; runtime?: RuntimeEnv }) {
 async function runConfigSchema(opts: { runtime?: RuntimeEnv } = {}) {
   const runtime = opts.runtime ?? defaultRuntime;
   try {
+    const { readBestEffortRuntimeConfigSchema } = await import("../config/runtime-schema.js");
     const schema = structuredClone((await readBestEffortRuntimeConfigSchema()).schema) as {
       properties?: Record<string, unknown>;
     };
@@ -233,11 +227,14 @@ async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } 
   const runtime = opts.runtime ?? defaultRuntime;
   let outputPath = CONFIG_PATH ?? "openclaw.json";
   try {
-    const read = await readConfigFileSnapshotWithPluginMetadata({ observe: false });
-    const snapshot = await strictlyValidateConfigSnapshotForCli(
-      read.snapshot,
-      read.pluginMetadataSnapshot,
-    );
+    const { readConfigFileSnapshotWithPluginMetadata } = await import("../config/config.js");
+    const { formatInvalidConfigRepairHint, finishConfigValidationForCli } =
+      await import("./config-cli-validation.js");
+    const read = await readConfigFileSnapshotWithPluginMetadata({
+      observe: false,
+      prepareValidation: "strict",
+    });
+    const snapshot = await finishConfigValidationForCli(read);
     outputPath = snapshot.path;
     const shortPath = shortenHomePath(outputPath);
     if (!snapshot.exists) {
@@ -265,15 +262,17 @@ async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } 
           issues,
         });
       } else {
-        runtime.error(danger(`OpenClaw config is invalid: ${shortPath}`));
-        for (const line of renderConfigValidationIssueLines(snapshot, danger("×"))) {
+        runtime.error(`Config needs correction: ${shortPath}`);
+        for (const line of renderConfigValidationIssueLines(snapshot, "-")) {
           runtime.error(`  ${line}`);
         }
         runtime.error("");
         runtime.error(
           formatInvalidConfigRepairHint(snapshot, "to repair, or fix the keys above manually."),
         );
-        runtime.error(`Inspect with ${formatCliCommand("openclaw config validate")}.`);
+        runtime.error(
+          `Run ${formatCliCommand("openclaw config schema")} to inspect supported settings and values, then rerun ${formatCliCommand("openclaw config validate")}.`,
+        );
       }
       exitCliAfterOutput(runtime, 1);
     }
@@ -306,21 +305,13 @@ async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } 
   }
 }
 
-function collectOption(value: string, previous: string[]): string[] {
-  return [...previous, value];
-}
-
 export function registerConfigCli(program: Command) {
   const cmd = program
     .command("config")
     .description(
       "Non-interactive config helpers (get/set/patch/unset/file/schema/validate). Run without subcommand for guided setup.",
     )
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/config", "docs.openclaw.ai/cli/config")}\n`,
-    )
+    .addHelpText("after", () => formatDocsHelp("/cli/config"))
     .option(
       "--section <section>",
       "Configuration sections for guided setup (repeatable). Use with no subcommand.",

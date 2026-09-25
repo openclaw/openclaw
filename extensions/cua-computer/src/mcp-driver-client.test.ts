@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { execution } from "./commands.test-helpers.js";
 import { CUA_DRIVER_CONTRACT_FIXTURES } from "./cua-driver-contract.test-fixtures.js";
-import { ClickButton, EscalationReason } from "./driver-client.js";
+import { ClickButton } from "./driver-client.js";
 import { createCuaMcpDriver } from "./mcp-driver-client.js";
 
 type RpcRequest = {
@@ -127,6 +127,7 @@ function sessionState(scope: "window" | "desktop") {
     session: "openclaw-test",
     capture_scope: scope,
     effective_scope: scope,
+    desktop_capture_authorized: scope === "desktop",
     desktop_unlocked: scope === "desktop",
     escalation_reason: null,
     escalation_detail: null,
@@ -302,7 +303,10 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
     await expect(driver.callTool("list_windows", {})).resolves.toMatchObject({
       isError: false,
     });
-    await driver.escalateScope(EscalationReason.Other);
+    await expect(driver.getSessionState()).resolves.toMatchObject({
+      desktopCaptureAuthorized: true,
+      desktopUnlocked: true,
+    });
     await expect(driver.callTool("list_windows", {})).resolves.toMatchObject({
       isError: false,
     });
@@ -622,21 +626,20 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
   });
 
   it("retires a pending initialize at the shared startup deadline", async () => {
-    const endpoint = await createFakeEndpoint(() => {});
     const deadline = new AbortController();
+    const endpoint = await createFakeEndpoint((request) => {
+      if (request.method === "initialize") {
+        deadline.abort(new Error("fixture startup deadline"));
+      }
+    });
     const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
     const driver = createCuaMcpDriver(endpoint);
     onTestFinished(() => driver.dispose());
     try {
-      const call = driver.getDesktopState();
-      const rejected = expect(call).rejects.toThrow(
+      await expect(driver.getDesktopState()).rejects.toThrow(
         "COMPUTER_DRIVER_UNAVAILABLE: CUA MCP initialize timed out after 10000ms",
       );
-      await vi.waitFor(() =>
-        expect(endpoint.requests.some((request) => request.method === "initialize")).toBe(true),
-      );
-      deadline.abort(new Error("fixture startup deadline"));
-      await rejected;
+      expect(endpoint.requests.some((request) => request.method === "initialize")).toBe(true);
       expect(driver.isAvailable()).toBe(false);
       expect(
         endpoint.requests.some((request) => request.method === "notifications/initialized"),

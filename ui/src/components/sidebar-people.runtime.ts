@@ -38,7 +38,6 @@ export class SidebarPeopleRuntime {
   } | null = null;
   private readonly portal = new PortaledHovercardController(() => this.close(), 100);
   private readonly observer = new MutationObserver(() => this.sync());
-  private suppressFocus = false;
   private lastOpenAt = -Infinity;
   private readonly stopLocale: () => void;
 
@@ -60,12 +59,8 @@ export class SidebarPeopleRuntime {
         ? event.target.closest<HTMLElement>("[data-person-card]")
         : null;
     if (event.type === "keydown" && event instanceof KeyboardEvent) {
-      if (event.key === "Tab" && !event.shiftKey && event.target === this.active?.trigger) {
-        const first = this.portal.focusables()[0];
-        if (first) {
-          event.preventDefault();
-          first.focus();
-        }
+      if (event.key === "Tab") {
+        this.portal.handleTriggerKeyDown(event);
       }
       return;
     }
@@ -111,7 +106,11 @@ export class SidebarPeopleRuntime {
         return;
       }
       this.portal.schedulePointerExit();
-    } else if (event.type === "focusin" && !this.suppressFocus) {
+    } else if (event.type === "focusin" && !this.portal.restoringFocus) {
+      // Pointer focus must not put a card over a navigation link before its click.
+      if (event.target instanceof HTMLAnchorElement && !event.target.matches(":focus-visible")) {
+        return;
+      }
       this.activate(row, 0);
       this.portal.focusInside = true;
       this.portal.clearClose();
@@ -241,75 +240,63 @@ export class SidebarPeopleRuntime {
         `openclaw-person-activity-${++nextCardId}`,
         "session-progress-hovercard person-activity-hovercard",
       );
-    const focused = card.contains(document.activeElement) ? document.activeElement : null;
     const label = presenceUserLabel(user, t("presence.card.person"));
     card.setAttribute("aria-label", t("presence.card.ariaLabel", { name: label.name }));
-    render(
-      renderPersonActivityCard({
-        user,
-        sessionData: data,
-        watchAgentId: resolveUiDefaultAgentId(defaults),
-        mainKey: resolveUiConfiguredMainKey(defaults),
-        globalScope: isUiGlobalScopeConfigured(defaults),
-        routing: personActivityRouting(
-          {
-            basePath: this.host.basePath,
-            navigate: (route, options) => this.host.onNavigate?.(route, options),
-          },
-          () => this.close(),
-        ),
-        openSession: (row, agentId) => {
-          const face = resolveSessionPreferredFace(row);
-          const target = sessionNavigationTarget({
-            face,
-            sessionKey: row.key,
-            row,
-            fallbackAgentId: agentId,
-            basePath: this.host.basePath,
-            mainKey: resolveUiConfiguredMainKey(defaults),
-          });
-          this.close();
-          runSessionNavigationIntent(this.host, {
-            face,
-            sessionKey: row.key,
-            commit: () => {
-              if (
-                this.host.sessionDataContext?.gateway !== active.gateway ||
-                context.gateway.snapshot.client !== active.client ||
-                context.gateway.snapshot.phase !== "connected" ||
-                active.scope !== this.scope()
-              ) {
-                return false;
-              }
-              this.host.prepareSessionNavigation(row.key, target.options.pathname);
-              this.host.onNavigate?.(face, target.options);
-              selectApplicationSession({
-                selection: context.agentSelection,
-                gateway: context.gateway,
-                sessionKey: row.key,
-                agentId,
-              });
-              return true;
+    this.portal.renderContents(card, () =>
+      render(
+        renderPersonActivityCard({
+          user,
+          sessionData: data,
+          watchAgentId: resolveUiDefaultAgentId(defaults),
+          mainKey: resolveUiConfiguredMainKey(defaults),
+          globalScope: isUiGlobalScopeConfigured(defaults),
+          routing: personActivityRouting(
+            {
+              basePath: this.host.basePath,
+              navigate: (route, options) => this.host.onNavigate?.(route, options),
             },
-          });
-        },
-      }),
-      card,
+            () => this.close(),
+          ),
+          openSession: (row, agentId) => {
+            const face = resolveSessionPreferredFace(row);
+            const target = sessionNavigationTarget({
+              face,
+              sessionKey: row.key,
+              row,
+              fallbackAgentId: agentId,
+              basePath: this.host.basePath,
+              mainKey: resolveUiConfiguredMainKey(defaults),
+            });
+            this.close();
+            runSessionNavigationIntent(this.host, {
+              face,
+              sessionKey: row.key,
+              commit: () => {
+                if (
+                  this.host.sessionDataContext?.gateway !== active.gateway ||
+                  context.gateway.snapshot.client !== active.client ||
+                  context.gateway.snapshot.phase !== "connected" ||
+                  active.scope !== this.scope()
+                ) {
+                  return false;
+                }
+                this.host.prepareSessionNavigation(row.key, target.options.pathname);
+                this.host.onNavigate?.(face, target.options);
+                selectApplicationSession({
+                  selection: context.agentSelection,
+                  gateway: context.gateway,
+                  sessionKey: row.key,
+                  agentId,
+                });
+                return true;
+              },
+            });
+          },
+        }),
+        card,
+      ),
     );
     if (existing) {
-      if (focused && !card.contains(document.activeElement)) {
-        const replacement =
-          focused instanceof HTMLAnchorElement
-            ? this.portal
-                .focusables()
-                .find((link) => link instanceof HTMLAnchorElement && link.href === focused.href)
-            : undefined;
-        if (replacement) {
-          replacement.focus({ preventScroll: true });
-        } else {
-          this.returnFocus();
-        }
-      }
       this.portal.position();
       return;
     }
@@ -333,9 +320,7 @@ export class SidebarPeopleRuntime {
   }
 
   private returnFocus(): void {
-    this.suppressFocus = true;
-    this.active?.trigger.focus({ preventScroll: true });
-    this.suppressFocus = false;
+    this.portal.returnFocus(this.active?.trigger ?? null);
     this.portal.focusInside = document.activeElement === this.active?.trigger;
   }
 

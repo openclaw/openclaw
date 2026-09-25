@@ -30,6 +30,10 @@ unavailable before any work runs:
 - Disabled memory returns `{"agentId":"main","status":"disabled"}` with a successful exit.
 - Backend acquisition failures return the standard `{"ok":false,"error":{"type":"cli_error","message":"..."}}` envelope, plus `agentId`, and exit with code 1.
 
+Invalid command input and errors during command execution also use the standard
+[CLI JSON failure envelope](/cli#json-failures) and exit with code 1. The failure
+message explains the command error; human-readable diagnostics stay on stderr.
+
 Handle these outcomes before reading the command's normal result fields. An
 enabled search with no matches still returns `{"results":[]}`. `status --json`
 keeps its aggregate array of available agents, including `[]` when all are
@@ -93,6 +97,9 @@ both groups without reindexing their retained transcripts. Ordinary retained,
 reset, and deleted user-session archives remain eligible until explicitly
 targeted.
 
+Full rebuilds wait for temporary database cleanup before reporting completion.
+File removal runs asynchronously so cleanup does not block the Gateway event loop.
+
 When an embedding provider rate-limits indexing, each embedding operation gets
 up to five attempts. Retries honor valid provider cooldown hints, capped at
 60 seconds per wait. Other transient errors keep the shorter three-attempt
@@ -100,8 +107,20 @@ budget. Permanent quota errors without a cooldown hint stop that operation.
 The verbose output shows each retry wait.
 
 Interactive `memory_search` keeps three attempts and at most eight seconds of
-total retry sleep within the agent tool's 15-second deadline. A cancelled caller
+total retry sleep within the agent tool's 30-second deadline. A cancelled caller
 interrupts its retry wait.
+
+After an OpenClaw index-format upgrade, the first search rebuilds the index before
+returning results. Rebuilding can take longer, and the search result discloses
+possible costs from the configured embedding provider. An index written by a
+newer OpenClaw version remains paused; upgrade OpenClaw or reindex explicitly.
+Later searches reuse the repaired index;
+status inspection alone does not rebuild it.
+Concurrent searches wait for the active repair. A slow repair can exceed the
+interactive tool's deadline; the tool reports unavailability while admitted
+index work finishes. If a format repair fails before publication, search reports
+the recorded sync error and retains the prior index. Use `memory status --deep`
+to inspect that failure before retrying.
 
 If status reports an index identity warning after changing embedding settings,
 check the affected agent's provider, model, sources, and extra paths, then rebuild:
@@ -260,7 +279,9 @@ and remain selected.
 
 Preview and apply use the same matching logic, but each reads current state;
 a preview is not an immutable plan or a lock on subsequent writes. Apply
-coordinates with the memory plugin's staging and file mutations. Indexing
+coordinates with the memory plugin's staging and file mutations. It rechecks
+selected lineage after preparation and refreshes the plan if it changed, while
+retaining entries already identified as belonging to the selected sessions. Indexing
 discards stale results instead of restoring purged chunks or cached embeddings;
 rerun an index command that reports a source change. Direct agent edits and
 external writers do not share that lock, so pause them during a sensitive

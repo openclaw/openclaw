@@ -25,7 +25,7 @@ import {
   resolveAnthropicCacheOptions,
   applyAnthropicContextManagementToRequest,
   isDirectAnthropicModel,
-  resolveAnthropicContextManagementBetaHeader,
+  resolveAnthropicRequestBetaHeader,
 } from "../transports/anthropic-payload-policy.js";
 import { consumeAnthropicStream } from "../transports/anthropic-stream-reducer.js";
 // Anthropic provider adapts Anthropic streams and tool calls for the runtime.
@@ -55,7 +55,7 @@ import {
 } from "./anthropic-auth-headers.js";
 import {
   applyClaudeRequestContract,
-  ANTHROPIC_CLAUDE_CODE_VERSION,
+  buildAnthropicClaudeCodeIdentity,
   prepareClaudeNoPrefillRequestContext,
   resolveAnthropicThinkingEffort,
   resolveClaudeOpus5ModelIdentity,
@@ -65,10 +65,7 @@ import {
   usesClaudeFable5MessagesContract,
   usesClaudeStreamingRefusalContract,
 } from "./anthropic-model-contract.js";
-import {
-  ANTHROPIC_SERVER_SIDE_FALLBACK_BETA,
-  ANTHROPIC_SERVER_SIDE_FALLBACKS,
-} from "./anthropic-server-fallback.js";
+import { ANTHROPIC_SERVER_SIDE_FALLBACKS } from "./anthropic-server-fallback.js";
 import { applyAnthropicThinkingBindingControls } from "./anthropic-thinking-replay.js";
 import {
   normalizeAnthropicToolCallId,
@@ -188,6 +185,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
       // caller-owned headers.
       let serverSideFallback = false;
       let directApiKeyBetaHeader: string | undefined;
+      let claudeCodeVersion: string | undefined;
 
       if (requestOptions?.client) {
         client = requestOptions.client;
@@ -221,6 +219,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
         isOAuth = created.isOAuthToken;
         serverSideFallback = created.serverSideFallback;
         directApiKeyBetaHeader = created.directApiKeyBetaHeader;
+        claudeCodeVersion = created.claudeCodeVersion;
       }
       const builtParams = await buildParams(
         model,
@@ -228,6 +227,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
         isOAuth,
         requestOptions,
         serverSideFallback,
+        claudeCodeVersion,
       );
       usedCompactionReplay = builtParams.usedCompactionReplay;
       let params = builtParams.params;
@@ -243,10 +243,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
         params = nextParams as MessageCreateParamsStreaming;
       }
       applyClaudeRequestContract(params, model);
-      const betaHeader = resolveAnthropicContextManagementBetaHeader(
-        params,
-        directApiKeyBetaHeader,
-      );
+      const betaHeader = resolveAnthropicRequestBetaHeader(params, directApiKeyBetaHeader);
       const sdkRequestOptions = {
         ...(requestOptions?.signal ? { signal: requestOptions.signal } : {}),
         ...(requestOptions?.timeoutMs !== undefined ? { timeout: requestOptions.timeoutMs } : {}),
@@ -318,6 +315,7 @@ type AnthropicSimpleStreamOptions = SimpleStreamOptions &
   AnthropicContextManagementOptions & {
     authProfileId?: string;
     toolChoice?: AnthropicCompactionOptions["toolChoice"];
+    thinkingDisplay?: AnthropicOptions["thinkingDisplay"];
   };
 
 export const streamSimpleAnthropic: StreamFunction<
@@ -341,6 +339,7 @@ export const streamSimpleAnthropic: StreamFunction<
     authProfileId: options?.authProfileId,
     maxTokens: clampMaxTokensToModel(model, options?.maxTokens ?? model.maxTokens),
     toolChoice: options?.toolChoice,
+    thinkingDisplay: options?.thinkingDisplay,
   };
   const mandatoryAdaptiveThinking = requiresClaudeAdaptiveThinking(model);
   if (options?.reasoning === "off" && !mandatoryAdaptiveThinking) {
@@ -359,14 +358,13 @@ export const streamSimpleAnthropic: StreamFunction<
     return streamAnthropic(model, context, {
       ...base,
       thinkingEnabled: true,
-      effort: resolveAnthropicThinkingEffort(model, reasoning ?? "high"),
+      effort: resolveAnthropicThinkingEffort(model, reasoning),
     } satisfies AnthropicCompactionOptions);
   }
   if (!reasoning) {
     return streamAnthropic(model, context, {
       ...base,
       thinkingEnabled: mandatoryAdaptiveThinking,
-      ...(mandatoryAdaptiveThinking ? { effort: "high" as const } : {}),
     } satisfies AnthropicCompactionOptions);
   }
 
@@ -385,7 +383,7 @@ export const streamSimpleAnthropic: StreamFunction<
   // Do not coerce to 0 here, or the thinking budget would become the entire max_tokens value.
   const adjusted = adjustMaxTokensForThinking(
     base.maxTokens,
-    model.maxTokens,
+    model.maxTokens ?? base.maxTokens,
     reasoning,
     options?.thinkingBudgets,
   );
@@ -435,6 +433,7 @@ function createClient(
   isOAuthToken: boolean;
   serverSideFallback: boolean;
   directApiKeyBetaHeader?: string;
+  claudeCodeVersion?: string;
 } {
   // Adaptive thinking models (Opus 4.6, Sonnet 4.6) have interleaved thinking built-in.
   // The beta header is deprecated on Opus 4.6 and redundant on Sonnet 4.6, so skip it.
@@ -530,34 +529,31 @@ function createClient(
 
   // OAuth: Bearer auth, Claude Code identity headers
   if (isAnthropicOAuthApiKey(apiKey)) {
+    const identity = buildAnthropicClaudeCodeIdentity(
+      ["claude-code-20250219", "oauth-2025-04-20", ...betaFeatures].join(","),
+      model.headers,
+      optionsHeaders,
+    );
     const client = new Anthropic({
       apiKey: null,
       authToken: apiKey,
       baseURL: model.baseUrl,
       dangerouslyAllowBrowser: true,
-      defaultHeaders: mergeHeaders(
-        {
-          accept: "application/json",
-          "anthropic-dangerous-direct-browser-access": "true",
-          "anthropic-beta": ["claude-code-20250219", "oauth-2025-04-20", ...betaFeatures].join(","),
-          "user-agent": `claude-cli/${ANTHROPIC_CLAUDE_CODE_VERSION}`,
-          "x-app": "cli",
-        },
-        model.headers,
-        optionsHeaders,
-      ),
+      defaultHeaders: identity.headers,
       fetch,
       maxRetries: 0,
     });
 
-    return { client, isOAuthToken: true, serverSideFallback: false };
+    return {
+      client,
+      isOAuthToken: true,
+      serverSideFallback: false,
+      claudeCodeVersion: identity.version,
+    };
   }
 
   // API key auth
   const serverSideFallback = supportsAnthropicServerSideFallback(model);
-  if (serverSideFallback) {
-    betaFeatures.push(ANTHROPIC_SERVER_SIDE_FALLBACK_BETA);
-  }
   const sessionAffinityHeaders: Record<string, string | null> =
     sessionId && getAnthropicCompat(model).sendSessionAffinityHeaders
       ? { "x-session-affinity": sessionId }
@@ -601,6 +597,7 @@ async function buildParams(
   isOAuthTokenResult: boolean,
   options?: AnthropicCompactionOptions,
   serverSideFallback = false,
+  claudeCodeVersion?: string,
 ): Promise<{
   params: MessageCreateParamsStreaming;
   toolProjection?: AnthropicToolProjection;
@@ -612,7 +609,12 @@ async function buildParams(
     model,
     options?.cacheRetention,
   );
-  const system = buildAnthropicSystemBlocks(context.systemPrompt, isOAuthTokenResult, cacheControl);
+  const system = buildAnthropicSystemBlocks(
+    context.systemPrompt,
+    isOAuthTokenResult,
+    cacheControl,
+    claudeCodeVersion,
+  );
   const compat = getAnthropicCompat(model);
   const convertedTools = context.tools
     ? convertAnthropicTools(

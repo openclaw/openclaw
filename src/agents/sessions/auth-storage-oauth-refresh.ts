@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type { OAuthProviderId } from "../../llm/utils/oauth/types.js";
 import { OAUTH_REFRESH_CALL_TIMEOUT_MS } from "../auth-profiles/constants.js";
 import {
@@ -5,6 +6,7 @@ import {
   refreshSerializedOAuthCredential,
 } from "../auth-profiles/oauth-refresh-fence.js";
 import { isOAuthRefreshFence } from "../auth-profiles/oauth-refresh-marker.js";
+import { AuthStoragePersistenceError } from "./auth-storage-error.js";
 import {
   canResolveAuthStoragePluginOAuthRefresh,
   getAuthStorageOAuthProviderRegistry,
@@ -56,7 +58,21 @@ export async function refreshAuthStorageOAuthCredential(params: {
     }),
     canRefresh: async () =>
       Boolean(provider) || (await canResolveAuthStoragePluginOAuthRefresh(params.providerId)),
-    commit: params.commit,
+    commit: (data) => {
+      const expected = params.parse(JSON.stringify(data));
+      const current = params.storage.withLock((raw) => {
+        const authoritative = params.parse(raw);
+        if (!isDeepStrictEqual(authoritative[params.providerId], expected[params.providerId])) {
+          throw new AuthStoragePersistenceError(
+            "Auth storage credentials changed before refresh publication.",
+            undefined,
+          );
+        }
+        return { result: authoritative };
+      });
+      // Backend completion captures credential sources before runtime publication.
+      params.commit(current);
+    },
     refresh: async (credential, data) => {
       const oauthCredentials = Object.fromEntries(
         Object.entries(data).filter((entry): entry is [string, OAuthCredential] => {

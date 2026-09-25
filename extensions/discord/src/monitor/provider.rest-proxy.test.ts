@@ -1,8 +1,8 @@
-// Discord tests cover provider.rest proxy plugin behavior.
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../../../test-support/runtime-spies.js";
 
 const {
   undiciFetchMock,
@@ -79,7 +79,9 @@ const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
 
 vi.mock("undici", async (importOriginal) => ({
   ...(await importOriginal<typeof import("undici")>()),
-  ...createMockUndiciRuntime(),
+  // Bun's bare undici shim has an Agent constructor but no dispatch method.
+  // The monitor must use the installed runtime for both fetch and its dispatcher.
+  Agent: (await import("node:events")).EventEmitter,
 }));
 
 let resolveDiscordRestFetch: typeof import("./rest-fetch.js").resolveDiscordRestFetch;
@@ -121,10 +123,6 @@ function dispatchRequest(dispatcher: unknown, origin: string): void {
     throw new Error("expected attached dispatcher.dispatch");
   }
   target.dispatch({ origin, path: "/", method: "GET" }, {});
-}
-
-function createRuntimeSpies() {
-  return { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as const;
 }
 
 function installUndiciRuntimeDeps(): void {
@@ -298,9 +296,12 @@ describe("resolveDiscordRestFetch", () => {
     expect(runtime.error).not.toHaveBeenCalled();
   });
 
-  it("uses undici Agent with IPv4-first lookup when no discord proxy URL is configured", async () => {
+  it("uses a runtime-compatible Agent with IPv4-first lookup without a proxy", async () => {
     const runtime = createRuntimeSpies();
-    undiciFetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
+    undiciFetchMock.mockImplementation(async (_input, init) => {
+      dispatchRequest(init?.dispatcher, "https://discord.com");
+      return new Response("ok", { status: 200 });
+    });
 
     const fetcher = resolveDiscordRestFetch(undefined, runtime);
     await fetcher("https://discord.com/api/v10/oauth2/applications/@me");
@@ -312,6 +313,7 @@ describe("resolveDiscordRestFetch", () => {
       "https://discord.com/api/v10/oauth2/applications/@me",
     );
     const fetchOptions = objectArgAt(undiciFetchMock, 0, 1);
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
     const dispatcherOptions = recordField(
       recordField(fetchOptions.dispatcher, "dispatcher").options,
       "dispatcher.options",

@@ -1,5 +1,6 @@
 import type { Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString as readTtsResultString } from "@openclaw/normalization-core/string-coerce";
+import { createRuntimeConfigReader } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig, ResolvedTtsPersona, TtsProvider } from "../config/types.js";
 import { logVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -272,6 +273,9 @@ export async function acquireTtsRequest(params: TtsRequestSetupParams) {
     return facts;
   }
   const { cfg, config, prefsPath } = facts;
+  // Bind before provider work can reload the snapshot; fallback follows a known runtime
+  // owner without letting an unrelated global snapshot replace explicit scoped config.
+  const readRuntimeConfig = createRuntimeConfigReader(cfg);
   const prefs = readTtsPrefs(prefsPath);
   const persona = resolveTtsPersonaFromPrefs(config, prefs);
   const queries = await acquirePluginCapabilityProviders({ key: "speechProviders", cfg });
@@ -329,7 +333,7 @@ export async function acquireTtsRequest(params: TtsRequestSetupParams) {
       };
       const prepareProviderRegistry = async (): Promise<TtsProviderRegistry> => {
         const inputView = await prepareView(cfg, await queries.resolveProviders({ cfg }));
-        const runtimeConfig = resolveTtsRuntimeConfig(cfg);
+        const runtimeConfig = readRuntimeConfig();
         const runtimeView =
           runtimeConfig === cfg
             ? inputView

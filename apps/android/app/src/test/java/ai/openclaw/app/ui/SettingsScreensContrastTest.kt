@@ -21,6 +21,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.Bitmap
 import android.os.Looper
+import android.provider.Settings
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.toArgb
@@ -39,6 +40,7 @@ import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasAnyChild
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -48,6 +50,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.printToString
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.core.os.LocaleListCompat
 import androidx.lifecycle.SavedStateHandle
@@ -141,6 +144,70 @@ class SettingsScreensContrastTest {
 
   @Test
   @Config(qualifiers = "fr-rFR-w320dp-h800dp-mdpi")
+  fun healthPhoneNodeStatusKeepsCompleteLocalizedTitleAtLargeFont() {
+    try {
+      val model = offlineTypographyModel()
+      composeRule.setContent {
+        DeviceConfigurationOverride(DeviceConfigurationOverride.FontScale(2f)) {
+          ClawDesignTheme {
+            SettingsDetailScreen(model, SettingsRoute.Health, onBack = {})
+          }
+        }
+      }
+      val title = nativeString("Phone Node")
+      composeRule.onNodeWithText(title, useUnmergedTree = true).performScrollTo()
+      captureTypography("health-phone-node-large")
+      composeRule.onNodeWithText(title, useUnmergedTree = true).assertCompleteText(title)
+      composeRule
+        .onNode(hasText(nativeString("Waiting")) and hasAnyAncestor(hasAnyChild(hasText(title))), useUnmergedTree = true)
+        .assertCompleteText(nativeString("Waiting"))
+      assertFalse(model.isNodeConnected.value)
+    } finally {
+      NativeStringResources.setApplicationLocales(LocaleListCompat.getEmptyLocaleList())
+    }
+  }
+
+  @Test
+  @Config(qualifiers = "fr-rFR-w320dp-h800dp-mdpi")
+  fun voiceAudioTestExposesLocalizedPlaybackActionInBothSpeakerStates() {
+    val resolver = RuntimeEnvironment.getApplication().contentResolver
+    val previousScale = Settings.Global.getString(resolver, Settings.Global.ANIMATOR_DURATION_SCALE)
+    try {
+      // The synthetic waveform animation is unrelated to the accessibility action.
+      Settings.Global.putFloat(resolver, Settings.Global.ANIMATOR_DURATION_SCALE, 0f)
+      val model = offlineTypographyModel()
+      composeRule.setContent {
+        DeviceConfigurationOverride(DeviceConfigurationOverride.FontScale(2f)) {
+          ClawDesignTheme {
+            SettingsDetailScreen(model, SettingsRoute.Voice, onBack = {})
+          }
+        }
+      }
+      val label = nativeString("Play audio")
+      assertEquals("Lire l’audio", label)
+      for (speakerEnabled in listOf(true, false)) {
+        composeRule.runOnIdle { model.setSpeakerEnabled(speakerEnabled) }
+        composeRule.onNodeWithText(nativeString(if (speakerEnabled) "Mute speaker" else "Enable speaker"), useUnmergedTree = true).performScrollTo()
+        captureTypography("voice-audio-test-$speakerEnabled")
+        composeRule
+          .onNodeWithContentDescription(label)
+          .performScrollTo()
+          .assertIsDisplayed()
+          .assertIsEnabled()
+          .assertHasClickAction()
+          .performClick()
+        composeRule.runOnIdle {
+          assertEquals("Playing the test tone does not toggle the speaker preference", speakerEnabled, model.speakerEnabled.value)
+        }
+      }
+    } finally {
+      Settings.Global.putString(resolver, Settings.Global.ANIMATOR_DURATION_SCALE, previousScale)
+      NativeStringResources.setApplicationLocales(LocaleListCompat.getEmptyLocaleList())
+    }
+  }
+
+  @Test
+  @Config(qualifiers = "fr-rFR-w320dp-h800dp-mdpi")
   fun gatewayInstanceIdCopiesTheWholeValueAtLargeFont() {
     val application = RuntimeEnvironment.getApplication()
     val clipboard = requireNotNull(application.getSystemService(ClipboardManager::class.java))
@@ -156,6 +223,7 @@ class SettingsScreensContrastTest {
       }
       val expected = model.instanceId.value
       assertTrue(expected.isNotBlank())
+      composeRule.onNodeWithText(nativeString("Diagnostics")).performScrollTo().performClick()
       val value = composeRule.onNodeWithText(expected, useUnmergedTree = true).performScrollTo()
       value.assertIsDisplayed()
       composeRule.runOnIdle { clipboard.setPrimaryClip(ClipData.newPlainText("Previous clipboard", "synthetic clipboard sentinel")) }
@@ -194,6 +262,9 @@ class SettingsScreensContrastTest {
       }
       val failures = mutableListOf<String>()
       for (text in listOf(nativeString("Connection"), nativeString("Instance ID"), model.instanceId.value)) {
+        if (text == nativeString("Instance ID")) {
+          composeRule.onNodeWithText(nativeString("Diagnostics")).performScrollTo().performClick()
+        }
         // Exact semantic lookup alone must not certify the visible, possibly ellipsized value.
         val node = composeRule.onNodeWithText(text, useUnmergedTree = true).performScrollTo()
         captureTypography("gateway-metric-${if (text == model.instanceId.value) "instance-value" else text}")
@@ -284,6 +355,9 @@ class SettingsScreensContrastTest {
         )
       }
       for (key in listOf("Scan or paste a setup code to add another gateway.", "Unencrypted", "Secure (TLS)")) {
+        if (key == "Unencrypted") {
+          composeRule.onNodeWithText(nativeString("Manual Gateway")).performScrollTo().performClick()
+        }
         val label = nativeString(key)
         composeRule.onNodeWithText(label, useUnmergedTree = true).performScrollTo()
         captureTypography("gateway-$key")
@@ -361,15 +435,32 @@ class SettingsScreensContrastTest {
         .fetchSemanticsNode()
         .config[SemanticsProperties.ContentDescription]
         .single()
-    disconnectAndReconnectStatusControl(model, showHeader = true)
-    composeRule.onNodeWithContentDescription(readyDescription).assertIsDisplayed()
+    try {
+      disconnectAndReconnectStatusControl(model, showHeader = true)
+      // The session title can resolve after reconnect; the health status is the invariant.
+      composeRule.onNode(chatStatusMatcher(showHeader = true, value = "Ready")).assertIsDisplayed()
 
-    composeRule.runOnIdle {
-      gateway.healthReady = false
-      model.refreshChat()
+      composeRule.runOnIdle {
+        gateway.healthReady = false
+        model.refreshChat()
+      }
+      awaitConnectedHealthFailure(model, showHeader = true)
+      composeRule.onNode(chatStatusMatcher(showHeader = true, value = "Not ready")).assertIsDisplayed()
+    } catch (failure: AssertionError) {
+      runCatching {
+        println("Chat header failure: initialHeader=$readyDescription, connected=${model.gatewayConnectionDisplay.value.isConnected}, health=${model.chatHealthOk.value}")
+        println("Chat header work: historyLoading=${model.chatHistoryLoading.value}, pendingRuns=${model.pendingRunCount.value}, sessionCreating=${model.chatSessionCreating.value}")
+        println("Chat header display: ${app.resources.configuration}, metrics=${app.resources.displayMetrics}")
+      }.onFailure(failure::addSuppressed)
+      for (unmerged in listOf(false, true)) {
+        runCatching {
+          println(
+            composeRule.onAllNodes(isRoot(), useUnmergedTree = unmerged).printToString(maxDepth = Int.MAX_VALUE),
+          )
+        }.onFailure(failure::addSuppressed)
+      }
+      throw failure
     }
-    awaitConnectedHealthFailure(model, showHeader = true)
-    composeRule.onNodeWithContentDescription(readyDescription.removeSuffix(ready) + nativeString("Not ready")).assertIsDisplayed()
   }
 
   private fun chatHealthStatusValue(value: String) = composeRule.onNode(chatStatusMatcher(showHeader = false, value = value))
@@ -658,7 +749,9 @@ class SettingsScreensContrastTest {
     val renderedTogether =
       try {
         gateway.terminal = true
-        composeRule.onNodeWithText("Refresh").performScrollTo().performClick()
+        // Connection bootstrap can refresh concurrently; this test targets publication coherence.
+        // The operational-caption test covers the actual Refresh button.
+        composeRule.runOnIdle { model.refreshExecApprovals() }
         composeRule.waitUntil(10_000) {
           composeRule.onAllNodesWithText("Approval approval-1").fetchSemanticsNodes().isNotEmpty() && noticeReached.count == 0L
         }

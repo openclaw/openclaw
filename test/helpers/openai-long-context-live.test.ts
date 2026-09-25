@@ -137,7 +137,7 @@ describe("OpenAI long-context live settings", () => {
       runLongOutput: true,
       toolOutputBytes: 700_000,
       profile: {
-        modelRef: "openai/gpt-5.6-sol",
+        modelRef: "openai/gpt-5.6-luna",
         contextWindow: 1_050_000,
         contextTokens: 922_000,
         maxTokens: 128_000,
@@ -196,7 +196,7 @@ describe("OpenAI compaction state observation", () => {
       replayIndex: 2,
       provider: "openai",
       api: "openai-responses",
-      model: "gpt-5.6-sol",
+      model: "gpt-5.6-luna",
       baseUrlHash: "route-fence",
       sessionHash: "session-fence",
       authProfileHash: "auth-fence",
@@ -214,7 +214,7 @@ describe("OpenAI compaction state observation", () => {
         type: "openai-responses-compaction",
         replayIndex: 2,
         provider: "openai",
-        model: "gpt-5.6-sol",
+        model: "gpt-5.6-luna",
         baseUrlHash: "route-fence",
       },
     });
@@ -232,7 +232,7 @@ describe("OpenAI compaction state observation", () => {
         data: "opaque",
         provider: "openai",
         api: "openai-responses",
-        model: "gpt-5.6-sol",
+        model: "gpt-5.6-luna",
         baseUrlHash: "route",
       },
     };
@@ -251,13 +251,13 @@ describe("OpenAI redacted request evidence", () => {
     const payloadHash = "b".repeat(64);
     const requestHash = "sha256:75620e64157af5a8925a20049b210540e40ed183a34f4c59aa4c53d80d1f2fbc";
     const logs =
-      `[responses] start provider=openai api=openai-responses model=gpt-5.6-sol ` +
+      `[responses] start provider=openai api=openai-responses model=gpt-5.6-luna ` +
       `requestIdHash=${requestHash} ` +
       `fields=context_management,input,model,service_tier serviceTier=priority ` +
       `inputItems=6 inputItemShape=message:developer,compaction,reasoning,message:assistant,function_call,message:user ` +
       `compactionItems=1 compactionIdHashes=${idHash} compactionPayloadHashes=${payloadHash} ` +
       `compactionInputIndexes=1 store=true`;
-    expect(readOpenAITransportReplayEvidence(logs, "gpt-5.6-sol", "run-1:model:1")).toEqual({
+    expect(readOpenAITransportReplayEvidence(logs, "gpt-5.6-luna", "run-1:model:1")).toEqual({
       serviceTier: "priority",
       inputItems: 6,
       inputItemShape: [
@@ -440,7 +440,7 @@ describe("OpenAI turn metrics", () => {
       }),
     ).toEqual({
       runtime: "openclaw",
-      model: "openai/gpt-5.6-sol",
+      model: "openai/gpt-5.6-luna",
       phase: "dense-2",
       inputChars: 900_000,
       elapsedMs: 12_345,

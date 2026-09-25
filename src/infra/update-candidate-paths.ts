@@ -2,6 +2,8 @@ import path from "node:path";
 import { sha256Hex } from "./crypto-digest.js";
 import { isPathInside, normalizeWindowsPathPreservingCase } from "./path-guards.js";
 
+export const UPDATE_CANDIDATE_PLUGIN_PLAN_FILENAME = "plugin-copy-plan.json";
+
 /**
  * One projection identity per locator, matching the raw canonical-spelling
  * eligibility of the rebase branch in resolveUpdateCandidateStatePath: only
@@ -65,4 +67,27 @@ export function resolveUpdateCandidatePluginPath(
         sha256Hex(path.parse(source).root),
         path.relative(path.parse(source).root, source),
       );
+}
+
+/** Decode the ancestry retained by published drivers for external plugin copies. */
+export function resolveUpdateCandidatePluginSourcePath(
+  rehearsalRoot: string,
+  copiedPath: string,
+): string | undefined {
+  const root = path.parse(copiedPath).root;
+  const namespace = path.join(rehearsalRoot, "candidate-plugins", sha256Hex(root));
+  if (
+    !root ||
+    path.normalize(copiedPath) !== copiedPath ||
+    !isPathInside(namespace, copiedPath) ||
+    namespace === copiedPath
+  ) {
+    return undefined;
+  }
+  // Other Windows volumes/UNC roots and managed state-relative copies lost their
+  // original root in the published protocol. A matching path is not source authority.
+  const source = path.join(root, path.relative(namespace, copiedPath));
+  return resolveUpdateCandidatePluginPath(rehearsalRoot, rehearsalRoot, source) === copiedPath
+    ? source
+    : undefined;
 }

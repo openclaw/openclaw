@@ -106,6 +106,21 @@ export function buildFallbackNotice(params: {
   return `↪️ Model Fallback: ${active} (selected ${selected}; ${reasonSummary})`;
 }
 
+/** Builds the visible notice shown after a successful embedded provider-policy retry. */
+export function buildProviderPolicyRetryNotice(params: {
+  provider: string;
+  model: string;
+  cfg?: OpenClawConfig;
+}): string {
+  const target = buildModelCatalogRef(params.provider, params.model);
+  const label = areRuntimeModelRefsEquivalent(target, "openai/gpt-daybreak-blue-latest", {
+    config: params.cfg,
+  })
+    ? "Daybreak"
+    : target;
+  return `↪️ Retried on ${label}`;
+}
+
 /** Builds the visible notice shown when runtime returns to the selected model. */
 export function buildFallbackClearedNotice(params: {
   selectedProvider: string;

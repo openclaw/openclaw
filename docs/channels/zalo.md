@@ -22,7 +22,7 @@ On an older build or a custom install that excludes Zalo, install the npm packag
 
 1. Create a bot token at [https://bot.zaloplatforms.com](https://bot.zaloplatforms.com) (sign in, create a bot, configure settings). The token is `numeric_id:secret`. For Marketplace bots the usable runtime token may appear in the bot's welcome message.
 2. Set the token, either as env `ZALO_BOT_TOKEN=...` (default account only) or in config.
-3. Restart the gateway.
+3. Check `openclaw channels status --probe`; start the Gateway if it is offline. Config changes follow [hot reload](/gateway/configuration/hot-reload). If you changed the service environment, restart the Gateway to load it.
 4. Approve the pairing code on first DM contact (default DM policy is pairing).
 
 Minimal config:
@@ -104,6 +104,7 @@ Group chats are supported by the plugin (`chatTypes: ["direct", "group"]`) and g
 
 - Text: full support, chunked to 2000 characters.
 - Media: inbound/outbound, capped by `mediaMaxMb`.
+- Photo captions: truncated to fit the 2000-character limit, including polling replies.
 - Reactions, threads, polls, native commands: not supported by the plugin.
 - Streaming: the plugin declares block-streaming capability. Zalo has no dedicated outbound queue/merge-text tuning knobs, unlike some other regional channels. Verify current behavior in your environment if this matters for your use case.
 

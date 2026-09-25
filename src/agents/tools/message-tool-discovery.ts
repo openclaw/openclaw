@@ -10,10 +10,13 @@ import {
 import {
   channelSupportsMessageCapability,
   channelSupportsMessageCapabilityForChannel,
+  createMessageActionDiscoveryContext,
   type ChannelMessageActionDiscoveryInput,
   listCrossChannelSchemaSupportedMessageActions,
+  listMessageActionDiscoveryChannels,
   type PreparedMessageToolCatalog,
   resolveChannelMessageToolSchemaProperties,
+  resolveMessageActionDiscoveryForPlugin,
 } from "../../channels/plugins/message-action-discovery.js";
 import type { ChannelMessageCapability } from "../../channels/plugins/message-capabilities.js";
 import type { ChannelMessageActionName } from "../../channels/plugins/types.public.js";
@@ -25,7 +28,6 @@ import { resolveAllowedMessageActions } from "../../infra/outbound/outbound-poli
 import { normalizeAccountId, parseSessionDeliveryRoute } from "../../routing/session-key.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { listAllChannelSupportedActions, listChannelSupportedActions } from "../channel-tools.js";
-import { appendMessageToolReadHint } from "./message-tool-description.js";
 import { buildMessageToolSchemaFromActions } from "./message-tool-schema-scoping.js";
 import { MESSAGE_TOOL_SCHEMA_BUILDERS } from "./message-tool-schema.js";
 export type MessageToolDiscoveryParams = {
@@ -41,6 +43,8 @@ export type MessageToolDiscoveryParams = {
   agentId?: string;
   requesterSenderId?: string;
   senderIsOwner?: boolean;
+  /** Host-redeemed scheduled account; never changes the current delivery context. */
+  scheduledAccountScope?: { channels?: readonly string[]; accountId: string };
   preparedMessageToolCatalog?: PreparedMessageToolCatalog;
 };
 
@@ -88,6 +92,7 @@ type MessageToolDeliveryRequest = {
   action: ChannelMessageActionName;
   params: Record<string, unknown>;
   accountId?: string;
+  preparedMessageToolCatalog?: PreparedMessageToolCatalog;
 };
 
 function recoverSessionCanonicalPeerId(params: {
@@ -102,7 +107,13 @@ function recoverSessionCanonicalPeerId(params: {
     !request ||
     normalizeOptionalString(request.params.target) ||
     (Array.isArray(request.params.targets) && request.params.targets.length > 0) ||
-    actionHasTarget(request.action, request.params, { channel: params.channel })
+    actionHasTarget(request.action, request.params, {
+      channel: params.channel,
+      aliasSpec: request.preparedMessageToolCatalog
+        ? (request.preparedMessageToolCatalog.getChannel(params.channel)?.actions
+            ?.messageActionTargetAliases?.[request.action] ?? null)
+        : undefined,
+    })
   ) {
     return params.peerId;
   }
@@ -202,6 +213,23 @@ export function resolveEffectiveCurrentChannelContext(
   };
 }
 
+function resolveDiscoveryAccountId(
+  params: MessageToolDiscoveryParams,
+  channel: string | undefined,
+  contextualAccountId: ChannelMessageActionDiscoveryInput["accountId"],
+): ChannelMessageActionDiscoveryInput["accountId"] {
+  const scope = params.scheduledAccountScope;
+  const normalizedChannel = normalizeMessageChannel(channel);
+  return scope &&
+    (scope.channels === undefined ||
+      (normalizedChannel !== undefined &&
+        scope.channels.some(
+          (scopedChannel) => normalizeMessageChannel(scopedChannel) === normalizedChannel,
+        )))
+    ? scope.accountId
+    : contextualAccountId;
+}
+
 function buildMessageActionDiscoveryInput(
   params: MessageToolDiscoveryParams,
   channel?: string,
@@ -213,7 +241,7 @@ function buildMessageActionDiscoveryInput(
     currentChannelId: params.currentChannelId,
     currentThreadTs: params.currentThreadTs,
     currentMessageId: params.currentMessageId,
-    accountId: params.currentAccountId,
+    accountId: resolveDiscoveryAccountId(params, channel, params.currentAccountId),
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
     agentId: params.agentId,
@@ -265,7 +293,19 @@ export function resolveMessageToolActionSchemaActions(
 }
 
 function listAllMessageToolActions(params: MessageToolDiscoveryParams): ChannelMessageActionName[] {
-  const pluginActions = listAllChannelSupportedActions(buildMessageActionDiscoveryInput(params));
+  const pluginActions = params.scheduledAccountScope?.channels
+    ? listMessageActionDiscoveryChannels(params.preparedMessageToolCatalog).flatMap(
+        (plugin) =>
+          resolveMessageActionDiscoveryForPlugin({
+            pluginId: plugin.id,
+            actions: plugin.actions,
+            context: createMessageActionDiscoveryContext(
+              buildMessageActionDiscoveryInput(params, plugin.id),
+            ),
+            includeActions: true,
+          }).actions,
+      )
+    : listAllChannelSupportedActions(buildMessageActionDiscoveryInput(params));
   return uniqueValues<ChannelMessageActionName>(["send", "broadcast", ...pluginActions]);
 }
 
@@ -280,19 +320,28 @@ function resolveIncludeCapability(
       capability,
     );
   }
+  if (params.scheduledAccountScope) {
+    const capabilities = listMessageActionDiscoveryChannels(params.preparedMessageToolCatalog).map(
+      (plugin) => {
+        const accountId = resolveDiscoveryAccountId(params, plugin.id, undefined);
+        return resolveMessageActionDiscoveryForPlugin({
+          pluginId: plugin.id,
+          actions: plugin.actions,
+          context: {
+            cfg: params.cfg,
+            ...(accountId !== undefined ? { accountId } : {}),
+          },
+          includeCapabilities: true,
+        }).capabilities;
+      },
+    );
+    return capabilities.some((values) => values.includes(capability));
+  }
   return channelSupportsMessageCapability(
     params.cfg,
     capability,
     params.preparedMessageToolCatalog,
   );
-}
-
-function resolveIncludePresentation(params: MessageToolDiscoveryParams): boolean {
-  return resolveIncludeCapability(params, "presentation");
-}
-
-function resolveIncludeDeliveryPin(params: MessageToolDiscoveryParams): boolean {
-  return resolveIncludeCapability(params, "delivery-pin");
 }
 
 function resolveIncludeBestEffort(params: MessageToolDiscoveryParams): boolean {
@@ -318,15 +367,19 @@ function resolveIncludeBestEffort(params: MessageToolDiscoveryParams): boolean {
 }
 
 export function buildMessageToolSchema(params: MessageToolDiscoveryParams, actions: string[]) {
-  const includePresentation = resolveIncludePresentation(params);
-  const includeDeliveryPin = resolveIncludeDeliveryPin(params);
+  const includePresentation = resolveIncludeCapability(params, "presentation");
+  const includeDeliveryPin = resolveIncludeCapability(params, "delivery-pin");
   const includeBestEffort = resolveIncludeBestEffort(params);
-  const extraProperties = resolveChannelMessageToolSchemaProperties(
-    buildMessageActionDiscoveryInput(
+  const extraProperties = resolveChannelMessageToolSchemaProperties({
+    ...buildMessageActionDiscoveryInput(
       params,
       normalizeMessageChannel(params.currentChannelProvider) ?? undefined,
     ),
-  );
+    resolveAccountIdForChannel: params.scheduledAccountScope
+      ? (channel, contextualAccountId) =>
+          resolveDiscoveryAccountId(params, channel, contextualAccountId)
+      : undefined,
+  });
   return buildMessageToolSchemaFromActions(
     actions.length > 0 ? actions : ["send"],
     {
@@ -353,11 +406,11 @@ export function resolveAgentAccountId(value?: string): string | undefined {
 export function buildMessageToolDescription(actions: string[] | undefined): string {
   const baseDescription = "Send/manage channel messages.";
   if (actions && actions.length > 0) {
-    const sortedActions = sortUniqueStrings(actions) as Array<ChannelMessageActionName | "send">;
-    return appendMessageToolReadHint(
-      `${baseDescription} Supports actions: ${sortedActions.join(", ")}.`,
-      sortedActions,
-    );
+    const sortedActions = sortUniqueStrings(actions);
+    const description = `${baseDescription} Supports actions: ${sortedActions.join(", ")}.`;
+    return sortedActions.includes("read")
+      ? `${description} Missing thread context: action="read" + threadId.`
+      : description;
   }
   return `${baseDescription} Action families (availability depends on the channel): sending/editing/unsend, reactions, polls, pins, threads, file upload/download, moderation (timeout/kick/ban), roles, channel + category management, profile/presence.`;
 }

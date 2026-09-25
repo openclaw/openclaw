@@ -1,9 +1,13 @@
 import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/account-helpers";
 import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
-import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import {
+  readProviderJsonResponse,
+  readProviderTextResponse,
+} from "openclaw/plugin-sdk/provider-http";
 import { sanitizeUntrustedFileName } from "openclaw/plugin-sdk/security-runtime";
 import { ssrfPolicyFromPrivateNetworkOptIn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { SaxesParser } from "saxes";
 import { fetchWithSsrFGuard, type OpenClawConfig, type PluginRuntime } from "../runtime-api.js";
 import { resolveNextcloudTalkApiCredentials } from "./api-credentials.js";
 import { releaseNextcloudTalkGuardedResponse } from "./guarded-response.js";
@@ -13,6 +17,8 @@ import type { NextcloudTalkAccountConfig, NextcloudTalkInboundAttachment } from 
 const DEFAULT_NEXTCLOUD_TALK_MEDIA_MAX_BYTES = 20 * 1024 * 1024;
 const NEXTCLOUD_TALK_MEDIA_RESPONSE_HEADER_TIMEOUT_MS = 120_000;
 const NEXTCLOUD_TALK_MEDIA_READ_IDLE_TIMEOUT_MS = 30_000;
+const NEXTCLOUD_TALK_WEBDAV_FILE_ID_REQUEST =
+  '<d:propfind xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns"><d:prop><oc:fileid/></d:prop></d:propfind>';
 
 export type NextcloudTalkMediaOutcomeReason =
   | "media_sender_not_allowlisted"
@@ -120,11 +126,13 @@ export function resolveNextcloudTalkAttachmentReference(params: {
 
   const basePath = base.pathname.replace(/\/+$/u, "");
   const sharePrefix = `${basePath}/s/`;
-  if (!share.pathname.startsWith(sharePrefix)) {
-    return { ok: false, reason: "media_invalid_link" };
-  }
-  const shareToken = share.pathname.slice(sharePrefix.length);
-  if (!shareToken || shareToken.includes("/")) {
+  const filePrefix = `${basePath}/index.php/f/`;
+  const suffix = share.pathname.startsWith(sharePrefix)
+    ? share.pathname.slice(sharePrefix.length)
+    : share.pathname.startsWith(filePrefix)
+      ? share.pathname.slice(filePrefix.length)
+      : "";
+  if (!suffix || suffix.includes("/")) {
     return { ok: false, reason: "media_invalid_link" };
   }
 
@@ -183,7 +191,12 @@ function resolveExactHistoryMedia(params: {
   senderId: string;
   attachment: NextcloudTalkInboundAttachment;
 }):
-  | { encodedFilePath: string; contentTypeOverride?: string; sourceModality?: "voice" }
+  | {
+      fileId: string;
+      encodedFilePath: string;
+      contentTypeOverride?: string;
+      sourceModality?: "voice";
+    }
   | undefined {
   if (!isRecord(params.payload) || !isRecord(params.payload.ocs)) {
     return undefined;
@@ -221,11 +234,13 @@ function resolveExactHistoryMedia(params: {
   const path = typeof file.path === "string" ? file.path.trim() : "";
   const hideDownload = file["hide-download"];
   if (
+    !/^\d+$/u.test(fileId) ||
     (params.attachment.fileId && fileId !== params.attachment.fileId) ||
     name !== params.attachment.name ||
     mimeType !== params.attachment.mimeType ||
     parseHistorySize(file.size) !== params.attachment.declaredSizeBytes ||
-    hideDownload !== (params.attachment.hideDownload ? "yes" : "no") ||
+    (hideDownload !== undefined && hideDownload !== "yes" && hideDownload !== "no") ||
+    (hideDownload === "yes") !== params.attachment.hideDownload ||
     !path
   ) {
     return undefined;
@@ -247,10 +262,102 @@ function resolveExactHistoryMedia(params: {
       ? mimeType.replace(/^video\//iu, "audio/")
       : undefined;
   return {
+    fileId,
     encodedFilePath,
     ...(contentTypeOverride ? { contentTypeOverride } : {}),
     ...(messageType === "voice-message" ? { sourceModality: "voice" as const } : {}),
   };
+}
+
+function parseWebDavFileId(xml: string): string | undefined {
+  const parser = new SaxesParser({ xmlns: true });
+  const ids: string[] = [];
+  let readingFileId = false;
+  let fileIdText = "";
+  let invalid = false;
+  parser.on("opentag", (tag) => {
+    if (readingFileId) {
+      invalid = true;
+    }
+    if (tag.uri === "http://owncloud.org/ns" && tag.local === "fileid") {
+      readingFileId = true;
+      fileIdText = "";
+    }
+  });
+  parser.on("text", (value) => {
+    if (readingFileId) {
+      fileIdText += value;
+    }
+  });
+  parser.on("closetag", (tag) => {
+    if (tag.uri === "http://owncloud.org/ns" && tag.local === "fileid") {
+      ids.push(fileIdText.trim());
+      readingFileId = false;
+    }
+  });
+  try {
+    parser.write(xml).close();
+  } catch {
+    return undefined;
+  }
+  const id = ids[0];
+  return !invalid && ids.length === 1 && id && /^\d+$/u.test(id) ? id : undefined;
+}
+
+async function fetchNextcloudTalkWebDavFileId(params: {
+  fetchGuarded: NextcloudTalkGuardedFetch;
+  url: string;
+  authorization: string;
+  origin: string;
+  hostname: string;
+  accountConfig: NextcloudTalkAccountConfig;
+  signal?: AbortSignal;
+}): Promise<{ ok: true; fileId: string } | { ok: false; status?: number }> {
+  try {
+    params.signal?.throwIfAborted();
+    const privateNetworkPolicy = ssrfPolicyFromPrivateNetworkOptIn(params.accountConfig);
+    const { response, release } = await params.fetchGuarded({
+      url: params.url,
+      init: {
+        method: "PROPFIND",
+        headers: {
+          Authorization: params.authorization,
+          Depth: "0",
+          "Content-Type": "application/xml; charset=utf-8",
+          Accept: "application/xml",
+        },
+        body: NEXTCLOUD_TALK_WEBDAV_FILE_ID_REQUEST,
+      },
+      maxRedirects: 0,
+      requireHttps: new URL(params.origin).protocol === "https:",
+      timeoutMs: NEXTCLOUD_TALK_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
+      ...(params.signal ? { signal: params.signal } : {}),
+      policy: {
+        ...privateNetworkPolicy,
+        hostnameAllowlist: [params.hostname],
+      },
+      auditContext: "nextcloud-talk.inbound-media-file-id",
+    });
+    try {
+      if (response.status !== 207) {
+        return { ok: false, status: response.status };
+      }
+      const xml = await readProviderTextResponse(response, "Nextcloud Talk file identity", {
+        maxBytes: 64 * 1024,
+        chunkTimeoutMs: NEXTCLOUD_TALK_MEDIA_READ_IDLE_TIMEOUT_MS,
+      });
+      params.signal?.throwIfAborted();
+      const fileId = parseWebDavFileId(xml);
+      return fileId ? { ok: true, fileId } : { ok: false };
+    } finally {
+      await releaseNextcloudTalkGuardedResponse({ response, release });
+    }
+  } catch {
+    if (params.signal?.aborted) {
+      params.signal.throwIfAborted();
+    }
+    return { ok: false };
+  }
 }
 
 async function fetchNextcloudTalkJson(params: {
@@ -378,6 +485,9 @@ export async function resolveNextcloudTalkAuthenticatedMediaSource(params: {
   historyUrl.searchParams.set("limit", "1");
   historyUrl.searchParams.set("lastKnownMessageId", params.messageId);
   historyUrl.searchParams.set("includeLastKnown", "1");
+  historyUrl.searchParams.set("setReadMarker", "0");
+  historyUrl.searchParams.set("noStatusUpdate", "1");
+  historyUrl.searchParams.set("markNotificationsAsRead", "0");
   const history = await fetchNextcloudTalkJson({
     fetchGuarded,
     url: historyUrl.toString(),
@@ -414,6 +524,25 @@ export async function resolveNextcloudTalkAuthenticatedMediaSource(params: {
     base,
     `/remote.php/dav/files/${encodeURIComponent(canonicalUserId)}/${exactHistoryMedia.encodedFilePath}`,
   );
+  const webDavFile = await fetchNextcloudTalkWebDavFileId({
+    fetchGuarded,
+    url: webDavUrl.toString(),
+    authorization,
+    origin: params.reference.origin,
+    hostname: params.reference.hostname,
+    accountConfig: params.accountConfig,
+    signal: params.signal,
+  });
+  if (!webDavFile.ok) {
+    return {
+      ok: false,
+      reason: webDavFile.status === 404 ? "media_unavailable" : "media_fetch_failed",
+      ...(webDavFile.status === undefined ? {} : { status: webDavFile.status }),
+    };
+  }
+  if (webDavFile.fileId !== exactHistoryMedia.fileId) {
+    return { ok: false, reason: "media_message_mismatch" };
+  }
   return {
     ok: true,
     url: webDavUrl.toString(),

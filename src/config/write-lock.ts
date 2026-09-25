@@ -4,9 +4,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage, isErrno } from "../infra/errors.js";
 import { withFileLock } from "../infra/file-lock.js";
+import {
+  getUpdateDoctorConfigWriteAuthority,
+  recordUpdateDoctorConfigWriteRefusal,
+} from "../infra/update-doctor-result.js";
 import { createManagedHandoffLeaseStore } from "../infra/update-managed-service-handoff-lease.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import { assertConfigWriteAllowedInCurrentMode } from "./config-write-guard.js";
+import { composeConfigWriteAssertions } from "./write-authority.js";
 
 const CONFIG_MUTATION_LOCK_OPTIONS = {
   retries: { retries: 80, factor: 1.2, minTimeout: 25, maxTimeout: 250, randomize: true },
@@ -17,7 +22,7 @@ type LockScope = {
   active: boolean;
   accepting: boolean;
   pending: Set<Promise<unknown>>;
-  assertCurrent?: () => void;
+  readonly assertCurrent?: () => void;
 };
 const activeConfigMutationLocks = new AsyncLocalStorage<{
   paths: Map<string, LockScope>;
@@ -33,17 +38,21 @@ export function captureConfigWriteLockGuard(pathname: string): (() => void) | un
     return undefined;
   }
   const target = context?.paths.get(path.resolve(pathname));
-  return () => {
-    if (!target?.active || !target.assertCurrent) {
-      throw new Error("Config write has no live source ownership for this path.");
-    }
-    for (const scope of guarded) {
-      if (!scope.active) {
-        throw new Error("Config write source ownership has closed.");
+  return composeConfigWriteAssertions(
+    () => {
+      if (!target?.active || !target.assertCurrent) {
+        throw new Error("Config write has no live source ownership for this path.");
       }
-      scope.assertCurrent?.();
-    }
-  };
+    },
+    ...guarded.flatMap((scope) => [
+      () => {
+        if (!scope.active) {
+          throw new Error("Config write source ownership has closed.");
+        }
+      },
+      scope.assertCurrent,
+    ]),
+  );
 }
 
 async function runConfigLockScope<T>(
@@ -111,12 +120,15 @@ export async function withConfigWriteLock<T>(
   if (parentGuard && !inherited?.current.accepting) {
     throw new Error("Config write source admission has closed.");
   }
-  const guard = assertCurrent
-    ? () => {
-        parentGuard?.();
-        assertCurrent();
-      }
-    : captureConfigWriteLockGuard(configPath);
+  const doctorAuthority = getUpdateDoctorConfigWriteAuthority(configPath);
+  const guard =
+    assertCurrent || doctorAuthority
+      ? composeConfigWriteAssertions(
+          parentGuard,
+          assertCurrent,
+          doctorAuthority ? () => doctorAuthority.assertCurrent() : undefined,
+        )
+      : captureConfigWriteLockGuard(configPath);
   guard?.();
   const inheritedScope = inherited?.paths.get(configPath);
   if (inheritedScope?.active) {
@@ -145,6 +157,11 @@ export async function withConfigWriteLock<T>(
       );
     })
     .catch(async (error: unknown) => {
+      recordUpdateDoctorConfigWriteRefusal({
+        reason: "config-lock-refused",
+        message: formatErrorMessage(error),
+        keys: [],
+      });
       if (!(await isPermissionErrorInDirectory(error, configDir))) {
         throw error;
       }

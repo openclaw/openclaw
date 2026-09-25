@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { renderFormatErrorCopy } from "./assistant-request-failure-copy.js";
 import {
   AUTH_INVALID_TOKEN_USER_TEXT,
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
-  renderFormatErrorCopy,
   renderBillingReplyCopy,
   renderCliTimeoutReplyCopy,
   renderFailoverCodeUserCopy,
@@ -69,6 +69,15 @@ describe("failover user copy", () => {
     "OpenAI API error (400): 400 max_new_tokens (384000) exceeds model's maximum output tokens (65536)",
   ])("surfaces token limits from %s", (raw) => {
     expect(renderFormatErrorCopy(raw)).toBe(tokenLimitCopy);
+  });
+
+  it.each([
+    "A maximum of 4 blocks with cache_control may be provided. Found 5. PRIVATE_CANARY",
+    "A maximum of many blocks with cache_control may be provided. Found 5.",
+  ])("does not echo arbitrary cache-limit error text: %s", (raw) => {
+    expect(renderFormatErrorCopy(raw)).toBe(
+      "LLM request failed: provider rejected the request schema or tool payload.",
+    );
   });
 
   it("keeps overlong provider-controlled limit text generic", () => {
@@ -166,7 +175,7 @@ describe("failover user copy", () => {
         "unexpected status 404 Not Found: The model `gpt-x` does not exist",
         { errorContext: true },
       ),
-    ).toMatch(/^⚠️ The configured model is unavailable from the provider/);
+    ).toMatch(/^⚠️ The selected model is unavailable from the provider/);
   });
 
   it("keeps non-401 auth text and non-error context out of the provider copy", () => {

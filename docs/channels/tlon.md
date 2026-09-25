@@ -58,8 +58,12 @@ Or edit config directly:
 The login code is your ship's web login code: run `+code` in the ship's dojo to print the current
 one. It rotates, so re-read it whenever authentication starts failing.
 
-Restart the gateway after editing config directly. Then DM the bot or @ mention it in a group
-channel.
+Ship URLs support IPv6 literals in brackets, such as `http://[::1]:8080`.
+Loopback and private IPv6 addresses require the private-network opt-in below.
+
+Config changes follow [hot reload](/gateway/configuration/hot-reload). Check
+`openclaw channels status --probe`, starting the Gateway if it is offline. Then
+DM the bot or @ mention it in a group channel.
 
 ## Inbound durability
 

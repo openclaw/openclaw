@@ -95,7 +95,7 @@ else
 fi
 
 if [ "${#inplace_files[@]}" -gt 0 ]; then
-  "$RUN_NODE_TOOL" oxfmt --write --no-error-on-unmatched-pattern "${inplace_files[@]}"
+  "$RUN_NODE_TOOL" oxfmt --write --threads=1 --no-error-on-unmatched-pattern "${inplace_files[@]}"
   git --literal-pathspecs add -- "${inplace_files[@]}"
 fi
 

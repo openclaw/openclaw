@@ -95,12 +95,15 @@ Controls inline attachment support for `sessions_spawn`.
 <AccordionGroup>
   <Accordion title="Attachment notes">
     - Attachments require `enabled: true`.
-    - Subagent attachments are materialized into the child workspace at `.openclaw/attachments/<uuid>/` with a `.manifest.json`.
+    - Subagent attachments are staged in Gateway-owned state with a `.manifest.json`; they are never written through the child workspace.
+    - Sandboxed children receive only their session-owned attachments read-only at `/openclaw/attachments/<uuid>/`. Attachment-bearing agent-scoped sessions use a dedicated runtime so sibling guests cannot inherit the projection. Shared-scope sandboxes and backends without read-only resource projection reject attachment-bearing spawns before staging.
+    - Unsandboxed children receive the absolute Gateway-owned path and can read it through workspace-scoped file/media tools.
     - ACP attachments are image-only and forwarded inline to the ACP runtime after the same file count, per-file byte, and total byte limits pass.
     - Attachment content is automatically redacted from transcript persistence.
     - Base64 inputs are validated with strict alphabet/padding checks and a pre-decode size guard.
     - Subagent attachment file permissions are `0700` for directories and `0600` for files.
     - Subagent cleanup follows the `cleanup` policy: `delete` always removes attachments; `keep` retains them only when `retainOnSessionKeep: true`.
+    - Upgrading from a pre-`readOnlyResourceMounts` release: previously staged attachments remain in their child workspaces at `.openclaw/attachments/<uuid>/`. Their registry records retire without deleting or traversing those files, so remove leftovers with your normal workspace cleanup. New spawns stage in Gateway-owned state; the child prompt path is the only usable filesystem location. The attachment receipt's `relDir` is a retained identifier, not a usable location, and must not be resolved.
 
   </Accordion>
 </AccordionGroup>
@@ -126,7 +129,8 @@ Controls inline attachment support for `sessions_spawn`.
 
 - `model`: default model for spawned sub-agents. If omitted, sub-agents inherit the caller's model.
 - `allowAgents`: default allowlist of configured target agent ids for `sessions_spawn` when the requester agent does not set its own `subagents.allowAgents` (`["*"]` = any configured target; default: same agent only). Stale entries whose agent config was deleted are rejected by `sessions_spawn` and omitted from `agents_list`; run `openclaw doctor --fix` to clean them up.
-- `maxConcurrent`: max concurrent sub-agent runs. Default: `8`.
+- `maxConcurrent`: max concurrent sub-agent runs per immediate spawning/controller session. Default: `8`; independent sessions do not share this budget. Codex-native subagents use Codex's separate scheduler and limits.
+- `maxChildrenPerAgent`: separate admission limit on active children per session. Default: `5`; raising `maxConcurrent` does not raise this limit.
 - `runTimeoutSeconds`: timeout (seconds) for `sessions_spawn` when the caller does not pass its own override. Default: `0` (no timeout); the `900` shown above is a common opt-in value, not the built-in default.
 - `announceTimeoutMs`: per-call timeout (milliseconds) for gateway `agent` announce delivery attempts. Default: `120000`. Transient retries can make the total announce wait longer than one configured timeout.
 - `archiveAfterMinutes`: minutes after a sub-agent session completes before it is auto-archived. Default: `60`; `0` disables auto-archive.

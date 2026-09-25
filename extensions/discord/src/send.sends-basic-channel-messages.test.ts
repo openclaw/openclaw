@@ -1487,15 +1487,13 @@ describe("reactMessageDiscord", () => {
     },
   ])("$name", async ({ emoji, encoded }) => {
     const { rest, putMock } = makeDiscordRest();
-    await reactMessageDiscord("chan1", "msg1", emoji, {
+    await reactMessageDiscord("chan1", "1", emoji, {
       rest,
       token: "t",
       cfg: DISCORD_TEST_CFG,
       accountId: "default",
     });
-    expect(putMock).toHaveBeenCalledWith(
-      Routes.channelMessageOwnReaction("chan1", "msg1", encoded),
-    );
+    expect(putMock).toHaveBeenCalledWith(Routes.channelMessageOwnReaction("chan1", "1", encoded));
   });
 });
 
@@ -1506,14 +1504,14 @@ describe("removeReactionDiscord", () => {
 
   it("removes a unicode emoji reaction", async () => {
     const { rest, deleteMock } = makeDiscordRest();
-    await removeReactionDiscord("chan1", "msg1", "✅", {
+    await removeReactionDiscord("chan1", "1", "✅", {
       rest,
       token: "t",
       cfg: DISCORD_TEST_CFG,
       accountId: "default",
     });
     expect(deleteMock).toHaveBeenCalledWith(
-      Routes.channelMessageOwnReaction("chan1", "msg1", "%E2%9C%85"),
+      Routes.channelMessageOwnReaction("chan1", "1", "%E2%9C%85"),
     );
   });
 
@@ -1524,7 +1522,7 @@ describe("removeReactionDiscord", () => {
       .mockResolvedValueOnce(undefined);
 
     await expect(
-      removeReactionDiscord("chan1", "msg1", "✅", {
+      removeReactionDiscord("chan1", "1", "✅", {
         rest,
         token: "t",
         cfg: DISCORD_TEST_CFG,
@@ -1551,7 +1549,7 @@ describe("removeOwnReactionsDiscord", () => {
         { me: false, emoji: { name: "other_blob", id: "456" } },
       ],
     });
-    const res = await removeOwnReactionsDiscord("chan1", "msg1", {
+    const res = await removeOwnReactionsDiscord("chan1", "1", {
       rest,
       token: "t",
       cfg: DISCORD_TEST_CFG,
@@ -1559,10 +1557,10 @@ describe("removeOwnReactionsDiscord", () => {
     });
     expect(res).toEqual({ ok: true, removed: ["✅", "party_blob:123"] });
     expect(deleteMock).toHaveBeenCalledWith(
-      Routes.channelMessageOwnReaction("chan1", "msg1", "%E2%9C%85"),
+      Routes.channelMessageOwnReaction("chan1", "1", "%E2%9C%85"),
     );
     expect(deleteMock).toHaveBeenCalledWith(
-      Routes.channelMessageOwnReaction("chan1", "msg1", "party_blob%3A123"),
+      Routes.channelMessageOwnReaction("chan1", "1", "party_blob%3A123"),
     );
     expect(deleteMock).toHaveBeenCalledTimes(2);
   });
@@ -1577,7 +1575,7 @@ describe("removeOwnReactionsDiscord", () => {
     });
 
     await expect(
-      removeOwnReactionsDiscord("chan1", "msg1", { rest, token: "t", cfg: DISCORD_TEST_CFG }),
+      removeOwnReactionsDiscord("chan1", "1", { rest, token: "t", cfg: DISCORD_TEST_CFG }),
     ).resolves.toEqual({ ok: true, removed: [] });
     expect(deleteMock).not.toHaveBeenCalled();
   });
@@ -1592,7 +1590,7 @@ describe("removeOwnReactionsDiscord", () => {
       .mockResolvedValueOnce(undefined);
 
     await expect(
-      removeOwnReactionsDiscord("chan1", "msg1", {
+      removeOwnReactionsDiscord("chan1", "1", {
         rest,
         token: "t",
         cfg: DISCORD_TEST_CFG,
@@ -1615,7 +1613,7 @@ describe("removeOwnReactionsDiscord", () => {
     deleteMock.mockResolvedValueOnce(undefined);
     deleteMock.mockRejectedValueOnce(apiError);
     await expect(
-      removeOwnReactionsDiscord("chan1", "msg1", { rest, token: "t", cfg: DISCORD_TEST_CFG }),
+      removeOwnReactionsDiscord("chan1", "1", { rest, token: "t", cfg: DISCORD_TEST_CFG }),
     ).rejects.toThrow("Discord API 500");
     // Both deletions are still attempted; the rejection just propagates.
     expect(deleteMock).toHaveBeenCalledTimes(2);
@@ -1638,7 +1636,7 @@ describe("fetchReactionsDiscord", () => {
       })
       .mockResolvedValueOnce([{ id: "u1", username: "alpha", discriminator: "0001" }])
       .mockResolvedValueOnce([{ id: "u2", username: "beta" }]);
-    const res = await fetchReactionsDiscord("chan1", "msg1", {
+    const res = await fetchReactionsDiscord("chan1", "1", {
       rest,
       token: "t",
       cfg: DISCORD_TEST_CFG,
@@ -1674,7 +1672,7 @@ describe("fetchReactionsDiscord", () => {
     getMock.mockResolvedValueOnce(users);
 
     await expect(
-      fetchReactionsDiscord("chan1", "msg1", {
+      fetchReactionsDiscord("chan1", "1", {
         rest,
         token: "t",
         cfg: DISCORD_TEST_CFG,
@@ -2050,19 +2048,19 @@ describe("edit/delete message helpers", () => {
     patchMock.mockResolvedValue({ id: "m1" });
     await editMessageDiscord(
       "chan1",
-      "m1",
+      "1",
       { content: "hello" },
       { rest, token: "t", cfg: DISCORD_TEST_CFG },
     );
-    expectRestRoute(patchMock, 0, Routes.channelMessage("chan1", "m1"));
+    expectRestRoute(patchMock, 0, Routes.channelMessage("chan1", "1"));
     expect(requireRestBody(patchMock).content).toBe("hello");
   });
 
   it("deletes message", async () => {
     const { rest, deleteMock } = makeDiscordRest();
     deleteMock.mockResolvedValue({});
-    await deleteMessageDiscord("chan1", "m1", { rest, token: "t", cfg: DISCORD_TEST_CFG });
-    expect(deleteMock).toHaveBeenCalledWith(Routes.channelMessage("chan1", "m1"));
+    await deleteMessageDiscord("chan1", "1", { rest, token: "t", cfg: DISCORD_TEST_CFG });
+    expect(deleteMock).toHaveBeenCalledWith(Routes.channelMessage("chan1", "1"));
   });
 });
 
@@ -2075,10 +2073,10 @@ describe("pin helpers", () => {
     const { rest, putMock, deleteMock } = makeDiscordRest();
     putMock.mockResolvedValue({});
     deleteMock.mockResolvedValue({});
-    await pinMessageDiscord("chan1", "m1", { rest, token: "t", cfg: DISCORD_TEST_CFG });
-    await unpinMessageDiscord("chan1", "m1", { rest, token: "t", cfg: DISCORD_TEST_CFG });
-    expect(putMock).toHaveBeenCalledWith(Routes.channelPin("chan1", "m1"));
-    expect(deleteMock).toHaveBeenCalledWith(Routes.channelPin("chan1", "m1"));
+    await pinMessageDiscord("chan1", "1", { rest, token: "t", cfg: DISCORD_TEST_CFG });
+    await unpinMessageDiscord("chan1", "1", { rest, token: "t", cfg: DISCORD_TEST_CFG });
+    expect(putMock).toHaveBeenCalledWith(Routes.channelPin("chan1", "1"));
+    expect(deleteMock).toHaveBeenCalledWith(Routes.channelPin("chan1", "1"));
   });
 });
 

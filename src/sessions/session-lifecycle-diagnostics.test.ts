@@ -107,14 +107,18 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  await flushLogger();
-  expect(vi.getTimerCount()).toBe(0);
-  vi.useRealTimers();
-  vi.restoreAllMocks();
-  setDiagnosticsEnabledForProcess(diagnosticsWereEnabled);
-  setLoggerOverride(null);
-  resetLogger();
-  fs.rmSync(directory, { recursive: true, force: true });
+  try {
+    await flushLogger();
+    expect(vi.getTimerCount()).toBe(0);
+  } finally {
+    // A failed leak assertion must still release this fixture's process-wide state.
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    setDiagnosticsEnabledForProcess(diagnosticsWereEnabled);
+    setLoggerOverride(null);
+    resetLogger();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 it("reports the current holder after turnover and preserves the waiter's trace and FIFO order", async () => {
@@ -530,12 +534,15 @@ it("preserves operation errors and queue release when the native logging sink th
   logging.setLoggerOverride({ level: "warn", consoleLevel: "silent", file: logFile });
   diagnostics.setDiagnosticsEnabledForProcess(true);
   const logger = logging.getLogger();
-  const overwrite = expectDefined(logger.settings.overwrite, "native logger overwrite settings");
-  const previousTransport = overwrite.transportJSON;
+  const transport = expectDefined(logger.settings.attachedTransports[0], "native logger transport");
+  const previousWrite = expectDefined(
+    Object.getOwnPropertyDescriptor(transport, "write"),
+    "native logger write descriptor",
+  );
   const failedSink = vi.fn(() => {
     throw new Error("diagnostic sink unavailable");
   });
-  overwrite.transportJSON = failedSink;
+  transport.write = failedSink;
   const lifecycle = await import("./session-lifecycle-admission.js");
   const started = createDeferred();
   const release = createDeferred();
@@ -565,11 +572,7 @@ it("preserves operation errors and queue release when the native logging sink th
   } finally {
     release.resolve();
     await Promise.allSettled([first, second]);
-    if (previousTransport) {
-      overwrite.transportJSON = previousTransport;
-    } else {
-      delete overwrite.transportJSON;
-    }
+    Object.defineProperty(transport, "write", previousWrite);
     await logging.flushLogger();
     diagnostics.setDiagnosticsEnabledForProcess(diagnosticsWereEnabled);
     logging.setLoggerOverride(null);

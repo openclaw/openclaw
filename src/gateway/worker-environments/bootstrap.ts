@@ -16,11 +16,7 @@ import {
   type CommandOptions,
   type SpawnResult,
 } from "../../process/exec.js";
-import {
-  WORKER_BUNDLE_ENTRY_PATH,
-  WORKER_BUNDLE_GITHUB_EXEC_LAUNCHER_PATH,
-  WORKER_BUNDLE_RSYNC_RECEIVER_PATH,
-} from "../../shared/worker-bundle-hash.js";
+import { WORKER_BUNDLE_ARTIFACT_PATHS } from "../../shared/worker-bundle-hash.js";
 import { WORKER_BUNDLE_MANIFEST_VERSION, type WorkerInstallationArtifact } from "./bundle.js";
 import {
   prepareWorkerSsh,
@@ -48,11 +44,6 @@ const NPM_MISSING_MARKER = "OPENCLAW_WORKER_NPM_MISSING";
 const BOOTSTRAP_OUTPUT_TAG = "OPENCLAW_WORKER_BOOTSTRAP_V1";
 const BUNDLE_HASH_PATTERN = /^[a-f0-9]{64}$/u;
 const NPM_INTEGRITY_PATTERN = /^sha512-[A-Za-z0-9+/]{86}==$/u;
-const WORKER_BUNDLE_ARTIFACT_PATHS = [
-  WORKER_BUNDLE_GITHUB_EXEC_LAUNCHER_PATH,
-  WORKER_BUNDLE_ENTRY_PATH,
-  WORKER_BUNDLE_RSYNC_RECEIVER_PATH,
-] as const;
 
 // Scale transfer time for congested uplinks (~243 MB at <4 Mbps exceeds 10 minutes).
 // The base timeout remains the floor; the cap keeps transfer bounded and fail-closed.
@@ -215,6 +206,19 @@ try {
   process.exit(1);
 }`;
 
+const ENSURE_PRIVATE_DIRECTORY_SH = String.raw`ensure_private_directory() {
+  directory=$1
+  if [ -e "$directory" ] || [ -L "$directory" ]; then
+    if [ ! -d "$directory" ] || [ -L "$directory" ]; then
+      printf '%s\n' 'unsafe worker bootstrap directory' >&2
+      exit 2
+    fi
+  else
+    mkdir "$directory"
+  fi
+  chmod 700 "$directory"
+}`;
+
 const PREFLIGHT_SCRIPT = String.raw`set -eu
 umask 077
 hash=$1
@@ -233,18 +237,7 @@ if [ "${"${"}#operation_token}" -ne 64 ]; then
   exit 2
 fi
 
-ensure_private_directory() {
-  directory=$1
-  if [ -e "$directory" ] || [ -L "$directory" ]; then
-    if [ ! -d "$directory" ] || [ -L "$directory" ]; then
-      printf '%s\n' 'unsafe worker bootstrap directory' >&2
-      exit 2
-    fi
-  else
-    mkdir "$directory"
-  fi
-  chmod 700 "$directory"
-}
+${ENSURE_PRIVATE_DIRECTORY_SH}
 
 ensure_private_directory "$root"
 
@@ -304,18 +297,7 @@ lock=$lock_root/$hash
 locked=0
 lock_identity="$$:$(date +%s)"
 
-ensure_private_directory() {
-  directory=$1
-  if [ -e "$directory" ] || [ -L "$directory" ]; then
-    if [ ! -d "$directory" ] || [ -L "$directory" ]; then
-      printf '%s\n' 'unsafe worker bootstrap directory' >&2
-      exit 2
-    fi
-  else
-    mkdir "$directory"
-  fi
-  chmod 700 "$directory"
-}
+${ENSURE_PRIVATE_DIRECTORY_SH}
 
 ensure_private_directory "$root"
 ensure_private_directory "$lock_root"
@@ -460,9 +442,7 @@ case "$install" in
       exit 2
     fi
     tar -xzf "$package_archive" -C "$staging" --strip-components=3 \
-      package/dist/worker/${WORKER_BUNDLE_GITHUB_EXEC_LAUNCHER_PATH} \
-      package/dist/worker/${WORKER_BUNDLE_ENTRY_PATH} \
-      package/dist/worker/${WORKER_BUNDLE_RSYNC_RECEIVER_PATH}
+      ${WORKER_BUNDLE_ARTIFACT_PATHS.map((entry) => `package/dist/worker/${entry}`).join(" ")}
     rm -f "$npm_pack_json" "$package_archive"
     ;;
   *)
@@ -482,8 +462,6 @@ mv "$staging" "$install_dir"
 finish_with_receipt
 `;
 
-type ResolvedWorkerSshIdentity = WorkerSshIdentity;
-
 type WorkerBootstrapCommandRunner = (
   argv: string[],
   options: CommandOptions,
@@ -498,7 +476,7 @@ type WorkerBootstrapRequest = {
 };
 
 type WorkerBootstrapDependencies = {
-  resolveIdentity: (keyRef: WorkerSshEndpoint["keyRef"]) => Promise<ResolvedWorkerSshIdentity>;
+  resolveIdentity: (keyRef: WorkerSshEndpoint["keyRef"]) => Promise<WorkerSshIdentity>;
   runCommand?: WorkerBootstrapCommandRunner;
   timeoutMs?: number;
   signal?: AbortSignal;

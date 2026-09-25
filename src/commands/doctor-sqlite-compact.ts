@@ -3,6 +3,8 @@ import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
+import { readFiniteSqliteNumber } from "../infra/sqlite-number.js";
+import { truncateSqliteWal } from "../infra/sqlite-wal-checkpoint.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
 
 export type DoctorSqliteCompactSnapshot = {
@@ -48,18 +50,27 @@ export function compactDoctorSqliteFile(
     database.exec("PRAGMA trusted_schema = OFF;");
     options.validateBeforeMutation?.(database);
     const before = readCompactSnapshot(database, options.sqlitePath);
-    assertSqliteIntegrity(database, options.sqlitePath);
-    checkpointDoctorSqliteFile(database, options.sqlitePath);
-    database.exec("PRAGMA auto_vacuum = INCREMENTAL;");
-    // NONE databases need a full rewrite to add pointer maps. Existing auto-vacuum
-    // stores can release free pages without repacking; explicit compact still repacks.
-    database.exec(
-      options.operation === "import-finalize" && before.autoVacuum !== 0
-        ? "PRAGMA incremental_vacuum;"
-        : "VACUUM;",
-    );
-    checkpointDoctorSqliteFile(database, options.sqlitePath);
-    const { integrityCheck } = assertSqliteIntegrity(database, options.sqlitePath);
+    let { integrityCheck } = assertSqliteIntegrity(database, options.sqlitePath);
+    const alreadyCompact =
+      options.operation === "import-finalize" &&
+      before.autoVacuum === 2 &&
+      before.freelistPages === 0 &&
+      before.walSizeBytes === 0;
+    // A verified no-op needs neither a file mutation nor a second full-file scan.
+    // Explicit compaction still repacks partially filled pages.
+    if (!alreadyCompact) {
+      truncateSqliteWal(database, options.sqlitePath);
+      database.exec("PRAGMA auto_vacuum = INCREMENTAL;");
+      // NONE databases need a full rewrite to add pointer maps. Existing auto-vacuum
+      // stores can release free pages without repacking; explicit compact still repacks.
+      database.exec(
+        options.operation === "import-finalize" && before.autoVacuum !== 0
+          ? "PRAGMA incremental_vacuum;"
+          : "VACUUM;",
+      );
+      truncateSqliteWal(database, options.sqlitePath);
+      ({ integrityCheck } = assertSqliteIntegrity(database, options.sqlitePath));
+    }
     const after = readCompactSnapshot(database, options.sqlitePath);
     const beforeBytes = before.dbSizeBytes + before.walSizeBytes;
     const afterBytes = after.dbSizeBytes + after.walSizeBytes;
@@ -95,19 +106,6 @@ export function compactDoctorSqliteFile(
   return result;
 }
 
-export function checkpointDoctorSqliteFile(database: DatabaseSync, sqlitePath: string): void {
-  const row = database.prepare("PRAGMA wal_checkpoint(TRUNCATE);").get() as
-    | Record<string, unknown>
-    | undefined;
-  const busy = readFiniteNumber(row?.busy ?? (row ? Object.values(row)[0] : undefined));
-  if (busy === undefined) {
-    throw new Error(`SQLite checkpoint returned an invalid result for ${sqlitePath}.`);
-  }
-  if (busy !== 0) {
-    throw new Error(`SQLite checkpoint remained busy for ${sqlitePath}. Stop OpenClaw and retry.`);
-  }
-}
-
 function readCompactSnapshot(
   database: DatabaseSync,
   sqlitePath: string,
@@ -125,25 +123,14 @@ function readPragmaNumber(
   database: DatabaseSync,
   pragmaName: "auto_vacuum" | "freelist_count" | "page_size",
 ): number {
-  const row = database.prepare(`PRAGMA ${pragmaName};`).get() as
-    | Record<string, unknown>
-    | undefined;
-  const value = readFiniteNumber(row?.[pragmaName] ?? (row ? Object.values(row)[0] : undefined));
+  const row = database.prepare(`PRAGMA ${pragmaName};`).get();
+  const value = readFiniteSqliteNumber(
+    row?.[pragmaName] ?? (row ? Object.values(row)[0] : undefined),
+  );
   if (value === undefined) {
     throw new Error(`SQLite PRAGMA ${pragmaName} returned an invalid result.`);
   }
   return value;
-}
-
-function readFiniteNumber(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === "bigint") {
-    const numberValue = Number(value);
-    return Number.isFinite(numberValue) ? numberValue : undefined;
-  }
-  return undefined;
 }
 
 function fileSize(filePath: string): number {

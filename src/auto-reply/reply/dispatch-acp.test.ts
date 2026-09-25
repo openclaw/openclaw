@@ -9,25 +9,20 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DecisionReceiptV1 } from "../../../packages/gateway-protocol/src/index.js";
 import type { MediaUnderstandingSkipError } from "../../../packages/media-understanding-common/src/errors.js";
+import { createTestChannelIngressOwner } from "../../../test/helpers/channel-admission-evidence.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { AcpSessionResolution } from "../../acp/control-plane/manager.types.js";
 import { AcpRuntimeError } from "../../acp/runtime/errors.js";
 import type { AcpSessionStoreEntry } from "../../acp/runtime/session-meta.js";
-import {
-  emitAcpLifecycleEnd,
-  resolveAcpLifecycleEndFields,
-} from "../../agents/command/attempt-execution.js";
 import { registerPendingAgentQuestion } from "../../agents/harness/gateway-question.js";
 import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-identity-admission.js";
 import { configureRuntimeActionDecisionSink } from "../../audit/runtime-action-decision.js";
 import { buildChannelInboundEventContext } from "../../channels/inbound-event/context.js";
 import { createHostChannelInboundEventContextBuilder } from "../../channels/inbound-event/host-context-builder.js";
-import { configureChannelAdmissionEvidenceCollection } from "../../channels/message-access/admission-evidence.js";
-import { registerChannelIngressHostOwner } from "../../channels/message-access/ingress-host-owner.js";
-import { resolveStableChannelMessageIngress } from "../../channels/message-access/runtime.js";
+import { createChannelAdmissionAudit } from "../../channels/message-access/admission-evidence.js";
+import { createHostChannelIngressRuntime } from "../../channels/message-access/runtime.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
-  listSessionParticipantsReadOnly,
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
@@ -35,13 +30,13 @@ import {
   OutboundDeliveryError,
   PlatformMessageNotDispatchedError,
 } from "../../infra/outbound/deliver-types.js";
-import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
 import { isImageAttachment } from "../../media-understanding/attachments.normalize.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { ReplyDispatchRun } from "../get-reply-options.types.js";
+import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { FinalizedRuntimeMsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -49,6 +44,7 @@ import {
   resolveInlineAgentImageAttachments,
 } from "./agent-turn-attachments.js";
 import { tryDispatchAcpReplyCore } from "./dispatch-acp.js";
+import { expectAcpSessionParticipantInput } from "./dispatch-acp.participant.test-support.js";
 import { createAbortAwareDispatcher } from "./dispatch-from-config.abort.js";
 import { expectedNoQueuedReplyResult } from "./dispatch-result-expectations.test-support.js";
 import {
@@ -160,35 +156,29 @@ const transcriptMocks = vi.hoisted(() => ({
   persistAcpDispatchTranscript: vi.fn(async (_params: unknown) => undefined),
 }));
 
-const bindingServiceMocks = vi.hoisted(() => ({
-  listBySession: vi.fn<(sessionKey: string) => SessionBindingRecord[]>(() => []),
-  unbind: vi.fn<(input: unknown) => Promise<SessionBindingRecord[]>>(async () => []),
-}));
+const { mocks: bindingServiceMocks, module: bindingServiceModule } = await vi.hoisted(async () => {
+  const { createAcpBindingMocks } = await import("./session-binding.test-mocks.js");
+  return createAcpBindingMocks(vi);
+});
 
-vi.mock("./dispatch-acp-manager.runtime.js", () => ({
+vi.mock("../../infra/outbound/session-binding-service.js", () => bindingServiceModule);
+vi.mock("./dispatch-acp-manager.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./dispatch-acp-manager.runtime.js")>()),
   getAcpSessionManager: () => managerMocks,
-  readAcpSessionEntry: (params: { sessionKey: string; cfg?: OpenClawConfig }) =>
-    sessionMetaMocks.readAcpSessionEntry(params),
-  getSessionBindingService: () => ({
-    listBySession: (targetSessionKey: string) =>
-      bindingServiceMocks.listBySession(targetSessionKey),
-    unbind: (input: unknown) => bindingServiceMocks.unbind(input),
-  }),
+  readAcpSessionEntry: sessionMetaMocks.readAcpSessionEntry,
 }));
 
-vi.mock("../../agents/command/attempt-execution.runtime.js", () => ({
-  createAcpToolLifecycleTracker: () => ({
-    active: new Map(),
-    terminalToolCallIds: new Set(),
-    saturated: false,
-  }),
-  emitAcpLifecycleStart: auditMocks.emitAcpLifecycleStart,
-  emitAcpRuntimeEvent: auditMocks.emitAcpRuntimeEvent,
-  emitAcpLifecycleEnd: auditMocks.emitAcpLifecycleEnd,
-  emitAcpLifecycleError: auditMocks.emitAcpLifecycleError,
-  resolveAcpLifecycleEndFields: (...args: Parameters<typeof resolveAcpLifecycleEndFields>) =>
-    resolveAcpLifecycleEndFields(...args),
-}));
+vi.mock("../../agents/command/acp-lifecycle.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/command/acp-lifecycle.js")>();
+  return {
+    createAcpToolLifecycleTracker: actual.createAcpToolLifecycleTracker,
+    emitAcpLifecycleStart: auditMocks.emitAcpLifecycleStart,
+    emitAcpRuntimeEvent: auditMocks.emitAcpRuntimeEvent,
+    emitAcpLifecycleEnd: auditMocks.emitAcpLifecycleEnd,
+    emitAcpLifecycleError: auditMocks.emitAcpLifecycleError,
+    resolveAcpLifecycleEndFields: actual.resolveAcpLifecycleEndFields,
+  };
+});
 
 vi.mock("../../acp/policy.js", () => ({
   resolveAcpDispatchPolicyError: (cfg: OpenClawConfig) =>
@@ -513,22 +503,9 @@ function expectRoutedPayload(callIndex: number, payload: Partial<MockTtsReply>) 
 
 describe("tryDispatchAcpReplyCore", () => {
   it("records an accepted channel input in the canonical participant store", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      await upsertSessionEntryCore(
-        { agentId: "codex-acp", env: state.env, sessionKey },
-        {
-          sessionId: "acp-participant-session",
-          updatedAt: 1,
-        },
-      );
+    await expectAcpSessionParticipantInput(sessionKey, async () => {
       setReadyAcpResolution();
       await runDispatch({ bodyForAgent: "hello", ctxOverrides: { SenderId: "participant" } });
-      await Promise.resolve();
-      expect(
-        listSessionParticipantsReadOnly({ agentId: "codex-acp", env: state.env, sessionKey }).get(
-          sessionKey,
-        ),
-      ).toHaveLength(1);
     });
   });
   beforeEach(() => {
@@ -586,16 +563,15 @@ describe("tryDispatchAcpReplyCore", () => {
 
   it("admits ACP message turns with the original channel participant", async () => {
     const captured: unknown[] = [];
-    const clearCollection = configureChannelAdmissionEvidenceCollection(true);
+    const audit = createChannelAdmissionAudit({ enabled: true });
     const clearSink = configureExecutionIdentityAdmissionSink((work) => {
       captured.push(work);
       return true;
     });
-    const owner = { channelId: "discord", record: {}, epoch: {}, isLive: () => true };
-    const clearOwner = registerChannelIngressHostOwner(owner);
+    const owner = createTestChannelIngressOwner({ audit, channelId: "discord" });
     try {
       setReadyAcpResolution();
-      const channelIngress = await resolveStableChannelMessageIngress({
+      const channelIngress = await createHostChannelIngressRuntime(owner).resolveStable({
         channelId: "discord",
         accountId: "default",
         subject: { stableId: "person-42" },
@@ -644,9 +620,8 @@ describe("tryDispatchAcpReplyCore", () => {
         },
       ]);
     } finally {
-      clearOwner();
       clearSink();
-      clearCollection();
+      audit.close();
     }
   });
 
@@ -1384,6 +1359,97 @@ describe("tryDispatchAcpReplyCore", () => {
     expect(auditMocks.emitAcpLifecycleError).not.toHaveBeenCalled();
   });
 
+  it.each([false, true])(
+    "admits live ACP events before speech-cleaned block settlement, no-send=%s",
+    async (noSend) => {
+      setReadyAcpResolution();
+      const deliveryStarted = createDeferred();
+      const deliveryGate = createDeferred();
+      const fallbackStarted = createDeferred();
+      const fallbackGate = createDeferred();
+      const eventsAccepted = createDeferred();
+      const attempts: Array<{ kind: string; text?: string }> = [];
+      const confirmed: Array<{ kind: string; text?: string }> = [];
+      const dispatcher = createReplyDispatcher({
+        deliver: async (payload, { kind }) => {
+          const message = { kind, text: payload.text };
+          attempts.push(message);
+          if (kind === "block") {
+            deliveryStarted.resolve();
+            await deliveryGate.promise;
+            if (noSend) {
+              throw new PlatformMessageNotDispatchedError("offline", {
+                cause: new Error("offline"),
+              });
+            }
+          } else if (kind === "final") {
+            fallbackStarted.resolve();
+            await fallbackGate.promise;
+          }
+          confirmed.push(message);
+        },
+      });
+      managerMocks.runTurn.mockImplementationOnce(
+        async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+          await onEvent({ type: "text_delta", text: "hello. ", tag: "agent_message_chunk" });
+          await onEvent({ type: "done", status: "completed" });
+          eventsAccepted.resolve();
+        },
+      );
+      let dispatchSettled = false;
+      const dispatchPromise = runDispatch({
+        bodyForAgent: "reply while delivery is pending",
+        cfg: createAcpTestConfig({
+          acp: { enabled: true, stream: { deliveryMode: "live" } },
+          tts: { enabled: true, mode: "final" },
+        }),
+        dispatcher,
+      }).then((result) => {
+        dispatchSettled = true;
+        return result;
+      });
+
+      try {
+        await eventsAccepted.promise;
+        await deliveryStarted.promise;
+        await nextEventLoopTurn();
+
+        expect(attempts).toEqual([{ kind: "block", text: "hello." }]);
+        expect(confirmed).toEqual([]);
+        expect(dispatchSettled).toBe(false);
+        expect(transcriptMocks.persistAcpDispatchTranscript).not.toHaveBeenCalled();
+
+        deliveryGate.resolve();
+        if (noSend) {
+          await fallbackStarted.promise;
+          expect(attempts).toEqual([
+            { kind: "block", text: "hello." },
+            { kind: "final", text: "hello." },
+          ]);
+          expect(confirmed).toEqual([]);
+          expect(dispatchSettled).toBe(false);
+          expect(transcriptMocks.persistAcpDispatchTranscript).not.toHaveBeenCalled();
+          fallbackGate.resolve();
+        }
+
+        await expect(dispatchPromise).resolves.toMatchObject({ queuedFinal: true });
+        expect(attempts).toEqual([
+          { kind: "block", text: "hello." },
+          ...(noSend ? [{ kind: "final", text: "hello." }] : []),
+        ]);
+        expect(confirmed).toEqual([{ kind: noSend ? "final" : "block", text: "hello." }]);
+        expect(transcriptMocks.persistAcpDispatchTranscript).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ finalText: "hello." }),
+        );
+      } finally {
+        deliveryGate.resolve();
+        fallbackGate.resolve();
+        await dispatchPromise;
+        await dispatcher.waitForIdle();
+      }
+    },
+  );
+
   it("does not persist final-only output rejected after caller cancellation", async () => {
     setReadyAcpResolution();
     const abortController = new AbortController();
@@ -1416,7 +1482,12 @@ describe("tryDispatchAcpReplyCore", () => {
     expect(transcript.finalText).toBe("");
   });
 
-  it("persists live ACP output delivered before caller cancellation", async () => {
+  it.each([
+    { tts: false, tail: "" },
+    { tts: true, tail: "" },
+    { tts: true, tail: "[" },
+    { tts: true, tail: "[[tts:text]]Private speech." },
+  ])("persists sent ACP text on abort, TTS=$tts, tail=$tail", async ({ tts, tail }) => {
     setReadyAcpResolution();
     const abortController = new AbortController();
     const deliveredPayloads: Array<Record<string, unknown>> = [];
@@ -1439,7 +1510,9 @@ describe("tryDispatchAcpReplyCore", () => {
       dispatcher: coreDispatcher,
       isAborted: () => abortController.signal.aborted,
     });
-    const partial = "Visible before cancellation. ".repeat(4);
+    const prefix = "Visible before cancellation. ".repeat(tail ? 18 : 4);
+    const partial = prefix + tail;
+    const expectedText = tts && !tail ? prefix.trimEnd() : prefix;
     let markTurnReady!: () => void;
     let finishTurn!: () => void;
     let markTurnDone!: () => void;
@@ -1470,6 +1543,7 @@ describe("tryDispatchAcpReplyCore", () => {
           enabled: true,
           stream: { deliveryMode: "live" },
         },
+        tts: { enabled: tts },
       }),
       dispatcher,
     });
@@ -1486,19 +1560,21 @@ describe("tryDispatchAcpReplyCore", () => {
       }),
     ]);
     expect(earlyOutcome).toBe("pending");
+    expect(deliveredPayloads).toEqual([{ text: expectedText }]);
     expect(transcriptMocks.persistAcpDispatchTranscript).not.toHaveBeenCalled();
 
     releaseDelivery();
     await dispatchPromise;
 
     const deliveredText = deliveredPayloads.map((payload) => String(payload.text)).join("\n");
+    expect(deliveredPayloads).toEqual([{ text: expectedText }]);
     expect(deliveredText).not.toBe("");
     expect(partial).toContain(deliveredText.replaceAll("\n", ""));
     const transcript = requireRecord(
       mockArg(transcriptMocks.persistAcpDispatchTranscript, 0, 0, "transcript call"),
       "transcript call",
     );
-    expect(transcript.finalText).toBe(deliveredText.trimEnd());
+    expect(transcript.finalText).toBe(tail ? deliveredText : deliveredText.trimEnd());
   });
 
   it("keeps caller abort authoritative until completed output settles", async () => {
@@ -1560,6 +1636,9 @@ describe("tryDispatchAcpReplyCore", () => {
           input as Parameters<typeof actualTranscript.persistAcpDispatchTranscript>[0],
         );
       });
+      const { emitAcpLifecycleEnd } = await vi.importActual<
+        typeof import("../../agents/command/acp-lifecycle.js")
+      >("../../agents/command/acp-lifecycle.js");
       auditMocks.emitAcpLifecycleEnd.mockImplementationOnce(emitAcpLifecycleEnd);
       const preparedMessages: unknown[] = [];
       let dispatchedRun: ReplyDispatchRun | undefined;
@@ -2723,13 +2802,7 @@ describe("tryDispatchAcpReplyCore", () => {
     };
     acpAttachmentBuffers.set(currentPath, currentImage);
     mediaUnderstandingMocks.applyMediaUnderstanding.mockResolvedValueOnce({
-      outputs: [],
-      decisions: [],
       extractedFileImages: [pdfPage],
-      appliedImage: false,
-      appliedAudio: false,
-      appliedVideo: false,
-      appliedFile: true,
     });
 
     await runDispatch({
@@ -2774,13 +2847,7 @@ describe("tryDispatchAcpReplyCore", () => {
       ctx.MediaUnderstanding = [description];
       acpAttachmentBuffers.delete(undescribedPath);
       return {
-        outputs: [description],
-        decisions: [],
         extractedFileImages: [pdfPage],
-        appliedImage: true,
-        appliedAudio: false,
-        appliedVideo: false,
-        appliedFile: true,
       };
     });
 
@@ -2822,13 +2889,7 @@ describe("tryDispatchAcpReplyCore", () => {
       ctx.MediaUnderstanding = [description];
       ctx.agentText = `${ctx.agentText}\n\n[Image 1]\n${description.text}`;
       return {
-        outputs: [description],
-        decisions: [],
         extractedFileImages: [],
-        appliedImage: true,
-        appliedAudio: false,
-        appliedVideo: false,
-        appliedFile: false,
       };
     });
 
@@ -3943,6 +4004,358 @@ describe("tryDispatchAcpReplyCore", () => {
       );
     },
   );
+
+  it.each(
+    [false, true].flatMap((routed) =>
+      [
+        { name: "literal end", chunks: ["See ["], visible: "See [", deferred: false },
+        {
+          name: "opener across the live threshold",
+          chunks: ["a".repeat(479) + "[", "[tts:text]]Private speech.[[/tts:text]] Done."],
+          visible: "a".repeat(479) + " Done.",
+          deferred: false,
+        },
+        {
+          name: "closer across the live threshold",
+          chunks: ["[[tts:text]]" + "h".repeat(467) + "[", "[/tts:text]]Done."],
+          visible: "Done.",
+          deferred: false,
+        },
+        { name: "hidden end", chunks: ["[[tts:text]]Private ["], visible: "", deferred: false },
+        { name: "deferred literal end", chunks: ["See ["], visible: "See [", deferred: true },
+      ].map((testCase) => Object.assign(testCase, { routed })),
+    ),
+  )("drains ACP $name through registered dispatch (routed=$routed)", async (testCase) => {
+    setReadyAcpResolution();
+    ttsCapabilityMocks.captionedFinalText = testCase.deferred;
+    ttsMocks.maybeApplyTtsToPayload.mockResolvedValue({});
+    managerMocks.runTurn.mockImplementationOnce(
+      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+        for (const text of testCase.chunks) {
+          await onEvent({ type: "text_delta", text, tag: "agent_message_chunk" });
+        }
+        await onEvent({ type: "done", status: "completed" });
+      },
+    );
+    const delivered: ReplyPayload[] = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload) => {
+        delivered.push(payload);
+        return { visibleReplySent: true };
+      },
+    });
+
+    await runDispatch({
+      bodyForAgent: "reply",
+      dispatcher,
+      cfg: createAcpTestConfig({
+        acp: { enabled: true, stream: { deliveryMode: "live" } },
+        tts: { auto: "always", mode: "final" },
+      }),
+      shouldRouteToOriginating: testCase.routed,
+      originatingChannel: "discord",
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(
+      testCase.routed
+        ? routeMocks.routeReply.mock.calls.map((_, index) => routePayload(index).text).join("")
+        : delivered.map((payload) => payload.text).join(""),
+    ).toBe(testCase.visible);
+    expect(transcriptMocks.persistAcpDispatchTranscript).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ finalText: testCase.chunks.join("\n") }),
+    );
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ payload: { text: testCase.chunks.join("") } }),
+    );
+  });
+
+  it.each(["completed", "cancelled", "error", "caller-abort"] as const)(
+    "settles tail-only ACP text before %s transcript completion",
+    async (outcome) => {
+      setReadyAcpResolution();
+      ttsMocks.maybeApplyTtsToPayload.mockImplementation(async (paramsUnknown) => {
+        const payload = requireRecord(
+          requireRecord(paramsUnknown, "TTS request").payload,
+          "TTS payload",
+        );
+        return payload.isError ? payload : {};
+      });
+      const controller = new AbortController();
+      managerMocks.runTurn.mockImplementationOnce(
+        async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+          await onEvent({ type: "text_delta", text: "[", tag: "agent_message_chunk" });
+          if (outcome === "error") {
+            throw new Error("Runtime stopped");
+          }
+          if (outcome === "caller-abort") {
+            controller.abort();
+          }
+          await onEvent({
+            type: "done",
+            status: outcome === "completed" ? "completed" : "cancelled",
+          });
+        },
+      );
+      const delivered: ReplyPayload[] = [];
+      const coreDispatcher = createReplyDispatcher({
+        deliver: async (payload) => {
+          delivered.push(payload);
+          return { visibleReplySent: true };
+        },
+      });
+      const dispatcher = createAbortAwareDispatcher({
+        dispatcher: coreDispatcher,
+        isAborted: () => controller.signal.aborted,
+      });
+
+      await runDispatch({
+        bodyForAgent: "reply",
+        dispatcher,
+        abortSignal: controller.signal,
+        cfg: createAcpTestConfig({
+          acp: { enabled: true, stream: { deliveryMode: "live" } },
+          tts: { auto: "always", mode: "final" },
+        }),
+      });
+      coreDispatcher.markComplete();
+      await coreDispatcher.waitForIdle();
+
+      expect(
+        delivered.filter((payload) => !payload.isError).map((payload) => payload.text),
+      ).toEqual(outcome === "caller-abort" ? [] : ["["]);
+      expect(transcriptMocks.persistAcpDispatchTranscript).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          finalText:
+            outcome === "error"
+              ? `[\n\n${delivered.find((payload) => payload.isError)?.text}`
+              : outcome === "caller-abort"
+                ? ""
+                : "[",
+        }),
+      );
+      if (outcome === "caller-abort") {
+        expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it.each(
+    (["all", "final"] as const).flatMap((mode) =>
+      [false, true].flatMap((abortAfterFinal) =>
+        (["tail-failed", "prefix-failed", "terminal-only"] as const)
+          .filter((outcome) => mode === "final" || outcome !== "terminal-only")
+          .map((outcome) => ({ outcome, abortAfterFinal, mode })),
+      ),
+    ),
+  )(
+    "recovers exactly the unsent ACP text after $outcome (abortAfterFinal=$abortAfterFinal, mode=$mode)",
+    async ({ outcome, abortAfterFinal, mode }) => {
+      setReadyAcpResolution();
+      ttsMocks.maybeApplyTtsToPayload.mockImplementation(async (input) => {
+        const request = requireRecord(input, "TTS request");
+        return request.kind === "block" ? request.payload : {};
+      });
+      mockVisibleTextTurn("See [");
+      const controller = new AbortController();
+      const attempts: Array<{ kind: string; text?: string }> = [];
+      const delivered: string[] = [];
+      const dispatcher = createReplyDispatcher({
+        deliver: async (payload, { kind }) => {
+          attempts.push({ kind, text: payload.text });
+          if (
+            kind === "block" &&
+            (outcome === "prefix-failed" || (outcome === "tail-failed" && payload.text === "["))
+          ) {
+            throw new PlatformMessageNotDispatchedError("offline", { cause: undefined });
+          }
+          if (payload.text && (outcome !== "terminal-only" || kind === "final")) {
+            delivered.push(payload.text);
+          }
+          if (kind === "final" && abortAfterFinal && delivered.join("") === "See [") {
+            controller.abort();
+          }
+          return { visibleReplySent: true };
+        },
+      });
+      await runDispatch({
+        bodyForAgent: "reply",
+        dispatcher: createAbortAwareDispatcher({
+          dispatcher,
+          isAborted: () => controller.signal.aborted,
+        }),
+        abortSignal: controller.signal,
+        cfg: createAcpTestConfig({
+          acp: { enabled: true, stream: { deliveryMode: "live" } },
+          tts: { auto: "always", mode },
+        }),
+        ...(outcome === "terminal-only"
+          ? { ctxOverrides: { Provider: "webchat", Surface: "webchat" } }
+          : {}),
+      });
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+
+      expect(attempts.filter((attempt) => attempt.kind === "block")).toEqual([
+        { kind: "block", text: "See " },
+        ...(outcome === "prefix-failed" ? [] : [{ kind: "block", text: "[" }]),
+      ]);
+      expect(
+        attempts
+          .filter((attempt) => attempt.kind === "final")
+          .map((attempt) => attempt.text)
+          .join(""),
+      ).toBe(outcome === "tail-failed" ? "[" : "See [");
+      expect(delivered.join("")).toBe("See [");
+      expect(transcriptMocks.persistAcpDispatchTranscript).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ finalText: "See [" }),
+      );
+    },
+  );
+
+  it("does not synthesize ACP speech after cancellation while the tail receipt is pending", async () => {
+    setReadyAcpResolution();
+    mockVisibleTextTurn("[");
+    const controller = new AbortController();
+    const tailStarted = createDeferred();
+    const tailGate = createDeferred();
+    const attempted: ReplyPayload[] = [];
+    const coreDispatcher = createReplyDispatcher({
+      deliver: async (payload) => {
+        attempted.push(payload);
+        tailStarted.resolve();
+        await tailGate.promise;
+        throw new PlatformMessageNotDispatchedError("cancelled", { cause: undefined });
+      },
+    });
+    const dispatch = runDispatch({
+      bodyForAgent: "reply",
+      dispatcher: createAbortAwareDispatcher({
+        dispatcher: coreDispatcher,
+        isAborted: () => controller.signal.aborted,
+      }),
+      abortSignal: controller.signal,
+      cfg: createAcpTestConfig({
+        acp: { enabled: true, stream: { deliveryMode: "live" } },
+        tts: { auto: "always", mode: "final" },
+      }),
+    });
+    try {
+      await tailStarted.promise;
+      controller.abort();
+      tailGate.resolve();
+      await dispatch;
+      expect(attempted.map((payload) => payload.text)).toEqual(["["]);
+      expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
+      expect(transcriptMocks.persistAcpDispatchTranscript).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ finalText: "" }),
+      );
+    } finally {
+      controller.abort();
+      tailGate.resolve();
+      await dispatch;
+      await coreDispatcher.waitForIdle();
+    }
+  });
+
+  it.each(
+    (["all", "final"] as const).flatMap((mode) =>
+      (["delivered", "tail-failed", "custody", "caller-abort"] as const).map((outcome) => ({
+        mode,
+        outcome,
+      })),
+    ),
+  )("settles prepared ACP text and media once ($mode, $outcome)", async ({ mode, outcome }) => {
+    setReadyAcpResolution();
+    ttsMocks.maybeApplyTtsToPayload.mockImplementation(async (input) => {
+      const request = requireRecord(input, "TTS request");
+      return request.kind === "block" ? request.payload : {};
+    });
+    const text = "a".repeat(479) + "[";
+    const prefixDelivered = createDeferred();
+    const delivered: ReplyPayload[] = [];
+    const attempts: ReplyPayload[] = [];
+    const controller = new AbortController();
+    const mediaUrl = "https://example.test/source.png";
+    const transformReplyPayload = vi.fn((payload: ReplyPayload) =>
+      setReplyPayloadMetadata(
+        { ...payload, text: `[channel] ${payload.text}`, replyToId: "source-message", mediaUrl },
+        { assistantMessageIndex: 7 },
+      ),
+    );
+    const dispatcher = createReplyDispatcher({
+      responsePrefix: "[bot]",
+      transformReplyPayload,
+      deliver: async (payload, { kind }) => {
+        attempts.push(payload);
+        if (kind === "block" && payload.text === "[" && outcome !== "delivered") {
+          if (outcome === "caller-abort") {
+            controller.abort();
+          }
+          const cause = new PlatformMessageNotDispatchedError("terminal send failed", {
+            cause: undefined,
+          });
+          if (outcome === "custody") {
+            const failure = new OutboundDeliveryError("queue retained tail", { cause });
+            failure.queueCustody = "held";
+            throw failure;
+          }
+          throw cause;
+        }
+        delivered.push(payload);
+        prefixDelivered.resolve();
+        return { visibleReplySent: true };
+      },
+    });
+    managerMocks.runTurn.mockImplementationOnce(
+      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+        await onEvent({ type: "text_delta", text, tag: "agent_message_chunk" });
+        await prefixDelivered.promise;
+        expect(delivered).toHaveLength(1);
+        expect(delivered[0]).toMatchObject({
+          text: `[bot] [channel] ${"a".repeat(479)}`,
+          mediaUrl,
+        });
+        await onEvent({ type: "done", status: "completed" });
+      },
+    );
+
+    await runDispatch({
+      bodyForAgent: "reply",
+      dispatcher: createAbortAwareDispatcher({
+        dispatcher,
+        isAborted: () => controller.signal.aborted,
+      }),
+      abortSignal: controller.signal,
+      cfg: createAcpTestConfig({
+        acp: { enabled: true, stream: { deliveryMode: "live" } },
+        tts: { auto: "always", mode },
+      }),
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    const recovered = outcome === "delivered" || outcome === "tail-failed";
+    expect(delivered.map((payload) => payload.text).join("")).toBe(
+      `[bot] [channel] ${recovered ? text : text.slice(0, -1)}`,
+    );
+    expect(attempts.map((payload) => payload.text)).toEqual([
+      `[bot] [channel] ${text.slice(0, -1)}`,
+      "[",
+      ...(outcome === "tail-failed" ? ["["] : []),
+    ]);
+    expect(delivered.map((payload) => payload.mediaUrl)).toEqual(
+      recovered ? [mediaUrl, undefined] : [mediaUrl],
+    );
+    expect(delivered.map((payload) => payload.replyToId)).toEqual(
+      recovered ? ["source-message", "source-message"] : ["source-message"],
+    );
+    expect(
+      delivered.map((payload) => getReplyPayloadMetadata(payload)?.assistantMessageIndex),
+    ).toEqual(recovered ? [7, 7] : [7]);
+    expect(transformReplyPayload).toHaveBeenCalledOnce();
+  });
 
   it("keeps Telegram ACP TTS-only block text out of the voice caption", async () => {
     setReadyAcpResolution();

@@ -10,12 +10,14 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../../../sessions/session-lifecycle-admission.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "../../../tasks/detached-task-runtime-contract.js";
+import { finalizeTaskRunByRunIdAsync } from "../../../tasks/detached-task-runtime.async.js";
 import {
-  finalizeTaskRunByRunId,
   findDetachedTaskRun,
+  findDetachedTaskRunAsync,
 } from "../../../tasks/detached-task-runtime.js";
 import { isProvisionalSubagentKillTask } from "../../../tasks/task-cancellation-state.js";
 import type { TaskRecord } from "../../../tasks/task-registry.types.js";
+import { reconcileRetiredSubagentCancellation } from "../completion/subagent-completion-admission.store.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_ERROR,
@@ -32,7 +34,6 @@ import {
 import {
   loadSubagentSessionEntry,
   resolveCompletionFromSessionEntry,
-  type SubagentSessionStoreCache,
 } from "./subagent-session-reconciliation.js";
 
 function findNextSubagentRunCreatedAt(
@@ -53,14 +54,11 @@ function findNextSubagentRunCreatedAt(
   return nextCreatedAt;
 }
 
-function resolveSubagentTaskForRunGeneration(
-  entry: SubagentRunRecord,
-  nextRunCreatedAt: number | undefined,
-) {
+function subagentTaskFindParams(entry: SubagentRunRecord, nextRunCreatedAt: number | undefined) {
   const generationStartedAt = entry.sessionStartedAt ?? entry.createdAt;
-  return findDetachedTaskRun({
+  return {
     runId: entry.taskRunId ?? entry.runId,
-    runtime: "subagent",
+    runtime: "subagent" as const,
     sessionKey: entry.childSessionKey,
     createdAtOrAfter: generationStartedAt,
     createdBefore: nextRunCreatedAt,
@@ -70,7 +68,7 @@ function resolveSubagentTaskForRunGeneration(
       entry.taskRunId === undefined &&
       typeof entry.sessionStartedAt === "number" &&
       entry.sessionStartedAt < entry.createdAt,
-  });
+  };
 }
 
 function isStableCancellation(task: TaskRecord | undefined) {
@@ -88,10 +86,34 @@ export function resolveSubagentTaskForRun(
   candidates: Iterable<SubagentRunRecord>,
   entry: SubagentRunRecord,
 ) {
-  return resolveSubagentTaskForRunGeneration(
-    entry,
-    findNextSubagentRunCreatedAt(candidates, entry),
+  return findDetachedTaskRun(
+    subagentTaskFindParams(entry, findNextSubagentRunCreatedAt(candidates, entry)),
   );
+}
+
+export async function resolveSubagentTaskForRunAsync(
+  getCandidates: () => Iterable<SubagentRunRecord>,
+  entry: SubagentRunRecord,
+) {
+  const boundary = findNextSubagentRunCreatedAt(getCandidates(), entry);
+  const selected = subagentTaskFindParams(entry, boundary);
+  const generation = entry.generation;
+  const result = await findDetachedTaskRunAsync(selected);
+  const current = subagentTaskFindParams(
+    entry,
+    findNextSubagentRunCreatedAt(getCandidates(), entry),
+  );
+  if (
+    entry.generation !== generation ||
+    selected.runId !== current.runId ||
+    selected.sessionKey !== current.sessionKey ||
+    selected.createdAtOrAfter !== current.createdAtOrAfter ||
+    selected.createdBefore !== current.createdBefore ||
+    selected.allowSessionFallback !== current.allowSessionFallback
+  ) {
+    throw new Error("Subagent task lookup generation changed during preparation");
+  }
+  return result;
 }
 
 export async function reconcileDurableSubagentKillIntent(params: {
@@ -121,19 +143,42 @@ export async function reconcileDurableSubagentKillIntent(params: {
   );
   if (latest !== params.entry) {
     try {
-      const taskResolution = resolveSubagentTaskForRun(childRuns(), params.entry);
+      const taskResolution = await resolveSubagentTaskForRunAsync(childRuns, params.entry);
+      if (
+        params.runs.get(params.runId) !== params.entry ||
+        params.entry.killIntent !== killIntent ||
+        getLatestSubagentRunByChildSessionKeyFromRuns(childRuns(), params.entry.childSessionKey) ===
+          params.entry
+      ) {
+        return false;
+      }
       const task = taskResolution.task;
       if (taskResolution.lookup === "unavailable" || isUnstableTask(task)) {
-        const finalized = finalizeTaskRunByRunId({
-          runId: task?.runId ?? params.entry.taskRunId ?? params.runId,
-          runtime: "subagent",
-          sessionKey: task?.childSessionKey ?? params.entry.childSessionKey,
-          status: "cancelled",
-          endedAt: killIntent.requestedAt,
-          lastEventAt: killIntent.requestedAt,
-          error: "Superseded subagent cancellation finalized.",
-          suppressDelivery: true,
-        });
+        const finalized = await finalizeTaskRunByRunIdAsync(
+          {
+            taskId: task?.taskId,
+            runId: task?.runId ?? params.entry.taskRunId ?? params.runId,
+            runtime: "subagent",
+            sessionKey: task?.childSessionKey ?? params.entry.childSessionKey,
+            status: "cancelled",
+            endedAt: killIntent.requestedAt,
+            lastEventAt: killIntent.requestedAt,
+            error: "Superseded subagent cancellation finalized.",
+            suppressDelivery: true,
+          },
+          () => {
+            if (
+              params.runs.get(params.runId) !== params.entry ||
+              params.entry.killIntent !== killIntent ||
+              getLatestSubagentRunByChildSessionKeyFromRuns(
+                childRuns(),
+                params.entry.childSessionKey,
+              ) === params.entry
+            ) {
+              throw new Error("superseded subagent kill owner changed before commit");
+            }
+          },
+        );
         if (taskResolution.lookup === "available" && finalized.length === 0) {
           params.warn("could not stabilize superseded durable kill task", {
             runId: params.runId,
@@ -305,7 +350,6 @@ export async function reconcileProvisionalSubagentKill(params: {
   entry: SubagentRunRecord;
   now: number;
   runs: Map<string, SubagentRunRecord>;
-  storeCache: SubagentSessionStoreCache;
   completeSubagentRunWithRecovery: (
     completion: SubagentCompletionRequest,
     source: string,
@@ -322,26 +366,42 @@ export async function reconcileProvisionalSubagentKill(params: {
   }
   // The child-session index stays current across awaits. Re-read it at each
   // decision boundary so a newly registered generation can supersede this run.
-  const resolveGeneration = () => {
+  const isCurrentKill = () =>
+    runs.get(runId) === entry &&
+    entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
+    entry.killReconciliation === killReconciliation;
+  const resolveGeneration = async () => {
+    const taskResolution = await resolveSubagentTaskForRunAsync(
+      () => params.getRunsForChildSession(entry.childSessionKey),
+      entry,
+    );
+    if (!isCurrentKill()) {
+      return undefined;
+    }
     const nextRunCreatedAt = findNextSubagentRunCreatedAt(
       params.getRunsForChildSession(entry.childSessionKey),
       entry,
     );
     return {
       nextRunCreatedAt,
-      taskResolution: resolveSubagentTaskForRunGeneration(entry, nextRunCreatedAt),
+      taskResolution,
     };
   };
-  const initialGeneration = resolveGeneration();
+  const initialGeneration = await resolveGeneration();
+  if (!initialGeneration) {
+    return false;
+  }
   const taskResolution = initialGeneration.taskResolution;
   const task = taskResolution.task;
   const nextRunCreatedAt = initialGeneration.nextRunCreatedAt;
+  if (taskResolution.lookup === "available" && !task && nextRunCreatedAt === undefined) {
+    const retired = reconcileRetiredSubagentCancellation(entry, now);
+    if (retired !== undefined) {
+      return retired;
+    }
+  }
   const hasStableTaskCancellation = isStableCancellation(task);
   const killedAt = killReconciliation.killedAt;
-  const isCurrentKill = () =>
-    runs.get(runId) === entry &&
-    entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
-    entry.killReconciliation === killReconciliation;
   const taskCompletion =
     nextRunCreatedAt === undefined ? resolveCompletionFromTerminalTask(task, entry) : undefined;
   if (taskCompletion) {
@@ -364,7 +424,6 @@ export async function reconcileProvisionalSubagentKill(params: {
   }
   const sessionEntry = loadSubagentSessionEntry({
     childSessionKey: entry.childSessionKey,
-    storeCache: params.storeCache,
   });
   const completion = resolveCompletionFromSessionEntry(sessionEntry, now, {
     notBeforeMs: entry.execution.startedAt ?? entry.createdAt,
@@ -423,7 +482,11 @@ export async function reconcileProvisionalSubagentKill(params: {
     if (!isCurrentKill()) {
       return false;
     }
-    const taskAfterResolution = resolveGeneration().taskResolution;
+    const generationAfter = await resolveGeneration();
+    if (!generationAfter) {
+      return false;
+    }
+    const taskAfterResolution = generationAfter.taskResolution;
     const taskAfter = taskAfterResolution.task;
     const stableCancellationWonDuringCompletion =
       isStableCancellation(taskAfter) && completionEndedAt >= killedAt;
@@ -434,7 +497,11 @@ export async function reconcileProvisionalSubagentKill(params: {
   if (!isCurrentKill()) {
     return false;
   }
-  const taskBeforeResolution = resolveGeneration().taskResolution;
+  const generationBefore = await resolveGeneration();
+  if (!generationBefore) {
+    return false;
+  }
+  const taskBeforeResolution = generationBefore.taskResolution;
   const taskBefore = taskBeforeResolution.task;
   const stableTaskCancellationAfterReconciliation = isStableCancellation(taskBefore);
   const taskNeedsStabilization =
@@ -445,21 +512,33 @@ export async function reconcileProvisionalSubagentKill(params: {
         ? entry.execution.outcome.error?.trim()
         : undefined;
     try {
-      const finalizedTasks = finalizeTaskRunByRunId({
-        runId: taskBefore?.runId ?? entry.taskRunId ?? runId,
-        runtime: "subagent",
-        sessionKey: taskBefore?.childSessionKey ?? entry.childSessionKey,
-        status: "cancelled",
-        endedAt: killedAt,
-        lastEventAt: killedAt,
-        error:
-          observedError && observedError !== SUBAGENT_KILL_TASK_ERROR
-            ? observedError
-            : "Subagent run cancellation finalized.",
-        suppressDelivery: true,
-      });
+      const finalizedTasks = await finalizeTaskRunByRunIdAsync(
+        {
+          taskId: taskBefore?.taskId,
+          runId: taskBefore?.runId ?? entry.taskRunId ?? runId,
+          runtime: "subagent",
+          sessionKey: taskBefore?.childSessionKey ?? entry.childSessionKey,
+          status: "cancelled",
+          endedAt: killedAt,
+          lastEventAt: killedAt,
+          error:
+            observedError && observedError !== SUBAGENT_KILL_TASK_ERROR
+              ? observedError
+              : "Subagent run cancellation finalized.",
+          suppressDelivery: true,
+        },
+        () => {
+          if (!isCurrentKill()) {
+            throw new Error("subagent kill owner changed before commit");
+          }
+        },
+      );
       if (finalizedTasks.length === 0) {
-        const taskAfterResolution = resolveGeneration().taskResolution;
+        const generationAfter = await resolveGeneration();
+        if (!generationAfter) {
+          return false;
+        }
+        const taskAfterResolution = generationAfter.taskResolution;
         const taskAfter = taskAfterResolution.task;
         if (taskAfterResolution.lookup === "available" && isUnstableTask(taskAfter)) {
           params.warn("killed task was not stabilized during sweep", {
@@ -484,7 +563,13 @@ export async function reconcileProvisionalSubagentKill(params: {
       return false;
     }
   }
-  if (resolveGeneration().nextRunCreatedAt !== undefined) {
+  if (!isCurrentKill()) {
+    return false;
+  }
+  if (
+    findNextSubagentRunCreatedAt(params.getRunsForChildSession(entry.childSessionKey), entry) !==
+    undefined
+  ) {
     await params.retireSupersededRun(runId, entry);
     return true;
   }

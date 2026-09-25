@@ -32,6 +32,7 @@ export async function executePluginInstall(
           opts: {},
           runtime: createNoExitRuntime(ctx.runtime),
           allowInstallPolicyWarningPrompt: false,
+          applyRuntime: ctx.deps?.applyPluginRuntime,
           ...(ctx.assertPersistentApply
             ? { beforePersistentApply: ctx.assertPersistentApply }
             : {}),

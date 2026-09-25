@@ -1,12 +1,12 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import {
   applySessionEntryLifecycleMutation,
   listSessionEntriesCore,
 } from "../../config/sessions/session-accessor.js";
+import { admitAgentRestartRecovery } from "../../gateway/agent-turn/agent-run-recovery-admission.js";
 import {
   getAgentEventLifecycleGeneration,
   rotateAgentEventLifecycleGeneration,
@@ -19,6 +19,7 @@ import {
   refreshMainSessionRecoveryOwner,
   releaseMainSessionRecoveryOwner,
 } from "./main-session-recovery-store.js";
+import { createMainSessionRecoveryStoreFixture } from "./main-session-recovery-store.test-support.js";
 import { retryRestartAbortedMainSessionRecovery } from "./main-session-restart-recovery-runtime.js";
 
 const sessionKey = "agent:main:main";
@@ -33,21 +34,24 @@ const enabledExecutionIdentity = (runId: string) => ({
   state: "enabled" as const,
   token: executionIdentity(runId),
 });
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
 describe("main session recovery store", () => {
-  let dir: string;
   let lifecycleGeneration: string;
   let storePath: string;
+  const { fixtureStore, createMovedSessionStore, resetCase } =
+    createMainSessionRecoveryStoreFixture();
+
+  function useIsolatedMovedSessionStore(): void {
+    storePath = createMovedSessionStore();
+  }
 
   beforeEach(() => {
-    dir = tempDirs.make("openclaw-main-recovery-store-");
+    storePath = fixtureStore();
     lifecycleGeneration = getAgentEventLifecycleGeneration();
-    storePath = path.join(dir, "sessions.json");
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
+    await resetCase();
   });
 
   async function write(entry: SessionEntry): Promise<void> {
@@ -199,9 +203,120 @@ describe("main session recovery store", () => {
       sessionId: "session-1",
     });
 
-    expect(admitted.transition).toEqual({ kind: "admitted_recovery" });
+    expect(admitted.transition).toEqual({
+      kind: "admitted_recovery",
+      admission: {
+        cycleId: "cycle-1",
+        attempt: 1,
+        lifecycleGeneration,
+        runId: "recovery-1",
+        sessionId: "session-1",
+      },
+    });
     expect(read().restartRecoveryRuns).toEqual([{ runId: "recovery-1", lifecycleGeneration }]);
     expect(read().abortedLastRun).toBe(false);
+  });
+
+  it.each(["recovery-1", "recovery-2"])(
+    "does not let delayed restoration interrupt a newer admission of %s",
+    async (successorRunId) => {
+      await write(
+        interruptedEntry({
+          restartRecoveryDeliveryRunId: "recovery-1",
+          restartRecoveryDeliverySourceRunId: "source-1",
+        }),
+      );
+      await reserve();
+      const restorePrevious = await admitAgentRestartRecovery({
+        lifecycleGeneration,
+        runId: "recovery-1",
+        sessionId: "session-1",
+        sessionKey,
+        storePath,
+      });
+      // Orphan reconciliation can win while the previous admission's cleanup is deferred.
+      await commitRecovery({ kind: "mark_interrupted", cycleId: "unused", now: 400 });
+      const observed = await commitRecovery({
+        kind: "observe",
+        cycleId: "unused",
+        lifecycleGeneration,
+        sessionKey,
+      });
+      if (
+        observed.transition.kind !== "observed" ||
+        observed.transition.view.status !== "recoverable"
+      ) {
+        throw new Error("expected recoverable session");
+      }
+      await commitRecovery({
+        kind: "prepare_attempt",
+        attempt: observed.transition.view.nextAttempt,
+        lifecycleGeneration,
+        now: 500,
+        observation: observed.transition.view.observation,
+        runId: successorRunId,
+        executionIdentity: { state: "disabled" },
+      });
+      await sessionAccessor.updateSessionEntry({ sessionKey, storePath }, () => ({
+        restartRecoveryDeliveryRunId: successorRunId,
+      }));
+      const restoreSuccessor = await admitAgentRestartRecovery({
+        lifecycleGeneration,
+        runId: successorRunId,
+        sessionId: "session-1",
+        sessionKey,
+        storePath,
+      });
+      const admittedSuccessor = read();
+
+      await expect(restorePrevious()).resolves.toBeUndefined();
+      expect(read()).toEqual(admittedSuccessor);
+      await expect(restoreSuccessor()).resolves.toMatchObject({
+        sessionId: "session-1",
+        sessionKey,
+      });
+      expect(read()).toMatchObject({
+        abortedLastRun: true,
+        restartRecoveryDeliverySourceRunId: "source-1",
+        mainRestartRecovery: { cycleId: "cycle-1", chargedAttempts: 2 },
+      });
+      expect(read().lifecycleRunId).toBeUndefined();
+      expect(read().restartRecoveryDeliveryRunId).toBeUndefined();
+    },
+  );
+
+  it("retries the exact restored attempt after its committed response is lost", async () => {
+    await write(
+      interruptedEntry({
+        restartRecoveryDeliveryRunId: "recovery-1",
+        restartRecoveryDeliverySourceRunId: "source-1",
+      }),
+    );
+    await reserve();
+    const restore = await admitAgentRestartRecovery({
+      lifecycleGeneration,
+      runId: "recovery-1",
+      sessionId: "session-1",
+      sessionKey,
+      storePath,
+    });
+    const applyReplacements = sessionAccessor.applySessionEntryReplacements;
+    vi.spyOn(sessionAccessor, "applySessionEntryReplacements").mockImplementationOnce(
+      async (params) => {
+        await applyReplacements(params);
+        throw new Error("restoration response lost");
+      },
+    );
+
+    await expect(restore()).rejects.toThrow("restoration response lost");
+    await expect(restore()).resolves.toMatchObject({ sessionId: "session-1", sessionKey });
+    expect(read()).toMatchObject({
+      abortedLastRun: true,
+      restartRecoveryDeliverySourceRunId: "source-1",
+      mainRestartRecovery: { cycleId: "cycle-1", chargedAttempts: 1 },
+    });
+    expect(read().lifecycleRunId).toBeUndefined();
+    expect(read().restartRecoveryDeliveryRunId).toBeUndefined();
   });
 
   it("rejects an observation after the session is replaced", async () => {
@@ -286,6 +401,200 @@ describe("main session recovery store", () => {
     expect(accessorSpy.mock.calls[0]?.[0]).toMatchObject({ sessionKeys: [sessionKey] });
   });
 
+  it.each([
+    ["claim", false],
+    ["inspect", false],
+    ["claim", true],
+    ["inspect", true],
+  ] as const)("%s follows a moved session with lifecycle rotation=%s", async (kind, rotate) => {
+    useIsolatedMovedSessionStore();
+    const movedKey = "agent:main:moved";
+    const replacement = { sessionId: "replacement", updatedAt: 200 };
+    await seedExact({ [movedKey]: interruptedEntry(), [sessionKey]: replacement });
+    if (rotate) {
+      const replace = sessionAccessor.applySessionEntryReplacements;
+      vi.spyOn(sessionAccessor, "applySessionEntryReplacements").mockImplementationOnce(
+        async (params) => {
+          const result = await replace(params);
+          rotateAgentEventLifecycleGeneration();
+          return result;
+        },
+      );
+    }
+
+    const result =
+      kind === "claim"
+        ? await claimRecovery()
+        : await inspectMainSessionRecoveryRequired({
+            expectedSessionId: "session-1",
+            lifecycleGeneration,
+            target: { sessionKey, storePath },
+          });
+
+    expect(result).toMatchObject(
+      rotate
+        ? { kind: "invalidated", reason: "stale_generation" }
+        : kind === "claim"
+          ? { kind: "claimed", sessionKey: movedKey }
+          : { kind: "required" },
+    );
+    expect(read()).toMatchObject(replacement);
+    const moved = sessionAccessor.loadSessionEntry({ sessionKey: movedKey, storePath });
+    expect(Boolean(moved?.mainRestartRecovery?.foregroundClaims)).toBe(kind === "claim" && !rotate);
+  });
+
+  it.each([
+    "validate_foreground",
+    "release_foreground",
+    "cancel_reservation",
+    "abandon_reservation",
+    "admit_recovery",
+  ] as const)("%s does not decode unrelated retained payloads", async (kind) => {
+    const unrelatedPayload = `unrelated-recovery-payload:${"x".repeat(32 * 1024)}`;
+    await seedExact({
+      [sessionKey]: interruptedEntry(),
+      ...Object.fromEntries(
+        Array.from({ length: 64 }, (_, index) => [
+          `agent:main:retained-${index}`,
+          {
+            sessionId: `retained-${index}`,
+            updatedAt: 100,
+            lastHeartbeatText: unrelatedPayload,
+          },
+        ]),
+      ),
+    });
+    let command: CommitParams["command"];
+    if (kind === "validate_foreground" || kind === "release_foreground") {
+      const claim = await claimRecovery();
+      if (claim.kind !== "claimed") {
+        throw new Error("expected foreground owner claim");
+      }
+      command = { kind, claim: claim.lease };
+    } else {
+      const reservation = await reserve();
+      command =
+        kind === "admit_recovery"
+          ? {
+              kind,
+              lifecycleGeneration,
+              now: 300,
+              runId: reservation.runId,
+              sessionId: "session-1",
+            }
+          : { kind, reservation };
+    }
+    const parse = vi.spyOn(JSON, "parse");
+
+    const result = await commitRecovery(command);
+
+    expect(result.sessionKey).toBe(sessionKey);
+    expect(result.transition.kind).toBe(
+      kind === "validate_foreground"
+        ? "foreground_validated"
+        : kind === "admit_recovery"
+          ? "admitted_recovery"
+          : "applied",
+    );
+    expect(parse.mock.calls.filter(([value]) => value.includes(unrelatedPayload))).toHaveLength(0);
+  });
+
+  it("refreshes a moved foreground owner and releases it after its session id rotates", async () => {
+    useIsolatedMovedSessionStore();
+    await write(interruptedEntry());
+    const claim = await claimRecovery();
+    if (claim.kind !== "claimed") {
+      throw new Error("expected foreground owner claim");
+    }
+    const movedKey = "agent:main:moved";
+    await seedExact({
+      [movedKey]: read(),
+      [sessionKey]: { sessionId: "replacement", updatedAt: 200 },
+    });
+
+    expect(await refreshMainSessionRecoveryOwner(claim.lease)).toMatchObject({
+      sessionKey: movedKey,
+      entry: { sessionId: "session-1" },
+    });
+    const moved = sessionAccessor.loadSessionEntry({ sessionKey: movedKey, storePath })!;
+    await sessionAccessor.replaceSessionEntry(
+      { sessionKey: movedKey, storePath },
+      { ...moved, sessionId: "session-2" },
+    );
+    await expect(refreshMainSessionRecoveryOwner(claim.lease)).resolves.toBeUndefined();
+    await releaseMainSessionRecoveryOwner(claim.lease);
+
+    expect(
+      sessionAccessor.loadSessionEntry({ sessionKey: movedKey, storePath })?.mainRestartRecovery
+        ?.foregroundClaims,
+    ).toBeUndefined();
+    expect(read()).toMatchObject({ sessionId: "replacement" });
+  });
+
+  it.each(["admit_recovery", "cancel_reservation", "abandon_reservation"] as const)(
+    "%s finds a moved reservation without changing its replacement",
+    async (kind) => {
+      useIsolatedMovedSessionStore();
+      await write(interruptedEntry());
+      const reservation = await reserve();
+      const movedKey = "agent:main:moved";
+      await seedExact({
+        [movedKey]: read(),
+        [sessionKey]: { sessionId: "replacement", updatedAt: 200 },
+      });
+
+      const command =
+        kind === "admit_recovery"
+          ? {
+              kind,
+              lifecycleGeneration,
+              now: 300,
+              runId: reservation.runId,
+              sessionId: reservation.sessionId,
+            }
+          : { kind, reservation };
+      expect(await commitRecovery(command)).toMatchObject({
+        sessionKey: movedKey,
+        transition: { kind: kind === "admit_recovery" ? "admitted_recovery" : "applied" },
+      });
+      const state = sessionAccessor.loadSessionEntry({
+        sessionKey: movedKey,
+        storePath,
+      })?.mainRestartRecovery;
+      expect(state?.chargedAttempts).toBe(kind === "cancel_reservation" ? 0 : 1);
+      expect(state?.reservation).toBeUndefined();
+      expect(read()).toMatchObject({ sessionId: "replacement" });
+    },
+  );
+
+  it("rechecks lifecycle authority after an exact lookup misses a moved owner", async () => {
+    useIsolatedMovedSessionStore();
+    await write(interruptedEntry());
+    const claim = await claimRecovery();
+    if (claim.kind !== "claimed") {
+      throw new Error("expected foreground owner claim");
+    }
+    const movedKey = "agent:main:moved";
+    await seedExact({
+      [movedKey]: read(),
+      [sessionKey]: { sessionId: "replacement", updatedAt: 200 },
+    });
+    const replace = sessionAccessor.applySessionEntryReplacements;
+    vi.spyOn(sessionAccessor, "applySessionEntryReplacements").mockImplementationOnce(
+      async (params) => {
+        const result = await replace(params);
+        rotateAgentEventLifecycleGeneration();
+        return result;
+      },
+    );
+
+    await expect(refreshMainSessionRecoveryOwner(claim.lease)).resolves.toBeUndefined();
+    expect(
+      sessionAccessor.loadSessionEntry({ sessionKey: movedKey, storePath })?.mainRestartRecovery
+        ?.foregroundClaims?.tokens,
+    ).toEqual([claim.lease.claimId]);
+  });
+
   it("atomically clears orphaned lifecycle fences from a healthy row", async () => {
     await write(
       interruptedEntry({
@@ -295,7 +604,8 @@ describe("main session recovery store", () => {
       }),
     );
 
-    await expect(claimRecovery()).resolves.toEqual({ kind: "not_required" });
+    const claim = await claimRecovery();
+    expect(claim).toEqual({ kind: "not_required", entry: read(), sessionKey });
     expect(read()).toMatchObject({
       sessionId: "session-1",
       status: "running",
@@ -314,7 +624,8 @@ describe("main session recovery store", () => {
       }),
     );
 
-    await expect(claimRecovery()).resolves.toEqual({ kind: "not_required" });
+    const claim = await claimRecovery();
+    expect(claim).toEqual({ kind: "not_required", entry: read(), sessionKey });
     expect(read()).toMatchObject({
       sessionId: "session-1",
       status: "failed",
@@ -347,7 +658,8 @@ describe("main session recovery store", () => {
     });
     expect(read().mainRestartRecovery).toBeUndefined();
 
-    await expect(claimRecovery()).resolves.toEqual({ kind: "not_required" });
+    const claim = await claimRecovery();
+    expect(claim).toEqual({ kind: "not_required", entry: read(), sessionKey });
     expect(read()).toMatchObject({ status: "done", abortedLastRun: false });
     expect(read().restartRecoveryRuns).toBeUndefined();
   });
@@ -442,7 +754,11 @@ describe("main session recovery store", () => {
       target: { sessionKey: subagentKey, storePath },
     });
 
-    expect(claim).toEqual({ kind: "not_required" });
+    expect(claim).toEqual({
+      kind: "not_required",
+      entry: readStore()[subagentKey],
+      sessionKey: subagentKey,
+    });
     expect(readStore()[subagentKey]?.mainRestartRecovery?.foregroundClaims).toBeUndefined();
   });
 
@@ -518,7 +834,8 @@ describe("main session recovery store", () => {
   });
 
   it("retains the shared-store agent owner through claim, refresh, and release", async () => {
-    const target = { agentId: "ops", sessionKey: "global", storePath };
+    const opsStorePath = fixtureStore("ops");
+    const target = { agentId: "ops", sessionKey: "global", storePath: opsStorePath };
     await sessionAccessor.replaceSessionEntry(target, interruptedEntry());
 
     await expect(
@@ -555,7 +872,9 @@ describe("main session recovery store", () => {
   });
 
   it("settles an owned shared-store recovery receipt without redispatching", async () => {
-    const target = { agentId: "ops", sessionKey: "global", storePath };
+    const opsStorePath = fixtureStore("ops");
+    const dir = path.dirname(opsStorePath);
+    const target = { agentId: "ops", sessionKey: "global", storePath: opsStorePath };
     await sessionAccessor.replaceSessionEntry(
       target,
       interruptedEntry({
@@ -583,9 +902,10 @@ describe("main session recovery store", () => {
             defaults: { sessionStore: { agentId: "ops" } },
             entries: { ops: {} },
           },
-          session: { scope: "global", store: storePath },
+          session: { scope: "global", store: opsStorePath },
         },
         gatewayRuntime: {
+          dispatchSessionMethod: dispatch,
           dispatchAgent: dispatch,
           waitForAgent: dispatch,
           sendRecoveryNotice: dispatch,
@@ -731,6 +1051,8 @@ describe("main session recovery store", () => {
 
     const result = await commitRecovery({
       kind: "mark_admitted_recovery_interrupted",
+      cycleId: "cycle-1",
+      attempt: 0,
       lifecycleGeneration,
       now: 300,
       runId: "recovery-1",

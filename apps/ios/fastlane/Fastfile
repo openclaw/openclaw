@@ -9,6 +9,10 @@ require "digest/md5"
 require "time"
 require "rubygems/version"
 
+# Only a completed deterministic planner rejection is reportable as no plan.
+# App Store/API failures must still abort read-only inspection.
+class IosReleasePlanRejected < StandardError; end
+
 default_platform(:ios)
 
 APP_STORE_APP_IDENTIFIER = "ai.openclawfoundation.app"
@@ -51,6 +55,7 @@ REQUIRED_IOS_SCREENSHOT_NAMES = RELEASE_IOS_SCREENSHOT_TESTS.map { |entry| entry
 IOS_SCREENSHOT_TEST_TIMEOUT_SECONDS = 180
 IOS_SCREENSHOT_XCARGS = [
   "-allowProvisioningUpdates",
+  "-parallel-testing-enabled NO",
   "-test-timeouts-enabled YES",
   "-default-test-execution-time-allowance #{IOS_SCREENSHOT_TEST_TIMEOUT_SECONDS}",
   "-maximum-test-execution-time-allowance #{IOS_SCREENSHOT_TEST_TIMEOUT_SECONDS}"
@@ -203,7 +208,9 @@ def available_simulator_devices
     UI.user_error!("Failed to list simulator devices: #{detail}")
   end
 
-  JSON.parse(stdout).fetch("devices").values.flatten
+  JSON.parse(stdout).fetch("devices").flat_map do |runtime, devices|
+    devices.map { |device| device.merge("runtime" => runtime) }
+  end
 rescue JSON::ParserError => e
   UI.user_error!("Invalid JSON from simctl device list: #{e.message}")
 end
@@ -860,7 +867,7 @@ def release_notes_metadata_path(release_version:, app_store_revision:)
 end
 
 def app_review_notes_markdown_path
-  File.join(ios_root, "APP-REVIEW-NOTES.md")
+  File.join(ios_root, "APP-REVIEW-NOTES-APPLE.md")
 end
 
 def app_review_notes_pdf_path
@@ -1221,7 +1228,7 @@ def upload_app_store_screenshots_deterministically!(app_identifier:, app_id:, sh
   UI.success("Uploaded and verified #{screenshots.length} App Store screenshots for #{short_version}.")
 end
 
-def read_ios_version_metadata(release_version: nil, app_store_revision: nil)
+def read_ios_version_metadata(release_version: nil, app_store_revision: nil, source_root: repo_root)
   script_path = File.join(repo_root, "scripts", "ios-version.ts")
   args = [
     "node",
@@ -1229,6 +1236,7 @@ def read_ios_version_metadata(release_version: nil, app_store_revision: nil)
     "tsx",
     script_path,
     "--json",
+    "--root", source_root,
   ]
   args.push("--version", release_version) if env_present?(release_version)
   args.push("--revision", app_store_revision) if env_present?(app_store_revision)
@@ -1290,28 +1298,28 @@ def app_store_build_upload_state(upload)
   state
 end
 
-def release_source_clean?
+def release_source_clean?(source_root: repo_root)
   stdout, _stderr, status = Open3.capture3(
     "git",
     "status",
     "--porcelain=v1",
     "--untracked-files=all",
-    chdir: repo_root
+    chdir: source_root
   )
   status.success? && stdout.strip.empty?
 end
 
-def resolve_ios_release_plan!(release_version: nil, app_store_revision: nil, build_number: nil)
-  gateway_metadata = read_ios_version_metadata
+def resolve_ios_release_plan!(release_version: nil, app_store_revision: nil, build_number: nil, source_root: repo_root, app: nil)
+  gateway_metadata = read_ios_version_metadata(source_root: source_root)
   if env_present?(release_version.to_s)
-    explicit_gateway = read_ios_version_metadata(release_version: release_version)[:version]
+    explicit_gateway = read_ios_version_metadata(release_version: release_version, source_root: source_root)[:version]
     if explicit_gateway != gateway_metadata[:version]
       UI.user_error!(
         "Explicit iOS gateway version #{explicit_gateway} does not match canonical mobile version #{gateway_metadata[:version]}."
       )
     end
   end
-  app = app_store_connect_target_app
+  app ||= app_store_connect_target_app
   versions = app.get_app_store_versions(
     filter: { platform: Spaceship::ConnectAPI::Platform::IOS },
     includes: nil
@@ -1335,9 +1343,9 @@ def resolve_ios_release_plan!(release_version: nil, app_store_revision: nil, bui
     explicitBuildNumber: env_present?(build_number.to_s) ? build_number.to_s : nil,
     explicitRevision: env_present?(app_store_revision.to_s) ? app_store_revision.to_s : nil,
     gatewayVersion: gateway_metadata[:version],
-    rootDir: repo_root,
-    sourceClean: release_source_clean?,
-    sourceSha: release_git_sha
+    rootDir: source_root,
+    sourceClean: release_source_clean?(source_root: source_root),
+    sourceSha: release_git_sha(source_root: source_root)
   }
 
   stdout = ""
@@ -1359,7 +1367,7 @@ def resolve_ios_release_plan!(release_version: nil, app_store_revision: nil, bui
   unless status&.success?
     detail = stderr.to_s.strip
     detail = stdout.to_s.strip if detail.empty?
-    UI.user_error!("Unable to resolve deterministic iOS release plan: #{detail}")
+    raise IosReleasePlanRejected, "Unable to resolve deterministic iOS release plan: #{detail}"
   end
   JSON.parse(stdout)
 rescue JSON::ParserError => e
@@ -1499,8 +1507,8 @@ def mobile_release_ref_script
   File.join(repo_root, "scripts", "mobile-release-ref.ts")
 end
 
-def release_git_sha
-  stdout, stderr, status = Open3.capture3("git", "rev-parse", "HEAD", chdir: repo_root)
+def release_git_sha(source_root: repo_root)
+  stdout, stderr, status = Open3.capture3("git", "rev-parse", "HEAD", chdir: source_root)
   UI.user_error!("Unable to resolve release Git SHA: #{stderr.strip}") unless status.success?
   stdout.strip
 end
@@ -1664,19 +1672,7 @@ def resolve_ci_testflight_internal_group_id!
   group.id
 end
 
-def assign_and_verify_ci_testflight_internal_group!(group_id:, app_store_version:, build_number:)
-  app_identifier = ENV["APP_STORE_CONNECT_APP_IDENTIFIER"]
-  app_id = ENV["APP_STORE_CONNECT_APP_ID"]
-  app_identifier = nil unless env_present?(app_identifier)
-  app_id = nil unless env_present?(app_id)
-  app = resolve_app_store_connect_app(
-    app_identifier: app_identifier,
-    app_id: app_id
-  )
-  group = select_ci_testflight_internal_group_by_id!(
-    groups: app.get_beta_groups,
-    group_id: group_id
-  )
+def resolve_ci_testflight_build!(app:, app_store_version:, build_number:)
   builds = app.get_builds(
     filter: {
       "preReleaseVersion.version" => app_store_version,
@@ -1691,19 +1687,55 @@ def assign_and_verify_ci_testflight_internal_group!(group_id:, app_store_version
   unless builds.length == 1
     UI.user_error!("Uploaded TestFlight build could not be resolved after processing.")
   end
-  build = builds.first
+  builds.first
+end
 
-  # Fastlane's groups option matches both names and IDs. Assign the freshly
-  # resolved group directly so a concurrent display-name collision cannot widen access.
-  build.add_beta_groups(beta_groups: [group])
+def ci_testflight_build_group_ids(groups:, build:)
+  groups.select do |candidate_group|
+    candidate_group.fetch_builds.any? { |candidate| candidate.id == build.id }
+  end.map(&:id)
+end
+
+def assign_and_verify_ci_testflight_internal_group!(group_id:, app_store_version:, build_number:)
+  app_identifier = ENV["APP_STORE_CONNECT_APP_IDENTIFIER"]
+  app_id = ENV["APP_STORE_CONNECT_APP_ID"]
+  app_identifier = nil unless env_present?(app_identifier)
+  app_id = nil unless env_present?(app_id)
+  app = resolve_app_store_connect_app(
+    app_identifier: app_identifier,
+    app_id: app_id
+  )
+  group = select_ci_testflight_internal_group_by_id!(
+    groups: app.get_beta_groups,
+    group_id: group_id
+  )
+  build = resolve_ci_testflight_build!(app: app, app_store_version: app_store_version, build_number: build_number)
+  current_groups = app.get_beta_groups
+  group = select_ci_testflight_internal_group_by_id!(groups: current_groups, group_id: group_id)
+  current_group_ids = ci_testflight_build_group_ids(groups: current_groups, build: build)
+  unless (current_group_ids - [group_id]).empty?
+    UI.user_error!("Uploaded TestFlight build is assigned outside the configured internal group.")
+  end
+  unless current_group_ids.include?(group_id)
+    # Do not explicitly assign automatic groups. Their flag is not proof
+    # of access: require the exact build relationship before accepting success.
+    unless group.has_access_to_all_builds == false
+      UI.user_error!("Uploaded TestFlight build is not assigned to the configured internal group.")
+    end
+    # Relationship reads can outlive a group change. Revalidate immediately
+    # before assigning by immutable ID, never by Fastlane's name-or-ID option.
+    group = select_ci_testflight_internal_group_by_id!(groups: app.get_beta_groups, group_id: group_id)
+    unless group.has_access_to_all_builds == false
+      UI.user_error!("Uploaded TestFlight build is not assigned to the configured internal group.")
+    end
+    build.add_beta_groups(beta_groups: [group])
+  end
   verified_groups = app.get_beta_groups
   verified_group = select_ci_testflight_internal_group_by_id!(
     groups: verified_groups,
     group_id: group_id
   )
-  assigned_group_ids = verified_groups.select do |candidate_group|
-    candidate_group.fetch_builds.any? { |candidate| candidate.id == build.id }
-  end.map(&:id)
+  assigned_group_ids = ci_testflight_build_group_ids(groups: verified_groups, build: build)
   unless assigned_group_ids.include?(group_id)
     UI.user_error!("Uploaded TestFlight build is not assigned to the configured internal group.")
   end
@@ -1836,6 +1868,16 @@ def record_release_ios_screenshot_attempt!(
   )
 end
 
+def run_screenshot_xcodebuild!(arguments, log_path:)
+  started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+  command = "source #{Shellwords.escape(File.join(repo_root, "scripts", "lib", "swift-toolchain.sh"))}; " \
+    "#{shell_join(["run_apple_command_logged", log_path, "xcodebuild", *arguments])}"
+  sh("/bin/bash", "-c", command)
+ensure
+  elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+  UI.message("Screenshot xcodebuild #{arguments.last}: #{elapsed.round(2)}s (#{log_path})")
+end
+
 def capture_release_ios_screenshot!(
   project:,
   device:,
@@ -1843,70 +1885,50 @@ def capture_release_ios_screenshot!(
   output_directory:,
   result_bundle_path:,
   result_bundle_archive_directory:,
+  log_directory:,
   capture_attempts:,
   capture_attempts_path:,
   derived_data_path:,
-  clear_previous_screenshots:
+  device_udid:,
+  snapshot_cache_directory:
 )
   test_name = screenshot.fetch(:test)
   screenshot_name = screenshot.fetch(:name)
-  expected_screenshot_path = File.join(output_directory, "en-US", "#{device}-#{screenshot_name}.png")
+  filename = "#{device}-#{screenshot_name}.png"
+  expected_screenshot_path = File.join(output_directory, "en-US", filename)
+  captured_screenshot_path = File.join(snapshot_cache_directory, "screenshots", filename)
 
-  1.upto(2) do |attempt|
-    FileUtils.rm_f(expected_screenshot_path)
-    FileUtils.rm_rf(result_bundle_path)
-    begin
-      # OpenClaw owns retries of the whole capture action; Fastlane may still
-      # retry simulator launch internally. Each action call creates a new
-      # xcodebuild/TestManager session and reboots the selected simulator.
-      capture_ios_screenshots(
-        project: project,
-        scheme: "OpenClawUITests",
-        configuration: "Debug",
-        devices: [device],
-        languages: ["en-US"],
-        only_testing: ["OpenClawUITests/OpenClawSnapshotUITests/#{test_name}"],
-        launch_arguments: ["--openclaw-screenshot-mode"],
-        output_directory: output_directory,
-        clear_previous_screenshots: clear_previous_screenshots && attempt == 1,
-        derived_data_path: derived_data_path,
-        test_without_building: true,
-        result_bundle: true,
-        number_of_retries: 0,
-        stop_after_first_error: true,
-        reinstall_app: true,
-        concurrent_simulators: false,
-        override_status_bar: true,
-        override_status_bar_arguments: SNAPSHOT_STATUS_BAR_ARGUMENTS,
-        skip_open_summary: true,
-        xcargs: IOS_SCREENSHOT_XCARGS
-      )
-      verify_snapshot_test_result!(result_bundle_path, "#{device} #{screenshot_name} attempt #{attempt}")
-    rescue StandardError => error
-      archive_snapshot_test_result!(
-        result_bundle_path: result_bundle_path,
-        archive_directory: result_bundle_archive_directory,
-        device: device,
-        screenshot_name: screenshot_name,
-        attempt: attempt
-      )
-      record_release_ios_screenshot_attempt!(
-        attempts: capture_attempts,
-        output_path: capture_attempts_path,
-        device: device,
-        screenshot_name: screenshot_name,
-        attempt: attempt,
-        capture_outcome: "failed"
-      )
-      raise if attempt == 2
-
-      UI.important(
-        "Screenshot #{screenshot_name} failed on #{device}; " \
-          "retrying once in a fresh simulator session (#{error.message})."
-      )
-      next
+  attempt = 1
+  FileUtils.rm_f(expected_screenshot_path)
+  FileUtils.rm_f(captured_screenshot_path)
+  FileUtils.rm_rf(result_bundle_path)
+  FileUtils.mkdir_p(File.dirname(result_bundle_path))
+  begin
+    installed_apps = sh(
+      "/bin/bash", "-o", "pipefail", "-c",
+      "#{shell_join(["xcrun", "simctl", "listapps", device_udid])} | /usr/bin/plutil -convert json -o - -",
+      log: false
+    )
+    if JSON.parse(installed_apps).key?(APP_STORE_APP_IDENTIFIER)
+      sh("xcrun", "simctl", "uninstall", device_udid, APP_STORE_APP_IDENTIFIER)
     end
-
+    # Keep independent XCTest sessions without Snapshot rebooting the simulator or
+    # querying build settings again just to choose its log filename.
+    run_screenshot_xcodebuild!(
+      [
+        "-project", project, "-scheme", "OpenClawUITests", "-configuration", "Debug",
+        "-derivedDataPath", derived_data_path,
+        "-destination", "platform=iOS Simulator,id=#{device_udid}",
+        "-resultBundlePath", result_bundle_path,
+        "-only-testing:OpenClawUITests/OpenClawSnapshotUITests/#{test_name}",
+        *Shellwords.split(IOS_SCREENSHOT_XCARGS),
+        "FASTLANE_SNAPSHOT=YES", "FASTLANE_LANGUAGE=en-US", "test-without-building"
+      ],
+      log_path: File.join(log_directory, "#{device}-#{screenshot_name}.log")
+    )
+    verify_snapshot_test_result!(result_bundle_path, "#{device} #{screenshot_name} attempt #{attempt}")
+    FileUtils.cp(captured_screenshot_path, expected_screenshot_path)
+  rescue StandardError
     archive_snapshot_test_result!(
       result_bundle_path: result_bundle_path,
       archive_directory: result_bundle_archive_directory,
@@ -1920,10 +1942,26 @@ def capture_release_ios_screenshot!(
       device: device,
       screenshot_name: screenshot_name,
       attempt: attempt,
-      capture_outcome: "succeeded"
+      capture_outcome: "failed"
     )
-    return
+    raise
   end
+
+  archive_snapshot_test_result!(
+    result_bundle_path: result_bundle_path,
+    archive_directory: result_bundle_archive_directory,
+    device: device,
+    screenshot_name: screenshot_name,
+    attempt: attempt
+  )
+  record_release_ios_screenshot_attempt!(
+    attempts: capture_attempts,
+    output_path: capture_attempts_path,
+    device: device,
+    screenshot_name: screenshot_name,
+    attempt: attempt,
+    capture_outcome: "succeeded"
+  )
 end
 
 def build_app_store_release(context)
@@ -2131,6 +2169,80 @@ platform :ios do
       "revision=#{plan.fetch("appStoreRevision")} short=#{plan.fetch("appStoreVersion")} " \
       "build=#{plan.fetch("buildNumber")} decision=#{plan.fetch("decision")}"
     )
+  end
+
+  desc "Inspect the candidate release plan and exact TestFlight relationships without publication"
+  lane :release_inspect do |options|
+    # This read-only lane is not a repair/upload/record mode. Never manufacture
+    # a publication intent from observed relationships or an old uploaded build.
+    if env_present?(ENV["OPENCLAW_MOBILE_RELEASE_REF_MODE"]) ||
+       env_present?(ENV["OPENCLAW_MOBILE_RELEASE_INTENT_PATH"]) ||
+       env_present?(ENV["OPENCLAW_IOS_RELEASE_WRAPPER"])
+      UI.user_error!("Read-only inspection rejects writer context.")
+    end
+    source_root = File.realpath(options.fetch(:source_root))
+    output_directory = options.fetch(:output_directory).to_s
+    app_store_version = options.fetch(:app_store_version).to_s
+    build_number = options.fetch(:build_number).to_s
+    unless build_number.match?(/\A[1-9][0-9]{0,17}\z/) && app_store_version.match?(/\A20[0-9]{2}\.[1-9][0-9]?\.[1-9][0-9]*\z/)
+      UI.user_error!("Inspection requires an exact candidate App Store version and positive build number.")
+    end
+    UI.user_error!("Inspection output directory must be new.") if File.exist?(output_directory)
+    group_id = configured_ci_testflight_internal_group_id!
+    app_store_connect_api_key_config
+    app = app_store_connect_target_app
+    build = resolve_ci_testflight_build!(app: app, app_store_version: app_store_version, build_number: build_number)
+    groups = app.get_beta_groups(includes: nil)
+    ids = [app.id, build.id, *groups.map(&:id)]
+    unless ids.all? { |id| id.is_a?(String) && !id.strip.empty? } && groups.map(&:id).uniq.length == groups.length
+      UI.user_error!("Inspection requires unambiguous app, build, and group IDs.")
+    end
+    assigned_group_ids = ci_testflight_build_group_ids(groups: groups, build: build)
+    # Query failures stay outside this policy-only rescue. Unsafe policy remains
+    # an observation, not a reason to assign a group or assert distribution.
+    group_policy_valid = begin
+      select_ci_testflight_internal_group_by_id!(groups: groups, group_id: group_id)
+      true
+    rescue StandardError
+      false
+    end
+    plan = begin
+      resolve_ios_release_plan!(source_root: source_root, app: app)
+    rescue IosReleasePlanRejected
+      nil
+    end
+    report = {
+      kind: "openclaw-ios-release-inspection",
+      publicationVerified: false,
+      sourceSha: release_git_sha(source_root: source_root),
+      workflowSha: release_git_sha,
+      appId: app.id,
+      appStoreVersion: app_store_version,
+      buildNumber: build_number,
+      buildId: build.id,
+      buildProcessingState: build.processing_state,
+      buildExpired: build.expired,
+      buildUsable: build.processing_state == "VALID" && build.expired == false,
+      targetGroupId: group_id,
+      groupPolicyValid: group_policy_valid,
+      exclusiveGroupRelationship: assigned_group_ids == [group_id],
+      groups: groups.map do |group|
+        {
+          id: group.id,
+          internal: group.is_internal_group,
+          allBuilds: group.has_access_to_all_builds,
+          containsBuild: assigned_group_ids.include?(group.id)
+        }
+      end,
+      planValidation: plan ? "passed" : "failed"
+    }
+    FileUtils.mkdir_p(output_directory)
+    File.write(File.join(output_directory, "plan.json"), "#{JSON.pretty_generate(plan)}\n") if plan
+    File.write(File.join(output_directory, "inspection.json"), "#{JSON.pretty_generate(report)}\n")
+    UI.success("Read-only iOS observations captured; publication is not verified.")
+  rescue StandardError
+    # Do not retain raw API payloads, group names, or credential diagnostics.
+    UI.user_error!("Read-only iOS inspection failed; no publication evidence was produced.")
   end
 
   desc "Print the App Store signing plan"
@@ -2374,10 +2486,13 @@ platform :ios do
     output_directory = File.join(ios_root, "fastlane", "screenshots")
     result_bundle_path = File.join(output_directory, "test_output", "en-US", "OpenClawUITests.xcresult")
     result_bundle_archive_directory = File.join(ios_root, "build", "SnapshotTestResults")
+    log_directory = File.join(ios_root, "build", "SnapshotLogs")
     capture_attempts_path = File.join(result_bundle_archive_directory, "capture-attempts.json")
     derived_data_path = File.join(ios_root, "build", "SnapshotDerivedData")
     FileUtils.rm_rf(result_bundle_archive_directory)
     FileUtils.mkdir_p(result_bundle_archive_directory)
+    FileUtils.rm_rf(log_directory)
+    FileUtils.mkdir_p(log_directory)
     capture_attempts = []
     write_release_ios_screenshot_attempts!(
       attempts: capture_attempts,
@@ -2386,34 +2501,54 @@ platform :ios do
     FileUtils.rm_rf(derived_data_path)
     devices = snapshot_devices
     project = File.join(ios_root, "OpenClaw.xcodeproj")
-    run_tests(
-      project: project,
-      scheme: "OpenClawUITests",
-      configuration: "Debug",
-      devices: [devices.first],
-      derived_data_path: derived_data_path,
-      build_for_testing: true,
-      clean: true,
-      number_of_retries: 0,
-      xcargs: "-allowProvisioningUpdates"
+    simulator_devices = available_simulator_devices
+    selected_devices = devices.map do |name|
+      simulator_devices.select { |device| device.fetch("name") == name }.max_by do |device|
+        Gem::Version.new(device.fetch("runtime").delete_prefix("com.apple.CoreSimulator.SimRuntime.iOS-").tr("-", "."))
+      end || UI.user_error!("Screenshot simulator '#{name}' is unavailable.")
+    end
+    run_screenshot_xcodebuild!(
+      [
+        "-project", project, "-scheme", "OpenClawUITests", "-configuration", "Debug",
+        "-derivedDataPath", derived_data_path,
+        "-destination", "platform=iOS Simulator,id=#{selected_devices.first.fetch("udid")}",
+        "-allowProvisioningUpdates", "build-for-testing"
+      ],
+      log_path: File.join(log_directory, "build.log")
     )
 
-    capture_index = 0
-    devices.each do |device|
-      RELEASE_IOS_SCREENSHOT_TESTS.each do |screenshot|
-        capture_release_ios_screenshot!(
-          project: project,
-          device: device,
-          screenshot: screenshot,
-          output_directory: output_directory,
-          result_bundle_path: result_bundle_path,
-          result_bundle_archive_directory: result_bundle_archive_directory,
-          capture_attempts: capture_attempts,
-          capture_attempts_path: capture_attempts_path,
-          derived_data_path: derived_data_path,
-          clear_previous_screenshots: capture_index.zero?
-        )
-        capture_index += 1
+    # SnapshotHelper.swift consumes these files from SIMULATOR_HOST_HOME.
+    snapshot_cache_directory = File.expand_path("~/Library/Caches/tools.fastlane")
+    FileUtils.mkdir_p(File.join(snapshot_cache_directory, "screenshots"))
+    File.write(File.join(snapshot_cache_directory, "language.txt"), "en-US")
+    File.write(File.join(snapshot_cache_directory, "locale.txt"), "")
+    File.write(File.join(snapshot_cache_directory, "snapshot-launch_arguments.txt"), "--openclaw-screenshot-mode")
+    FileUtils.mkdir_p(File.join(output_directory, "en-US"))
+    FileUtils.rm_f(Dir[File.join(output_directory, "*", "*.png")])
+
+    selected_devices.each do |device|
+      device_udid = device.fetch("udid")
+      sh("xcrun", "simctl", "bootstatus", device_udid, "-b")
+      sh("xcrun", "simctl", "status_bar", device_udid, "override", *Shellwords.split(SNAPSHOT_STATUS_BAR_ARGUMENTS))
+      begin
+        RELEASE_IOS_SCREENSHOT_TESTS.each do |screenshot|
+          capture_release_ios_screenshot!(
+            project: project,
+            device: device.fetch("name"),
+            screenshot: screenshot,
+            output_directory: output_directory,
+            result_bundle_path: result_bundle_path,
+            result_bundle_archive_directory: result_bundle_archive_directory,
+            log_directory: log_directory,
+            capture_attempts: capture_attempts,
+            capture_attempts_path: capture_attempts_path,
+            derived_data_path: derived_data_path,
+            device_udid: device_udid,
+            snapshot_cache_directory: snapshot_cache_directory
+          )
+        end
+      ensure
+        sh("xcrun", "simctl", "status_bar", device_udid, "clear")
       end
     end
     verify_release_ios_screenshot_manifest!(

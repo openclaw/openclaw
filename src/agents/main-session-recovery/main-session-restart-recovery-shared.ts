@@ -1,5 +1,4 @@
 import path from "node:path";
-import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveStateDir } from "../../config/paths.js";
 import {
@@ -14,6 +13,7 @@ import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/s
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { LEGACY_IMPLICIT_AGENT_ID } from "../../routing/session-key.js";
+import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
 import { resolveAgentSessionDirs } from "../session-dirs.js";
 
 export const mainSessionRecoveryLog = createSubsystemLogger("main-session-restart-recovery");
@@ -25,6 +25,7 @@ export type ExpectedRestartRecoveryTarget = {
   canonicalSessionKey?: string;
   sessionId: string;
   sessionKey: string;
+  claim?: { runId: string; sourceRunId: string };
 };
 
 export type ExhaustedRestartRecoveryTarget = ExpectedRestartRecoveryTarget & {
@@ -37,31 +38,6 @@ export function resolveRestartRecoveryTerminalClientRunId(
   return entry.restartRecoverySourceIngress === "control-ui"
     ? normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId)
     : undefined;
-}
-
-export function normalizeStringSet(values: Iterable<string> | undefined): Set<string> {
-  const normalized = new Set<string>();
-  for (const value of values ?? []) {
-    const trimmed = value.trim();
-    if (trimmed) {
-      normalized.add(trimmed);
-    }
-  }
-  return normalized;
-}
-
-export const normalizeFiniteTimestamp = asFiniteNumber;
-
-export function hasCurrentProcessOwner(params: {
-  activeSessionIds: Set<string>;
-  activeSessionKeys: Set<string>;
-  entry: SessionEntry;
-  sessionKey: string;
-}): boolean {
-  if (params.activeSessionIds.has(params.entry.sessionId)) {
-    return true;
-  }
-  return params.activeSessionIds.size === 0 && params.activeSessionKeys.has(params.sessionKey);
 }
 
 export async function discoverRestartRecoveryStoreTargets(params: {
@@ -106,7 +82,9 @@ export async function discoverRestartRecoveryStoreTargets(params: {
   return storeTargets
     .filter(
       (target) =>
-        !params.statuses || hasSessionEntriesByStatusReadOnly({ ...target, env }, params.statuses),
+        !readAgentDatabaseAdmissionRefusal(target.agentId, { env }) &&
+        (!params.statuses ||
+          hasSessionEntriesByStatusReadOnly({ ...target, env }, params.statuses)),
     )
     .toSorted(
       (a, b) => a.storePath.localeCompare(b.storePath) || a.agentId.localeCompare(b.agentId),

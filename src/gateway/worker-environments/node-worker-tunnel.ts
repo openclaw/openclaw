@@ -188,9 +188,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
     if (!transport) {
       throw new Error("device worker node transport is unavailable");
     }
-    const node = (await raceNodeWorkerOperation(transport.listCurrentNodes(), signal)).find(
-      (candidate) => candidate.nodeId === entry.deviceId,
-    );
+    const node = await raceNodeWorkerOperation(transport.getCurrentNode(entry.deviceId), signal);
     if (!node) {
       throw new WorkerTunnelOwnerDisconnectedError(
         "device worker node is not connected with the supervisor dialect",
@@ -243,6 +241,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       ...(command.resetWorkspace === undefined ? {} : { resetWorkspace: command.resetWorkspace }),
       ...(command.transfer === undefined ? {} : { transfer: command.transfer }),
       ...(command.seed === undefined ? {} : { seed: command.seed }),
+      ...(command.process === undefined ? {} : { process: command.process }),
     };
     while (true) {
       assertCurrent();
@@ -548,6 +547,43 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
   }
 
   return {
+    async runSessionCommand(
+      binding: { environmentId: string; ownerEpoch: number; sessionId: string; sessionKey: string },
+      command: WorkerWorkspaceCommand,
+    ): Promise<NodeWorkerWorkspaceExecResult> {
+      command.assertCurrent?.();
+      const record = options.getEnvironment(binding.environmentId);
+      if (
+        !record ||
+        record.ownerEpoch !== binding.ownerEpoch ||
+        !record.nodeDeviceId ||
+        record.sharedHost !== false ||
+        !record.bootstrapReceipt ||
+        record.bootstrapReceipt.installKind !== "bundle"
+      ) {
+        throw new Error("Attached environment node workspace is unavailable");
+      }
+      await this.start({
+        environmentId: binding.environmentId,
+        ownerEpoch: binding.ownerEpoch,
+        sessionId: binding.sessionId,
+        deviceId: record.nodeDeviceId,
+        // The node workspace owns attached apps independently of this Gateway connection.
+        // Closing its transport must not retire the still-live attachment's process scope.
+        executionMode: "remote-exec",
+        expectedBuild: record.bootstrapReceipt,
+      });
+      command.assertCurrent?.();
+      const entry = entries.get(binding.environmentId);
+      if (
+        !entry ||
+        entry.ownerEpoch !== binding.ownerEpoch ||
+        entry.sessionId !== binding.sessionId
+      ) {
+        throw new Error("Attached environment execution owner changed");
+      }
+      return await runWorkspaceCommand(entry, { ...command, sessionKey: binding.sessionKey });
+    },
     bindWorkspaceBindingResolver(resolver: NodeWorkerWorkspaceBindingResolver): void {
       resolveWorkspaceBinding = resolver;
     },

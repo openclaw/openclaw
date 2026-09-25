@@ -17,8 +17,8 @@ vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
   spawn: spawnMock,
 }));
-vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
+vi.mock("openclaw/plugin-sdk/media-ffmpeg", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-ffmpeg")>()),
   resolveFfmpegBin: () => "ffmpeg",
 }));
 vi.mock("openclaw/plugin-sdk/temp-path", async (importOriginal) => {
@@ -99,6 +99,42 @@ describe("discord voice opus codec", () => {
     expect(onChunk.mock.calls[0]?.[1]).toBe(packets[0]);
     expect(onVerbose).toHaveBeenCalledWith("opus decoder: libopus-wasm");
     expect(onWarn).not.toHaveBeenCalled();
+  });
+
+  it.each([2, 3, 6])("decodes a valid %i-frame Opus packet without truncation", async (frames) => {
+    // RFC 6716 code 3 CBR: repeat the standard Discord 20 ms silence frame.
+    const packet = Buffer.from([
+      0xfb,
+      frames,
+      ...Array.from({ length: frames }, () => [0xff, 0xfe]).flat(),
+    ]);
+    const onChunk = vi.fn();
+    const onError = vi.fn();
+    await decodeOpusStreamChunks(Readable.from([packet]), {
+      onChunk,
+      onError,
+      onVerbose: vi.fn(),
+      onWarn: vi.fn(),
+    });
+    expect(onError).not.toHaveBeenCalled();
+    expect(onChunk).toHaveBeenCalledOnce();
+    expect(onChunk.mock.calls[0]?.[0]).toHaveLength(frames * 960 * 2 * 2);
+    expect(onChunk.mock.calls[0]?.[1]).toBe(packet);
+  });
+
+  it("reports corrupt packets and never completes their trailing audio", async () => {
+    const onChunk = vi.fn();
+    const onError = vi.fn();
+    await decodeOpusStreamChunks(
+      Readable.from([
+        Buffer.from([0xf8, 0xff, 0xfe]),
+        Buffer.from([0xfb, 0]),
+        Buffer.from([0xf8, 0xff, 0xfe]),
+      ]),
+      { onChunk, onError, onVerbose: vi.fn(), onWarn: vi.fn() },
+    );
+    expect(onError).toHaveBeenCalledOnce();
+    expect(onChunk).toHaveBeenCalledOnce();
   });
 
   it("pads final partial PCM frames before encoding", async () => {
@@ -227,21 +263,27 @@ describe("Discord voice WAV workspace ownership", () => {
       const writeError = Object.assign(new Error("disk full"), { code: "ENOSPC" });
       voiceWorkspaceFixture.writeError = writeError;
 
-      await expect(writeVoiceWavFile(Buffer.alloc(960))).rejects.toBe(writeError);
+      await expect(writeVoiceWavFile([Buffer.alloc(960)])).rejects.toBe(writeError);
 
       expect(await fs.readdir(rootDir)).toEqual([]);
     });
   });
 
-  it("retains successful WAV files until their processing owner releases them", async () => {
+  it("snapshots chunked PCM into an exact WAV until its owner releases it", async () => {
     await withVoiceWorkspace(async ({ rootDir }) => {
-      const pcm = Buffer.alloc(960);
-
-      const result = await writeVoiceWavFile(pcm);
+      const pcm = Buffer.from([0xee, 0x00, 0xff, 0x80, 0x7f, 0xaa, 0x55, 0x12, 0x34, 0xdd]);
+      const chunks = [pcm.subarray(1, 4), pcm.subarray(4, 9)];
+      const writing = writeVoiceWavFile(chunks);
+      pcm.fill(0x66);
+      chunks.reverse();
+      const result = await writing;
 
       expect(path.basename(result.path)).toBe("segment.wav");
-      expect((await fs.readFile(result.path)).subarray(0, 4).toString()).toBe("RIFF");
-      expect(result.durationSeconds).toBe(960 / (4 * 48_000));
+      expect((await fs.readFile(result.path)).toString("hex")).toBe(
+        "524946462c00000057415645666d7420100000000100020080bb000000ee020004001000" +
+          "646174610800000000ff807faa551234",
+      );
+      expect(result.durationSeconds).toBe(8 / (4 * 48_000));
       expect(await fs.readdir(rootDir)).toHaveLength(1);
 
       await result.cleanup();

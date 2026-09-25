@@ -1,30 +1,65 @@
+import {
+  createAgentHarnessAttemptDeadlineController,
+  type AgentHarnessAttemptTimeout,
+} from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createAgentHarnessToolExecutionRegistry } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   closeCodexStartupClientBestEffort,
   interruptCodexTurnAndWaitBestEffort,
 } from "./attempt-client-cleanup.js";
-import {
-  createCodexAttemptDeadlineController,
-  type CodexAttemptTimeout,
-} from "./attempt-deadlines.js";
 import { createCodexSteeringQueue } from "./attempt-steering.js";
 import type { AttemptSettlementWarning } from "./attempt-terminal.js";
+import { TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS } from "./attempt-timeouts.js";
+import type { CodexDynamicToolRuntimeResponse } from "./dynamic-tool-response-state.js";
 import {
   resolveCodexNativeHookRelayTtlMs,
   CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS,
 } from "./native-hook-relay.js";
-import type {
-  CodexServerNotification,
-  CodexDynamicToolCallParams,
-  CodexDynamicToolCallResponse,
-} from "./protocol.js";
+import type { CodexServerNotification, CodexDynamicToolCallParams } from "./protocol.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
-import { createCodexDynamicToolExecutionRegistry } from "./run-attempt-tools.js";
 import { createCodexUserInputBridge } from "./user-input-bridge.js";
 
 const CODEX_NATIVE_HOOK_RELAY_RENEW_INTERVAL_MS = 60_000;
+
+class CodexAttemptState {
+  latestStartupErrorNotification?: CodexServerNotification;
+  rateLimitsRevisionBeforeLastTurnStart?: number;
+  completed = false;
+  abortCleanup = Promise.resolve();
+  pluginRuntimeRefreshStop?: Promise<void>;
+  // Only completed native cleanup can advance this state to confirmed.
+  permissionChangeRestart?: "requested" | "confirmed";
+  localCompletionRequested = false;
+  terminalTurnNotificationQueued = false;
+  // App-server collapses user interrupts and replacements to "interrupted";
+  // this marker remains the user-interrupt hint until Codex exposes abortReason.
+  sawCodexInterruptMarker = false;
+  timeout?: AgentHarnessAttemptTimeout;
+  // Only the correlated completed-answer deadline fills this slot.
+  settlementWarning?: AttemptSettlementWarning;
+  // Finalization fills this slot while its transcript mirror is pending.
+  pendingSettlementStage?: string;
+  clientClosedPromptError?: string;
+  clientClosedDiagnostic?: string;
+  clientClosedAbort = false;
+  shouldDelayNativeHookRelayUnregister = false;
+  lifecycleStarted = false;
+  lifecycleTerminalEmitted = false;
+  nativeHookRelayLastRenewedAt = 0;
+  activeAppServerTurnRequests = 0;
+  activeLocalProjections = 0;
+  projectionClosed = false;
+  pendingTerminalDynamicToolRelease?: {
+    call: CodexDynamicToolCallParams;
+    response: CodexDynamicToolRuntimeResponse;
+    durationMs: number;
+  };
+  terminalDynamicToolReleaseCheckScheduled = false;
+  currentTurnHadNonTerminalDynamicToolResult = false;
+}
 
 export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
   const {
@@ -36,49 +71,16 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
   } = resources;
   const { connection } = prompt.context.runtime;
   const { params, options, runAbortController } = connection;
-  const state = {
-    latestStartupErrorNotification: undefined as CodexServerNotification | undefined,
-    rateLimitsRevisionBeforeLastTurnStart: undefined as number | undefined,
-    completed: false,
-    abortCleanup: Promise.resolve(),
-    // SAFETY: Unset is valid; only completed native cleanup can advance this closed state to confirmed.
-    permissionChangeRestart: undefined as "requested" | "confirmed" | undefined,
-    localCompletionRequested: false,
-    terminalTurnNotificationQueued: false,
-    // App-server collapses user interrupts and replacements to "interrupted";
-    // this marker remains the user-interrupt hint until Codex exposes abortReason.
-    sawCodexInterruptMarker: false,
-    timeout: undefined as CodexAttemptTimeout | undefined,
-    // SAFETY: Only the correlated completed-answer deadline fills this initially empty slot.
-    settlementWarning: undefined as AttemptSettlementWarning | undefined,
-    // SAFETY: Finalization fills this initially empty slot while its transcript mirror is pending.
-    pendingSettlementStage: undefined as string | undefined,
-    clientClosedPromptError: undefined as string | undefined,
-    clientClosedDiagnostic: undefined as string | undefined,
-    clientClosedAbort: false,
-    shouldDelayNativeHookRelayUnregister: false,
-    lifecycleStarted: false,
-    lifecycleTerminalEmitted: false,
-    nativeHookRelayLastRenewedAt: 0,
-    activeAppServerTurnRequests: 0,
-    activeLocalProjections: 0,
-    projectionClosed: false,
-    pendingTerminalDynamicToolRelease: undefined as
-      | {
-          call: CodexDynamicToolCallParams;
-          response: CodexDynamicToolCallResponse;
-          durationMs: number;
-        }
-      | undefined,
-    terminalDynamicToolReleaseCheckScheduled: false,
-    currentTurnHadNonTerminalDynamicToolResult: false,
-  };
+  const state = new CodexAttemptState();
   const { promise: completion, resolve: resolveCompletion } = createDeferred<void>();
   const settlementExpired = createDeferred<void>();
   const pendingOpenClawDynamicToolCompletionIds = new Set<string>();
   // One execution promise per call id prevents duplicate delivery from
   // repeating non-idempotent computer input while the attempt remains active.
-  const openClawDynamicToolExecutions = createCodexDynamicToolExecutionRegistry();
+  const openClawDynamicToolExecutions = createAgentHarnessToolExecutionRegistry<
+    Pick<CodexDynamicToolCallParams, "threadId" | "turnId" | "callId">,
+    CodexDynamicToolRuntimeResponse
+  >((call) => [call.threadId, call.turnId, call.callId]);
   const activeTurnItemIds = new Set<string>();
   const turnIdRef: { current?: string } = {};
   const userInputBridgeRef: { current?: ReturnType<typeof createCodexUserInputBridge> } = {};
@@ -168,9 +170,10 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
       reason: `codex_app_server:${reason}`,
     });
   };
-  const deadlines = createCodexAttemptDeadlineController({
+  const deadlines = createAgentHarnessAttemptDeadlineController({
     startedAtMs: connection.attemptStartedAt,
     timeoutMs: params.timeoutMs,
+    settlementTimeoutMs: TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS,
     signal: runAbortController.signal,
     onDeadlineChanged: params.onAttemptDeadlineChanged,
     onTimeout: (timeout) => {

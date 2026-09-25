@@ -12,6 +12,16 @@ export async function assertUpdateRecoveryAdmission(
   const databasePath = path.resolve(
     options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env),
   );
+  if (!(await assertUpdateRecoveryDirectoryAdmission(databasePath))) {
+    return;
+  }
+  assertNoPendingUpdateRecovery({ ...options, path: databasePath });
+}
+
+/** Check publication before an admitted row reader; false means the parent is absent. */
+export async function assertUpdateRecoveryDirectoryAdmission(
+  databasePath: string,
+): Promise<boolean> {
   const parent = path.dirname(databasePath);
   try {
     await fs.lstat(parent);
@@ -19,7 +29,7 @@ export async function assertUpdateRecoveryAdmission(
     if (!hasNodeErrorCode(error, "ENOENT")) {
       throw error;
     }
-    return;
+    return false;
   }
   // A family may hold the only original DB even when another canonical file
   // exists. Locators confer no authority to inspect, repair, or retire it.
@@ -30,5 +40,5 @@ export async function assertUpdateRecoveryAdmission(
       "Interrupted shared-database publication is read-only while full-state recovery is deferred",
     );
   }
-  assertNoPendingUpdateRecovery(options);
+  return true;
 }

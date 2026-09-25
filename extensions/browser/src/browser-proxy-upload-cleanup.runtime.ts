@@ -1,1 +1,4 @@
-export { ensureBrowserProxyUploadCleanup } from "./browser-proxy-upload.js";
+export {
+  ensureBrowserProxyUploadCleanup,
+  hasBrowserProxyUploadWork,
+} from "./browser-proxy-upload.js";

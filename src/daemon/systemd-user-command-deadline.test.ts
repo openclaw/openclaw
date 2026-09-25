@@ -1,44 +1,52 @@
-// Direct and machine-scope attempts share the caller's one monotonic timeout.
-import { afterEach, describe, expect, it, vi } from "vitest";
+// Discovery and command dispatch share the caller's monotonic deadline and custody.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const exec = vi.hoisted(() => vi.fn<typeof import("./exec-file.js").execFileUtf8>());
 vi.mock("./exec-file.js", () => ({ execFileUtf8: exec }));
 import { execBusctlUser, execSystemctlUser } from "./systemd-exec.js";
 
+const environment = (name: string) => ({
+  USER: "owned",
+  LOGNAME: "owned",
+  HOME: "/test/owned",
+  XDG_RUNTIME_DIR: `/runtime/${name}`,
+  DBUS_SESSION_BUS_ADDRESS: `unix:path=/runtime/${name}/bus`,
+});
+const unavailable = {
+  code: 1,
+  termination: "exit" as const,
+  stdout: "",
+  stderr: "Failed to connect to bus: No medium found",
+};
+const success = (stdout: string) => ({ code: 0, termination: "exit" as const, stdout, stderr: "" });
+beforeEach(() => {
+  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+  vi.spyOn(process, "geteuid").mockReturnValue(1001);
+  exec.mockReset();
+});
 afterEach(() => vi.restoreAllMocks());
 
 describe("systemd user routing deadline", () => {
   it.each([450, 500])("does not give fallback a new deadline after %s ms", async (spent) => {
     let elapsed = 0;
     vi.spyOn(performance, "now").mockImplementation(() => elapsed);
-    vi.spyOn(process, "geteuid").mockReturnValue(1001);
-    exec.mockReset().mockImplementation(async (_command, args) => {
+    exec.mockImplementation(async (_command, args) => {
       if (!args.includes("--machine")) {
         elapsed += spent;
-        return {
-          code: 1,
-          termination: "exit",
-          stdout: "",
-          stderr: "Failed to connect to bus: No medium found",
-        };
+        return unavailable;
       }
-      return { code: 0, termination: "exit", stdout: "native result", stderr: "" };
+      return success(args.includes("Version") ? 's "252.39"' : "native result");
     });
     const result = await execBusctlUser(
-      {
-        USER: "owned",
-        LOGNAME: "owned",
-        HOME: "/test/owned",
-        XDG_RUNTIME_DIR: "/run/user/1001",
-        DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/1001/bus",
-      },
-      ["--auto-start=no", "--json=short", "call", "org.freedesktop.systemd1"],
+      environment(`budget-${spent}`),
+      ["--auto-start=no", "call", "org.freedesktop.systemd1"],
       500,
     );
-    expect(exec.mock.calls[0]?.[2]?.timeout).toBe(500);
+    expect(exec.mock.calls[0]?.[2]?.timeout).toBe(166);
     if (spent === 450) {
-      expect(exec).toHaveBeenCalledTimes(2);
+      expect(exec).toHaveBeenCalledTimes(3);
       expect(exec.mock.calls[1]?.[1]).toContain("owned@");
-      expect(exec.mock.calls[1]?.[2]?.timeout).toBe(50);
+      expect(exec.mock.calls[1]?.[2]?.timeout).toBe(25);
+      expect(exec.mock.calls[2]?.[2]?.timeout).toBe(50);
       expect(result.code).toBe(0);
     } else {
       expect(exec).toHaveBeenCalledTimes(1);
@@ -50,19 +58,13 @@ describe("systemd user routing deadline", () => {
 
 it("does not dispatch machine fallback after the original stop owner retires", async () => {
   let active = true;
-  vi.spyOn(process, "geteuid").mockReturnValue(1001);
-  exec.mockReset().mockImplementation(async () => {
+  exec.mockImplementation(async () => {
     active = false;
-    return {
-      code: 1,
-      termination: "exit",
-      stdout: "",
-      stderr: "Failed to connect to bus: No medium found",
-    };
+    return unavailable;
   });
   await expect(
     execSystemctlUser(
-      { USER: "owned", HOME: "/test/owned" },
+      environment("retired-stop"),
       ["stop", "openclaw-gateway.service"],
       500,
       () => {
@@ -80,24 +82,19 @@ it.each(["current", "retired", "guard-deadline"] as const)(
   async (mode) => {
     let active = true;
     let elapsed = 0;
-    let guards = 0;
+    let firstProbeCompleted = false;
     vi.spyOn(performance, "now").mockImplementation(() => elapsed);
-    vi.spyOn(process, "geteuid").mockReturnValue(1001);
-    exec.mockReset().mockImplementation(async (_command, args) => {
+    exec.mockImplementation(async (_command, args) => {
       if (!args.includes("--machine")) {
         elapsed = 50;
         active = mode !== "retired";
-        return {
-          code: 1,
-          termination: "exit",
-          stdout: "",
-          stderr: "Failed to connect to bus: No medium found",
-        };
+        firstProbeCompleted = true;
+        return unavailable;
       }
-      return { code: 0, termination: "exit", stdout: "loaded unit", stderr: "" };
+      return success(args.includes("Version") ? 's "252.39"' : "loaded unit");
     });
     const result = execBusctlUser(
-      { USER: "owned", HOME: "/test/owned" },
+      environment(`load-${mode}`),
       [
         "--auto-start=no",
         "call",
@@ -110,11 +107,10 @@ it.each(["current", "retired", "guard-deadline"] as const)(
       ],
       500,
       () => {
-        guards++;
         if (!active) {
           throw new Error("original load owner retired");
         }
-        if (mode === "guard-deadline" && guards === 2) {
+        if (mode === "guard-deadline" && firstProbeCompleted) {
           elapsed = 500;
         }
       },
@@ -122,9 +118,17 @@ it.each(["current", "retired", "guard-deadline"] as const)(
     if (mode === "retired") {
       await expect(result).rejects.toThrow("original load owner retired");
     } else {
-      expect((await result).termination).toBe(mode === "current" ? "exit" : "timeout");
+      const outcome = await result;
+      expect(outcome.termination).toBe(mode === "current" ? "exit" : "timeout");
+      if (mode === "guard-deadline") {
+        expect(outcome.inspectionReason).toBe("systemd-inspection-deadline-exceeded");
+        expect(outcome.stderr).toContain("custody/admission guards");
+        expect(outcome.stderr).not.toContain("enable-linger");
+      }
     }
-    expect(exec).toHaveBeenCalledTimes(mode === "current" ? 2 : 1);
-    expect(guards).toBe(2);
+    expect(exec).toHaveBeenCalledTimes(mode === "current" ? 3 : 1);
+    expect(exec.mock.calls.filter((call) => call[1].includes("LoadUnit"))).toHaveLength(
+      mode === "current" ? 1 : 0,
+    );
   },
 );

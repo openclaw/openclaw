@@ -64,7 +64,7 @@ approval.
 openclaw plugins install @openclaw/buzz
 ```
 
-Restart the Gateway after installing or updating the plugin.
+Check the [application result](/plugins/manage-plugins#apply-changes-and-inspect) after installing or updating the plugin.
 
 ## Guided setup
 
@@ -634,7 +634,7 @@ Bot identity rotation requires admin approval for the new public key:
 
 1. Generate a new dedicated bot identity.
 2. Have an admin approve its public key for the relay and every configured room.
-3. Replace the configured private key and restart or reload the Gateway.
+3. Replace the configured private key and verify that [hot reload](/gateway/configuration/hot-reload) applies the change. Restart the Gateway if the key comes from a changed service environment.
 4. Test outbound and inbound messages.
 5. Remove the old public key from the rooms and relay.
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // Runs plugin lifecycle and gateway QA gauntlet probes with timing metrics.
-import { spawn } from "node:child_process";
+import type { StdioOptions } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -13,6 +13,7 @@ import {
 } from "../packages/normalization-core/src/number-coercion.ts";
 import { normalizeCsvOrLooseStringList } from "../packages/normalization-core/src/string-normalization.ts";
 import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mts";
+import { hasUnjoinedWork, runManagedCommand } from "./lib/managed-child-process.mts";
 import {
   parseNonNegativeInt,
   parsePositiveInt,
@@ -65,7 +66,6 @@ const COMMAND_OUTPUT_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 const ANSI_PATTERN = new RegExp(String.raw`\u001B\[[0-9;]*m`, "gu");
 
 type ProcessSignal = `SIG${string}`;
-type TimerHandle = ReturnType<typeof setTimeout>;
 type PluginEntry = ReturnType<typeof discoverBundledPluginManifests>[number];
 type CommandAlias = PluginEntry["cliCommandAliases"][number];
 export type GauntletMeasuredRow = {
@@ -89,13 +89,12 @@ export type GauntletMeasuredCommandParams = {
   consoleOutputMaxBytes?: number;
   cwd: string;
   env: NodeJS.ProcessEnv;
-  killProcessGroup?: boolean;
   label: string;
   logDir: string;
   maxBufferBytes?: number;
   phase: string;
   pluginId?: string;
-  spawnOptions?: Parameters<typeof spawn>[2];
+  spawnOptions?: { stdio?: StdioOptions };
   timeoutKillGraceMs?: number;
   timeoutMs: number;
   timeMode?: "none";
@@ -453,8 +452,14 @@ function validateOutputDir(options: ReturnType<typeof parseArgs>, repoRoot: stri
 function createIsolatedEnv(repoRoot: string, runRoot: string) {
   const home = path.join(runRoot, "home");
   const stateDir = path.join(runRoot, "state");
+  const configPath = path.join(stateDir, "openclaw.json");
   fs.mkdirSync(home, { recursive: true });
   fs.mkdirSync(stateDir, { recursive: true });
+  fs.writeFileSync(
+    configPath,
+    `${JSON.stringify({ logging: { file: path.join(runRoot, "logs", "openclaw.log") } })}\n`,
+    { encoding: "utf8", mode: 0o600, flag: "wx" },
+  );
   return {
     ...process.env,
     HOME: home,
@@ -462,8 +467,7 @@ function createIsolatedEnv(repoRoot: string, runRoot: string) {
     XDG_CACHE_HOME: path.join(home, ".cache"),
     XDG_DATA_HOME: path.join(home, ".local", "share"),
     OPENCLAW_STATE_DIR: stateDir,
-    OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
-    OPENCLAW_LOG_DIR: path.join(runRoot, "logs"),
+    OPENCLAW_CONFIG_PATH: configPath,
     OPENCLAW_QA_SUITE_PROGRESS: process.env.OPENCLAW_QA_SUITE_PROGRESS ?? "1",
     PATH: process.env.PATH,
     PWD: repoRoot,
@@ -571,317 +575,201 @@ function writeCommandLog(params: {
 }
 
 /**
- * Runs a measured command through the live process implementation.
- */
-export async function runMeasuredCommand(params: GauntletMeasuredCommandParams) {
-  return await runMeasuredCommandLive(params);
-}
-
-/**
  * Runs one command with optional timing wrapper, bounded output, and log capture.
  */
-export function runMeasuredCommandLive(params: GauntletMeasuredCommandParams) {
+export async function runMeasuredCommand(
+  params: GauntletMeasuredCommandParams,
+): Promise<GauntletMeasuredRow> {
   const { command, args, mode } =
     params.timeMode === "none"
       ? { command: params.command, args: params.args, mode: "none" }
       : timeWrapperArgs(params.command, params.args);
   const started = performance.now();
-  return new Promise<GauntletMeasuredRow>((resolve) => {
-    let stdout = "";
-    let stderr = "";
-    let stdoutBytes = 0;
-    let stderrBytes = 0;
-    let stdoutRelayBytes = 0;
-    let stderrRelayBytes = 0;
-    let stdoutTruncated = false;
-    let stderrTruncated = false;
-    let stdoutRelayTruncated = false;
-    let stderrRelayTruncated = false;
-    let spawnError: GauntletMeasuredRow["spawnError"] = null;
-    let timedOut = false;
-    let settled = false;
-    let forceKillTimeout: TimerHandle | null = null;
-    let forceKillAt = 0;
-    let parentTerminationSignal: ProcessSignal | null = null;
-    const maxBufferBytes = params.maxBufferBytes ?? COMMAND_OUTPUT_MAX_BUFFER_BYTES;
-    const maxRelayBytes = params.consoleOutputMaxBytes ?? maxBufferBytes;
-    const timeoutMs = resolveOptionalTimerTimeoutMs(params.timeoutMs);
-    const timeoutKillGraceMs = resolveTimerTimeoutMs(
-      params.timeoutKillGraceMs ?? 5_000,
-      MAX_TIMER_TIMEOUT_MS,
-    );
-    const spawnOptions = mode === "none" ? (params.spawnOptions ?? {}) : {};
-    const useProcessGroup =
-      process.platform !== "win32" &&
-      params.killProcessGroup !== false &&
-      spawnOptions.detached !== false;
-    const child = spawn(command, args, {
+  let stdout = "";
+  let stderr = "";
+  let stdoutBytes = 0;
+  let stderrBytes = 0;
+  let stdoutRelayBytes = 0;
+  let stderrRelayBytes = 0;
+  let stdoutTruncated = false;
+  let stderrTruncated = false;
+  let stdoutRelayTruncated = false;
+  let stderrRelayTruncated = false;
+  let spawnError: GauntletMeasuredRow["spawnError"] = null;
+  let timedOut = false;
+  let exitStatus: number | null = null;
+  let exitSignal: ProcessSignal | null = null;
+  let parentTerminationSignal: NodeJS.Signals | undefined;
+  let commandError: unknown;
+  const maxBufferBytes = params.maxBufferBytes ?? COMMAND_OUTPUT_MAX_BUFFER_BYTES;
+  const maxRelayBytes = params.consoleOutputMaxBytes ?? maxBufferBytes;
+  const timeoutMs = resolveOptionalTimerTimeoutMs(params.timeoutMs);
+  const timeoutKillGraceMs = resolveTimerTimeoutMs(
+    params.timeoutKillGraceMs ?? 5_000,
+    MAX_TIMER_TIMEOUT_MS,
+  );
+  const appendCapturedOutput = (streamName: "stdout" | "stderr", chunk: string | Uint8Array) => {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    const currentBytes = streamName === "stdout" ? stdoutBytes : stderrBytes;
+    const alreadyTruncated = streamName === "stdout" ? stdoutTruncated : stderrTruncated;
+    if (alreadyTruncated) {
+      return;
+    }
+    const remainingBytes = maxBufferBytes - currentBytes;
+    const appendTruncation = () => {
+      const message = `\n[${streamName} truncated after ${maxBufferBytes} bytes]\n`;
+      if (streamName === "stdout") {
+        stdout += message;
+        stdoutTruncated = true;
+      } else {
+        stderr += message;
+        stderrTruncated = true;
+      }
+    };
+    if (remainingBytes <= 0) {
+      appendTruncation();
+      return;
+    }
+    const capturedBuffer =
+      buffer.length > remainingBytes ? buffer.subarray(0, remainingBytes) : buffer;
+    if (streamName === "stdout") {
+      stdout += capturedBuffer.toString("utf8");
+      stdoutBytes += capturedBuffer.length;
+    } else {
+      stderr += capturedBuffer.toString("utf8");
+      stderrBytes += capturedBuffer.length;
+    }
+    if (buffer.length > remainingBytes) {
+      appendTruncation();
+    }
+  };
+  const relayOutput = (streamName: "stdout" | "stderr", chunk: string | Uint8Array) => {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    const currentBytes = streamName === "stdout" ? stdoutRelayBytes : stderrRelayBytes;
+    const alreadyTruncated = streamName === "stdout" ? stdoutRelayTruncated : stderrRelayTruncated;
+    if (alreadyTruncated) {
+      return;
+    }
+    const write =
+      streamName === "stdout"
+        ? process.stdout.write.bind(process.stdout)
+        : process.stderr.write.bind(process.stderr);
+    const markTruncated = () => {
+      write(`\n[${streamName} relay truncated after ${maxRelayBytes} bytes]\n`);
+      if (streamName === "stdout") {
+        stdoutRelayTruncated = true;
+      } else {
+        stderrRelayTruncated = true;
+      }
+    };
+    const remainingBytes = maxRelayBytes - currentBytes;
+    if (remainingBytes <= 0) {
+      markTruncated();
+      return;
+    }
+    const relayedBuffer =
+      buffer.length > remainingBytes ? buffer.subarray(0, remainingBytes) : buffer;
+    if (relayedBuffer.length > 0) {
+      write(relayedBuffer.toString("utf8"));
+    }
+    if (streamName === "stdout") {
+      stdoutRelayBytes += relayedBuffer.length;
+    } else {
+      stderrRelayBytes += relayedBuffer.length;
+    }
+    if (buffer.length > remainingBytes) {
+      markTruncated();
+    }
+  };
+  const appendOutput = (streamName: "stdout" | "stderr", chunk: string | Uint8Array) => {
+    relayOutput(streamName, chunk);
+    appendCapturedOutput(streamName, chunk);
+  };
+  try {
+    await runManagedCommand({
+      bin: command,
+      args,
       cwd: params.cwd,
       env: params.env,
-      ...spawnOptions,
-      ...(useProcessGroup ? { detached: true } : {}),
-    });
-    const killMeasuredProcess = (signal: ProcessSignal = "SIGTERM") => {
-      if (useProcessGroup && child.pid) {
-        try {
-          process.kill(-child.pid, signal as NodeJS.Signals);
-          return;
-        } catch {}
-      }
-      child.kill(signal as NodeJS.Signals);
-    };
-    const processGroupAlive = () => {
-      if (!useProcessGroup || !child.pid) {
-        return false;
-      }
-      try {
-        process.kill(-child.pid, 0);
-        return true;
-      } catch (error) {
-        return Boolean(
-          error && typeof error === "object" && "code" in error && error.code === "EPERM",
-        );
-      }
-    };
-    const waitForProcessGroupExit = async (timeoutBudgetMs: number) => {
-      const deadlineAt = Date.now() + timeoutBudgetMs;
-      while (Date.now() < deadlineAt) {
-        if (!processGroupAlive()) {
-          return true;
-        }
-        await new Promise((resolvePoll) => {
-          setTimeout(resolvePoll, 25);
+      shell: false,
+      stdio: (mode === "none" ? params.spawnOptions?.stdio : undefined) ?? "pipe",
+      timeoutMs: timeoutMs ?? undefined,
+      timeoutKillGraceMs,
+      signalKillGraceMs: timeoutKillGraceMs,
+      // Windows retains the managed owner's ordinary completion contract.
+      requireProcessTreeExit: process.platform !== "win32",
+      onSignal(signal) {
+        parentTerminationSignal ??= signal;
+      },
+      onReady(child) {
+        child.once("exit", (status, signal) => {
+          exitStatus = status;
+          exitSignal = signal;
         });
-      }
-      return !processGroupAlive();
-    };
-    const scheduleForceKill = () => {
-      forceKillAt = Date.now() + timeoutKillGraceMs;
-      forceKillTimeout ??= setTimeout(() => {
-        forceKillTimeout = null;
-        killMeasuredProcess("SIGKILL");
-      }, timeoutKillGraceMs);
-      forceKillTimeout.unref?.();
-    };
-    const parentSignalHandlers = new Map<ProcessSignal, () => void>();
-    const removeParentSignalHandlers = () => {
-      for (const [signal, handler] of parentSignalHandlers) {
-        process.off(signal, handler);
-      }
-      parentSignalHandlers.clear();
-    };
-    const parentSignals: ProcessSignal[] =
-      process.platform === "win32" ? ["SIGINT", "SIGTERM"] : ["SIGINT", "SIGTERM", "SIGHUP"];
-    for (const signal of parentSignals) {
-      const handler = () => {
-        if (parentTerminationSignal) {
-          return;
-        }
-        parentTerminationSignal = signal;
-        killMeasuredProcess(signal);
-        scheduleForceKill();
-      };
-      parentSignalHandlers.set(signal, handler);
-      process.once(signal, handler);
-    }
-    const appendCapturedOutput = (streamName: "stdout" | "stderr", chunk: string | Uint8Array) => {
-      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      const currentBytes = streamName === "stdout" ? stdoutBytes : stderrBytes;
-      const alreadyTruncated = streamName === "stdout" ? stdoutTruncated : stderrTruncated;
-      if (alreadyTruncated) {
-        return;
-      }
-      const remainingBytes = maxBufferBytes - currentBytes;
-      const appendTruncation = () => {
-        const message = `\n[${streamName} truncated after ${maxBufferBytes} bytes]\n`;
-        if (streamName === "stdout") {
-          stdout += message;
-          stdoutTruncated = true;
-        } else {
-          stderr += message;
-          stderrTruncated = true;
-        }
-      };
-      if (remainingBytes <= 0) {
-        appendTruncation();
-        return;
-      }
-      const capturedBuffer =
-        buffer.length > remainingBytes ? buffer.subarray(0, remainingBytes) : buffer;
-      if (streamName === "stdout") {
-        stdout += capturedBuffer.toString("utf8");
-        stdoutBytes += capturedBuffer.length;
-      } else {
-        stderr += capturedBuffer.toString("utf8");
-        stderrBytes += capturedBuffer.length;
-      }
-      if (buffer.length > remainingBytes) {
-        appendTruncation();
-      }
-    };
-    const relayOutput = (streamName: "stdout" | "stderr", chunk: string | Uint8Array) => {
-      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      const currentBytes = streamName === "stdout" ? stdoutRelayBytes : stderrRelayBytes;
-      const alreadyTruncated =
-        streamName === "stdout" ? stdoutRelayTruncated : stderrRelayTruncated;
-      if (alreadyTruncated) {
-        return;
-      }
-      const write =
-        streamName === "stdout"
-          ? process.stdout.write.bind(process.stdout)
-          : process.stderr.write.bind(process.stderr);
-      const markTruncated = () => {
-        write(`\n[${streamName} relay truncated after ${maxRelayBytes} bytes]\n`);
-        if (streamName === "stdout") {
-          stdoutRelayTruncated = true;
-        } else {
-          stderrRelayTruncated = true;
-        }
-      };
-      const remainingBytes = maxRelayBytes - currentBytes;
-      if (remainingBytes <= 0) {
-        markTruncated();
-        return;
-      }
-      const relayedBuffer =
-        buffer.length > remainingBytes ? buffer.subarray(0, remainingBytes) : buffer;
-      if (relayedBuffer.length > 0) {
-        write(relayedBuffer.toString("utf8"));
-      }
-      if (streamName === "stdout") {
-        stdoutRelayBytes += relayedBuffer.length;
-      } else {
-        stderrRelayBytes += relayedBuffer.length;
-      }
-      if (buffer.length > remainingBytes) {
-        markTruncated();
-      }
-    };
-    const appendOutput = (streamName: "stdout" | "stderr", chunk: string | Uint8Array) => {
-      relayOutput(streamName, chunk);
-      appendCapturedOutput(streamName, chunk);
-    };
-    child.stdout?.on("data", (chunk) => appendOutput("stdout", chunk));
-    child.stderr?.on("data", (chunk) => appendOutput("stderr", chunk));
-    const timeout =
-      timeoutMs !== null
-        ? setTimeout(() => {
-            timedOut = true;
-            spawnError = {
-              code: "ETIMEDOUT",
-              message: `Command timed out after ${timeoutMs}ms`,
-            };
-            killMeasuredProcess();
-            scheduleForceKill();
-          }, timeoutMs)
+        child.stdout?.on("data", (chunk) => appendOutput("stdout", chunk));
+        child.stderr?.on("data", (chunk) => appendOutput("stderr", chunk));
+      },
+    });
+  } catch (error) {
+    commandError = error;
+    const code =
+      error && typeof error === "object" && "code" in error && typeof error.code === "string"
+        ? error.code
         : null;
-    timeout?.unref?.();
-    const finish = (status: number | null, signal: ProcessSignal | null) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      if (timeout) {
-        clearTimeout(timeout);
-      }
-      if (forceKillTimeout) {
-        clearTimeout(forceKillTimeout);
-      }
-      removeParentSignalHandlers();
-      const wallMs = performance.now() - started;
-      const finalStatus = status ?? (signal || spawnError ? 1 : 0);
-      const finalStderr = [
-        stderr,
-        spawnError ? `[spawn error] ${spawnError.code ?? "unknown"} ${spawnError.message}` : "",
-      ]
-        .filter(Boolean)
-        .join("\n");
-      let logPath: string | null = null;
-      let logWriteError: string | null = null;
-      try {
-        logPath = writeCommandLog({
-          logDir: params.logDir,
-          label: params.label,
-          command: [params.command, ...params.args],
-          stdout,
-          stderr: finalStderr,
-        });
-      } catch (error) {
-        logWriteError = error instanceof Error ? error.message : String(error);
-      }
-      const outputDiagnosticFailure = detectCommandDiagnosticFailure(stdout, finalStderr);
-      const diagnosticFailure =
-        outputDiagnosticFailure ?? (logWriteError ? "command-log-write-failure" : null);
-      resolve({
-        label: params.label,
-        phase: params.phase,
-        pluginId: params.pluginId ?? null,
-        status: logWriteError ? 1 : finalStatus,
-        diagnosticFailure,
-        signal: signal ?? null,
-        timedOut,
-        spawnError,
-        logPath,
-        ...(logWriteError ? { logWriteError } : {}),
-        ...parseTimedMetrics(finalStderr, wallMs, mode),
-      });
+    spawnError = {
+      code,
+      message: error instanceof Error ? error.message : String(error),
     };
-    const waitForTerminationCleanup = async () => {
-      const remainingGraceMs = Math.max(0, forceKillAt - Date.now());
-      if (remainingGraceMs > 0) {
-        await waitForProcessGroupExit(remainingGraceMs);
-      }
-      if (processGroupAlive()) {
-        killMeasuredProcess("SIGKILL");
-        await waitForProcessGroupExit(100);
-      }
-    };
-    const rethrowParentTermination = (signal: ProcessSignal) => {
-      settled = true;
-      if (timeout) {
-        clearTimeout(timeout);
-      }
-      if (forceKillTimeout) {
-        clearTimeout(forceKillTimeout);
-      }
-      removeParentSignalHandlers();
-      process.kill(process.pid, signal as NodeJS.Signals);
-    };
-    const finishAfterTimeoutTeardown = async (
-      status: number | null,
-      signal: ProcessSignal | null,
-    ) => {
-      await waitForTerminationCleanup();
-      if (parentTerminationSignal) {
-        rethrowParentTermination(parentTerminationSignal);
-        return;
-      }
-      finish(status, signal);
-    };
-    const finishAfterParentTermination = async (signal: ProcessSignal) => {
-      await waitForTerminationCleanup();
-      rethrowParentTermination(signal);
-    };
-    child.on("error", (error) => {
-      spawnError = {
-        code: "code" in error && typeof error.code === "string" ? error.code : null,
-        message: error.message,
-      };
-      finish(null, null);
+    timedOut = code === "ETIMEDOUT";
+  }
+  if (parentTerminationSignal && !hasUnjoinedWork(commandError)) {
+    // Preserve signal termination after cleanup, without admitting another probe.
+    const terminationSignal = parentTerminationSignal;
+    return await new Promise<never>(() => {
+      process.kill(process.pid, terminationSignal);
     });
-    child.on("close", (status, signal) => {
-      if (parentTerminationSignal) {
-        void finishAfterParentTermination(parentTerminationSignal);
-        return;
-      }
-      if (timedOut) {
-        void finishAfterTimeoutTeardown(status, signal);
-        return;
-      }
-      finish(status, signal);
+  }
+  const wallMs = performance.now() - started;
+  const finalStatus =
+    spawnError && !timedOut ? 1 : (exitStatus ?? (exitSignal || spawnError ? 1 : 0));
+  const finalStderr = [
+    stderr,
+    spawnError ? `[spawn error] ${spawnError.code ?? "unknown"} ${spawnError.message}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+  let logPath: string | null = null;
+  let logWriteError: string | null = null;
+  try {
+    logPath = writeCommandLog({
+      logDir: params.logDir,
+      label: params.label,
+      command: [params.command, ...params.args],
+      stdout,
+      stderr: finalStderr,
     });
-  });
+  } catch (error) {
+    logWriteError = error instanceof Error ? error.message : String(error);
+  }
+  if (hasUnjoinedWork(commandError)) {
+    throw commandError;
+  }
+  const outputDiagnosticFailure = detectCommandDiagnosticFailure(stdout, finalStderr);
+  const diagnosticFailure =
+    outputDiagnosticFailure ?? (logWriteError ? "command-log-write-failure" : null);
+  return {
+    label: params.label,
+    phase: params.phase,
+    pluginId: params.pluginId ?? null,
+    status: logWriteError ? 1 : finalStatus,
+    diagnosticFailure,
+    signal: exitSignal,
+    timedOut,
+    spawnError,
+    logPath,
+    ...(logWriteError ? { logWriteError } : {}),
+    ...parseTimedMetrics(finalStderr, wallMs, mode),
+  };
 }
 
 /**
@@ -1093,8 +981,8 @@ async function main() {
   fs.mkdirSync(options.outputDir, { recursive: true });
   const runRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-gauntlet-"));
   let preserveRunRoot = options.keepRunRoot;
-  const env = createIsolatedEnv(repoRoot, runRoot);
   try {
+    const env = createIsolatedEnv(repoRoot, runRoot);
     const matrix = discoverBundledPluginManifests(repoRoot);
     const selectedPlugins = selectPluginEntries(matrix, {
       ids: options.pluginIds,
@@ -1128,7 +1016,7 @@ async function main() {
       process.stderr.write("[plugin-gauntlet] prebuild\n");
       const prebuildCommand = createGauntletPrebuildCommand(repoRoot);
       rows.push(
-        await runMeasuredCommandLive({
+        await runMeasuredCommand({
           cwd: repoRoot,
           env: commandEnv,
           logDir: path.join(options.outputDir, "logs", "prebuild"),
@@ -1272,7 +1160,11 @@ async function main() {
       process.exitCode = 1;
     }
   } catch (error) {
-    if (!options.keepRunRoot) {
+    const unjoined = hasUnjoinedWork(error);
+    if (unjoined) {
+      process.stderr.write(`[plugin-gauntlet] isolated run root preserved: ${runRoot}\n`);
+    }
+    if (!options.keepRunRoot && !unjoined) {
       try {
         fs.rmSync(runRoot, { recursive: true, force: true });
       } catch (cleanupError) {

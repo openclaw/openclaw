@@ -9,6 +9,7 @@ import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { StoredConversationReference } from "./conversation-store.js";
+import { teamsMarkdownDeliveryCases } from "./format.test-fixtures.js";
 const graphUploadMockState = vi.hoisted(() => ({
   uploadAndShareSharePoint: vi.fn(),
   getDriveItemProperties: vi.fn(),
@@ -28,8 +29,8 @@ import {
   renderReplyPayloadsToMessages,
   sendMSTeamsMessages,
 } from "./messenger.js";
+import { createMockApp } from "./messenger.test-helpers.js";
 import { setMSTeamsRuntime } from "./runtime.js";
-import type { MSTeamsApp } from "./sdk.js";
 
 const chunkMarkdownText = (text: string, limit: number) => {
   if (!text) {
@@ -96,71 +97,6 @@ function requireAiGeneratedEntity(entities: unknown): Record<string, unknown> {
     throw new Error("expected Teams AI-generated entity");
   }
   return entity;
-}
-
-type MockAppOptions = {
-  createFn?: (activity: unknown) => Promise<unknown>;
-  onClientCreated?: (serviceUrl: string, conversationId: string) => void;
-  onReference?: (ref: unknown) => void;
-};
-
-function createMockApp(opts?: MockAppOptions): MSTeamsApp {
-  const createFn =
-    opts?.createFn ??
-    (async (activity: unknown) => {
-      const text = (activity as Record<string, unknown>)?.text;
-      return { id: typeof text === "string" ? `id:${text}` : "created" };
-    });
-  const apiServiceUrl = "https://smba.trafficmanager.net/amer";
-  return {
-    client: { request: vi.fn() },
-    tokenManager: {
-      getBotToken: async () => ({ toString: () => "bot-token" }),
-      getGraphToken: async () => ({ toString: () => "graph-token" }),
-    },
-    send: async (conversationId: string, activity: unknown) => {
-      opts?.onClientCreated?.("", conversationId);
-      return await createFn(activity);
-    },
-    activitySender: {
-      send: async (
-        activity: unknown,
-        ref: { serviceUrl?: string; conversation?: { id?: string } },
-      ) => {
-        opts?.onReference?.(ref);
-        opts?.onClientCreated?.(ref.serviceUrl ?? "", ref.conversation?.id ?? "");
-        return await createFn(activity);
-      },
-    },
-    // Mirror the SDK's `app.reply` which internally calls
-    // `app.send(toThreadedConversationId(channelId, msgId), activity)`. The
-    // test capture sees the threaded conversationId so existing assertions
-    // continue to work after we switched messenger.ts from manual URL
-    // construction to `app.reply`.
-    reply: async (conversationId: string, messageId: string, activity: unknown) => {
-      const threaded = `${conversationId};messageid=${messageId}`;
-      opts?.onClientCreated?.("", threaded);
-      return await createFn(activity);
-    },
-    api: {
-      serviceUrl: apiServiceUrl,
-      conversations: {
-        activities: (conversationId: string) => {
-          opts?.onClientCreated?.(apiServiceUrl, conversationId);
-          return {
-            create: async (activity: unknown) => {
-              opts?.onReference?.({ serviceUrl: apiServiceUrl, ...(activity as object) });
-              return createFn(activity);
-            },
-            update: async (_id: string, activity: unknown) => ({
-              id: (activity as Record<string, unknown>)?.id ?? "updated",
-            }),
-            delete: async () => {},
-          };
-        },
-      },
-    },
-  } as unknown as MSTeamsApp;
 }
 
 async function buildActivity(
@@ -330,31 +266,33 @@ describe("msteams messenger", () => {
       expect(ids).toEqual(["id:one", "id:two"]);
     });
 
-    it("sends top-level messages via proactive send context", async () => {
-      const texts: string[] = [];
-      let capturedConversationId: string | undefined;
+    it.each(teamsMarkdownDeliveryCases)(
+      "sends $name via proactive send context",
+      async ({ source, expected }) => {
+        const texts: string[] = [];
+        let capturedConversationId: string | undefined;
 
-      const ids = await sendMSTeamsMessages({
-        replyStyle: "top-level",
-        app: createMockApp({
-          createFn: async (activity: unknown) => {
-            const text = (activity as Record<string, unknown>)?.text;
-            texts.push(typeof text === "string" ? text : "");
-            return { id: typeof text === "string" ? `id:${text}` : "created" };
-          },
-          onClientCreated: (_serviceUrl, conversationId) => {
-            capturedConversationId = conversationId;
-          },
-        }),
-        appId: "app123",
-        conversationRef: baseRef,
-        messages: [{ text: "hello" }],
-      });
+        const ids = await sendMSTeamsMessages({
+          replyStyle: "top-level",
+          app: createMockApp({
+            createFn: createRecordedSendActivity(texts),
+            onClientCreated: (_serviceUrl, conversationId) => {
+              capturedConversationId = conversationId;
+            },
+          }),
+          appId: "app123",
+          conversationRef: baseRef,
+          messages: renderReplyPayloadsToMessages([{ text: source }], {
+            textChunkLimit: 4000,
+            tableMode: "off",
+          }),
+        });
 
-      expect(texts).toEqual(["hello"]);
-      expect(ids).toEqual(["id:hello"]);
-      expect(capturedConversationId).toBe("19:abc@thread.tacv2");
-    });
+        expect(texts).toEqual([expected]);
+        expect(ids).toEqual([`id:${expected}`]);
+        expect(capturedConversationId).toBe("19:abc@thread.tacv2");
+      },
+    );
 
     it("requires SharePoint storage for channel files", async () => {
       const tmpDir = await mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "msteams-storage-"));

@@ -1,6 +1,7 @@
 // Resolves executable paths from PATH and platform-specific install locations.
 import fs from "node:fs";
 import path from "node:path";
+import { safeStatSync } from "@openclaw/fs-safe/path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { expandHomePrefix } from "./home-dir.js";
 import { pruneMapToMaxSize } from "./map-size.js";
@@ -63,16 +64,13 @@ function resolveWindowsExecutableExtSet(env: NodeJS.ProcessEnv | undefined): Set
 }
 
 export function isRegularFile(filePath: string): boolean {
-  try {
-    return fs.statSync(filePath).isFile();
-  } catch {
-    return false;
-  }
+  return safeStatSync(filePath)?.isFile() ?? false;
 }
 
 const WINDOWS_NATIVE_EXECUTABLE_EXTENSIONS = new Set([".com", ".exe", ".bat", ".cmd"]);
 
-function isExecutableFile(filePath: string, options?: { env?: NodeJS.ProcessEnv }): boolean {
+/** Checks a supplied path without PATH lookup or lexical normalization. */
+export function isExecutableFile(filePath: string, options?: { env?: NodeJS.ProcessEnv }): boolean {
   if (!isRegularFile(filePath)) {
     return false;
   }
@@ -175,11 +173,14 @@ export function resolveExecutableFromPathEnv(
     options?.includeExtensionless,
   );
   for (const entry of entries) {
+    const hasParentTraversal = process.platform !== "win32" && entry.split("/").includes("..");
+    const rawDirectory =
+      cwd !== undefined && !path.isAbsolute(entry) ? `${cwd}${path.sep}${entry}` : entry;
     for (const ext of extensions) {
-      const candidate = path.join(
-        cwd === undefined ? entry : path.resolve(cwd, entry),
-        executable + ext,
-      );
+      // Folding ".." can replace the filesystem parent of a symlink with a different directory.
+      const candidate = hasParentTraversal
+        ? `${rawDirectory}${path.sep}${executable}${ext}`
+        : path.join(cwd === undefined ? entry : path.resolve(cwd, entry), executable + ext);
       if (isExecutableFile(candidate, { env })) {
         if (useCache) {
           cacheExecutablePath(cacheKey, candidate);

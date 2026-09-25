@@ -17,7 +17,7 @@ The dates and gates that govern when deprecated surfaces become removable. Part 
 | **Pending owner decision**                               | Records without `removeAfter` or `removalGate` remain deprecated and ineligible until their owner publishes a gate.                                                          |
 | **Day after a `deprecated` record's `removeAfter` date** | At 00:00 UTC, that record becomes date-eligible and `pnpm plugins:boundary-report --fail-on-eligible-compat` exits non-zero. The date itself is the final compatibility day. |
 | **A `removal-pending` record's `removeAfter` date**      | At 00:00 UTC, the report marks the record due for review and lists its blockers. It does not trigger the compatibility fail flag.                                            |
-| **Next Plugin SDK major**                                | `inbound-reply-dispatch` reaches its explicit `next-plugin-sdk-major` gate; it is not date-eligible before that version boundary.                                            |
+| **Next Plugin SDK major**                                | `inbound-reply-dispatch` and synchronous plugin keyed stores reach their explicit `next-plugin-sdk-major` gate; neither is date-eligible before that version boundary.       |
 
 The remaining public SDK subpaths below have registry-backed removal windows.
 The July 30 rows were removed after their early maintainer-authorized sweep:
@@ -35,7 +35,7 @@ until the next Plugin SDK major.
 | Removal gate            | Tier                               | SDK subpaths                                                                                                                                                                        |
 | ----------------------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `2026-10-01`            | Earlier compatibility deprecations | `channel-lifecycle`, `channel-message`, `channel-reply-pipeline`, `config-runtime`, `infra-runtime`                                                                                 |
-| `next-plugin-sdk-major` | Major-version compatibility gate   | `inbound-reply-dispatch`                                                                                                                                                            |
+| `next-plugin-sdk-major` | Major-version compatibility gate   | `inbound-reply-dispatch`; `api.runtime.state.openSyncKeyedStore` and `PluginStateSyncKeyedStore`                                                                                    |
 | `2026-10-01`            | Media legacy projection            | `agent-media-payload`, plus the non-subpath `MsgContext Media*` fields, channel inbound media payload builders, `buildMediaPayload`, hook media aliases, and `{{Media*}}` templates |
 
 The five September 1 subpaths remain available in 2026.8.2 under an approved

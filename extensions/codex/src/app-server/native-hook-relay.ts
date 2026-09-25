@@ -10,6 +10,7 @@ import type {
   registerNativeHookRelay,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { registerNativeHookRelayForBundledRuntime } from "openclaw/plugin-sdk/native-hook-relay-runtime";
 import type { NativeHookRelayCommandPlan } from "openclaw/plugin-sdk/native-hook-relay-runtime";
@@ -21,11 +22,15 @@ import type { PluginHookToolContext } from "openclaw/plugin-sdk/types";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
 import { resolveCodexToolAbortTerminalReason } from "./dynamic-tool-execution.js";
+import type { CodexInferenceThreadQualification } from "./inference-qualification.js";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
+import type { CodexNativeModelInputTools } from "./native-model-input-tools.js";
+import type { CodexNativeProcessAuthority } from "./native-process-authority.js";
+import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
 
 /** Codex hook events that can be registered through OpenClaw's native relay. */
-export const CODEX_NATIVE_HOOK_RELAY_EVENTS: readonly NativeHookRelayEvent[] = [
+const CODEX_NATIVE_HOOK_RELAY_EVENTS: readonly NativeHookRelayEvent[] = [
   "pre_tool_use",
   "post_tool_use",
   "permission_request",
@@ -45,7 +50,6 @@ const CODEX_NATIVE_HOOK_RELAY_DEFAULT_TIMEOUT_SEC = 10;
 const CODEX_NATIVE_HOOK_RELAY_UNREGISTER_GRACE_MS = 10_000;
 const CODEX_NATIVE_HOOK_RELAY_UNREGISTER_EXTRA_GRACE_MS = 5_000;
 const MAX_PENDING_DIRECT_CHILD_ADMISSIONS = 32;
-const nativeHookPolicyByClient = new WeakMap<object, Promise<void>>();
 
 const CODEX_HOOK_MATCHER_NAMES_BY_TOOL_ID: Readonly<Record<string, readonly string[]>> = {
   exec: ["Bash", "exec", "exec_command"],
@@ -69,48 +73,42 @@ export type CodexNativeHookRelay = ReturnType<typeof registerNativeHookRelayForB
   rejectPendingDirectChild: (threadId: string, reason: string) => void;
 };
 
+export class CodexManagedHooksOnlyError extends Error {
+  constructor() {
+    super(
+      "Codex managed-only hooks disable the OpenClaw native hook relay; refusing unenforced execution",
+    );
+    this.name = "CodexManagedHooksOnlyError";
+  }
+}
+
 /** Enterprise managed-only policy silently drops the session-layer hooks that enforce OpenClaw. */
 export async function assertCodexNativeHookRelayAllowed(
   client: Pick<CodexAppServerClient, "request">,
   signal?: AbortSignal,
+  timeoutMs?: number,
 ): Promise<void> {
-  let attestation = nativeHookPolicyByClient.get(client);
-  if (!attestation) {
-    attestation = client
-      .request("configRequirements/read", undefined, { signal })
-      .then((response) => {
-        if (!isJsonObject(response) || !Object.hasOwn(response, "requirements")) {
-          throw new Error("Codex configRequirements/read returned an invalid hook policy response");
-        }
-        const requirements = response.requirements;
-        if (requirements === null) {
-          return;
-        }
-        if (!isJsonObject(requirements)) {
-          throw new Error(
-            "Codex configRequirements/read returned invalid hook policy requirements",
-          );
-        }
-        const managedOnly = requirements.allowManagedHooksOnly;
-        if (managedOnly !== undefined && managedOnly !== null && typeof managedOnly !== "boolean") {
-          throw new Error(
-            "Codex configRequirements/read returned invalid managed-only hook policy",
-          );
-        }
-        if (managedOnly === true) {
-          throw new Error(
-            "Codex managed-only hooks disable the OpenClaw native hook relay; refusing unenforced execution",
-          );
-        }
-      });
-    nativeHookPolicyByClient.set(client, attestation);
-    attestation.catch(() => {
-      if (nativeHookPolicyByClient.get(client) === attestation) {
-        nativeHookPolicyByClient.delete(client);
-      }
-    });
+  const response = await client.request("configRequirements/read", undefined, {
+    signal,
+    ...(timeoutMs === undefined ? {} : { timeoutMs }),
+  });
+  if (!isJsonObject(response) || !Object.hasOwn(response, "requirements")) {
+    throw new Error("Codex configRequirements/read returned an invalid hook policy response");
   }
-  await attestation;
+  const requirements = response.requirements;
+  if (requirements === null) {
+    return;
+  }
+  if (!isJsonObject(requirements)) {
+    throw new Error("Codex configRequirements/read returned invalid hook policy requirements");
+  }
+  const managedOnly = requirements.allowManagedHooksOnly;
+  if (managedOnly !== undefined && managedOnly !== null && typeof managedOnly !== "boolean") {
+    throw new Error("Codex configRequirements/read returned invalid managed-only hook policy");
+  }
+  if (managedOnly === true) {
+    throw new CodexManagedHooksOnlyError();
+  }
 }
 
 /** Defers relay unregister so late native hook subprocesses can still resolve. */
@@ -210,12 +208,25 @@ export function createCodexNativeHookRelay(params: {
   loopDetectionPreToolUseRelay: boolean;
   signal: AbortSignal;
   hostCapabilities: EmbeddedRunAttemptParams["hostCapabilities"];
+  nativeProcessAuthority?: {
+    owner: CodexNativeProcessAuthority;
+    client: () => CodexAppServerClient;
+  };
+  nativeModelAdmission?: {
+    client: () => CodexAppServerClient;
+    threadId: () => string | undefined;
+    tools?: CodexNativeModelInputTools;
+    readQualification: (threadId: string) => CodexInferenceThreadQualification | undefined;
+  };
   assertCurrent?: () => void;
   onPreToolUseFailure: (failure: CodexNativePreToolUseFailure) => void | Promise<void>;
 }): CodexNativeHookRelay | undefined {
   if (params.options?.enabled === false) {
     return undefined;
   }
+  const modelInputTools: CodexNativeModelInputTools = params.nativeModelAdmission?.tools ?? [
+    "multi_agent_v1send_input",
+  ];
   const directChildClaims = new Map<string, symbol>();
   const pendingDirectChildAdmissions = new Map<
     string,
@@ -223,6 +234,7 @@ export function createCodexNativeHookRelay(params: {
       promise: Promise<symbol>;
       resolve: (claim: symbol) => void;
       reject: (reason: Error) => void;
+      waiters: number;
     }
   >();
   let foregroundClosed = false;
@@ -235,6 +247,8 @@ export function createCodexNativeHookRelay(params: {
     }
     pendingDirectChildAdmissions.clear();
   };
+  let releaseProcessAdmission: (() => void) | undefined;
+  let processAdmissionDisposed = false;
   const relay = registerNativeHookRelayForBundledRuntime({
     provider: "codex",
     relayId: buildCodexNativeHookRelayId({
@@ -266,6 +280,76 @@ export function createCodexNativeHookRelay(params: {
     }),
     signal: params.signal,
     runBeforeToolCall: params.hostCapabilities.runBeforeToolCall,
+    executionAdmission:
+      params.nativeProcessAuthority || params.nativeModelAdmission
+        ? {
+            toolNames: [
+              ...(params.nativeProcessAuthority ? ["exec"] : []),
+              ...(params.nativeModelAdmission ? modelInputTools : []),
+            ],
+            admit: async (invocation, assertAdmissionCurrent, preparation) => {
+              const payload = invocation.rawPayload;
+              if (
+                params.nativeModelAdmission &&
+                invocation.toolName &&
+                modelInputTools.includes(invocation.toolName)
+              ) {
+                const admission = params.nativeModelAdmission;
+                const input = isJsonObject(payload) ? payload.tool_input : undefined;
+                const targetThreadId =
+                  isJsonObject(input) && typeof input.target === "string"
+                    ? input.target.trim()
+                    : undefined;
+                const threadId = readCodexNativeChildThreadId(payload) ?? admission?.threadId();
+                if (
+                  !admission ||
+                  !threadId ||
+                  !targetThreadId ||
+                  !invocation.turnId ||
+                  !invocation.toolUseId
+                ) {
+                  throw new Error(
+                    "Codex native input requires exact sender, receiver, turn, and tool identities",
+                  );
+                }
+                assertAdmissionCurrent();
+                const request = {
+                  client: admission.client(),
+                  threadId,
+                  turnId: invocation.turnId,
+                  itemId: invocation.toolUseId,
+                };
+                await codexNativeSubagentMonitorRuntime.prepareModelInput({
+                  ...request,
+                  target: targetThreadId,
+                  readQualification: admission.readQualification,
+                  signal: preparation.signal,
+                  assertCurrent: preparation.assertCurrent,
+                });
+                assertAdmissionCurrent();
+                return;
+              }
+              const rootThreadId =
+                isJsonObject(payload) && typeof payload.session_id === "string"
+                  ? payload.session_id.trim()
+                  : undefined;
+              const childThreadId = readCodexNativeChildThreadId(payload);
+              const threadId = childThreadId ?? rootThreadId;
+              if (!threadId || !invocation.turnId || !invocation.toolUseId) {
+                throw new Error(
+                  "Codex native process admission requires exact thread, turn, and tool identities",
+                );
+              }
+              params.nativeProcessAuthority!.owner.admit(
+                params.nativeProcessAuthority!.client(),
+                { threadId, turnId: invocation.turnId, itemId: invocation.toolUseId },
+                assertAdmissionCurrent,
+                childThreadId ? rootThreadId : undefined,
+              );
+            },
+          }
+        : undefined,
+    approvalHost: params.hostCapabilities,
     assertActive: () => {
       params.hostCapabilities.assertActive();
       params.assertCurrent?.();
@@ -277,34 +361,58 @@ export function createCodexNativeHookRelay(params: {
       shouldRetainAfterForegroundClose: () =>
         successfulYieldRetentionAuthorized && directChildClaims.size > 0,
       allowPreToolUse: (childThreadId) => directChildClaims.has(childThreadId),
-      awaitForegroundAdmission: (childThreadId) => {
-        if (foregroundClosed) {
-          return Promise.reject(new Error("native hook relay foreground admission unavailable"));
-        }
+      awaitForegroundAdmission: (childThreadId, signal) => {
         const existingClaim = directChildClaims.get(childThreadId);
         if (existingClaim) {
           return Promise.resolve(assertClaim(childThreadId, existingClaim));
         }
-        const existingPending = pendingDirectChildAdmissions.get(childThreadId);
-        if (existingPending) {
-          return existingPending.promise.then((claim) => assertClaim(childThreadId, claim));
+        if (foregroundClosed) {
+          return Promise.reject(new Error("native hook relay foreground admission unavailable"));
         }
-        if (pendingDirectChildAdmissions.size >= MAX_PENDING_DIRECT_CHILD_ADMISSIONS) {
-          return Promise.reject(
-            new Error("native hook relay foreground admission capacity reached"),
-          );
+        let pending = pendingDirectChildAdmissions.get(childThreadId);
+        if (!pending) {
+          if (pendingDirectChildAdmissions.size >= MAX_PENDING_DIRECT_CHILD_ADMISSIONS) {
+            return Promise.reject(
+              new Error("native hook relay foreground admission capacity reached"),
+            );
+          }
+          pending = { ...createDeferred<symbol>(), waiters: 0 };
+          pendingDirectChildAdmissions.set(childThreadId, pending);
         }
-        const { promise, resolve, reject } = createDeferred<symbol>();
-        pendingDirectChildAdmissions.set(childThreadId, {
-          promise,
-          resolve,
-          reject,
+        const admission = pending;
+        admission.waiters++;
+        let onAbort: (() => void) | undefined;
+        const wait = new Promise<symbol>((resolve, reject) => {
+          void admission.promise.then(resolve, reject);
+          onAbort = () =>
+            reject(toErrorObject(signal?.reason, "native hook relay admission aborted"));
+          signal?.addEventListener("abort", onAbort, { once: true });
+          if (signal?.aborted) {
+            onAbort();
+          }
         });
-        return promise.then((claim) => assertClaim(childThreadId, claim));
+        return wait
+          .then((claim) => assertClaim(childThreadId, claim))
+          .finally(() => {
+            if (onAbort) {
+              signal?.removeEventListener("abort", onAbort);
+            }
+            // Duplicate callbacks share admission, but each owns its wait. A
+            // disconnected last waiter releases capacity without revoking a child.
+            admission.waiters--;
+            if (
+              admission.waiters === 0 &&
+              pendingDirectChildAdmissions.get(childThreadId) === admission
+            ) {
+              pendingDirectChildAdmissions.delete(childThreadId);
+            }
+          });
       },
       onDispose: () => {
         foregroundClosed = true;
         rejectPendingAdmissions("native hook relay registration closed");
+        processAdmissionDisposed = true;
+        releaseProcessAdmission?.();
       },
     },
     onPreToolUseFailure: params.onPreToolUseFailure,
@@ -315,6 +423,14 @@ export function createCodexNativeHookRelay(params: {
       timeoutMs: params.options?.gatewayTimeoutMs,
     },
   });
+  if (!processAdmissionDisposed) {
+    try {
+      releaseProcessAdmission = params.nativeProcessAuthority?.owner.retainAdmission();
+    } catch (error) {
+      relay.unregister();
+      throw error;
+    }
+  }
   const unregister = () => {
     foregroundClosed = true;
     rejectPendingAdmissions("native hook relay foreground closed");

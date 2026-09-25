@@ -52,13 +52,6 @@ export function loadPluginDiscoveryDetail(
   );
 }
 
-export function installPlugin(
-  client: GatewayBrowserClient,
-  request: PluginInstallRequest,
-): Promise<PluginMutationResult> {
-  return client.request<PluginMutationResult>("plugins.install", request);
-}
-
 export function uninstallPlugin(
   client: GatewayBrowserClient,
   pluginId: string,

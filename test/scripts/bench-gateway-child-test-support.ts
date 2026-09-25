@@ -68,8 +68,9 @@ export function registerStopChildBehaviorTests<TChild>(params: {
     expect(child.kill).toHaveBeenCalledWith("SIGTERM");
   });
 
-  it("bounds teardown when the child ignores termination signals", async () => {
+  it("bounds teardown and releases IPC when the child ignores termination signals", async () => {
     const child = new EventEmitter() as EventEmitter & {
+      channel: { unref: ReturnType<typeof vi.fn> };
       exitCode: number | null;
       kill: ReturnType<typeof vi.fn>;
       signalCode: NodeJS.Signals | null;
@@ -80,6 +81,7 @@ export function registerStopChildBehaviorTests<TChild>(params: {
     };
     child.exitCode = null;
     child.signalCode = null;
+    child.channel = { unref: vi.fn() };
     child.kill = vi.fn(() => true);
     child.stderr = { destroy: vi.fn() };
     child.stdin = { destroy: vi.fn() };
@@ -101,6 +103,7 @@ export function registerStopChildBehaviorTests<TChild>(params: {
     expect(child.stdin.destroy).toHaveBeenCalledOnce();
     expect(child.stdout.destroy).toHaveBeenCalledOnce();
     expect(child.stderr.destroy).toHaveBeenCalledOnce();
+    expect(child.channel.unref).toHaveBeenCalledOnce();
     expect(child.unref).toHaveBeenCalledOnce();
   });
 

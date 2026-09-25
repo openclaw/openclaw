@@ -2,6 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
+import { createDeferred as deferred } from "../../../../../test/helpers/promise.js";
 import {
   clearNativeGatewayTestState,
   setNativeGatewayTestState,
@@ -15,14 +16,6 @@ type SessionDiffElement = HTMLElement & {
   loader: SessionDiffLoader | null;
   readonly updateComplete: Promise<boolean>;
 };
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((nextResolve) => {
-    resolve = nextResolve;
-  });
-  return { promise, resolve };
-}
 
 function result(branch: string): SessionsDiffResult {
   return {

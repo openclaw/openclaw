@@ -2,10 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
 import { z } from "zod";
-import { isRepoRootRelativeRef } from "./cli-paths.js";
 import { qaCoverageIdSchema } from "./coverage-id.js";
+import { qaEvidenceAssertionSchema } from "./evidence-assertion.js";
 import { parseQaYamlWithContext } from "./qa-yaml.js";
-import { resolveQaRepoPath, type QaRepoPathKind } from "./repo-path.js";
+import { isRepoRootRelativeRef, resolveQaRepoPath, type QaRepoPathKind } from "./repo-path.js";
 import { qaScenarioModuleFlow } from "./scenario-module-flow.js";
 
 export const DEFAULT_QA_AGENT_IDENTITY_MARKDOWN = `# Dev C-3PO
@@ -308,6 +308,12 @@ const qaSeedScenarioBodySchema = z.object({
   runtimePairLane: qaRuntimePairLaneSchema.optional(),
   runtimeParityUsage: qaRuntimeParityUsageSchema.optional(),
   coverage: qaScenarioCoverageSchema.optional(),
+  assertions: z
+    .array(qaEvidenceAssertionSchema)
+    .refine((assertions) => new Set(assertions.map(({ id }) => id)).size === assertions.length, {
+      message: "scenario assertion ids must be unique",
+    })
+    .optional(),
   surfaces: z.array(z.string().trim().min(1)).min(1).optional(),
   risk: z.enum(["low", "medium", "high"]).optional(),
   capabilities: z.array(z.string().trim().min(1)).optional(),
@@ -371,6 +377,15 @@ export type QaSeedScenarioWithSource = QaSeedScenario & {
     flowKind?: "module" | "steps";
   };
 };
+
+export type QaTestFileScenario = QaSeedScenarioWithSource & {
+  execution: Extract<
+    QaSeedScenarioWithSource["execution"],
+    { kind: "script" | "vitest" | "playwright" }
+  >;
+};
+
+export type QaTestFileExecutionKind = "script" | "vitest" | "playwright";
 
 export type QaScenarioPack = z.infer<typeof qaScenarioPackSchema> & {
   scenarios: QaSeedScenarioWithSource[];
@@ -453,6 +468,44 @@ export function readQaScenarioPackYamlSource(): string {
   return chunks.filter(Boolean).join("\n---\n");
 }
 
+export function readQaScenarioFile(
+  filePath: string,
+  sourcePath = filePath,
+): QaSeedScenarioWithSource {
+  const parsedScenarioFile = parseQaYamlWithContext(
+    qaScenarioFileSchema,
+    YAML.parse(fs.readFileSync(filePath, "utf8")) as unknown,
+    sourcePath,
+  );
+  const parsedScenario = qaScenarioModuleFlow.normalizeMetadata(
+    parsedScenarioFile.scenario,
+    parsedScenarioFile.title,
+  );
+  const execution = parseQaYamlWithContext(
+    qaScenarioExecutionSchema,
+    parsedScenario.execution ?? {},
+    sourcePath,
+  );
+  // Keep the authored kind so planning can reject unsupported module flows.
+  const flowKind = qaScenarioModuleFlow.resolveKind(parsedScenarioFile.flow);
+  const flow = qaScenarioModuleFlow.resolveFlow(parsedScenarioFile.flow, parsedScenarioFile.title);
+  qaScenarioModuleFlow.assertDefined({
+    executionKind: execution.kind,
+    flow,
+    relativePath: sourcePath,
+  });
+  const scenario = {
+    ...parsedScenario,
+    sourcePath,
+    execution: {
+      ...execution,
+      ...(flow ? { flow, flowKind } : {}),
+    },
+  } satisfies QaSeedScenarioWithSource;
+  resolveQaScenarioRequiredProviderMode(scenario);
+  return scenario;
+}
+
 export function readQaScenarioPack(): QaScenarioPack {
   if (qaScenarioPackCache) {
     return qaScenarioPackCache;
@@ -473,38 +526,13 @@ export function readQaScenarioPack(): QaScenarioPack {
     qaScenarioPackFileSchema,
     QA_SCENARIO_PACK_INDEX_PATH,
   );
-  const scenarios = listQaScenarioYamlPaths().map((relativePath) =>
-    (() => {
-      const parsedScenarioFile = parseQaYamlFileWithContext(qaScenarioFileSchema, relativePath);
-      const parsedScenario = qaScenarioModuleFlow.normalizeMetadata(
-        parsedScenarioFile.scenario,
-        parsedScenarioFile.title,
-      );
-      const execution = parseQaYamlWithContext(
-        qaScenarioExecutionSchema,
-        parsedScenario.execution ?? {},
-        relativePath,
-      );
-      // Module shorthand normalizes to ordinary steps below. Preserve its authored form so
-      // planning cannot schedule it on an adapter that does not support module flows.
-      const flowKind = qaScenarioModuleFlow.resolveKind(parsedScenarioFile.flow);
-      const flow = qaScenarioModuleFlow.resolveFlow(
-        parsedScenarioFile.flow,
-        parsedScenarioFile.title,
-      );
-      qaScenarioModuleFlow.assertDefined({ executionKind: execution.kind, flow, relativePath });
-      const scenario = {
-        ...parsedScenario,
-        sourcePath: relativePath,
-        execution: {
-          ...execution,
-          ...(flow ? { flow, flowKind } : {}),
-        },
-      } satisfies QaSeedScenarioWithSource;
-      resolveQaScenarioRequiredProviderMode(scenario);
-      return scenario;
-    })(),
-  );
+  const scenarios = listQaScenarioYamlPaths().map((relativePath) => {
+    const filePath = resolveRepoPath(relativePath, "file");
+    if (!filePath) {
+      throw new Error(`QA scenario file not found: ${relativePath}`);
+    }
+    return readQaScenarioFile(filePath, relativePath);
+  });
   const seenScenarioIds = new Set<string>();
   for (const scenario of scenarios) {
     if (seenScenarioIds.has(scenario.id)) {

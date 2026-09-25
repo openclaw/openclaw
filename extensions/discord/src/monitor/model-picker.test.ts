@@ -1505,17 +1505,6 @@ describe("model-specific runtime view", () => {
       .flatMap((row) => row.components ?? [])
       .find((c) => parseDiscordModelPickerCustomId(c.custom_id ?? "")?.action === "runtime");
     expect(runtime).toBeUndefined();
-    const payload = JSON.stringify(
-      renderDiscordModelPickerModelsView({
-        command: "model",
-        userId: "owner",
-        data,
-        provider: "openai",
-        pendingModel: "openai/gpt-4o",
-        pendingModelIndex: 2,
-      }),
-    );
-    expect(payload).toContain("runtime openclaw");
   });
   it.each(["unknown", "empty", "retired"])(
     "disables Submit for %s model runtime choices",

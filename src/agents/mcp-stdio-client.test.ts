@@ -24,7 +24,7 @@ const childCleanups: Array<() => void> = [];
 function createFixture(protocolVersion = "2025-06-18") {
   const root = createDeferred<{ code: number | null; signal: NodeJS.Signals | null }>();
   const extinction = createDeferred();
-  const requested = createDeferred();
+  const requested = createDeferred<string | number>();
   const stdin = new PassThrough();
   const stdout = new PassThrough();
   const stderr = new PassThrough();
@@ -39,8 +39,8 @@ function createFixture(protocolVersion = "2025-06-18") {
         stdout.write(
           `${JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { protocolVersion } })}\n`,
         );
-      } else if ("method" in message && message.method === "tools/call") {
-        requested.resolve();
+      } else if ("method" in message && message.method === "tools/call" && "id" in message) {
+        requested.resolve(message.id);
       }
     }
   });
@@ -95,7 +95,7 @@ function createFixture(protocolVersion = "2025-06-18") {
     },
   });
   clients.push(client);
-  return { client, child, stdin, messages, requested: requested.promise };
+  return { client, child, stdin, stdout, messages, requested: requested.promise };
 }
 
 afterEach(async () => {
@@ -110,6 +110,37 @@ afterEach(async () => {
 });
 
 describe("createMcpStdioClient", () => {
+  it("keeps the connection when one stdout chunk contains multiple bounded messages", async () => {
+    const { client, child, stdout, requested } = createFixture();
+    const pending = client.request("tools/call", {}, { timeoutMs: 1000 });
+    const id = await requested;
+    const result = { text: "x".repeat(700) };
+    const notification = {
+      jsonrpc: "2.0",
+      method: "notifications/message",
+      params: { data: "n".repeat(700) },
+    };
+    const response = { jsonrpc: "2.0", id, result };
+    stdout.write(`${JSON.stringify(notification)}\n${JSON.stringify(response)}\n`);
+
+    await expect(pending).resolves.toEqual(result);
+    expect(client.isAvailable()).toBe(true);
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  it("preserves the cleanup owner's error as the cause of uncertain shutdown", async () => {
+    const { client } = createFixture();
+    await vi.waitFor(() => expect(client.isAvailable()).toBe(true));
+    const failure = new Error("fixture cleanup failed");
+    closeMock.mockRejectedValue(failure);
+
+    await expect(client.stop()).rejects.toMatchObject({
+      message: "unavailable: proxy cleanup could not be confirmed",
+      cause: failure,
+    });
+    expect(client.isAvailable()).toBe(false);
+  });
+
   it("classifies an incompatible initialize version as a fatal protocol error", async () => {
     const { client, child, messages } = createFixture("2024-11-05");
     await expect(client.request("tools/call", {}, { timeoutMs: 1000 })).rejects.toThrow(

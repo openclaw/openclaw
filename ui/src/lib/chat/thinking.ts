@@ -7,6 +7,7 @@ import type {
   SessionsListResult,
 } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
+import { resolveModelRuntimeEntry, type ModelRuntimeEntry } from "../model-runtime-choice.ts";
 import { pushUniqueTrimmedSelectOption } from "../select-options.ts";
 import { sessionModelMatchesDefaults } from "../session-model-defaults.ts";
 // Control UI module implements thinking behavior.
@@ -208,17 +209,23 @@ function resolveThinkingCatalogEntry(
   provider: string | null,
   model: string | null,
   runtimeId?: string,
-): ModelCatalogEntry | undefined {
+): ModelRuntimeEntry | undefined {
   const runtime = runtimeId?.trim();
-  return catalog.find((entry) => {
-    const entryRuntime = entry.agentRuntime?.id?.trim();
+  const entry = catalog.find((candidate) => {
+    const entryRuntime = candidate.agentRuntime?.id?.trim();
     // Agent-scoped catalogs must not supply another runtime's session thinking profile.
     return (
-      entry.provider === provider &&
-      entry.id === model &&
-      (!runtime || !entryRuntime || runtime === entryRuntime)
+      candidate.provider === provider &&
+      candidate.id === model &&
+      (!runtime ||
+        !entryRuntime ||
+        runtime === entryRuntime ||
+        candidate.runtimeChoices?.some((choice) => choice.agentRuntime.id === runtime))
     );
   });
+  return runtime && (entry?.agentRuntime?.id || entry?.runtimeChoices?.length)
+    ? resolveModelRuntimeEntry(entry, runtime)
+    : entry;
 }
 
 export function resolveChatThinkingSelectState(params: {

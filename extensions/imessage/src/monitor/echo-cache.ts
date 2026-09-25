@@ -30,7 +30,7 @@ export type SentMessageCache = {
     scope: string,
     lookup: SentMessageLookup,
     options?: boolean | SentMessageLookupOptions,
-  ) => boolean;
+  ) => Promise<boolean>;
 };
 
 // Echo arrival observed at ~2.2s on M4 Mac Mini (SQLite poll interval is the bottleneck).
@@ -89,16 +89,16 @@ class DefaultSentMessageCache implements SentMessageCache {
     this.cleanup();
   }
 
-  has(
+  async has(
     scope: string,
     lookup: SentMessageLookup,
     options: boolean | SentMessageLookupOptions = false,
-  ): boolean {
+  ): Promise<boolean> {
     this.cleanup();
     const resolvedOptions =
       typeof options === "boolean" ? { skipIdShortCircuit: options } : options;
     if (
-      hasPersistedIMessageEcho({
+      await hasPersistedIMessageEcho({
         scope,
         text: lookup.text,
         media: lookup.media,
@@ -154,29 +154,19 @@ class DefaultSentMessageCache implements SentMessageCache {
 
   private cleanup(): void {
     const now = Date.now();
-    for (const [key, timestamp] of this.textCache.entries()) {
-      if (now - timestamp > SENT_MESSAGE_TEXT_TTL_MS) {
-        this.textCache.delete(key);
-      }
-    }
-    for (const [key, timestamp] of this.textBackedByIdCache.entries()) {
-      if (now - timestamp > SENT_MESSAGE_TEXT_TTL_MS) {
-        this.textBackedByIdCache.delete(key);
-      }
-    }
-    for (const [key, timestamp] of this.mediaCache.entries()) {
-      if (now - timestamp > SENT_MESSAGE_TEXT_TTL_MS) {
-        this.mediaCache.delete(key);
-      }
-    }
-    for (const [key, timestamp] of this.mediaBackedByIdCache.entries()) {
-      if (now - timestamp > SENT_MESSAGE_TEXT_TTL_MS) {
-        this.mediaBackedByIdCache.delete(key);
-      }
-    }
-    for (const [key, timestamp] of this.messageIdCache.entries()) {
-      if (now - timestamp > SENT_MESSAGE_ID_TTL_MS) {
-        this.messageIdCache.delete(key);
+    for (const cache of [
+      this.textCache,
+      this.textBackedByIdCache,
+      this.mediaCache,
+      this.mediaBackedByIdCache,
+      this.messageIdCache,
+    ]) {
+      const ttlMs =
+        cache === this.messageIdCache ? SENT_MESSAGE_ID_TTL_MS : SENT_MESSAGE_TEXT_TTL_MS;
+      for (const [key, timestamp] of cache) {
+        if (now - timestamp > ttlMs) {
+          cache.delete(key);
+        }
       }
     }
   }

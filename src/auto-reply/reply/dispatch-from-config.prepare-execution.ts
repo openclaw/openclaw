@@ -17,10 +17,8 @@ import {
   hasExecApprovalPayload,
   hasExecApprovalUnavailablePayload,
 } from "./dispatch-from-config.payloads.js";
-import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import { loadGetReplyFromConfigRuntime } from "./dispatch-from-config.runtime-loaders.js";
 import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
-import { shouldBridgeCliPreambleEvents } from "./get-reply.types.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 
@@ -39,6 +37,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     shouldRouteToOriginating,
     shouldSendToolSummaries,
     shouldSendVerboseProgressMessages,
+    shouldSuppressProgressDelivery,
     turnLedger,
   } = state;
   // When automatic source delivery is suppressed, still let the agent process
@@ -51,7 +50,11 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
   }
 
   let didSendPlanStatusNotice = false;
-  const formatPlanUpdateText = (payload: { explanation?: string; steps?: AgentPlanStep[] }) => {
+  const formatPlanUpdateText = (payload: {
+    explanation?: string;
+    explanationFormat?: "plain";
+    steps?: AgentPlanStep[];
+  }) => {
     const explanation = payload.explanation?.replace(/\s+/g, " ").trim();
     const steps = (payload.steps ?? [])
       .map((entry) => ({ step: entry.step.replace(/\s+/g, " ").trim(), status: entry.status }))
@@ -62,10 +65,14 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
         maxLineChars: 120,
       }).join("\n");
     }
-    return explanation || "Planning next steps.";
+    // Generic notices retain their shipped receipt; prepared notes belong to literal-capable drafts.
+    return payload.explanationFormat === "plain"
+      ? "Progress updated"
+      : explanation || "Planning next steps.";
   };
   const sendPlanUpdate = async (payload: {
     explanation?: string;
+    explanationFormat?: "plain";
     steps?: AgentPlanStep[];
   }): Promise<void> => {
     if (
@@ -120,13 +127,12 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     ) {
       return null;
     }
-    if (shouldSendToolSummaries()) {
-      return payload;
-    }
-    if (hasExecApprovalPayload(payload) || hasExecApprovalUnavailablePayload(payload)) {
-      return payload;
-    }
-    if (hasAskUserPayload(payload)) {
+    if (
+      shouldSendToolSummaries() ||
+      hasExecApprovalPayload(payload) ||
+      hasExecApprovalUnavailablePayload(payload) ||
+      hasAskUserPayload(payload)
+    ) {
       return payload;
     }
     // Group/native flows intentionally suppress tool summary text, but media-only
@@ -143,9 +149,6 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     originatingChannel: state.routeReplyChannel,
     systemEvent: shouldRouteToOriginating,
   });
-  const shouldSuppressProgressDelivery = () =>
-    state.sendPolicyDenied ||
-    (state.suppressDelivery && !state.shouldDeliverVerboseProgressDespiteSourceSuppression());
   const onToolResultFromReplyOptions = params.replyOptions?.onToolResult;
   const onPlanUpdateFromReplyOptions = params.replyOptions?.onPlanUpdate;
   const onApprovalEventFromReplyOptions = params.replyOptions?.onApprovalEvent;
@@ -322,10 +325,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
             : undefined,
       })
     : undefined;
-  const canCaptureCliPreambleEvents =
-    Boolean(params.replyOptions?.onItemEvent) && shouldBridgeCliPreambleEvents(params.replyOptions);
-  const canConsumeItemEvents =
-    deliverStandaloneCommentaryProgress || canForwardItemEvents || canCaptureCliPreambleEvents;
+  const canConsumeItemEvents = deliverStandaloneCommentaryProgress || canForwardItemEvents;
   // CLI runners classify preambles as item events only when this handler exists.
   // Keep it for channel-owned capture even when delivery policy hides the event.
   const onItemEvent = canConsumeItemEvents
@@ -360,12 +360,11 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
       : runtimeReplyConfig,
   );
   state.recordAgentDispatchStarted();
-  const nextState = extendPreparedDispatchState(state, {
+  const nextState = Object.assign(state, {
     sendPlanUpdate,
     cleanBlockTtsDirectiveText,
     resolveToolDeliveryPayload,
     typing,
-    shouldSuppressProgressDelivery,
     onToolResultFromReplyOptions,
     onPlanUpdateFromReplyOptions,
     onApprovalEventFromReplyOptions,

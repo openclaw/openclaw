@@ -14,6 +14,11 @@ import {
   releaseCodexAppServerLiveThread,
 } from "./client-runtime.js";
 import type { CodexAppServerClient } from "./client.js";
+import {
+  assertCodexInferenceRouteConfig,
+  getCodexInferenceThread,
+  getCodexInferenceThreadQualification,
+} from "./inference-routing.js";
 import { applyCodexNativeSkillIsolation } from "./native-skill-isolation.js";
 import { attestCodexThreadToolSurface } from "./plugin-thread-attestation.js";
 import {
@@ -21,6 +26,7 @@ import {
   mergeCodexThreadConfigs,
   type CodexPluginThreadConfig,
 } from "./plugin-thread-config.js";
+import type { CodexThread } from "./protocol.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
 import {
   captureCodexAppServerClientLifetime,
@@ -35,8 +41,15 @@ import type {
   CodexThreadRequestContext,
   CodexThreadFinalConfigPatchResult,
 } from "./thread-lifecycle-types.js";
-import { retainCodexAppServerBindingSubscription } from "./thread-ownership.js";
-import { CodexIncognitoPolicyChangeError } from "./thread-policy.js";
+import {
+  isSameCodexAppServerThreadOwner,
+  retainCodexAppServerBindingSubscription,
+} from "./thread-ownership.js";
+import {
+  assertAdoptedCodexThreadResumeAllowed,
+  CodexIncognitoPolicyChangeError,
+  refreshCodexThreadSkillsCatalog,
+} from "./thread-policy.js";
 import { buildThreadResumeParams } from "./thread-requests.js";
 
 type CodexWarmThreadReuseParams = CodexThreadRequestContext & {
@@ -195,20 +208,21 @@ export async function tryReuseCodexLiveThread(
       ((await options.buildLoadedPluginThreadConfig(binding))?.fingerprint ??
         binding.pluginAppsFingerprint) === binding.pluginAppsFingerprint
     ) {
-      await params.buildFinalConfigPatch?.({ action: "resume", binding });
+      await params.buildFinalConfigPatch?.({
+        action: "resume",
+        binding,
+        ...(options.nativeModelInputTools
+          ? { nativeModelInputTools: options.nativeModelInputTools }
+          : {}),
+      });
       throwIfAborted();
+      params.assertCurrent?.();
       return { kind: "ready", binding: { ...binding, lifecycle: { action: "resumed" } } };
     }
     return { kind: "rotate" };
   }
 
-  if (
-    !binding.clientId ||
-    binding.clientId !== clientId ||
-    binding.preserveNativeModel === true ||
-    binding.connectionScope === "supervision" ||
-    (ringZeroActive && !incognito)
-  ) {
+  if (!binding.clientId || binding.clientId !== clientId || (ringZeroActive && !incognito)) {
     return { kind: "resume" };
   }
 
@@ -238,8 +252,33 @@ export async function tryReuseCodexLiveThread(
   };
   let ownershipTransferred = false;
   let preserveSubscription = false;
+  let nativeThread: CodexThread | undefined;
   try {
     assertWarmOwner();
+    if (binding.preserveNativeModel || binding.connectionScope === "supervision") {
+      try {
+        nativeThread = await assertAdoptedCodexThreadResumeAllowed(
+          params,
+          binding.threadId,
+          options,
+          assertWarmOwner,
+        );
+      } catch (error) {
+        // This read-only preflight cannot change native configuration. Direct-input
+        // refusals and failed reads preserve it too, but revocation or cancellation cannot.
+        assertWarmOwner();
+        preserveSubscription = isSameCodexAppServerThreadOwner(
+          params.bindingStore.read(bindingIdentity),
+          binding,
+        );
+        throw error;
+      }
+      assertWarmOwner();
+      if (nativeThread.status?.type === "notLoaded") {
+        preserveSubscription = true;
+        return { kind: "resume" };
+      }
+    }
     const pluginThreadConfig = await options.buildLoadedPluginThreadConfig(binding);
     assertWarmOwner();
     if (pluginThreadConfig && pluginThreadConfig.fingerprint !== binding.pluginAppsFingerprint) {
@@ -251,6 +290,9 @@ export async function tryReuseCodexLiveThread(
     const prebuiltFinalConfigPatch = (await params.buildFinalConfigPatch?.({
       action: "resume",
       binding,
+      ...(options.nativeModelInputTools
+        ? { nativeModelInputTools: options.nativeModelInputTools }
+        : {}),
     })) ?? {
       configPatch: params.finalConfigPatch,
       nativeHookRelayGeneration: params.nativeHookRelayGeneration,
@@ -260,7 +302,10 @@ export async function tryReuseCodexLiveThread(
       (params.pluginThreadConfig?.enabled && binding.pluginAppPolicyContext
         ? buildCodexPluginAppsConfigPatchFromPolicyContext(binding.pluginAppPolicyContext)
         : undefined);
-    const resumeAuthProfileId = params.params.authProfileId ?? binding.authProfileId;
+    const resumeAuthProfileId =
+      binding.connectionScope === "supervision"
+        ? undefined
+        : (params.params.authProfileId ?? binding.authProfileId);
     const resumeConfig = mergeCodexThreadConfigs(
       params.config,
       userMcpServersConfigPatch,
@@ -274,10 +319,11 @@ export async function tryReuseCodexLiveThread(
         authProfileId: resumeAuthProfileId,
         model: startModelSelection.model,
         modelProvider: startModelProvider,
-        preserveNativeModel: false,
+        preserveNativeModel: binding.preserveNativeModel === true,
         appServer: params.appServer,
         dynamicTools: params.dynamicTools,
         developerInstructions: params.developerInstructions,
+        skillsInstructions: params.skillsInstructions,
         config: applyCodexNativeSkillIsolation(resumeConfig, nativeSkillIsolation),
         nativeCodeModeEnabled: params.nativeCodeModeEnabled,
         nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
@@ -286,8 +332,19 @@ export async function tryReuseCodexLiveThread(
         hostSystemAgentActive,
         restrictedToolSurfaceInheritedMcpServerNames,
         shellEnvironment: params.shellEnvironment,
+        shellPathPrepend: params.shellPathPrepend,
         disableLoginShell: params.disableLoginShell,
       }),
+    );
+    assertCodexInferenceRouteConfig(
+      params.client,
+      params.inferenceRoute,
+      resumeParams.config,
+      resumeParams.modelProvider ??
+        (binding.preserveNativeModel
+          ? nativeThread?.modelProvider?.trim() || binding.modelProvider
+          : undefined),
+      params.inferenceProviderRoutes,
     );
     const liveThreadConfigFingerprint = incognito
       ? retainedThread.configFingerprint
@@ -296,15 +353,33 @@ export async function tryReuseCodexLiveThread(
             ...resumeParams,
             // Keep the actual loaded provider separate from caller-selected
             // overrides so account or provider changes always invalidate reuse.
-            model: binding.model ?? resumeParams.model ?? null,
-            requestedModel: resumeParams.model ?? null,
-            modelProvider: binding.modelProvider ?? resumeParams.modelProvider ?? null,
-            requestedModelProvider: resumeParams.modelProvider ?? binding.modelProvider ?? null,
+            model: binding.preserveNativeModel
+              ? null
+              : (binding.model ?? resumeParams.model ?? null),
+            requestedModel: binding.preserveNativeModel ? null : (resumeParams.model ?? null),
+            modelProvider: binding.preserveNativeModel
+              ? null
+              : (binding.modelProvider ?? resumeParams.modelProvider ?? null),
+            requestedModelProvider: binding.preserveNativeModel
+              ? null
+              : (resumeParams.modelProvider ?? binding.modelProvider ?? null),
           },
           resumeAuthProfileId,
           dynamicToolsFingerprint,
         );
-    if (incognito && retainedThread.ephemeralPolicy !== resumeParams.developerInstructions) {
+    const ephemeralPolicy = retainedThread.ephemeralPolicy;
+    if (
+      incognito &&
+      (!ephemeralPolicy ||
+        ephemeralPolicy.developerInstructions !== params.developerInstructions ||
+        getCodexInferenceThread(params.client, binding.threadId) !== params.inferenceRoute ||
+        [...(params.inferenceProviderRoutes?.keys() ?? [])].some(
+          (provider) =>
+            !getCodexInferenceThreadQualification(params.client, binding.threadId)?.hasProvider(
+              provider,
+            ),
+        ))
+    ) {
       preserveSubscription = true;
       throw new CodexIncognitoPolicyChangeError();
     }
@@ -325,9 +400,32 @@ export async function tryReuseCodexLiveThread(
       assertCurrent: assertWarmOwner,
     });
     assertWarmOwner();
+    if (ephemeralPolicy && ephemeralPolicy.skillsInstructions !== params.skillsInstructions) {
+      try {
+        await refreshCodexThreadSkillsCatalog({
+          client: params.client,
+          threadId: binding.threadId,
+          skillsInstructions: params.skillsInstructions,
+          timeoutMs: params.appServer.requestTimeoutMs,
+          signal: params.signal,
+          assertCurrent: assertWarmOwner,
+        });
+      } catch (error) {
+        // The ephemeral conversation survives a failed catalog handoff; the retained
+        // record still names the old catalog, so the next turn delivers it again.
+        preserveSubscription = true;
+        throw error;
+      }
+    }
     const nativeHookRelayGeneration =
       prebuiltFinalConfigPatch.nativeHookRelayGeneration ?? binding.nativeHookRelayGeneration;
-    const model = startModelSelection.model;
+    // Older App Servers omit model metadata; newer ones report native changes between turns.
+    const model = binding.preserveNativeModel
+      ? nativeThread?.model?.trim() || binding.model
+      : startModelSelection.model;
+    const modelProvider = binding.preserveNativeModel
+      ? nativeThread?.modelProvider?.trim() || binding.modelProvider
+      : binding.modelProvider;
     // Validate ownership even when relay generation is unchanged; reset may
     // have replaced the persisted binding since it was first read. Model and
     // cwd are sticky turn settings, so future turns and /btw need current facts.
@@ -344,6 +442,7 @@ export async function tryReuseCodexLiveThread(
             patch: {
               cwd: params.cwd,
               model,
+              modelProvider,
               nativeHookRelayGeneration,
               environmentSelectionFingerprint,
             },
@@ -369,10 +468,19 @@ export async function tryReuseCodexLiveThread(
       binding: {
         ...binding,
         ...(!incognito
-          ? { cwd: params.cwd, model, nativeHookRelayGeneration, environmentSelectionFingerprint }
+          ? {
+              cwd: params.cwd,
+              model,
+              modelProvider,
+              nativeHookRelayGeneration,
+              environmentSelectionFingerprint,
+            }
           : {}),
         liveThreadConfigFingerprint,
-        liveThreadEphemeralPolicy: retainedThread.ephemeralPolicy,
+        liveThreadEphemeralPolicy: ephemeralPolicy && {
+          ...ephemeralPolicy,
+          skillsInstructions: params.skillsInstructions,
+        },
         liveThreadOwnership: retainedThread,
         ...(!incognito && retainedThread.serviceTier && resumeParams.serviceTier === undefined
           ? { clearInheritedServiceTier: true }
@@ -384,6 +492,19 @@ export async function tryReuseCodexLiveThread(
     if (!ownershipTransferred) {
       let failure: { cause: unknown } | undefined;
       try {
+        if (preserveSubscription) {
+          // Recheck immediately before republishing: even a passive failure can
+          // race cancellation or replacement of the retained generation.
+          try {
+            assertWarmOwner();
+            preserveSubscription = isSameCodexAppServerThreadOwner(
+              params.bindingStore.read(bindingIdentity),
+              binding,
+            );
+          } catch {
+            preserveSubscription = false;
+          }
+        }
         if (preserveSubscription) {
           if (
             !(await retainCodexAppServerBindingSubscription(

@@ -1,6 +1,8 @@
 import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
+import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
 import { syncDirectoryIfSupported } from "./directory-durability.js";
+import { writeFileWindowFully } from "./file-descriptor.js";
 import { root as createFsSafeRoot } from "./fs-safe.js";
 import {
   legacyAuditRawCheckpointKey,
@@ -46,16 +48,17 @@ function auditRecoveryJournalTargetsSnapshot(
   );
 }
 
-function auditRecoveryCheckpointPrefixMatches(
+export function auditRecoveryCheckpointPrefixMatches(
   snapshot: LegacyAuditSourceSnapshot,
   checkpoint: LegacyAuditRawCheckpoint,
 ): boolean {
   if (snapshot.rawBytes.length < checkpoint.size) {
     return false;
   }
+  const prefix = snapshot.rawBytes.subarray(0, checkpoint.size);
   return (
-    createHash("sha256").update(snapshot.rawBytes.subarray(0, checkpoint.size)).digest("hex") ===
-    checkpoint.contentHash
+    createHash("sha256").update(prefix).digest("hex") === checkpoint.contentHash ||
+    createHash("sha256").update(prefix.toString("utf8")).digest("hex") === checkpoint.contentHash
   );
 }
 
@@ -70,33 +73,15 @@ export async function readLegacyAuditSourceSnapshot(
   root: AuditMigrationRoot,
   relativePath: string,
 ): Promise<LegacyAuditSourceSnapshot> {
-  const opened = await root.open(relativePath);
-  try {
-    const before = await opened.handle.stat();
-    if (!before.isFile()) {
-      throw new Error("legacy audit source is not a regular file");
-    }
-    const rawBytes = await opened.handle.readFile();
-    const after = await opened.handle.stat();
-    const beforeCheckpoint = {
-      dev: before.dev,
-      ino: before.ino,
-      mtimeMs: before.mtimeMs,
-      size: before.size,
-    };
-    const afterCheckpoint = {
-      dev: after.dev,
-      ino: after.ino,
-      mtimeMs: after.mtimeMs,
-      size: after.size,
-    };
-    if (!legacyAuditRawCheckpointsMatch(beforeCheckpoint, afterCheckpoint)) {
-      throw new Error("legacy audit source changed while Doctor was reading it");
-    }
-    return { ...afterCheckpoint, raw: rawBytes.toString("utf8"), rawBytes };
-  } finally {
-    await opened.handle.close();
-  }
+  const { buffer: rawBytes, stat } = await root.read(relativePath, { maxBytes: Infinity });
+  return {
+    dev: stat.dev,
+    ino: stat.ino,
+    mtimeMs: stat.mtimeMs,
+    size: rawBytes.length,
+    raw: rawBytes.toString("utf8"),
+    rawBytes,
+  };
 }
 
 export async function readLegacyAuditSourcePrefixSnapshotForBackup(
@@ -110,14 +95,8 @@ export async function readLegacyAuditSourcePrefixSnapshotForBackup(
       throw new Error("legacy audit source is not a regular file");
     }
     const rawBytes = Buffer.allocUnsafe(before.size);
-    let offset = 0;
-    while (offset < rawBytes.length) {
-      const length = Math.min(64 * 1024, rawBytes.length - offset);
-      const { bytesRead } = await opened.handle.read(rawBytes, offset, length, offset);
-      if (bytesRead === 0) {
-        throw new Error("legacy audit source was truncated while backup was reading it");
-      }
-      offset += bytesRead;
+    if ((await readFileWindowFully(opened.handle, rawBytes, 0)) !== rawBytes.length) {
+      throw new Error("legacy audit source was truncated while backup was reading it");
     }
     const after = await opened.handle.stat();
     if (before.dev !== after.dev || before.ino !== after.ino || after.size < before.size) {
@@ -200,26 +179,6 @@ function buildScrubbedAuditRecoveryContent(rawBytes: Buffer, scrubPattern: Buffe
   return scrubbed;
 }
 
-async function writeAuditRecoveryRange(
-  handle: Awaited<ReturnType<AuditMigrationRoot["openWritable"]>>["handle"],
-  content: Buffer,
-  position: number,
-): Promise<void> {
-  let offset = 0;
-  while (offset < content.byteLength) {
-    const { bytesWritten } = await handle.write(
-      content,
-      offset,
-      content.byteLength - offset,
-      position + offset,
-    );
-    if (bytesWritten === 0) {
-      throw new Error("zero-byte write while updating legacy recovery archive");
-    }
-    offset += bytesWritten;
-  }
-}
-
 const AUDIT_RECOVERY_WRITE_CHUNK_BYTES = 64 * 1024;
 
 async function writeAuditRecoveryProgress(params: {
@@ -279,7 +238,7 @@ async function advanceAuditRecoveryWrite(params: {
 }): Promise<AuditRecoveryProgress> {
   let progress = params.progress;
   if (progress.pendingEnd > progress.committedBytes) {
-    await writeAuditRecoveryRange(
+    await writeFileWindowFully(
       params.handle,
       params.desiredContent.subarray(progress.committedBytes, progress.pendingEnd),
       progress.committedBytes,
@@ -297,7 +256,7 @@ async function advanceAuditRecoveryWrite(params: {
     // range changed; pendingEnd lets recovery finish it without guessing.
     progress = { ...progress, pendingEnd: end };
     await writeAuditRecoveryProgress({ ...params, progress });
-    await writeAuditRecoveryRange(
+    await writeFileWindowFully(
       params.handle,
       params.desiredContent.subarray(progress.committedBytes, end),
       progress.committedBytes,
@@ -319,7 +278,7 @@ async function reconcileAuditRecoveryPendingWrite(params: {
   if (params.progress.pendingEnd === params.progress.committedBytes) {
     return params.progress;
   }
-  await writeAuditRecoveryRange(
+  await writeFileWindowFully(
     params.handle,
     params.desiredContent.subarray(params.progress.committedBytes, params.progress.pendingEnd),
     params.progress.committedBytes,
@@ -354,16 +313,10 @@ async function stageAuditRecoveryRestore(params: {
       size: params.snapshot.size,
     },
   });
-  await params.root.create(stagingRelativePath, journalRaw, { mode: 0o600 });
-  const staged = await params.root.openWritable(stagingRelativePath, {
-    writeMode: "update",
+  await params.root.create(stagingRelativePath, journalRaw, {
+    mode: 0o600,
+    durable: "file",
   });
-  try {
-    await staged.handle.chmod(0o600);
-    await staged.handle.sync();
-  } finally {
-    await staged.handle.close();
-  }
   await params.root.move(stagingRelativePath, restoreRelativePath);
   await syncAuditRecoveryDirectory(params.root, params.relativePath);
   const journal = parseAuditRecoveryRestoreJournal(journalRaw);
@@ -443,11 +396,11 @@ export async function restoreInterruptedAuditRecoveryArchive(params: {
       await syncAuditRecoveryDirectory(params.root, params.relativePath);
       return true;
     }
-    const writable = await params.root.openWritable(params.relativePath, {
-      mode: 0o600,
-      writeMode: "update",
-    });
-    try {
+    {
+      await using writable = await params.root.openWritable(params.relativePath, {
+        mode: 0o600,
+        writeMode: "update",
+      });
       const verification = await readLegacyAuditSourceSnapshot(params.root, params.relativePath);
       if (
         writable.stat.dev !== verification.dev ||
@@ -493,8 +446,6 @@ export async function restoreInterruptedAuditRecoveryArchive(params: {
       });
       await writable.handle.chmod(0o600);
       await writable.handle.sync();
-    } finally {
-      await writable.handle.close().catch(() => undefined);
     }
     await params.root.remove(progressRelativePath).catch(() => undefined);
     await params.root.remove(stagingRelativePath).catch(() => undefined);
@@ -564,7 +515,8 @@ export async function scrubLegacyAuditRecoveryArchive(params: {
     return undefined;
   }
   try {
-    if (!legacyAuditRawCheckpointsMatch(params.expectedSnapshot, writable.stat)) {
+    await using opened = writable;
+    if (!legacyAuditRawCheckpointsMatch(params.expectedSnapshot, opened.stat)) {
       params.warnings.push(
         `Skipped scrubbing changed ${params.label} legacy recovery archive; rerun openclaw doctor --fix`,
       );
@@ -575,12 +527,11 @@ export async function scrubLegacyAuditRecoveryArchive(params: {
       relativePath: params.relativePath,
       progress,
       desiredContent: scrubbedContent,
-      handle: writable.handle,
+      handle: opened.handle,
     });
-    await writable.handle.chmod(0o600);
-    await writable.handle.sync();
+    await opened.handle.chmod(0o600);
+    await opened.handle.sync();
   } catch (error) {
-    await writable.handle.close().catch(() => undefined);
     const recoveryWarnings: string[] = [];
     const restored = await restoreInterruptedAuditRecoveryArchive({
       root: params.root,
@@ -599,8 +550,6 @@ export async function scrubLegacyAuditRecoveryArchive(params: {
       );
     }
     return undefined;
-  } finally {
-    await writable.handle.close().catch(() => undefined);
   }
   let scrubbedSnapshot: LegacyAuditSourceSnapshot;
   try {
@@ -686,29 +635,4 @@ export function findPreviousLegacyAuditRawCheckpoint(
     .entries()
     .toReversed()
     .find((entry) => entry.value.generationKey === generationKey)?.value;
-}
-
-export function recordsAfterLegacyAuditRawCheckpoint<T>(params: {
-  checkpoint: LegacyAuditRawCheckpoint;
-  snapshot: LegacyAuditSourceSnapshot;
-  records: readonly T[];
-}): readonly T[] | undefined {
-  const rawBytes = params.snapshot.rawBytes;
-  if (rawBytes.length < params.checkpoint.size) {
-    return undefined;
-  }
-  const prefixHash = createHash("sha256")
-    .update(rawBytes.subarray(0, params.checkpoint.size))
-    .digest("hex");
-  const legacyUtf8PrefixHash = createHash("sha256")
-    .update(rawBytes.subarray(0, params.checkpoint.size).toString("utf8"))
-    .digest("hex");
-  if (
-    (prefixHash !== params.checkpoint.contentHash &&
-      legacyUtf8PrefixHash !== params.checkpoint.contentHash) ||
-    params.records.length < params.checkpoint.recordCount
-  ) {
-    return undefined;
-  }
-  return params.records.slice(params.checkpoint.recordCount);
 }

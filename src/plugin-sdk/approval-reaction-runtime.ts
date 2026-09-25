@@ -55,9 +55,9 @@ type InMemoryApprovalReactionTarget<TTarget> = {
 
 /** In-memory or backed store for approval targets awaiting reaction decisions. */
 export type ApprovalReactionTargetStore<TTarget> = {
-  register(key: string, target: TTarget, opts?: { ttlMs?: number }): void;
+  register(key: string, target: TTarget, opts?: { ttlMs?: number }): Promise<void>;
   lookup(key: string): Promise<TTarget | null>;
-  delete(key: string): void;
+  delete(key: string): Promise<void>;
   clearForTest(): void;
 };
 
@@ -121,7 +121,7 @@ export async function settleApprovalReaction(params: {
     typeof createChannelApprovalAuth
   >["approvalAuth"]["authorizeActorAction"];
   loadResolver: () => Promise<typeof resolveApprovalOverGateway>;
-  clearTarget: () => void;
+  clearTarget: () => void | Promise<void>;
   onResolved: (result: ApprovalResolveResult) => void;
   onError?: (error: unknown) => void;
   logVerboseMessage?: (message: string) => void;
@@ -139,15 +139,12 @@ export async function settleApprovalReaction(params: {
     return "denied";
   }
   const resolve = await params.loadResolver();
+  let result: ApprovalResolveResult;
   try {
-    const result = await resolve(request);
-    // Losing surfaces receive the canonical winner too; both outcomes retire controls.
-    params.clearTarget();
-    params.onResolved(result);
-    return "resolved";
+    result = await resolve(request);
   } catch (error) {
     if (isApprovalNotFoundError(error)) {
-      params.clearTarget();
+      await params.clearTarget();
       logVerboseMessage?.(
         `${channel}: approval reaction ignored for expired approval id=${approvalId} sender=${senderId}`,
       );
@@ -160,6 +157,10 @@ export async function settleApprovalReaction(params: {
     // The channel's ingress/poller owns replay; retain the binding and propagate failure.
     throw error;
   }
+  // Losing surfaces receive the canonical winner too; both outcomes retire controls.
+  await params.clearTarget();
+  params.onResolved(result);
+  return "resolved";
 }
 
 /** Reply payload enriched with reaction decision metadata. */
@@ -713,7 +714,7 @@ export function createApprovalReactionTargetStore<TTarget>(params: {
   };
 
   return {
-    register(key: string, target: TTarget, opts?: { ttlMs?: number }): void {
+    async register(key: string, target: TTarget, opts?: { ttlMs?: number }): Promise<void> {
       const normalizedKey = key.trim();
       if (!normalizedKey) {
         return;
@@ -728,7 +729,7 @@ export function createApprovalReactionTargetStore<TTarget>(params: {
       if (!store) {
         return;
       }
-      void store
+      await store
         .register(normalizedKey, { version: 1, target }, { ttlMs })
         .catch(disablePersistentStore);
     },
@@ -759,7 +760,7 @@ export function createApprovalReactionTargetStore<TTarget>(params: {
         return null;
       }
     },
-    delete(key: string): void {
+    async delete(key: string): Promise<void> {
       const normalizedKey = key.trim();
       if (!normalizedKey) {
         return;
@@ -769,7 +770,7 @@ export function createApprovalReactionTargetStore<TTarget>(params: {
       if (!store) {
         return;
       }
-      void store.delete(normalizedKey).catch(disablePersistentStore);
+      await store.delete(normalizedKey).catch(disablePersistentStore);
     },
     clearForTest(): void {
       memory.clear();

@@ -1,9 +1,11 @@
 // Explicit schema exports keep public protocol changes reviewable.
 export * from "./schema/sessions-goal.js";
+export * from "./schema/sessions-provider-review.js";
 export * from "./schema/human-mentions.js";
 export * from "./public-schema-push.js";
 export * from "./public-schema-users.js";
 export * from "./public-schema-plugins.js";
+export * from "./public-schema-environments.js";
 export {
   isCloudWorkerPlacementState,
   ConnectParamsSchema,
@@ -83,32 +85,6 @@ export {
   WORKER_TRANSCRIPT_MAX_CONTENT_PARTS,
   WORKER_TRANSCRIPT_MAX_JSON_DEPTH,
   WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE,
-  EnvironmentStatusSchema,
-  WorkerEnvironmentStateSchema,
-  WorkerTunnelStatusSchema,
-  WorkerDesktopAppIdSchema,
-  RequiredNodeCommandStateSchema,
-  RequiredNodeCommandSchema,
-  WorkerEnvironmentMetadataSchema,
-  EnvironmentSummarySchema,
-  EnvironmentsCreateParamsSchema,
-  EnvironmentsCreateResultSchema,
-  EnvironmentsPrepareParamsSchema,
-  EnvironmentsPrepareResultSchema,
-  EnvironmentsDestroyParamsSchema,
-  EnvironmentsDestroyResultSchema,
-  EnvironmentsListParamsSchema,
-  EnvironmentsListResultSchema,
-  EnvironmentsStatusParamsSchema,
-  EnvironmentsStatusResultSchema,
-  WorkerDesktopObserveParamsSchema,
-  WorkerDesktopObserveResultSchema,
-  WorkerDesktopLaunchParamsSchema,
-  WorkerDesktopLaunchResultSchema,
-  DesktopSourceSchema,
-  DesktopObserveParamsSchema,
-  DesktopObserveResultSchema,
-  DesktopLaunchParamsSchema,
   SystemInfoParamsSchema,
   SystemInfoResultSchema,
   StateVersionSchema,
@@ -152,6 +128,7 @@ export {
   NodeSkillsUpdateParamsSchema,
   NodePendingAckParamsSchema,
   NodeInvokeParamsSchema,
+  NodeInvokeCancelEventSchema,
   NodeInvokeInputEventSchema,
   NodeInvokeProgressParamsSchema,
   NodeEventResultSchema,
@@ -187,6 +164,8 @@ export {
   SessionsSearchParamsSchema,
   SessionsSearchResultSchema,
   SessionsCleanupParamsSchema,
+  SessionsStorageParamsSchema,
+  SessionsStorageStatusResultSchema,
   SessionsPreviewParamsSchema,
   SessionsDescribeParamsSchema,
   SessionsResolveCandidateSchema,
@@ -213,9 +192,6 @@ export {
   SessionDiffScopeSchema,
   SessionsDiffParamsSchema,
   SessionsDiffResultSchema,
-  SessionsCompactionListParamsSchema,
-  SessionsCompactionBranchParamsSchema,
-  SessionsCompactionRestoreParamsSchema,
   SessionBranchSchema,
   SessionRowSchema,
   SessionsBranchesListParamsSchema,
@@ -399,6 +375,7 @@ export {
   SystemAgentSetupAuthStartParamsSchema,
   SystemAgentSetupAuthStartResultSchema,
   WizardStartParamsSchema,
+  McpAuthLoginParamsSchema,
   WizardNextParamsSchema,
   WizardCancelParamsSchema,
   WizardStatusParamsSchema,
@@ -407,6 +384,12 @@ export {
   WizardStartResultSchema,
   WizardStatusResultSchema,
   TalkEventSchema,
+  TalkVoiceGetParamsSchema,
+  TalkVoiceSetParamsSchema,
+  TalkVoiceSelectionSchema,
+  TalkVoiceSetResultSchema,
+  TalkVoiceCompleteParamsSchema,
+  TalkVoiceChangeEventSchema,
   TalkCatalogParamsSchema,
   TalkCatalogResultSchema,
   TalkClientCreateParamsSchema,
@@ -481,6 +464,8 @@ export {
   ModelsAuthOrderSetParamsSchema,
   ModelsAuthRefreshParamsSchema,
   ModelsAuthStatusParamsSchema,
+  ModelsAuthSetApiKeyParamsSchema,
+  ModelsAuthSetApiKeyResultSchema,
   ModelsListParamsSchema,
   AuthProbeStatusSchema,
   ModelsProbeParamsSchema,
@@ -680,3 +665,11 @@ export {
   FsListDirParamsSchema,
   FsListDirResultSchema,
 } from "./schema-modules.js";
+
+export {
+  SessionActivitySummarySchema,
+  SessionsActivitySummaryEnsureParamsSchema,
+  SessionsActivitySummaryEnsureResultSchema,
+} from "./schema/sessions-activity-summary.js";
+
+export * from "./schema/sessions-involvement.js";

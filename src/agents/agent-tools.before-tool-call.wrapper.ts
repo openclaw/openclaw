@@ -38,6 +38,7 @@ import {
   resolveToolErrorDiagnostic,
   resolveToolResultTerminalDiagnostic,
   summarizeToolParams,
+  startToolExecutionLiveness,
 } from "./agent-tools.before-tool-call.diagnostics.js";
 import {
   consumeFinalClientVoiceToolConfirmation,
@@ -63,15 +64,9 @@ import {
   createInternalExecutionPreparer,
   readInternalExecutionControl,
 } from "./agent-tools.execution-preparer.js";
+import { validateToolExecutionParams } from "./agent-tools.execution-validation.js";
 import {
-  readInternalToolExecutionValidation,
-  validateToolExecutionParams,
-} from "./agent-tools.execution-validation.js";
-import {
-  BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS,
-  BEFORE_TOOL_CALL_HOOK_CONTEXT,
-  BEFORE_TOOL_CALL_SOURCE_TOOL,
-  BEFORE_TOOL_CALL_WRAPPED,
+  bindBeforeToolCallMetadata,
   clearBeforeToolCallWrappedMarker,
   getBeforeToolCallDiagnosticOptions,
   getBeforeToolCallHookContext,
@@ -80,10 +75,13 @@ import {
 } from "./before-tool-call-metadata.js";
 import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import {
+  CODE_MODE_WAIT_TOOL_NAME,
+  isCodeModeControlTool,
   getCodeModeExecBeforeHookMetadata,
   normalizeCodeModeExecBeforeHookParams,
   reconcileCodeModeExecBeforeHookParams,
 } from "./code-mode-control-tools.js";
+import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import {
   appendToolLoopWarning,
   attachInternalToolExecutionPreparer,
@@ -296,6 +294,12 @@ export function wrapToolWithBeforeToolCallHook(
   options: Partial<BeforeToolCallDiagnosticOptions> = {},
 ): AnyAgentTool {
   const execute = tool.execute;
+  const refresh = captureAgentPluginRuntimeRefresh();
+  // Only the exact host wait control may drain work admitted before a reload.
+  const assertAgentPluginRuntimeCurrent =
+    isCodeModeControlTool(tool) && tool.name === CODE_MODE_WAIT_TOOL_NAME
+      ? refresh.assertActive
+      : refresh.assertCurrent;
   if (!execute) {
     return tool;
   }
@@ -310,15 +314,9 @@ export function wrapToolWithBeforeToolCallHook(
   const wrappedTool: AnyAgentTool = {
     ...tool,
     execute: async (toolCallId, params, signal, onUpdate, ...executionArgs: unknown[]) => {
+      assertAgentPluginRuntimeCurrent();
       const prepareControl = readInternalExecutionControl(executionArgs.at(-1));
       if (prepareControl) {
-        executionArgs.pop();
-      }
-      const onUpdateValidation = readInternalToolExecutionValidation(onUpdate);
-      const internalValidation =
-        onUpdateValidation ?? readInternalToolExecutionValidation(executionArgs.at(-1));
-      const forwardedOnUpdate = onUpdateValidation ? undefined : onUpdate;
-      if (!onUpdateValidation && internalValidation) {
         executionArgs.pop();
       }
       const toolCallOrdinal = ctx?.allocateToolOutcomeOrdinal?.(toolCallId);
@@ -488,9 +486,6 @@ export function wrapToolWithBeforeToolCallHook(
         // Hooks can repair or rewrite arguments; only the final execution
         // shape is safe to validate, after vetoes but before side effects.
         await validateToolExecutionParams(toolCallId, executeParams);
-        if (internalValidation?.toolCallId === toolCallId) {
-          await internalValidation.validate(executeParams);
-        }
         await reconcileLoopCallExecutionParams({
           ctx,
           toolName: normalizedToolName,
@@ -513,6 +508,7 @@ export function wrapToolWithBeforeToolCallHook(
       // A voice grant binds the post-finalizer execution shape. Consume it only
       // after steering can no longer suppress the prepared call.
       const voiceConfirmation = consumeFinalClientVoiceToolConfirmation({
+        toolCallId,
         toolName,
         params: executeParams,
         ctx,
@@ -527,24 +523,20 @@ export function wrapToolWithBeforeToolCallHook(
       // Host capabilities can close while hooks, approval, validation, or
       // steering awaits. Recheck at the final synchronous source boundary.
       signal?.throwIfAborted();
+      assertAgentPluginRuntimeCurrent();
       runAgentToolSourceExecutionGuard(tool);
       admitExecution?.();
       onImplementationStart?.();
       recordAdjustedParamsForToolCall(toolCallId, executeParams, ctx?.runId);
       const eventBase = buildEventBase(executeParams);
       recordToolExecutionStarted(toolCallId, ctx?.runId);
-      if (hookOptions.emitDiagnostics) {
-        emitTrustedDiagnosticEvent({
-          type: "tool.execution.started",
-          ...eventBase,
-        });
-      }
+      const liveness = startToolExecutionLiveness(eventBase, hookOptions.emitDiagnostics, signal);
       const startedAt = Date.now();
       try {
         let result: Awaited<ReturnType<ForwardedToolExecution>>;
         try {
-          const args = [toolCallId, executeParams, signal, forwardedOnUpdate, ...executionArgs];
-          const invoke = () => (execute as ForwardedToolExecution)(...args);
+          const args = [toolCallId, executeParams, signal, onUpdate, ...executionArgs];
+          const invoke = () => liveness.run(() => (execute as ForwardedToolExecution)(...args));
           result = outcome.ownerDecision
             ? await invoke()
             : await runWithGenericToolActionDecision(tool, toolCallId, invoke);
@@ -577,12 +569,13 @@ export function wrapToolWithBeforeToolCallHook(
         if (!signal?.aborted) {
           rememberPendingTerminalPresentation(preparedTerminalPresentation, ctx?.runId, toolCallId);
         }
+        const terminalDiagnostic = resolveToolResultTerminalDiagnostic(result, durationMs);
         const skillMatch = findSkillUsageMatch({
           toolName: normalizedToolName,
           toolParams: executeParams,
           ctx,
         });
-        if (skillMatch) {
+        if (skillMatch && terminalDiagnostic.type === "tool.execution.completed") {
           recordRunSkillUsage({
             runId: ctx?.runId,
             name: skillMatch.skillName,
@@ -590,20 +583,18 @@ export function wrapToolWithBeforeToolCallHook(
             activation: skillMatch.activation,
             ...(skillMatch.skillFile ? { skillFile: skillMatch.skillFile } : {}),
           });
+          emitSkillUsedDiagnostic({
+            ctx,
+            match: skillMatch,
+            toolName: normalizedToolName,
+            toolCallId,
+          });
         }
         if (hookOptions.emitDiagnostics) {
-          if (skillMatch) {
-            emitSkillUsedDiagnostic({
-              ctx,
-              match: skillMatch,
-              toolName: normalizedToolName,
-              toolCallId,
-            });
-          }
           emitTrustedDiagnosticEventWithPrivateData(
             {
               ...eventBase,
-              ...resolveToolResultTerminalDiagnostic(result, durationMs),
+              ...terminalDiagnostic,
             },
             buildToolContentPrivateData(toolContentPolicy, {
               input: executeParams,
@@ -642,6 +633,8 @@ export function wrapToolWithBeforeToolCallHook(
           toolCallOrdinal,
         });
         throw err;
+      } finally {
+        liveness.close();
       }
     },
   };
@@ -690,11 +683,10 @@ export function wrapToolWithBeforeToolCallHook(
     }
   };
   copyBeforeToolCallWrapperMetadata(tool, wrappedTool);
-  Object.defineProperties(wrappedTool, {
-    [BEFORE_TOOL_CALL_WRAPPED]: { value: true, enumerable: true },
-    [BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS]: { value: hookOptions, enumerable: false },
-    [BEFORE_TOOL_CALL_SOURCE_TOOL]: { value: tool, enumerable: false },
-    [BEFORE_TOOL_CALL_HOOK_CONTEXT]: { value: ctx, enumerable: false },
+  bindBeforeToolCallMetadata(wrappedTool, {
+    options: hookOptions,
+    sourceTool: tool,
+    hookContext: ctx,
   });
   return wrappedTool;
 }

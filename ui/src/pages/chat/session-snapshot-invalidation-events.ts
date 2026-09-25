@@ -1,4 +1,8 @@
-type SnapshotInvalidation = { sessionKey: string } | { sessionKey?: undefined };
+export type SessionSnapshotInvalidationReason = "cache-eviction";
+
+type SnapshotInvalidation =
+  | { sessionKey: string; reason?: SessionSnapshotInvalidationReason }
+  | { sessionKey?: undefined; reason?: undefined };
 
 type SnapshotInvalidationListener = (invalidation: SnapshotInvalidation) => void | Promise<void>;
 
@@ -32,7 +36,12 @@ function parseSnapshotInvalidation(value: string): SnapshotInvalidation {
       typeof parsed.sessionKey === "string" &&
       parsed.sessionKey
     ) {
-      return { sessionKey: parsed.sessionKey };
+      return {
+        sessionKey: parsed.sessionKey,
+        ...("reason" in parsed && parsed.reason === "cache-eviction"
+          ? { reason: "cache-eviction" as const }
+          : {}),
+      };
     }
   } catch {}
   // Counter values from older tabs carried no scope, so they still retire every snapshot.

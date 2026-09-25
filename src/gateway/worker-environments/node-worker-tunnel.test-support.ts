@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
@@ -49,6 +50,9 @@ export function environment(): WorkerEnvironmentRecord {
 
 export function transport(): NodeWorkerSupervisorTransport {
   return {
+    async getCurrentNode(nodeId) {
+      return (await this.listCurrentNodes()).find((node) => node.nodeId === nodeId);
+    },
     hasCurrentRunner: () => true,
     listCurrentNodes: async () => [
       {
@@ -115,4 +119,53 @@ export function workspaceCommandPayload(workspaceDir: string, result: Partial<Sp
     termination: "exit",
     ...result,
   });
+}
+
+export function manifestCaptureOutput(manifestRef: string): string {
+  return JSON.stringify({
+    version: 1,
+    manifestRef,
+    memo: [],
+    metrics: {
+      contentHashCount: 0,
+      contentHashDurationMs: 0,
+      memoHitCount: 0,
+      memoTruncatedCount: 0,
+      totalDurationMs: 0,
+    },
+  });
+}
+
+export function seedNodeWorkspaceRepositories(
+  localPath: string,
+  remoteWorkspaceDir: string,
+): string {
+  const git = (args: string[]) =>
+    execFileSync("git", args, {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+        GIT_CONFIG_NOSYSTEM: "1",
+      },
+    }).trim();
+  git(["init", "--quiet", localPath]);
+  git(["-C", localPath, "add", "."]);
+  git([
+    "-C",
+    localPath,
+    "-c",
+    "user.name=Memo Test",
+    "-c",
+    "user.email=memo@example.invalid",
+    "-c",
+    "commit.gpgSign=false",
+    "commit",
+    "--quiet",
+    "-m",
+    "base",
+  ]);
+  const baseCommit = git(["-C", localPath, "rev-parse", "HEAD"]);
+  git(["clone", "--quiet", localPath, remoteWorkspaceDir]);
+  return baseCommit;
 }

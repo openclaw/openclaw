@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { redactToolDetail, redactToolPayloadText } from "./browser-redact.ts";
 
 describe("browser tool detail redaction", () => {
-  it("redacts tool detail credential families without Node config imports", () => {
+  it("redacts credentials while preserving diagnostic paths", () => {
     const redacted = redactToolDetail(
       [
         "Authorization: Basic dXNlcjpzdXBlcnNlY3JldHBhc3N3b3Jk",
@@ -28,7 +28,6 @@ describe("browser tool detail redaction", () => {
     expect(redacted).toContain("[redacted private key]");
     expect(redacted).toContain("cookie: [redacted]");
     expect(redacted).toContain("Bearer [redacted]");
-    expect(redacted).toContain("[redacted path]");
     expect(redacted).not.toContain("supersecretpassword");
     expect(redacted).not.toContain("longOAuthRefreshTokenValue");
     expect(redacted).not.toContain("clientSecretValueThatShouldNotRender");
@@ -39,7 +38,7 @@ describe("browser tool detail redaction", () => {
     expect(redacted).not.toContain("abc123");
     expect(redacted).not.toContain("verySensitiveCookieValue");
     expect(redacted).not.toContain("abcdefghijkl");
-    expect(redacted).not.toContain("/Users/alice/private/config.json");
+    expect(redacted).toContain("/Users/alice/private/config.json");
     for (const masked of ["fw-CCC...CCCC", "fw_AAA...AAAA", "fpk_BB...BBBB"]) {
       expect(redactToolDetail(masked)).toBe(masked);
     }

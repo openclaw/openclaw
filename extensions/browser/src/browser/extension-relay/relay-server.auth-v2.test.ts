@@ -3,8 +3,8 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { WebSocket, type RawData } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { WebSocket, type RawData } from "ws";
 import {
   createRelayProof,
   randomRelayNonce,
@@ -20,7 +20,6 @@ import {
   getBrowserRelayAuthV2Authority,
   invalidateBrowserRelayAuthV2Authority,
   parseRelayAuthHello,
-  parseStrictJsonObject,
 } from "./auth-v2.js";
 import { RawHttpConnection } from "./relay-http.test-support.js";
 import {
@@ -28,6 +27,7 @@ import {
   startExtensionRelayServer,
   type ExtensionRelayHandle,
 } from "./relay-server.js";
+import { parseStrictJsonObject } from "./strict-json.js";
 
 const KEY = "0123456789abcdef".repeat(4);
 const SOURCE = "127.0.0.1";

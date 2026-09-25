@@ -26,12 +26,14 @@ The older Coding Plan does not include these models. `qwen3.7-max` and
 
 ## Install plugin
 
-`qwen` ships as an official external plugin, not bundled with core. Install it and restart Gateway:
+`qwen` ships as an official external plugin, not bundled with core. Install it:
 
 ```bash
 openclaw plugins install @openclaw/qwen-provider
-openclaw gateway restart
 ```
+
+Installation applies to a running Gateway automatically; otherwise it takes effect
+on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 ## Getting started
 
@@ -267,6 +269,9 @@ included here because they use different APIs.
 | `qwen-token-plan/MiniMax-M2.5`     | text        | 196,608   | visible       |
 
 ## Thinking controls
+
+Agent runs and standalone completions use the same model-specific thinking
+controls, including Token Plan tool-choice and reasoning-replay requirements.
 
 `qwen3.8-max` and `qwen3.8-flash` support `off`, `low`, `medium`, and `xhigh`
 thinking, with `xhigh` as the default. `minimal` maps to `low`; `high` and `max`

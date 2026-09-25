@@ -1,6 +1,6 @@
 // Qa Matrix plugin module implements shared CLI scenario runtime E2EE behavior.
 import { randomUUID } from "node:crypto";
-import { chmod, mkdir, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { MatrixVerificationSummary } from "@openclaw/matrix/test-api.js";
 import { createMatrixQaClient } from "../substrate/client.js";
@@ -76,40 +76,21 @@ export function isMatrixQaCliBackupUsable(
   );
 }
 
-function parseMatrixQaCliJsonText(text: string): unknown {
-  const candidate = text.trim();
-  if (!candidate) {
-    throw new Error("no JSON payload found");
-  }
-  return JSON.parse(candidate) as unknown;
-}
-
 export function parseMatrixQaCliJson(result: MatrixQaCliRunResult): unknown {
   const stdout = result.stdout.trim();
   const stderr = result.stderr.trim();
-  if (stdout) {
-    try {
-      return parseMatrixQaCliJsonText(stdout);
-    } catch (error) {
-      throw new Error(
-        `${formatMatrixQaCliCommand(result.args)} printed invalid JSON: ${
-          error instanceof Error ? error.message : String(error)
-        }\nstdout:\n${redactMatrixQaCliOutput(stdout)}`,
-        { cause: error },
-      );
-    }
-  }
-
-  if (!stderr) {
+  // Nonempty stdout is authoritative, including malformed failure payloads.
+  const payload = stdout || stderr;
+  if (!payload) {
     throw new Error(`${formatMatrixQaCliCommand(result.args)} did not print JSON`);
   }
   try {
-    return parseMatrixQaCliJsonText(stderr);
+    return JSON.parse(payload) as unknown;
   } catch (error) {
     throw new Error(
       `${formatMatrixQaCliCommand(result.args)} printed invalid JSON: ${
         error instanceof Error ? error.message : String(error)
-      }\nstderr:\n${redactMatrixQaCliOutput(stderr)}`,
+      }\n${stdout ? "stdout" : "stderr"}:\n${redactMatrixQaCliOutput(payload)}`,
       { cause: error },
     );
   }
@@ -220,14 +201,17 @@ export async function writeMatrixQaCliOutputArtifacts(params: {
   return { stderrPath, stdoutPath };
 }
 
-export async function assertMatrixQaPrivatePathMode(pathToCheck: string, label: string) {
-  if (process.platform === "win32") {
-    return;
-  }
-  const mode = (await stat(pathToCheck)).mode & 0o777;
-  if ((mode & 0o077) !== 0) {
-    throw new Error(`${label} permissions are too broad: ${mode.toString(8)}`);
-  }
+export async function runMatrixQaSetupCliJson(
+  cli: {
+    rootDir: string;
+    run: (args: string[], timeoutMs?: number, stdin?: string) => Promise<MatrixQaCliRunResult>;
+  },
+  label: string,
+  ...args: Parameters<typeof cli.run>
+) {
+  const result = await cli.run(...args);
+  const artifacts = await writeMatrixQaCliOutputArtifacts({ label, result, rootDir: cli.rootDir });
+  return { artifacts, payload: parseMatrixQaCliJson(result), result };
 }
 
 export function assertMatrixQaCliSasMatches(params: {

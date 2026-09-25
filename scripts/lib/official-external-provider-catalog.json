@@ -19,6 +19,7 @@
           }
         ],
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/amazon-bedrock-provider",
           "npmSpec": "@openclaw/amazon-bedrock-provider",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.5.12-beta.1"
@@ -44,6 +45,7 @@
           }
         ],
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/amazon-bedrock-mantle-provider",
           "npmSpec": "@openclaw/amazon-bedrock-mantle-provider",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.5.12-beta.1"
@@ -69,6 +71,7 @@
           }
         ],
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/anthropic-vertex-provider",
           "npmSpec": "@openclaw/anthropic-vertex-provider",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.5.12-beta.1"
@@ -1537,6 +1540,66 @@
       }
     },
     {
+      "name": "@openclaw/radius-provider",
+      "description": "OpenClaw Radius model gateway provider plugin.",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "radius",
+          "label": "Radius"
+        },
+        "providers": [
+          {
+            "id": "radius",
+            "name": "Radius",
+            "docs": "/providers/radius",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "RADIUS_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "oauth",
+                "choiceId": "radius",
+                "choiceLabel": "Radius (browser sign-in)",
+                "groupId": "radius",
+                "groupLabel": "Radius",
+                "groupHint": "Browser sign-in or API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              },
+              {
+                "method": "api-key",
+                "choiceId": "radius-api-key",
+                "choiceLabel": "Radius API key",
+                "groupId": "radius",
+                "groupLabel": "Radius",
+                "groupHint": "Browser sign-in or API key",
+                "optionKey": "radiusApiKey",
+                "cliFlag": "--radius-api-key",
+                "cliOption": "--radius-api-key <key>",
+                "cliDescription": "Radius organization API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              }
+            ]
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/radius-provider",
+          "npmSpec": "@openclaw/radius-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.9.4"
+        }
+      }
+    },
+    {
       "name": "@openclaw/fireworks-provider",
       "description": "OpenClaw Fireworks provider plugin",
       "source": "official",
@@ -1774,6 +1837,57 @@
           "npmSpec": "@openclaw/tencent-provider",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.6.9"
+        }
+      }
+    },
+    {
+      "name": "@telnyx/openclaw-provider",
+      "description": "Official Telnyx AI inference provider plugin for OpenClaw.",
+      "source": "external",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "telnyx",
+          "label": "Telnyx"
+        },
+        "providers": [
+          {
+            "id": "telnyx",
+            "name": "Telnyx",
+            "docs": "/providers/telnyx",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "TELNYX_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "telnyx-api-key",
+                "choiceLabel": "Telnyx API key",
+                "choiceHint": "OpenAI-compatible Telnyx AI inference endpoint",
+                "groupId": "telnyx",
+                "groupLabel": "Telnyx",
+                "groupHint": "OpenAI-compatible Telnyx AI inference endpoint",
+                "optionKey": "telnyxApiKey",
+                "cliFlag": "--telnyx-api-key",
+                "cliOption": "--telnyx-api-key <key>",
+                "cliDescription": "Telnyx API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              }
+            ]
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@telnyx/openclaw-provider@0.2.0",
+          "npmSpec": "@telnyx/openclaw-provider@0.2.0",
+          "defaultChoice": "npm",
+          "expectedIntegrity": "sha512-htqOJfPx+TlLWE/nmpdJJVgrg8zDqRIX87smzY3CnKcdJPlx51Rc1kWzarvE+2hvhpm2lzD5sKkxRSIWKz2AaA==",
+          "minHostVersion": ">=2026.8.1"
         }
       }
     },
@@ -2083,7 +2197,8 @@
           {
             "endpointClass": "zai-native",
             "hosts": [
-              "api.z.ai"
+              "api.z.ai",
+              "open.bigmodel.cn"
             ]
           }
         ],

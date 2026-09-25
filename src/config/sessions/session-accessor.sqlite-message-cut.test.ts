@@ -1,292 +1,96 @@
+import fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import {
-  deliveryContextFromSession,
-  normalizeSessionDeliveryState,
-} from "../../utils/delivery-context.shared.js";
+import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
   forkSessionAtMessage,
   listSessionBranches,
+  listSessionParticipantsReadOnly,
   loadSessionEntry,
   loadTranscriptEvents,
-  listSessionParticipantsReadOnly,
-  recordSessionParticipant,
   readSessionTranscriptMessageEventPage,
   readSessionTranscriptMessageEvents,
-  replaceTranscriptEvents,
   rewindSessionToMessage,
   switchSessionBranch,
   updateSessionEntry,
-  upsertSessionEntryCore,
 } from "./session-accessor.js";
+import {
+  agentId,
+  sessionKey,
+  sourceExpectedState,
+  useSessionMessageCutFixtures,
+} from "./session-accessor.sqlite-message-cut.test-support.js";
+import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { SYNC_REBUILD_MAX_BYTES } from "./session-transcript-index.js";
 import { waitForSessionTranscriptProjection } from "./session-transcript-reconcile.js";
 import type { InternalSessionEntry } from "./types.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const agentId = "main";
-const sessionKey = "agent:main:message-cut";
-const sourceExpectedState = {
-  lifecycleRevision: "source-lifecycle-revision",
-  sessionId: "message-cut-source",
-};
+const { createSession } = useSessionMessageCutFixtures();
 
 afterEach(() => {
   vi.restoreAllMocks();
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
 });
 
-function trackFullTranscriptLoads(env: NodeJS.ProcessEnv): () => number {
-  const database = openOpenClawAgentDatabase({ agentId, env });
-  const { counts } = trackSqliteStatementExecutions(database.db, ["loads"], (sqlText) =>
-    sqlText.includes('select "event_json" from "transcript_events"') &&
-    sqlText.includes('order by "seq" asc')
-      ? "loads"
-      : null,
-  );
-  return () => counts.loads;
-}
-
-async function createSiblingSession(params: {
-  env: NodeJS.ProcessEnv;
-  headline: string;
-  sessionId: string;
-  sessionKey: string;
-}) {
-  const scope = { agentId, ...params };
-  await upsertSessionEntryCore(scope, { sessionId: params.sessionId, updatedAt: Date.now() });
-  await appendTranscriptEvent(scope, {
-    type: "session",
-    id: params.sessionId,
-    version: 3,
-    timestamp: "2026-07-18T01:00:00.000Z",
-  });
-  await appendTranscriptMessage(scope, {
-    eventId: `${params.sessionId}-user`,
-    message: { role: "user", content: params.headline },
-    now: Date.parse("2026-07-18T01:00:01.000Z"),
-    parentId: null,
-  });
-  return scope;
-}
-
-async function createSession(options: { activeLeafTarget?: string } = {}) {
-  const stateDir = tempDirs.make("openclaw-message-cut-");
-  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-  const sessionId = "message-cut-source";
-  const scope = { agentId, env, sessionId, sessionKey };
-  const entry: InternalSessionEntry = {
-    agentHarnessId: "embedded",
-    claudeCliSessionId: "claude-conversation",
-    cliSessionBindings: { "claude-cli": { sessionId: "claude-conversation" } },
-    cliSessionIds: { "claude-cli": "claude-conversation" },
-    compactionCount: 2,
-    transcriptByteCompactionLatch: {
-      activeBytes: 20_000,
-      sessionId,
-      maxBytes: 10_000,
-    },
-    contextTokens: 100_000,
-    contextTokensSource: "runtime",
-    createdVia: "operator",
-    createdActor: { type: "human", source: "profile", id: "profile-1" },
-    createdAt: 1_000,
-    delivery: normalizeSessionDeliveryState({
-      context: { channel: "telegram", to: "chat-123" },
-    }),
-    forkSource: { sessionKey: "agent:main:root", sessionId: "root-session" },
-    lifecycleRevision: "source-lifecycle-revision",
-    lifecycleRunId: "source-run",
-    lastRunId: "settled-source-run",
-    modelOverride: "gpt-5",
-    modelOverrideSource: "user",
-    providerOverride: "openai",
-    sessionId,
-    updatedAt: Date.now(),
-  };
-  await upsertSessionEntryCore(scope, entry);
-  for (const event of [
-    { type: "session", id: sessionId, version: 3, timestamp: "2026-07-18T00:00:00.000Z" },
-    {
-      type: "message",
-      id: "user-1",
-      parentId: null,
-      timestamp: "2026-07-18T00:00:01.000Z",
-      message: { role: "user", content: "first prompt" },
-    },
-    {
-      type: "message",
-      id: "assistant-1",
-      parentId: "user-1",
-      timestamp: "2026-07-18T00:00:02.000Z",
-      message: { role: "assistant", content: "first answer" },
-    },
-    {
-      type: "message",
-      id: "user-2",
-      parentId: "assistant-1",
-      timestamp: "2026-07-18T00:00:03.000Z",
-      message: {
-        role: "user",
-        content: [
-          { type: "text", text: "second prompt" },
-          { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
-        ],
-        __openclaw: {
-          media: [
-            { path: "/state/media/inbound/stored-image.png", contentType: "image/png" },
-            { path: "/state/media/inbound/notes.txt", contentType: "text/plain" },
-          ],
-        },
-      },
-    },
-    {
-      type: "message",
-      id: "assistant-2",
-      parentId: "user-2",
-      timestamp: "2026-07-18T00:00:04.000Z",
-      message: { role: "assistant", content: "second answer" },
-    },
-    {
-      type: "message",
-      id: "off-path-user",
-      parentId: "user-1",
-      timestamp: "2026-07-18T00:00:05.000Z",
-      message: { role: "user", content: "inactive prompt" },
-    },
-    {
-      type: "leaf",
-      id: "active-leaf",
-      parentId: "off-path-user",
-      timestamp: "2026-07-18T00:00:06.000Z",
-      targetId: options.activeLeafTarget ?? "assistant-2",
-    },
-  ]) {
-    if (event.type === "message") {
-      await appendTranscriptMessage(scope, {
-        eventId: event.id,
-        message: event.message,
-        now: Date.parse(event.timestamp),
-        parentId: event.parentId,
-      });
-    } else {
-      await appendTranscriptEvent(scope, event);
-    }
-  }
-  return { env, scope };
-}
-
 describe("SQLite session message cuts", () => {
-  it("reuses branch summaries while the transcript watermark is unchanged", async () => {
-    const { env } = await createSession();
-    const fullTranscriptLoads = trackFullTranscriptLoads(env);
-
-    const first = await listSessionBranches({ agentId, env, sessionKey });
-    expect(fullTranscriptLoads()).toBe(1);
-
-    const second = await listSessionBranches({ agentId, env, sessionKey });
-    expect(second).toEqual(first);
-    expect(fullTranscriptLoads()).toBe(1);
-    if (second.status !== "ok" || !second.branches[0]) {
-      throw new Error("expected cached branch list result");
-    }
-    second.branches[0].headline = "caller mutation";
-
-    await expect(listSessionBranches({ agentId, env, sessionKey })).resolves.toEqual(first);
-    expect(fullTranscriptLoads()).toBe(1);
-  });
-
-  it("recomputes branch summaries after an append advances the watermark", async () => {
-    const { env, scope } = await createSession();
-    const fullTranscriptLoads = trackFullTranscriptLoads(env);
-
-    const before = await listSessionBranches({ agentId, env, sessionKey });
-    expect(fullTranscriptLoads()).toBe(1);
-    await appendTranscriptMessage(scope, {
-      eventId: "assistant-3",
-      message: { role: "assistant", content: "third answer" },
-      now: Date.parse("2026-07-18T00:00:07.000Z"),
-      parentId: "assistant-2",
-    });
-
-    const after = await listSessionBranches({ agentId, env, sessionKey });
-    expect(fullTranscriptLoads()).toBe(2);
-    expect(after).not.toEqual(before);
-    expect(after.status).toBe("ok");
-    if (after.status !== "ok") {
-      throw new Error("expected branch list result");
-    }
-    expect(after.branches.find((branch) => branch.active)).toMatchObject({
-      leafEntryId: "assistant-3",
-      headline: "third answer",
-    });
-  });
-
-  it.each(["rewind", "switch", "fork"] as const)(
-    "%s invalidates the source cache and lists the resulting branch",
+  it.each(["rewind", "fork"] as const)(
+    "returns authored text, not attached context, on %s",
     async (mode) => {
       const { env, scope } = await createSession();
-      const aliasKey = `${sessionKey}:alias`;
-      const targetKey = `${sessionKey}:fork`;
-      const sourceEntry = loadSessionEntry(scope);
-      if (!sourceEntry) {
-        throw new Error("expected source session entry");
-      }
-      await upsertSessionEntryCore({ agentId, env, sessionKey: aliasKey }, sourceEntry);
-      const fullTranscriptLoads = trackFullTranscriptLoads(env);
-      await listSessionBranches({ agentId, env, sessionKey });
-
+      const text = "Edit only these words";
+      const snapshot = { page: "chat", title: "Captured work" };
+      await appendTranscriptMessage(scope, {
+        eventId: "context-input",
+        parentId: "assistant-2",
+        message: {
+          role: "user",
+          content: text + "\n\nWorking context captured at send time. " + JSON.stringify(snapshot),
+          __openclaw: { workContext: { snapshot, text } },
+        },
+        now: Date.now(),
+      });
+      const params = { agentId, env, sessionKey, entryId: "context-input" };
       const result =
         mode === "rewind"
-          ? await rewindSessionToMessage({
-              agentId,
-              env,
-              entryId: "user-2",
-              sessionKey,
-            })
-          : mode === "switch"
-            ? await switchSessionBranch({
-                agentId,
-                env,
-                leafEntryId: "off-path-user",
-                sessionKey,
-              })
-            : await forkSessionAtMessage({
-                agentId,
-                env,
-                entryId: "user-2",
-                sessionKey,
-                targetKey,
-              });
-      expect(result.status).toBe("created");
-
-      const loadsBeforeAliasRead = fullTranscriptLoads();
-      await listSessionBranches({ agentId, env, sessionKey: aliasKey });
-      expect(fullTranscriptLoads()).toBe(loadsBeforeAliasRead + 1);
-
-      const listed = await listSessionBranches({
-        agentId,
-        env,
-        sessionKey: mode === "fork" ? targetKey : sessionKey,
-      });
-      expect(listed.status).toBe("ok");
-      if (listed.status !== "ok") {
-        throw new Error("expected branch list result");
-      }
-      expect(listed.branches.find((branch) => branch.active)).toMatchObject({
-        leafEntryId: mode === "switch" ? "off-path-user" : "assistant-1",
-      });
+          ? await rewindSessionToMessage(params)
+          : await forkSessionAtMessage({ ...params, targetKey: sessionKey + ":context-fork" });
+      expect(result).toMatchObject({ status: "created", editorText: text });
     },
   );
+
+  it("drains fixture resources before retiring native handles and removing the root", async ({
+    onTestFinished,
+  }) => {
+    const { env } = await createSession();
+    const agentDatabase = openOpenClawAgentDatabase({ agentId, env });
+    const stateDatabase = openOpenClawStateDatabase({ env });
+    const closingSnapshots: Array<{ agentOpen: boolean; stateOpen: boolean; rootExists: boolean }> =
+      [];
+    registerOpenClawAgentDatabaseAsyncResource({
+      agentId,
+      path: agentDatabase.path,
+      revoke: () => {},
+      close: async () => {
+        await Promise.resolve();
+        closingSnapshots.push({
+          agentOpen: agentDatabase.db.isOpen,
+          stateOpen: stateDatabase.db.isOpen,
+          rootExists: fs.existsSync(env.OPENCLAW_STATE_DIR),
+        });
+      },
+    });
+
+    // Inspect real fixture teardown after both consumer and helper afterEach hooks run.
+    onTestFinished(() => {
+      expect(closingSnapshots).toEqual([{ agentOpen: true, stateOpen: true, rootExists: true }]);
+      expect(agentDatabase.db.isOpen).toBe(false);
+      expect(stateDatabase.db.isOpen).toBe(false);
+      expect(fs.existsSync(env.OPENCLAW_STATE_DIR)).toBe(false);
+    });
+  });
 
   it.each(["rewind", "switch", "fork"] as const)(
     "rejects %s when the source lifecycle changes in the writer queue",
@@ -351,148 +155,6 @@ describe("SQLite session message cuts", () => {
     },
   );
 
-  it("keeps branch summaries isolated between sessions in the same store", async () => {
-    const { env } = await createSession();
-    const sibling = await createSiblingSession({
-      env,
-      headline: "sibling prompt",
-      sessionId: "message-cut-sibling",
-      sessionKey: `${sessionKey}:sibling`,
-    });
-    const fullTranscriptLoads = trackFullTranscriptLoads(env);
-
-    const source = await listSessionBranches({ agentId, env, sessionKey });
-    const other = await listSessionBranches(sibling);
-    expect(fullTranscriptLoads()).toBe(2);
-    expect(source.status).toBe("ok");
-    if (source.status !== "ok") {
-      throw new Error("expected source branch list result");
-    }
-    expect(source.branches.find((branch) => branch.active)).toMatchObject({
-      leafEntryId: "assistant-2",
-      headline: "second answer",
-    });
-    expect(other).toEqual({
-      status: "ok",
-      branches: [
-        {
-          active: true,
-          headline: "sibling prompt",
-          leafEntryId: "message-cut-sibling-user",
-          messageCount: 1,
-          updatedAt: "2026-07-18T01:00:01.000Z",
-        },
-      ],
-    });
-    await expect(listSessionBranches({ agentId, env, sessionKey })).resolves.toEqual(source);
-    expect(fullTranscriptLoads()).toBe(2);
-  });
-
-  it("lists every DAG tip with active state, headline, count, and timestamp", async () => {
-    const { env } = await createSession({ activeLeafTarget: "assistant-1" });
-
-    await expect(listSessionBranches({ agentId, env, sessionKey })).resolves.toEqual({
-      status: "ok",
-      branches: [
-        {
-          leafEntryId: "assistant-1",
-          headline: "first answer",
-          messageCount: 2,
-          updatedAt: "2026-07-18T00:00:02.000Z",
-          active: true,
-        },
-        {
-          leafEntryId: "off-path-user",
-          headline: "inactive prompt",
-          messageCount: 2,
-          updatedAt: "2026-07-18T00:00:05.000Z",
-          active: false,
-        },
-        {
-          leafEntryId: "assistant-2",
-          headline: "second answer",
-          messageCount: 4,
-          updatedAt: "2026-07-18T00:00:04.000Z",
-          active: false,
-        },
-      ],
-    });
-  });
-
-  it("summarizes a large shared branch graph without repeated path walks", async () => {
-    const stateDir = tempDirs.make("openclaw-large-branches-");
-    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-    const sessionId = "large-branches-source";
-    const scope = { agentId, env, sessionId, sessionKey };
-    await upsertSessionEntryCore(scope, { sessionId, updatedAt: Date.now() });
-    const events: Parameters<typeof replaceTranscriptEvents>[1] = [
-      {
-        type: "session",
-        id: sessionId,
-        version: 3,
-        timestamp: "2026-08-30T00:00:00.000Z",
-      },
-      {
-        type: "message",
-        id: "orphan-user",
-        parentId: "missing-ancestor",
-        timestamp: "2026-08-30T00:00:01.000Z",
-        message: { role: "user", content: "orphan prompt" },
-      },
-      {
-        type: "message",
-        id: "orphan-assistant",
-        parentId: "orphan-user",
-        timestamp: "2026-08-30T00:00:02.000Z",
-        message: { role: "assistant", content: "orphan answer" },
-      },
-    ];
-    for (let index = 1; index <= 12_554; index += 1) {
-      events.push({
-        type: "message",
-        id: `main-${index}`,
-        parentId: index === 1 ? null : `main-${index - 1}`,
-        timestamp: new Date(Date.UTC(2026, 7, 30, 0, 0, index)).toISOString(),
-        message: { role: index % 2 === 0 ? "assistant" : "user", content: `main ${index}` },
-      });
-    }
-    for (let index = 1; index <= 1_360; index += 1) {
-      events.push({
-        type: "message",
-        id: `side-${index}`,
-        parentId: "main-5376",
-        appendMode: "side",
-        timestamp: new Date(Date.UTC(2026, 7, 30, 1, 0, index)).toISOString(),
-        message: { role: "assistant", content: `side ${index}` },
-      });
-    }
-    events.push({
-      type: "leaf",
-      id: "active-leaf",
-      parentId: "main-12554",
-      targetId: "main-12554",
-      timestamp: "2026-08-30T02:00:02.000Z",
-    });
-    await replaceTranscriptEvents(scope, events);
-
-    const startedAt = performance.now();
-    const result = await listSessionBranches({ agentId, env, sessionKey });
-    const elapsedMs = performance.now() - startedAt;
-    expect(result.status).toBe("ok");
-    if (result.status !== "ok") {
-      throw new Error("expected branch list result");
-    }
-    expect(elapsedMs).toBeLessThan(1_000);
-    expect(result.branches).toHaveLength(1_362);
-    expect(result.branches.find((branch) => branch.leafEntryId === "orphan-assistant")).toEqual({
-      leafEntryId: "orphan-assistant",
-      headline: "orphan answer",
-      messageCount: 2,
-      updatedAt: "2026-08-30T00:00:02.000Z",
-      active: false,
-    });
-  }, 15_000);
-
   it("switches to another tip and rebuilds the active-path projection", async () => {
     const { env } = await createSession();
 
@@ -542,7 +204,18 @@ describe("SQLite session message cuts", () => {
   });
 
   it("rewinds by repointing the active leaf and returns the editor text", async () => {
-    const { env } = await createSession();
+    const { env, scope } = await createSession();
+    const legacyCheckpoints = [
+      {
+        sessionId: scope.sessionId,
+        preCompaction: { sessionId: scope.sessionId },
+        postCompaction: { sessionId: scope.sessionId },
+      },
+    ];
+    await updateSessionEntry(scope, (entry) => ({
+      ...entry,
+      compactionCheckpoints: legacyCheckpoints,
+    }));
 
     const result = await rewindSessionToMessage({
       agentId,
@@ -570,6 +243,7 @@ describe("SQLite session message cuts", () => {
       ).totalMessages,
     ).toBe(2);
     expect(loadSessionEntry({ agentId, env, sessionKey })?.sessionId).toBe(result.entry.sessionId);
+    expect(loadSessionEntry(scope)).toHaveProperty("compactionCheckpoints", legacyCheckpoints);
     expect(result.entry).toMatchObject({
       agentHarnessId: undefined,
       claudeCliSessionId: undefined,
@@ -654,6 +328,17 @@ describe("SQLite session message cuts", () => {
 
   it("forks an exact active-path prefix without changing the source", async () => {
     const { env, scope } = await createSession();
+    const legacyCheckpoints = [
+      {
+        sessionId: scope.sessionId,
+        preCompaction: { sessionId: scope.sessionId },
+        postCompaction: { sessionId: scope.sessionId },
+      },
+    ];
+    await updateSessionEntry(scope, (entry) => ({
+      ...entry,
+      compactionCheckpoints: legacyCheckpoints,
+    }));
     const canonicalSourceKey = "agent:main:canonical-message-cut-source";
     const targetKey = "agent:main:dashboard:message-cut-fork";
     recordSessionParticipant(scope, {
@@ -695,6 +380,10 @@ describe("SQLite session message cuts", () => {
       ),
     ).toEqual([result.entry.sessionId, "user-1", "assistant-1"]);
     expect(loadSessionEntry(scope)?.sessionId).toBe(scope.sessionId);
+    expect(loadSessionEntry(scope)).toHaveProperty("compactionCheckpoints", legacyCheckpoints);
+    expect(loadSessionEntry({ agentId, env, sessionKey: targetKey })).not.toHaveProperty(
+      "compactionCheckpoints",
+    );
     expect(listSessionParticipantsReadOnly({ agentId, env }).get(targetKey)).toBeUndefined();
     expect(listSessionParticipantsReadOnly({ agentId, env }).get(sessionKey)).toEqual([
       {

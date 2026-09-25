@@ -1,8 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type {
-  OpenClawPluginApi,
-  OpenClawPluginServiceContext,
-} from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginServiceContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { TeamReportsConfig } from "./config.js";
 import { DAY_MS, describePeriod } from "./periods.js";
 import {
@@ -13,6 +10,7 @@ import {
   type ResolvedTeamReportsConfig,
 } from "./run.js";
 import type { TeamReportsStore } from "./store.js";
+import type { SummaryLlm } from "./summaries.js";
 import type { Person, PeriodDescriptor, SourceStatus } from "./types.js";
 
 const RUN_DEADLINE_MS = 45 * 60_000;
@@ -61,7 +59,7 @@ export class TeamReportsScheduler {
       config: TeamReportsConfig;
       resolved: ResolvedTeamReportsConfig;
       store: TeamReportsStore;
-      llm: OpenClawPluginApi["runtime"]["llm"];
+      llm: SummaryLlm;
       context: Pick<OpenClawPluginServiceContext, "logger" | "serviceHealth">;
       sources?: ReportSourceFactory;
     },
@@ -112,7 +110,7 @@ export class TeamReportsScheduler {
       nextDue: { ...this.due },
       runs: await this.options.store.listRuns(),
       periods: await this.options.store.listPeriods(),
-      sourceWarnings: await this.sourceWarnings(),
+      sourceWarnings: await this.options.store.latestSourceWarnings(),
     };
   }
 
@@ -136,19 +134,8 @@ export class TeamReportsScheduler {
           }
         : {}),
       ...(due.length ? { nextDueMs: Math.min(...due) } : {}),
-      warnings: (await this.sourceWarnings()).length,
+      warnings: (await this.options.store.latestSourceWarnings()).length,
     };
-  }
-
-  private async sourceWarnings(): Promise<string[]> {
-    const latest = (await this.options.store.listPeriods({ period: "day", limit: 1 }))[0];
-    const stored = latest ? await this.options.store.getPeriod("day", latest.key) : undefined;
-    return stored
-      ? stored.report.sources.github.warnings.concat(
-          stored.report.sources.discord?.warnings ?? [],
-          stored.summary?.warnings ?? [],
-        )
-      : [];
   }
 
   async generate(params: { date?: string; intraday?: boolean } = {}): Promise<string> {
@@ -322,10 +309,12 @@ export class TeamReportsScheduler {
           await this.options.store.prune(this.options.config.retention.days);
           controller.signal.throwIfAborted();
         }
-        const failed = Object.values(stats).some((source) => !source.ok);
-        if (failed) {
+        const failed = Object.entries(stats)
+          .filter(([, source]) => !source.ok)
+          .map(([sourceId]) => sourceId);
+        if (failed.length > 0) {
           throw new Error(
-            "An activity source failed; inspect report source warnings and check access",
+            `Activity sources failed (${failed.join(", ")}); inspect run source warnings and check access`,
           );
         }
         await this.options.store.finishRun(id, { status: "ok", finishedAtMs: Date.now(), stats });

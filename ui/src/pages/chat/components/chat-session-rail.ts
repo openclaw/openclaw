@@ -1,3 +1,4 @@
+import "../../../styles/chat/session-rail.css";
 import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import { ref } from "lit/directives/ref.js";
@@ -12,16 +13,26 @@ import { renderPanelLoadingSkeleton } from "../../../components/panel-loading-sk
 import "../../../components/tooltip.ts";
 import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
-import { formatDurationCompact, formatTimeAgo, formatTimeMs } from "../../../lib/format.ts";
+import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
+import { formatDurationCompact } from "../../../lib/format-duration.ts";
+import { formatTimeAgo, formatTimeMs } from "../../../lib/format.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import {
   type ChatObserverDisplayPreference,
   loadChatObserverDisplayPreference,
   storeChatObserverDisplayPreference,
 } from "../chat-observer-display.ts";
-import type { ChatSessionCompanionThread } from "../chat-session-companion.ts";
+import type {
+  ChatSessionCompanionThread,
+  ChatSessionCompanionTurn,
+} from "../chat-session-companion.ts";
+import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
+import { createChatAttachmentDropHandlers } from "./chat-attachments.ts";
 import { renderMessageMarkdown } from "./chat-message-text.ts";
-import { createSessionRailComposer } from "./chat-session-rail-composer.ts";
+import {
+  createSessionRailComposer,
+  renderSessionRailComposer,
+} from "./chat-session-rail-composer.ts";
 
 export type SessionRailMode = "hidden" | "pill" | "expanded";
 
@@ -186,32 +197,18 @@ function checksSummary(pullRequest: ControlUiSessionPullRequest): string | null 
 
 const SESSION_RAIL_STARTER_KEYS = ["changed", "stopped", "remaining"] as const;
 
-function companionHasActivity(thread: ChatSessionCompanionThread): boolean {
-  return (
-    thread.exchanges.length > 0 ||
-    thread.pendingQuestion !== null ||
-    thread.failedQuestion !== null ||
-    thread.draft.length > 0
-  );
-}
-
 const COMPANION_HINT_KEYS = {
   busy: "chat.rail.askBusy",
   "history-unavailable": "chat.rail.askHistoryUnavailable",
   missing: "chat.rail.askMissing",
   "model-unavailable": "chat.rail.askModelUnavailable",
+  "image-unsupported": "chat.rail.askImageUnsupported",
   "rate-limited": "chat.rail.askRateLimited",
   unavailable: "chat.rail.askUnavailable",
 } as const satisfies Record<
-  NonNullable<ChatSessionCompanionThread["hint"]>,
+  Extract<ChatSessionCompanionTurn, { status: "failed" }>["hint"],
   Parameters<typeof t>[0]
 >;
-
-function companionHintKey(
-  hint: NonNullable<ChatSessionCompanionThread["hint"]>,
-): Parameters<typeof t>[0] {
-  return COMPANION_HINT_KEYS[hint];
-}
 
 export class ChatSessionRailElement extends OpenClawLightDomElement {
   @property({ attribute: false }) sessionKey = "";
@@ -222,12 +219,8 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
   @property({ attribute: false }) lastReadAt?: number;
   @property({ attribute: false }) pullRequests: ControlUiSessionPullRequest[] = [];
   @property({ attribute: false }) companion: ChatSessionCompanionThread = {
-    exchanges: [],
+    turns: [],
     loading: false,
-    pendingQuestion: null,
-    failedQuestion: null,
-    hint: null,
-    retryable: false,
     draft: "",
   };
   @property({ attribute: false }) connected = false;
@@ -235,12 +228,16 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
   @property({ attribute: false }) command: SessionRailCommand | null = null;
   @property({ attribute: false }) consumedCommandGeneration = 0;
   @property({ attribute: false }) onCommandConsumed?: (generation: number) => void;
-  @property({ attribute: false }) onSubmit?: (question: string) => void;
+  @property({ attribute: false }) onSubmit?: (question: string | ChatSessionCompanionTurn) => void;
   @property({ attribute: false }) onDraftChange?: (draft: string) => void;
+  @property({ attribute: false }) onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
+  @property({ attribute: false })
+  attachmentLimits?: ChatAttachmentControlsProps["attachmentLimits"];
   @property({ attribute: false }) onModeChange?: (mode: SessionRailMode) => void;
   @property({ attribute: false }) onVisibilityChange?: (visible: boolean) => void;
   @property({ type: Boolean }) embedded = false;
   @property({ type: Boolean }) presented = false;
+  @property({ attribute: false }) focusRequest?: () => boolean;
   @state() private now = Date.now();
 
   private readonly railState = new ChatSessionRailState();
@@ -304,9 +301,11 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
   }
 
   override updated(changedProperties: PropertyValues<this>) {
-    // Retained tabs stay mounted while hidden. Only a presentation edge owns
-    // focus; history, replies, and reconnects must not interrupt another input.
-    if (changedProperties.has("presented") && this.presented) {
+    // The pane owns focus intent across lazy mounting and retained tab presentation.
+    const focusRequested = changedProperties.has("focusRequest")
+      ? this.focusRequest?.()
+      : undefined;
+    if (this.presented && focusRequested) {
       this.querySelector<HTMLTextAreaElement>(".chat-session-rail__input:not(:disabled)")?.focus({
         preventScroll: true,
       });
@@ -328,7 +327,7 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
       activeRunId: this.activeRunId,
       digest: this.digest,
       lastReadAt: this.lastReadAt,
-      hasCompanionActivity: companionHasActivity(this.companion),
+      hasCompanionActivity: this.companion.turns.length > 0 || this.companion.draft.length > 0,
     };
   }
 
@@ -366,11 +365,17 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
   }
 
   private submit() {
-    const question = this.companion.draft.trim();
-    if (!question || !this.connected || this.companion.pendingQuestion || !this.onSubmit) {
-      return;
+    const question =
+      this.companion.draft.trim() ||
+      (this.companion.attachments?.length ? t("chat.rail.askImageQuestion") : "");
+    if (
+      question &&
+      this.connected &&
+      !this.companion.attachmentReads?.pendingReads &&
+      !this.companion.turns.some((turn) => turn.status === "pending")
+    ) {
+      this.onSubmit?.(question);
     }
-    this.onSubmit(question);
   }
 
   private renderStatus(digest: SessionObserverDigest): TemplateResult {
@@ -422,65 +427,12 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
     `;
   }
 
-  private renderDigestDetails(digest: SessionObserverDigest | null) {
-    if (!digest) {
-      return nothing;
-    }
-    return html`
-      ${
-        digest.assessment
-          ? html`<p class="chat-session-rail__assessment">${digest.assessment}</p>`
-          : nothing
-      }
-      ${this.renderPullRequests()}
-    `;
-  }
-
-  private renderQuestion(question: string) {
-    return html`
-      <div class="chat-group user chat-session-rail__message">
-        <div class="chat-bubble chat-session-rail__question">
-          ${renderMessageMarkdown(
-            question,
-            question,
-            { role: "user", isStreaming: false },
-            { codeBlockChrome: "none", codeBlockInteraction: "static" },
-          )}
-        </div>
-      </div>
-    `;
-  }
-
-  private renderExchange(question: string, answer: string, ts: number) {
-    return html`
-      <article class="chat-session-rail__exchange">
-        ${this.renderQuestion(question)}
-        <div class="chat-group assistant chat-session-rail__message">
-          <div class="chat-bubble chat-session-rail__answer">
-            ${renderMessageMarkdown(
-              answer,
-              String(ts),
-              { role: "assistant", isStreaming: false },
-              { codeBlockInteraction: "interactive" },
-            )}
-          </div>
-        </div>
-        <time class="chat-session-rail__timestamp" datetime=${new Date(ts).toISOString()}>
-          ${t("chat.rail.asOf", {
-            time: formatTimeMs(ts, { hour: "numeric", minute: "2-digit" }, ""),
-          })}
-        </time>
-      </article>
-    `;
-  }
-
   /**
    * The empty state is the only place the companion explains its scope, so it
    * shows openers it can actually answer from the transcript and the project
    * files it may read, rather than a sentence about being read-only.
    */
   private renderStarters() {
-    const disabled = !this.connected || this.companion.pendingQuestion !== null;
     return html`
       <div class="chat-session-rail__starters">
         ${SESSION_RAIL_STARTER_KEYS.map((key) => {
@@ -489,7 +441,7 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
             <button
               class="chip chat-session-rail__starter"
               type="button"
-              ?disabled=${disabled}
+              ?disabled=${!this.connected}
               @click=${() => this.onSubmit?.(question)}
             >
               ${icons.spark}<span>${question}</span>
@@ -500,8 +452,9 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
     `;
   }
 
-  private renderThread() {
-    const scrollKey = `${this.companion.exchanges.length}:${this.companion.pendingQuestion ?? ""}:${this.companion.failedQuestion ?? ""}`;
+  private renderThread(pending: boolean) {
+    const { turns } = this.companion;
+    const scrollKey = JSON.stringify(turns.map((turn) => [turn.question, turn.status]));
     const syncScroll = (element: Element | undefined) => {
       if (!(element instanceof HTMLElement) || element.dataset.railScrollKey === scrollKey) {
         return;
@@ -518,15 +471,12 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
         ${ref(syncScroll)}
       >
         ${
-          this.companion.loading && this.companion.exchanges.length === 0
+          this.companion.loading && turns.length === 0
             ? renderPanelLoadingSkeleton("chat", t("chat.thread.loading"))
             : nothing
         }
         ${
-          !this.companion.loading &&
-          this.companion.exchanges.length === 0 &&
-          !this.companion.pendingQuestion &&
-          !(this.companion.failedQuestion && this.companion.hint)
+          !this.companion.loading && turns.length === 0
             ? renderPanelEmptyState({
                 icon: icons.bot,
                 heading: t("chat.sidePanel.companion"),
@@ -534,50 +484,96 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
               })
             : nothing
         }
-        ${this.companion.exchanges.map((exchange) =>
-          this.renderExchange(exchange.question, exchange.answer, exchange.ts),
+        ${turns.map(
+          (turn) => html`
+            <article
+              class="chat-session-rail__exchange ${turn.status === "pending" ? "chat-session-rail__exchange--pending" : turn.status === "failed" ? "chat-session-rail__exchange--error" : ""}"
+            >
+              <div class="chat-group user chat-session-rail__message">
+                <div class="chat-bubble chat-session-rail__question">
+                  ${renderMessageMarkdown(
+                    turn.question,
+                    turn.question,
+                    { role: "user", isStreaming: false },
+                    { codeBlockChrome: "none", codeBlockInteraction: "static" },
+                  )}
+                </div>
+              </div>
+              ${
+                turn.status === "answered"
+                  ? html`
+                      <div class="chat-group assistant chat-session-rail__message">
+                        <div class="chat-bubble chat-session-rail__answer">
+                          ${renderMessageMarkdown(
+                            turn.answer,
+                            String(turn.ts),
+                            { role: "assistant", isStreaming: false },
+                            { codeBlockInteraction: "interactive" },
+                          )}
+                        </div>
+                      </div>
+                      <time
+                        class="chat-session-rail__timestamp"
+                        datetime=${new Date(turn.ts).toISOString()}
+                      >
+                        ${t("chat.rail.asOf", {
+                          time: formatTimeMs(turn.ts, { hour: "numeric", minute: "2-digit" }, ""),
+                        })}
+                      </time>
+                    `
+                  : html`
+                      <div class="chat-session-rail__hint">
+                        ${t(turn.status === "pending" ? "chat.rail.askPending" : COMPANION_HINT_KEYS[turn.hint])}
+                      </div>
+                      ${
+                        turn.status === "failed" &&
+                        turn.retryable &&
+                        this.connected &&
+                        this.onSubmit
+                          ? html`<button
+                              class="btn btn--secondary chat-session-rail__retry"
+                              type="button"
+                              ?disabled=${pending}
+                              @click=${() => this.onSubmit?.(turn)}
+                            >
+                              ${t("chat.rail.askRetry")}
+                            </button>`
+                          : nothing
+                      }
+                    `
+              }
+            </article>
+          `,
         )}
-        ${
-          this.companion.failedQuestion && this.companion.hint
-            ? html`
-                <article class="chat-session-rail__exchange chat-session-rail__exchange--error">
-                  ${this.renderQuestion(this.companion.failedQuestion)}
-                  <div class="chat-session-rail__hint">
-                    ${t(companionHintKey(this.companion.hint))}
-                  </div>
-                  ${
-                    this.companion.retryable && this.connected && this.onSubmit
-                      ? html`
-                          <button
-                            class="btn btn--secondary chat-session-rail__retry"
-                            type="button"
-                            @click=${() => this.onSubmit?.(this.companion.failedQuestion ?? "")}
-                          >
-                            ${t("chat.rail.askRetry")}
-                          </button>
-                        `
-                      : nothing
-                  }
-                </article>
-              `
-            : nothing
-        }
-        ${
-          this.companion.pendingQuestion
-            ? html`
-                <article class="chat-session-rail__exchange chat-session-rail__exchange--pending">
-                  ${this.renderQuestion(this.companion.pendingQuestion)}
-                  <div class="chat-session-rail__hint">${t("chat.rail.askPending")}</div>
-                </article>
-              `
-            : nothing
-        }
       </div>
     `;
   }
 
   override render() {
     this.composer.syncDraft(this.companion.draft);
+    const companion = this.companion;
+    const reads = companion.attachmentReads;
+    const readSignal = reads?.readSignal;
+    const attachmentProps: ChatAttachmentControlsProps = {
+      attachments: companion.attachments,
+      getAttachments: () => companion.attachments ?? [],
+      attachmentReads: reads,
+      readSignal,
+      attachmentLimits: this.attachmentLimits,
+      imagesOnly: true,
+      disabled: !this.connected,
+      onAttachmentsChange: this.onAttachmentsChange,
+      onPendingReadsChange: (delta) => {
+        if (readSignal) {
+          reads?.updatePending(readSignal, delta);
+        }
+      },
+    };
+    const drop = createChatAttachmentDropHandlers({
+      ...attachmentProps,
+      canCompose: this.connected,
+    });
+    const pending = this.companion.turns.some((turn) => turn.status === "pending");
     const input = this.input();
     const mode = this.embedded ? "expanded" : this.railState.mode(input);
     this.renderedMode = mode;
@@ -639,6 +635,10 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
         role="region"
         aria-label=${t("chat.rail.title")}
         tabindex="-1"
+        @dragenter=${drop.onDragenter}
+        @dragleave=${drop.onDragleave}
+        @dragover=${drop.onDragover}
+        @drop=${drop.onDrop}
         @keydown=${(event: KeyboardEvent) => {
           if (!this.embedded && event.key === "Escape") {
             event.preventDefault();
@@ -696,67 +696,13 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
                 </div>
               </header>`
         }
+        ${digest ? this.renderPullRequests() : nothing} ${this.renderThread(pending)}
         ${
-          digest
-            ? html`<div class="chat-session-rail__digest">${this.renderDigestDetails(digest)}</div>`
-            : nothing
-        }
-        ${this.renderThread()}
-        ${
-          this.companion.exchanges.length === 0 && !this.companion.pendingQuestion
+          !this.companion.turns.some((turn) => turn.status !== "failed")
             ? this.renderStarters()
             : nothing
         }
-        <form
-          class="agent-chat__input chat-session-rail__composer"
-          @submit=${(event: SubmitEvent) => {
-            event.preventDefault();
-            this.submit();
-          }}
-        >
-          <div class="agent-chat__composer-input-row">
-            <label class="agent-chat__composer-combobox chat-session-rail__prompt">
-              <textarea
-                class="chat-session-rail__input"
-                rows="1"
-                maxlength="400"
-                autocomplete="off"
-                aria-label=${t("chat.rail.askLabel")}
-                aria-keyshortcuts=${
-                  this.sendShortcut === "enter" ? "Enter" : "Control+Enter Meta+Enter"
-                }
-                .value=${this.companion.draft}
-                placeholder=${
-                  this.companion.pendingQuestion
-                    ? t("chat.rail.askPending")
-                    : t("chat.rail.askPlaceholder")
-                }
-                ?disabled=${!this.connected || this.companion.pendingQuestion !== null}
-                @keydown=${this.composer.handleKeydown}
-                @input=${this.composer.handleInput}
-                ${ref(this.composer.ref)}
-              ></textarea>
-            </label>
-          </div>
-          <div class="agent-chat__composer-footer">
-            <div class="agent-chat__composer-trail">
-              <div class="agent-chat__composer-actions">
-                <button
-                  class="chat-send-btn"
-                  type="submit"
-                  aria-label=${t("chat.rail.askSubmit")}
-                  ?disabled=${
-                    !this.connected ||
-                    this.companion.pendingQuestion !== null ||
-                    !this.companion.draft.trim()
-                  }
-                >
-                  ${icons.arrowUp}
-                </button>
-              </div>
-            </div>
-          </div>
-        </form>
+        ${renderSessionRailComposer({ companion, connected: this.connected, pending, sendShortcut: this.sendShortcut, composer: this.composer, attachmentProps, submit: () => this.submit() })}
       </section>
     `;
   }

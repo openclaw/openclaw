@@ -5,7 +5,7 @@ import fs from "node:fs/promises";
 import type http from "node:http";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -44,6 +44,7 @@ const originalEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[ke
 const execFileAsync = promisify(execFile);
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const server of servers.splice(0)) {
     await new Promise<void>((resolve) => {
       server.close(() => resolve());

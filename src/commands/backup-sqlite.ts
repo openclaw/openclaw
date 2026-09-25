@@ -89,7 +89,7 @@ export async function backupSqliteCreateCommand(
       snapshotPath: result.ref.path,
       manifest: result.manifest,
     };
-    recordBackupOutcomeBestEffort(runtime, {
+    await recordBackupOutcomeBestEffort(runtime, {
       kind: "sqlite-snapshot",
       archivePath: report.snapshotPath,
       status: "ok",
@@ -97,7 +97,7 @@ export async function backupSqliteCreateCommand(
     writeCreateResult(runtime, options, report);
     return report;
   } catch (error) {
-    recordBackupOutcomeBestEffort(runtime, {
+    await recordBackupOutcomeBestEffort(runtime, {
       kind: "sqlite-snapshot",
       archivePath: repositoryPath,
       status: "failed",

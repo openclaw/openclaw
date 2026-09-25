@@ -414,4 +414,37 @@ describe("volcengineTTS", () => {
     ).rejects.toThrow("Volcengine TTS response exceeds 16777216 bytes");
     expect(release).toHaveBeenCalledTimes(1);
   });
+
+  it.each([
+    { key: "speed", value: "0.2", expected: 0.2 },
+    { key: "speedratio", value: "1.25", expected: 1.25 },
+    { key: "speed_ratio", value: "3", expected: 3 },
+  ])(
+    "merges the $key=$value directive without mutating prior overrides",
+    ({ key, value, expected }) => {
+      const provider = buildVolcengineSpeechProvider();
+      const currentOverrides = Object.freeze({ voice: "retained", speedRatio: 0.75 });
+      const result = provider.parseDirectiveToken?.({
+        key,
+        value,
+        currentOverrides,
+        policy: {
+          enabled: true,
+          allowText: true,
+          allowProvider: true,
+          allowVoice: true,
+          allowModelId: true,
+          allowVoiceSettings: true,
+          allowNormalization: true,
+          allowSeed: true,
+        },
+      });
+      expect(result).toEqual({
+        handled: true,
+        overrides: { voice: "retained", speedRatio: expected },
+      });
+      expect(result?.overrides).not.toBe(currentOverrides);
+      expect(currentOverrides).toEqual({ voice: "retained", speedRatio: 0.75 });
+    },
+  );
 });

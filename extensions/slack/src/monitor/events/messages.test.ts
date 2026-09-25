@@ -898,7 +898,16 @@ describe("registerSlackMessageEvents", () => {
     } as unknown as App;
     const ctx = createInboundSlackTestContext({
       app,
-      cfg: { channels: { slack: { enabled: true } } },
+      cfg: {
+        channels: {
+          slack: {
+            enabled: true,
+            groupPolicy: "open",
+            allowFrom: ["*"],
+            dm: { groupEnabled: true },
+          },
+        },
+      },
       defaultRequireMention: false,
     });
     const handleSlackMessage = vi.fn(async () => {});
@@ -1049,35 +1058,25 @@ describe("registerSlackMessageEvents", () => {
     );
   });
 
-  it("logs channel app_mention receipts with zero chars when text is absent", async () => {
-    const { handleSlackMessage } = await invokeRegisteredHandler({
-      eventName: "app_mention",
-      overrides: { dmPolicy: "open" },
-      event: {
-        ...makeAppMentionEvent({ channel: "C123", channelType: "channel" }),
-        text: undefined,
-      },
-    });
-
-    expect(handleSlackMessage).toHaveBeenCalledTimes(1);
-    expect(inboundLogLines()).toEqual([
+  it.each([
+    [
+      "text",
       "Inbound app_mention slack:T_TEST:channel:C123:user:U1 -> bot:U_BOT (channel, 0 chars)",
-    ]);
-  });
-
-  it("logs channel app_mention receipts with unknown sender when user is absent", async () => {
+    ],
+    [
+      "user",
+      "Inbound app_mention slack:T_TEST:channel:C123:user:unknown -> bot:U_BOT (channel, 14 chars)",
+    ],
+  ])("logs channel app_mention receipts when %s is absent", async (field, receipt) => {
     const { handleSlackMessage } = await invokeRegisteredHandler({
       eventName: "app_mention",
       overrides: { dmPolicy: "open" },
       event: {
-        ...makeAppMentionEvent({ channel: "C123", channelType: "channel" }),
-        user: undefined,
+        ...makeAppMentionEvent(),
+        [field]: undefined,
       },
     });
-
     expect(handleSlackMessage).toHaveBeenCalledTimes(1);
-    expect(inboundLogLines()).toEqual([
-      "Inbound app_mention slack:T_TEST:channel:C123:user:unknown -> bot:U_BOT (channel, 14 chars)",
-    ]);
+    expect(inboundLogLines()).toEqual([receipt]);
   });
 });

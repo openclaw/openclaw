@@ -59,7 +59,7 @@ function captureWarningLogger() {
 }
 
 describe("node-hosted skill snapshots", () => {
-  it("appears while connected, includes the locator note, and disappears on disconnect", () => {
+  it("appears while connected, includes the locator note, and disappears on disconnect", async () => {
     const before = getSkillsSnapshotVersion();
     recordRemoteSkillNodeInfo({
       nodeId: "node-1",
@@ -83,7 +83,7 @@ describe("node-hosted skill snapshots", () => {
       workspaceOnly: true,
       eligibility: { nodeSkills: { canExec: true } },
     });
-    const snapshot = buildSkillSnapshot("/workspace", { entries });
+    const snapshot = await buildSkillSnapshot("/workspace", { entries });
     expect(snapshot.skills.map((skill) => skill.name)).toEqual(["release-helper"]);
     expect(snapshot.prompt).toContain("Build Mac (node-1)");
     expect(snapshot.prompt).toContain(

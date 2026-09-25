@@ -1,5 +1,6 @@
 // Gateway miscellaneous tests cover shared utility edges around control UI,
 // diagnostics, proxy state, node command policy, and server helper behavior.
+import { EventEmitter } from "node:events";
 import * as fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import * as os from "node:os";
@@ -28,10 +29,10 @@ import {
 } from "./node-command-policy.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { createChatRunState, createSessionMessageSubscriberRegistry } from "./server-chat-state.js";
-import { MAX_BUFFERED_BYTES } from "./server-constants.js";
+import { MAX_BUFFERED_BYTES, WEBSOCKET_CLOSE_GRACE_MS } from "./server-constants.js";
 import { handleNodeInvokeResult } from "./server-methods/nodes.handlers.invoke-result.js";
 import type * as GatewayMethodTypes from "./server-methods/types.js";
-import { formatError, normalizeVoiceWakeTriggers } from "./server-utils.js";
+import { normalizeVoiceWakeTriggers } from "./server-utils.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
@@ -288,13 +289,11 @@ type EventFrame = {
   seq?: number;
 };
 
-type RecordingSocket = TestSocket & {
-  sent: EventFrame[];
-};
+type RecordingSocket = TestSocket & { sent: EventFrame[] };
 
 function makeRecordingSocket(): RecordingSocket {
   const sent: EventFrame[] = [];
-  return {
+  return Object.assign(new EventEmitter(), {
     readyState: 1,
     bufferedAmount: 0,
     send: vi.fn((payload: string) => {
@@ -303,7 +302,7 @@ function makeRecordingSocket(): RecordingSocket {
     close: vi.fn(),
     terminate: vi.fn(),
     sent,
-  };
+  });
 }
 
 function makeGatewayWsClient(
@@ -418,6 +417,7 @@ describe("gateway broadcaster", () => {
   });
 
   it("closes a slow authoritative-session subscriber while delivering to healthy clients", () => {
+    vi.useFakeTimers();
     const slowSocket = makeRecordingSocket();
     slowSocket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
     const healthySocket = makeRecordingSocket();
@@ -439,6 +439,7 @@ describe("gateway broadcaster", () => {
     broadcastToConnIds("session.message", payload, new Set(["slow-session", "healthy-session"]));
 
     expect(slowSocket.close).toHaveBeenCalledWith(1008, "slow consumer");
+    vi.advanceTimersByTime(WEBSOCKET_CLOSE_GRACE_MS);
     expect(slowSocket.terminate).toHaveBeenCalledOnce();
     expect(slowSocket.send).not.toHaveBeenCalled();
     expect(healthySocket.sent).toEqual([
@@ -1138,17 +1139,5 @@ describe("normalizeVoiceWakeTriggers", () => {
   test("does not split surrogate pairs at the length limit", () => {
     const prefix = "x".repeat(63);
     expect(normalizeVoiceWakeTriggers([`${prefix}\u{1f600}`])).toEqual([prefix]);
-  });
-});
-
-describe("formatError", () => {
-  test("prefers message for Error", () => {
-    expect(formatError(new Error("boom"))).toBe("boom");
-  });
-
-  test("handles status/code", () => {
-    expect(formatError({ status: 500, code: "EPIPE" })).toBe("status=500 code=EPIPE");
-    expect(formatError({ status: 404 })).toBe("status=404 code=unknown");
-    expect(formatError({ code: "ENOENT" })).toBe("status=unknown code=ENOENT");
   });
 });

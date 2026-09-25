@@ -15,6 +15,47 @@ afterEach(() => {
 });
 
 describe("browser tab ownership probes", () => {
+  it("rejects a non-durable dashboard open and compensates through its captured managed endpoint", async () => {
+    vi.spyOn(cdpModule, "createTargetViaCdp").mockResolvedValue({
+      targetId: "CREATED",
+      finalUrl: "http://127.0.0.1:8080",
+    });
+    const state = makeState("openclaw");
+    const closeRequests: string[] = [];
+    const fetchMock = vi.fn(async (url: unknown) => {
+      const value = String(url);
+      if (value.includes("/json/list")) {
+        return {
+          ok: true,
+          json: async () => [
+            { id: "CREATED", title: "New Tab", url: "http://127.0.0.1:8080", type: "page" },
+          ],
+        } as unknown as Response;
+      }
+      if (value.includes("/json/version")) {
+        state.resolved.profiles.openclaw = {
+          driver: "existing-session",
+          cdpUrl: "http://127.0.0.1:19999",
+          color: "#FF4500",
+        };
+        return { ok: true, json: async () => ({}) } as unknown as Response;
+      }
+      if (value.includes("/json/close/CREATED")) {
+        closeRequests.push(value);
+        return { ok: true } as Response;
+      }
+      throw new Error(`unexpected fetch: ${value}`);
+    });
+    global.fetch = withBrowserFetchPreconnect(fetchMock);
+    const openclaw = createTestBrowserRouteContext({ getState: () => state }).forProfile(
+      "openclaw",
+    );
+    await expect(
+      openclaw.openTab("http://127.0.0.1:8080", { requireDurableOwnership: true }),
+    ).rejects.toThrow(/could not verify durable ownership/);
+    expect(closeRequests).toEqual(["http://127.0.0.1:18800/json/close/CREATED"]);
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes(":19999"))).toBe(false);
+  });
   it.each([false, true])(
     "propagates caller abort through the managed ownership version probe (close fails: %s)",
     async (closeFails) => {

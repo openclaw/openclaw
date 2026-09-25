@@ -146,12 +146,17 @@ async function runManagedWorkerCommand(
           }
           await new Promise<void>((resolveWrite, rejectWrite) => {
             const onClose = () => rejectWrite(new Error("managed worker result output closed"));
+            // A failed write reports through both the callback and the stream. The callback owns
+            // the result; retain one listener to consume the matching runtime error event.
+            const onError = () => {};
             options.output.once("close", onClose);
+            options.output.once("error", onError);
             options.output.write(`${JSON.stringify(response)}\n`, (error) => {
               options.output.off("close", onClose);
               if (error) {
                 rejectWrite(error);
               } else {
+                options.output.off("error", onError);
                 resolveWrite();
               }
             });

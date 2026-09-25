@@ -2,61 +2,88 @@
 summary: "The subagent queue lane, restart recovery, stop scope, and the standing limitations"
 title: "Sub-agent concurrency, recovery, and stopping"
 read_when:
-  - You are tuning sub-agent concurrency or hitting the backlog cap
+  - You are tuning sub-agent concurrency or investigating a delivery backlog
   - A Gateway restart interrupted a sub-agent run
   - You need the exact scope of Stop and /stop
 ---
 
 ## Concurrency
 
-Sub-agents use a dedicated in-process queue lane:
+Each spawning session has its own in-process sub-agent queue. The setting
+`agents.defaults.subagents.maxConcurrent` limits concurrent child runs for that
+session (default `8`). Independent sessions have independent budgets, so one
+busy session does not consume another session's sub-agent slots. A nested
+orchestrator's children use that orchestrator's budget, not its parent's.
 
-- **Lane name:** `subagent`
-- **Concurrency:** `agents.defaults.subagents.maxConcurrent` (default `8`)
+The budget belongs to the child's immediate spawning/controller session.
+Changing where a child's completion is delivered does not move its execution
+to another session's budget. Accepted runs above the execution limit queue until
+a slot is available.
 
-Retained blocked completions also protect the gateway from unbounded fan-out.
-OpenClaw warns when the delivery backlog reaches 25 and blocks new subagent
-spawns at 50 until operators retry or dismiss enough retained deliveries. It
-does not prune results to make room.
+`maxChildrenPerAgent` is a separate admission limit on active children per
+session (default `5`); increasing execution concurrency does not raise that
+limit. [Codex-native subagents](/plugins/codex-harness) use Codex's own scheduler
+and limits independently of these OpenClaw queues.
+
+Suspended completion deliveries do not block new work. Native subagents, ACP
+sessions, and visible sessions retain their normal active-run limits and
+authorization checks independently of the delivery backlog. Operators can
+inspect, retry, or dismiss retained deliveries with `openclaw tasks`.
+
+OpenClaw warns when the delivery backlog reaches 25. Within a Gateway process,
+unchanged backlog counts do not repeat the warning every sweep. A count change
+at or above 25, or a return to that threshold after recovery, produces a new
+warning. The backlog size does not discard results or change their retention.
 
 ## Liveness and recovery
 
 OpenClaw does not treat `endedAt` absence as permanent proof that a
-sub-agent is still alive. Unended runs older than the stale-run window
+sub-agent is still alive. When the reading process can verify a current
+execution owner or an exact queued collector reservation, an unended run keeps
+counting regardless of age. Persisted metadata alone does not establish that
+ownership in another process. Other unended runs stop counting as active/pending
+after the stale-run window
 (2 hours, or the configured run timeout plus a short grace period,
-whichever is longer) stop counting as active/pending in `/subagents list`,
-status summaries, descendant completion gating, and per-session
-concurrency checks.
+whichever is longer). These retained counts govern `/subagents list`,
+status summaries, descendant completion gating, and per-session concurrency
+checks; they are not proof that an executor is live.
 
-After a Gateway restart, fresh interrupted sub-agents resume automatically
-from their existing child transcript. Recovery handles both sessions marked
-`abortedLastRun: true` and hard kills that prevented the shutdown marker from
-being written. For a hard kill, the child session must still identify the exact
-running sub-agent from the retired Gateway process, with no newer run or admitted
-work owning that session. Stale interrupted runs are finalized without a resume;
-other stale unended restored runs are pruned.
+During a graceful restart, an already-admitted replacement run can finish
+refreshing a deferred child result before shutdown. The refresh remains tracked
+until capture and persistence finish; it does not admit a new run.
 
-An accepted recovery keeps the original task, Task Flow, requester, and child
-session identities. The task returns to `running` as the replacement execution
-continues, and the aborted marker is cleared after acceptance. You do not need
-to send another prompt to restart the work.
+After a Gateway restart, the parent owns continuation of the user's task.
+Interrupted sub-agents are finalized through their normal completion path instead
+of automatically relaunched. Their results tell the parent that execution was
+interrupted and that partially completed actions need checking. A parent waiting
+for its child batch receives the settled results, including children that finished
+before the restart, and decides what work remains.
 
-If saving an accepted recovery temporarily fails, the Gateway retries adopting
-that same execution into its original task. Cancellation, replacement by a newer
-run, or another Gateway restart prevents that adoption.
+Recovery handles both sessions marked `abortedLastRun: true` and hard kills that
+prevented the shutdown marker from being written. For a hard kill, the child
+session must still identify the exact run from the retired Gateway, with no newer
+run or admitted work owning that session. Live executions and queued collectors
+keep their existing owners. Orphaned runs settle their background task before
+cleanup, so retained child sessions do not leave phantom running activity. If the
+task update fails, completion remains available for retry.
 
-For sub-agents that announce completion, OpenClaw also attempts a notice to the
-original requester: “Resumed your interrupted task after the Gateway restart.”
-Failed or suppressed notices are retried without launching another recovery
-turn; completion continues through the normal delivery path.
+Startup session maintenance reports retained run/task owners in one informational
+summary. Those rows remain with registry recovery; the session-only orphan repair
+does not compete for their ownership. Ownership changes during a repair and failed
+ownership checks still produce warnings.
 
-Automatic restart recovery is bounded per child session. If the same
-sub-agent child is accepted for orphan recovery repeatedly inside the
-rapid re-wedge window, OpenClaw persists a recovery tombstone on that
-session and stops auto-resuming it on later restarts. Run
-`openclaw tasks maintenance --apply` to reconcile the task record, or
-`openclaw doctor --fix` to clear stale aborted recovery flags on
-tombstoned sessions.
+The parent can inspect a retained child transcript and use `sessions_send` to
+continue that session, or spawn a replacement after confirming the old execution
+has stopped. Reusing a child restores its conversation context; it does not replay
+an interrupted command. Existing cleanup and retention settings still apply.
+
+When a detached cleanup attempt logs `subagent cleanup finalize failed`, its
+retries use bounded backoff in the current Gateway process. If those retries are
+exhausted, the run remains recorded with incomplete cleanup; inspect the warning
+to identify the failing operation. Unrelated
+sub-agent completions do not restart failed cleanup or reset its retry budget.
+Descendant completion still wakes the current requester ancestors waiting on that
+work. These cleanup retries are separate from [completion delivery](/tools/subagents/announce).
 
 <Note>
 If a sub-agent spawn fails with Gateway `PAIRING_REQUIRED` /
@@ -79,6 +106,12 @@ collectors. Successful cancellation keeps selected queued collectors from
 starting while running children stop. Exact-run cancellation does not cancel
 unrelated turns or clear unrelated session-wide queues.
 
+Stop also retires pending completion continuations for the selected work, even
+when a child has already finished. Cancelling a completion turn retires its
+matching child batch, so automatic delivery retries cannot start it again under
+a new run ID. Captured child results and their execution outcomes remain intact;
+you can inspect them or send a new instruction afterward.
+
 For Gateway callers, `chat.abort` with a `runId` uses this exact-parent scope.
 `sessions.abort` with a `runId` also targets that run. When it resolves a recovered
 native run without a chat controller, it cancels children only if the captured
@@ -91,6 +124,11 @@ session work, clears its queues, and cancels its active child tree. Session-wide
 requires `clearQueued: true`. Ordinary `chat.abort` without a `runId` does not
 cascade to children. These operations retain their normal authorization checks.
 
+A typed `/stop` sent through `chat.send` honors `expectedLeafEntryId` and, when
+that branch check is present, `sessionId`. If the check fails during descendant
+cancellation, the Gateway refuses further cancellation and reports
+`active-leaf-changed`. Cancellation already accepted by a child still settles.
+
 Incomplete cancellation is reported as an error, not a clean success. `/stop`
 reports actual stopped and failed child counts. Inspect the remaining
 [background tasks](/automation/tasks#control-ui) and retry their cancellation;
@@ -102,7 +140,7 @@ timeout. Those events do not automatically cancel them.
 ## Limitations
 
 - Direct announce attempts are best-effort, but admitted session-queued completion handoffs and their owner/task projections survive gateway restarts in the shared SQLite state database.
-- Sub-agents still share the same gateway process resources; treat `maxConcurrent` as a safety valve.
+- Sub-agents still share the same Gateway process resources; `maxConcurrent` bounds each spawning session's execution, not total Gateway concurrency.
 - `sessions_spawn` returns `{ status: "accepted", runId, childSessionKey }` when startup is accepted, without waiting for the child task to finish. Cloud-worker spawns can wait for provisioning before returning this receipt.
 - Sub-agent context only injects `AGENTS.md` (no `SOUL.md`, `IDENTITY.md`, `USER.md`, `MEMORY.md`, or `BOOTSTRAP.md`). Its `## Tools` section carries environment-specific notes. Codex-native subagents follow the same boundary through native `AGENTS.md` discovery, while parent-only persona, identity, and user files are injected as turn-scoped collaboration instructions so children do not clone them.
 - Recursive spawning is enabled through depth `5` by default. Set `maxSpawnDepth` from `1` through `5` to lower the boundary.

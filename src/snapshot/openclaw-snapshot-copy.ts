@@ -1,5 +1,6 @@
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import { resolveStateDir } from "../config/paths.js";
+import { embedSessionColdArchivesInSnapshot } from "../config/sessions/session-cold-storage-backup.js";
 import {
   createVerifiedSqliteSnapshot,
   type SqliteSnapshotValidator,
@@ -62,12 +63,17 @@ export async function createOpenClawSnapshotCopy(params: {
     sourcePath: params.database.path,
     targetPath: params.targetPath,
     requireNonEmptySource: identity.role !== "generic",
-    transform:
-      identity.role === "global"
-        ? sanitizeOpenClawGlobalStateSnapshot
-        : identity.role === "agent"
-          ? sanitizeOpenClawStateLeaseRows
-          : undefined,
+    transform: async (database) => {
+      if (identity.role === "global") {
+        sanitizeOpenClawGlobalStateSnapshot(database);
+      } else if (identity.role === "agent") {
+        sanitizeOpenClawStateLeaseRows(database);
+      }
+      await embedSessionColdArchivesInSnapshot({
+        database,
+        sourceStorePath: params.database.path,
+      });
+    },
     validate: buildSnapshotValidator(identity),
   });
   return { identity, ...result };

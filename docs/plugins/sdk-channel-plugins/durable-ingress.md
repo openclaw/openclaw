@@ -65,6 +65,16 @@ fences are unrelated to this rule. Stable outbound message IDs use the shared
 outbound-echo registry from `openclaw/plugin-sdk/channel-outbound` instead of a
 channel-local TTL cache.
 
+Persistent replay guards await SQLite reads, comparisons, writes, and legacy-file
+migration in the shared state worker. Competing records are compared again in the
+write transaction; clearing memory or forgetting a key fences older asynchronous
+cache fills. Await commits and deletions before acknowledging adoption or finishing
+cleanup. Error hooks retain their existing policy: a throwing hook rejects the
+operation, while a nonthrowing hook permits the guard's memory fallback. Worker
+failures never switch persistence to synchronous SQLite. Multi-key commits and
+deletions settle every accepted write before returning an error, so rollback and
+shutdown cannot race a still-running sibling mutation.
+
 ### Transport classes and retention
 
 Classify a transport by the recovery guarantee at its receive boundary:
@@ -126,6 +136,15 @@ pending.
 
 ### Dynamic policy publication
 
+Gateway reply dispatch selects the current committed model-runtime config and
+catalog for each new turn, including low-level `channel.reply.dispatchReplyFromConfig`
+calls from a monitor that retained its startup config. Dispatch waits for an
+in-progress model-runtime publication before admission. Channel transport and
+access-policy freshness still belong to the account monitor; reply dispatch does
+not replace durable ingress or its append-before-ack contract.
+The legacy `usePublishedModelRuntime` argument remains accepted for SDK
+compatibility but no longer controls Gateway model admission.
+
 Use `reload.noopPrefixes` only for fields whose consumers read the committed
 runtime config without replacing a channel resource. These writes still publish
 the validated runtime snapshot; “noop” means no component restart. A `*` path
@@ -137,6 +156,10 @@ Bind `createRuntimeConfigReader` when the account starts, and derive a coherent
 policy snapshot at each new admission. Keep resolved-name caches with that
 account owner and recheck the current revision after asynchronous resolution.
 Do not retain startup-only allowlists in another message or interaction path.
+For asynchronous `shouldSupersedePending` authorization, return a synchronous
+guard that verifies the prepared policy is still current. The drain invokes this
+guard immediately before cancelling pre-adoption work; boolean decisions remain
+supported for predicates without asynchronous authority resolution.
 
 Keep credentials, transport settings, and account lifecycle changes on the
 restart path. Do not declare an entire `accounts` subtree dynamic merely to cover

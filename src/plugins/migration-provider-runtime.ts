@@ -1,4 +1,3 @@
-// Runtime bridge for plugin-provided migration hooks.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
@@ -12,8 +11,8 @@ import {
   resolveMigrationProviderPublicArtifacts,
   type MigrationProviderArtifactPlugin,
 } from "./migration-provider-public-artifacts.js";
+import { getPluginInstance } from "./plugin-instance-scope.js";
 import type { PluginRegistry } from "./registry-types.js";
-import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 import type { MigrationProviderPlugin } from "./types.js";
 
 type MigrationProviderPluginResolution = {
@@ -21,28 +20,6 @@ type MigrationProviderPluginResolution = {
   bundledCompatPluginIds: string[];
   publicPlugins: MigrationProviderArtifactPlugin[];
 };
-
-function bindMigrationProviderToRegistry(
-  provider: MigrationProviderPlugin,
-  registry: PluginRegistry,
-): MigrationProviderPlugin {
-  return {
-    ...provider,
-    ...(provider.detect
-      ? {
-          detect: (ctx) => withPluginRuntimeRegistryScope(registry, () => provider.detect!(ctx)),
-        }
-      : {}),
-    ...(provider.prepareApply
-      ? {
-          prepareApply: (ctx) =>
-            withPluginRuntimeRegistryScope(registry, () => provider.prepareApply!(ctx)),
-        }
-      : {}),
-    plan: (ctx) => withPluginRuntimeRegistryScope(registry, () => provider.plan(ctx)),
-    apply: (ctx, plan) => withPluginRuntimeRegistryScope(registry, () => provider.apply(ctx, plan)),
-  };
-}
 
 function resolveMigrationProviderPluginResolution(params: {
   cfg?: OpenClawConfig;
@@ -110,13 +87,22 @@ function resolveMigrationProviderPluginResolution(params: {
 }
 
 function mergeMigrationProviders(
-  left: ReadonlyArray<{ provider: MigrationProviderPlugin }>,
-  right: ReadonlyArray<{ provider: MigrationProviderPlugin }>,
+  ...registries: Array<
+    | {
+        plugins?: PluginRegistry["plugins"];
+        migrationProviders: ReadonlyArray<{ pluginId: string; provider: MigrationProviderPlugin }>;
+      }
+    | undefined
+  >
 ): MigrationProviderPlugin[] {
   const merged = new Map<string, MigrationProviderPlugin>();
-  for (const entry of [...left, ...right]) {
-    if (!merged.has(entry.provider.id)) {
-      merged.set(entry.provider.id, entry.provider);
+  for (const registry of registries) {
+    for (const { pluginId, provider } of registry?.migrationProviders ?? []) {
+      if (!merged.has(provider.id)) {
+        const record = registry?.plugins?.find((entry) => entry.id === pluginId);
+        const instance = record && getPluginInstance(record);
+        merged.set(provider.id, instance?.wrap(provider) ?? provider);
+      }
     }
   }
   return [...merged.values()].toSorted((a, b) => a.id.localeCompare(b.id));
@@ -138,7 +124,7 @@ export async function withPluginMigrationProviders<T>(
     params.providerId &&
     activeProviders.some(({ provider }) => provider.id === params.providerId)
   ) {
-    return await run(mergeMigrationProviders(activeProviders, []));
+    return await run(mergeMigrationProviders(activeRegistry));
   }
   const resolution = resolveMigrationProviderPluginResolution(params);
   if (params.providerId) {
@@ -147,14 +133,14 @@ export async function withPluginMigrationProviders<T>(
       providerId: params.providerId,
     });
     if (providers.length > 0) {
-      return await run(mergeMigrationProviders(activeProviders, providers));
+      return await run(mergeMigrationProviders(activeRegistry, { migrationProviders: providers }));
     }
   }
   if (
     resolution.pluginIds.length === 0 ||
     getLoadedRuntimePluginRegistry({ requiredPluginIds: resolution.pluginIds })
   ) {
-    return await run(mergeMigrationProviders(activeProviders, []));
+    return await run(mergeMigrationProviders(activeRegistry));
   }
   const compatConfig = withBundledPluginEnablementCompat({
     config: params.cfg,
@@ -166,10 +152,7 @@ export async function withPluginMigrationProviders<T>(
   });
   let result: T;
   try {
-    const providers = acquisition.registry.migrationProviders.map(({ provider }) => ({
-      provider: bindMigrationProviderToRegistry(provider, acquisition.registry),
-    }));
-    result = await run(mergeMigrationProviders(activeProviders, providers));
+    result = await run(mergeMigrationProviders(activeRegistry, acquisition.registry));
   } catch (error) {
     const failures = [error];
     try {

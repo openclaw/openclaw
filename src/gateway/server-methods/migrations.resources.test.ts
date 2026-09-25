@@ -83,7 +83,9 @@ describe("memory migration registration resources", () => {
             try {
               await Promise.race([fixture.state.applying.promise, firstRun]);
               expect(fixture.state.applyCalls).toBe(1);
-              expect(fixture.state.connections[1]?.database.isOpen).toBe(true);
+              expect(fixture.state.connections[1]?.database.isOpen, first.frames.join("\n")).toBe(
+                true,
+              );
               const retry = invoke("migrations.memory.apply", params);
               const retryRun = retry.run();
               fixture.state.resumeApply.resolve();
@@ -285,7 +287,7 @@ describe("memory migration registration resources", () => {
             expect(spy).toHaveBeenCalledOnce();
             releaseAcquisition.resolve();
             await Promise.all(runs);
-            expect(first.respond.mock.calls[0]?.[0]).toBe(true);
+            expect(first.respond.mock.calls[0]?.[0], first.frames.join("\n")).toBe(true);
             expect(duplicate.respond.mock.calls[0]?.[3]).toEqual({ cached: true });
             expect(fixture.state.applyCalls).toBe(1);
             expect(fixture.state.connections[1]?.disposals).toBe(1);

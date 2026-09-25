@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { configureAiTransportHost, getAiTransportHost } from "@openclaw/ai";
 import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";
+import { calculateUsageCost, normalizeResolvedPricing } from "@openclaw/llm-core";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -48,10 +49,14 @@ import { shouldSkipLiveProviderDrift } from "../agents/live-test-provider-drift.
 import {
   isLiveBillingDrift,
   isLiveRateLimitDrift,
+  isChatGPTUsageLimitErrorMessage,
+  isOllamaUnavailableErrorMessage,
+  isAudioOnlyModelErrorMessage,
+  isUnsupportedThinkingToggleErrorMessage,
 } from "../agents/live-test-provider-drift.test-support.js";
 import { getApiKeyForModelCore, type ResolvedProviderAuth } from "../agents/model-auth.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
-import { shouldSuppressBuiltInModelCore } from "../agents/model-suppression.js";
+import { resolveBuiltInModelSuppressionFromManifest } from "../agents/model-suppression.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import {
@@ -83,6 +88,7 @@ import {
   withOwnedSessionTranscriptWrites,
 } from "../config/sessions/transcript-write-context.js";
 import type { ModelsConfig, ModelProviderConfig, OpenClawConfig } from "../config/types.js";
+import { OpenClawSchema } from "../config/zod-schema.js";
 import {
   captureAgentRunLifecycleGeneration,
   withAgentRunLifecycleGeneration,
@@ -130,14 +136,11 @@ import { deleteTestEnvValue, setTestEnvValue, withEnvAsync } from "../test-utils
 import { getFreePort, isPortFree } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
+import {
+  isolateLiveGatewayConfig,
+  type ProviderThinkingModelCompat,
+} from "./gateway-models.profiles.live.test-helpers.js";
 import { restoreLiveEnv, snapshotLiveEnv } from "./live-env-test-helpers.js";
-import { READ_SCOPE, WRITE_SCOPE } from "./operator-scopes.js";
-import type { GatewayServer } from "./server-public.js";
-
-type ProviderThinkingModelCompat = {
-  thinkingFormat?: string;
-  supportedReasoningEfforts?: readonly string[] | null;
-};
 import {
   hasExpectedSingleNonce,
   hasExpectedToolNonce,
@@ -145,6 +148,8 @@ import {
   shouldRetryExecReadProbe,
   shouldRetryToolReadProbe,
 } from "./live-tool-probe.test-helpers.js";
+import { READ_SCOPE, WRITE_SCOPE } from "./operator-scopes.js";
+import type { GatewayServer } from "./server-public.js";
 import { readSessionMessagesAsync } from "./session-transcript-readers.js";
 import { loadSessionEntry } from "./session-utils.js";
 
@@ -2119,6 +2124,133 @@ describe("resolveGatewayLiveModelThinkingLevel", () => {
 });
 
 describe("buildLiveGatewayConfig", () => {
+  it("serializes normalized open-ended pricing without changing runtime accounting", () => {
+    const rawCost = {
+      input: 1,
+      output: 2,
+      cacheRead: 0.25,
+      cacheWrite: 1.5,
+      tieredPricing: [
+        {
+          range: [0, 1001] as [number, number],
+          input: 1,
+          output: 2,
+          cacheRead: 0.25,
+          cacheWrite: 1.5,
+        },
+        { range: [1001] as [number], input: 3, output: 4, cacheRead: 0.5, cacheWrite: 2.5 },
+      ],
+    };
+    const model = {
+      ...createGatewayLiveTestModel("openai", "fixture-tiered-model"),
+      baseUrl: "https://api.example.com/v1",
+      cost: normalizeResolvedPricing(rawCost),
+    };
+    const originalCost = structuredClone(model.cost);
+    expect(model.cost.tieredPricing?.[1]?.range).toEqual([1001, Infinity]);
+    const cfg = buildLiveGatewayConfig({
+      cfg: {},
+      candidates: [model],
+      liveAgentDir: GATEWAY_LIVE_CONFIG_TEST_AGENT_DIR,
+      liveAgentWorkspaceDir: GATEWAY_LIVE_CONFIG_TEST_WORKSPACE,
+    });
+    const projected = expectDefined(
+      cfg.models?.providers?.openai?.models?.[0]?.cost,
+      "projected model pricing",
+    );
+    const serialized = JSON.stringify(cfg);
+    const parsed = OpenClawSchema.parse(JSON.parse(serialized));
+    const serializedCost = expectDefined(
+      parsed.models?.providers?.openai?.models?.[0]?.cost,
+      "serialized model pricing",
+    );
+
+    expect(serializedCost).toEqual(rawCost);
+    expect(projected).not.toBe(model.cost);
+    expect(projected.tieredPricing).not.toBe(model.cost.tieredPricing);
+    expect(projected.tieredPricing?.[0]?.range).not.toBe(model.cost.tieredPricing?.[0]?.range);
+    expect(projected.tieredPricing?.[1]?.range).not.toBe(model.cost.tieredPricing?.[1]?.range);
+    expect(model.cost).toEqual(originalCost);
+    const restoredCost = normalizeResolvedPricing(serializedCost);
+    for (const input of [900, 901, 1900]) {
+      const usage = { input, output: 10, cacheRead: 40, cacheWrite: 60 };
+      expect(calculateUsageCost(usage, restoredCost)).toEqual(
+        calculateUsageCost(usage, model.cost),
+      );
+    }
+  });
+
+  it.each(["finite", "flat"] as const)("preserves %s pricing in serialized config", (kind) => {
+    const cost = {
+      input: 1,
+      output: 2,
+      cacheRead: 0.25,
+      cacheWrite: 1.5,
+      ...(kind === "finite"
+        ? {
+            tieredPricing: [
+              {
+                range: [0, 1001] as [number, number],
+                input: 1,
+                output: 2,
+                cacheRead: 0.25,
+                cacheWrite: 1.5,
+              },
+            ],
+          }
+        : {}),
+    };
+    const model = {
+      ...createGatewayLiveTestModel("openai", "fixture-pricing-model"),
+      baseUrl: "https://api.example.com/v1",
+      cost: normalizeResolvedPricing(cost),
+    };
+    const originalCost = structuredClone(model.cost);
+    const cfg = buildLiveGatewayConfig({
+      cfg: {},
+      candidates: [model],
+      liveAgentDir: GATEWAY_LIVE_CONFIG_TEST_AGENT_DIR,
+      liveAgentWorkspaceDir: GATEWAY_LIVE_CONFIG_TEST_WORKSPACE,
+    });
+    const serialized = JSON.stringify(cfg);
+    const parsed = OpenClawSchema.parse(JSON.parse(serialized));
+
+    expect(parsed.models?.providers?.openai?.models?.[0]?.cost).toEqual(cost);
+    expect(model.cost).toEqual(originalCost);
+  });
+
+  it.each([
+    ["NaN upper endpoint", Number.NaN],
+    ["negative infinity upper endpoint", Number.NEGATIVE_INFINITY],
+  ] as const)("does not repair a malformed %s during pricing projection", (_label, upper) => {
+    const model = createGatewayLiveTestModel("openai", "fixture-invalid-pricing");
+    model.baseUrl = "https://api.example.com/v1";
+    model.cost = {
+      input: 1,
+      output: 2,
+      cacheRead: 0.25,
+      cacheWrite: 1.5,
+      tieredPricing: [
+        {
+          range: [0, upper],
+          input: 1,
+          output: 2,
+          cacheRead: 0.25,
+          cacheWrite: 1.5,
+        },
+      ],
+    };
+    const cfg = buildLiveGatewayConfig({
+      cfg: {},
+      candidates: [model],
+      liveAgentDir: GATEWAY_LIVE_CONFIG_TEST_AGENT_DIR,
+      liveAgentWorkspaceDir: GATEWAY_LIVE_CONFIG_TEST_WORKSPACE,
+    });
+
+    const serialized = JSON.stringify(cfg);
+    expect(OpenClawSchema.safeParse(JSON.parse(serialized)).success).toBe(false);
+  });
+
   it("pins the runtime while retaining a non-Ultra fixture default", () => {
     const cfg = buildLiveGatewayConfig({
       cfg: { agents: { defaults: { thinkingDefault: OPENAI_ULTRA_NORMAL_EFFORT } } },
@@ -2643,33 +2775,11 @@ function isAccountIdExtractionError(error: string): boolean {
   return /failed to extract accountid from token/i.test(error);
 }
 
-function isChatGPTUsageLimitErrorMessage(raw: string): boolean {
-  const msg = raw.toLowerCase();
-  return msg.includes("hit your chatgpt usage limit") && msg.includes("try again in");
-}
-
-function isOllamaUnavailableErrorMessage(raw: string): boolean {
-  const msg = raw.toLowerCase();
-  return (
-    msg.includes("ollama could not be reached") ||
-    (msg.includes("127.0.0.1:11434") && msg.includes("econnrefused")) ||
-    (msg.includes("localhost:11434") && msg.includes("econnrefused"))
-  );
-}
-
-function isAudioOnlyModelErrorMessage(raw: string): boolean {
-  return /requires that either input content or output modality contain audio/i.test(raw);
-}
-
 function isUnsupportedReasoningEffortErrorMessage(raw: string): boolean {
   return (
     /does not support parameter reasoningeffort/i.test(raw) ||
     /unsupported value:\s*'low'.*reasoning\.effort.*supported values are:\s*'medium'/i.test(raw)
   );
-}
-
-function isUnsupportedThinkingToggleErrorMessage(raw: string): boolean {
-  return /does not support parameter [`"]?enable_thinking[`"]?/i.test(raw);
 }
 
 function isInstructionsRequiredError(error: string): boolean {
@@ -3897,9 +4007,9 @@ async function verifyGatewayUltraSubagentHandoff(params: {
   const childToken = `ULTRA-CHILD-${nonce}`;
   const parentToken = `ULTRA-PARENT-${nonce}`;
   const message = [
-    "Ultra orchestration live proof.",
     "Call sessions_spawn exactly once with these exact arguments:",
     JSON.stringify({
+      runtime: "subagent",
       task: `Reply exactly ${childToken} and nothing else.`,
       agentId: GATEWAY_LIVE_AGENT_ID,
       mode: "run",
@@ -3907,7 +4017,7 @@ async function verifyGatewayUltraSubagentHandoff(params: {
       model: params.modelKey,
       thinking: params.thinkingLevel,
     }),
-    "Pass only those six arguments. Omit visible, worktree, worktreeName, worktreeBaseRef, cwd, context, taskName, label, streamTo, lightContext, attachments, attachAs, and resumeSessionId.",
+    "Pass only those seven arguments. This is a native subagent proof, not an ACP task. Omit visible, worktree, worktreeName, worktreeBaseRef, cwd, context, taskName, label, streamTo, lightContext, attachments, attachAs, and resumeSessionId.",
     "Wait for the child completion to return before answering.",
     `Then reply exactly ${parentToken} ${childToken} and nothing else.`,
   ].join("\n");
@@ -5323,7 +5433,20 @@ function toLiveModelConfig(model: Model): NonNullable<ModelProviderConfig["model
     baseUrl: model.baseUrl,
     input: model.input ?? ["text"],
     reasoning: model.reasoning,
-    cost: model.cost,
+    cost: {
+      ...model.cost,
+      ...(model.cost.tieredPricing
+        ? {
+            tieredPricing: model.cost.tieredPricing.map((tier) => ({
+              ...tier,
+              range:
+                tier.range.length === 2 && tier.range[1] === Number.POSITIVE_INFINITY
+                  ? [tier.range[0]]
+                  : [...tier.range],
+            })),
+          }
+        : {}),
+    },
     contextWindow: model.contextWindow,
     maxTokens: model.maxTokens,
     ...(model.compat ? { compat: model.compat } : {}),
@@ -5594,7 +5717,7 @@ async function resolveGatewayLiveRequestedModels(): Promise<string | undefined> 
   if (!selected) {
     throw new Error("fresh OpenAI API-key inference selection returned no candidate");
   }
-  expect(selected.modelRef).toBe("openai/gpt-5.6-sol");
+  expect(selected.modelRef).toBe("openai/gpt-6-astra");
   return selected.modelRef;
 }
 
@@ -5645,7 +5768,7 @@ function buildLiveGatewayConfig(params: {
   } satisfies NonNullable<OpenClawConfig["agents"]>["entries"];
   const baseModels = params.cfg.models;
   return {
-    ...params.cfg,
+    ...isolateLiveGatewayConfig(params.cfg),
     bindings: undefined,
     broadcast: undefined,
     agents: {
@@ -6894,7 +7017,10 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         const candidates: PreparedGatewayLiveModelCandidate[] = [];
         const skipped: Array<{ model: string; error: string }> = [];
         for (const model of wanted) {
-          if (shouldSuppressBuiltInModelCore({ provider: model.provider, id: model.id })) {
+          if (
+            resolveBuiltInModelSuppressionFromManifest({ provider: model.provider, id: model.id })
+              ?.suppress
+          ) {
             continue;
           }
           if (!targetMatcher.matchesProvider(model.provider)) {

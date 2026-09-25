@@ -67,6 +67,31 @@ describe("flattenMarkdownDetails", () => {
     ).toBe("10. **A**\n\n    body");
   });
 
+  it.each([
+    [31, "**A**\n\nonelater\n\nmiddle\n\n**B**\n\ntwo"],
+    [32, "AonelatermiddleBtwo"],
+  ] as const)("preserves child rendering at parent depth %i", (depth, expected) => {
+    const prefix = "<summary>".repeat(depth);
+    const suffix = "</summary>".repeat(depth);
+    const children =
+      "<details><summary>A</summary>one<summary>later</summary></details>" +
+      "middle<details><summary>B</summary>two</details>";
+
+    expect(flattenMarkdownDetails(`${prefix}<summary>${children}</summary>${suffix}`)).toBe(
+      expected,
+    );
+    expect(
+      flattenMarkdownDetails(
+        `${prefix}<details><summary>Body</summary>${children}</details>${suffix}`,
+      ),
+    ).toBe(`**Body**\n\n${expected}`);
+    expect(
+      flattenMarkdownDetails(
+        `${prefix}<details><summary>${children}</summary>tail</details>${suffix}`,
+      ),
+    ).toBe(`**${expected}**\n\ntail`);
+  });
+
   it("bounds rendering of deeply nested details", () => {
     let markdown = "deep body";
     for (let index = 0; index < 128; index += 1) {

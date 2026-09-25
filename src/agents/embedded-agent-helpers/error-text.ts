@@ -13,13 +13,18 @@ import {
   isKnownTransportErrorCode,
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
-import { renderAssistantRequestFailureCopy } from "../failover/assistant-request-failure-copy.js";
+import {
+  PROVIDER_SCHEMA_REJECTION_USER_TEXT,
+  renderAssistantFormatFailureCopy,
+  renderAssistantRequestFailureCopy,
+  renderFormatErrorCopy,
+} from "../failover/assistant-request-failure-copy.js";
 import {
   classifyFailoverSignal,
   isProviderCompletedErrorFinishReasonMessage,
-  isReasoningConstraintErrorMessage,
   isTimeoutErrorMessage,
 } from "../failover/classify.js";
+import { isReasoningConstraintErrorMessage } from "../failover/context-overflow-tables.js";
 import type { PreparedProviderFailoverOwner } from "../failover/provider-patterns.js";
 import {
   AUTH_INVALID_TOKEN_USER_TEXT,
@@ -29,8 +34,6 @@ import {
   isLikelyHttpErrorText,
   isRawApiErrorPayload,
   isStreamingJsonParseError,
-  PROVIDER_SCHEMA_REJECTION_USER_TEXT,
-  renderFormatErrorCopy,
   renderRateLimitOrOverloadedCopy,
 } from "../failover/user-copy.js";
 import { formatSandboxToolPolicyBlockedMessage } from "../sandbox/runtime-status.js";
@@ -308,21 +311,16 @@ export function formatUserFacingAssistantErrorText(
   const facts = classifyAssistantErrorFacts(msg, opts);
   const friendlyError = formatAssistantErrorText(msg, opts, facts);
   const rawPassthrough = isRawAssistantErrorPassthrough({ friendlyError, rawError });
-  const structuredSchemaDetail = [
-    parseApiErrorInfo(rawError ?? ""),
-    parseApiErrorInfo(typeof msg.errorBody === "string" ? msg.errorBody.trim() : ""),
-  ].find((error) => error?.type?.toLowerCase().includes("invalid_request"))?.message;
   const schemaFriendlyError =
     friendlyError === PROVIDER_SCHEMA_REJECTION_USER_TEXT ||
     friendlyError?.startsWith("LLM request rejected:");
   const safeFriendlyError =
-    structuredSchemaDetail && schemaFriendlyError
-      ? renderFormatErrorCopy(structuredSchemaDetail)
-      : rawPassthrough
-        ? schemaFriendlyError
-          ? PROVIDER_SCHEMA_REJECTION_USER_TEXT
-          : undefined
-        : friendlyError;
+    (schemaFriendlyError ? renderAssistantFormatFailureCopy(msg) : undefined) ??
+    (rawPassthrough
+      ? schemaFriendlyError
+        ? PROVIDER_SCHEMA_REJECTION_USER_TEXT
+        : undefined
+      : friendlyError);
   if (safeFriendlyError) {
     return safeFriendlyError.trim();
   }

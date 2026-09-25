@@ -9,6 +9,7 @@ import {
   PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE,
 } from "../../../llm/types.js";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../../agent-run-terminal-outcome.js";
+import { createApiKeyCredential } from "../../auth-profiles/credential-fixtures.test-support.js";
 import { classifyAssistantFailoverReason } from "../../embedded-agent-helpers/assistant-message-failures.js";
 import { FailoverError } from "../../failover-error.js";
 import { runWithModelFallback } from "../../model-fallback-runner.js";
@@ -81,16 +82,8 @@ function makeExhaustedCredentialFailureInput(options?: { replaySafe?: boolean })
     authProfileStore: {
       version: 1,
       profiles: {
-        "anthropic:p1": {
-          type: "api_key",
-          provider: "anthropic",
-          key: "test-key",
-        },
-        "anthropic:p2": {
-          type: "api_key",
-          provider: "anthropic",
-          key: "test-key-2",
-        },
+        "anthropic:p1": createApiKeyCredential("anthropic", "test-key"),
+        "anthropic:p2": createApiKeyCredential("anthropic", "test-key-2"),
       },
       usageStats: {
         "anthropic:p1": { lastUsed: 1 },
@@ -753,6 +746,43 @@ describe("handleEmbeddedAssistantFailure", () => {
     expect(fixture.input.maybeRefreshRuntimeAuthForAuthError).not.toHaveBeenCalled();
     expect(fixture.advanceAuthProfile).not.toHaveBeenCalled();
     expect(fixture.traceAttempts).toEqual([]);
+  });
+
+  it("retries a blank runtime failure and advances to fallback when its budget is spent", async () => {
+    const fixture = makeExhaustedCredentialFailureInput();
+    const assistant = buildEmbeddedRunnerAssistant({
+      api: "github-copilot",
+      provider: "anthropic",
+      model: "mock-1",
+      stopReason: "error",
+      errorMessage: "No API provider registered for api: github-copilot",
+      content: [{ type: "text", text: "" }],
+      usage: createMockUsage(0, 0),
+    });
+    const attempt = makeEmbeddedRunnerAttempt({
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+    });
+    fixture.input.attempt = attempt;
+    fixture.input.attemptAssistant = assistant;
+    fixture.input.currentAttemptAssistant = assistant;
+    fixture.input.terminalState = resolveEmbeddedRunAttemptTerminalState({ attempt, assistant });
+    fixture.input.emptyErrorRetries = 0;
+
+    await expect(handleEmbeddedAssistantFailure(fixture.input)).resolves.toMatchObject({
+      action: "retry",
+      emptyErrorRetries: 1,
+    });
+
+    fixture.input.emptyErrorRetries = 3;
+    await expect(handleEmbeddedAssistantFailure(fixture.input)).rejects.toMatchObject({
+      reason: "unknown",
+      provider: "anthropic",
+      model: "mock-1",
+      rawError: assistant.errorMessage,
+    });
+    expect(fixture.advanceAuthProfile).not.toHaveBeenCalled();
   });
 
   it("retries a pre-dispatch tool-call rejection whose content was discarded", async () => {

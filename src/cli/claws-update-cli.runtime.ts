@@ -21,6 +21,7 @@ import {
 import { waitUntilGatewayAgentAvailable } from "./claws-cli.gateway-readiness.js";
 import type { ClawsUpdateOptions } from "./claws-cli.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
+import { resolvePluginBatchReload } from "./plugins-lifecycle-client.js";
 
 export async function runClawsUpdateCommand(
   target: string,
@@ -178,6 +179,7 @@ export async function runClawsUpdateCommand(
       },
       {
         config,
+        reloadPlugins: await resolvePluginBatchReload(),
         sourceMcpServers: listedMcpServers.mcpServers,
         consentPlanIntegrity: opts.planIntegrity,
         packagePreflight: preflightClawPackage,

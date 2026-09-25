@@ -1,8 +1,16 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolveUsableAgentCredentialModes } from "./agent-auth-credentials.js";
+import { noteCommittedSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
+import {
+  clearRuntimeAuthProfileStoreSnapshots,
+  setRuntimeAuthProfileStoreSnapshot,
+} from "./auth-profiles/runtime-snapshots.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import {
   dualRoutes,
   platformRoute,
@@ -290,5 +298,192 @@ describe("captured model decisions", () => {
     expect(
       resolveUsableAgentCredentialModes({ codex: { type: "api_key", key: "configured-bearer" } }),
     ).toEqual({ codex: "api_key" });
+  });
+});
+
+describe("catalog decisions with prepared CLI auth directories", () => {
+  beforeEach(() => {
+    vi.stubEnv("ANTHROPIC_API_KEY", "");
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolvePluginSetupRegistry: () => ({
+        providers: [],
+        cliBackends: [],
+        configMigrations: [],
+        autoEnableProbes: [],
+        diagnostics: [],
+      }),
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "claude-cli",
+          modelProvider: "anthropic",
+          pluginId: "anthropic",
+          config: { command: "claude" },
+        },
+      ],
+    });
+  });
+
+  afterEach(() => {
+    clearRuntimeAuthProfileStoreSnapshots();
+    cliBackendsTesting.resetDepsForTest();
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  const cliMetadata = createPluginMetadataSnapshotFixture({
+    plugins: [
+      {
+        id: "anthropic",
+        providers: ["anthropic"],
+        cliBackends: ["claude-cli"],
+        providerAuthChoices: [
+          {
+            provider: "anthropic",
+            method: "cli",
+            choiceId: "anthropic-cli",
+            deprecatedChoiceIds: ["claude-cli"],
+            choiceLabel: "Anthropic Claude CLI",
+          },
+        ],
+      },
+    ],
+  });
+
+  function storedChoice(cli: boolean): AuthProfileStore {
+    return {
+      version: 1,
+      profiles: {
+        selected: cli
+          ? {
+              type: "oauth",
+              provider: "claude-cli",
+              access: "synthetic-access",
+              refresh: "synthetic-refresh",
+              expires: Date.now() + 600_000,
+            }
+          : { type: "api_key", provider: "anthropic", key: "synthetic-key" },
+      },
+      order: { anthropic: ["selected"] },
+    };
+  }
+
+  function decisionOwner(cfg: OpenClawConfig, agentId: string, workspaceDir: string) {
+    return createModelCatalogDecisions({
+      cfg,
+      agentId,
+      workspaceDir,
+      snapshot: { entries: [], routeVariants: [] },
+      metadataSnapshot: cliMetadata,
+      preparedAuthStore: { version: 1, profiles: {} },
+      preparedRuntimeAuthModes: { "claude-cli": "oauth" },
+      preparedSyntheticAuthComplete: true,
+    });
+  }
+
+  function readRow(owner: ReturnType<typeof decisionOwner>, id: string) {
+    return owner.evaluateEntry({ provider: "anthropic", id });
+  }
+
+  it("reads replaced stored CLI choices for new rows in one decisions instance", async () => {
+    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+      noteCommittedSharedAuthStoreOwnership({ location: "legacy-main" });
+      const cfg: OpenClawConfig = {
+        agents: { entries: { worker: { agentDir: state.path("custom-worker") } } },
+      };
+      const orderStore: AuthProfileStore = {
+        ...storedChoice(true),
+        profiles: {
+          ...storedChoice(true).profiles,
+          direct: { type: "api_key", provider: "anthropic", key: "synthetic-direct-key" },
+        },
+      };
+      setRuntimeAuthProfileStoreSnapshot(orderStore, state.path("custom-worker"));
+      const owner = decisionOwner(cfg, "worker", state.workspaceDir);
+      expect(await readRow(owner, "before-order-change")).toMatchObject({
+        availability: true,
+        evidence: "runtime",
+        selectedAuthMode: "oauth",
+      });
+
+      setRuntimeAuthProfileStoreSnapshot(
+        { ...orderStore, order: { anthropic: ["direct"] } },
+        state.path("custom-worker"),
+      );
+      // New keys bypass the intentional completed-row decision memoization.
+      expect((await readRow(owner, "after-order-change")).evidence).not.toBe("runtime");
+      setRuntimeAuthProfileStoreSnapshot(orderStore, state.path("custom-worker"));
+      expect(await readRow(owner, "after-order-restored")).toMatchObject({
+        availability: true,
+        evidence: "runtime",
+      });
+    });
+  });
+
+  it("follows shared ownership relocation after preparing a legacy inherited directory", async () => {
+    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+      noteCommittedSharedAuthStoreOwnership({ location: "legacy-main" });
+      const legacyDir = state.path("custom-inherited");
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: { authInheritance: { agentId: "legacy" } },
+          entries: { legacy: { agentDir: legacyDir }, worker: {} },
+        },
+      };
+      setRuntimeAuthProfileStoreSnapshot(storedChoice(false), legacyDir);
+      const owner = decisionOwner(cfg, "worker", state.workspaceDir);
+      expect((await readRow(owner, "before-relocation")).evidence).not.toBe("runtime");
+
+      noteCommittedSharedAuthStoreOwnership({ location: "state-db" });
+      setRuntimeAuthProfileStoreSnapshot(storedChoice(true));
+      expect(await readRow(owner, "after-relocation")).toMatchObject({
+        availability: true,
+        evidence: "runtime",
+        selectedAuthMode: "oauth",
+      });
+    });
+  });
+
+  it("keeps custom agent paths separate and prepares a changed path for a new decisions instance", async () => {
+    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+      noteCommittedSharedAuthStoreOwnership({ location: "legacy-main" });
+      const firstDir = state.path("custom-first");
+      const secondDir = state.path("custom-second");
+      const replacementDir = state.path("custom-replacement");
+      const cfg: OpenClawConfig = {
+        agents: {
+          entries: {
+            first: { agentDir: firstDir },
+            second: { agentDir: secondDir },
+          },
+        },
+      };
+      setRuntimeAuthProfileStoreSnapshot(storedChoice(true), firstDir);
+      setRuntimeAuthProfileStoreSnapshot(storedChoice(false), secondDir);
+      setRuntimeAuthProfileStoreSnapshot(storedChoice(false), replacementDir);
+      const first = decisionOwner(cfg, "first", state.workspaceDir);
+      const second = decisionOwner(cfg, "second", state.workspaceDir);
+      expect(await readRow(first, "same-row")).toMatchObject({
+        availability: true,
+        evidence: "runtime",
+      });
+      expect((await readRow(second, "same-row")).evidence).not.toBe("runtime");
+      const replacement = decisionOwner(
+        {
+          ...cfg,
+          agents: {
+            ...cfg.agents,
+            entries: { ...cfg.agents?.entries, first: { agentDir: replacementDir } },
+          },
+        },
+        "first",
+        state.workspaceDir,
+      );
+      expect((await readRow(replacement, "same-row")).evidence).not.toBe("runtime");
+      expect(await readRow(first, "old-owner-new-row")).toMatchObject({
+        availability: true,
+        evidence: "runtime",
+      });
+    });
   });
 });

@@ -1,6 +1,6 @@
 // Bound account read helpers extract account bindings from channel records.
 import { normalizeChatType, type ChatType } from "../channels/chat-type.js";
-import { listRouteBindings } from "../config/bindings.js";
+import { isRouteBinding, listConfiguredBindings } from "../config/bindings.js";
 import type { AgentRouteBinding } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -73,16 +73,23 @@ export function resolveFirstBoundAccountId(params: {
     return undefined;
   }
   const normalizedAgentId = normalizeAgentId(params.agentId);
-  const normalizedPeerId = params.peerId?.trim() || undefined;
-  const exactPeerIds = buildExactPeerIdSet({
-    peerId: normalizedPeerId,
-    exactPeerIdAliases: params.exactPeerIdAliases,
-  });
+  const exactPeerIds = buildExactPeerIdSet(params);
   const hasPeerContext = exactPeerIds.size > 0;
   const normalizedPeerKind = normalizeChatType(params.peerKind) ?? undefined;
+  let memberRoleIds: Set<string> | undefined;
+  const scope = {
+    groupSpace: params.groupSpace,
+    // Keep role preparation behind guild/team checks and share it only within this call.
+    get memberRoleIds() {
+      return params.memberRoleIds ? (memberRoleIds ??= new Set(params.memberRoleIds)) : undefined;
+    },
+  };
   let wildcardPeerMatch: string | undefined;
   let channelOnlyFallback: string | undefined;
-  for (const binding of listRouteBindings(params.cfg)) {
+  for (const binding of listConfiguredBindings(params.cfg)) {
+    if (!isRouteBinding(binding)) {
+      continue;
+    }
     const resolved = resolveNormalizedBoundAccountMatch(binding);
     if (
       !resolved ||
@@ -91,12 +98,7 @@ export function resolveFirstBoundAccountId(params: {
     ) {
       continue;
     }
-    if (
-      !routeBindingScopeMatches(resolved, {
-        groupSpace: params.groupSpace,
-        memberRoleIds: params.memberRoleIds,
-      })
-    ) {
+    if (!routeBindingScopeMatches(resolved, scope)) {
       continue;
     }
     if (!hasPeerContext) {

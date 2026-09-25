@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements group gating behavior.
 export {
   implicitMentionKindWhen,
   resolveInboundMentionDecision,

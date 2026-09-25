@@ -361,7 +361,8 @@ openclaw models list
     Use `amazon-bedrock/anthropic.claude-fable-5` in `us-east-1`, or the
     regional inference ids such as `us.anthropic.claude-fable-5`.
     OpenClaw applies Fable's 1M context window, 128K output limit, always-on
-    adaptive thinking, and supported effort mapping. `/think off` and
+    adaptive thinking, and supported effort mapping. Fable 5 and 5.1 default
+    to `medium` effort; explicit effort settings take precedence. `/think off` and
     `/think minimal` map to `low`; temperature and forced tool choice controls
     are omitted, matching the Opus 4.7/4.8 route. Streaming output is held
     until Bedrock returns a terminal status so mid-stream refusals do not

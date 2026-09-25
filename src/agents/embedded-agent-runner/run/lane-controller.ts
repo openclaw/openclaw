@@ -154,6 +154,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
       onAttemptDeadlineChanged(deadline);
     }
     return {
+      isCurrent,
       abortSignal: signal,
       onAttemptDeadlineChanged,
       onAttemptTimeout: (reason: Error) => {
@@ -291,7 +292,6 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
       finishGlobalLaneAdmission();
       noteLaneTaskProgress();
       let params = options.getParams();
-      params.replyOperation?.markGlobalLaneWaitEnded();
       throwIfAborted();
       let lifecycleGeneration = options.getLifecycleGeneration();
       const currentLifecycleGeneration = getAgentEventLifecycleGeneration();
@@ -355,6 +355,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
               lastActiveAt: Date.now(),
             });
             // Queue dequeue can still block on writer or placement admission.
+            params.replyOperation?.markGlobalLaneWaitEnded();
             params.onLaneWait?.({ waitMs: 0, queuedAhead: 0, waiting: false });
           },
         ),

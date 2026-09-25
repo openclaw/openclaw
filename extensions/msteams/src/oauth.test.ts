@@ -137,12 +137,7 @@ describe("exchangeMSTeamsCodeForTokens", () => {
   });
 
   it("throws on a 400 error response", async () => {
-    fetchSpy.mockResolvedValueOnce(
-      new Response(JSON.stringify({ error: "invalid_grant" }), {
-        status: 400,
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
+    fetchSpy.mockResolvedValueOnce(Response.json({ error: "invalid_grant" }, { status: 400 }));
 
     await expect(
       exchangeMSTeamsCodeForTokens({
@@ -275,12 +270,7 @@ describe("refreshMSTeamsDelegatedTokens", () => {
   });
 
   it("throws on a 401 error response", async () => {
-    fetchSpy.mockResolvedValueOnce(
-      new Response(JSON.stringify({ error: "invalid_grant" }), {
-        status: 401,
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
+    fetchSpy.mockResolvedValueOnce(Response.json({ error: "invalid_grant" }, { status: 401 }));
 
     await expect(
       refreshMSTeamsDelegatedTokens({

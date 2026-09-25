@@ -20,6 +20,7 @@ import { acquireGatewayLock, type GatewayLockOptions } from "../infra/gateway-lo
 import { loggingState } from "../logging/state.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-harness-session-key.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { agentCliCommand, agentViaGatewayTesting } from "./agent-via-gateway.js";
 import type { agentCommand as AgentCommand } from "./agent.js";
 
@@ -79,6 +80,7 @@ function mockConfig(storePath: string, overrides?: Partial<OpenClawConfig>) {
       },
       ...(overrides?.agents?.ownership ? { ownership: overrides.agents.ownership } : {}),
       ...(overrides?.agents?.list ? { list: overrides.agents.list } : {}),
+      ...(overrides?.agents?.entries ? { entries: overrides.agents.entries } : {}),
     },
     session: {
       store: storePath,
@@ -321,10 +323,12 @@ function resetAgentCliCommandMocksForTest() {
   vi.stubEnv("OPENCLAW_GATEWAY_URL", "");
   agentViaGatewayTesting.resetLazyImportsForTests();
   agentViaGatewayTesting.setGatewayAbortRetryDelaysMsForTests([0, 0, 0, 0]);
-  loadAgentSessionModuleMock.mockImplementation(
-    async () => await import("./agent/session.runtime.js"),
-  );
-  agentViaGatewayTesting.setAgentSessionModuleLoaderForTests(loadAgentSessionModuleMock);
+  // Each test observes a fresh mock generation, even after the real module was
+  // warmed; a single hoisted factory would hide later unexpected imports.
+  vi.doMock("./agent/session.runtime.js", async (importOriginal) => {
+    loadAgentSessionModuleMock();
+    return await importOriginal<typeof import("./agent/session.runtime.js")>();
+  });
   originalForceConsoleToStderr = loggingState.forceConsoleToStderr;
   loggingState.forceConsoleToStderr = false;
 }
@@ -334,6 +338,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.doUnmock("./agent/session.runtime.js");
   vi.unstubAllEnvs();
   configureExecutionIdentityAdmissionSink(() => false)();
   agentViaGatewayTesting.setGatewayAbortRetryDelaysMsForTests();
@@ -355,6 +360,7 @@ describe("agentCliCommand", () => {
         zeroTimeoutGatewayRequestMs = request.timeoutMs;
       });
     } finally {
+      vi.doUnmock("./agent/session.runtime.js");
       agentViaGatewayTesting.setGatewayAbortRetryDelaysMsForTests();
       loggingState.forceConsoleToStderr = restoreForceConsoleToStderr;
     }
@@ -413,23 +419,35 @@ describe("agentCliCommand", () => {
     });
   });
 
-  it("uses owner authority with the configured local gateway by default", async () => {
-    await withTempStore(async () => {
-      mockGatewaySuccessReply();
+  it.each([false, true])(
+    "uses owner authority with the local gateway (explicit sole: %s)",
+    async (explicitOwnership) => {
+      await withTempStore(
+        async () => {
+          mockGatewaySuccessReply();
 
-      await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
+          await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
 
-      expect(callGateway).toHaveBeenCalledTimes(1);
-      const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "gateway request");
-      expect(request.clientName).toBe("cli");
-      expect(request.mode).toBe("cli");
-      expect(request.scopes).toEqual(["operator.admin"]);
-      expect(request.params).not.toHaveProperty("cleanupBundleMcpOnRunEnd");
-      expect(agentCommand).not.toHaveBeenCalled();
-      expect(agentModuleLoadCount).not.toHaveBeenCalled();
-      expect(runtime.log).toHaveBeenCalledWith("hello");
-    });
-  });
+          expect(callGateway).toHaveBeenCalledTimes(1);
+          const request = requireRecord(
+            requireFirstCallArg(callGateway, "gateway"),
+            "gateway request",
+          );
+          expect(request.clientName).toBe("cli");
+          expect(request.mode).toBe("cli");
+          expect(request.scopes).toEqual(["operator.admin"]);
+          expect(request.params).toMatchObject({ agentId: explicitOwnership ? "solo" : "main" });
+          expect(request.params).not.toHaveProperty("cleanupBundleMcpOnRunEnd");
+          expect(agentCommand).not.toHaveBeenCalled();
+          expect(agentModuleLoadCount).not.toHaveBeenCalled();
+          expect(runtime.log).toHaveBeenCalledWith("hello");
+        },
+        explicitOwnership
+          ? { agents: { ownership: "explicit", entries: { solo: {} } } }
+          : undefined,
+      );
+    },
+  );
 
   it("keeps an agent-scoped gateway turn off session and delivery runtimes", async () => {
     await withTempStore(
@@ -837,44 +855,41 @@ describe("agentCliCommand", () => {
 
   it("holds one agent-embedded state lock for the run and rejects a concurrent --local run", async () => {
     await withTempStore(async ({ dir }) => {
-      const lockOptions = createLocalGatewayLockOptions(dir);
-      let finishFirstRun: ((value: Awaited<ReturnType<typeof AgentCommand>>) => void) | undefined;
-      agentCommand.mockImplementationOnce(
-        async () =>
-          await new Promise<Awaited<ReturnType<typeof AgentCommand>>>((resolve) => {
-            finishFirstRun = resolve;
-          }),
-      );
-
+      let elapsedMs = 0;
+      const lockOptions = createLocalGatewayLockOptions(dir, {
+        now: () => elapsedMs,
+        sleep: async (ms) => {
+          elapsedMs += ms;
+        },
+      });
+      const firstRunStarted = createDeferredCore();
+      const firstRunFinished = createDeferredCore();
+      agentCommand.mockImplementationOnce(async () => {
+        firstRunStarted.resolve();
+        await firstRunFinished.promise;
+      });
+      const clock = vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
       const firstRun = agentCliCommand({ message: "first", to: "+1555", local: true }, runtime, {
         localGatewayLockOptions: lockOptions,
       });
-      await waitForAgentCommandCall();
-
       const stateLockPath = path.join(lockOptions.lockDir!, "gateway.state.lock");
-      const payload = JSON.parse(fs.readFileSync(stateLockPath, "utf8")) as {
-        pid?: number;
-        role?: string;
-      };
-      expect(payload).toMatchObject({ pid: process.pid, role: "agent-embedded" });
+      try {
+        await Promise.race([firstRunStarted.promise, firstRun]);
+        const payload: unknown = JSON.parse(fs.readFileSync(stateLockPath, "utf8"));
+        expect(payload).toMatchObject({ pid: process.pid, role: "agent-embedded" });
 
-      await expect(
-        agentCliCommand({ message: "second", to: "+1555", local: true }, runtime, {
-          localGatewayLockOptions: { ...lockOptions, pollIntervalMs: 2, timeoutMs: 15 },
-        }),
-      ).rejects.toThrow(
-        `another embedded OpenClaw state writer is active (pid ${process.pid}); lock timeout after 15ms`,
-      );
-      expect(agentCommand).toHaveBeenCalledTimes(1);
-
-      if (!finishFirstRun) {
-        throw new Error("Expected first embedded run to start");
+        await expect(
+          agentCliCommand({ message: "second", to: "+1555", local: true }, runtime, {
+            localGatewayLockOptions: { ...lockOptions, pollIntervalMs: 2, timeoutMs: 15 },
+          }),
+        ).rejects.toThrow(
+          `another embedded OpenClaw state writer is active (pid ${process.pid}); lock timeout after 15ms`,
+        );
+        expect(agentCommand).toHaveBeenCalledTimes(1);
+      } finally {
+        firstRunFinished.resolve();
+        await firstRun.finally(() => clock.mockRestore());
       }
-      finishFirstRun({
-        payloads: [{ text: "done" }],
-        meta: { durationMs: 1 },
-      } as Awaited<ReturnType<typeof AgentCommand>>);
-      await firstRun;
       expect(fs.existsSync(stateLockPath)).toBe(false);
     });
   });
@@ -2575,7 +2590,7 @@ describe("agentCliCommand", () => {
 
         await agentCliCommand({ message: "hi", to: "+1555", local: true }, runtime);
 
-        expect(auditRecorderMocks.create).toHaveBeenCalledWith({ messageMode: "off" });
+        expect(auditRecorderMocks.create).toHaveBeenCalledOnce();
         expect(auditRecorderMocks.stop).toHaveBeenCalledOnce();
         expect(hasExecutionIdentityAdmissionSink()).toBe(false);
       },
@@ -2671,8 +2686,10 @@ describe("agentCliCommand", () => {
       try {
         await withTempStore(async () => {
           const error = createGatewayNormalCloseError();
+          const gatewayStarted = createDeferredCore();
           callGateway.mockImplementation(
             async (request: { onAccepted?: (payload: unknown) => void }) => {
+              gatewayStarted.resolve();
               if (accepted && callGateway.mock.calls.length === 1) {
                 request.onAccepted?.({ status: "accepted", runId: "gateway-before-retry" });
                 throw createGatewayNormalCloseError();
@@ -2683,6 +2700,8 @@ describe("agentCliCommand", () => {
 
           const command = agentCliCommand({ message: "hi", to: "+1555" }, runtime);
           const rejection = expect(command).rejects.toBe(error);
+          // Module loading is not driven by fake time; observe dispatch before advancing it.
+          await gatewayStarted.promise;
           await vi.advanceTimersByTimeAsync(33_000);
           await rejection;
 
@@ -3013,6 +3032,70 @@ describe("agentCliCommand", () => {
 
     expect(callGateway).toHaveBeenCalledTimes(1);
     expect(runtime.exit).not.toHaveBeenCalledWith(1);
+  });
+
+  it("keeps a resolved session module cached until the existing lazy reset", async () => {
+    await withTempStore(async () => {
+      mockGatewaySuccessReply();
+      const run = () => agentCliCommand({ message: "hi", to: "+1555" }, runtime);
+      await expect(run()).resolves.toEqual(gatewaySuccessReply("hello"));
+      expect(loadAgentSessionModuleMock).toHaveBeenCalledOnce();
+
+      const nextGeneration = vi.fn();
+      vi.doMock("./agent/session.runtime.js", async (importOriginal) => {
+        nextGeneration();
+        return await importOriginal<typeof import("./agent/session.runtime.js")>();
+      });
+      await expect(run()).resolves.toEqual(gatewaySuccessReply("hello"));
+      expect(nextGeneration).not.toHaveBeenCalled();
+
+      agentViaGatewayTesting.resetLazyImportsForTests();
+      await expect(run()).resolves.toEqual(gatewaySuccessReply("hello"));
+      expect(nextGeneration).toHaveBeenCalledOnce();
+      expect(callGateway).toHaveBeenCalledTimes(3);
+      expect(
+        callGateway.mock.calls.map(([value]) => {
+          const request = requireRecord(value, "gateway request");
+          return requireRecord(request.params, "gateway params").sessionKey;
+        }),
+      ).toEqual(["agent:main:main", "agent:main:main", "agent:main:main"]);
+    });
+  });
+
+  it("keeps a rejected session module cached until the existing lazy reset", async () => {
+    await withTempStore(async () => {
+      const failure = new Error("synthetic session module load failure");
+      const rejectedGeneration = vi.fn(() => {
+        throw failure;
+      });
+      vi.doMock("./agent/session.runtime.js", rejectedGeneration);
+      const signals = createSignalProcess();
+      const run = () =>
+        agentCliCommand({ message: "hi", to: "+1555" }, runtime, {
+          process: signals.processLike,
+        });
+      const firstError = await run().catch((error: unknown) => error);
+      expect(firstError).toBeInstanceOf(Error);
+      expect(firstError).toMatchObject({ cause: failure });
+      expect(rejectedGeneration).toHaveBeenCalledOnce();
+
+      const nextGeneration = vi.fn();
+      vi.doMock("./agent/session.runtime.js", async (importOriginal) => {
+        nextGeneration();
+        return await importOriginal<typeof import("./agent/session.runtime.js")>();
+      });
+      await expect(run()).rejects.toBe(firstError);
+      expect(nextGeneration).not.toHaveBeenCalled();
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(signals.listenerCount("SIGINT") + signals.listenerCount("SIGTERM")).toBe(0);
+
+      agentViaGatewayTesting.resetLazyImportsForTests();
+      mockGatewaySuccessReply();
+      await expect(run()).resolves.toEqual(gatewaySuccessReply("hello"));
+      expect(nextGeneration).toHaveBeenCalledOnce();
+      expect(callGateway).toHaveBeenCalledOnce();
+      expect(signals.listenerCount("SIGINT") + signals.listenerCount("SIGTERM")).toBe(0);
+    });
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

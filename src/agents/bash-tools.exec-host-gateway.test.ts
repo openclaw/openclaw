@@ -59,6 +59,7 @@ import {
 } from "../process/gateway-work-admission.js";
 import { createProcessSupervisor } from "../process/supervisor/supervisor.js";
 import type { ProcessSupervisor } from "../process/supervisor/types.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -195,7 +196,7 @@ const defaultExecAutoReviewerMock = vi.hoisted(() =>
     rationale: "allowed",
   })),
 );
-const commitExecAuthorizationMock = vi.hoisted(() => vi.fn(async () => undefined));
+const commitExecAuthorizationMock = vi.hoisted(() => vi.fn(async () => () => {}));
 const resolveApprovalDecisionOrUndefinedMock = vi.hoisted(() =>
   vi.fn(
     async (_params?: {
@@ -732,7 +733,9 @@ describe("processGatewayAllowlist", () => {
     const resolvedPath =
       candidate?.sourceSegment.resolution?.execution.resolvedRealPath ??
       candidate?.sourceSegment.resolution?.execution.resolvedPath;
-    return { authorizationPlan, resolvedPath };
+    const invocationPath =
+      candidate?.sourceSegment.resolution?.execution.resolvedPath ?? resolvedPath;
+    return { authorizationPlan, resolvedPath, invocationPath };
   }
 
   async function runTimedOutStrictInlineEval(params: {
@@ -1079,6 +1082,7 @@ describe("processGatewayAllowlist", () => {
     expect(result!).toEqual({
       execCommandOverride: undefined,
       allowWithoutEnforcedCommand: true,
+      assertCurrent: expect.any(Function),
       revalidateBeforeExecution: expect.any(Function),
     });
     expect(captured.events).toHaveLength(2);
@@ -1096,7 +1100,7 @@ describe("processGatewayAllowlist", () => {
 
   it("auto-reviews simple read-only approval misses without prompting", async () => {
     const command = "echo ok";
-    const { resolvedPath } = await configurePlanBackedCommand({ command });
+    const { resolvedPath, invocationPath } = await configurePlanBackedCommand({ command });
     expect(resolvedPath).toBeTruthy();
 
     const captured = captureSecurityEvents();
@@ -1118,7 +1122,8 @@ describe("processGatewayAllowlist", () => {
     );
     expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
     expect(result!).toEqual({
-      execCommandOverride: `${resolvedPath} ok`,
+      execCommandOverride: `'${invocationPath}' ok`,
+      assertCurrent: expect.any(Function),
       revalidateBeforeExecution: expect.any(Function),
     });
     expect(captured.events).toHaveLength(1);
@@ -1131,7 +1136,7 @@ describe("processGatewayAllowlist", () => {
   });
 
   it.runIf(process.platform !== "win32")(
-    "reviews an unquoted glob and semicolon chain and allows the original text once",
+    "reviews an unquoted glob and semicolon chain and pins its dispatches once",
     async () => {
       const command = "ls *.ts; echo complete";
       await configurePlanBackedCommand({ command });
@@ -1152,8 +1157,10 @@ describe("processGatewayAllowlist", () => {
           analysis: expect.objectContaining({ parsed: true, heredoc: false }),
         }),
       );
-      expect(result).not.toHaveProperty("execCommandOverride");
-      expect(result.allowWithoutEnforcedCommand).toBe(true);
+      expect(result.execCommandOverride).toMatch(
+        /^'\/[^']*\/ls' \*\.ts; '\/[^']*\/echo' complete$/,
+      );
+      expect(result.allowWithoutEnforcedCommand).toBeUndefined();
       await expect(result.revalidateBeforeExecution?.()).resolves.toBeUndefined();
       expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
       expect(commitExecAuthorizationMock).toHaveBeenCalledWith(
@@ -1210,7 +1217,7 @@ describe("processGatewayAllowlist", () => {
         });
         if (approval === "auto") {
           expect(defaultExecAutoReviewerMock).toHaveBeenCalledOnce();
-          expect(result.allowWithoutEnforcedCommand).toBe(true);
+          expect(result.execCommandOverride).toMatch(/^'\/[^']*\/ls' \*\.ts \| '\/[^']*\/head'$/);
           changed = true;
           const denied = await result.revalidateBeforeExecution?.();
           expect(denied?.content[0]).toMatchObject({
@@ -1638,7 +1645,7 @@ Command: ${command}`;
       expect(defaultExecAutoReviewerMock).toHaveBeenCalledWith(
         expect.objectContaining({ resolvedPath: canonicalShadowGit }),
       );
-      expect(result).toMatchObject({ execCommandOverride: `${canonicalShadowGit} status` });
+      expect(result.execCommandOverride).toBe(`'${shadowGit}' status`);
       await expect(result.revalidateBeforeExecution?.()).resolves.toBeUndefined();
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
@@ -1725,12 +1732,12 @@ Command: ${command}`;
     });
 
     expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
-    expect(result).toEqual({ execCommandOverride: undefined });
+    expect(result).toEqual({ execCommandOverride: undefined, assertCurrent: expect.any(Function) });
   });
 
   it("auto-reviews strict inline-eval commands instead of forcing human approval", async () => {
     const command = "python3 -c 'print(1)'";
-    const { resolvedPath } = await configurePlanBackedCommand({
+    const { invocationPath } = await configurePlanBackedCommand({
       command,
       allowlistSatisfied: true,
       requiresApproval: false,
@@ -1760,7 +1767,7 @@ Command: ${command}`;
     );
     expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
     expect(warnings[0]).toContain("reviewer or explicit approval");
-    expect(result.execCommandOverride).toBe(`${resolvedPath} -c 'print(1)'`);
+    expect(result.execCommandOverride).toBe(`'${invocationPath}' -c 'print(1)'`);
   });
 
   it("uses a plan-backed enforced command when the allowlist plan is usable", async () => {
@@ -1810,6 +1817,7 @@ Command: ${command}`;
 
     expect(result).toEqual({
       execCommandOverride: `${resolvedExecutable} -c 16`,
+      assertCurrent: expect.any(Function),
       revalidateBeforeExecution: expect.any(Function),
     });
     expect(commitExecAuthorizationMock).toHaveBeenCalledWith(
@@ -1870,6 +1878,7 @@ Command: ${command}`;
     expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
     expect(result).toEqual({
       execCommandOverride: enforced.command,
+      assertCurrent: expect.any(Function),
       revalidateBeforeExecution: expect.any(Function),
     });
     expect(commitExecAuthorizationMock).toHaveBeenCalledWith(
@@ -1883,7 +1892,7 @@ Command: ${command}`;
     );
   });
 
-  it("reviews unrenderable allowlist plans before executing the original command", async () => {
+  it("reviews glob arguments before executing the pinned command", async () => {
     const command = "ls *.ts";
     await configurePlanBackedCommand({
       command,
@@ -1902,8 +1911,8 @@ Command: ${command}`;
       expect.objectContaining({ command, reason: "execution-plan-miss" }),
     );
     expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
-    expect(result.allowWithoutEnforcedCommand).toBe(true);
-    expect(result).not.toHaveProperty("execCommandOverride");
+    expect(result.allowWithoutEnforcedCommand).toBeUndefined();
+    expect(result.execCommandOverride).toMatch(/^'\/[^']*\/ls' \*\.ts$/);
     await expect(result.revalidateBeforeExecution?.()).resolves.toBeUndefined();
   });
 
@@ -2060,6 +2069,7 @@ Command: ${command}`;
     expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
     expect(result).toEqual({
       execCommandOverride: undefined,
+      assertCurrent: expect.any(Function),
       revalidateBeforeExecution: expect.any(Function),
     });
     expect(commitExecAuthorizationMock).toHaveBeenCalledWith(
@@ -2141,25 +2151,16 @@ Command: ${command}`;
 
     const command = "sh -c 'git status'";
     const env = { PATH: "/usr/bin:/bin" };
-    const authorizationPlan = await planShellAuthorization({ command, env });
-    expect(authorizationPlan.ok).toBe(true);
-    if (!authorizationPlan.ok) {
-      throw new Error(authorizationPlan.reason);
-    }
-    requiresExecApprovalMock.mockReturnValue(true);
-    evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
-      allowlistMatches: [],
-      analysisOk: true,
-      allowlistSatisfied: false,
-      segments: authorizationPlan.groups.flatMap((group) =>
-        group.candidates.map((candidate) => candidate.sourceSegment),
-      ),
-      segmentAllowlistEntries: [],
-      segmentSatisfiedBy: [null],
-      authorizationPlan,
-    });
-    resolveExecHostApprovalContextMock.mockReturnValue(createAllowlistOnMissContext());
-    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-always");
+    const secretEgressBindings = [
+      {
+        name: "SERVICE_KEY",
+        sentinel: "synthetic-approval-sentinel",
+        allowedHosts: ["api.example.com"],
+      },
+    ];
+    await configurePlanBackedCommand({ command, env });
+    const approval = createDeferredCore<"allow-always">();
+    resolveApprovalDecisionOrUndefinedMock.mockReturnValue(approval.promise);
     createExecApprovalDecisionStateMock.mockReturnValue({
       baseDecision: { timedOut: false },
       approvedByAsk: true,
@@ -2180,6 +2181,7 @@ Command: ${command}`;
       command,
       ask: "on-miss",
       env,
+      secretEgressBindings,
       autoReview: false,
     });
     const expectedGitArgPattern = buildCwdBoundHashedArgPattern(
@@ -2201,9 +2203,14 @@ Command: ${command}`;
         allowedDecisions: ["allow-once", "allow-always", "deny"],
       }),
     );
+    expect(runExecProcessMock).not.toHaveBeenCalled();
+    approval.resolve("allow-always");
     await vi.waitFor(() => {
       expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledTimes(1);
     });
+    expect(runExecProcessMock).toHaveBeenCalledWith(
+      expect.objectContaining({ env, secretEgressBindings }),
+    );
     expect(commitExecAuthorizationMock).toHaveBeenCalledWith(
       expect.objectContaining({
         authorization: expect.objectContaining({ source: "explicit-approval" }),
@@ -2265,21 +2272,17 @@ Command: ${command}`;
       segmentSatisfiedBy: ["safeBuiltins", null] as ExecSegmentSatisfiedBy[],
     },
   ])(
-    "auto-reviews the exact enforced $name without prompting",
+    "auto-reviews bound executables while preserving the $name without prompting",
     async ({ command, segmentSatisfiedBy }) => {
       const { authorizationPlan } = await configurePlanBackedCommand({
         command,
         segmentSatisfiedBy,
       });
       const candidates = authorizationPlan.groups.flatMap((group) => group.candidates);
-      const enforced = buildAuthorizedShellCommandFromPlan({
-        plan: authorizationPlan,
-        mode: "enforced",
-        segmentSatisfiedBy: segmentSatisfiedBy ?? candidates.map(() => null),
-      });
-      expect(enforced.ok).toBe(true);
-      if (!enforced.ok) {
-        throw new Error(enforced.reason);
+      const nodePath = candidates.find((candidate) => candidate.sourceSegment.argv[0] === "node")
+        ?.sourceSegment.resolution?.execution.resolvedPath;
+      if (!nodePath) {
+        throw new Error("Expected a resolved node invocation path");
       }
 
       const result = await runGatewayAllowlist({
@@ -2296,7 +2299,7 @@ Command: ${command}`;
         }),
       );
       expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
-      expect(result.execCommandOverride).toBe(enforced.command);
+      expect(result.execCommandOverride).toBe(command.replaceAll("node", `'${nodePath}'`));
     },
   );
 
@@ -2714,6 +2717,7 @@ EOF`,
     expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
     expect(result).toEqual({
       execCommandOverride: undefined,
+      assertCurrent: expect.any(Function),
       revalidateBeforeExecution: expect.any(Function),
     });
     expect(commitExecAuthorizationMock).toHaveBeenCalledWith(
@@ -3247,6 +3251,7 @@ EOF`,
     });
     commitExecAuthorizationMock.mockImplementation(async () => {
       expect(getActiveGatewayRootWorkCount()).toBe(1);
+      return () => {};
     });
     runExecProcessMock.mockImplementation(async () => {
       expect(getActiveGatewayRootWorkCount()).toBe(1);
@@ -3451,6 +3456,10 @@ EOF`,
     "resolves a %s GitHub credential only after delayed approval",
     async (credentialState) => {
       buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
+      const followupDelivered = createDeferredCore();
+      sendExecApprovalFollowupResultMock.mockImplementation(async () => {
+        followupDelivered.resolve();
+      });
       createExecApprovalDecisionStateMock.mockReturnValue({
         baseDecision: { timedOut: false },
         approvedByAsk: false,
@@ -3509,7 +3518,8 @@ EOF`,
           fs.writeFileSync(hostsPath, "github.com:\n  oauth_token: synthetic-after-approval\n");
         }
         releaseApproval();
-        await vi.waitFor(() => expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledOnce());
+        await followupDelivered.promise;
+        expect(sendExecApprovalFollowupResultMock.mock.calls.length).toBe(1);
         if (credentialState === "missing") {
           expect(requireSentFollowupText(0)).toContain(
             "GitHub Identity credential is unavailable or insecure. Reconnect or change GitHub Identity, then retry.",
@@ -4195,8 +4205,8 @@ EOF`,
       return resolveCronJobConfigRevision(loadedJob);
     }
 
-    function mintStandingGrant(revision: string): void {
-      insertOperatorApproval({
+    async function mintStandingGrant(revision: string): Promise<void> {
+      await insertOperatorApproval({
         approval: {
           id: "cron-approval-1",
           kind: "exec",
@@ -4226,7 +4236,7 @@ EOF`,
         },
         databaseOptions: databaseOptions(),
       });
-      const resolved = resolveOperatorApproval({
+      const resolved = await resolveOperatorApproval({
         id: "cron-approval-1",
         decision: "allow-always",
         resolver: { kind: "device", id: "reviewer-1" },
@@ -4260,7 +4270,7 @@ EOF`,
 
     it("executes a cron occurrence via a standing grant without prompting", async () => {
       const revision = seedCronJobRow();
-      mintStandingGrant(revision);
+      await mintStandingGrant(revision);
       unregisterCronSource = registerCronRunExecSource("cron-run-1", {
         agentId: "main",
         jobId: "job-1",
@@ -4290,7 +4300,7 @@ EOF`,
 
     it("denies at the spawn boundary when the grant is invalidated after consult", async () => {
       const revision = seedCronJobRow();
-      mintStandingGrant(revision);
+      await mintStandingGrant(revision);
       unregisterCronSource = registerCronRunExecSource("cron-run-1", {
         agentId: "main",
         jobId: "job-1",

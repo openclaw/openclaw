@@ -29,9 +29,7 @@ describe("renderChatComposer context usage", () => {
       },
     });
     expect(container.querySelector(".context-usage__context-value")?.textContent).toContain("180k");
-    expect(container.querySelector(".context-usage__title")?.textContent).toBe(
-      "Prompt budget (last run)",
-    );
+    expect(container.querySelector(".context-usage__title")?.textContent).toBe("Prompt budget");
     expect(
       container.querySelector(".context-ring")?.classList.contains("context-ring--warning"),
     ).toBe(fresh);

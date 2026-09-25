@@ -40,7 +40,7 @@ function createStressReviewer(params: {
     selection: { provider: "openrouter", modelId: "reviewer", agentDir: "/agent" },
     model: { provider: "openrouter", id: "reviewer", api: "openai" as const },
     auth: { apiKey: "redacted", mode: "env" as const },
-    release: () => {},
+    [Symbol.asyncDispose]: async () => {},
   }));
   const complete = vi.fn(params.complete);
   const reviewer = createModelExecAutoReviewer({
@@ -738,7 +738,7 @@ describe("exec auto-review concurrency stress", () => {
           selection: { provider: "openrouter", modelId: "reviewer", agentDir: "/agent" },
           model: { provider: "openrouter", id: "reviewer", api: "openai" as const },
           auth: { apiKey: "redacted", mode: "env" as const },
-          release: () => {},
+          [Symbol.asyncDispose]: async () => {},
         };
       });
       const complete = vi.fn(async () => {

@@ -13,7 +13,7 @@ import { migrateLegacyMainSessionKeys } from "../config/sessions/legacy-main-ses
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 
-export type FirstOnboardingAgent = { name: string };
+export type FirstOnboardingAgent = { name: string; team?: boolean };
 
 export function validateFirstOnboardingAgentName(value: string | undefined): string | undefined {
   const name = value?.trim();
@@ -67,6 +67,7 @@ export async function ensureOnboardingAgent(params: {
   agentId: string;
   bootstrapPending: boolean;
   createdAgent: boolean;
+  createdAgentIds?: string[];
   sessionMigrationWarnings?: string[];
   /**
    * Config hash observed after this helper created the first roster agent.
@@ -94,10 +95,18 @@ export async function ensureOnboardingAgent(params: {
   // owner before returning an existing fleet to the remaining setup effects.
   inheritLegacyDefaultAgentId(params.baseConfig ?? params.config, params.config);
   const candidateRoster = listAgentEntries(params.config);
-  if (
+  const hasCandidateRoster =
     candidateRoster.length > 0 &&
-    (params.preserveCandidateRoster || !isInjectedMainRoster(params.config))
-  ) {
+    (params.preserveCandidateRoster || !isInjectedMainRoster(params.config));
+  if (params.firstAgent?.team) {
+    before ??= await readConfigFileSnapshot();
+    if (hasCandidateRoster || hasResolvedRosterBeforeMigrations(before)) {
+      throw new Error(
+        "The requested team was not created because an agent roster already exists. Use `openclaw agents team create` to add a team.",
+      );
+    }
+  }
+  if (hasCandidateRoster) {
     return {
       config: params.config,
       configBase: params.baseConfig ?? params.config,
@@ -126,22 +135,34 @@ export async function ensureOnboardingAgent(params: {
     };
   }
   const firstAgentName = params.firstAgent ? params.firstAgent.name.trim() : "main";
-  const created = await createAgent({
-    entry: {
-      id: normalizeAgentId(firstAgentName),
-      name: firstAgentName,
-      workspace: params.workspace,
-    },
-    bootstrapMain: normalizeAgentId(firstAgentName) === "main",
+  const createOptions = {
     bootstrapFirstAgent: true,
     ...(hasExpectedConfigHash ? { expectedConfigHash: params.expectedConfigHash } : {}),
-    skipBootstrap: params.config.agents?.defaults?.skipBootstrap,
-    skipOptionalBootstrapFiles: params.config.agents?.defaults?.skipOptionalBootstrapFiles,
     beforePersistentApply: params.beforePersistentApply,
-  });
+  };
+  const created = params.firstAgent?.team
+    ? await (
+        await import("../agents/agent-team.js")
+      ).createAgentTeam({
+        ...createOptions,
+        coordinator: firstAgentName,
+        workspaceRoot: params.workspace,
+      })
+    : await createAgent({
+        ...createOptions,
+        entry: {
+          id: normalizeAgentId(firstAgentName),
+          name: firstAgentName,
+          workspace: params.workspace,
+        },
+        bootstrapMain: normalizeAgentId(firstAgentName) === "main",
+        skipBootstrap: params.config.agents?.defaults?.skipBootstrap,
+        skipOptionalBootstrapFiles: params.config.agents?.defaults?.skipOptionalBootstrapFiles,
+      });
   if (created.status === "error") {
     throw new Error(created.message);
   }
+  const createdTeam = "coordinatorId" in created;
   const after = await readConfigFileSnapshot();
   if (!after.valid) {
     throw new Error("Agent creation wrote an invalid OpenClaw config.");
@@ -156,21 +177,15 @@ export async function ensureOnboardingAgent(params: {
   });
   const sessionMigration = await migrateLegacyMainSessionKeys({
     cfg: after.config,
-    mode: "automatic",
-    // Unlike creation bookkeeping, convergence can wait for the next startup.
-    beforePersistentApply: params.beforePersistentApply,
+    mode: "detect",
   });
-  const sessionMigrationWarnings =
-    sessionMigration.armed && !sessionMigration.complete
-      ? [
-          `Legacy main-agent session history migration is incomplete${sessionMigration.warnings.length > 0 ? `: ${sessionMigration.warnings.join("; ")}` : ""}. Run \`openclaw doctor --fix\`; OpenClaw will also retry at next startup.`,
-        ]
-      : [];
+  const sessionMigrationWarnings = sessionMigration.warnings;
   return {
     config,
     configBase: after.config,
-    agentId: created.agentId,
-    bootstrapPending: created.bootstrapPending,
+    agentId: createdTeam ? created.coordinatorId : created.agentId,
+    bootstrapPending: createdTeam ? false : created.bootstrapPending,
+    createdAgentIds: createdTeam ? created.agents.map((agent) => agent.agentId) : [created.agentId],
     createdAgent: created.status === "created",
     ...(created.configHash ? { configHash: created.configHash } : {}),
     ...(sessionMigrationWarnings.length > 0 ? { sessionMigrationWarnings } : {}),

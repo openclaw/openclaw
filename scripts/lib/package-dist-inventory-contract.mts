@@ -40,6 +40,19 @@ export type PackageDistContentInventoryEntry = {
   size: number;
 };
 
+export function createPackageDistContentInventoryEntry(
+  relativePath: string,
+  hash: { bytes: number; digest: string },
+  mode: number,
+): PackageDistContentInventoryEntry {
+  return {
+    path: relativePath.replace(/\\/g, "/"),
+    sha256: hash.digest,
+    mode: mode & 0o777,
+    size: hash.bytes,
+  };
+}
+
 export function parsePackageDistContentInventory(
   value: unknown,
 ): PackageDistContentInventoryEntry[] {

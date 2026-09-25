@@ -47,6 +47,12 @@ export type TranslationBatchItem = {
   sourceContext?: string;
 };
 
+export function extractTranslationPlaceholders(text: string): string[] {
+  return [...new Set([...text.matchAll(/\{(\w+)\}/g)].map((match) => match[1] ?? ""))]
+    .filter(Boolean)
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
 export function flattenTranslations(
   value: TranslationMap,
   prefix = "",
@@ -249,7 +255,7 @@ export function createControlUiLocaleSyncPlan(input: {
   };
 }
 
-export function compareStringArrays(left: string[], right: string[]): boolean {
+export function compareStringArrays(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 

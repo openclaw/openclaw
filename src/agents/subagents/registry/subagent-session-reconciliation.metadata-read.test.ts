@@ -85,8 +85,6 @@ it("reads subagent lifecycle and policy metadata without decoding unrelated sess
         cfg: { session: { store: storePath } },
         fallbackEndedAt: 3000,
       };
-      const storeCache = new Map();
-      expect(resolveSubagentSessionCompletion({ ...params, storeCache })).toEqual(completion);
       replaceSessionEntrySync(
         { storePath, sessionKey: childSessionKey },
         {
@@ -96,7 +94,6 @@ it("reads subagent lifecycle and policy metadata without decoding unrelated sess
         },
       );
       expect(resolveSubagentSessionCompletion(params)).toBeNull();
-      expect(resolveSubagentSessionCompletion({ ...params, storeCache })).toEqual(completion);
       expect(
         resolveSubagentSessionCompletion({
           ...params,
@@ -110,7 +107,9 @@ it("reads subagent lifecycle and policy metadata without decoding unrelated sess
       database.db
         .prepare("UPDATE session_nodes SET entry_json = ?, entry_valid = 0 WHERE session_key = ?")
         .run('{"bad":true}', childSessionKey);
-      expect(resolveSubagentSessionCompletion(params)).toBeNull();
+      expect(() => resolveSubagentSessionCompletion(params)).toThrow(
+        "invalid persisted session row requires repair",
+      );
 
       expect(getSubagentDepthFromSessionStore(childSessionKey, { cfg: params.cfg })).toBe(1);
       expect(

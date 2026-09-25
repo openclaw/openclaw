@@ -17,6 +17,14 @@
       ]
     }
   },
+  "configGroups": [
+    {
+      "id": "webhook-routes",
+      "title": "Webhook routes",
+      "order": 10,
+      "properties": ["routes"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

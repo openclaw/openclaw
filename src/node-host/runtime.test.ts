@@ -8,111 +8,16 @@ import { NODE_DEVICE_APPS_COMMAND } from "../infra/node-commands.js";
 import type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import type { NodeHostClient } from "./client.js";
 import type { SkillBinsProvider } from "./invoke.js";
-import { listRegisteredNodeHostCapsAndCommands } from "./plugin-node-host.js";
-import { prepareNodeHostRuntime } from "./runtime.js";
-
-const mocks = vi.hoisted(() => {
-  const closeMcp = vi.fn(async () => undefined);
-  return {
-    closeMcp,
-    closeWorkerSupervisor: vi.fn(async () => undefined),
-    initializeWorkerSupervisor: vi.fn(async () => undefined),
-    handleInvoke: vi.fn(async () => undefined),
-    progressStartHeartbeats: vi.fn(),
-    progressWrite: vi.fn(async (_chunk: string) => undefined),
-    startMcp: vi.fn(async (_servers: unknown, _deps?: { signal?: AbortSignal }) => ({
-      descriptors: [],
-      callMcpTool: vi.fn(),
-      close: closeMcp,
-    })),
-  };
-});
-
-vi.mock("../infra/path-env.js", () => ({
-  ensureOpenClawCliOnPath: vi.fn(),
-}));
-
-vi.mock("./invoke.js", () => ({
-  handleInvoke: mocks.handleInvoke,
-}));
-
-vi.mock("./mcp.js", () => ({
-  startNodeHostMcpManager: mocks.startMcp,
-}));
-
-vi.mock("./node-invoke-progress.js", () => ({
-  createNodeInvokeProgressWriter: vi.fn(() => ({
-    startHeartbeats: mocks.progressStartHeartbeats,
-    write: mocks.progressWrite,
-    stop: vi.fn(),
-    flush: vi.fn(async () => undefined),
-  })),
-}));
-
-vi.mock("./node-worker-supervisor.js", () => ({
-  createNodeWorkerSupervisor: vi.fn(() => ({
-    initialize: mocks.initializeWorkerSupervisor,
-    close: mocks.closeWorkerSupervisor,
-  })),
-}));
-
-vi.mock("./node-worker-workspace.js", () => ({
-  NodeWorkerWorkspaceRuntime: class {
-    readonly exec = vi.fn();
-  },
-}));
-
-vi.mock("./plugin-node-host.js", () => ({
-  ensureNodeHostPluginRegistry: vi.fn(async () => undefined),
-  isRegisteredNodeHostCommandDuplex: vi.fn((command: string) => command === "test.duplex"),
-  listRegisteredNodeHostCapsAndCommands: vi.fn(() => ({
-    caps: ["terminal"],
-    commands: ["test.duplex"],
-    nodePluginTools: [],
-  })),
-}));
-
-vi.mock("./skills.js", () => ({
-  scanNodeHostedSkills: vi.fn(() => []),
-}));
-
-const frame = {
-  id: "invoke-1",
-  nodeId: "node-1",
-  command: "test.duplex",
-  paramsJSON: null,
-  timeoutMs: 0,
-  idempotencyKey: null,
-};
-
-beforeEach(() => {
-  vi.clearAllMocks();
-  mocks.closeMcp.mockResolvedValue(undefined);
-  mocks.closeWorkerSupervisor.mockResolvedValue(undefined);
-  mocks.initializeWorkerSupervisor.mockResolvedValue(undefined);
-});
-
-function createNodeHostClient(request: () => Promise<unknown>): NodeHostClient {
-  return {
-    async request<T>() {
-      return (await request()) as T;
-    },
-  };
-}
-
-async function startRuntime(
-  client: NodeHostClient = createNodeHostClient(async () => ({ bins: [] })),
-) {
-  const prepared = await prepareNodeHostRuntime({
-    config: { nodeHost: { skills: { enabled: false }, workerRuns: { enabled: true } } },
-    env: { PATH: "/usr/bin" },
-    enableAgentRuns: true,
-    enableWorkerRuns: true,
-  });
-  return prepared.start({ client });
-}
+import {
+  createNodeHostClient,
+  frame,
+  holdInvoke,
+  listRegisteredNodeHostCapsAndCommands,
+  mocks,
+  prepareNodeHostRuntime,
+  startRuntime,
+} from "./runtime.test-support.js";
 
 type SkillBinsResponse = { bins: string[] };
 type SkillBinsFixture = {
@@ -259,36 +164,6 @@ describe("node-host skill-bin cache", () => {
   });
 });
 
-function holdInvoke(onCommand?: (io: OpenClawPluginNodeHostCommandIo) => void) {
-  let io: OpenClawPluginNodeHostCommandIo | undefined;
-  let signal: AbortSignal | undefined;
-  let release: (() => void) | undefined;
-  const held = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  mocks.handleInvoke.mockImplementationOnce(async (...args: unknown[]) => {
-    const runtime = args[4] as {
-      pluginCommandIo?: OpenClawPluginNodeHostCommandIo;
-      signal?: AbortSignal;
-    };
-    io = runtime.pluginCommandIo;
-    signal = runtime.signal;
-    if (io) {
-      onCommand?.(io);
-    }
-    await held;
-  });
-  return {
-    get io() {
-      return io;
-    },
-    get signal() {
-      return signal;
-    },
-    release: () => release?.(),
-  };
-}
-
 describe("node-host invocation cancellation", () => {
   it("does not admit a queued invocation after its connection is retired", async () => {
     const runtime = await startRuntime();
@@ -377,24 +252,197 @@ describe("node-host invocation cancellation", () => {
     await invoking;
   });
 
-  it("retires MCP even when supervisor close fails", async () => {
+  it("retries retained supervisor retirement without replaying completed MCP close", async () => {
     const supervisorError = new Error("supervisor close failed");
-    mocks.closeWorkerSupervisor.mockRejectedValueOnce(supervisorError);
+    const retiring = createDeferred();
+    const entered = createDeferred();
+    mocks.closeWorkerSupervisor.mockImplementationOnce(async () => {
+      entered.resolve();
+      await retiring.promise;
+      return undefined;
+    });
     const runtime = await startRuntime();
-
-    await expect(runtime.close()).rejects.toBe(supervisorError);
-    expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce();
-    expect(mocks.closeMcp).toHaveBeenCalledOnce();
+    const closing = runtime.close();
+    const observed = expect(closing).rejects.toBe(supervisorError);
+    try {
+      await entered.promise;
+      expect(runtime.close()).toBe(closing);
+      retiring.reject(supervisorError);
+      await observed;
+      expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce();
+      expect(mocks.closeMcp).toHaveBeenCalledOnce();
+      await expect(runtime.close()).resolves.toBeUndefined();
+      expect(mocks.closeWorkerSupervisor).toHaveBeenCalledTimes(2);
+      expect(mocks.closeMcp).toHaveBeenCalledOnce();
+    } finally {
+      retiring.resolve();
+      await Promise.allSettled([closing, observed]);
+    }
   });
 
-  it("completes supervisor retirement even when MCP close fails", async () => {
+  it("retains the terminal MCP close failure across concurrent and later closes", async () => {
     const mcpError = new Error("MCP close failed");
-    mocks.closeMcp.mockRejectedValueOnce(mcpError);
+    const retiring = createDeferred();
+    const entered = createDeferred();
+    // The real MCP manager marks itself closed before awaiting physical disposal.
+    mocks.closeMcp.mockImplementationOnce(async () => {
+      entered.resolve();
+      await retiring.promise;
+      return undefined;
+    });
     const runtime = await startRuntime();
+    const closing = runtime.close();
+    const observed = expect(closing).rejects.toBe(mcpError);
+    try {
+      await entered.promise;
+      expect(runtime.close()).toBe(closing);
+      retiring.reject(mcpError);
+      await observed;
+      await expect(runtime.close()).rejects.toBe(mcpError);
+      expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce();
+      expect(mocks.closeMcp).toHaveBeenCalledOnce();
+    } finally {
+      retiring.resolve();
+      await Promise.allSettled([closing, observed]);
+    }
+  });
 
-    await expect(runtime.close()).rejects.toBe(mcpError);
-    expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce();
+  it("shares close completion with a synchronously reentrant abort listener", async () => {
+    const held = holdInvoke();
+    const retiring = createDeferred();
+    const entered = createDeferred();
+    mocks.closeMcp.mockImplementationOnce(async () => {
+      entered.resolve();
+      await retiring.promise;
+      return undefined;
+    });
+    const runtime = await startRuntime();
+    const invoking = runtime.invoke({ ...frame, command: "system.run" });
+    let reentrant: Promise<void> | undefined;
+    let closing: Promise<void> | undefined;
+    try {
+      await vi.waitFor(() => expect(held.signal).toBeDefined());
+      held.signal?.addEventListener(
+        "abort",
+        () => {
+          // Observe the shared owner without making cleanup await itself.
+          reentrant = runtime.close();
+        },
+        { once: true },
+      );
+      closing = runtime.close();
+      expect(held.signal?.aborted).toBe(true);
+      expect(reentrant).toBe(closing);
+      await entered.promise;
+      retiring.resolve();
+      await closing;
+      expect(mocks.disconnectPlugins).toHaveBeenCalledOnce();
+      expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce();
+      expect(mocks.closeMcp).toHaveBeenCalledOnce();
+    } finally {
+      retiring.resolve();
+      held.release();
+      await Promise.allSettled([invoking, closing, reentrant]);
+    }
+  });
+
+  it("reports failed disconnect cleanup and retries it on explicit close", async () => {
+    const failure = new Error("plugin close failed");
+    mocks.disconnectPlugins.mockRejectedValueOnce(failure);
+    const runtime = await startRuntime();
+    await expect(runtime.close()).rejects.toBe(failure);
+    await expect(runtime.close()).resolves.toBeUndefined();
+    expect(mocks.disconnectPlugins).toHaveBeenCalledTimes(2);
     expect(mocks.closeMcp).toHaveBeenCalledOnce();
+    expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce();
+  });
+
+  it("joins disconnect cleanup when an abort listener reenters close", async () => {
+    const held = holdInvoke();
+    const cleanups: Array<ReturnType<typeof createDeferred<void>>> = [];
+    const entered = createDeferred();
+    let tearingDown = false;
+    mocks.disconnectPlugins.mockImplementation(async () => {
+      if (tearingDown) {
+        return;
+      }
+      const cleanup = createDeferred();
+      cleanups.push(cleanup);
+      entered.resolve();
+      await cleanup.promise;
+    });
+    const runtime = await startRuntime();
+    const invoking = runtime.invoke({ ...frame, command: "system.run" });
+    let closing: Promise<void> | undefined;
+    let observed: Promise<void> | undefined;
+    let closed = false;
+    try {
+      await vi.waitFor(() => expect(held.signal).toBeDefined());
+      held.signal?.addEventListener(
+        "abort",
+        () => {
+          closing = runtime.close();
+          observed = closing.then(() => {
+            closed = true;
+          });
+        },
+        { once: true },
+      );
+      runtime.cancelAll();
+      await entered.promise;
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(closed).toBe(false);
+      for (const cleanup of cleanups) {
+        cleanup.resolve();
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        if (cleanups.at(-1) !== cleanup) {
+          expect(closed).toBe(false);
+        }
+      }
+      await closing;
+      expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce();
+      expect(mocks.closeMcp).toHaveBeenCalledOnce();
+    } finally {
+      tearingDown = true;
+      for (const cleanup of cleanups) {
+        cleanup.resolve();
+      }
+      held.release();
+      await Promise.allSettled([invoking, closing, observed]);
+    }
+  });
+
+  it("reports unavailable after failed disconnect and resumes after explicit reconnect cleanup", async () => {
+    const failure = new Error("plugin disconnect failed");
+    mocks.disconnectPlugins.mockRejectedValueOnce(failure);
+    const request = vi.fn(async () => ({}));
+    const runtime = await startRuntime(createNodeHostClient(request));
+    try {
+      runtime.cancelAll();
+      await runtime.invoke(frame);
+      expect(mocks.handleInvoke).not.toHaveBeenCalled();
+      expect(request).toHaveBeenCalledWith(
+        "node.invoke.result",
+        expect.objectContaining({
+          id: frame.id,
+          ok: false,
+          error: {
+            code: "UNAVAILABLE",
+            message: "Node plugin cleanup failed. Reconnect the node to retry cleanup.",
+          },
+        }),
+      );
+      runtime.cancelAll();
+      await runtime.invoke({ ...frame, id: "after-reconnect" });
+      expect(mocks.handleInvoke).toHaveBeenCalledOnce();
+      expect(mocks.disconnectPlugins).toHaveBeenCalledTimes(2);
+    } finally {
+      await runtime.close();
+    }
   });
 
   it("aggregates independent supervisor and MCP close failures in owner order", async () => {
@@ -435,21 +483,63 @@ describe("node-host invocation cancellation", () => {
 });
 
 describe("node-host desktop manifest", () => {
-  it("advertises desktop.stream only when the node-local desktop is enabled", async () => {
-    const disabled = await prepareNodeHostRuntime({
-      config: {},
-      env: { PATH: "/usr/bin" },
-      platform: "linux",
-    });
-    expect(disabled.manifest.commands).not.toContain(NODE_DESKTOP_STREAM_COMMAND);
+  it.each(["darwin", "linux", "win32"] as const)(
+    "enables the same desktop stream for advertisement and invocation on %s by default",
+    async (platform) => {
+      const prepared = await prepareNodeHostRuntime({
+        config: {},
+        env: { PATH: "/usr/bin" },
+        platform,
+      });
+      expect(prepared.manifest.commands).toContain(NODE_DESKTOP_STREAM_COMMAND);
+      const runtime = prepared.start({ client: createNodeHostClient(async () => ({ bins: [] })) });
+      try {
+        await runtime.invoke({ ...frame, command: NODE_DESKTOP_STREAM_COMMAND });
+        expect(mocks.handleInvoke).toHaveBeenLastCalledWith(
+          expect.anything(),
+          expect.anything(),
+          expect.anything(),
+          expect.anything(),
+          expect.objectContaining({ desktopHostConfig: { enabled: true } }),
+        );
+      } finally {
+        await runtime.close();
+      }
+    },
+  );
 
-    const enabled = await prepareNodeHostRuntime({
-      config: { desktop: { host: { enabled: true } } },
-      env: { PATH: "/usr/bin" },
-      platform: "linux",
-    });
-    expect(enabled.manifest.commands).toContain(NODE_DESKTOP_STREAM_COMMAND);
-  });
+  it.each([
+    { configEnabled: false, nativeEnabled: undefined, ephemeral: false, enabled: false },
+    { configEnabled: true, nativeEnabled: undefined, ephemeral: false, enabled: true },
+    { configEnabled: true, nativeEnabled: false, ephemeral: false, enabled: false },
+    { configEnabled: false, nativeEnabled: true, ephemeral: false, enabled: true },
+    { configEnabled: true, nativeEnabled: true, ephemeral: true, enabled: false },
+  ])(
+    "preserves node desktop preference precedence and disposable worker isolation: $configEnabled/$nativeEnabled/$ephemeral",
+    async ({ configEnabled, nativeEnabled, ephemeral, enabled }) => {
+      const prepared = await prepareNodeHostRuntime({
+        config: { desktop: { host: { enabled: configEnabled, port: 5901 } } },
+        env: { PATH: "/usr/bin" },
+        desktopSharingEnabled: nativeEnabled,
+        platform: "darwin",
+        ephemeral,
+      });
+      expect(prepared.manifest.commands.includes(NODE_DESKTOP_STREAM_COMMAND)).toBe(enabled);
+      const runtime = prepared.start({ client: createNodeHostClient(async () => ({ bins: [] })) });
+      try {
+        await runtime.invoke({ ...frame, command: NODE_DESKTOP_STREAM_COMMAND });
+        expect(mocks.handleInvoke).toHaveBeenLastCalledWith(
+          expect.anything(),
+          expect.anything(),
+          expect.anything(),
+          expect.anything(),
+          expect.objectContaining({ desktopHostConfig: { enabled, port: 5901 } }),
+        );
+      } finally {
+        await runtime.close();
+      }
+    },
+  );
 
   it("emits desktop statuses without control-channel heartbeats", async () => {
     const runtime = await startRuntime();

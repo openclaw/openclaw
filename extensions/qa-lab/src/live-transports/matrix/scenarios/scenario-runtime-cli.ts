@@ -1,4 +1,3 @@
-// QA Lab Matrix plugin module implements scenario runtime cli behavior.
 import { spawn as startOpenClawCliProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
@@ -81,19 +80,9 @@ function buildMatrixQaCliResult(params: {
   };
 }
 
-function formatMatrixQaCliExitError(result: MatrixQaCliRunResult) {
+function formatMatrixQaCliFailure(result: MatrixQaCliRunResult, reason: string) {
   return [
-    `${formatMatrixQaCliCommand(result.args)} exited ${result.exitCode}`,
-    result.stderr.trim() ? `stderr:\n${redactMatrixQaCliOutput(result.stderr.trim())}` : null,
-    result.stdout.trim() ? `stdout:\n${redactMatrixQaCliOutput(result.stdout.trim())}` : null,
-  ]
-    .filter(Boolean)
-    .join("\n");
-}
-
-function formatMatrixQaCliTimeoutError(result: MatrixQaCliRunResult, timeoutMs: number) {
-  return [
-    `${formatMatrixQaCliCommand(result.args)} timed out after ${timeoutMs}ms`,
+    `${formatMatrixQaCliCommand(result.args)} ${reason}`,
     result.stderr.trim() ? `stderr:\n${redactMatrixQaCliOutput(result.stderr.trim())}` : null,
     result.stdout.trim() ? `stdout:\n${redactMatrixQaCliOutput(result.stdout.trim())}` : null,
   ]
@@ -186,9 +175,9 @@ export function startMatrixQaOpenClawCli(params: {
                 cause: primary.error,
               })
             : primary.type === "timeout"
-              ? new Error(formatMatrixQaCliTimeoutError(result, params.timeoutMs))
+              ? new Error(formatMatrixQaCliFailure(result, `timed out after ${params.timeoutMs}ms`))
               : result.exitCode !== 0 && params.allowNonZero !== true
-                ? new Error(formatMatrixQaCliExitError(result))
+                ? new Error(formatMatrixQaCliFailure(result, `exited ${result.exitCode}`))
                 : undefined;
       finish(
         result,
@@ -226,7 +215,9 @@ export function startMatrixQaOpenClawCli(params: {
           } else if (closeResult.exitCode === 0 || params.allowNonZero === true) {
             resolve(closeResult);
           } else {
-            reject(new Error(formatMatrixQaCliExitError(closeResult)));
+            reject(
+              new Error(formatMatrixQaCliFailure(closeResult, `exited ${closeResult.exitCode}`)),
+            );
           }
           return;
         }
@@ -281,7 +272,7 @@ export async function runMatrixQaOpenClawCli(params: {
   return await startMatrixQaOpenClawCli(params).wait();
 }
 
-async function assertMatrixQaPrivatePathMode(pathToCheck: string, label: string) {
+export async function assertMatrixQaPrivatePathMode(pathToCheck: string, label: string) {
   if (process.platform === "win32") {
     return;
   }

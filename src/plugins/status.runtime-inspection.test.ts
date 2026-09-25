@@ -1,23 +1,30 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { afterAll, afterEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { handlePluginsCommand } from "../auto-reply/reply/commands-plugins.js";
 import { buildPluginsCommandParams } from "../auto-reply/reply/commands.test-harness.js";
 import { runPluginsDoctorCommand } from "../cli/plugins-cli.runtime.js";
 import { runPluginsInspectCommand } from "../cli/plugins-inspect-command.js";
+import * as configRuntime from "../config/config.js";
 import { readConfigFileSnapshotForWrite, writeConfigFile } from "../config/config.js";
+import * as configObserver from "../config/io.observe.js";
 import { defaultRuntime } from "../runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { withEnv, withEnvAsync } from "../test-utils/env.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
+import { withEnvAsync } from "../test-utils/env.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { setGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { getGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import { selectInstallMutationWriteOptions } from "./install-config-mutation.js";
 import { persistPluginInstall } from "./install-persistence.js";
 import { readPersistedInstalledPluginIndexInstallRecords } from "./installed-plugin-index-records.js";
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
-import { loadAndActivateRootPluginRegistry } from "./loader.js";
+import { loadAndActivateRootPluginRegistry, loadPluginRegistryHandle } from "./loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   makePluginLoaderTempDir,
@@ -33,23 +40,28 @@ import {
   capturePluginRegistryLifecycleEpoch,
   capturePluginRegistryLifecycleSignal,
 } from "./registry-lifecycle.js";
-import { getActivePluginRegistry } from "./runtime.js";
+import { disposePluginRegistryInstances, getActivePluginRegistry } from "./runtime.js";
 import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 import { applySlotSelectionForPlugin } from "./slot-selection.js";
 import * as statusSnapshot from "./status-snapshot.js";
+import { withPluginDiagnosticsReportForInspection, withPluginDiagnosticsReport } from "./status.js";
 import {
-  withPluginDiagnosticsReportForInspection,
-  buildPluginDiagnosticsReport,
-} from "./status.js";
+  classifyConfigObservationError,
+  createDiagnosticsFixture,
+} from "./status.runtime-inspection.test-helpers.js";
+import type { OpenClawPluginService } from "./types.js";
 
 describe("plugin runtime inspection", () => {
-  afterEach(() => {
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     clearPluginMetadataLifecycleCaches();
     resetPluginLoaderTestStateForTest();
     closeOpenClawStateDatabaseForTest();
   });
 
-  afterAll(() => {
+  afterAll(async () => {
+    // Retire async admission records before deleted fixture inodes can be reused.
+    await closeOpenClawStateDatabaseAsync();
     cleanupPluginLoaderFixturesForTest();
   });
 
@@ -304,7 +316,7 @@ module.exports = {
       output.push(value);
     });
     const projectionError = new Error("fixture report projection failed");
-    const projection = vi.spyOn(statusSnapshot, "collectPluginCapabilityConsentDiagnostics");
+    const projection = vi.spyOn(statusSnapshot, "projectPluginInstallHealth");
     try {
       await withEnvAsync(
         {
@@ -318,7 +330,7 @@ module.exports = {
           await writeConfigFile(config);
           const active = getActivePluginRegistry();
           if (mode === "raw") {
-            const report = buildPluginDiagnosticsReport({ config, runtimeInspection: true });
+            const report = loadPluginRegistryHandle({ config, cache: false, toolDiscovery: true });
             expect(report.plugins[0]?.id).toBe(plugin.id);
             expect(state.database?.isOpen).toBe(true);
             expect(state.disposals).toBe(0);
@@ -478,7 +490,7 @@ module.exports = {
       mode: "ready",
       slots: ["memory", "contextEngine"],
     },
-    { source: "npm", kind: undefined, mode: "ready", slots: ["memory"] },
+    { source: "npm", kind: undefined, mode: "ready", slots: ["contextEngine"] },
     { source: "npm", kind: "memory", mode: "disabled", slots: [] },
     { source: "npm", kind: "memory", mode: "requires-config", slots: [] },
   ] as const)("persists first-install slots for $source ($kind, $mode)", async (testCase) => {
@@ -528,7 +540,7 @@ module.exports = {
           );
           fs.writeFileSync(
             path.join(pluginDir, "index.cjs"),
-            `module.exports = { id: ${JSON.stringify(pluginId)}, kind: ${JSON.stringify(testCase.kind ?? "memory")}, register() {} };\n`,
+            `module.exports = { id: ${JSON.stringify(pluginId)}, kind: ${JSON.stringify(testCase.kind ?? "context-engine")}, register() { require("node:fs").writeFileSync(${JSON.stringify(path.join(pluginDir, "registered"))}, "registered"); } };\n`,
           );
 
           const next = await persistPluginInstall({
@@ -541,6 +553,7 @@ module.exports = {
             install: { source: testCase.source, installPath: pluginDir, version: "1.0.0" },
             enable: testCase.mode !== "disabled",
           });
+          expect(fs.existsSync(path.join(pluginDir, "registered"))).toBe(false);
 
           const expectedSlots = testCase.slots.length
             ? Object.fromEntries(testCase.slots.map((slot) => [slot, pluginId]))
@@ -742,7 +755,7 @@ module.exports = { id: ${JSON.stringify(`${pluginId}/${entry}`)}, kind: ${JSON.s
     },
   );
 
-  it("captures full registrations through the non-activating inspection mode", () => {
+  it("captures full registrations through the non-activating inspection mode", async () => {
     const pluginDir = makePluginLoaderTempDir();
     const registrationModePath = path.join(pluginDir, "registration-mode.txt");
     const plugin = writePlugin({
@@ -774,18 +787,239 @@ module.exports = { id: ${JSON.stringify(`${pluginId}/${entry}`)}, kind: ${JSON.s
       },
     };
 
-    withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       useNoBundledPlugins();
       const params = { config, workspaceDir: plugin.dir, env: process.env };
 
-      const diagnostics = buildPluginDiagnosticsReport(params);
-      expect(diagnostics.plugins.find((entry) => entry.id === plugin.id)?.httpRoutes).toBe(0);
+      await withPluginDiagnosticsReport(params, (diagnostics) => {
+        expect(diagnostics.plugins.find((entry) => entry.id === plugin.id)?.httpRoutes).toBe(0);
+      });
       expect(fs.readFileSync(registrationModePath, "utf8")).toBe("discovery");
 
       const runtimeInspectionParams = { ...params, runtimeInspection: true };
-      const runtimeInspection = buildPluginDiagnosticsReport(runtimeInspectionParams);
-      expect(runtimeInspection.plugins.find((entry) => entry.id === plugin.id)?.httpRoutes).toBe(1);
+      await withPluginDiagnosticsReport(runtimeInspectionParams, (runtimeInspection) => {
+        expect(runtimeInspection.plugins.find((entry) => entry.id === plugin.id)?.httpRoutes).toBe(
+          1,
+        );
+      });
       expect(fs.readFileSync(registrationModePath, "utf8")).toBe("tool-discovery");
     });
+  });
+});
+
+it("retires runtime diagnostics after each actual chat inspect reply", async () => {
+  await withOpenClawTestState({ label: "diagnostics-chat" }, async (state) => {
+    const { id, event, config, disposed } = createDiagnosticsFixture(state);
+    await state.writeConfig(config);
+    const before = process.listenerCount(event);
+    const stageNames = new Set([
+      "config.snapshot.read.file",
+      "config.snapshot.read.hash",
+      "config.snapshot.read.parse",
+      "config.snapshot.read.includes",
+      "config.snapshot.read.env",
+      "config.snapshot.read.validate",
+      "config.snapshot.read.legacy-issues",
+      "config.snapshot.read.recover-suspicious",
+      "config.snapshot.read.materialize",
+      "config.snapshot.read.observe",
+    ]);
+    for (const name of [id, "all"]) {
+      let lastCompletedStage = "<none>";
+      let measuredFailure: { stage: string; error: unknown } | undefined;
+      const readConfigSnapshot = configRuntime.readConfigFileSnapshot;
+      const configRead = vi
+        .spyOn(configRuntime, "readConfigFileSnapshot")
+        .mockImplementation((options = {}) =>
+          readConfigSnapshot({
+            ...options,
+            measure: async (stage, run) => {
+              const safeStage = stageNames.has(stage) ? stage : "<other stage>";
+              try {
+                const value = await (options.measure ? options.measure(stage, run) : run());
+                lastCompletedStage = safeStage;
+                return value;
+              } catch (error) {
+                measuredFailure = { stage: safeStage, error };
+                throw error;
+              }
+            },
+          }),
+        );
+      let observation: MockInstance<typeof configObserver.observeConfigSnapshot> | undefined;
+      try {
+        observation = vi.spyOn(configObserver, "observeConfigSnapshot");
+        const result = await handlePluginsCommand(
+          buildPluginsCommandParams({
+            cfg: config,
+            workspaceDir: state.workspaceDir,
+            commandBodyNormalized: `/plugins inspect ${name}`,
+          }),
+          true,
+        );
+        expect(result?.reply?.text).toContain("diagnostics-resource-service");
+        expect(result?.reply?.text).toContain('"status": "loaded"');
+        expect(process.listenerCount(event)).toBe(before);
+      } catch (error) {
+        try {
+          // Observe the command's existing promise only after failure; do not warm config reads.
+          const read = configRead.mock.results[0];
+          let snapshot: Awaited<ReturnType<typeof readConfigSnapshot>> | undefined;
+          let readFailure: ReturnType<typeof classifyConfigObservationError> | undefined;
+          try {
+            snapshot = read?.type === "return" ? await read.value : undefined;
+          } catch (readError) {
+            // A rejected fallback observation must not hide the first observation's failure.
+            readFailure = classifyConfigObservationError(readError);
+          }
+          const observations = (observation?.mock.calls ?? []).flatMap(([, observed], index) =>
+            observed.path === state.configPath ? [{ index, observed }] : [],
+          );
+          const issuePaths = new Set([
+            "",
+            "agents",
+            "agents.defaults",
+            "agents.defaults.workspace",
+            "agents.entries",
+            "commands",
+            "commands.text",
+            "commands.plugins",
+            "plugins",
+            "plugins.enabled",
+            "plugins.allow",
+            "plugins.load.paths",
+            "plugins.entries.diagnostics-resource",
+            "plugins.slots.memory",
+          ]);
+          const messageKinds = [
+            "JSON5 parse failed:",
+            "Include resolution failed:",
+            "read failed:",
+            "plugin present but blocked:",
+            "plugin not found:",
+            "invalid config:",
+            "plugin schema missing for",
+            "Unrecognized key",
+            "Invalid input",
+            "Invalid option",
+          ];
+          console.error("diagnostics-chat config snapshot", {
+            selection: name,
+            readCalls: configRead.mock.calls.length,
+            readFailure,
+            observationCount: observations.length,
+            omittedObservations: Math.max(0, observations.length - 4),
+            observations: observations.slice(0, 4).map(({ index, observed }) => {
+              const result = observation?.mock.results[index];
+              const settled = observation?.mock.settledResults[index];
+              return {
+                index,
+                valid: observed.valid,
+                exists: observed.exists,
+                snapshotKind: observed.valid
+                  ? "valid-snapshot"
+                  : observed.issues.some(
+                        (issue) => issue.path === "" && issue.message.startsWith("read failed:"),
+                      )
+                    ? "read-failed-fallback"
+                    : "other",
+                result: result?.type ?? "unavailable",
+                settled: settled?.type ?? "unavailable",
+                failure:
+                  result?.type === "throw"
+                    ? classifyConfigObservationError(result.value)
+                    : settled?.type === "rejected"
+                      ? classifyConfigObservationError(settled.value)
+                      : undefined,
+              };
+            }),
+            matchesFixturePath: snapshot ? snapshot.path === state.configPath : undefined,
+            lastCompletedStage,
+            measuredFailure: measuredFailure
+              ? {
+                  stage: measuredFailure.stage,
+                  ...classifyConfigObservationError(measuredFailure.error),
+                }
+              : { stage: "<outside measured callback>" },
+            valid: snapshot?.valid,
+            exists: snapshot?.exists,
+            matchesWrittenFixture: snapshot?.raw === `${JSON.stringify(config, null, 2)}\n`,
+            issueCount: snapshot?.issues.length,
+            issues: snapshot?.issues.slice(0, 10).map((issue) => ({
+              path: issuePaths.has(issue.path) ? issue.path : "<other path>",
+              messageKind:
+                messageKinds.find((kind) => issue.message.startsWith(kind)) ?? "<other message>",
+            })),
+          });
+        } catch {
+          // Diagnostics must not replace the original failure.
+        }
+        throw error;
+      } finally {
+        try {
+          observation?.mockRestore();
+        } finally {
+          configRead.mockRestore();
+        }
+      }
+    }
+    expect(fs.readFileSync(disposed, "utf8")).toBe("disposed\ndisposed\n");
+  });
+});
+
+it("keeps metadata getters live through awaited projection without retiring an independent handle", async () => {
+  await withOpenClawTestState({ label: "diagnostics-projection" }, async (state) => {
+    const { id, event, config, disposed } = createDiagnosticsFixture(state);
+    const params = {
+      config,
+      env: state.env,
+      workspaceDir: state.workspaceDir,
+      onlyPluginIds: [id],
+    };
+    const before = process.listenerCount(event);
+    const independent = loadPluginRegistryHandle({ ...params, cache: false });
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    let retained: OpenClawPluginService | undefined;
+    const projection = withPluginDiagnosticsReport(params, async (report) => {
+      retained = report.services[0]?.service;
+      entered.resolve();
+      await release.promise;
+      return retained?.id;
+    });
+    try {
+      await entered.promise;
+      await nextTurn();
+      expect(process.listenerCount(event)).toBe(before + 2);
+      expect(fs.existsSync(disposed)).toBe(false);
+      release.resolve();
+      expect(await projection).toBe("diagnostics-resource-service");
+      expect(process.listenerCount(event)).toBe(before + 1);
+      expect(() => retained?.id).toThrow(/reloaded|disabled|retir/);
+      expect(independent.services[0]?.service.id).toBe("diagnostics-resource-service");
+    } finally {
+      release.resolve();
+      await projection;
+      await disposePluginRegistryInstances(independent);
+    }
+    expect(process.listenerCount(event)).toBe(before);
+    expect(fs.readFileSync(disposed, "utf8")).toBe("disposed\ndisposed\n");
+  });
+});
+
+it("preserves the diagnostics projection failure after best-effort instance cleanup", async () => {
+  await withOpenClawTestState({ label: "diagnostics-failure" }, async (state) => {
+    const { id, event, config, disposed } = createDiagnosticsFixture(state, true);
+    const before = process.listenerCount(event);
+    const projectionError = new Error("fixture projection rejected");
+    const failure = await withPluginDiagnosticsReport(
+      { config, env: state.env, onlyPluginIds: [id] },
+      () => {
+        throw projectionError;
+      },
+    ).catch((error: unknown) => error);
+    expect(failure).toBe(projectionError);
+    expect(process.listenerCount(event)).toBe(before);
+    expect(fs.readFileSync(disposed, "utf8")).toBe("disposed\n");
   });
 });

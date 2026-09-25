@@ -2303,9 +2303,9 @@ describe("runtime model picker visibility", () => {
       "openai/gpt-5.5",
       "anthropic/claude-sonnet-4-6",
       "google/gemini-3.1-pro-preview",
-      "openai/gpt-5.6-sol",
+      "openai/gpt-6-astra",
     ]);
-    expect(call.initialValues).toEqual(["openai/gpt-5.5", "openai/gpt-5.6-sol"]);
+    expect(call.initialValues).toEqual(["openai/gpt-5.5", "openai/gpt-6-astra"]);
   });
 });
 
@@ -2502,7 +2502,7 @@ describe("applyModelFallbacksFromSelection", () => {
     } as OpenClawConfig;
 
     const next = applyModelFallbacksFromSelection(config, [
-      "openai/gpt-5.6-sol",
+      "openai/gpt-6-astra",
       "anthropic/claude-sonnet-4-6",
     ]);
     expect(next.agents?.defaults?.model).toEqual({

@@ -35,8 +35,38 @@ export function renderLazyElementModal(controller: {
     return nothing;
   }
   const close = () => controller.close();
-  return html`<openclaw-modal-dialog label=${state.element.label} @modal-cancel=${close}>
-    ${renderLazyElementState(state, () => controller.retry(), close)}
+  const loading = state.status === "loading";
+  return html`<openclaw-modal-dialog
+    class=${loading ? "lazy-element-loading-modal" : nothing}
+    label=${state.element.label}
+    @modal-cancel=${close}
+  >
+    ${
+      loading
+        ? html`<section class="lazy-element-loading">
+            <header class="lazy-element-loading__header">
+              <h2>${state.element.label}</h2>
+              <button
+                class="btn btn--ghost btn--icon"
+                type="button"
+                aria-label=${t("common.close")}
+                @click=${close}
+              >
+                ${icon("x")}
+              </button>
+            </header>
+            <div
+              class="lazy-element-loading__status"
+              role="status"
+              aria-live="polite"
+              aria-label=${t("common.loading")}
+            >
+              <span class="btn__spinner" aria-hidden="true"></span>
+              <span>${t("common.loading")}</span>
+            </div>
+          </section>`
+        : renderLazyElementState(state, () => controller.retry(), close)
+    }
   </openclaw-modal-dialog>`;
 }
 

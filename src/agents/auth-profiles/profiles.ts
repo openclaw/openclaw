@@ -8,12 +8,18 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
+import { loadCandidateAuthProfileStore } from "./candidate-stores.js";
 import { normalizeAuthProfileCredential } from "./credential-normalize.js";
 import { withOAuthProfileLocks, type OAuthProfileLockKey } from "./oauth-profile-lock.js";
-import { removeOAuthRefreshGenerationPeers } from "./oauth-refresh-peers.js";
+import {
+  listOAuthRefreshGenerationPeers,
+  removeOAuthRefreshGenerationPeers,
+  type OAuthRefreshGenerationPeer,
+} from "./oauth-refresh-peers.js";
 import { resolveSharedAuthStorePath } from "./path-resolve.js";
 import { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
 import { removeRuntimeExternalProfileReferences } from "./runtime-external-profile-references.js";
@@ -78,18 +84,6 @@ function replaceProviderAuthState<T>(
     next[canonicalProvider] = value;
   }
   return Object.keys(next).length > 0 ? next : undefined;
-}
-
-function updateSuccessfulUsageStatsEntry(
-  store: AuthProfileStore,
-  profileId: string,
-  lastUsed?: number,
-): void {
-  store.usageStats = store.usageStats ?? {};
-  store.usageStats[profileId] = resetAuthProfileFailureState(
-    store.usageStats[profileId] ?? {},
-    lastUsed === undefined ? undefined : { lastUsed },
-  );
 }
 
 /** Sets or clears explicit auth profile order for a provider. */
@@ -266,6 +260,7 @@ function removeProfileReferences(
 
 type AuthProfileRemovalTarget = {
   agentDir?: string;
+  databasePath: string;
   profileIds: ReadonlySet<string>;
   provider?: string;
   expectedProfiles: ReadonlyMap<string, AuthProfileCredential | undefined>;
@@ -285,6 +280,11 @@ function createAuthProfileRemovalTarget(params: {
     params.profileIds ?? new Set(listProfilesForProvider(store, params.provider ?? ""));
   return {
     agentDir: params.agentDir,
+    databasePath: resolvePathViaExistingAncestorSync(
+      params.agentDir
+        ? resolveAuthProfileDatabasePath(params.agentDir)
+        : resolveSharedAuthStorePath(),
+    ),
     profileIds,
     ...(params.provider ? { provider: params.provider } : {}),
     expectedProfiles: new Map(
@@ -316,23 +316,94 @@ type AuthProfileRemovalResult =
   | { kind: "contention" }
   | { kind: "updated"; stores: AuthProfileStore[] };
 
-function readSurvivingRemovalProfiles(
+/** Physical credential owners affected by one explicit removal. No secret material. */
+export type AuthProfileRemovalScope = {
+  readonly agentDir?: string;
+  readonly databasePath: string;
+  readonly profileIds: readonly string[];
+};
+
+async function prepareAuthProfileRemovalPeers(
   targets: readonly AuthProfileRemovalTarget[],
-): ReadonlyMap<string, AuthProfileCredential> {
-  const surviving = new Map<string, AuthProfileCredential>();
+  cfg: OpenClawConfig,
+): Promise<OAuthRefreshGenerationPeer[]> {
+  const peers = new Map<string, OAuthRefreshGenerationPeer>();
   for (const target of targets) {
-    const store = loadAuthProfileStoreWithoutExternalProfiles(target.agentDir, {
-      allowKeychainPrompt: false,
-      inheritedAuthDir: target.agentDir,
-    });
-    for (const profileId of target.profileIds) {
-      const credential = store.profiles[profileId];
-      if (credential) {
-        surviving.set(profileId, credential);
+    for (const [profileId, credential] of target.expectedProfiles) {
+      if (credential?.type !== "oauth") {
+        continue;
+      }
+      for (const peer of await listOAuthRefreshGenerationPeers({
+        cfg,
+        ownerDatabasePath: target.databasePath,
+        profileId,
+        generation: credential,
+      })) {
+        // Direct targets own their reference cleanup and generation check already.
+        if (
+          !targets.some(
+            (owner) =>
+              owner.databasePath === peer.candidate.databasePath && owner.profileIds.has(profileId),
+          )
+        ) {
+          peers.set(`${peer.candidate.databasePath}\0${profileId}`, peer);
+        }
       }
     }
   }
-  return surviving;
+  return [...peers.values()];
+}
+
+function readRemovalProfileState(
+  targets: readonly AuthProfileRemovalTarget[],
+  peers: readonly OAuthRefreshGenerationPeer[],
+  current = false,
+): { profiles: ReadonlyMap<string, AuthProfileCredential>; scopes: AuthProfileRemovalScope[] } {
+  const profiles = new Map<string, AuthProfileCredential>();
+  const scopes = new Map<
+    string,
+    { agentDir?: string; databasePath: string; profileIds: string[] }
+  >();
+  const add = (
+    owner: { agentDir?: string; databasePath: string },
+    profileId: string,
+    credential: AuthProfileCredential | undefined,
+  ) => {
+    if (!credential) {
+      return;
+    }
+    profiles.set(profileId, credential);
+    let scope = scopes.get(owner.databasePath);
+    if (!scope) {
+      scope = { agentDir: owner.agentDir, databasePath: owner.databasePath, profileIds: [] };
+      scopes.set(owner.databasePath, scope);
+    }
+    if (!scope.profileIds.includes(profileId)) {
+      scope.profileIds.push(profileId);
+    }
+  };
+  for (const target of targets) {
+    const store = current
+      ? loadAuthProfileStoreWithoutExternalProfiles(target.agentDir, {
+          allowKeychainPrompt: false,
+          inheritedAuthDir: target.agentDir,
+        })
+      : undefined;
+    for (const profileId of target.profileIds) {
+      add(
+        target,
+        profileId,
+        current ? store?.profiles[profileId] : target.expectedProfiles.get(profileId),
+      );
+    }
+  }
+  for (const peer of peers) {
+    const credential = current
+      ? loadCandidateAuthProfileStore(peer.candidate)?.profiles[peer.profileId]
+      : peer.credential;
+    add(peer.candidate, peer.profileId, credential);
+  }
+  return { profiles, scopes: [...scopes.values()] };
 }
 
 async function removeAuthProfileTargetsWithLocks(
@@ -355,21 +426,7 @@ async function removeAuthProfileTargetsWithLocks(
       }
     }
 
-    for (const target of targets) {
-      for (const [profileId, credential] of target.expectedProfiles) {
-        if (credential?.type !== "oauth") {
-          continue;
-        }
-        await removeOAuthRefreshGenerationPeers({
-          cfg,
-          ownerDatabasePath: target.agentDir
-            ? resolveAuthProfileDatabasePath(target.agentDir)
-            : resolveSharedAuthStorePath(),
-          profileId,
-          generation: credential,
-        });
-      }
-    }
+    removeOAuthRefreshGenerationPeers(await prepareAuthProfileRemovalPeers(targets, cfg));
 
     const stores: AuthProfileStore[] = [];
     for (const target of targets) {
@@ -406,8 +463,14 @@ export async function removeAuthProfilesAcrossOwnerStores(params: {
   provider?: string;
   agentDir?: string;
   profileIds: readonly string[];
-  beforeRemove?: (profileIds: readonly string[]) => Promise<void>;
-  onIncomplete?: (survivingProfiles: ReadonlyMap<string, AuthProfileCredential>) => Promise<void>;
+  beforeRemove?: (
+    profileIds: readonly string[],
+    scopes: readonly AuthProfileRemovalScope[],
+  ) => Promise<void>;
+  onIncomplete?: (
+    survivingProfiles: ReadonlyMap<string, AuthProfileCredential>,
+    scopes: readonly AuthProfileRemovalScope[],
+  ) => Promise<void>;
 }): Promise<boolean> {
   const profileIds = new Set(params.profileIds);
   if ([...profileIds].some(isUserModelAuthProfileId)) {
@@ -418,7 +481,14 @@ export async function removeAuthProfilesAcrossOwnerStores(params: {
   for (let attempt = 0; attempt < OAUTH_REMOVAL_MAX_ATTEMPTS; attempt += 1) {
     const owners =
       params.provider === undefined ? [params.agentDir] : providerAuthStoreOwners(params.agentDir);
-    const profilesByOwner = new Map(owners.map((owner) => [owner, new Set(profileIds)]));
+    // An explicit main dir and the implicit shared owner can name one legacy database.
+    // Capture it once, or the first removal makes its duplicate target look stale.
+    const profilesByOwner = new Map(
+      owners.map((owner) => [
+        isSharedMainAuthProfileAgentDir(owner) ? undefined : owner,
+        new Set(profileIds),
+      ]),
+    );
     for (const profileId of profileIds) {
       const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir({
         agentDir: params.agentDir,
@@ -436,22 +506,41 @@ export async function removeAuthProfilesAcrossOwnerStores(params: {
           : { profileIds: ownerProfileIds }),
       }),
     );
+    const peers =
+      params.beforeRemove || params.onIncomplete
+        ? await prepareAuthProfileRemovalPeers(targets, params.cfg ?? {})
+        : [];
+    const reconcileSurvivors = async () => {
+      if (!params.onIncomplete) {
+        return;
+      }
+      const surviving = readRemovalProfileState(targets, peers, true);
+      await params.onIncomplete(surviving.profiles, surviving.scopes);
+    };
     // Config cleanup must not make a later credential generation eligible for this removal.
     let result: AuthProfileRemovalResult;
     try {
-      await params.beforeRemove?.([
-        ...new Set(targets.flatMap((target) => [...target.profileIds])),
-      ]);
+      await params.beforeRemove?.(
+        [...new Set(targets.flatMap((target) => [...target.profileIds]))],
+        readRemovalProfileState(targets, peers).scopes,
+      );
       result = await removeAuthProfileTargetsWithLocks(targets, params.cfg ?? {});
     } catch (error) {
-      await params.onIncomplete?.(readSurvivingRemovalProfiles(targets));
+      await reconcileSurvivors();
       throw error;
     }
     if (result.kind === "updated") {
+      if (params.onIncomplete) {
+        const surviving = readRemovalProfileState(targets, peers, true);
+        // A captured peer may have reconnected while config cleanup was awaiting I/O.
+        if (surviving.profiles.size > 0) {
+          await params.onIncomplete(surviving.profiles, surviving.scopes);
+        }
+      }
       return true;
     }
     if (result.kind === "contention" || params.beforeRemove) {
-      await params.onIncomplete?.(readSurvivingRemovalProfiles(targets));
+      await reconcileSurvivors();
       return false;
     }
   }
@@ -520,7 +609,11 @@ export async function markAuthProfileSuccess(params: {
       if (updatesSelection) {
         freshStore.lastGood = replaceProviderAuthState(freshStore.lastGood, providerKey, profileId);
       }
-      updateSuccessfulUsageStatsEntry(freshStore, profileId, inherited ? undefined : lastUsed);
+      freshStore.usageStats ??= {};
+      freshStore.usageStats[profileId] = resetAuthProfileFailureState(
+        freshStore.usageStats[profileId] ?? {},
+        { lastProbeAt: Date.now(), ...(inherited ? {} : { lastUsed }) },
+      );
       applied = true;
       return true;
     },

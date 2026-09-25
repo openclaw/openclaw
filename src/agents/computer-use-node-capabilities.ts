@@ -8,6 +8,10 @@ import {
   COMPUTER_USE_V2_ACTION_NAMES,
 } from "../plugins/computer-use-contract.js";
 import {
+  loadGatewayComputerStatus,
+  type GatewayComputerStatus,
+} from "./tools/computer-tool-gateway.js";
+import {
   COMPUTER_ACT_COMMAND,
   type ComputerToolTransport,
   SCREEN_SNAPSHOT_COMMAND,
@@ -17,6 +21,7 @@ import { listNodes, type NodeListNode } from "./tools/nodes-utils.js";
 export type PreparedPairedComputerUse = {
   actions: readonly ComputerUseV2ActionName[];
   guidanceCapabilities?: ComputerUseCapabilityDescriptor;
+  gateway?: GatewayComputerStatus;
 };
 
 export type PairedComputerUseAvailability = {
@@ -24,7 +29,7 @@ export type PairedComputerUseAvailability = {
   prepared?: PreparedPairedComputerUse;
 };
 
-/** Avoids node inventory unless the model will receive an ordinary paired computer tool. */
+/** Avoids desktop discovery unless the model will receive an ordinary computer tool. */
 function shouldLoadPairedComputerUseAvailability(params: {
   computerAllowed: boolean;
   modelHasVision?: boolean;
@@ -39,7 +44,7 @@ function shouldLoadPairedComputerUseAvailability(params: {
   );
 }
 
-/** Loads inventory only when an ordinary paired computer tool can reach the model. */
+/** Loads host and node inventory only when an ordinary computer tool can reach the model. */
 export async function loadPairedComputerUseAvailabilityForSurface(params: {
   computerAllowed: boolean;
   modelHasVision?: boolean;
@@ -63,43 +68,64 @@ export function isEligibleComputerNode(node: NodeListNode): boolean {
   );
 }
 
-/** Projects effective paired-node descriptors into one honest pre-publication action surface. */
+/** Projects Gateway and paired-node descriptors into the initial action surface. */
 function preparePairedComputerUse(
   nodes: readonly NodeListNode[],
-): PreparedPairedComputerUse | undefined {
+  gateway: GatewayComputerStatus,
+): PreparedPairedComputerUse {
   const eligible = nodes.filter(isEligibleComputerNode);
-  if (eligible.length === 0) {
-    return undefined;
-  }
   const advertised = new Set<ComputerUseV2ActionName>();
   for (const node of eligible) {
     for (const action of node.computerUse?.actions ?? COMPUTER_USE_V1_ACTION_NAMES) {
       advertised.add(action);
     }
   }
+  if (gateway.available) {
+    for (const action of gateway.computerUse.actions) {
+      advertised.add(action);
+    }
+  }
   return {
     actions: COMPUTER_USE_V2_ACTION_NAMES.filter((action) => advertised.has(action)),
+    gateway,
     // Per-provider guidance is only exact when there is one possible target.
-    guidanceCapabilities: eligible.length === 1 ? eligible[0]?.computerUse : undefined,
+    guidanceCapabilities: gateway.available
+      ? eligible.length === 0
+        ? gateway.computerUse
+        : undefined
+      : eligible.length === 1
+        ? eligible[0]?.computerUse
+        : undefined,
   };
 }
 
-/** Loads current approved node facts before a model-facing tool catalog is serialized. */
+/** Loads current desktop facts before a model-facing tool catalog is serialized. */
 async function loadPairedComputerUseAvailability(
   signal?: AbortSignal,
 ): Promise<PairedComputerUseAvailability> {
-  const nodes = await listNodes({}, signal).catch(() => {
-    signal?.throwIfAborted();
-    return [];
-  });
+  const [nodes, gateway] = await Promise.all([
+    listNodes({}, signal).catch(() => {
+      signal?.throwIfAborted();
+      return [];
+    }),
+    loadGatewayComputerStatus({}, signal).catch((error: unknown): GatewayComputerStatus => {
+      signal?.throwIfAborted();
+      return {
+        configured: true,
+        available: false,
+        error: error instanceof Error ? error.message : "Gateway computer discovery failed",
+      };
+    }),
+  ]);
   signal?.throwIfAborted();
   const eligible = nodes.filter(isEligibleComputerNode);
   return {
-    cacheKey: stableStringify(
-      eligible
+    cacheKey: stableStringify({
+      gateway,
+      nodes: eligible
         .toSorted((a, b) => a.nodeId.localeCompare(b.nodeId))
         .map(({ nodeId, computerUse }) => ({ nodeId, computerUse })),
-    ),
-    prepared: preparePairedComputerUse(eligible),
+    }),
+    prepared: preparePairedComputerUse(eligible, gateway),
   };
 }

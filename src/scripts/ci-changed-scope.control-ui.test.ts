@@ -92,6 +92,8 @@ it.each([
   "test/vitest/vitest.timeouts.ts",
   "test/vitest/vitest.weighted-sharding.ts",
   "scripts/lib/vitest-local-scheduling.mts",
+  "scripts/test-desktop-resize-real.mts",
+  "scripts/lib/desktop-resize-proof.mts",
   "test/helpers/temp-dir.ts",
   "scripts/control-ui-mock-dev.ts",
   "scripts/control-ui-mock-isolation.ts",

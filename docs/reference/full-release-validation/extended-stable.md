@@ -22,6 +22,8 @@ pnpm ci:full-release \
   --sha "$VALIDATION_SHA" \
   --target-ref "$CONTEXT_REF" \
   --workflow-sha "$TOOLING_SHA" \
+  -f validation_purpose=publish \
+  -f publication_selection_json='{"route":"extended-stable","npmDistTag":"extended-stable","publishOpenclawNpm":true,"pluginPublishScope":"all-publishable","plugins":[]}' \
   -f release_profile=stable \
   -f run_release_soak=true \
   -f fail_fast=false \
@@ -39,6 +41,15 @@ canonical-branch dispatch is valid only when its head is also the trusted
 workflow implementation. Current extended-stable validation uses distinct
 trusted-main tooling and therefore requires the immutable helper.
 
+The shared publisher requires this canonical `release-ci/*` producer and binds
+its trusted workflow SHA separately from the exact candidate SHA. Its protected
+`release-publish/*` ref does not replace the canonical candidate branch. Retain
+the complete `rerun_group=all` manifest, exact run ID and successful attempt;
+reject direct canonical-branch/main producers, narrow runs, stale attempts, and
+mismatched targets. If a reviewed tooling repair changes the publication SHA,
+the validation tooling must remain reachable from current `main` and all
+candidate and evidence identities must still match.
+
 Backport product failures; make the smallest behavior-preserving repair for
 frozen-target tooling; retry provider, approval, or runner failures without a
 source change. Any branch change needs a complete new run. Do not omit required
@@ -49,18 +60,24 @@ use that same commit as the **Release SHA**. Retain its successful full
 validation parent and exact prepared publication artifacts; no extra commit or
 validation run is needed solely to separate those roles.
 
-If notes change after qualification, commit only `CHANGELOG.md` as a new
+If notes change after qualification, commit the selected release entry and its
+permitted record/index updates as a new
 Release SHA and run the same helper for that commit. Product evidence reuse is
 optional and requires GitHub to prove that the Release SHA descends from the
-green Code SHA with a complete changed path set of exactly `CHANGELOG.md`.
-That path records `changelog-only-release-v1` and still qualifies the changed
+green Code SHA. The complete changed path set must include
+`CHANGELOG/YYYY.M.PATCH.md` and may also include only `CHANGELOG.md` and
+`CHANGELOG/records/YYYY.M.PATCH.md`. Entry/record additions or modifications are
+allowed; the root index may only be modified. Renames, deletions, other release
+files, and docs source edits do not qualify. This path records
+`split-changelog-release-v1`; historical root-only receipts retain their
+`changelog-only-release-v1` contract. Reuse still qualifies the changed
 package and image bytes. Any other source change returns to full Code
 validation. See [Releasing](/reference/RELEASING) for the publication sequence.
 
 The conceptual phases map to current inputs:
 
 - `beta-publish`: `release_profile=beta`, `run_release_soak=false`
-- `postpublish-confidence`: exact published package plus
+- `postpublish-confidence`: `validation_purpose=postpublish-confidence`, no publication selection, exact published package plus
   `run_release_soak=true` or explicit focused groups
 - `stable-publish`: `release_profile=stable`
 
@@ -168,3 +185,9 @@ that selects Telegram, conflicts with the waiver and is rejected. The declaratio
 target version bind the immutable execution plan, manifest, and reuse identity;
 the publisher carries the waiver into release verification notes. The beta-only
 package deferral above remains unchanged.
+
+Source Telegram QA uses the release checks' shared context check: an exact candidate
+SHA must remain an ancestor of its canonical branch, or equal its release tag.
+Both build and execution admission independently repeat that check and retain
+candidate-version, signature/merge-attribution, and live maintainer checks.
+Advancing a release branch does not select a new candidate or invalidate the old one.

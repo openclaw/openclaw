@@ -44,7 +44,8 @@ Copilot CLI environment.
 
 The Copilot runtime ships as an external plugin so the core `openclaw`
 package does not carry `@github/copilot-sdk` or its platform-specific
-`@github/copilot-<platform>-<arch>` CLI binary (roughly 260 MB together).
+`@github/copilot-sdk-<platform>-<arch>` runtime package. Keep optional
+dependencies enabled during installation so the native runtime is included.
 Install it only for agents that opt into this runtime:
 
 ```bash
@@ -260,6 +261,11 @@ unvalidated so the next run creates a fresh SDK session instead of trusting a
 partial transcript. Only the post-append transcript update notification is
 best-effort and logged.
 
+Native subagent task updates retain their original completion or failure result
+when task persistence fails. A later terminal event or parent cleanup retries
+that same result instead of replacing it with cancellation. Bookkeeping is
+retired only after the tracked task is durably terminal or no longer exists.
+
 ## Side questions (`/btw`)
 
 `/btw` is **not** native on this harness. `createCopilotAgentHarness()`
@@ -350,12 +356,23 @@ allowlist, and `toolConstructionPlan`.
 The bridge also uses the shared harness tool-surface helper from
 `openclaw/plugin-sdk/agent-harness-tool-runtime` for PI parity. When
 tool-search is enabled, the SDK sees compact control tools plus a hidden
-catalog executor instead of every OpenClaw tool schema. When code mode is
-enabled, the helper builds the same code-mode control surface and catalog
-lifecycle used by other agent harnesses. Local-model lean defaults,
-runtime-compatible schema filtering, directory hydration, and catalog
-cleanup all stay in the shared helper so Copilot and Codex-adjacent
-harnesses do not drift.
+catalog executor instead of every OpenClaw tool schema. The shared Tool Search
+directory and mode-specific calling instructions enter the SDK developer prompt
+after `before_prompt_build` narrows the catalog. Denied entries are not advertised,
+and an empty catalog adds no discovery instructions. When code mode is enabled,
+the helper builds the same code-mode control surface and catalog lifecycle used
+by other agent harnesses. Local-model lean defaults, runtime-compatible schema
+filtering, and catalog cleanup stay in the shared helper.
+
+For Copilot, `tools.toolSearch.mode: "directory"` uses structured `tools`
+semantics: discover with `tool_search` or `tool_describe`, then execute through
+`tool_call` with `id` and `args`. Hidden OpenClaw catalog names are not registered
+as SDK tool handlers and cannot be called directly. The pinned Copilot SDK
+1.0.13 supports native deferral of registered tool declarations through
+`Tool.defer`; that is a separate SDK catalog, not a resolver for omitted
+OpenClaw tools. OpenClaw keeps its compact bridge rather than registering every
+hidden schema with the SDK. The agent configuration is not rewritten, and the
+embedded harness retains its direct directory-name hydration.
 
 ### Session-level GitHub token
 

@@ -81,15 +81,6 @@ export type ShortTermLockEntry = {
   ownerStartTime?: number;
 };
 
-type PromotionComponents = {
-  frequency: number;
-  relevance: number;
-  diversity: number;
-  recency: number;
-  consolidation: number;
-  conceptual: number;
-};
-
 export type PromotionCandidate = {
   key: string;
   path: string;
@@ -113,7 +104,7 @@ export type PromotionCandidate = {
   score: number;
   recallDays: string[];
   conceptTags: string[];
-  components: PromotionComponents;
+  components: PromotionWeights;
   provenance?: MemoryEntryProvenance;
 };
 
@@ -153,9 +144,9 @@ export type ApplyShortTermPromotionsOptions = {
   /**
    * Maximum size of MEMORY.md on disk after a promotion write, in
    * characters. When the post-write size would exceed this budget, the
-   * oldest auto-promotion sections are compacted out before write so the
-   * file stays bounded and bootstrap injection keeps reaching new
-   * sessions. Pass `0` to disable compaction. Defaults to
+   * oldest auto-promotion sections may be compacted out, within
+   * `maxPriorEntryLossFraction`, so the file stays bounded and bootstrap
+   * injection keeps reaching new sessions. Pass `0` to disable compaction. Defaults to
    * `DEFAULT_MEMORY_FILE_MAX_CHARS`. See #73691.
    */
   memoryFileMaxChars?: number;
@@ -166,6 +157,7 @@ export type ApplyShortTermPromotionsOptions = {
    * metadata.
    */
   maxPromotedSnippetTokens?: number;
+  /** Maximum fraction of prior entries a promotion write may remove. */
   maxPriorEntryLossFraction?: number;
   consolidation?: {
     subagent?: import("./dreaming-narrative.js").DreamingCompletion;
@@ -177,6 +169,22 @@ export type ApplyShortTermPromotionsOptions = {
   };
 };
 
+/** Fixed diagnostic labels; never include candidate identifiers or threshold values. */
+export type PromotionRejectionCategory =
+  | "origin"
+  | "consolidation origin/session"
+  | "contamination"
+  | "already promoted"
+  | "score threshold"
+  | "signal threshold"
+  | "query threshold"
+  | "age threshold"
+  | "selection limit"
+  | "source rehydration"
+  | "source changed"
+  | "memory budget"
+  | "candidate changed";
+
 export type ApplyShortTermPromotionsResult = {
   memoryPath: string;
   applied: number;
@@ -186,6 +194,7 @@ export type ApplyShortTermPromotionsResult = {
   rejectedCandidates: Array<{
     candidate: PromotionCandidate;
     reason: string;
+    category: PromotionRejectionCategory;
   }>;
   /** Number of older promotion sections compacted out to honor the budget. */
   compactedSections: number;

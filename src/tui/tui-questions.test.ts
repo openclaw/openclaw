@@ -71,6 +71,7 @@ function createHarness() {
       focus() {},
       unfocus() {},
       isFocused: () => true,
+      getBounds: () => undefined,
     } satisfies OverlayHandle;
   });
   const listQuestions = vi

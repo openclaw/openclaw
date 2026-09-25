@@ -1,13 +1,88 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ModelAuthStatusResult } from "../api/types.ts";
-import { loadModelAuthStatus } from "./model-auth.ts";
+import { invalidateModelAuthStatusRequests } from "./model-auth-request-state.ts";
+import { listEffectiveModelAuthProviders, loadModelAuthStatus } from "./model-auth.ts";
 
 const status = (ts: number): ModelAuthStatusResult => ({ ts, providers: [] });
 
+afterEach(() => vi.useRealTimers());
+
 describe("model auth status reads", () => {
-  it("shares pending ordinary reads without retaining completed results", async () => {
+  it("shares one new read at each credential deadline without a mounted sidebar", async () => {
+    vi.useFakeTimers();
+    const startedAt = Date.UTC(2026, 8, 17);
+    vi.setSystemTime(startedAt);
+    const expiresAt = startedAt + 25 * 60 * 60_000;
+    const request = vi.fn(async (): Promise<ModelAuthStatusResult> => ({
+      ts: Date.now(),
+      providers: [
+        {
+          provider: "test",
+          displayName: "Test",
+          status: Date.now() < expiresAt ? "ok" : "expired",
+          profiles: [
+            {
+              profileId: "test:token",
+              type: "token",
+              status: "ok",
+              expiry: { at: expiresAt, remainingMs: expiresAt - Date.now(), label: "remaining" },
+            },
+          ],
+        },
+      ],
+    }));
+    const client = { request } as unknown as GatewayBrowserClient;
+    await loadModelAuthStatus(client, { agentId: "main" });
+    for (const boundary of [expiresAt - 24 * 60 * 60_000, expiresAt - 5 * 60_000, expiresAt]) {
+      vi.setSystemTime(boundary - 1);
+      const before = request.mock.calls.length;
+      await loadModelAuthStatus(client, { agentId: "main" });
+      expect(request).toHaveBeenCalledTimes(before);
+      vi.setSystemTime(boundary);
+      const results = await Promise.all(
+        Array.from({ length: 4 }, () => loadModelAuthStatus(client, { agentId: "main" })),
+      );
+      expect(request).toHaveBeenCalledTimes(before + 1);
+      expect(results[0]?.providers[0]?.status).toBe(boundary === expiresAt ? "expired" : "ok");
+    }
+    vi.setSystemTime(expiresAt + 60_000);
+    await loadModelAuthStatus(client, { agentId: "main" });
+    expect(request).toHaveBeenCalledTimes(4);
+  });
+
+  it.each([-3_600_000, 3_600_000])(
+    "maps Gateway expiry onto the browser clock with %s ms skew",
+    async (offset) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(Date.UTC(2026, 8, 17));
+      const serverStartedAt = Date.now() + offset;
+      const request = vi.fn(async (): Promise<ModelAuthStatusResult> => ({
+        ts: Date.now() + offset,
+        providers: [
+          {
+            provider: "test",
+            displayName: "Test",
+            status: "expiring",
+            expiry: { at: serverStartedAt + 60_000, remainingMs: 60_000, label: "1m" },
+            profiles: [],
+          },
+        ],
+      }));
+      const client = { request } as unknown as GatewayBrowserClient;
+      await loadModelAuthStatus(client, { agentId: "main" });
+      await vi.advanceTimersByTimeAsync(59_999);
+      await loadModelAuthStatus(client, { agentId: "main" });
+      expect(request).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(1);
+      await loadModelAuthStatus(client, { agentId: "main" });
+      await loadModelAuthStatus(client, { agentId: "main" });
+      expect(request).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("shares ordinary reads until the connection or auth event invalidates them", async () => {
     const first = createDeferred<ModelAuthStatusResult>();
     const request = vi.fn(() => first.promise);
     const client = { request } as unknown as GatewayBrowserClient;
@@ -18,6 +93,9 @@ describe("model auth status reads", () => {
     expect(await Promise.all([one, two])).toEqual([status(1), status(1)]);
     expect(request).toHaveBeenCalledExactlyOnceWith("models.authStatus", { agentId: "main" });
 
+    expect(await loadModelAuthStatus(client, { agentId: "main" })).toEqual(status(1));
+    expect(request).toHaveBeenCalledTimes(1);
+    invalidateModelAuthStatusRequests(client);
     request.mockResolvedValueOnce(status(2));
     expect(await loadModelAuthStatus(client, { agentId: "main" })).toEqual(status(2));
     expect(request).toHaveBeenCalledTimes(2);
@@ -42,60 +120,28 @@ describe("model auth status reads", () => {
     expect(otherRequest).toHaveBeenCalledOnce();
   });
 
-  it("keeps signal-bearing reads independent", async () => {
-    const first = createDeferred<ModelAuthStatusResult>();
-    const second = createDeferred<ModelAuthStatusResult>();
-    const request = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
-    const client = { request } as unknown as GatewayBrowserClient;
-    const firstAbort = new AbortController();
-    const secondAbort = new AbortController();
-    const one = loadModelAuthStatus(client, { agentId: "main", signal: firstAbort.signal });
-    const two = loadModelAuthStatus(client, { agentId: "main", signal: secondAbort.signal });
-
-    first.resolve(status(1));
-    second.resolve(status(2));
-    expect(await Promise.all([one, two])).toEqual([status(1), status(2)]);
-    expect(request).toHaveBeenNthCalledWith(
-      1,
-      "models.authStatus",
-      { agentId: "main" },
-      { signal: firstAbort.signal },
-    );
-    expect(request).toHaveBeenNthCalledWith(
-      2,
-      "models.authStatus",
-      { agentId: "main" },
-      { signal: secondAbort.signal },
-    );
-  });
-
-  it("does not let a cancellable read join or cancel an ordinary read", async () => {
+  it("shares cancellable view reads without cancelling another consumer", async () => {
     const pending = createDeferred<ModelAuthStatusResult>();
-    const reason = new DOMException("consumer retired", "AbortError");
-    const request = vi.fn(
-      (_method: string, _params: unknown, options?: { signal?: AbortSignal }) => {
-        const signal = options?.signal;
-        if (!signal) {
-          return pending.promise;
-        }
-        return new Promise<ModelAuthStatusResult>((_resolve, reject) => {
-          signal.addEventListener("abort", () => reject(reason), { once: true });
-        });
-      },
-    );
+    const request = vi.fn(() => pending.promise);
     const client = { request } as unknown as GatewayBrowserClient;
     const controller = new AbortController();
-    const first = loadModelAuthStatus(client, { agentId: "main" });
+    const ordinary = loadModelAuthStatus(client, { agentId: "main" });
     const cancellable = loadModelAuthStatus(client, {
       agentId: "main",
       signal: controller.signal,
     }).catch((error: unknown) => error);
+    const reason = new DOMException("consumer retired", "AbortError");
     controller.abort(reason);
-    expect(await cancellable).toBe(reason);
-    const follower = loadModelAuthStatus(client, { agentId: "main" });
     pending.resolve(status(1));
-    expect(await Promise.all([first, follower])).toEqual([status(1), status(1)]);
-    expect(request).toHaveBeenCalledTimes(2);
+    expect(await cancellable).toBe(reason);
+    expect(await ordinary).toEqual(status(1));
+    expect(
+      await loadModelAuthStatus(client, {
+        agentId: "main",
+        signal: new AbortController().signal,
+      }),
+    ).toEqual(status(1));
+    expect(request).toHaveBeenCalledTimes(1);
   });
 
   it("does not retain a failed ordinary read", async () => {
@@ -162,4 +208,25 @@ describe("model auth status reads", () => {
       expect(request).toHaveBeenCalledTimes(6);
     },
   );
+});
+
+describe("listEffectiveModelAuthProviders", () => {
+  it("keeps an alias's API key when the worst-status record lacks one", () => {
+    const [merged] = listEffectiveModelAuthProviders([
+      {
+        provider: "google",
+        displayName: "Google",
+        status: "static",
+        profiles: [],
+        apiKey: { source: "env", envVar: "GEMINI_API_KEY" },
+      },
+      {
+        provider: "google-gemini-cli",
+        displayName: "Gemini CLI",
+        status: "missing",
+        profiles: [],
+      },
+    ]);
+    expect(merged?.apiKey).toEqual({ source: "env", envVar: "GEMINI_API_KEY" });
+  });
 });

@@ -6,7 +6,7 @@ import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { resolveDefaultSessionStorePath } from "../config/sessions/paths.js";
 import { loadExactSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { callGateway } from "../gateway/call.runtime.js";
+import { callGateway } from "../gateway/call.js";
 import {
   createGatewayConfigPath,
   removeGatewayTempHome,

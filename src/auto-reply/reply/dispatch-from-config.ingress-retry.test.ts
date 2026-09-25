@@ -87,6 +87,17 @@ describe("dispatch retry after queued ingress abandonment", () => {
           });
           run.turnAdoptionLifecycle = options?.turnAdoptionLifecycle;
           run.abortSignal = options?.turnAdoptionLifecycle?.abortSignal;
+          let renewalFailed = false;
+          const lifecycle = run.turnAdoptionLifecycle;
+          const heartbeat = lifecycle?.onDeferredHeartbeat;
+          if (lifecycle) {
+            lifecycle.onDeferredHeartbeat = () => {
+              if (renewalFailed) {
+                throw new Error("deferred heartbeat owner failed");
+              }
+              heartbeat?.();
+            };
+          }
           expect(
             enqueueFollowupRun(
               key,
@@ -103,6 +114,7 @@ describe("dispatch retry after queued ingress abandonment", () => {
             ),
           ).toBe(true);
           if (abandonment === "watchdog-after-commit") {
+            renewalFailed = true;
             expect(
               enqueueFollowupRun(
                 key,

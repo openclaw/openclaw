@@ -1,8 +1,8 @@
-// QA Lab Matrix plugin module implements scenario runtime approval behavior.
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { normalizeUniqueStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { formatApprovalResultValue } from "../../shared/live-approval-result.js";
 import type { MatrixQaObservedEvent } from "../substrate/events.js";
 import {
   MATRIX_QA_DRIVER_DM_ROOM_KEY,
@@ -68,21 +68,10 @@ function hasObservedApprovalOptionReaction(params: MatrixQaApprovalOptionReactio
 }
 
 function assertApprovalMetadata(params: {
-  event: { approval?: unknown; eventId: string };
+  event: Pick<MatrixQaObservedEvent, "approval" | "eventId">;
   expectedKind: ChannelApprovalKind;
 }) {
-  const approval =
-    typeof params.event.approval === "object" && params.event.approval !== null
-      ? (params.event.approval as {
-          allowedDecisions?: string[];
-          hasCommandText?: boolean;
-          id?: string;
-          kind?: string;
-          state?: string;
-          type?: string;
-          version?: number;
-        })
-      : null;
+  const approval = params.event.approval;
   if (!approval) {
     throw new Error(`approval event ${params.event.eventId} did not expose metadata`);
   }
@@ -326,16 +315,6 @@ function assertApprovalDecisionResult(params: {
       `approval decision was ${formatApprovalResultValue(result?.decision)} instead of ${params.decision}`,
     );
   }
-}
-
-function formatApprovalResultValue(value: unknown) {
-  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-  if (value == null) {
-    return "<missing>";
-  }
-  return JSON.stringify(value) ?? "<unserializable>";
 }
 
 async function requestExecApproval(params: {

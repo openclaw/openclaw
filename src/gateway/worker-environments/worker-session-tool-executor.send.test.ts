@@ -218,10 +218,7 @@ describe("worker session tool send delivery", () => {
       sessionKey: SOURCE.sessionKey,
       sessionId: SOURCE.sessionId,
     });
-    let resolvePolicy!: () => void;
-    const policy = new Promise<void>((resolve) => {
-      resolvePolicy = resolve;
-    });
+    const { promise: policy, resolve: resolvePolicy } = createDeferred();
     const beforeToolCall = vi.fn(async () => {
       await policy;
       return {};
@@ -260,14 +257,8 @@ describe("worker session tool send delivery", () => {
       sessionId: SOURCE.sessionId,
     });
     gatewayRequest.mockResolvedValue({ runId: "target-run", status: "accepted" });
-    let enterDispatch!: () => void;
-    const dispatchEntered = new Promise<void>((resolve) => {
-      enterDispatch = resolve;
-    });
-    let finishDispatch!: () => void;
-    const dispatch = new Promise<void>((resolve) => {
-      finishDispatch = resolve;
-    });
+    const { promise: dispatchEntered, resolve: enterDispatch } = createDeferred();
+    const { promise: dispatch, resolve: finishDispatch } = createDeferred();
     delivered.mockImplementationOnce(async ({ options }) => {
       enterDispatch();
       await dispatch;
@@ -318,10 +309,10 @@ describe("worker session tool send delivery", () => {
       sessionKey: SOURCE.sessionKey,
       sessionId: SOURCE.sessionId,
     });
-    let resolvePolicy!: (value: { block: true; blockReason: string }) => void;
-    const policy = new Promise<{ block: true; blockReason: string }>((resolve) => {
-      resolvePolicy = resolve;
-    });
+    const { promise: policy, resolve: resolvePolicy } = createDeferred<{
+      block: true;
+      blockReason: string;
+    }>();
     const beforeToolCall = vi.fn(async () => await policy);
     initializeGlobalHookRunner(
       createMockPluginRegistry([

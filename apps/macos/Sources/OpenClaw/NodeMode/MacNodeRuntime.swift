@@ -497,9 +497,9 @@ extension MacNodeRuntime {
             }
             let sessionKey = self.mainSessionKey
             try await MainActor.run {
-                _ = try CanvasManager.shared.showDetailed(
+                _ = try CanvasManager.shared.show(
                     sessionKey: sessionKey,
-                    target: effectiveURL,
+                    path: effectiveURL,
                     placement: placement)
             }
             return BridgeInvokeResponse(id: req.id, ok: true)

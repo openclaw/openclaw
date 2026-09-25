@@ -5,14 +5,23 @@ import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../../packages/gatew
 import { renderCopyAsMarkdownButton } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
+import { readHumanMentions } from "../../../lib/chat/human-mentions.ts";
+import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
 import {
   normalizeMessage,
   normalizeRoleForGrouping,
 } from "../../../lib/chat/message-normalizer.ts";
 import { stripThinkingTags } from "../../../lib/strip-thinking-tags.ts";
-import { persistedMessageEntryId, type AssistantMessageExpansionState } from "../chat-thread.ts";
+import {
+  resolveCappedMessageId,
+  resolveSourceMessageId,
+  type AssistantMessageExpansionState,
+} from "../chat-message-recovery.ts";
+import { persistedMessageEntryId } from "../chat-thread.ts";
 import { extractMessageMediaText } from "./chat-message-media.ts";
-import { resolveMessageDisplayMarkdown } from "./chat-message-text.ts";
+
+registerChatMessageMetadataEnglish();
 
 export type MessageReplyTarget = {
   messageId: string;
@@ -22,6 +31,8 @@ export type MessageReplyTarget = {
 };
 
 export type MessageActionDetails = {
+  /** Source for context copy, independent of footer visibility and reply truncation. */
+  copyMarkdown?: string;
   markdown?: string;
   fullMessage?: { messageId: string; state: AssistantMessageExpansionState | undefined };
   replyTarget?: MessageReplyTarget;
@@ -30,38 +41,31 @@ export type MessageActionDetails = {
 // Loading and completion each advance the revision: three automatic attempts.
 export const FULL_MESSAGE_RETRY_REVISION_LIMIT = 6;
 
-function resolveSourceMessageId(message: unknown): string | undefined {
-  const record = asNullableRecord(message);
-  const metadata = asNullableRecord(record?.["__openclaw"]);
-  return typeof metadata?.id === "string"
-    ? metadata.id
-    : typeof record?.messageId === "string"
-      ? record.messageId
-      : undefined;
-}
-
-export function resolveCappedMessageId(message: unknown, role: string): string | undefined {
-  const record = asNullableRecord(message);
-  const metadata = asNullableRecord(record?.["__openclaw"]);
-  const messageId = resolveSourceMessageId(message);
-  // Only the Gateway marker proves a display cap; sentinel text can be literal.
-  // Pending user inputs share read-only recovery with assistant messages.
-  return (normalizeRoleForGrouping(role) === "assistant" ||
-    messageId?.startsWith(CHAT_PENDING_INPUT_MESSAGE_PREFIX)) &&
-    !record?.openclawMessageToolMirror &&
-    metadata?.truncated === true
-    ? messageId
-    : undefined;
-}
-
 // Options and action handlers outlive a render; keep this preparation separate from them.
 export function prepareChatMessageRender(message: unknown) {
   const normalizedMessage = normalizeMessage(message);
-  return {
-    message,
-    normalizedMessage,
-    displayMarkdown: resolveMessageDisplayMarkdown(message, normalizedMessage),
-  };
+  const displayMarkdown = resolveMessageDisplayMarkdown(message, normalizedMessage);
+  const record = asNullableRecord(message);
+  const metadata = asNullableRecord(record?.["__openclaw"]);
+  let humanMentions: ReturnType<typeof readHumanMentions>;
+  if (record?.role === "user" && metadata?.humanMentions) {
+    const source =
+      typeof record.content === "string"
+        ? record.content
+        : Array.isArray(record.content)
+          ? record.content
+              .flatMap((block: unknown) => {
+                const item = asNullableRecord(block);
+                return item?.type === "text" && typeof item.text === "string" ? [item.text] : [];
+              })
+              .join("\n")
+          : null;
+    // Selections belong to submitted bytes, not a stripped envelope or display cap.
+    if (source === displayMarkdown) {
+      humanMentions = readHumanMentions(displayMarkdown, metadata.humanMentions);
+    }
+  }
+  return { message, normalizedMessage, displayMarkdown, humanMentions };
 }
 
 export type ChatMessageRenderPreparation = ReturnType<typeof prepareChatMessageRender>;
@@ -99,16 +103,16 @@ export function resolveMessageActionDetails(
   const expandedMarkdown = expansion?.status === "loaded" ? expansion.markdown : previewMarkdown;
   const visibleMarkdown =
     role === "assistant" ? stripThinkingTags(expandedMarkdown) : expandedMarkdown;
-  const markdown = role === "assistant" || pendingInput ? visibleMarkdown : undefined;
-  const replyText =
-    onReply && !pendingInput
-      ? truncateUtf16Safe(resolveMessageReplyText(message, normalizedMessage, visibleMarkdown), 500)
-      : "";
-  if (!markdown && !replyText && !fullMessage) {
+  const markdown =
+    role === "assistant" || role === "user" || pendingInput ? visibleMarkdown : undefined;
+  const copyMarkdown = resolveMessageReplyText(message, normalizedMessage, visibleMarkdown);
+  const replyText = onReply && !pendingInput ? truncateUtf16Safe(copyMarkdown, 500) : "";
+  if (!copyMarkdown && !markdown && !replyText && !fullMessage) {
     return null;
   }
   const sourceMessageId = persistedMessageEntryId(message);
   return {
+    copyMarkdown,
     ...(markdown === undefined ? {} : { markdown }),
     fullMessage,
     ...(replyText

@@ -1,4 +1,3 @@
-// Applies the package, agent, workspace, and managed-file slices of a consented Claw add plan.
 import type { Stats } from "node:fs";
 import { lstat, mkdir, rmdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
@@ -10,6 +9,7 @@ import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { normalizeWindowsPathForComparison } from "../infra/path-guards.js";
+import type { PluginInstallBatchReload } from "../plugins/install-runtime-batch.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { recordAgentProvenance } from "../state/agent-provenance.js";
@@ -54,6 +54,7 @@ export const CLAW_ADD_RESULT_SCHEMA_VERSION = "openclaw.clawAddResult.v1" as con
 
 type ConfigCommit = (transform: (config: OpenClawConfig) => OpenClawConfig) => Promise<void>;
 type ClawAddApplyOptions = OpenClawStateDatabaseOptions & {
+  reloadPlugins?: PluginInstallBatchReload;
   consentPlanIntegrity?: string;
   resumeRecord?: PersistedClawInstall;
   resumePlan?: ClawAddPlan;
@@ -552,32 +553,21 @@ export async function applyClawAddPlan(
             workspaceFiles,
           );
     markInstallStatus(plan.agent.finalId, "config_committed", ["config_committed"], options);
-    return {
-      schemaVersion: CLAW_ADD_RESULT_SCHEMA_VERSION,
-      stability: CLAW_OUTPUT_STABILITY,
-      dryRun: false,
-      mutationAllowed: true,
-      planIntegrity: plan.planIntegrity,
-      status: "partial",
-      claw: plan.claw,
-      agent: plan.agent,
+    return partialResult({
+      plan,
+      installRecord,
       workspaceCreated,
       configCommitted,
       workspaceFiles: workspaceError.createdFiles,
       packages,
-      mcpServers: [],
-      cronJobs: [],
-      installRecord: {
-        ...installRecord,
-        status: "config_committed",
-        updatedAtMs: options.nowMs ?? Date.now(),
-      },
+      installStatus: "config_committed",
+      nowMs: options.nowMs,
       error: {
         code: "workspace_files_failed",
         message: workspaceError.message,
         diagnostics: workspaceError.diagnostics,
       },
-    };
+    });
   }
 
   let cronJobs: PersistedClawCronRef[] = [];

@@ -36,6 +36,13 @@ export function assertMatrixQaToolProgressMentionsInert(event: MatrixQaObservedE
       `Matrix tool-progress preview linked Matrix mentions: ${event.formattedBody ?? "<none>"}`,
     );
   }
+  const mentionTextPattern = /@room|@alice:matrix-qa\.test|!room:matrix-qa\.test/i;
+  if (
+    !mentionTextPattern.test(event.body ?? "") &&
+    !mentionTextPattern.test(event.formattedBody ?? "")
+  ) {
+    return;
+  }
   if (
     !/<code>[^<]*(?:@room|@alice:matrix-qa\.test|!room:matrix-qa\.test)/i.test(
       event.formattedBody ?? "",

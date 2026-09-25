@@ -4,6 +4,7 @@ import {
   controlUiSessionUrl,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -20,6 +21,88 @@ const boardSnapshot = {
 };
 
 suite.define(() => {
+  it.each([
+    { main: "Chat", side: "Side chat", view: "split" },
+    { main: "Chat", side: "Files", view: "split" },
+    { main: "Dashboard", side: "Side chat", view: "split" },
+    { main: "Dashboard", side: "Files", view: "split" },
+    { main: "Chat", side: "Files", view: "closed side" },
+    { main: "Chat", side: "Files", view: "focused Chat" },
+  ])(
+    "retains $main main and $side in $view after dashboard reload",
+    async ({ main, side, view }) => {
+      await suite.withPage({ viewport: { height: 900, width: 1440 } }, async ({ page }) => {
+        await installMockGateway(page, {
+          sessionKey,
+          sessions: [
+            {
+              key: sessionKey,
+              agentId: "main",
+              sessionId: "dashboard-active-panel",
+              kind: "direct",
+              updatedAt: 1,
+              boardFace: "dashboard",
+              boardPresentation: "split",
+            },
+          ],
+          featureMethods: ["board.get", "chat.metadata", "chat.startup"],
+          methodResponses: {
+            "board.get": boardSnapshot,
+            "sessions.companion.state": {
+              exchanges: [
+                {
+                  question: "What should I check?",
+                  answer: "Keep this side conversation visible.",
+                  ts: 1_000,
+                },
+              ],
+            },
+          },
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
+        await page.locator(".board-session-surface").waitFor();
+        if (main === "Dashboard") {
+          await page.locator(".chat-panel-swap").click();
+        }
+        const mainPanel = page.locator(
+          main === "Dashboard"
+            ? '[data-panel-slot="dashboard"][data-region="main"]'
+            : '.sidebar-region__primary[data-region="main"]',
+        );
+        await mainPanel.waitFor();
+        await openChatSidePanelType(page, side);
+        const selectedTab = page.getByRole("tab", { name: side, exact: true });
+        const answer = page
+          .locator("openclaw-chat-session-rail")
+          .getByText("Keep this side conversation visible.", { exact: true });
+        await expect.poll(() => selectedTab.getAttribute("aria-selected")).toBe("true");
+        if (side === "Side chat") {
+          await answer.waitFor();
+        }
+        if (view === "closed side") {
+          await page.locator(".chat-side-panel-toggle").click();
+        } else if (view === "focused Chat") {
+          await page.locator(".chat-panel-focus").click();
+        }
+
+        await page.reload();
+        await mainPanel.waitFor();
+        if (view === "closed side") {
+          await expect.poll(() => page.locator(".sidebar-region--open").count()).toBe(0);
+          await page.locator(".chat-side-panel-toggle").click();
+        } else if (view === "focused Chat") {
+          await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(1);
+          await page.locator(".chat-panel-focus").click();
+        }
+        await selectedTab.waitFor();
+        await expect.poll(() => selectedTab.getAttribute("aria-selected")).toBe("true");
+        if (side === "Side chat") {
+          await answer.waitFor();
+        }
+      });
+    },
+  );
+
   it("restores the saved main and side selection on ordinary dashboard revisits", async () => {
     await suite.withPage({ viewport: { height: 900, width: 1280 } }, async ({ page }) => {
       const settingsKey = controlUiBundledSettingsStorageKey(suite.server.baseUrl);

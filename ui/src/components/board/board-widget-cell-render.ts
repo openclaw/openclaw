@@ -1,10 +1,8 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../../i18n/index.ts";
 import type { BoardTab, BoardWidget } from "../../lib/board/types.ts";
-import type { BoardGrantDecision } from "../../lib/board/view-types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { icons } from "../icons.ts";
-import { renderBoardPendingCapabilities } from "./board-widget-capabilities.ts";
 
 export const BOARD_SIZE_PRESETS = {
   sm: { w: 3, h: 3 },
@@ -20,14 +18,20 @@ export function closeBoardWidgetMenu(root: ParentNode): void {
   }
 }
 
+export type BoardWidgetPageMenu = {
+  widget: BoardWidget;
+  tabs: readonly BoardTab[];
+  canMutate: boolean;
+  onSelect: (value: string) => void;
+};
+
 export function renderBoardWidgetMenu(options: {
   widget: BoardWidget;
   tabs: readonly BoardTab[];
   disabled: boolean;
   onSelect: (event: CustomEvent<{ item: { value?: string } }>) => void;
 }): TemplateResult {
-  const { widget, tabs, disabled, onSelect } = options;
-  const otherTabs = tabs.filter((tab) => tab.tabId !== widget.tabId);
+  const { onSelect } = options;
   return html`
     <wa-dropdown class="board-widget__menu" placement="bottom-end" @wa-select=${onSelect}>
       <button
@@ -39,60 +43,68 @@ export function renderBoardWidgetMenu(options: {
       >
         ⋮
       </button>
-      <div class="board-widget__menu-heading">${t("board.widget.moveToTab")}</div>
-      ${
-        otherTabs.length > 0
-          ? otherTabs.map(
-              (tab) => html`
-                <wa-dropdown-item value=${`move:${tab.tabId}`} ?disabled=${disabled}>
-                  ${tab.title}
-                </wa-dropdown-item>
-              `,
-            )
-          : html`<span class="board-widget__menu-empty">${t("board.widget.noOtherTabs")}</span>`
-      }
-      <div class="board-widget__menu-heading">${t("board.widget.resize")}</div>
-      ${Object.entries(BOARD_SIZE_PRESETS).map(
-        ([label, size]) => html`
-          <wa-dropdown-item
-            class="board-widget__preset"
-            value=${`resize:${label}`}
-            ?disabled=${disabled}
-          >
-            ${label.toUpperCase()}
-            <span slot="details">${size.w}×${size.h}</span>
-          </wa-dropdown-item>
-        `,
-      )}
-      ${
-        widget.contentKind === "html"
-          ? html`<wa-dropdown-item
-              class="board-widget__preset"
-              type="checkbox"
-              value="height:auto"
-              ?checked=${widget.heightMode !== "fixed"}
-              ?disabled=${disabled}
-            >
-              ${t("board.widget.autoHeight")}
-            </wa-dropdown-item>`
-          : nothing
-      }
-      <div class="board-widget__menu-separator" role="separator"></div>
-      <wa-dropdown-item class="board-widget__menu-danger" value="remove" ?disabled=${disabled}>
-        <span slot="icon" class="board-widget__menu-icon" aria-hidden="true">${icons.trash}</span>
-        ${t("board.widget.remove")}
-      </wa-dropdown-item>
+      ${renderBoardWidgetMenuItems(options)}
     </wa-dropdown>
   `;
 }
 
-export function renderBoardWidgetPending(options: {
+export function renderBoardWidgetMenuItems(options: {
   widget: BoardWidget;
+  tabs: readonly BoardTab[];
   disabled: boolean;
-  onGrant: (decision: BoardGrantDecision) => void;
-  error?: TemplateResult;
+  prefix?: string;
 }): TemplateResult {
-  return renderBoardPendingCapabilities(options);
+  const { widget, tabs, disabled, prefix = "" } = options;
+  const otherTabs = tabs.filter((tab) => tab.tabId !== widget.tabId);
+  return html`
+    <div class="board-widget__menu-heading">${t("board.widget.moveToTab")}</div>
+    ${
+      otherTabs.length > 0
+        ? otherTabs.map(
+            (tab) => html`
+              <wa-dropdown-item value=${`${prefix}move:${tab.tabId}`} ?disabled=${disabled}>
+                ${tab.title}
+              </wa-dropdown-item>
+            `,
+          )
+        : html`<span class="board-widget__menu-empty">${t("board.widget.noOtherTabs")}</span>`
+    }
+    <div class="board-widget__menu-heading">${t("board.widget.resize")}</div>
+    ${Object.entries(BOARD_SIZE_PRESETS).map(
+      ([label, size]) => html`
+        <wa-dropdown-item
+          class="board-widget__preset"
+          value=${`${prefix}resize:${label}`}
+          ?disabled=${disabled}
+        >
+          ${label.toUpperCase()}
+          <span slot="details">${size.w}×${size.h}</span>
+        </wa-dropdown-item>
+      `,
+    )}
+    ${
+      widget.contentKind === "html"
+        ? html`<wa-dropdown-item
+            class="board-widget__preset"
+            type="checkbox"
+            value=${`${prefix}height:auto`}
+            ?checked=${widget.heightMode !== "fixed"}
+            ?disabled=${disabled}
+          >
+            ${t("board.widget.autoHeight")}
+          </wa-dropdown-item>`
+        : nothing
+    }
+    <div class="board-widget__menu-separator" role="separator"></div>
+    <wa-dropdown-item
+      class="board-widget__menu-danger"
+      value=${`${prefix}remove`}
+      ?disabled=${disabled}
+    >
+      <span slot="icon" class="board-widget__menu-icon" aria-hidden="true">${icons.trash}</span>
+      ${t("board.widget.remove")}
+    </wa-dropdown-item>
+  `;
 }
 
 export function renderBoardWidgetRejected(options: {

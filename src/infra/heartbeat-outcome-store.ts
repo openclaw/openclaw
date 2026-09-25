@@ -1,34 +1,40 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import type { Insertable, Selectable } from "kysely";
-import type { EmbeddedRunTrigger } from "../agents/embedded-agent-runner/run/params.js";
+import type { EmbeddedRunTrigger } from "../agents/run-trigger.js";
 import type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-response.js";
+import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
-import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
-import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
-import type { HeartbeatWakeSource } from "./heartbeat-wake.js";
+import { resolveStateDir } from "../config/state-dir.js";
 import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "./kysely-sync.js";
-
+  runOpenClawAgentWriteTransaction,
+  withOpenClawAgentDatabaseAsync,
+} from "../state/openclaw-agent-db.js";
+import {
+  isIncognitoOpenClawAgentSqlitePath,
+  resolveOpenClawAgentSqlitePath,
+} from "../state/openclaw-agent-db.paths.js";
+import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
+import { openOpenClawAgentSqliteWorkerStore } from "../state/openclaw-agent-worker-store.js";
+import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
+import {
+  claimHeartbeatOutcomeRowInDatabase,
+  persistHeartbeatOutcomeInDatabase,
+  type HeartbeatOutcomeInput,
+  type HeartbeatOutcomeRow,
+} from "./heartbeat-outcome-store.kernel.js";
+import type { HeartbeatOutcomeWorkerOperations } from "./heartbeat-outcome-store.worker.js";
+import type { HeartbeatWakeSource } from "./heartbeat-wake.js";
+import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import type { SqliteWorkerCommand } from "./sqlite-worker-contract.js";
 const HEARTBEAT_OUTCOME_SUMMARY_MAX_CHARS = 4_000;
 const HEARTBEAT_OUTCOME_REASON_MAX_CHARS = 1_000;
 const HEARTBEAT_OUTCOME_NEXT_CHECK_MAX_CHARS = 500;
 const HEARTBEAT_OUTCOME_WAKE_REASON_MAX_CHARS = 1_000;
 const HEARTBEAT_OUTCOME_TASK_NAME_MAX_CHARS = 200;
 const HEARTBEAT_OUTCOME_MAX_TASKS = 32;
-
-type HeartbeatOutcomeTable = OpenClawAgentKyselyDatabase["heartbeat_outcomes"];
-type HeartbeatOutcomeDatabase = Pick<
-  OpenClawAgentKyselyDatabase,
-  "heartbeat_outcomes" | "session_nodes"
->;
-type HeartbeatOutcomeRow = Selectable<HeartbeatOutcomeTable>;
-type HeartbeatOutcomeInsert = Insertable<HeartbeatOutcomeTable>;
 
 type PersistedHeartbeatOutcome = {
   sessionKey: string;
@@ -113,7 +119,7 @@ export async function persistHeartbeatOutcome(params: {
     return;
   }
   const taskNames = normalizeTaskNames(params.taskNames ?? []);
-  const values: HeartbeatOutcomeInsert = {
+  const values: HeartbeatOutcomeInput = {
     session_key: params.sessionKey,
     run_session_key: params.runSessionKey,
     outcome: params.response.outcome,
@@ -133,48 +139,7 @@ export async function persistHeartbeatOutcome(params: {
     context_claimed_at: null,
     updated_at: Date.now(),
   };
-  runOpenClawAgentWriteTransaction(
-    ({ db }) => {
-      const agentDb = getNodeSqliteKysely<HeartbeatOutcomeDatabase>(db);
-      const owner = executeSqliteQueryTakeFirstSync(
-        db,
-        agentDb
-          .selectFrom("session_nodes")
-          .select("session_key")
-          .where("session_key", "=", params.sessionKey),
-      );
-      // Transient isolated runs may have no durable base row.
-      // Without one, no later user turn can claim an outcome.
-      if (!owner) {
-        return;
-      }
-      executeSqliteQuerySync(
-        db,
-        agentDb
-          .insertInto("heartbeat_outcomes")
-          .values(values)
-          .onConflict((conflict) =>
-            conflict.column("session_key").doUpdateSet({
-              run_session_key: values.run_session_key,
-              outcome: values.outcome,
-              summary: values.summary,
-              response_reason: values.response_reason,
-              priority: values.priority,
-              next_check: values.next_check,
-              task_names_json: values.task_names_json,
-              wake_source: values.wake_source,
-              wake_reason: values.wake_reason,
-              occurred_at: values.occurred_at,
-              context_run_id: null,
-              context_claimed_at: null,
-              updated_at: values.updated_at,
-            }),
-          ),
-      );
-    },
-    toDatabaseOptions(resolveSqliteScope(params)),
-    { operationLabel: "heartbeat.outcome.persist" },
-  );
+  await runHeartbeatOutcomeOperation(params, { type: "persist", input: values });
 }
 
 /** Claims the latest outcome for one user run while allowing that run's retries. */
@@ -186,38 +151,84 @@ export async function claimHeartbeatOutcomeForRun(params: {
   env?: NodeJS.ProcessEnv;
   assertCurrent?: () => void;
 }): Promise<PersistedHeartbeatOutcome | undefined> {
-  return runOpenClawAgentWriteTransaction(
-    ({ db }) => {
-      params.assertCurrent?.();
-      const agentDb = getNodeSqliteKysely<HeartbeatOutcomeDatabase>(db);
-      const row = executeSqliteQuerySync(
-        db,
-        agentDb
-          .selectFrom("heartbeat_outcomes")
-          .selectAll()
-          .where("session_key", "=", params.sessionKey),
-      ).rows[0];
-      if (!row || (row.context_run_id !== null && row.context_run_id !== params.runId)) {
-        return undefined;
-      }
-      if (row.context_run_id === null) {
-        const claim = executeSqliteQuerySync(
-          db,
-          agentDb
-            .updateTable("heartbeat_outcomes")
-            .set({ context_run_id: params.runId, context_claimed_at: Date.now() })
-            .where("session_key", "=", params.sessionKey)
-            .where("context_run_id", "is", null),
-        );
-        if (claim.numAffectedRows !== 1n) {
-          return undefined;
-        }
-      }
-      return rowToOutcome(row);
+  const row = await runHeartbeatOutcomeOperation(
+    params,
+    {
+      type: "claim",
+      input: { sessionKey: params.sessionKey, runId: params.runId },
     },
-    toDatabaseOptions(resolveSqliteScope(params)),
-    { operationLabel: "heartbeat.outcome.claim" },
+    params.assertCurrent,
   );
+  return row ? rowToOutcome(row) : undefined;
+}
+
+async function runHeartbeatOutcomeOperation(
+  params: Parameters<typeof resolveSqliteScope>[0],
+  command: SqliteWorkerCommand<HeartbeatOutcomeWorkerOperations>,
+  assertCurrent: () => void = () => undefined,
+): Promise<HeartbeatOutcomeRow | undefined> {
+  const resolved = toDatabaseOptions(resolveSqliteScope(params));
+  const env = cloneEnvWithPlatformSemantics(resolved.env ?? process.env);
+  env.OPENCLAW_STATE_DIR = resolveStateDir(env);
+  const options = { ...resolved, env, path: resolveOpenClawAgentSqlitePath({ ...resolved, env }) };
+  if (isIncognitoOpenClawAgentSqlitePath(options.path, options)) {
+    // Incognito retains its sole in-memory owner until that owner is migrated as a whole.
+    return runOpenClawAgentWriteAdmission(
+      options,
+      () =>
+        runOpenClawAgentWriteTransaction(
+          ({ db }) => {
+            assertCurrent();
+            if (command.type === "persist") {
+              persistHeartbeatOutcomeInDatabase(db, command.input);
+              return undefined;
+            }
+            return claimHeartbeatOutcomeRowInDatabase(db, command.input);
+          },
+          options,
+          { operationLabel: `heartbeat.outcome.${command.type}` },
+        ),
+      true,
+    );
+  }
+  // Retain the lifecycle before queuing so close cannot turn waiting work into a fresh open.
+  const execution = captureOpenClawAgentDatabaseExecution(options);
+  const assertQueuedCurrent = () => {
+    execution.assertCurrent();
+    assertCurrent();
+  };
+  try {
+    return await runOpenClawAgentWriteAdmission(
+      options,
+      () =>
+        withOpenClawAgentDatabaseAsync(
+          options,
+          async ({ db }) => {
+            assertQueuedCurrent();
+            const worker =
+              await openOpenClawAgentSqliteWorkerStore<HeartbeatOutcomeWorkerOperations>(
+                options,
+                db,
+                {
+                  moduleUrl: resolveRuntimeWorkerUrl(
+                    runtimeProcessEntrypoints.heartbeatOutcomeStore,
+                  ),
+                  input: undefined,
+                },
+              );
+            try {
+              return await worker.run((scope) => scope.execute(command), assertQueuedCurrent);
+            } finally {
+              await worker.close();
+            }
+          },
+          assertQueuedCurrent,
+        ),
+      true,
+    );
+  } finally {
+    await execution.release();
+  }
 }
 
 /** Formats persisted state as model-only provenance context, never transcript text. */

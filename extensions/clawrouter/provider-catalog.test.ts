@@ -162,7 +162,7 @@ describe("ClawRouter provider catalog", () => {
     ]);
     const openai = provider.models.find((model) => model.id === "openai/gpt-5.6");
     expect(openai).toMatchObject({
-      name: "OpenAI · openai/gpt-5.6",
+      name: "OpenAI · gpt-5.6",
       api: "openai-responses",
       baseUrl: "https://clawrouter.example/v1",
       reasoning: true,
@@ -185,16 +185,21 @@ describe("ClawRouter provider catalog", () => {
       supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
     });
     const deepseek = provider.models.find((model) => model.id === "deepseek/deepseek-v4-flash");
-    expect(deepseek).toMatchObject({ api: "openai-completions" });
+    expect(deepseek).toMatchObject({
+      name: "DeepSeek · deepseek-v4-flash",
+      api: "openai-completions",
+    });
     expect(deepseek?.compat).toBeUndefined();
     expect(deepseek?.thinkingLevelMap).toBeUndefined();
     expect(
       provider.models.find((model) => model.id === "anthropic/claude-sonnet-4-6"),
     ).toMatchObject({
+      name: "Anthropic · claude-sonnet-4-6",
       api: "anthropic-messages",
       baseUrl: "https://clawrouter.example/v1/native/anthropic",
     });
     expect(provider.models.find((model) => model.id === "google/gemini-3.5-flash")).toMatchObject({
+      name: "Google Gemini · google/gemini-3.5-flash",
       api: "google-generative-ai",
       baseUrl: "https://clawrouter.example/v1/native/google-gemini/v1beta",
     });

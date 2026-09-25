@@ -4,7 +4,6 @@ import os from "node:os";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-  readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -17,37 +16,45 @@ import {
   validateSystemEventParams,
 } from "../../../packages/gateway-protocol/src/schema/system-event.js";
 import { listAgentIds } from "../../agents/agent-scope.js";
-import {
-  readUtilityModelSetting,
-  resolveUtilityModelRefForAgent,
-} from "../../agents/utility-model.js";
+import { readUtilityModelSetting } from "../../agents/utility-model-setting.js";
+import { resolveUtilityModelRefForAgent } from "../../agents/utility-model.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { resolveGatewayPort, resolveStateDir } from "../../config/paths.js";
 import { resolveSystemMainSessionTarget } from "../../config/sessions.js";
 import { resolveAdvertisedLanHostCore } from "../../infra/advertised-lan-host.js";
-import {
-  loadOrCreateProcessDeviceIdentity,
-  publicKeyRawBase64UrlFromPem,
-} from "../../infra/device-identity.js";
+import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
+import { publicKeyRawBase64UrlFromPem } from "../../infra/device-identity.js";
 import { tryReadDiskSpace } from "../../infra/disk-space.js";
 import { getLastHeartbeatEvent } from "../../infra/heartbeat-events.js";
 import { requestHeartbeat, setHeartbeatsEnabled } from "../../infra/heartbeat-wake.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { resolveRuntimeOsLabel } from "../../infra/os-summary.js";
 import { readSystemDisks } from "../../infra/system-disks.js";
-import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
+import {
+  resolveSystemEventQueueKey,
+  withSystemEventOwner,
+} from "../../infra/system-event-ownership.js";
 import { enqueueSystemEvent, isSystemEventContextChanged } from "../../infra/system-events.js";
 import { listSystemPresence, updateSystemPresence } from "../../infra/system-presence.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { createPresenceRecipientProjection } from "../presence-projection.js";
 import { getGatewayProcessInstanceId } from "../process-instance.js";
 import { broadcastPresenceSnapshot } from "../server/presence-events.js";
+import { readGatewayProcessVitals } from "../server/process-vitals.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 let advertisedLanHostPromise: Promise<string | null> | null = null;
+let stateDiskSnapshot:
+  | { stateDir: string; expiresAt: number; disk: ReturnType<typeof tryReadDiskSpace> }
+  | undefined;
+// CPU identity belongs to this process; os.cpus() also reads every core's live timings.
+const cpuInfoSnapshot = (() => {
+  const cpus = os.cpus();
+  return { cpuCount: cpus.length, cpuModel: cpus[0]?.model.trim() || undefined };
+})();
 
 function resolveCachedAdvertisedLanHost(): Promise<string | null> {
   // Route discovery may spawn a platform command. Keep the result process-stable
@@ -57,12 +64,23 @@ function resolveCachedAdvertisedLanHost(): Promise<string | null> {
 }
 
 async function collectSystemInfo(context: GatewayRequestContext): Promise<SystemInfoResult> {
-  const cpus = os.cpus();
-  const cpuModel = cpus[0]?.model.trim() || undefined;
+  const { cpuCount, cpuModel } = cpuInfoSnapshot;
   const [oneMinute = 0, fiveMinutes = 0, fifteenMinutes = 0] = os.loadavg();
   const loadAverage: [number, number, number] = [oneMinute, fiveMinutes, fifteenMinutes];
   const stateDir = resolveStateDir();
-  const disk = tryReadDiskSpace(stateDir);
+  // State-volume stats share the mounted-disk cadence; a new state root invalidates immediately.
+  if (
+    !stateDiskSnapshot ||
+    stateDiskSnapshot.stateDir !== stateDir ||
+    Date.now() >= stateDiskSnapshot.expiresAt
+  ) {
+    stateDiskSnapshot = {
+      stateDir,
+      disk: tryReadDiskSpace(stateDir),
+      expiresAt: Date.now() + 30_000,
+    };
+  }
+  const { disk } = stateDiskSnapshot;
   const config = context.getRuntimeConfig();
   const port = resolveGatewayPort(config);
   const [lanAddress, disks] = await Promise.all([
@@ -97,11 +115,12 @@ async function collectSystemInfo(context: GatewayRequestContext): Promise<System
     pid: process.pid,
     processInstanceId: getGatewayProcessInstanceId(),
     uptimeMs: Math.round(process.uptime() * 1000),
-    cpuCount: cpus.length,
+    cpuCount,
     ...(cpuModel ? { cpuModel } : {}),
     ...(loadAverage.some((value) => value !== 0) ? { loadAverage } : {}),
     memoryTotalBytes: os.totalmem(),
     memoryFreeBytes: os.freemem(),
+    ...readGatewayProcessVitals(context.getEventLoopHealth),
     // Keep the existing state-volume reading when native discovery is unavailable;
     // an empty successful discovery intentionally stays empty.
     disks:
@@ -122,8 +141,8 @@ async function collectSystemInfo(context: GatewayRequestContext): Promise<System
 
 /** Gateway handlers for identity, host information, heartbeat toggles, and presence events. */
 export const systemHandlers: GatewayRequestHandlers = {
-  "gateway.identity.get": ({ respond }) => {
-    const identity = loadOrCreateProcessDeviceIdentity();
+  "gateway.identity.get": async ({ respond }) => {
+    const identity = await loadOrCreateProcessDeviceIdentityAsync();
     respond(
       true,
       {
@@ -229,49 +248,26 @@ export const systemHandlers: GatewayRequestHandlers = {
         return;
       }
     }
-    const deviceId = readStringValue(params.deviceId);
-    const instanceId = readStringValue(params.instanceId);
-    const host = readStringValue(params.host);
-    const ip = readStringValue(params.ip);
-    const mode = readStringValue(params.mode);
-    const version = readStringValue(params.version);
-    const platform = readStringValue(params.platform);
-    const deviceFamily = readStringValue(params.deviceFamily);
-    const modelIdentifier = readStringValue(params.modelIdentifier);
-    const reason = readStringValue(params.reason);
-    const roles =
-      Array.isArray(params.roles) && params.roles.every((t) => typeof t === "string")
-        ? params.roles
-        : undefined;
-    const scopes =
-      Array.isArray(params.scopes) && params.scopes.every((t) => typeof t === "string")
-        ? params.scopes
-        : undefined;
-    const tags =
-      Array.isArray(params.tags) && params.tags.every((t) => typeof t === "string")
-        ? params.tags
-        : undefined;
-    const lastInputSeconds = tags?.includes(SYSTEM_PRESENCE_CLEAR_LAST_INPUT_TAG)
+    const reason = params.reason;
+    const lastInputSeconds = params.tags?.includes(SYSTEM_PRESENCE_CLEAR_LAST_INPUT_TAG)
       ? null
-      : typeof params.lastInputSeconds === "number" && Number.isFinite(params.lastInputSeconds)
-        ? params.lastInputSeconds
-        : undefined;
+      : params.lastInputSeconds;
     const presenceUpdate = updateSystemPresence({
       text,
-      deviceId,
-      instanceId,
-      host,
-      ip,
-      mode,
-      version,
-      platform,
-      deviceFamily,
-      modelIdentifier,
+      deviceId: params.deviceId,
+      instanceId: params.instanceId,
+      host: params.host,
+      ip: params.ip,
+      mode: params.mode,
+      version: params.version,
+      platform: params.platform,
+      deviceFamily: params.deviceFamily,
+      modelIdentifier: params.modelIdentifier,
       lastInputSeconds,
       reason,
-      roles,
-      scopes,
-      tags,
+      roles: params.roles,
+      scopes: params.scopes,
+      tags: params.tags,
     });
     if (isNodePresenceLine) {
       // Node presence heartbeats are noisy; only enqueue user-visible system
@@ -293,7 +289,10 @@ export const systemHandlers: GatewayRequestHandlers = {
       const reasonChanged = changed.has("reason") && !ignoreReason;
       const hasChanges = hostChanged || ipChanged || versionChanged || modeChanged || reasonChanged;
       if (hasChanges) {
-        const contextChanged = isSystemEventContextChanged(sessionKey, presenceUpdate.key);
+        const contextChanged = isSystemEventContextChanged(
+          resolveSystemEventQueueKey(sessionKey, eventOwnerAgentId),
+          presenceUpdate.key,
+        );
         const parts: string[] = [];
         // Re-state node identity only when the line would otherwise lose
         // routing context or the host/IP changed.

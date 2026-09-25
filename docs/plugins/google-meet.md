@@ -12,13 +12,13 @@ The `google-meet` plugin joins explicit Meet URLs on behalf of an OpenClaw agent
 - It only joins `https://meet.google.com/...` URLs; it never dials into a meeting from a phone number it discovers itself.
 - `googlemeet create` can mint a new Meet URL through the Google Meet API (or a browser fallback) and join it by default.
 - Chrome participation uses a signed-in Chrome profile, optionally on a paired node. Twilio participation dials a phone number plus PIN/DTMF through the [Voice call plugin](/plugins/voice-call); it cannot dial a Meet URL directly.
-- `mode: "agent"` (default) transcribes participant speech with a realtime provider, routes it to the configured OpenClaw agent, and speaks the answer with regular OpenClaw TTS. `mode: "bidi"` lets a realtime voice model answer directly. `mode: "transcribe"` joins observe-only with no talk-back.
+- `mode: "agent"` (default) transcribes participant speech with a realtime provider, routes it to the configured OpenClaw agent, and speaks the answer with regular OpenClaw TTS. `mode: "bidi"` uses realtime voice, including GPT-Live with native OpenClaw agent delegation. `mode: "transcribe"` joins observe-only with no talk-back.
 - There is no automatic consent announcement when the plugin joins a call.
 - The CLI command is `googlemeet`; `meet` is reserved for broader agent teleconference workflows.
 
 ## Quick start
 
-Install the plugin and the native audio dependencies for the Chrome host, then set a realtime provider key. OpenAI is the default transcription provider for `agent` mode; Google Gemini Live is available as the `bidi`-mode voice provider. On macOS:
+Install the plugin and the native audio dependencies for the Chrome host, then configure provider authentication. OpenAI is the default transcription provider for `agent` mode; `bidi` mode supports Google Gemini Live and OpenAI realtime voice, including GPT-Live. For GPT-Live with Cove, use the [explicit Live configuration](/plugins/google-meet/config#gpt-live-with-cove). The default agent path on macOS:
 
 ```bash
 openclaw plugins install @openclaw/google-meet
@@ -164,12 +164,12 @@ Google Meet's official media API is receive-oriented, so speaking into a call st
 
 Chrome talk-back modes need a supported native virtual-audio backend plus either:
 
-- `chrome.audioInputCommand` plus `chrome.audioOutputCommand`: OpenClaw owns the bridge and pipes audio in `chrome.audioFormat` between those commands and the selected provider. `agent` mode uses realtime transcription plus regular TTS; `bidi` mode uses the realtime voice provider. The default path is 24 kHz PCM16 with `chrome.audioBufferBytes: 4096`; 8 kHz G.711 mu-law remains available for legacy command pairs.
+- `chrome.audioInputCommand` plus `chrome.audioOutputCommand`: with generated native commands, OpenClaw captures participant audio from browser playback, injects assistant audio into the virtual microphone, and uses native input to verify that injection. An explicitly configured input command keeps supplying participant audio to the provider, preserving custom capture/filter/mixer setups. `agent` mode uses realtime transcription plus regular TTS; `bidi` mode uses the realtime voice provider. The default path is 24 kHz PCM16 with `chrome.audioBufferBytes: 4096`; 8 kHz G.711 mu-law remains available for legacy command pairs.
 - `chrome.audioBridgeCommand`: an external bridge command owns the whole local audio path and must exit after starting or validating its daemon. Valid only for `bidi`, because `agent` mode needs direct command-pair access for TTS.
 
-With the command-pair Chrome bridge, `chrome.bargeInInputCommand` can listen to a separate local microphone and clear assistant playback when a human starts talking, keeping human speech ahead of assistant output even while the shared virtual loopback input is temporarily suppressed during assistant playback. Like `chrome.audioInputCommand`/`chrome.audioOutputCommand`, it is an operator-configured local command: use an explicit trusted command path or argument list, never a script from an untrusted location.
+The default browser bridge keeps participant playback off the virtual microphone, so received meeting audio is not sent back into the call. Isolated participant input remains available during assistant speech. Google Meet, Microsoft Teams, and Zoom use this same meeting engine; provider selection, delegation, and interruption policy also share the realtime voice runtime used by Discord and Talk.
 
-For clean duplex audio, route Meet output and Meet microphone through separate virtual devices or a Loopback-style virtual device graph; the default shared loopback device can echo other participants back into the call.
+GPT-Live owns interruptions and plays continuous audio without waiting for response-completion events. It requires the managed isolated browser input: remove an explicit `chrome.audioInputCommand` when selecting Live. Custom input commands cannot establish that isolation and are rejected for Live instead of silently replaced. Live does not use `chrome.bargeInInputCommand`. That optional separate local-microphone command remains available for providers that support host-driven interruption on the Gateway-hosted command-pair bridge. Like the other audio commands, it is an operator-configured local command: use an explicit trusted command path or argument list.
 
 `googlemeet speak` triggers the active talk-back audio bridge for a Chrome session; `googlemeet leave` stops it (and, for Twilio sessions delegated through Voice Call, hangs up the underlying call). Use `googlemeet end-active-conference` to also close the active Google Meet conference for an API-managed space.
 
@@ -177,7 +177,7 @@ For clean duplex audio, route Meet output and Meet microphone through separate v
 
 During talk-back sessions, `google_meet` status reports Chrome/audio bridge health: `inCall`, `manualAction`, `providerConnected`, `realtimeReady`, `audioInputActive`, `audioOutputActive`, last input/output timestamps, byte counters, and bridge-closed state. Managed Chrome sessions only speak the intro/test phrase after health reports `inCall: true`; otherwise `speechReady: false` and the speech attempt is blocked rather than silently no-opping.
 
-Local Chrome joins through the signed-in OpenClaw browser profile and routes its microphone and speaker through the native backend selected by `chrome.audioBackend`. The default shared loopback device is enough for a first smoke test but can echo; use separate virtual devices or a Loopback-style graph for clean duplex audio.
+Local Chrome and paired Chrome nodes use the same input-source selection. Generated commands use isolated browser capture and native injection; explicit input commands keep their configured capture path and existing echo protection. If managed browser playback cannot be captured, the bridge fails clearly instead of sending mixed loopback audio to Live. A room with no participant audio yet is idle, not a capture failure.
 
 ## Where each section moved
 

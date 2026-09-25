@@ -14,10 +14,19 @@ Fixes for setup, webhook exposure, credentials, signature verification, Google M
 
 ### Call placement fails to save its initial record
 
-Voice Call saves the initial record before reserving a concurrency slot or
-contacting the carrier. If that write fails, the placement reports the storage
-error without dialing. Restore access to the state directory, then retry; the
-failed placement does not consume `maxConcurrentCalls` capacity.
+Voice Call reserves pending capacity while saving the initial record, then publishes
+the active call and contacts the carrier only after the write succeeds. If the write
+fails, placement reports the storage error without dialing and releases the reservation.
+Restore access to the state directory, then retry; a failed placement does not consume
+`maxConcurrentCalls` capacity.
+
+Webhook acknowledgments and transcript-driven replies wait for call-record persistence.
+Token-bound realtime streams wait for pending call updates before matching the carrier ID.
+Failed event writes remain retryable, and shutdown drains admitted call work after
+closing webhook and stream producers.
+
+If another realtime stream becomes active during admission, a failure to create
+the new bridge leaves that active call connected.
 
 ### Setup fails webhook exposure
 
@@ -61,7 +70,8 @@ Use one public exposure path:
 }
 ```
 
-After changing config, restart or reload the Gateway, then run:
+Config changes apply automatically with the default hybrid reload mode (see
+[Hot reload](/gateway/configuration/hot-reload)). After application, run:
 
 ```bash
 openclaw voicecall setup
@@ -83,8 +93,8 @@ Check the selected provider and the required credential fields:
   `PLIVO_AUTH_ID` and `PLIVO_AUTH_TOKEN`.
 
 Credentials must exist on the Gateway host. Editing a local shell profile
-does not affect an already running Gateway until it restarts or reloads its
-environment.
+does not change the running Gateway's environment. Update its service environment
+and restart the Gateway when changing environment-based credentials.
 
 ### Calls start but provider webhooks do not arrive
 

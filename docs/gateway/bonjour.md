@@ -89,10 +89,12 @@ Only the gateway advertises `_openclaw-gw._tcp`. LAN multicast advertising comes
 Security notes:
 
 - Bonjour/mDNS TXT records are **unauthenticated**. Clients must not treat TXT as authoritative routing.
-- Clients should route using the resolved service endpoint (SRV + A/AAAA). Treat `lanHost`, `tailnetDns`, `gatewayPort`, and `gatewayTlsSha256` as hints only.
-- SSH auto-targeting should likewise use the resolved service host, not TXT-only hints.
+- Clients that offer discovery-based routing should use the resolved service endpoint (SRV + A/AAAA). Treat `lanHost`, `tailnetDns`, `gatewayPort`, and `gatewayTlsSha256` as hints only.
+- Where supported, SSH auto-targeting should likewise use the resolved service host, not TXT-only hints.
 - TLS pinning must never let an advertised `gatewayTlsSha256` override a previously stored pin.
 - iOS/Android nodes should treat discovery-based direct connects as **TLS-only** and require explicit user confirmation before trusting a first-time fingerprint.
+
+The macOS app treats the resolved endpoint as a hint too. Selecting **Nearby Gateways** opens the connection editor; it does not authenticate to the advertised destination, change a saved route, or import SSH details or a certificate pin. Supply a trusted address, SSH target, or owner-provided setup code, then save the connection. See [Configure in the app](/platforms/mac/remote#configure-in-the-app).
 
 ## Debugging on macOS
 

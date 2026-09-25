@@ -1,10 +1,8 @@
-// Slack plugin module owns durable Events API admission and replay.
 import type { App, Receiver, ReceiverEvent } from "@slack/bolt";
 import {
   createChannelIngressError,
   createChannelIngressMonitor,
   type ChannelIngressQueue,
-  type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
 import {
   collectErrorGraphCandidates,
@@ -15,7 +13,10 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { PluginJsonValue } from "openclaw/plugin-sdk/plugin-entry";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getSlackRuntime } from "../runtime.js";
+import { parseSlackMessageEvent } from "../types.js";
+import type { SlackIngressTurnLifecycle } from "./ingress.types.js";
 import { isNonRecoverableSlackAuthError } from "./reconnect-policy.js";
+import { isTransientSlackThreadLookupError } from "./thread-resolution.js";
 
 const SLACK_INGRESS_PAYLOAD_VERSION = 1;
 const SLACK_INGRESS_POLL_INTERVAL_MS = 1_000;
@@ -23,31 +24,7 @@ const SLACK_BOLT_AUTHORIZATION_ERROR = "slack_bolt_authorization_error";
 
 const SLACK_INGRESS_LIFECYCLE_CONTEXT_KEY = "openclawIngressLifecycle";
 
-export type SlackIngressTurnLifecycle = Omit<
-  ChannelIngressMonitorLifecycle,
-  "onAdoptionFinalizing"
-> & {
-  onSessionRouted?: (sessionKey: string) => Promise<void>;
-  /** A logical duplicate awaits its existing owner before session routing. */
-  onDispatchWaiting?: () => void;
-};
-
-type SlackIngressPayload = {
-  version: number;
-  receivedAt: number;
-} & (
-  | {
-      kind: "events-api";
-      body: PluginJsonValue;
-      retryNum?: number;
-      retryReason?: string;
-    }
-  // Relay frames carry a bare message event (no Events API envelope), so the
-  // durable key is the logical message identity — the retired guard's exact
-  // key space — instead of a router delivery id whose redelivery stability
-  // is not a documented contract.
-  | { kind: "relay"; message: PluginJsonValue }
-);
+type SlackIngressPayload = SlackIngressBody & { version: number };
 
 type SlackRelayIngressEvent = {
   deliveryId: string;
@@ -83,7 +60,8 @@ type SlackRelayIngressDispatch = (
   lifecycle: SlackIngressTurnLifecycle,
 ) => Promise<void>;
 
-/** Logical message identity: mirrors the retired guard key (team:channel:ts). */
+// Relay frames have no Events API envelope. Keep the shipped logical identity
+// (team:channel:ts); router delivery IDs have no documented redelivery stability.
 function resolveSlackRelayIngressEventId(event: SlackRelayIngressEvent): string {
   const ts = event.message.ts?.trim();
   if (!event.message.channel?.trim() || !ts) {
@@ -162,7 +140,7 @@ function decodeSlackIngressPayload(
   eventId: string,
 ): { version: unknown; body: SlackIngressBody } {
   if (payload.kind === "relay") {
-    if (!asOptionalRecord(payload.message)) {
+    if (!parseSlackMessageEvent(payload.message)) {
       throw new SlackIngressPayloadError(`Slack relay ingress payload ${eventId} was invalid.`);
     }
     return { version: payload.version, body: payload };
@@ -192,16 +170,21 @@ function inspectSlackIngress(raw: SlackIngressRawEvent): { eventId: string; lane
 }
 
 function resolveSlackIngressNonRetryableFailure(error: unknown) {
-  for (const candidate of collectErrorGraphCandidates(error, (current) => [
+  const candidates = collectErrorGraphCandidates(error, (current) => [
     current.cause,
     current.error,
     current.original,
-  ])) {
+  ]);
+  // Bolt wraps auth.test outages in AuthorizationError too. Keep the durable
+  // event retryable for those failures; dispatch still requires authorization.
+  const transientAuthorizationFailure = candidates.some(isTransientSlackThreadLookupError);
+  for (const candidate of candidates) {
     if (candidate instanceof SlackIngressPayloadError || candidate instanceof SyntaxError) {
       return { reason: "invalid-event", message: formatErrorMessage(candidate) };
     }
     if (
-      extractErrorCode(candidate) === SLACK_BOLT_AUTHORIZATION_ERROR ||
+      (extractErrorCode(candidate) === SLACK_BOLT_AUTHORIZATION_ERROR &&
+        !transientAuthorizationFailure) ||
       isNonRecoverableSlackAuthError(candidate)
     ) {
       return { reason: "slack-auth", message: formatErrorMessage(candidate) };
@@ -418,10 +401,15 @@ export function createSlackDurableIngress(
           await routedLifecycle.onAdopted();
         }
       } catch (error) {
-        settleTurn();
+        try {
+          await lifecycle.onFailed?.(error);
+        } finally {
+          settleTurn();
+        }
         throw error;
       }
     },
+    deferredClaims: "wait-on-stop",
     pollIntervalMs: options.pollIntervalMs ?? SLACK_INGRESS_POLL_INTERVAL_MS,
     retention: "standard",
     appendRetryDelaysMs: [0],

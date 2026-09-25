@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelChoice } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
+import {
+  createApiKeyCredential,
+  createAuthProfileStoreFixture,
+} from "../../agents/auth-profiles/credential-fixtures.test-support.js";
 import * as catalog from "../../agents/prepared-model-catalog.js";
-import { setPreparedModelRuntimeAuthStore } from "../../agents/prepared-model-runtime-auth.js";
+import { bindPreparedModelRuntimeAuth } from "../../agents/prepared-model-runtime-auth.js";
 import { markPreparedModelCatalogFull } from "../../agents/prepared-model-runtime.full-catalog.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.types.js";
 import * as runtimeConfig from "../../config/config.js";
@@ -72,20 +76,16 @@ function createOwner(): PreparedModelRuntimeSnapshot {
     allowGatewaySubagentBinding: false,
     modelCatalog: markPreparedModelCatalogFull({ entries: [entry], routeVariants: [entry] }),
     configuredRuntimeModels: [],
+    findConfiguredRuntimeModel: () => undefined,
     inlineProviderModels: [],
     createStores() {
       throw new Error("Inventory must not start model execution");
     },
   };
-  setPreparedModelRuntimeAuthStore(owner, {
-    version: 1,
-    profiles: {
-      "catalog-provider:test": {
-        type: "api_key",
-        provider: "catalog-provider",
-        key: "synthetic-catalog-key",
-      },
-    },
+  bindPreparedModelRuntimeAuth(owner, {
+    store: createAuthProfileStoreFixture({
+      "catalog-provider:test": createApiKeyCredential("catalog-provider", "synthetic-catalog-key"),
+    }),
   });
   return owner;
 }
@@ -230,23 +230,46 @@ describe("models list published transport", () => {
     expect(runtime.error).not.toHaveBeenCalled();
   });
 
-  it("shows a refresh warning while retaining the returned published rows", async () => {
-    vi.mocked(gateway.callGateway).mockResolvedValue({
-      models: [model],
-      providerOutcomes: [{ provider: "catalog-provider", status: "unavailable" }],
-    });
-    await list({ refresh: true, json: true });
-    expect(runtime.error).toHaveBeenCalledWith(
-      "Model discovery could not refresh all providers. Showing the available published model list.",
-    );
-    expect(runtime.writeJson).toHaveBeenCalledWith(expect.objectContaining({ count: 1 }), 2);
-  });
+  it.each([
+    { refresh: true, refreshFailed: undefined },
+    { refresh: false, refreshFailed: undefined },
+    { refresh: true, refreshFailed: true },
+    { refresh: false, refreshFailed: true },
+  ])(
+    "uses published refresh status with rejected auth for %j",
+    async ({ refresh, refreshFailed }) => {
+      vi.mocked(gateway.callGateway).mockResolvedValue({
+        models: [model],
+        refreshFailed,
+        providerOutcomes: [{ provider: "signed-out", status: "auth-rejected" }],
+      });
+      await list({ refresh, json: true });
+      if (refreshFailed) {
+        expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
+          "Model discovery could not refresh all providers. Showing the available published model list.",
+        );
+      } else {
+        expect(runtime.error).not.toHaveBeenCalled();
+      }
+      expect(runtime.writeJson).toHaveBeenCalledWith(expect.objectContaining({ count: 1 }), 2);
+      expect(gateway.callGateway).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          params: { view: "default", includeDetails: true, ...(refresh ? { refresh: true } : {}) },
+        }),
+      );
+    },
+  );
 
   it.each([false, true])(
     "uses the standalone owner only with no selected Gateway, refresh=%s",
     async (refresh) => {
       vi.mocked(gatewayLock.readActiveGatewayLockIdentity).mockResolvedValue(undefined);
       await list({ agent: "work", all: true, json: true, refresh });
+      expect(runtime.error).toHaveBeenCalledWith(
+        refresh
+          ? "Gateway is not running. Refreshing the local model catalog."
+          : "Gateway is not running. Showing the local cached model catalog. Use --refresh to discover provider models.",
+      );
       expect(gateway.callGateway).not.toHaveBeenCalled();
       expect(catalog.withPreparedModelCatalogOwner).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({

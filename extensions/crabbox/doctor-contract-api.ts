@@ -1,5 +1,14 @@
-import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import type {
+  PluginDoctorStateMigration,
+  PluginDoctorStateMigrationContext,
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  crabboxLegacyWarmImageCaptureSelector,
+  LEGACY_WARM_LEASE_MAX_ENTRIES,
+  projectCrabboxLegacyWarmLeases,
+  WARM_IMAGE_MAX_ENTRIES,
+} from "./src/crabbox-worker-warm-image-records.js";
 import type {
   WarmAllocationRecord,
   WarmImageRecord,
@@ -141,14 +150,24 @@ function migrateImage({
   return { ...image, lastDemandAtMs: null, preparationKey: null, cacheKey: null, purpose: null };
 }
 
+async function listLegacyWarmLeases(context: PluginDoctorStateMigrationContext) {
+  return projectCrabboxLegacyWarmLeases(
+    await context
+      .openPluginStateKeyedStore<unknown>({
+        namespace: "warm-leases",
+        maxEntries: LEGACY_WARM_LEASE_MAX_ENTRIES,
+        overflowPolicy: "evict-oldest",
+      })
+      .entries(),
+  );
+}
+
 export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "crabbox-warm-profile-v3",
     label: "Crabbox warm profiles",
     doctorOnly: true,
-    async detectLegacyState({ context, env }) {
-      const { WARM_IMAGE_MAX_ENTRIES, listCrabboxLegacyWarmLeases } =
-        await import("./src/crabbox-worker-warm-image-store.js");
+    async detectLegacyState({ context }) {
       const images = await context
         .openPluginStateKeyedStore<unknown>({
           namespace: "warm-images",
@@ -157,7 +176,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         })
         .entries();
       const pending = images.filter(({ value }) => asOptionalRecord(value)?.version !== 3).length;
-      const leases = listCrabboxLegacyWarmLeases(env);
+      const leases = await listLegacyWarmLeases(context);
       return pending || leases.length
         ? {
             preview: [
@@ -174,12 +193,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           }
         : null;
     },
-    async migrateLegacyState({ context, env }) {
-      const {
-        WARM_IMAGE_MAX_ENTRIES,
-        crabboxLegacyWarmImageCaptureSelector,
-        listCrabboxLegacyWarmLeases,
-      } = await import("./src/crabbox-worker-warm-image-store.js");
+    async migrateLegacyState({ context }) {
       const changes: string[] = [];
       const warnings: string[] = [];
       const store = context.openPluginStateKeyedStore<unknown>({
@@ -258,7 +272,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           );
         }
       }
-      const leases = listCrabboxLegacyWarmLeases(env);
+      const leases = await listLegacyWarmLeases(context);
       if (leases.length) {
         warnings.push(
           `${leases.length} legacy Crabbox lease row(s) still block warm-profile admission; their original cold/checkpoint choices are unknown.`,

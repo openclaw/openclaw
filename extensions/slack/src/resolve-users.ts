@@ -1,4 +1,3 @@
-// Slack plugin module implements resolve users behavior.
 import type { WebClient } from "@slack/web-api";
 import { resolveDirectoryAllowlistEntries } from "openclaw/plugin-sdk/directory-runtime";
 import {
@@ -7,7 +6,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createSlackLookupClient } from "./client.js";
 import { collectSlackCursorPages } from "./cursor-pages.js";
-import { formatSlackTarget, parseSlackTarget } from "./target-parsing.js";
+import { resolveWorkspaceQualifiedSlackTarget } from "./target-parsing.js";
 
 export type SlackUserLookup = {
   id: string;
@@ -30,25 +29,6 @@ export type SlackUserResolution = {
   isBot?: boolean;
   note?: string;
 };
-
-function resolveWorkspaceQualifiedUser(input: string): SlackUserResolution | undefined {
-  if (!/^team:/i.test(input)) {
-    return undefined;
-  }
-  try {
-    const target = parseSlackTarget(input);
-    if (target?.kind !== "user" || !target.teamId) {
-      return undefined;
-    }
-    return {
-      input,
-      resolved: true,
-      id: formatSlackTarget({ teamId: target.teamId, kind: "user", id: target.id }),
-    };
-  } catch {
-    return undefined;
-  }
-}
 
 function parseSlackUserInput(raw: string): { id?: string; name?: string; email?: string } {
   const trimmed = raw.trim();
@@ -102,7 +82,15 @@ async function listSlackUsers(client: WebClient): Promise<SlackUserLookup[]> {
             isAppUser: Boolean(member.is_app_user),
           } satisfies SlackUserLookup;
         })
-        .filter(Boolean) as SlackUserLookup[],
+        .filter((user) => user !== null),
+  });
+}
+
+function matchesSlackUserName(user: SlackUserLookup, name: string): boolean {
+  const target = normalizeLowercaseStringOrEmpty(name);
+  return [user.name, user.displayName, user.realName].some((value) => {
+    const candidate = normalizeLowercaseStringOrEmpty(value);
+    return Boolean(candidate) && candidate === target;
   });
 }
 
@@ -117,14 +105,8 @@ function scoreSlackUser(user: SlackUserLookup, match: { name?: string; email?: s
   if (match.email && user.email === match.email) {
     score += 5;
   }
-  if (match.name) {
-    const target = normalizeLowercaseStringOrEmpty(match.name);
-    const candidates = [user.name, user.displayName, user.realName]
-      .map((value) => normalizeLowercaseStringOrEmpty(value))
-      .filter(Boolean);
-    if (candidates.some((value) => value === target)) {
-      score += 2;
-    }
+  if (match.name && matchesSlackUserName(user, match.name)) {
+    score += 2;
   }
   return score;
 }
@@ -137,7 +119,7 @@ function resolveSlackUserFromMatches(
   const scored = matches
     .map((user) => ({ user, score: scoreSlackUser(user, parsed) }))
     .toSorted((a, b) => b.score - a.score);
-  const best = scored[0]?.user ?? matches[0];
+  const best = scored[0]?.user;
   if (!best) {
     return { input, resolved: false };
   }
@@ -158,10 +140,12 @@ export async function resolveSlackUserAllowlist(params: {
   entries: string[];
   client?: WebClient;
 }): Promise<SlackUserResolution[]> {
-  const workspaceResolved = params.entries.map(resolveWorkspaceQualifiedUser);
+  const workspaceResolved = params.entries.map((input) =>
+    resolveWorkspaceQualifiedSlackTarget(input, "user"),
+  );
   const lookupEntries = params.entries.filter((_, index) => !workspaceResolved[index]);
   if (lookupEntries.length === 0) {
-    return workspaceResolved.filter((entry): entry is SlackUserResolution => entry !== undefined);
+    return workspaceResolved.filter((entry) => entry !== undefined);
   }
   const client = params.client ?? createSlackLookupClient(params.token);
   const users = await listSlackUsers(client);
@@ -190,14 +174,9 @@ export async function resolveSlackUserAllowlist(params: {
           return resolveSlackUserFromMatches(input, matches, parsed);
         }
       }
-      if (parsed.name) {
-        const target = normalizeLowercaseStringOrEmpty(parsed.name);
-        const matches = lookup.filter((user) => {
-          const candidates = [user.name, user.displayName, user.realName]
-            .map((value) => normalizeLowercaseStringOrEmpty(value))
-            .filter(Boolean);
-          return candidates.includes(target);
-        });
+      const name = parsed.name;
+      if (name) {
+        const matches = lookup.filter((user) => matchesSlackUserName(user, name));
         if (matches.length > 0) {
           return resolveSlackUserFromMatches(input, matches, parsed);
         }

@@ -1,4 +1,7 @@
 // Tests abort request handling, cutoff persistence, and active run cleanup.
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import { registryPersistence } from "./abort-subagent-registry.test-support.js";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -8,7 +11,6 @@ import {
   addSubagentRunForTests,
   getSubagentRunByChildSessionKey,
   resetSubagentRegistryForTests,
-  testing as subagentRegistryTesting,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -21,16 +23,12 @@ import {
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { resolveAbortCutoffFromContext, shouldSkipMessageByAbortCutoff } from "./abort-cutoff.js";
-import { getAbortMemory } from "./abort-primitives.js";
-import {
-  formatAbortReplyText,
-  isAbortRequestText,
-  isAbortTrigger,
-  setAbortMemory,
-  stopSubagentsForRequester,
-  tryFastAbortFromMessage,
-} from "./abort.js";
+import { stopSubagentsForRequester } from "./abort-operation.js";
+import { getAbortMemory, isAbortRequestText, setAbortMemory } from "./abort-primitives.js";
+import { isAbortTrigger } from "./abort-trigger-text.js";
+import { formatAbortReplyText, tryFastAbortFromMessage } from "./abort.js";
 import { enqueueFollowupRun, getFollowupQueueDepth, type FollowupRun } from "./queue.js";
+import { clearFollowupQueue } from "./queue/state.js";
 import { createReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
 import { testing as replyRunRegistryTesting } from "./reply-run-registry.test-support.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -239,8 +237,8 @@ describe("abort detection", () => {
   }
 
   function bindAcpSessionForTest(targetSessionKey: string) {
-    vi.spyOn(getSessionBindingService(), "resolveByConversation").mockImplementation(
-      (conversation) => ({
+    vi.spyOn(getSessionBindingService(), "resolveByConversationAsync").mockImplementation(
+      async (conversation) => ({
         bindingId: "test-acp-binding",
         targetKind: "session",
         targetSessionKey,
@@ -252,20 +250,14 @@ describe("abort detection", () => {
   }
 
   beforeEach(() => {
-    subagentRegistryTesting.setDepsForTest({
-      persistSubagentRunsToDisk: () => {},
-      persistSubagentRunsToDiskOrThrow: () => {},
-      restoreSubagentRunsFromDisk: () => 0,
-      cleanupBrowserSessionsForLifecycleEnd: async () => {},
-      ensureContextEnginesInitialized: () => {},
-      loadAgentRuntimePluginRegistryHandle: () => undefined,
-    });
+    registryPersistence.persistSubagentRunsToDiskOrThrow.mockReset();
     commandQueueMocks.clearCommandLane.mockClear().mockReturnValue(1);
   });
 
   afterEach(async () => {
     for (const key of trackedAbortMemoryKeys) {
       setAbortMemory(key, false);
+      clearFollowupQueue(key);
     }
     trackedAbortMemoryKeys.clear();
     vi.restoreAllMocks();
@@ -279,7 +271,6 @@ describe("abort detection", () => {
     runtimeAbortMocks.resolveActiveEmbeddedRunSessionId.mockReset().mockReturnValue(undefined);
     await settleSubagentRegistryPersistenceWork();
     resetSubagentRegistryForTests({ persist: false });
-    subagentRegistryTesting.setDepsForTest();
   });
 
   it("isAbortTrigger matches standalone abort trigger phrases", () => {
@@ -475,6 +466,27 @@ describe("abort detection", () => {
     });
 
     expect(result.handled).toBe(true);
+  });
+
+  it("resolves owner authorization after loading cancellation runtime", async () => {
+    const sessionKey = "telegram:123";
+    const sessionId = "session-123";
+    const { root, cfg } = await createAbortConfig({
+      sessionIdsByKey: { [sessionKey]: sessionId },
+    });
+    cfg.commands = { ownerAllowFrom: ["telegram:123"] };
+    enqueueQueuedFollowupRun({ root, cfg, sessionId, sessionKey });
+    const pending = runStopCommand({
+      cfg,
+      sessionKey,
+      from: "telegram:123",
+      to: "telegram:123",
+      senderId: "123",
+    });
+    cfg.commands.ownerAllowFrom = ["telegram:other-owner"];
+
+    await expect(pending).resolves.toEqual({ handled: false, aborted: false });
+    expect(getFollowupQueueDepth(sessionKey)).toBe(1);
   });
 
   it("fast-aborts authorized text slash stop commands before they queue", async () => {
@@ -796,7 +808,7 @@ describe("abort detection", () => {
       const signaledBeforeAcpWait = native.abortSignal.aborted;
       if (!signaledBeforeAcpWait) {
         // This is still-live parent work, not a post-closure registration claim.
-        registerSubagentRun({
+        await registerSubagentRun({
           runId: "during-acp-wait",
           childSessionKey: "agent:main:subagent:during-acp-wait",
           requesterSessionKey: sessionKey,
@@ -1268,8 +1280,8 @@ describe("abort detection", () => {
       addSubagentFixture(fixture);
     }
     let failedTombstone = false;
-    subagentRegistryTesting.setDepsForTest({
-      persistSubagentRunsToDiskOrThrow: (runs, changedRunIds) => {
+    registryPersistence.persistSubagentRunsToDiskOrThrow.mockImplementation(
+      (runs, changedRunIds) => {
         const first = runs.get("run-persistence-failure-first");
         if (
           !failedTombstone &&
@@ -1281,7 +1293,7 @@ describe("abort detection", () => {
           throw new Error("sqlite busy");
         }
       },
-    });
+    );
 
     await expect(
       stopSubagentsForRequester({

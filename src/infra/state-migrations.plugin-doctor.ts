@@ -8,10 +8,11 @@ import {
   PluginDoctorStateMigrationDeclarationError,
   type PluginDoctorStateMigration,
   type PluginDoctorStateMigrationDetection,
+  type PluginDoctorStateMigrationInventory,
 } from "../plugins/doctor-contract-registry.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db.js";
-import { repairOpenClawStateDatabaseSchemaIfNeeded } from "../state/openclaw-state-db.js";
+import { prepareOpenClawStateDatabaseSchema } from "../state/openclaw-state-db.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import { formatStartupMigrationFailure } from "./state-migrations.messages.js";
 import { createPluginDoctorStateMigrationContext } from "./state-migrations.plugin-doctor-context.js";
@@ -32,6 +33,41 @@ type PluginDoctorInput = Omit<
 
 const PLUGIN_DOCTOR_MIGRATION_LOCK_TIMEOUT_MS = 250;
 const PLUGIN_DOCTOR_MIGRATION_LOCK_POLL_INTERVAL_MS = 25;
+
+type PluginDoctorPlanCollection = {
+  plans: DetectedPluginDoctorStateMigrationPlan[];
+  inspectedPluginIds: Set<string>;
+  otherPhasePluginIds: Set<string>;
+  requiredPluginIds: Set<string>;
+  statelessPluginIds: Set<string>;
+};
+
+function pluginInspectionFacts(
+  collection: PluginDoctorPlanCollection,
+): Pick<MigrationMessages, "requiredPluginIds" | "statelessPluginIds"> {
+  return {
+    ...(collection.requiredPluginIds.size > 0
+      ? { requiredPluginIds: [...collection.requiredPluginIds] }
+      : {}),
+    ...(collection.statelessPluginIds.size > 0
+      ? { statelessPluginIds: [...collection.statelessPluginIds] }
+      : {}),
+  };
+}
+
+function completedPluginInspection(
+  collection: PluginDoctorPlanCollection,
+  migrated: MigrationMessages,
+  excludedPluginIds: ReadonlySet<string> = collection.otherPhasePluginIds,
+): Pick<MigrationMessages, "completedPluginIds"> {
+  const pendingIds = new Set(collection.plans.map((plan) => plan.pluginId));
+  const migratedIds = new Set(migrated.completedPluginIds);
+  const completedPluginIds = [...collection.inspectedPluginIds].filter(
+    (pluginId) =>
+      !excludedPluginIds.has(pluginId) && (!pendingIds.has(pluginId) || migratedIds.has(pluginId)),
+  );
+  return completedPluginIds.length > 0 ? { completedPluginIds } : {};
+}
 
 function validatePluginDoctorPlanOrder(params: {
   actions: readonly PlannedPluginDoctorAction[];
@@ -63,24 +99,52 @@ export async function collectPluginDoctorStateMigrationPlans(
     repairAuthority?: PluginDoctorRepairAuthority;
     warnings?: string[];
     plannedActions?: readonly PlannedPluginDoctorAction[];
+    inventory?: PluginDoctorStateMigrationInventory;
     validateDeclarations?: boolean;
   },
-): Promise<DetectedPluginDoctorStateMigrationPlan[]> {
+): Promise<PluginDoctorPlanCollection> {
   const plans: DetectedPluginDoctorStateMigrationPlan[] = [];
+  const inspectedPluginIds = new Set<string>();
+  const otherPhasePluginIds = new Set<string>();
+  const requiredPluginIds = new Set<string>();
+  const statelessPluginIds = new Set<string>();
+  const collected = {
+    plans,
+    inspectedPluginIds,
+    otherPhasePluginIds,
+    requiredPluginIds,
+    statelessPluginIds,
+  };
   const { config, env } = input;
   let entries: ReturnType<typeof listPluginDoctorStateMigrationEntries>;
   try {
     entries = listPluginDoctorStateMigrationEntries({
       config,
       env,
+      inventory: params.inventory,
       validateDeclarations: params.validateDeclarations,
+      onInspectedPlugin: (pluginId) => inspectedPluginIds.add(pluginId),
+      onInspectedStatelessPlugin: (pluginId) => statelessPluginIds.add(pluginId),
     });
   } catch (error) {
     if (!(error instanceof PluginDoctorStateMigrationDeclarationError)) {
       throw error;
     }
     params.warnings?.push(error.message);
-    return [];
+    inspectedPluginIds.clear();
+    return collected;
+  }
+  for (const entry of entries) {
+    requiredPluginIds.add(entry.pluginId);
+    inspectedPluginIds.add(entry.pluginId);
+    if (entry.migration.phase !== params.phase) {
+      otherPhasePluginIds.add(entry.pluginId);
+    }
+  }
+  for (const entry of entries) {
+    if (entry.migration.doctorOnly === true && params.includeDoctorOnly !== true) {
+      inspectedPluginIds.delete(entry.pluginId);
+    }
   }
   entries = entries.filter(
     ({ migration }) =>
@@ -96,7 +160,8 @@ export async function collectPluginDoctorStateMigrationPlans(
     });
     if (refusal) {
       params.warnings?.push(refusal);
-      return [];
+      inspectedPluginIds.clear();
+      return collected;
     }
   }
   for (const entry of entries) {
@@ -112,6 +177,7 @@ export async function collectPluginDoctorStateMigrationPlans(
           env,
           config,
           repairAuthority: params.repairAuthority,
+          trustedForDurableStores: entry.trustedForDurableStores ?? true,
           // Detection runs before exclusive state ownership, so it is handed
           // inspection-only ingress access and no mutation gate. Untrusted owners get
           // no ingress lane at all: Doctor must not widen the runtime's durable-store
@@ -129,6 +195,7 @@ export async function collectPluginDoctorStateMigrationPlans(
         }),
       });
     } catch (err) {
+      inspectedPluginIds.delete(entry.pluginId);
       params.warnings?.push(`Failed detecting ${entry.migration.label}: ${String(err)}`);
       continue;
     }
@@ -142,7 +209,7 @@ export async function collectPluginDoctorStateMigrationPlans(
       });
     }
   }
-  return plans;
+  return collected;
 }
 
 export async function runPluginDoctorStateMigrationPlans(params: {
@@ -150,6 +217,7 @@ export async function runPluginDoctorStateMigrationPlans(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   plannedActions?: readonly PlannedPluginDoctorAction[];
+  inventory?: PluginDoctorStateMigrationInventory;
 }): Promise<MigrationMessages> {
   const input: PluginDoctorInput = {
     config: params.config,
@@ -158,21 +226,19 @@ export async function runPluginDoctorStateMigrationPlans(params: {
     oauthDir: params.detected.oauthDir,
   };
   const warnings: string[] = [];
-  const refreshedPlans = await collectPluginDoctorStateMigrationPlans(input, {
+  const collected = await collectPluginDoctorStateMigrationPlans(input, {
     includeDoctorOnly: params.detected.doctorOnlyStateMigrations,
     warnings,
     plannedActions: params.plannedActions,
+    inventory: params.inventory,
   });
   const hasDetectorFailure = warnings.length > 0;
-  // Previously detected plans are only safe when refresh found no current work.
-  // If any detector failed, skip stale plans instead of migrating on old assumptions.
-  const plans =
-    refreshedPlans.length > 0 || hasDetectorFailure
-      ? refreshedPlans
-      : (params.detected.pluginPlans?.plans ?? []);
-  const migrated = await migratePluginDoctorStatePlans(input, plans);
+  const migrated = await migratePluginDoctorStatePlans(input, collected.plans);
   return {
     ...migrated,
+    completedPluginIds: undefined,
+    ...completedPluginInspection(collected, migrated),
+    ...pluginInspectionFacts(collected),
     warnings: [...warnings, ...migrated.warnings],
     ...(hasDetectorFailure ? { warningDisposition: undefined } : {}),
   };
@@ -186,6 +252,7 @@ async function migratePluginDoctorStatePlans(
   const changes: string[] = [];
   const warnings: string[] = [];
   const notices: string[] = [];
+  const completedPluginIds = new Set(plans.map((plan) => plan.pluginId));
   let hasRefusal = false;
   if (plans.length === 0) {
     return { changes, warnings };
@@ -225,6 +292,7 @@ async function migratePluginDoctorStatePlans(
             env: input.env,
             config: input.config,
             repairAuthority,
+            trustedForDurableStores: plan.trustedForDurableStores ?? true,
             ...((plan.trustedForDurableStores ?? true)
               ? {
                   channelIngress: {
@@ -239,11 +307,15 @@ async function migratePluginDoctorStatePlans(
         repairAuthority?.assertCurrent();
         changes.push(...result.changes);
         warnings.push(...result.warnings);
+        if (result.warnings.length > 0) {
+          completedPluginIds.delete(plan.pluginId);
+        }
         if (result.warnings.length > 0 && result.warningDisposition !== "recoverable") {
           hasRefusal = true;
         }
         notices.push(...(result.notices ?? []));
       } catch (err) {
+        completedPluginIds.delete(plan.pluginId);
         hasRefusal = true;
         warnings.push(`Failed migrating ${plan.migration.label}: ${String(err)}`);
       }
@@ -252,6 +324,7 @@ async function migratePluginDoctorStatePlans(
       changes,
       warnings,
       ...(notices.length > 0 ? { notices } : {}),
+      ...(completedPluginIds.size > 0 ? { completedPluginIds: [...completedPluginIds] } : {}),
       ...(warnings.length > 0 && !hasRefusal ? { warningDisposition: "recoverable" as const } : {}),
     };
   };
@@ -289,7 +362,7 @@ async function migratePluginDoctorStatePlans(
   try {
     // Plugin migrations may claim retired files after verified import. Keep the
     // predecessor Gateway excluded for the full read, import, and archive window.
-    return await migrate();
+    return await lock.run(migrate);
   } finally {
     await lock.release();
   }
@@ -301,6 +374,11 @@ export async function runPostSessionPluginDoctorStateRepairs(params: {
   env: NodeJS.ProcessEnv;
   maintenanceAuthority?: { assertCurrent(): void };
   plannedActions?: readonly PlannedPluginDoctorAction[];
+  inventory?: PluginDoctorStateMigrationInventory;
+  beforeCompletion?: (
+    completedPluginIds: readonly string[],
+    assertCurrent: () => void,
+  ) => Promise<void>;
 }): Promise<MigrationMessages> {
   const stateDir = resolveStateDir(params.env);
   const input: PluginDoctorInput = {
@@ -312,28 +390,45 @@ export async function runPostSessionPluginDoctorStateRepairs(params: {
   const run = async (repairAuthority?: PluginDoctorRepairAuthority): Promise<MigrationMessages> => {
     const warnings: string[] = [];
     repairAuthority?.assertCurrent();
-    const plans = await collectPluginDoctorStateMigrationPlans(input, {
+    const collected = await collectPluginDoctorStateMigrationPlans(input, {
       includeDoctorOnly: true,
       phase: "after-session-repair",
       repairAuthority,
       warnings,
       plannedActions: params.plannedActions,
+      inventory: params.inventory,
     });
     if (!repairAuthority) {
       return {
         changes: [],
         warnings: [
           ...warnings,
-          ...plans.flatMap((plan) => plan.preview),
-          ...(plans.length
+          ...collected.plans.flatMap((plan) => plan.preview),
+          ...(collected.plans.length
             ? ['Run "openclaw doctor --fix" to repair plugin session ownership.']
             : []),
         ],
       };
     }
-    const result = await migratePluginDoctorStatePlans(input, plans, repairAuthority);
+    const result = await migratePluginDoctorStatePlans(input, collected.plans, repairAuthority);
+    // The later phase cannot certify an earlier action that still reports pending work.
+    const earlier = await collectPluginDoctorStateMigrationPlans(input, {
+      includeDoctorOnly: true,
+      inventory: params.inventory,
+      repairAuthority,
+      warnings,
+    });
+    const unfinishedEarlierIds = new Set([
+      ...earlier.plans.map((plan) => plan.pluginId),
+      ...[...collected.inspectedPluginIds].filter(
+        (pluginId) => !earlier.inspectedPluginIds.has(pluginId),
+      ),
+    ]);
     return {
       ...result,
+      completedPluginIds: undefined,
+      ...completedPluginInspection(collected, result, unfinishedEarlierIds),
+      ...pluginInspectionFacts(collected),
       warnings: [...warnings, ...result.warnings],
       ...(warnings.length > 0 ? { warningDisposition: undefined } : {}),
     };
@@ -343,42 +438,68 @@ export async function runPostSessionPluginDoctorStateRepairs(params: {
     return run();
   }
   maintenance.assertCurrent();
+  const {
+    assertDeferredPluginMigrationsCurrent,
+    readDeferredPluginMigrations,
+    recordDeferredPluginMigrations,
+  } = await import("./deferred-plugin-migrations.js");
+  maintenance.assertCurrent();
+  const expectedPending = readDeferredPluginMigrations({ env: params.env });
+  const assertCompletionCurrent = () => {
+    maintenance.assertCurrent();
+    assertDeferredPluginMigrationsCurrent({ env: params.env, expectedPending });
+  };
   let completed: MigrationMessages = { changes: [], warnings: [] };
   try {
-    return await withAgentDatabaseMaintenanceLease({ env: params.env }, async (agentLease) =>
-      withPluginLifecycleLease({ env: params.env, waitMs: 5_000 }, async (pluginLease) => {
-        let active = true;
-        const assertCurrent = () => {
-          if (!active) {
-            throw new Error("Plugin Doctor repair authority has expired.");
+    const result = await withAgentDatabaseMaintenanceLease(
+      { env: params.env },
+      async (agentLease) =>
+        withPluginLifecycleLease({ env: params.env, waitMs: 5_000 }, async (pluginLease) => {
+          let active = true;
+          const assertCurrent = () => {
+            if (!active) {
+              throw new Error("Plugin Doctor repair authority has expired.");
+            }
+            maintenance.assertCurrent();
+          };
+          const authority: PluginDoctorRepairAuthority = {
+            assertCurrent() {
+              assertCurrent();
+              agentLease.assertOwned();
+              pluginLease.assertOwned();
+            },
+            assertOwnedInTransaction(database) {
+              assertCurrent();
+              agentLease.assertOwnedInTransaction(database);
+              pluginLease.assertOwnedInTransaction(database);
+            },
+          };
+          try {
+            // Lease settlement can reject after the callback's mutations committed.
+            // Retain those facts without treating a failed settlement as success.
+            completed = await run(authority);
+            return completed;
+          } finally {
+            active = false;
           }
-          maintenance.assertCurrent();
-        };
-        const authority: PluginDoctorRepairAuthority = {
-          assertCurrent() {
-            assertCurrent();
-            agentLease.assertOwned();
-            pluginLease.assertOwned();
-          },
-          assertOwnedInTransaction(database) {
-            assertCurrent();
-            agentLease.assertOwnedInTransaction(database);
-            pluginLease.assertOwnedInTransaction(database);
-          },
-        };
-        try {
-          // Lease settlement can reject after the callback's mutations committed.
-          // Retain those facts without treating a failed settlement as success.
-          completed = await run(authority);
-          return completed;
-        } finally {
-          active = false;
-        }
-      }),
+        }),
     );
+    if (result.completedPluginIds?.length) {
+      assertCompletionCurrent();
+      await params.beforeCompletion?.(result.completedPluginIds, assertCompletionCurrent);
+      assertCompletionCurrent();
+      recordDeferredPluginMigrations({
+        env: params.env,
+        pending: [],
+        resolvedPluginIds: result.completedPluginIds,
+        expectedPending,
+      });
+    }
+    return result;
   } catch (error) {
     return {
       ...completed,
+      completedPluginIds: undefined,
       warnings: [...completed.warnings, `Plugin session repair did not settle: ${String(error)}.`],
       warningDisposition: undefined,
     };
@@ -397,6 +518,9 @@ export async function autoMigrateLegacyPluginDoctorState(params: {
   changes: string[];
   warnings: string[];
   notices?: string[];
+  completedPluginIds?: readonly string[];
+  requiredPluginIds?: readonly string[];
+  statelessPluginIds?: readonly string[];
 }> {
   const env = params.env ?? process.env;
   const stateDirResult = await autoMigrateLegacyStateDir({
@@ -406,9 +530,10 @@ export async function autoMigrateLegacyPluginDoctorState(params: {
   });
   const stateDir = resolveStateDir(env, params.homedir ?? os.homedir);
   const oauthDir = resolveOAuthDir(env, stateDir);
-  const stateSchema = repairOpenClawStateDatabaseSchemaIfNeeded({
-    env: { ...env, OPENCLAW_STATE_DIR: stateDir },
-  });
+  const stateSchema = await prepareOpenClawStateDatabaseSchema(
+    { env: { ...env, OPENCLAW_STATE_DIR: stateDir } },
+    params.doctorOnlyStateMigrations === true ? "doctor" : "automatic",
+  );
   const changes = [...stateDirResult.changes, ...stateSchema.changes];
   const warnings = [...stateDirResult.warnings, ...stateSchema.warnings];
   const notices = [...(stateDirResult.notices ?? [])];
@@ -416,22 +541,31 @@ export async function autoMigrateLegacyPluginDoctorState(params: {
     throw new Error(formatStartupMigrationFailure(stateSchema.warnings));
   }
   const input: PluginDoctorInput = { config: params.config, env, stateDir, oauthDir };
-  const plans =
+  const collected =
     stateSchema.warnings.length > 0
-      ? []
+      ? {
+          plans: [],
+          inspectedPluginIds: new Set<string>(),
+          otherPhasePluginIds: new Set<string>(),
+          requiredPluginIds: new Set<string>(),
+          statelessPluginIds: new Set<string>(),
+        }
       : await collectPluginDoctorStateMigrationPlans(input, {
           includeDoctorOnly: params.doctorOnlyStateMigrations === true,
           warnings,
         });
-  const migrated = await migratePluginDoctorStatePlans(input, plans);
+  const migrated = await migratePluginDoctorStatePlans(input, collected.plans);
   changes.push(...migrated.changes);
   warnings.push(...migrated.warnings);
   notices.push(...(migrated.notices ?? []));
   return {
-    migrated: stateDirResult.migrated || stateSchema.changes.length > 0 || plans.length > 0,
+    migrated:
+      stateDirResult.migrated || stateSchema.changes.length > 0 || collected.plans.length > 0,
     skipped: false,
     changes,
     warnings,
+    ...completedPluginInspection(collected, migrated),
+    ...pluginInspectionFacts(collected),
     ...(notices.length > 0 ? { notices } : {}),
   };
 }

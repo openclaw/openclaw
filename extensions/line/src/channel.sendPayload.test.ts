@@ -250,10 +250,7 @@ describe("line outbound sendPayload", () => {
     const cfg = {
       channels: { line: { channelAccessToken: "line-fixture-token" } },
     } as OpenClawConfig;
-    const providerResponse = new Response(JSON.stringify({ sentMessages: [{ id: "m-flex" }] }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
+    const providerResponse = Response.json({ sentMessages: [{ id: "m-flex" }] });
     const fetch = vi.fn(async () => providerResponse);
     vi.stubGlobal("fetch", fetch);
     const onDeliveryResult = vi.fn();
@@ -284,12 +281,7 @@ describe("line outbound sendPayload", () => {
     const laterFailure = new Error("second LINE Flex send failed");
     const fetch = vi
       .fn()
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ sentMessages: [{ id: "m-first-flex" }] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
-      )
+      .mockResolvedValueOnce(Response.json({ sentMessages: [{ id: "m-first-flex" }] }))
       .mockRejectedValueOnce(laterFailure);
     vi.stubGlobal("fetch", fetch);
     mocks.pushFlexMessage

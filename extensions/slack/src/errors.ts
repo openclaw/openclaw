@@ -1,18 +1,32 @@
-// Slack plugin module implements errors behavior.
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const NO_ERROR_DETAIL = "no error detail";
+const MAX_ERROR_CAUSE_DEPTH = 32;
 
-function redact(value: string): string {
-  return redactSensitiveText(value);
+type SlackWebApiErrorData = {
+  error?: unknown;
+  needed?: unknown;
+  response_metadata?: {
+    scopes?: unknown;
+    acceptedScopes?: unknown;
+  };
+};
+
+export function getSlackWebApiErrorData(error: unknown): SlackWebApiErrorData | undefined {
+  if (!(error instanceof Error)) {
+    return undefined;
+  }
+  // SAFETY: Slack attaches data to Error; the object check and consumer coercers validate its fields.
+  const data = (error as Error & { data?: SlackWebApiErrorData }).data;
+  return data && typeof data === "object" ? data : undefined;
 }
 
 function addStringDetail(details: string[], label: string, value: unknown) {
   if (typeof value !== "string") {
     return;
   }
-  const trimmed = redact(value.trim());
+  const trimmed = redactSensitiveText(value.trim());
   if (trimmed) {
     details.push(label ? `${label}: ${trimmed}` : trimmed);
   }
@@ -36,7 +50,7 @@ function addStringListDetail(details: string[], label: string, value: unknown) {
     if (typeof entry !== "string") {
       return [];
     }
-    const trimmed = redact(entry.trim());
+    const trimmed = redactSensitiveText(entry.trim());
     return trimmed ? [trimmed] : [];
   });
   if (entries.length) {
@@ -57,7 +71,7 @@ function safeStringify(value: unknown): string | undefined {
       seen.add(nested);
       return nested;
     });
-    return result ? redact(result) : undefined;
+    return result ? redactSensitiveText(result) : undefined;
   } catch {
     return undefined;
   }
@@ -113,7 +127,7 @@ function addRecordDetails(details: string[], value: Record<string, unknown>) {
   }
 }
 
-function collectSlackErrorDetails(error: unknown): string[] {
+function collectSlackErrorDetails(error: unknown, seen: Set<Error>): string[] {
   const details: string[] = [];
   if (error === undefined || error === null) {
     return details;
@@ -125,7 +139,7 @@ function collectSlackErrorDetails(error: unknown): string[] {
   if (error instanceof Error) {
     addStringDetail(details, "", error.message || error.name);
     if (error.cause !== undefined) {
-      const cause = formatSlackError(error.cause, "");
+      const cause = formatSlackErrorWithCauses(error.cause, "", seen);
       if (cause) {
         details.push(`cause: ${cause}`);
       }
@@ -141,8 +155,18 @@ function collectSlackErrorDetails(error: unknown): string[] {
   return details;
 }
 
-export function formatSlackError(error: unknown, fallback = NO_ERROR_DETAIL): string {
-  const details = collectSlackErrorDetails(error);
+function formatSlackErrorWithCauses(error: unknown, fallback: string, seen: Set<Error>): string {
+  if (error instanceof Error) {
+    if (seen.has(error)) {
+      return "[Circular]";
+    }
+    // Error.cause can be cyclic or arbitrarily deep; reporting must not overflow the stack.
+    if (seen.size >= MAX_ERROR_CAUSE_DEPTH) {
+      return "[Cause chain truncated]";
+    }
+    seen.add(error);
+  }
+  const details = collectSlackErrorDetails(error, seen);
   if (details.length > 0) {
     return details.join("; ");
   }
@@ -153,4 +177,8 @@ export function formatSlackError(error: unknown, fallback = NO_ERROR_DETAIL): st
     return fallback;
   }
   return safeStringify(error) ?? fallback;
+}
+
+export function formatSlackError(error: unknown, fallback = NO_ERROR_DETAIL): string {
+  return formatSlackErrorWithCauses(error, fallback, new Set<Error>());
 }

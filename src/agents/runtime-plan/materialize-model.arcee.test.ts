@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { registerSingleProviderPlugin } from "../../plugin-sdk/plugin-test-runtime.js";
-import { loadBundledPluginPublicSurface } from "../../plugin-sdk/test-helpers/public-surface-loader.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
+import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { materializePreparedRuntimeModel } from "./materialize-model.js";
 
 describe("Arcee OpenRouter profile materialization", () => {
   it("retains the selected default while materializing its vendor wire id", async () => {
-    const plugin = await loadBundledPluginPublicSurface<{
+    const plugin = await loadBundledPluginFacade<{
       default: Parameters<typeof registerSingleProviderPlugin>[0];
     }>({ pluginId: "arcee", artifactBasename: "index.js" });
     const provider = await registerSingleProviderPlugin(plugin.default);

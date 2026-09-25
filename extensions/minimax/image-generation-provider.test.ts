@@ -31,18 +31,12 @@ describe("minimax image-generation provider", () => {
 
   function mockSuccessfulMinimaxImageResponse() {
     const fetchMock = vi.fn().mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          data: {
-            image_base64: [Buffer.from("png-data").toString("base64")],
-          },
-          base_resp: { status_code: 0 },
-        }),
-        {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
+      Response.json({
+        data: {
+          image_base64: [Buffer.from("png-data").toString("base64")],
         },
-      ),
+        base_resp: { status_code: 0 },
+      }),
     );
     vi.stubGlobal("fetch", fetchMock);
     return fetchMock;
@@ -144,18 +138,12 @@ describe("minimax image-generation provider", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
-        new Response(
-          JSON.stringify({
-            data: {
-              image_base64: ["not-base64!"],
-            },
-            base_resp: { status_code: 0 },
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
+        Response.json({
+          data: {
+            image_base64: ["not-base64!"],
           },
-        ),
+          base_resp: { status_code: 0 },
+        }),
       ),
     );
 
@@ -175,18 +163,12 @@ describe("minimax image-generation provider", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
-        new Response(
-          JSON.stringify({
-            base_resp: {
-              status_code: 1000,
-              status_msg: "rpc timeout: timeout=1m0s",
-            },
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
+        Response.json({
+          base_resp: {
+            status_code: 1000,
+            status_msg: "rpc timeout: timeout=1m0s",
           },
-        ),
+        }),
       ),
     );
 
@@ -204,13 +186,10 @@ describe("minimax image-generation provider", () => {
   it("passes request SSRF policy to the provider HTTP helper", async () => {
     mockMinimaxApiKey();
     const postJsonRequest = vi.spyOn(providerHttp, "postJsonRequest").mockResolvedValue({
-      response: new Response(
-        JSON.stringify({
-          data: { image_base64: [Buffer.from("png-data").toString("base64")] },
-          base_resp: { status_code: 0 },
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      ),
+      response: Response.json({
+        data: { image_base64: [Buffer.from("png-data").toString("base64")] },
+        base_resp: { status_code: 0 },
+      }),
       finalUrl: "https://api.minimax.io/v1/image_generation",
       release: async () => {},
     });
@@ -239,13 +218,10 @@ describe("minimax image-generation provider", () => {
   it("passes portal image request policy through the provider HTTP helper", async () => {
     mockMinimaxApiKey();
     const postJsonRequest = vi.spyOn(providerHttp, "postJsonRequest").mockResolvedValue({
-      response: new Response(
-        JSON.stringify({
-          data: { image_base64: [Buffer.from("png-data").toString("base64")] },
-          base_resp: { status_code: 0 },
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      ),
+      response: Response.json({
+        data: { image_base64: [Buffer.from("png-data").toString("base64")] },
+        base_resp: { status_code: 0 },
+      }),
       finalUrl: "https://api.minimaxi.com/v1/image_generation",
       release: async () => {},
     });

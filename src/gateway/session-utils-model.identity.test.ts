@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "vitest";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -11,17 +12,93 @@ import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js
 import { resolveDirectStoredModelOverride } from "../sessions/stored-model-overrides.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { listSessionFixture } from "./session-list.test-support.js";
+import { resolveSessionSelectedModelRef } from "./session-utils-model-selection.js";
 import { getSessionDefaults, projectSessionPatchResult } from "./session-utils-model.js";
-import {
-  buildSessionListRowMetadataContext,
-  resolveSessionSelectedModelRef,
-} from "./session-utils-projection.js";
+import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import { buildGatewaySessionRow } from "./session-utils-row.js";
 
 afterEach(() => {
   resetConfigRuntimeState();
   resetPluginRuntimeStateForTest();
 });
+
+test.each(["selected", "custom/missing"])(
+  "projects current context limits with one configured catalog traversal for %s",
+  async (selected) => {
+    await withStateDirEnv("session-context-projection-", async ({ stateDir }) => {
+      const rows: ModelDefinitionConfig[] = Array.from({ length: 64 }, (_, index) => ({
+        id: index === 63 ? "selected" : `model-${index}`,
+        name: `Model ${index}`,
+        contextWindow: 128_000,
+        contextTokens: 80_000,
+        maxTokens: 4096,
+        input: ["text"],
+        reasoning: false,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      }));
+      let visits = 0;
+      const models = [...rows];
+      Object.defineProperty(models, Symbol.iterator, {
+        *value() {
+          for (const row of rows) {
+            visits++;
+            yield row;
+          }
+        },
+      });
+      const providerConfig = { baseUrl: "https://example.invalid", models };
+      const cfg: OpenClawConfig = {
+        plugins: { enabled: false },
+        agents: { entries: { main: {} }, defaults: { model: "custom/selected" } },
+        models: { providers: { custom: providerConfig } },
+      };
+      setActivePluginRegistry(createEmptyPluginRegistry());
+      setRuntimeConfigSnapshot(cfg);
+      const rowContext = buildSessionListRowMetadataContext({ now: 1 });
+      const entry: SessionEntry = {
+        sessionId: "context-projection",
+        updatedAt: 1,
+        providerOverride: "custom",
+        modelOverride: selected,
+        modelOverrideRouteResolution: "resolved",
+      };
+      const key = "agent:main:context-projection";
+      const params = {
+        cfg,
+        agentId: "main",
+        key,
+        entry,
+        store: { [key]: entry },
+        storePath: stateDir,
+        now: 1,
+        rowContext,
+        lightweightListRow: true,
+        skipTranscriptUsageFallback: true,
+        modelCatalog: [
+          { provider: "custom", id: selected, name: selected, contextWindow: 128_000 },
+        ],
+      } satisfies Parameters<typeof buildGatewaySessionRow>[0];
+      visits = 0;
+      for (let index = 0; index < 32; index++) {
+        expect(buildGatewaySessionRow(params)).toMatchObject({
+          modelProvider: "custom",
+          model: selected,
+          contextTokens: selected === "selected" ? 80_000 : 128_000,
+        });
+      }
+      expect(visits).toBeLessThanOrEqual(rows.length * 32);
+      providerConfig.models = structuredClone(rows);
+      for (const model of providerConfig.models) {
+        model.contextTokens = 96_000;
+      }
+      entry.modelOverride = "selected";
+      expect(buildGatewaySessionRow(params)).toMatchObject({
+        model: "selected",
+        contextTokens: 96_000,
+      });
+    });
+  },
+);
 
 const identityConfig: OpenClawConfig = {
   plugins: { enabled: false },
@@ -79,7 +156,7 @@ test.each(["custom/model", "middle"])(
           resolveSessionSelectedModelRef({
             cfg: identityConfig,
             agentId: "main",
-            source: { entry, loadSessionEntry: () => undefined },
+            source: { entry, readSourceEntry: () => undefined },
             allowPluginNormalization: false,
           }),
         )
@@ -90,7 +167,7 @@ test.each(["custom/model", "middle"])(
 );
 
 test.each([false, true])(
-  "separates cached raw and resolved selections (resolved first=%s)",
+  "projects raw and resolved selections once (resolved first=%s)",
   async (resolvedFirst) => {
     await withIdentityScope(() => {
       const resolved = { entry: writtenModelOverride("middle"), model: "middle" };
@@ -101,7 +178,7 @@ test.each([false, true])(
           providerOverride: "custom",
           modelOverride: "latest",
         },
-        model: "final",
+        model: "middle",
       };
       const rowContext = buildSessionListRowMetadataContext({ now: 1 });
       for (const { entry, model } of resolvedFirst ? [resolved, raw] : [raw, resolved]) {
@@ -110,7 +187,7 @@ test.each([false, true])(
             resolveSessionSelectedModelRef({
               cfg: identityConfig,
               agentId: "main",
-              source: { entry, loadSessionEntry: () => undefined },
+              source: { entry, readSourceEntry: () => undefined },
               rowContext,
               allowPluginNormalization: false,
             }),

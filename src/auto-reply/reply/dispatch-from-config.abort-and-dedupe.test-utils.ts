@@ -8,6 +8,7 @@ import type { SessionBindingRecord } from "../../infra/outbound/session-binding-
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { createPluginBindingRecord } from "./conversation-binding.test-fixtures.js";
 import {
   DispatchReplyOperationAbortedError,
   runWithDispatchAbortSignal,
@@ -21,6 +22,7 @@ import {
   hookMocks,
   internalHookMocks,
   messageAuditMocks,
+  mockPluginBinding,
   mocks,
   replyMediaPathMocks,
   sessionBindingMocks,
@@ -187,7 +189,6 @@ describe("dispatchReplyFromConfig", () => {
         cfg: { ...emptyConfig, diagnostics: { enabled: true } },
         dispatcher: createDispatcher(),
         replyOptions: { abortSignal: abort.signal },
-        usePublishedModelRuntime: true,
       }),
     );
     try {
@@ -410,52 +411,6 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });
 
-  it("delivers deterministic exec approval tool payloads for native commands with progress suppression", async () => {
-    setNoAbort();
-    const cfg = emptyConfig;
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "telegram",
-      CommandSource: "native",
-    });
-
-    const replyResolver = async (
-      _ctx: MsgContext,
-      opts?: GetReplyOptions,
-      _cfg?: OpenClawConfig,
-    ) => {
-      await opts?.onToolResult?.({
-        text: "Approval required.\n\n```txt\n/approve 117ba06d allow-once\n```",
-        channelData: {
-          execApproval: {
-            approvalId: "117ba06d-1111-2222-3333-444444444444",
-            approvalSlug: "117ba06d",
-            allowedDecisions: ["allow-once", "allow-always", "deny"],
-          },
-        },
-      });
-      return { text: "NO_REPLY" } satisfies ReplyPayload;
-    };
-
-    await dispatchReplyFromConfig({
-      ctx,
-      cfg,
-      dispatcher,
-      replyResolver,
-      replyOptions: { suppressDefaultToolProgressMessages: true },
-    });
-
-    expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(1);
-    expect(firstToolResultPayload(dispatcher)?.channelData).toStrictEqual({
-      execApproval: {
-        approvalId: "117ba06d-1111-2222-3333-444444444444",
-        approvalSlug: "117ba06d",
-        allowedDecisions: ["allow-once", "allow-always", "deny"],
-      },
-    });
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "NO_REPLY" });
-  });
-
   it("fast-aborts without calling the reply resolver", async () => {
     hookMocks.runner.hasHooks.mockImplementation(
       ((hookName?: string) => hookName === "message_received") as () => boolean,
@@ -464,23 +419,17 @@ describe("dispatchReplyFromConfig", () => {
       handled: true,
       aborted: true,
     });
-    sessionBindingMocks.resolveByConversation.mockReturnValue({
+    mockPluginBinding({
       bindingId: "binding-fast-abort",
       targetSessionKey: "plugin-binding:test:fast-abort",
-      targetKind: "session",
       conversation: {
         channel: "telegram",
         accountId: "default",
         conversationId: "direct:stop-hook",
       },
-      status: "active",
-      boundAt: 1710000000000,
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "test-plugin",
-        pluginRoot: "/tmp/test-plugin",
-      },
-    } satisfies SessionBindingRecord);
+      pluginId: "test-plugin",
+      pluginRoot: "/tmp/test-plugin",
+    });
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
@@ -1012,24 +961,18 @@ describe("dispatchReplyFromConfig", () => {
         parentConversationId?: string;
       }) =>
         ref.channel === "discord" && ref.accountId === "work" && ref.conversationId === "thread-1"
-          ? ({
+          ? createPluginBindingRecord({
               bindingId: "plugin:work:thread-1",
               targetSessionKey: "plugin-binding:missing-plugin",
-              targetKind: "session",
               conversation: {
                 channel: "discord",
                 accountId: "work",
                 conversationId: "thread-1",
               },
-              status: "active",
-              boundAt: Date.now(),
-              metadata: {
-                pluginBindingOwner: "plugin",
-                pluginId: "missing-plugin",
-                pluginRoot: "/plugins/missing-plugin",
-                pluginName: "Missing Plugin",
-              },
-            } satisfies SessionBindingRecord)
+              pluginId: "missing-plugin",
+              pluginRoot: "/plugins/missing-plugin",
+              pluginName: "Missing Plugin",
+            })
           : null,
     );
 
@@ -1180,7 +1123,6 @@ describe("dispatchReplyFromConfig", () => {
         cfg,
         dispatcher,
         replyResolver,
-        usePublishedModelRuntime: true,
       });
     } finally {
       preparedLoader.mockRestore();
@@ -1198,16 +1140,25 @@ describe("dispatchReplyFromConfig", () => {
       undefined,
       boundConversationBinding.conversation,
     );
-    expect(sessionStoreMocks.loadSessionEntry).toHaveBeenCalledWith({
-      agentId: "main",
-      storePath: sourceStorePath,
-      sessionKey: sourceSessionKey,
-      readConsistency: "latest",
-    });
-    expect(sessionStoreMocks.loadSessionEntry).not.toHaveBeenCalledWith(
+    expect(sessionStoreMocks.loadSessionEntry).toHaveBeenCalledWith(
+      {
+        agentId: "main",
+        storePath: sourceStorePath,
+        sessionKey: sourceSessionKey,
+        readConsistency: "latest",
+      },
+      {
+        assertCurrent: expect.any(Function),
+        deadlineMs: expect.any(Number),
+        onWait: undefined,
+        signal: expect.any(AbortSignal),
+      },
+    );
+    const readScopes = sessionStoreMocks.loadSessionEntry.mock.calls.map(([scope]) => scope);
+    expect(readScopes).not.toContainEqual(
       expect.objectContaining({ agentId: "opencode", sessionKey: sourceSessionKey }),
     );
-    expect(sessionStoreMocks.loadSessionEntry).not.toHaveBeenCalledWith(
+    expect(readScopes).not.toContainEqual(
       expect.objectContaining({
         storePath: targetStorePath,
         sessionKey: sourceSessionKey,
@@ -1427,7 +1378,6 @@ describe("dispatchReplyFromConfig", () => {
     setNoAbort();
     const cfg = emptyConfig;
     const ctx = buildTestCtx({
-      Provider: "whatsapp",
       OriginatingChannel: "whatsapp",
       OriginatingTo: "whatsapp:+15555550123",
       AccountId: "default",
@@ -1561,7 +1511,6 @@ describe("dispatchReplyFromConfig", () => {
     setNoAbort();
     const cfg = emptyConfig;
     const ctx = buildTestCtx({
-      Provider: "whatsapp",
       OriginatingChannel: "whatsapp",
       OriginatingTo: "whatsapp:+15555550123",
       AccountId: "default",
@@ -1857,8 +1806,6 @@ describe("dispatchReplyFromConfig", () => {
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
-      Provider: "whatsapp",
-      Surface: "whatsapp",
       OriginatingChannel: "whatsapp",
       OriginatingTo: "whatsapp:+15555550123",
       CommandBody: "hello",

@@ -1,6 +1,6 @@
-// Mattermost tests cover client plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import { requestUrl } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
@@ -18,10 +18,12 @@ import {
   createMattermostClient,
   createMattermostDirectChannelWithRetry,
   createMattermostPost,
+  deleteMattermostPost,
   fetchMattermostChannel,
   fetchMattermostChannelPosts,
   normalizeMattermostBaseUrl,
   readMattermostError,
+  sendMattermostTyping,
   updateMattermostPost,
 } from "./client.js";
 
@@ -44,16 +46,6 @@ function createMockFetch(response?: { status?: number; body?: unknown; contentTy
   });
 
   return { mockFetch: mockFetch as typeof fetch, calls };
-}
-
-function requestUrl(url: string | URL | Request): string {
-  if (typeof url === "string") {
-    return url;
-  }
-  if (url instanceof URL) {
-    return url.toString();
-  }
-  return url.url;
 }
 
 function parseRequestJson(init: RequestInit | undefined): Record<string, unknown> {
@@ -165,10 +157,7 @@ describe("readMattermostError", () => {
   });
 
   it("parses bounded JSON error messages from response bodies", async () => {
-    const response = new Response(JSON.stringify({ message: "invalid token", id: "app.error" }), {
-      status: 401,
-      headers: { "content-type": "application/json" },
-    });
+    const response = Response.json({ message: "invalid token", id: "app.error" }, { status: 401 });
     const jsonSpy = vi.spyOn(response, "json").mockRejectedValue(new Error("unbounded"));
     const textSpy = vi.spyOn(response, "text").mockRejectedValue(new Error("unbounded"));
 
@@ -195,10 +184,7 @@ describe("readMattermostError", () => {
 
   it("redacts reflected credentials in JSON error messages", async () => {
     const token = "mm-bot-token-ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-    const response = new Response(JSON.stringify({ message: `auth failed for Bearer ${token}` }), {
-      status: 401,
-      headers: { "content-type": "application/json" },
-    });
+    const response = Response.json({ message: `auth failed for Bearer ${token}` }, { status: 401 });
 
     const detail = await readMattermostError(response, { Authorization: `Bearer ${token}` });
 
@@ -496,6 +482,134 @@ describe("createMattermostClient", () => {
     });
     const result = await client.request<unknown>("/anything", { method: "DELETE" });
     expect(result).toBeUndefined();
+  });
+
+  it("treats an accepted no-result mutation as success when its body read fails", async () => {
+    const release = vi.fn(async () => {});
+    const stream = new ReadableStream<Uint8Array>({
+      pull() {
+        throw new Error("accepted response body lost");
+      },
+    });
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(stream, {
+        status: 201,
+        headers: { "content-type": "application/json" },
+      }),
+      release,
+    });
+    const client = createMattermostClient({
+      baseUrl: "https://chat.example.com",
+      botToken: "test-token",
+    });
+
+    await expect(
+      client.request("/reactions", {
+        method: "POST",
+        body: JSON.stringify({ user_id: "u1", post_id: "p1", emoji_name: "+1" }),
+        discardResponse: true,
+      }),
+    ).resolves.toBeUndefined();
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats an accepted no-result mutation as success when its body is undecodable", async () => {
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response('{"partial":', {
+        status: 201,
+        headers: { "content-type": "application/json" },
+      }),
+      release,
+    });
+    const client = createMattermostClient({
+      baseUrl: "https://chat.example.com",
+      botToken: "test-token",
+    });
+
+    await expect(
+      client.request("/reactions", {
+        method: "POST",
+        body: JSON.stringify({ user_id: "u1", post_id: "p1", emoji_name: "+1" }),
+        discardResponse: true,
+      }),
+    ).resolves.toBeUndefined();
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores a rejecting body cancellation on an accepted no-result mutation", async () => {
+    const release = vi.fn(async () => {});
+    const stream = new ReadableStream<Uint8Array>({
+      cancel() {
+        return Promise.reject(new Error("release failed"));
+      },
+    });
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(stream, {
+        status: 201,
+        headers: { "content-type": "application/json" },
+      }),
+      release,
+    });
+    const client = createMattermostClient({
+      baseUrl: "https://chat.example.com",
+      botToken: "test-token",
+    });
+
+    await expect(
+      client.request("/reactions", {
+        method: "POST",
+        body: JSON.stringify({ user_id: "u1", post_id: "p1", emoji_name: "+1" }),
+        discardResponse: true,
+      }),
+    ).resolves.toBeUndefined();
+  });
+});
+
+describe("no-result Mattermost mutations", () => {
+  // Mattermost answers typing and post deletion with 200 {"status":"OK"}; callers use no receipt.
+  function createUnreadableOkClient() {
+    const fetchImpl = vi.fn<typeof fetch>(async () => {
+      const body = new ReadableStream<Uint8Array>({
+        pull() {
+          throw new TypeError("terminated");
+        },
+      });
+      return new Response(body, { status: 200, headers: { "content-type": "application/json" } });
+    });
+    const client = createMattermostClient({
+      baseUrl: "https://chat.example.com",
+      botToken: "test-token",
+      fetchImpl,
+    });
+    return { client, fetchImpl };
+  }
+
+  it("reports an accepted typing indicator as sent when its body cannot be read", async () => {
+    const { client, fetchImpl } = createUnreadableOkClient();
+
+    await expect(
+      sendMattermostTyping(client, { channelId: "ch1", parentId: "root1" }),
+    ).resolves.toBeUndefined();
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl.mock.calls[0]?.[1]?.method).toBe("POST");
+  });
+
+  it("reports an accepted post deletion as done when its body cannot be read", async () => {
+    const { client, fetchImpl } = createUnreadableOkClient();
+
+    await expect(deleteMattermostPost(client, "post1")).resolves.toBeUndefined();
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(requestUrl(fetchImpl.mock.calls[0]?.[0] ?? "")).toBe(
+      "https://chat.example.com/api/v4/posts/post1",
+    );
+    expect(fetchImpl.mock.calls[0]?.[1]?.method).toBe("DELETE");
+  });
+
+  it("still fails a receipt-bearing request whose body cannot be read", async () => {
+    const { client } = createUnreadableOkClient();
+
+    await expect(fetchMattermostChannel(client, "ch1")).rejects.toThrow("terminated");
   });
 });
 
@@ -867,11 +981,11 @@ describe("createMattermostPost", () => {
 // ── updateMattermostPost ─────────────────────────────────────────────
 
 describe("updateMattermostPost", () => {
-  it("sends PUT to /posts/{id}", async () => {
+  it("sends PUT to /posts/{id}/patch", async () => {
     const { calls } = await updatePostAndCapture({ message: "Updated" });
 
     const firstCall = requireRequestCall(calls);
-    expect(firstCall.url).toContain("/posts/post1");
+    expect(new URL(firstCall.url).pathname).toBe("/api/v4/posts/post1/patch");
     if (!firstCall.init) {
       throw new Error("expected Mattermost update post request init");
     }

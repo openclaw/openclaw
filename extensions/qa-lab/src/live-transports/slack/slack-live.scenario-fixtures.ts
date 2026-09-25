@@ -115,7 +115,9 @@ function hasSlackExecHeader(message: { blockText?: string[]; text: string }) {
   // fallback text remains a generic status headline. Command-derived suffixes
   // can be truncated, so identify the row by its stable native label.
   return (message.blockText ?? []).some((text) =>
-    text.split(/\r?\n/u).some((line) => /^• \*Exec\* — \S/u.test(line.trim())),
+    text
+      .split(/\r?\n/u)
+      .some((line) => /^(?:(?:•|🛠️|:hammer_and_wrench:) \*Exec\*|Exec) — \S/u.test(line.trim())),
   );
 }
 
@@ -175,7 +177,7 @@ export function buildSlackProgressCommentaryRun(
     input: [
       `<@${sutUserId}> This is a Slack progress protocol test. First, emit an assistant commentary message whose entire text is exactly ${commentaryMarker}.`,
       "Do not call any tool until that commentary message is complete.",
-      `Then use the exec tool exactly once to run this exact command: \`sleep 5; printf '%s\\n' '${outputMarker}' # ${toolMarker}\`.`,
+      `Then use the exec tool exactly once to run this exact command: \`printf '%s' '${toolMarker}' >/dev/null; sleep 5; printf '%s\\n' '${outputMarker}'\`.`,
       `After the command finishes, reply with only this exact marker: ${finalMarker}`,
     ].join(" "),
     matchText: finalMarker,
@@ -268,7 +270,9 @@ export function buildSlackProgressCommentaryRun(
             (message) =>
               [toolMarker, outputMarker].some((marker) =>
                 observedSlackText(message).includes(marker),
-              ) || hasSlackExecHeader(message),
+              ) ||
+              hasSlackExecHeader(message) ||
+              /\bsleep\s+5\b/u.test(observedSlackText(message)),
           )
           .map((message) => message.ts),
       );

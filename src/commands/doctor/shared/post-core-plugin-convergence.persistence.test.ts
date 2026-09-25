@@ -1,27 +1,252 @@
 import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withUpdateCommandExecutor } from "../../../cli/update-cli/update-command-executor.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
+import { cleanupRetainedPluginInstallGenerations } from "../../../gateway/server-retained-plugin-cleanup.js";
+import * as temporaryState from "../../../infra/tmp-openclaw-dir.js";
+import { createUpdateRun } from "../../../infra/update-run-ledger.js";
+import { commitPluginInstallRecordsWithConfig } from "../../../plugins/install-record-commit.js";
+import { readPersistedInstalledPluginIndexRowSync } from "../../../plugins/installed-plugin-index-record-state.js";
 import {
+  loadInstalledPluginIndexInstallRecords,
   readPersistedInstalledPluginIndexInstallRecords,
-  writePersistedInstalledPluginIndexInstallRecords,
 } from "../../../plugins/installed-plugin-index-records.js";
+import { resolveRetainedManagedNpmInstallMarkerPath } from "../../../plugins/managed-npm-retention.js";
 import { withPluginLifecycleLease } from "../../../plugins/plugin-lifecycle-lease.js";
+import { seedInstalledPluginIndex } from "../../../plugins/test-helpers/installed-plugin-index.js";
+import { writeManagedNpmPlugin } from "../../../plugins/test-helpers/managed-npm-plugin.js";
 import { runPluginUpdateAttempt } from "../../../plugins/update-attempt.js";
 import * as pluginUpdates from "../../../plugins/update.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { repairMissingConfiguredPluginInstalls } from "./missing-configured-plugin-install.js";
 import { runPostCorePluginConvergence } from "./post-core-plugin-convergence.js";
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  syncBuiltinESMExports();
+});
 
 describe("post-core plugin persistence cancellation", () => {
+  it.each(["managed", "registered"] as const)(
+    "fences %s host-link effects when only the raw plugin lease is revoked",
+    async (layout) => {
+      await withOpenClawTestState({ label: `plugin-raw-lease-${layout}` }, async (state) => {
+        const cfg = { plugins: { enabled: false } };
+        await state.writeConfig(cfg);
+        const control = state.path("control");
+        fs.mkdirSync(control);
+        vi.spyOn(temporaryState, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
+        const packageDir =
+          layout === "managed"
+            ? state.statePath("npm", "node_modules", "peer-plugin")
+            : state.statePath("extensions", "peer-plugin");
+        const nodeModules = path.join(packageDir, "node_modules");
+        const linkPath = path.join(nodeModules, "openclaw");
+        fs.mkdirSync(nodeModules, { recursive: true });
+        fs.writeFileSync(
+          path.join(packageDir, "package.json"),
+          JSON.stringify({
+            name: "peer-plugin",
+            version: "1.0.0",
+            peerDependencies: { openclaw: "*" },
+          }),
+        );
+        fs.symlinkSync(state.root, linkPath, "junction");
+        const baselineInstallRecords: Record<string, PluginInstallRecord> =
+          layout === "managed"
+            ? {}
+            : {
+                "peer-plugin": {
+                  source: "npm",
+                  spec: "peer-plugin@1.0.0",
+                  installPath: packageDir,
+                },
+              };
+        const configBefore = fs.readFileSync(state.configPath, "utf8");
+        const run = createUpdateRun({ trigger: "cli" }, { env: state.env });
+        await withUpdateCommandExecutor(run.runId, async (executor) => {
+          const fence = await executor.enter(state.root, { preflight: true });
+          const controller = new AbortController();
+          let revocations = 0;
+          let rowAtRevocation: ReturnType<typeof readPersistedInstalledPluginIndexRowSync>;
+          const revoke = () => {
+            if (controller.signal.aborted) {
+              return;
+            }
+            revocations += 1;
+            rowAtRevocation = readPersistedInstalledPluginIndexRowSync({ env: state.env });
+            controller.abort(new Error("plugin lease revoked while updater remains current"));
+          };
+          const unlink = fs.unlinkSync.bind(fs);
+          const unlinkSpy = vi.spyOn(fs, "unlinkSync").mockImplementation((file) => {
+            unlink(file);
+            if (layout === "managed" && file === linkPath) {
+              revoke();
+            }
+          });
+          const lstat = fs.promises.lstat.bind(fs.promises);
+          const lstatSpy = vi.spyOn(fs.promises, "lstat").mockImplementation(async (...args) => {
+            const result = await lstat(...args);
+            if (layout === "registered" && args[0] === linkPath) {
+              revoke();
+            }
+            return result;
+          });
+          const symlinkSpy = vi.spyOn(fs, "symlinkSync");
+          syncBuiltinESMExports();
+          const params = {
+            cfg,
+            env: state.env,
+            baselineInstallRecords,
+            beforePersistentEffect: fence.assertCurrent,
+          };
+          try {
+            await expect(
+              withPluginLifecycleLease({ env: state.env, signal: controller.signal }, () =>
+                runPostCorePluginConvergence(params),
+              ),
+            ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_ABORTED" });
+            expect(controller.signal.aborted).toBe(true);
+            expect(revocations).toBe(1);
+            expect(() => fence.assertCurrent()).not.toThrow();
+            expect(unlinkSpy.mock.calls.filter(([file]) => file === linkPath)).toHaveLength(
+              layout === "managed" ? 1 : 0,
+            );
+            expect(symlinkSpy.mock.calls.filter(([, target]) => target === linkPath)).toHaveLength(
+              0,
+            );
+            if (layout === "managed") {
+              expect(fs.existsSync(linkPath)).toBe(false);
+            } else {
+              expect(fs.readlinkSync(linkPath)).toBe(state.root);
+            }
+            expect(rowAtRevocation).toBeDefined();
+            expect(readPersistedInstalledPluginIndexRowSync({ env: state.env })).toEqual(
+              rowAtRevocation,
+            );
+            expect(fs.readFileSync(state.configPath, "utf8")).toBe(configBefore);
+          } finally {
+            unlinkSpy.mockRestore();
+            lstatSpy.mockRestore();
+            symlinkSpy.mockRestore();
+            syncBuiltinESMExports();
+          }
+
+          const fresh = await runPostCorePluginConvergence(params);
+          expect(fresh.errored).toBe(false);
+          expect(fresh.warnings).toEqual([]);
+          expect(fresh.changes.length).toBeGreaterThan(0);
+          expect(fs.lstatSync(linkPath).isSymbolicLink()).toBe(true);
+          expect(fs.realpathSync(linkPath)).not.toBe(fs.realpathSync(state.root));
+          expect(() => fence.assertCurrent()).not.toThrow();
+        });
+      });
+    },
+  );
+
+  it("keeps restored indexed packages usable under a fresh owner after marker compensation is interrupted", async () => {
+    await withOpenClawTestState({ label: "plugin-marker-fresh-owner" }, async (state) => {
+      const cfg = { plugins: { enabled: false } };
+      await state.writeConfig(cfg);
+      const records: Record<string, PluginInstallRecord & { installPath: string }> = {};
+      for (const pluginId of ["first-retained", "second-retained"]) {
+        const installPath = writeManagedNpmPlugin({
+          stateDir: state.stateDir,
+          packageName: `@openclaw/${pluginId}`,
+          pluginId,
+          version: "1.0.0",
+        });
+        records[pluginId] = {
+          source: "npm",
+          spec: `@openclaw/${pluginId}@1.0.0`,
+          installPath,
+          version: "1.0.0",
+          resolvedVersion: "1.0.0",
+        };
+      }
+      await seedInstalledPluginIndex(records, {
+        config: cfg,
+        env: state.env,
+      });
+      const configBefore = fs.readFileSync(state.configPath, "utf8");
+      const firstMarker = resolveRetainedManagedNpmInstallMarkerPath(
+        expectDefined(records["first-retained"], "first retained record").installPath,
+      );
+      const secondMarker = resolveRetainedManagedNpmInstallMarkerPath(
+        expectDefined(records["second-retained"], "second retained record").installPath,
+      );
+      const controller = new AbortController();
+      const refusal = new Error("caller revoked during marker compensation");
+      let restoredRow: ReturnType<typeof readPersistedInstalledPluginIndexRowSync>;
+      const rm = fs.promises.rm.bind(fs.promises);
+      const rmSpy = vi.spyOn(fs.promises, "rm").mockImplementation(async (file, options) => {
+        await rm(file, options);
+        if (file === firstMarker) {
+          restoredRow = readPersistedInstalledPluginIndexRowSync({ env: state.env });
+          controller.abort(refusal);
+        }
+      });
+      await expect(
+        withPluginLifecycleLease(
+          { env: state.env, assertCurrent: () => controller.signal.throwIfAborted() },
+          async () =>
+            commitPluginInstallRecordsWithConfig({
+              previousInstallRecords: records,
+              nextInstallRecords: {},
+              nextConfig: { ...cfg, gateway: { port: 18792 } },
+              writeOptions: {
+                beforeCommit: () => {
+                  throw new Error("config commit failed");
+                },
+              },
+            }),
+        ),
+      ).rejects.toBe(refusal);
+      rmSpy.mockRestore();
+      expect(restoredRow).toBeDefined();
+      expect(readPersistedInstalledPluginIndexRowSync({ env: state.env })).toEqual(restoredRow);
+      expect(readPersistedInstalledPluginIndexInstallRecords({ env: state.env })).toEqual(records);
+      expect(fs.existsSync(firstMarker)).toBe(false);
+      expect(fs.existsSync(secondMarker)).toBe(true);
+      expect(fs.readFileSync(state.configPath, "utf8")).toBe(configBefore);
+
+      // The old operation stays revoked. New ownership and fresh metadata, not saved
+      // compensation snapshots, authorize continuation of the restored index.
+      await withPluginLifecycleLease({ env: state.env }, async (lease) => {
+        const freshRecords = await loadInstalledPluginIndexInstallRecords({ env: state.env });
+        expect(freshRecords).toEqual(records);
+        const result = await runPostCorePluginConvergence({
+          cfg,
+          env: state.env,
+          baselineInstallRecords: freshRecords,
+          beforePersistentEffect: () => lease.assertOwned(),
+        });
+        expect(result.errored).toBe(false);
+        expect(result.warnings).toEqual([]);
+        expect(result.installRecords).toEqual(records);
+      });
+      const log = { info: vi.fn(), warn: vi.fn() };
+      await cleanupRetainedPluginInstallGenerations({ log, startupInstallPaths: [] });
+      expect(controller.signal.aborted).toBe(true);
+      for (const record of Object.values(records)) {
+        expect(fs.readFileSync(path.join(record.installPath, "dist", "index.js"), "utf8")).toBe(
+          "export {};\n",
+        );
+      }
+      expect(log.info).not.toHaveBeenCalled();
+      expect(log.warn).not.toHaveBeenCalled();
+    });
+  });
+
   it.each([false, true])("preserves the repair index when cancelled=%s", async (cancelled) => {
     await withOpenClawTestState({ label: "plugin-repair-cancellation" }, async (state) => {
       const cfg = { plugins: { enabled: false } };
       const previous: Record<string, PluginInstallRecord> = { previous: { source: "archive" } };
       const next: Record<string, PluginInstallRecord> = { next: { source: "archive" } };
-      await writePersistedInstalledPluginIndexInstallRecords(previous, {
+      await seedInstalledPluginIndex(previous, {
         config: cfg,
         env: state.env,
       });
@@ -56,7 +281,7 @@ describe("post-core plugin persistence cancellation", () => {
         spec: "peerplugin@1.0.0",
         installPath: state.statePath("extensions", "peerplugin"),
       };
-      await writePersistedInstalledPluginIndexInstallRecords({}, { config: cfg, env: state.env });
+      await seedInstalledPluginIndex({}, { config: cfg, env: state.env });
       const refusal = new Error("initiating-owner store read failed");
       let checks = 0;
       vi.spyOn(pluginUpdates, "updateNpmInstalledPlugins").mockImplementationOnce(
@@ -102,6 +327,81 @@ describe("post-core plugin persistence cancellation", () => {
     });
   });
 
+  it.each(["missing-modules", "stale-link", "package-copy"] as const)(
+    "submits real host-link effects in the synchronous admission turn: %s",
+    async (layout) => {
+      await withOpenClawTestState({ label: `plugin-sync-admission-${layout}` }, async (state) => {
+        const packageDir = state.statePath("npm", "node_modules", "peer-plugin");
+        const nodeModules = path.join(packageDir, "node_modules");
+        const linkPath = path.join(nodeModules, "openclaw");
+        fs.mkdirSync(packageDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(packageDir, "package.json"),
+          JSON.stringify({ name: "peer-plugin", peerDependencies: { openclaw: "*" } }),
+        );
+        if (layout !== "missing-modules") {
+          fs.mkdirSync(nodeModules);
+          if (layout === "stale-link") {
+            fs.symlinkSync(state.root, linkPath, "junction");
+          } else {
+            fs.mkdirSync(linkPath);
+            fs.writeFileSync(path.join(linkPath, "package.json"), '{"name":"openclaw"}');
+          }
+        }
+        let inAdmissionTurn = false;
+        const observations: Array<{ effect: string; admitted: boolean }> = [];
+        const observe = (effect: string, target: unknown) => {
+          if (target === nodeModules || target === linkPath) {
+            observations.push({ effect, admitted: inAdmissionTurn });
+          }
+        };
+        const mkdir = fs.promises.mkdir.bind(fs.promises);
+        vi.spyOn(fs.promises, "mkdir").mockImplementation((...args) => {
+          observe("mkdir", args[0]);
+          return mkdir(...args);
+        });
+        const unlink = fs.unlinkSync.bind(fs);
+        vi.spyOn(fs, "unlinkSync").mockImplementation((...args) => {
+          observe("unlink", args[0]);
+          return unlink(...args);
+        });
+        const rm = fs.promises.rm.bind(fs.promises);
+        vi.spyOn(fs.promises, "rm").mockImplementation((...args) => {
+          observe("rm", args[0]);
+          return rm(...args);
+        });
+        const symlink = fs.symlinkSync.bind(fs);
+        vi.spyOn(fs, "symlinkSync").mockImplementation((...args) => {
+          observe("symlink", args[1]);
+          return symlink(...args);
+        });
+        syncBuiltinESMExports();
+        await runPostCorePluginConvergence({
+          cfg: { plugins: { enabled: false } },
+          env: state.env,
+          baselineInstallRecords: {},
+          beforePersistentEffect: () => {
+            // Observe the submission turn; no lease, filesystem result or clock is mocked.
+            inAdmissionTurn = true;
+            queueMicrotask(() => {
+              inAdmissionTurn = false;
+            });
+          },
+        });
+        expect(observations).toEqual([
+          {
+            effect:
+              layout === "missing-modules" ? "mkdir" : layout === "stale-link" ? "unlink" : "rm",
+            admitted: true,
+          },
+          { effect: "symlink", admitted: true },
+        ]);
+        expect(fs.lstatSync(linkPath).isSymbolicLink()).toBe(true);
+        expect(fs.realpathSync(linkPath)).not.toBe(fs.realpathSync(state.root));
+      });
+    },
+  );
+
   it.each([
     ["managed", "mkdir"],
     ["managed", "unlink"],
@@ -139,15 +439,7 @@ describe("post-core plugin persistence cancellation", () => {
         }
         const controller = new AbortController();
         const refusal = new Error("initiating operation revoked after host-link probe");
-        if (effect === "symlink") {
-          const unlink = fs.promises.unlink.bind(fs.promises);
-          vi.spyOn(fs.promises, "unlink").mockImplementation(async (file) => {
-            await unlink(file);
-            if (file === linkPath) {
-              controller.abort(refusal);
-            }
-          });
-        } else {
+        if (effect !== "symlink") {
           const lstat = fs.promises.lstat.bind(fs.promises);
           vi.spyOn(fs.promises, "lstat").mockImplementation(async (...args) => {
             try {
@@ -158,6 +450,15 @@ describe("post-core plugin persistence cancellation", () => {
               }
             }
           });
+        } else {
+          const unlink = fs.unlinkSync.bind(fs);
+          vi.spyOn(fs, "unlinkSync").mockImplementation((target) => {
+            unlink(target);
+            if (target === linkPath) {
+              controller.abort(refusal);
+            }
+          });
+          syncBuiltinESMExports();
         }
         const baselineInstallRecords: Record<string, PluginInstallRecord> =
           layout === "managed"
@@ -169,11 +470,17 @@ describe("post-core plugin persistence cancellation", () => {
                   installPath: packageDir,
                 },
               };
+        let refused = false;
         const params = {
           cfg,
           env: state.env,
           baselineInstallRecords,
-          beforePersistentEffect: () => controller.signal.throwIfAborted(),
+          beforePersistentEffect: () => {
+            if (controller.signal.aborted && !refused) {
+              refused = true;
+              throw controller.signal.reason;
+            }
+          },
         };
         await expect(runPostCorePluginConvergence(params)).rejects.toBe(refusal);
         if (effect === "mkdir") {

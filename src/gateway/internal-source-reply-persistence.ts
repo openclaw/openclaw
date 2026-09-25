@@ -9,10 +9,10 @@ import {
   type TranscriptMessageAppendResult,
 } from "../config/sessions/session-accessor.js";
 import {
-  findTranscriptEvent,
   readTranscriptEventId,
   readTranscriptEventMessage,
 } from "../config/sessions/session-accessor.sqlite-read.js";
+import { findTranscriptEvent } from "../config/sessions/session-transcript-match.js";
 import { sessionMatchesExpectedTranscriptTurn } from "../config/sessions/session-transcript-turn-state.js";
 import { getOwnedSessionTranscriptWriterFence } from "../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -23,7 +23,6 @@ import {
 } from "../shared/assistant-display-content.js";
 import { readClawHubRecommendations } from "../shared/clawhub-recommendations.js";
 import { createKeyedFifoLeaseRegistry } from "../shared/keyed-fifo-lease.js";
-import { isOpenClawDeliveryMirrorAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
 import {
   attachManagedOutgoingMediaToMessage,
   createManagedOutgoingMediaBlocks,
@@ -59,12 +58,10 @@ async function completePersistedInternalSourceReply(params: {
     expectedSessionId: params.expectedSessionId,
     ...getOwnedSessionTranscriptWriterFence({ sessionKey: scope.sessionKey }),
   };
-  const found = await findTranscriptEvent(scope, (event) => {
-    const message = readTranscriptEventMessage(event);
-    return (
-      message?.idempotencyKey === params.idempotencyKey &&
-      isOpenClawDeliveryMirrorAssistantMessage(message)
-    );
+  const found = await findTranscriptEvent(scope, {
+    kind: "idempotency",
+    key: params.idempotencyKey,
+    deliveryMirror: true,
   });
   if (!found) {
     return false;
@@ -187,6 +184,7 @@ export async function persistInternalSourceReply(params: {
         ...(writerFence ? { expectedWriterRunId: writerFence.expectedWriterRunId } : {}),
         content: retainAssistantModelContent(content),
         displayContent: content,
+        mediaUrls: media.map((item) => item.url),
         idempotencyKey: params.idempotencyKey,
         runId: params.runId,
         ...(params.sourceReplyFinal !== undefined

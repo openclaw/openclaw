@@ -12,6 +12,7 @@ import {
   useNoBundledPlugins,
   writePlugin,
 } from "../plugins/loader.test-fixtures.js";
+import { waitForPluginCacheRetirement } from "../plugins/plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
@@ -38,7 +39,17 @@ function createPreparationFixture() {
   const tailResume = createDeferredCore();
   const tails: Promise<void>[] = [];
   const consumedVoices: string[] = [];
-  const state = { connections, callbacks, tailResume, tails, consumedVoices, trackAsyncWork, dir };
+  const receivedOverrides: unknown[] = [];
+  const state = {
+    connections,
+    callbacks,
+    tailResume,
+    tails,
+    consumedVoices,
+    receivedOverrides,
+    trackAsyncWork,
+    dir,
+  };
   Object.defineProperty(globalThis, key, { configurable: true, value: state });
   const plugin = writePlugin({
     dir,
@@ -73,7 +84,8 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     },
     async synthesize() { throw new Error("Buffered fixture synthesis is unused"); },
     async synthesizeTelephony(request) {
-      read(); state.consumedVoices.push(request.providerOverrides.voiceSettings.voiceId);
+      read(); state.receivedOverrides.push(request.providerOverrides.voiceSettings);
+      state.consumedVoices.push(request.providerOverrides.voiceSettings.voiceId);
       return { audioBuffer: Buffer.from([42, 0]), sampleRate: 8000, outputFormat: "pcm" };
     }
   });
@@ -111,12 +123,18 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       tailResume.resolve();
       await Promise.allSettled(tails);
       await host.close();
-      for (const { database } of connections) {
-        if (database.isOpen) {
-          database.close();
+      clearPluginMetadataLifecycleCaches();
+      try {
+        const cleanup = await waitForPluginCacheRetirement();
+        expect(cleanup.failures).toEqual([]);
+      } finally {
+        for (const { database } of connections) {
+          if (database.isOpen) {
+            database.close();
+          }
         }
+        Reflect.deleteProperty(globalThis, key);
       }
-      Reflect.deleteProperty(globalThis, key);
     },
   };
 }
@@ -144,22 +162,31 @@ describe("async speech preparation resources", () => {
                   first.directives.overrides.providerOverrides?.[fixture.id]?.voiceSettings,
               ).toBe(true);
             }
+            const synthesis = await fixture.runtime.tts.textToSpeechTelephony({
+              cfg: first.cfg,
+              text: first.directives.cleanedText,
+              overrides: first.directives.overrides,
+            });
+            expect(synthesis.success).toBe(true);
+            // Ordinary dispatch must restore the handle inside its exact owning plugin.
+            expect(
+              fixture.state.receivedOverrides[0] === fixture.state.connections[0]?.opaque,
+            ).toBe(true);
             return first;
           });
           expect(fixture.state.connections.length).toBe(1);
           await inspection.release();
           expect(fixture.state.connections[0]?.database.isOpen).toBe(true);
           expect(
-            prepared.directives.overrides.providerOverrides?.[fixture.id]?.voiceSettings ===
-              fixture.state.connections[0]?.opaque,
-          ).toBe(true);
+            prepared.directives.overrides.providerOverrides?.[fixture.id]?.voiceSettings,
+          ).toHaveProperty("voiceId", "voice-42");
           const result = await fixture.runtime.tts.textToSpeechTelephony({
             cfg: prepared.cfg,
             text: prepared.directives.cleanedText,
             overrides: prepared.directives.overrides,
           });
           expect(result.success).toBe(true);
-          expect(fixture.state.consumedVoices).toEqual(["voice-42"]);
+          expect(fixture.state.consumedVoices).toEqual(["voice-42", "voice-42"]);
           await fixture.host.close();
           expect(fixture.state.connections.every((entry) => !entry.database.isOpen)).toBe(true);
           expect(fixture.state.connections.every((entry) => entry.disposals === 1)).toBe(true);
@@ -365,17 +392,11 @@ describe("async speech preparation resources", () => {
           await fixture.host.close();
           expect(fixture.state.connections[0]?.database.isOpen).toBe(true);
           expect(fixture.state.connections[0]?.disposals).toBe(0);
-          if (registry) {
-            const lifecycle = registry.runtimeLifecycles.find(
-              (entry) => entry.lifecycle.id === "speech-preparation-resource",
-            );
-            await lifecycle?.lifecycle.cleanup?.({ reason: "restart" });
-            expect(fixture.state.connections[0]?.cleanups).toBe(1);
-          }
         });
       } finally {
         await fixture.cleanup();
       }
+      expect(fixture.state.connections[0]?.cleanups).toBe(1);
     },
   );
 

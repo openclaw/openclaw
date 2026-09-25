@@ -51,7 +51,7 @@ export async function withLegacyMigrationStateLock(
   let releaseError: unknown;
   try {
     try {
-      result = await options.run(env);
+      result = await lock.run(() => options.run(env));
     } catch (error) {
       if (!options.errorLabel) {
         throw error;
@@ -60,7 +60,7 @@ export async function withLegacyMigrationStateLock(
     }
   } finally {
     try {
-      await options.beforeRelease?.();
+      await lock.run(() => options.beforeRelease?.());
     } catch (error) {
       releaseError = error;
     }
@@ -71,6 +71,7 @@ export async function withLegacyMigrationStateLock(
     }
   }
   if (releaseError) {
+    delete result.warningDisposition;
     result.warnings.push(
       `${options.releaseLabel} migration lock release failed: ${formatErrorMessage(releaseError)}`,
     );

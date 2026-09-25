@@ -14,7 +14,6 @@ import {
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import * as sqlite from "./node-sqlite.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
-import { hasManagedUpdateRecoveryRecord } from "./update-managed-service-recovery-presence.js";
 import {
   createRetainedUpdateRecovery,
   storeRetainedUpdateRecovery,
@@ -73,10 +72,10 @@ function shape(pathname: string) {
     db.close();
   }
 }
-it("refuses existing-state writes while another owner excludes the physical state file", () => {
+it("refuses existing-state writes while another owner excludes the physical state file", async () => {
   const f = source();
   const before = fs.readFileSync(f.pathname);
-  const held = acquireOpenClawStateDatabaseFileExclusion(f.pathname);
+  const held = await acquireOpenClawStateDatabaseFileExclusion(f.pathname);
   try {
     expect(() => probeExistingWriter(f)).toThrow(/state-handles/);
     expect(fs.readFileSync(f.pathname)).toEqual(before);
@@ -175,61 +174,6 @@ it("does not recreate canonical state displaced immediately before the tracked w
   expect(fs.existsSync(f.pathname)).toBe(false);
   expect(shape(f.pathname + ".retained")).toEqual(before);
 });
-
-it("detects WAL-only helper recovery without changing the canonical SQLite family", () => {
-  const f = source();
-  const db = openNodeSqliteDatabase(f.pathname);
-  try {
-    const key = `update.recovery.${f.run.runId}`;
-    const row = db.prepare("SELECT * FROM config_machine_state WHERE state_key=?").get(key);
-    if (typeof row?.value_json !== "string" || typeof row.updated_at_ms !== "number") {
-      throw new Error("Expected the prepared recovery row");
-    }
-    db.prepare("DELETE FROM config_machine_state WHERE state_key=?").run(key);
-    db.exec("PRAGMA journal_mode=WAL; PRAGMA wal_checkpoint(TRUNCATE)");
-    expect(hasManagedUpdateRecoveryRecord(f.pathname, f.run.runId)).toBe(false);
-    db.prepare(
-      "INSERT INTO config_machine_state(state_key,value_json,updated_at_ms) VALUES (?,?,?)",
-    ).run(key, row.value_json, row.updated_at_ms);
-    const family = () =>
-      ["", "-wal", "-shm", "-journal"].map((suffix) => {
-        const file = f.pathname + suffix;
-        return fs.existsSync(file) ? fs.readFileSync(file) : null;
-      });
-    const before = family();
-    expect(before[1]?.length).toBeGreaterThan(0);
-    expect(hasManagedUpdateRecoveryRecord(f.pathname, f.run.runId)).toBe(true);
-    expect(family()).toEqual(before);
-  } finally {
-    db.close();
-  }
-});
-it.each(["missing", "metadata", "run", "future"])(
-  "does not classify %s helper state as recovery absence",
-  (failure) => {
-    const f = source();
-    if (failure === "missing") {
-      fs.renameSync(f.pathname, f.pathname + ".retained");
-    } else {
-      const db = openNodeSqliteDatabase(f.pathname);
-      try {
-        if (failure === "metadata") {
-          db.exec("UPDATE schema_meta SET schema_version=14 WHERE meta_key='primary'");
-        } else if (failure === "run") {
-          db.prepare("DELETE FROM update_runs WHERE run_id=?").run(f.run.runId);
-        } else {
-          db.exec("PRAGMA user_version=2147483647");
-        }
-      } finally {
-        db.close();
-      }
-    }
-    expect(() => hasManagedUpdateRecoveryRecord(f.pathname, f.run.runId)).toThrow();
-    if (failure === "missing") {
-      expect(fs.existsSync(f.pathname)).toBe(false);
-    }
-  },
-);
 
 function probeExistingWriter(f: ReturnType<typeof source>) {
   return runExistingOpenClawStateWriteTransaction(() => undefined, f.options, {

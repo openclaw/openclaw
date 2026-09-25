@@ -13,8 +13,11 @@ import {
   shouldUseCmdExeForCommand,
 } from "../../scripts/ui.mts";
 import { mergeProcessEnv } from "../../src/infra/process-env.js";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { normalizeControlUiBuildInfo } from "../../ui/src/build-info-normalizers.ts";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
+
+const testNodeExecPath = resolveTestNodeExecPath();
 // writeFileSync creates the file before its content lands, so an existence
 // poll can observe an empty file on loaded runners; wait for bytes instead.
 function readNonEmpty(file: string): string | null {
@@ -325,7 +328,7 @@ describe("scripts/ui windows spawn behavior", () => {
   });
 
   it.each(["--help", "-h"])("keeps no-pnpm build %s informational", (helpFlag) => {
-    const result = spawnSync(process.execPath, ["scripts/ui.js", "build", helpFlag], {
+    const result = spawnSync(testNodeExecPath, ["scripts/ui.js", "build", helpFlag], {
       cwd: path.resolve("."),
       encoding: "utf8",
       env: {
@@ -412,7 +415,7 @@ process.exitCode = ${expectedExit};\n`,
           pnpm,
           'throw new Error("Installed UI tools must not need package shims");\n',
         );
-        const result = spawnSync(process.execPath, ["scripts/ui.js", action, ...forwarded], {
+        const result = spawnSync(testNodeExecPath, ["scripts/ui.js", action, ...forwarded], {
           cwd: root,
           encoding: "utf8",
           env: mergeProcessEnv([
@@ -447,7 +450,7 @@ process.exitCode = ${expectedExit};\n`,
     { noPnpm: false, failValidator: "check-control-ui-precompressed-assets.mts" },
     { noPnpm: true, failValidator: "check-control-ui-performance.mts" },
   ])(
-    "reports budgets and enforces asset validity off disk caches (noPnpm=$noPnpm, failure=$failValidator)",
+    "reports budgets and enforces asset validity without compiler children or disk caches (noPnpm=$noPnpm, failure=$failValidator)",
     ({ noPnpm, failValidator }) => {
       const tempDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ui-cache-")));
       const tempRoot = path.join(tempDir, "temp");
@@ -477,6 +480,17 @@ process.exitCode = ${expectedExit};\n`,
 const fs = require("node:fs");
 const path = require("node:path");
 const roots = ${JSON.stringify(cacheRoots)};
+if (${JSON.stringify(validators)}.includes(process.argv[2])) {
+  function rejectRuntimeActivity(operation) {
+    fs.appendFileSync(${JSON.stringify(accessLog)}, operation + "\\n");
+    throw new Error("Unexpected validator runtime activity: " + operation);
+  }
+  const childProcess = require("node:child_process");
+  for (const operation of ["spawn", "spawnSync", "exec", "execSync", "execFile", "execFileSync", "fork"]) {
+    childProcess[operation] = function() { rejectRuntimeActivity(operation); };
+  }
+  require("node:worker_threads").Worker = function() { rejectRuntimeActivity("Worker"); };
+}
 function guardAccess(target, operation) {
   const resolved = path.resolve(String(target));
   if (roots.some(root => resolved === root || resolved.startsWith(root + path.sep))) {
@@ -505,16 +519,16 @@ require("node:module").syncBuiltinESMExports();
         fs.writeFileSync(
           fixture,
           `
-enum Transformed { Value = "transformed" }
-const validator = process.argv[2];
+const validator: string = process.argv[2];
 const reportOnly = process.argv.includes("--report-only");
-console.log(JSON.stringify({ validator, transformed: Transformed.Value, reportOnly }));
+console.log(JSON.stringify({ validator, reportOnly }));
 process.exitCode = validator === ${JSON.stringify(failValidator)} ? 17
   : validator === "check-control-ui-performance.mts" && !reportOnly ? 1 : 0;
 `,
         );
         // Run the native launcher, intercept only the build, then replay each real
-        // validator command/environment with a tiny transform-required entrypoint.
+        // validator command/environment with erasable TypeScript. The preload rejects
+        // compiler workers and subprocesses before they can escape validator completion.
         fs.writeFileSync(
           capture,
           `
@@ -530,11 +544,13 @@ childProcess.spawnSync = function(command, args, options) {
     assert.deepEqual(args.slice(1), ["build"]);
     return { status: 0 };
   }
-  const validator = path.basename(args[2]);
-  if (!validators.includes(validator)) throw new Error("Unexpected UI subprocess");
-  assert.deepEqual(args.slice(3), validator === "check-control-ui-performance.mts" ? ["--report-only"] : []);
+  const validatorIndex = args.findIndex(arg => validators.includes(path.basename(arg)));
+  if (validatorIndex === -1) throw new Error("Unexpected UI subprocess");
+  const validator = path.basename(args[validatorIndex]);
+  const validatorArgs = args.slice(validatorIndex + 1);
+  assert.deepEqual(validatorArgs, validator === "check-control-ui-performance.mts" ? ["--report-only"] : []);
   assert.equal(options.env.TSX_DISABLE_CACHE, undefined);
-  return spawnSync(command, [...args.slice(0, 2), ${JSON.stringify(fixture)}, validator, ...args.slice(3)], options);
+  return spawnSync(command, [...args.slice(0, validatorIndex), ${JSON.stringify(fixture)}, validator, ...validatorArgs], options);
 };
 require("node:module").syncBuiltinESMExports();
 `,
@@ -561,19 +577,19 @@ require("node:module").syncBuiltinESMExports();
         ]);
 
         if (!noPnpm && failValidator === null) {
-          const control = spawnSync(process.execPath, ["--import", "tsx", fixture, "control"], {
-            cwd: path.resolve("."),
-            encoding: "utf8",
-            env,
-            timeout: 10_000,
-          });
+          const control = spawnSync(
+            testNodeExecPath,
+            ["--eval", `require("node:fs").readdirSync(${JSON.stringify(cacheRoots[0])})`],
+            { cwd: path.resolve("."), encoding: "utf8", env, timeout: 10_000 },
+          );
           expect(control.error).toBeUndefined();
-          // Prove the guard detects raw tsx cache access without coupling to its disk I/O strategy.
-          expect(fs.readFileSync(accessLog, "utf8").trim()).not.toBe("");
+          expect(control.status).toBe(1);
+          // Check the cache guard without starting the compiler service it protects against.
+          expect(fs.readFileSync(accessLog, "utf8").trim()).toBe("readdirSync");
           fs.unlinkSync(accessLog);
         }
         const result = spawnSync(
-          process.execPath,
+          testNodeExecPath,
           ["--require", capture, "scripts/ui.js", "build"],
           {
             cwd: path.resolve("."),
@@ -596,7 +612,6 @@ require("node:module").syncBuiltinESMExports();
         ).toEqual(
           expectedValidators.map((validator) => ({
             validator,
-            transformed: "transformed",
             reportOnly: validator === "check-control-ui-performance.mts",
           })),
         );
@@ -679,7 +694,7 @@ require("node:module").syncBuiltinESMExports();
           "setInterval(() => { if (fs.existsSync(process.env.RELEASE_FILE)) process.exit(0); }, 20);",
         ].join("\n"),
       );
-      const wrapper = spawn(process.execPath, ["scripts/ui.js", "install"], {
+      const wrapper = spawn(testNodeExecPath, ["scripts/ui.js", "install"], {
         cwd: path.resolve("."),
         env: {
           ...process.env,
@@ -754,7 +769,7 @@ require("node:module").syncBuiltinESMExports();
         env.PATH = `${bin}${path.delimiter}${env.PATH ?? ""}`;
         env.PS_FAILURE_FILE = failedCaptureFile;
       }
-      const wrapper = spawn(process.execPath, ["scripts/ui.js", "install"], {
+      const wrapper = spawn(testNodeExecPath, ["scripts/ui.js", "install"], {
         cwd: path.resolve("."),
         env,
         stdio: "ignore",

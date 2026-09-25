@@ -1,12 +1,10 @@
-// Qa Lab plugin module implements Tool Search gateway flow fixture behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
-  countSessionLogMentions,
   countSystemPromptChars,
   fetchQaFixtureJson,
   outputText,
@@ -15,14 +13,18 @@ import {
   subtractMentionCounts,
   type QaFixtureFetchJsonOptions,
 } from "./fixture-utils.js";
+import { resolveQaLiveTurnTimeoutMs as liveTurnTimeoutMs } from "./live-timeout.js";
 import { QA_TOOL_SEARCH_SECONDARY_TARGET } from "./providers/mock-openai/mock-openai-tooling.js";
 import {
   qaMockRequestCursorUrl,
   qaMockRequestsAfterUrl,
   readQaMockRequestCursor,
 } from "./providers/shared/debug-request-cursor.js";
-import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
+import {
+  countToolSearchSessionLogMentions,
+  throwToolSearchGatewayRequestFailure,
+} from "./tool-search-gateway-request-evidence.js";
 
 type Lane = "normal" | "code" | "tools";
 
@@ -148,18 +150,6 @@ export async function fetchJson(
   });
 }
 
-async function countToolSearchSessionLogMentions(params: { stateDir: string; targetTool: string }) {
-  return countSessionLogMentions({
-    sessionsDir: path.join(params.stateDir, "agents", "qa", "sessions"),
-    needles: {
-      tool_search_code: "tool_search_code",
-      tool_search: "tool_search",
-      tool_call: "tool_call",
-      [params.targetTool]: params.targetTool,
-    },
-  });
-}
-
 async function writeFakePlugin(params: {
   rootDir: string;
   repoRoot: string;
@@ -245,23 +235,14 @@ function applyLaneConfig(
   params: { lane: Lane; fakePluginDir: string },
 ) {
   const cfg = structuredClone(config);
-  const plugins = (cfg.plugins && typeof cfg.plugins === "object" ? cfg.plugins : {}) as Record<
-    string,
-    unknown
-  >;
-  const pluginEntries =
-    plugins.entries && typeof plugins.entries === "object"
-      ? (plugins.entries as Record<string, unknown>)
-      : {};
-  const pluginLoad =
-    plugins.load && typeof plugins.load === "object"
-      ? (plugins.load as Record<string, unknown>)
-      : {};
+  const plugins = asRecord(cfg.plugins);
+  const pluginEntries = asRecord(plugins.entries);
+  const pluginLoad = asRecord(plugins.load);
   cfg.plugins = {
     ...plugins,
     allow: [...new Set([...(Array.isArray(plugins.allow) ? plugins.allow : []), FAKE_PLUGIN_ID])],
     slots: {
-      ...(plugins.slots && typeof plugins.slots === "object" ? plugins.slots : {}),
+      ...asRecord(plugins.slots),
       memory: "none",
     },
     entries: {
@@ -279,12 +260,8 @@ function applyLaneConfig(
     },
   };
 
-  const memory =
-    cfg.memory && typeof cfg.memory === "object" ? (cfg.memory as Record<string, unknown>) : {};
-  const memorySearch =
-    memory.search && typeof memory.search === "object"
-      ? (memory.search as Record<string, unknown>)
-      : {};
+  const memory = asRecord(cfg.memory);
+  const memorySearch = asRecord(memory.search);
   cfg.memory = {
     ...memory,
     search: {
@@ -293,10 +270,7 @@ function applyLaneConfig(
     },
   };
 
-  const tools = (cfg.tools && typeof cfg.tools === "object" ? cfg.tools : {}) as Record<
-    string,
-    unknown
-  >;
+  const tools = asRecord(cfg.tools);
   cfg.tools = {
     ...tools,
     alsoAllow: [
@@ -316,18 +290,9 @@ function applyLaneConfig(
           : false,
   };
 
-  const gateway = (cfg.gateway && typeof cfg.gateway === "object" ? cfg.gateway : {}) as Record<
-    string,
-    unknown
-  >;
-  const gatewayHttp =
-    gateway.http && typeof gateway.http === "object"
-      ? (gateway.http as Record<string, unknown>)
-      : {};
-  const endpoints =
-    gatewayHttp.endpoints && typeof gatewayHttp.endpoints === "object"
-      ? (gatewayHttp.endpoints as Record<string, unknown>)
-      : {};
+  const gateway = asRecord(cfg.gateway);
+  const gatewayHttp = asRecord(gateway.http);
+  const endpoints = asRecord(gatewayHttp.endpoints);
   cfg.gateway = {
     ...gateway,
     http: {
@@ -410,22 +375,25 @@ export async function runToolSearchGatewayLane(params: {
   fixture: ToolSearchGatewayFixture;
   lane: Lane;
 }): Promise<LaneResult> {
-  const providerBaseUrl = params.env.mock?.baseUrl;
+  const { env, fixture, lane } = params;
+  const { targetTool } = fixture;
+  const providerBaseUrl = env.mock?.baseUrl;
   assert(providerBaseUrl, "Tool Search gateway fixture requires mock-openai provider mode");
-  const gatewayToken = params.env.gateway.runtimeEnv.OPENCLAW_GATEWAY_TOKEN;
+  const gatewayToken = env.gateway.runtimeEnv.OPENCLAW_GATEWAY_TOKEN;
   assert(gatewayToken, "Tool Search gateway fixture requires QA gateway token");
   await configureLane(params);
-  const stateDir = path.join(params.env.gateway.tempRoot, "state");
+  const stateDir = path.join(env.gateway.tempRoot, "state");
   const mentionCountsBefore = await countToolSearchSessionLogMentions({
     stateDir,
-    targetTool: params.fixture.targetTool,
+    targetTool,
   });
   const requestCursorBefore = readQaMockRequestCursor(
     await fetchJson(qaMockRequestCursorUrl(providerBaseUrl)),
   );
-  const sessionKey = `tool-search-gateway-${params.lane}`;
+  const gatewayLogMark = env.gateway.markLogs?.();
+  const sessionKey = `tool-search-gateway-${lane}`;
   const response = await fetchJson(
-    `${params.env.gateway.baseUrl}/v1/responses`,
+    `${env.gateway.baseUrl}/v1/responses`,
     {
       method: "POST",
       headers: {
@@ -444,7 +412,7 @@ export async function runToolSearchGatewayLane(params: {
             content: [
               {
                 type: "input_text",
-                text: `tool search qa check target=${params.fixture.targetTool}`,
+                text: `tool search qa check target=${targetTool}`,
               },
             ],
           },
@@ -453,7 +421,21 @@ export async function runToolSearchGatewayLane(params: {
         stream: false,
       }),
     },
-    { timeoutMs: liveTurnTimeoutMs(params.env, 30_000) },
+    { timeoutMs: liveTurnTimeoutMs(env, 30_000) },
+  ).catch((cause: unknown) =>
+    throwToolSearchGatewayRequestFailure({
+      cause,
+      fetchJson,
+      // The log owner preserves attribution and redaction across bounded-buffer rollover.
+      gatewayLogs:
+        gatewayLogMark === undefined ? "" : (env.gateway.readLogsSince?.(gatewayLogMark) ?? ""),
+      lane,
+      mentionCountsBefore,
+      providerBaseUrl,
+      requestCursorBefore,
+      stateDir,
+      targetTool,
+    }),
   );
   const laneRequests = (await fetchJson(
     qaMockRequestsAfterUrl(providerBaseUrl, requestCursorBefore),
@@ -465,6 +447,7 @@ export async function runToolSearchGatewayLane(params: {
     prompt?: string;
     toolOutput?: string;
     plannedToolName?: string;
+    plannedWireToolName?: string;
   }>;
   const lastRequest = laneRequests.at(-1) ?? {};
   // The last provider request contains the terminal target result, while earlier
@@ -474,7 +457,7 @@ export async function runToolSearchGatewayLane(params: {
     .filter((value): value is string => typeof value === "string" && value.length > 0)
     .join("\n");
   const toolCallRequestIndex = laneRequests.findIndex(
-    (request) => request.plannedToolName === "tool_call",
+    (request) => (request.plannedWireToolName ?? request.plannedToolName) === "tool_call",
   );
   const providerToolSearchResult = parseJson(
     toolCallRequestIndex >= 0 ? laneRequests[toolCallRequestIndex]?.toolOutput : undefined,
@@ -492,16 +475,16 @@ export async function runToolSearchGatewayLane(params: {
     .join("\n");
   const responseStatus = (response as { status?: unknown }).status;
   const targetToolIdentity = await readTargetToolIdentity({
-    env: params.env,
+    env,
     sessionKey,
-    targetTool: params.fixture.targetTool,
+    targetTool,
   });
   const mentionCountsAfter = await countToolSearchSessionLogMentions({
     stateDir,
-    targetTool: params.fixture.targetTool,
+    targetTool,
   });
   return {
-    lane: params.lane,
+    lane,
     status: typeof responseStatus === "string" ? responseStatus : "",
     providerRequestCount: laneRequests.length,
     providerRawBytes: typeof lastRequest.raw === "string" ? lastRequest.raw.length : 0,
@@ -523,9 +506,9 @@ export async function runToolSearchGatewayLane(params: {
       : [],
     providerDirectoryContainsTarget:
       providerPromptText.includes("### Deferred Tool Schemas") &&
-      providerPromptText.includes(`- ${params.fixture.targetTool}`),
+      providerPromptText.includes(`- ${targetTool}`),
     providerPlannedTools: laneRequests
-      .map((request) => request.plannedToolName)
+      .map((request) => request.plannedWireToolName ?? request.plannedToolName)
       .filter((name): name is string => typeof name === "string"),
     gatewayOutputToolNames: outputToolNames(response),
     gatewayOutputText: outputText(response),
@@ -542,26 +525,25 @@ export function assertToolSearchLaneResults(params: {
   const { code, normal, targetTool } = params;
   const laneDebug = () =>
     JSON.stringify(
-      {
-        normal: {
-          plannedTools: normal.providerPlannedTools,
-          declaredToolCount: normal.providerDeclaredToolCount,
-          directoryContainsTarget: normal.providerDirectoryContainsTarget,
-          input: normal.providerInputSnippet,
-          toolOutput: normal.providerToolOutputSnippet,
-          output: truncateUtf16Safe(normal.gatewayOutputText, 300),
-          mentions: normal.sessionLogToolMentions,
-        },
-        code: {
-          plannedTools: code.providerPlannedTools,
-          declaredToolCount: code.providerDeclaredToolCount,
-          directoryContainsTarget: code.providerDirectoryContainsTarget,
-          input: code.providerInputSnippet,
-          toolOutput: code.providerToolOutputSnippet,
-          output: truncateUtf16Safe(code.gatewayOutputText, 300),
-          mentions: code.sessionLogToolMentions,
-        },
-      },
+      Object.fromEntries(
+        (
+          [
+            ["normal", normal],
+            ["code", code],
+          ] as const
+        ).map(([name, result]) => [
+          name,
+          {
+            plannedTools: result.providerPlannedTools,
+            declaredToolCount: result.providerDeclaredToolCount,
+            directoryContainsTarget: result.providerDirectoryContainsTarget,
+            input: result.providerInputSnippet,
+            toolOutput: result.providerToolOutputSnippet,
+            output: truncateUtf16Safe(result.gatewayOutputText, 300),
+            mentions: result.sessionLogToolMentions,
+          },
+        ]),
+      ),
       null,
       2,
     );
@@ -654,28 +636,21 @@ export function assertToolSearchBatchLaneResult(params: {
   const batchResult = tools.providerToolSearchResult;
   const groups =
     isRecord(batchResult) && Array.isArray(batchResult.results) ? batchResult.results : [];
-  const targetGroup = groups[0];
-  const catalogGroup = groups[1];
   assert(
     groups.length === 2 &&
-      isRecord(targetGroup) &&
-      targetGroup.query === targetTool &&
-      Array.isArray(targetGroup.candidates) &&
-      targetGroup.candidates.length === 1 &&
-      targetGroup.candidates.some(
-        (candidate) =>
-          isRecord(candidate) && (candidate.name === targetTool || candidate.id === targetTool),
-      ) &&
-      isRecord(catalogGroup) &&
-      catalogGroup.query === QA_TOOL_SEARCH_SECONDARY_TARGET &&
-      Array.isArray(catalogGroup.candidates) &&
-      catalogGroup.candidates.length === 1 &&
-      catalogGroup.candidates.some(
-        (candidate) =>
-          isRecord(candidate) &&
-          (candidate.name === QA_TOOL_SEARCH_SECONDARY_TARGET ||
-            candidate.id === QA_TOOL_SEARCH_SECONDARY_TARGET),
-      ),
+      [targetTool, QA_TOOL_SEARCH_SECONDARY_TARGET].every((target, index) => {
+        const group = groups[index];
+        return (
+          isRecord(group) &&
+          group.query === target &&
+          Array.isArray(group.candidates) &&
+          group.candidates.length === 1 &&
+          group.candidates.some(
+            (candidate) =>
+              isRecord(candidate) && (candidate.name === target || candidate.id === target),
+          )
+        );
+      }),
     `structured lane did not return both grouped search results: ${debug()}`,
   );
   const toolCallResult = tools.providerToolCallResult;

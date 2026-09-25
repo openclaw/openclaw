@@ -29,7 +29,7 @@ Rich Telegram surfaces: formatted messages, inline keyboards, agent message acti
 }
 ```
 
-    When enabled: the agent is told rich messages are available for this bot/account (with the supported Markdown + HTML-island authoring contract); Markdown text renders through OpenClaw's Markdown IR as typed Bot API 10.3 rich blocks (headings, tables, details, checklists, rich media, formulas, maps, collages); media captions still use Telegram HTML captions (rich messages do not replace captions, and captions cap at 1024 characters).
+    When enabled: every OpenClaw agent turn delivered to this bot/account (replies, heartbeats, cron announces, and subagent announces) is told rich messages are available, with the supported Markdown + HTML-island authoring contract; Markdown text renders through OpenClaw's Markdown IR as typed Bot API 10.3 rich blocks (headings, tables, details, checklists, rich media, formulas, maps, collages); media captions still use Telegram HTML captions (rich messages do not replace captions, and captions cap at 1024 characters).
 
     Ordinary rich body text, including list items, quotes, and disclosure bodies, preserves parsed Markdown spaces and newlines. Entities decode once: `&amp;` displays `&`, while `\&amp;` and `&amp;amp;` display literal `&amp;`. Escaped tags such as `&lt;b&gt;` stay visible text, and image alternatives stay plain text; neither becomes an HTML island. Unsupported HTML stays visible without suppressing Markdown formatting inside it. HTML attributes and recognized inline comments retain their literal source during Markdown parsing; supported attributes are then decoded by the HTML mapper. HTML-island summaries and figure captions keep their separate HTML normalization.
 
@@ -81,7 +81,9 @@ Rich Telegram surfaces: formatted messages, inline keyboards, agent message acti
     `ask_user` uses these native controls for one single-select question.
     Choices use one row each, and **Other…** opens Telegram's reply input.
 
-    Message action example:
+    Shared `message` tool example (`action: "send"`, `channel: "telegram"`):
+
+    Availability follows the layered [tool policy](/gateway/config-tools/tool-policy). A Telegram account must be configured and enabled, the `message` tool must be allowed for the run, and `channels.telegram.actions.sendMessage` must not be disabled. For button-bearing sends, `inlineButtons: "off"` blocks the controls, while `"dm"` and `"group"` restrict the target chat type. Callback clicks are authorized separately by Telegram access policy; `"allowlist"` applies the configured sender authorization.
 
 ```json5
 {
@@ -148,7 +150,7 @@ Rich Telegram surfaces: formatted messages, inline keyboards, agent message acti
 
     Ergonomic aliases: `send`, `react`, `delete`, `edit`, `sticker`, `sticker-search`, `topic-create`.
 
-    Gating: `channels.telegram.actions.sendMessage`, `deleteMessage`, `reactions`, `sticker` (default: disabled). `reactions` controls both `react` and `emoji-list`. `edit`, `createForumTopic`, and `editForumTopic` are enabled by default with no dedicated toggle.
+    Gating: `channels.telegram.actions.sendMessage`, `poll`, `deleteMessage`, `reactions`, `editMessage`, `createForumTopic`, and `editForumTopic` are enabled by default; set one to `false` to disable it. Poll creation requires both `sendMessage` and `poll`. `sticker` is disabled by default and must be enabled explicitly. `reactions` controls both `react` and `emoji-list`.
     Runtime sends use the active config/secrets snapshot from startup/reload, so action paths do not re-resolve `SecretRef` values per send.
 
     Use `emoji-list` to inspect reactions in the current trusted chat and account. Agents cannot inspect another chat; direct operators may provide a different `chatId`. `limit` defaults to and cannot exceed 100:

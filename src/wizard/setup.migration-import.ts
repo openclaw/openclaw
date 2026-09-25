@@ -211,14 +211,10 @@ export async function listSetupMigrationOptions(params: {
         : {}),
     });
   }
-  for (const provider of providers) {
-    addOption({
-      providerId: provider.providerId,
-      label: t("wizard.migration.importFrom", { source: provider.label }),
-      hint: provider.description ?? t("wizard.migration.sourcePathHint"),
-    });
-  }
-  for (const provider of resolveManifestSetupMigrationProviders(params.baseConfig)) {
+  for (const provider of [
+    ...providers,
+    ...resolveManifestSetupMigrationProviders(params.baseConfig),
+  ]) {
     addOption({
       providerId: provider.providerId,
       label: t("wizard.migration.importFrom", { source: provider.label }),
@@ -272,12 +268,7 @@ async function selectSetupMigrationProvider(params: {
   return assertListedMigrationProvider(selection.value, options);
 }
 
-/**
- * Rejects a provider id that is absent from the listed options, naming the ids that are present.
- * `openclaw migrate` already answers an unknown provider this way; onboarding has to match, because
- * a typed id is far likelier to be a typo here than a genuinely missing plugin. An undefined id
- * means the operator dismissed the prompt, which is a cancellation rather than a bad choice.
- */
+/** Undefined means cancellation; unknown ids receive the same guidance as `openclaw migrate`. */
 function assertListedMigrationProvider(
   providerId: string | undefined,
   options: readonly SetupMigrationOption[],
@@ -539,7 +530,6 @@ export async function runSetupMigrationImport(params: {
         });
         await prepareSetupMigrationAttemptBoundary({
           currentConfig: await params.readConfigFile(),
-          targetConfig,
           stateDir,
           workspaceDir,
           plan,
@@ -597,10 +587,7 @@ export async function runSetupMigrationImport(params: {
               workspaceDir: stage.staged.workspaceDir,
               agentDir: stage.staged.agentDir,
               stateDir: stage.staged.stateDir,
-              writeConfig: async (config) => {
-                stage.replaceStagedConfig(config);
-                return stage.getStagedConfig();
-              },
+              configTarget: stage.inferenceConfigTarget,
               required: true,
             });
             if (!verification.verified || !verification.modelRef) {

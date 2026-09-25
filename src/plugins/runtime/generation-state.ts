@@ -1,21 +1,39 @@
 // Keep retained registry reads independent of metadata discovery and plugin loading.
-import { AsyncLocalStorage } from "node:async_hooks";
-import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import {
+  getPluginExecutionFrame,
+  runWithPluginExecutionFrame,
+} from "../plugin-instance-invocation.js";
 import type { PluginRegistry } from "../registry-types.js";
-
-const registryScope = resolveGlobalSingleton<AsyncLocalStorage<PluginRegistry>>(
-  Symbol.for("openclaw.pluginRuntimeGenerationRegistryScope"),
-  () => new AsyncLocalStorage<PluginRegistry>(),
-);
+import { getPluginRuntimeExecutionFrame, PluginRuntimeExecutionFrame } from "./execution-frame.js";
 
 export function withPluginRuntimeGenerationRegistryScope<T>(
   registry: PluginRegistry,
   run: () => T,
 ): T {
-  return registryScope.run(registry, run);
+  const current = getPluginExecutionFrame();
+  return runWithPluginExecutionFrame(
+    new PluginRuntimeExecutionFrame(
+      current ?? {},
+      getPluginRuntimeExecutionFrame(current)?.gatewayScope,
+      registry,
+    ),
+    run,
+  );
 }
 
 /** Exact registry owned by the prepared generation, including empty selections. */
 export function getPluginRuntimeGenerationRegistry(): PluginRegistry | undefined {
-  return registryScope.getStore();
+  return getPluginRuntimeExecutionFrame()?.generationRegistry;
+}
+
+export function runOutsidePluginRuntimeGenerationRegistryScope<T>(run: () => T): T {
+  const current = getPluginExecutionFrame();
+  return runWithPluginExecutionFrame(
+    new PluginRuntimeExecutionFrame(
+      current ?? {},
+      getPluginRuntimeExecutionFrame(current)?.gatewayScope,
+      undefined,
+    ),
+    run,
+  );
 }

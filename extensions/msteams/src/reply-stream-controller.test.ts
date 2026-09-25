@@ -1,5 +1,6 @@
 // Msteams tests cover reply stream controller plugin behavior.
 import { describe, expect, it, vi } from "vitest";
+import { teamsQuotedTableReply } from "./format.test-fixtures.js";
 import { createTeamsReplyStreamController } from "./reply-stream-controller.js";
 
 type StreamCloseResult = { id: string } | undefined;
@@ -353,12 +354,9 @@ describe("createTeamsReplyStreamController", () => {
     expect(stream.emit).toHaveBeenCalledWith("abcdef");
   });
 
-  it("does not touch native stream on reply start before text or progress work", async () => {
+  it("keeps replies without partial text or progress work on block delivery", async () => {
     const stream = makeStream();
     const ctrl = makeController({ stream });
-
-    await ctrl.onReplyStart();
-    await ctrl.onReplyStart();
 
     expect(stream.update).not.toHaveBeenCalled();
     expect(stream.emit).not.toHaveBeenCalled();
@@ -489,6 +487,32 @@ describe("createTeamsReplyStreamController", () => {
     expect(stream.close).toHaveBeenCalled();
   });
 
+  it("preserves disabled quoted tables when finalizing formatted replies", async () => {
+    const { source: text, expected } = teamsQuotedTableReply;
+    const stream = makeStream();
+    const ctrl = createTeamsReplyStreamController({
+      allowProviderPreview: true,
+      conversationType: "personal",
+      context: makeContext(stream),
+      feedbackLoopEnabled: false,
+      tableMode: "off",
+    });
+
+    ctrl.onPartialReply({ text });
+    expect(ctrl.preparePayload({ text })).toBeUndefined();
+    await expect(ctrl.finalize()).resolves.toEqual({
+      visibleReplySent: true,
+      messageId: "stream-final",
+      content: expected,
+      logicalContent: text,
+    });
+    expect(stream.clearText).toHaveBeenCalledTimes(1);
+    expect(stream.emit).toHaveBeenLastCalledWith(
+      expect.objectContaining({ type: "message", text: expected }),
+    );
+    expect(stream.close).toHaveBeenCalledTimes(1);
+  });
+
   it("returns suppressed final payload when stream close produces no final activity", async () => {
     const stream = makeStream();
     stream.close.mockResolvedValueOnce(undefined);
@@ -567,8 +591,8 @@ describe("createTeamsReplyStreamController", () => {
         } as never,
       });
 
-      await ctrl.pushProgressLine("tool: search");
-      await ctrl.pushProgressLine("tool: exec");
+      await ctrl.pushItemEvent({ itemId: "search", title: "tool: search", phase: "start" });
+      await ctrl.pushItemEvent({ itemId: "exec", title: "tool: exec", phase: "start" });
       expect(stream.update).not.toHaveBeenCalled();
 
       await vi.advanceTimersByTimeAsync(5_000);
@@ -621,7 +645,7 @@ describe("createTeamsReplyStreamController", () => {
       });
 
       // One work event schedules the delayed start; the turn finishes first.
-      await ctrl.pushProgressLine("tool: search");
+      await ctrl.pushItemEvent({ itemId: "search", title: "tool: search", phase: "start" });
       ctrl.preparePayload({ text: "done" });
       await ctrl.finalize();
       expect(stream.update).not.toHaveBeenCalled();
@@ -662,16 +686,15 @@ describe("createTeamsReplyStreamController", () => {
     expect(ctrl.preparePayload({ text: "complete final answer" })).toBeUndefined();
     await ctrl.pushPlanProgress([{ step: "Late plan", status: "in_progress" }]);
     const lateFailure = {
-      id: "late-failure",
-      kind: "item" as const,
-      label: "Late failure",
-      text: "Late failure",
+      itemId: "late-failure",
+      title: "Late failure",
+      phase: "end",
       status: "failed",
     };
-    await ctrl.pushProgressLine(lateFailure);
+    await ctrl.pushItemEvent(lateFailure);
     await ctrl.finalize();
     await ctrl.pushPlanProgress([{ step: "Late settled plan", status: "in_progress" }]);
-    await ctrl.pushProgressLine(lateFailure);
+    await ctrl.pushItemEvent(lateFailure);
 
     expect(stream.update).not.toHaveBeenCalled();
   });
@@ -738,7 +761,14 @@ describe("createTeamsReplyStreamController", () => {
           streaming: { mode: "progress", progress: { toolProgress: true } },
         } as never,
       });
-      await expect(ctrl.noteProgressWork({ toolName: "exec" })).resolves.toBeUndefined();
+      await ctrl.pushItemEvent({
+        itemId: "tool:exec",
+        name: "exec",
+        title: "Exec",
+        phase: "end",
+        status: "failed",
+      });
+      expect(stream.update).toHaveBeenCalled();
     });
 
     it("swallows StreamCancelledError thrown from stream.emit during finalize", async () => {

@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import type { WebSearchStatusResult } from "../../../packages/gateway-protocol/src/schema/web-search.ts";
 import { pathForRoute, type RouteId } from "../app-route-paths.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
@@ -29,8 +30,8 @@ const routes = [
   "devices",
   "cloud-workers",
   "agents",
-  "labs",
   "model-providers",
+  "search",
   "plugin-settings",
   "skill-settings",
   "mcp",
@@ -40,6 +41,7 @@ const routes = [
   "secrets",
   "approvals",
   "infrastructure",
+  "labs",
   "advanced",
   "debug",
   "logs",
@@ -133,7 +135,7 @@ suite.define(() => {
         await waitForControlUiRoute(page, { routeId: "settings", pathname: "/settings" });
         await page
           .locator(".native-embed-header")
-          .getByRole("button", { name: /offline.*retry/i })
+          .getByRole("button", { name: /reconnecting.*retry/i })
           .waitFor();
         await page.locator('.settings-embed-list a[href="/settings/appearance"]').click();
         await waitForControlUiRoute(page, { routeId: "appearance" });
@@ -219,7 +221,40 @@ suite.define(() => {
           async ({ page }) => {
             await installNativeEmbed(page, { platform: "ios", formFactor: viewport.formFactor });
             await installExistingNativeDeviceSettings(page);
-            const methodResponses = createNativeEmbedLayoutMethodResponses();
+            const methodResponses = {
+              ...createNativeEmbedLayoutMethodResponses(),
+              "webSearch.status": {
+                enabled: true,
+                provider: null,
+                agentId: "main",
+                model: {
+                  provider: "openai",
+                  id: "gpt-5.6-luna",
+                  runtime: "openclaw",
+                  runtimeLabel: "OpenClaw",
+                },
+                route: {
+                  kind: "managed",
+                  provider: "parallel-free",
+                  label: "Parallel Search (Free)",
+                  testable: true,
+                },
+                providers: [
+                  {
+                    id: "parallel-free",
+                    pluginId: "parallel",
+                    label: "Parallel Search (Free)",
+                    hint: "Free hosted web search",
+                    configured: true,
+                    installed: true,
+                    available: true,
+                    requiresCredential: false,
+                    credentialSource: "none",
+                    configPath: [],
+                  },
+                ],
+              } satisfies WebSearchStatusResult,
+            };
             await installMockGateway(page, {
               methodResponses,
               featureMethods: [
@@ -254,8 +289,20 @@ suite.define(() => {
               expect(
                 await page
                   .locator(
-                    ".shell-nav, openclaw-app-topbar, .shell-chrome-controls, resizable-divider, .settings-sidebar__footer, openclaw-macos-titlebar-controls, openclaw-keyboard-shortcuts-dialog",
+                    ".shell-nav, openclaw-app-topbar, .shell-chrome-controls, .settings-sidebar__footer, openclaw-macos-titlebar-controls, openclaw-keyboard-shortcuts-dialog",
                   )
+                  .count(),
+              ).toBe(0);
+              expect(
+                await page
+                  .locator(
+                    "resizable-divider:visible, .assistant-panel:visible, .debug-overlay:visible",
+                  )
+                  .count(),
+              ).toBe(0);
+              expect(
+                await page
+                  .locator("openclaw-assistant-panel-content, openclaw-debug-overlay-content")
                   .count(),
               ).toBe(0);
               if (route === "settings") {
@@ -280,6 +327,13 @@ suite.define(() => {
               } else {
                 await page.locator(".native-embed-header .page-title").waitFor();
                 await page.locator("openclaw-router-outlet > *").first().waitFor();
+              }
+              if (route === "search") {
+                await page
+                  .getByRole("combobox", { name: "Search provider", exact: true })
+                  .waitFor();
+                await page.getByRole("button", { name: "Test search", exact: true }).waitFor();
+                expect(await page.locator('openclaw-search-page [role="alert"]').count()).toBe(0);
               }
               if (route === "devices") {
                 await page.locator(".device-entry__details summary").first().click();

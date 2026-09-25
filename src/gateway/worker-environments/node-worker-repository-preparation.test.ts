@@ -325,7 +325,12 @@ it("prepares and reuses an exact repository commit without a Gateway workspace",
     ),
   ).rejects.toThrow("session binding failed");
   expect(await git(remoteWorkspaceDir, "branch", "--show-current")).toBe("");
-  const bound = await repository.bindPreparedRepository({ ...source, branch }, preparedWorkspace);
+  const author = { name: 'Prepared "Name"', email: "prepared+session@example.invalid" };
+  const bound = await repository.bindPreparedRepository(
+    { ...source, branch },
+    preparedWorkspace,
+    author,
+  );
   expect(bound).toMatchObject({
     mode: "repository",
     baseCommit: commit,
@@ -333,6 +338,8 @@ it("prepares and reuses an exact repository commit without a Gateway workspace",
     remoteWorkspaceDir,
   });
   expect(await git(remoteWorkspaceDir, "symbolic-ref", "--short", "HEAD")).toBe(branch);
+  expect(await git(remoteWorkspaceDir, "config", "--local", "user.name")).toBe(author.name);
+  expect(await git(remoteWorkspaceDir, "config", "--local", "user.email")).toBe(author.email);
   await fs.writeFile(path.join(remoteWorkspaceDir, "session-only.txt"), "discard on replacement");
 
   const offlineOrigin = `${origin}-offline`;

@@ -70,6 +70,12 @@ class NodeApp : Application() {
         }
     }
 
+  // Match Stop's service -> runtime lock order. Resolve the runtime before entering this monitor.
+  internal fun beginQuickGatewayConnectionOperation(
+    runtime: NodeRuntime,
+    createIntent: () -> (() -> Boolean),
+  ): NodeRuntime.GatewayConnectionOperation? = synchronized(nodeServiceControlLock) { runtime.beginQuickGatewayConnectionOperation(createIntent) }
+
   internal fun updateNodeServiceIntent(
     allowStart: Boolean,
     updateService: () -> Unit,

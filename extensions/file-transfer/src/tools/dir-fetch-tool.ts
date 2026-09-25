@@ -1,7 +1,8 @@
-// File Transfer plugin module implements dir fetch tool behavior.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { sha256File } from "@openclaw/fs-safe/durability";
+import { walkDirectory } from "@openclaw/fs-safe/walk";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   ARCHIVE_LIMIT_ERROR_CODE,
@@ -45,28 +46,6 @@ function classifyArchiveFailure(error: unknown): {
   return { auditCode: "UNSAFE_ARCHIVE", publicCode: "UNSAFE_ARCHIVE", reason };
 }
 
-async function computeFileSha256(filePath: string): Promise<string> {
-  // Stream the hash so we never pull a whole large file into memory.
-  // file_fetch caps single files at 16MB, but unpacked dir_fetch entries
-  // share the 64MB uncompressed budget — better to stream regardless.
-  const hash = crypto.createHash("sha256");
-  const handle = await fs.open(filePath, "r");
-  try {
-    const chunkSize = 64 * 1024;
-    const buf = Buffer.allocUnsafe(chunkSize);
-    while (true) {
-      const { bytesRead } = await handle.read(buf, 0, chunkSize, null);
-      if (bytesRead === 0) {
-        break;
-      }
-      hash.update(buf.subarray(0, bytesRead));
-    }
-  } finally {
-    await handle.close();
-  }
-  return hash.digest("hex");
-}
-
 type UnpackedFileEntry = {
   relPath: string;
   size: number;
@@ -76,14 +55,10 @@ type UnpackedFileEntry = {
 };
 
 function savedDirectoryText(rootDir: string, files: UnpackedFileEntry[]): string {
-  const visible: Array<{ relPath: string; size: number }> = [];
+  const header = JSON.stringify({ rootDir, fileCount: files.length }).slice(0, -1);
+  const visible: string[] = [];
   const render = () => {
-    const manifest = JSON.stringify({
-      rootDir,
-      fileCount: files.length,
-      displayedCount: visible.length,
-      files: visible,
-    });
+    const manifest = `${header},"displayedCount":${visible.length},"files":[${visible.join(",")}]}`;
     const omitted = files.length - visible.length;
     // A stable footer lets each additional complete record consume more bytes,
     // including the last one; omission guidance must not crowd out a full manifest.
@@ -103,7 +78,7 @@ function savedDirectoryText(rootDir: string, files: UnpackedFileEntry[]): string
   for (const { relPath, size } of files.toSorted((a, b) =>
     a.relPath < b.relPath ? -1 : a.relPath > b.relPath ? 1 : 0,
   )) {
-    visible.push({ relPath, size });
+    visible.push(JSON.stringify({ relPath, size }));
     const candidate = render();
     if (!candidate) {
       break;
@@ -117,31 +92,6 @@ function savedDirectoryText(rootDir: string, files: UnpackedFileEntry[]): string
       { source: "unknown" },
     )
   );
-}
-
-/**
- * Walk a directory recursively, collecting file entries (skips directories).
- * Skips symlinks — we don't want to follow links the archive might have
- * carried in. Files only.
- */
-async function walkDir(
-  dir: string,
-  rootDir: string,
-): Promise<{ relPath: string; absPath: string }[]> {
-  const entries = await fs.readdir(dir, { withFileTypes: true });
-  const results: { relPath: string; absPath: string }[] = [];
-  for (const entry of entries) {
-    const absPath = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      const nested = await walkDir(absPath, rootDir);
-      results.push(...nested);
-    } else if (entry.isFile()) {
-      const relPath = path.relative(rootDir, absPath);
-      results.push({ relPath, absPath });
-    }
-    // Symlinks are intentionally ignored: don't follow them out of destDir.
-  }
-  return results;
 }
 
 export function createDirFetchTool(): AnyAgentTool {
@@ -235,9 +185,15 @@ export function createDirFetchTool(): AnyAgentTool {
         throw new Error(`dir.fetch ${failure.publicCode}: ${failure.reason}`, { cause: error });
       }
 
-      const walked = await walkDir(rootDir, rootDir);
+      const walked = await walkDirectory(rootDir, {
+        symlinks: "skip",
+        include: ({ kind }) => kind === "file",
+      });
+      if (walked.failedDirs.length > 0) {
+        throw walked.failedDirs[0]!.error;
+      }
       const files: UnpackedFileEntry[] = [];
-      for (const { relPath, absPath } of walked) {
+      for (const { relativePath: relPath, path: absPath } of walked.entries) {
         let size;
         try {
           const st = await fs.stat(absPath);
@@ -246,7 +202,7 @@ export function createDirFetchTool(): AnyAgentTool {
           continue;
         }
         const mimeType = mimeFromExtension(relPath);
-        const fileSha256 = await computeFileSha256(absPath);
+        const fileSha256 = (await sha256File(absPath)).digest;
         files.push({ relPath, size, mimeType, sha256: fileSha256, localPath: absPath });
       }
       const fileCount = files.length;

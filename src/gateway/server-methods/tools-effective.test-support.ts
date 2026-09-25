@@ -8,7 +8,7 @@ import {
 import { getRegisteredAgentHarness } from "../../agents/harness/registry.js";
 import { resolveReplyToMode } from "../../auto-reply/reply/reply-threading.js";
 import { resolveRuntimeConfigCacheKey } from "../../config/config.js";
-import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
 import { getConnectedNodePluginToolsVersion } from "../node-plugin-tool-snapshot.js";
 import { loadGatewaySessionEntryReadOnly, resolveSessionModelRef } from "../session-utils.js";
 type ToolsEffectiveDependencies = NonNullable<
@@ -61,7 +61,7 @@ const acquireEffectiveToolInventoryRuntimeModelContext = vi.fn<
 >(async (params) => {
   const context =
     toolsEffectiveInventoryMocks.resolveEffectiveToolInventoryRuntimeModelContext(params);
-  return { run: (project) => project(context), release: () => {} };
+  return { run: (project) => project(context), [Symbol.asyncDispose]: async () => {} };
 });
 
 export const toolsEffectiveTestDependencies: ToolsEffectiveDependencies = {

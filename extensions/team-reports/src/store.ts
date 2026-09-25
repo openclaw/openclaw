@@ -29,8 +29,20 @@ export class TeamReportsStore {
     return this.execute("getPeriod", { period, key });
   }
 
+  getPeriodDocument(period: Period, key: string) {
+    return this.execute("getPeriodDocument", { period, key });
+  }
+
   listPeriods(options: TeamReportsOperations["listPeriods"]["input"] = {}) {
     return this.execute("listPeriods", options);
+  }
+
+  latestSourceWarnings() {
+    return this.execute("latestSourceWarnings", undefined);
+  }
+
+  latestPeople() {
+    return this.execute("latestPeople", undefined);
   }
 
   getDayReports(sinceMs: number, untilMs: number) {

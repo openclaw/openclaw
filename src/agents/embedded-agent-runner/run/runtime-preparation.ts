@@ -41,6 +41,7 @@ import type { RunEmbeddedAgentParams } from "./params.js";
 import { resolveInitialThinkLevel } from "./runtime-resolution.js";
 
 export async function prepareEmbeddedRunRuntime(input: {
+  assertCurrent: () => void;
   runParams: RunEmbeddedAgentInternalParams;
   sessionAdmission?: Parameters<typeof resolveEmbeddedRunModelSetup>[0]["sessionAdmission"];
   provider: string;
@@ -62,6 +63,7 @@ export async function prepareEmbeddedRunRuntime(input: {
   let provider = input.provider;
   let modelId = input.modelId;
   const modelSetup = await resolveEmbeddedRunModelSetup({
+    assertCurrent: input.assertCurrent,
     runParams: params,
     sessionAdmission: input.sessionAdmission,
     provider,
@@ -180,6 +182,7 @@ export async function prepareEmbeddedRunRuntime(input: {
   pluginHarnessOwnsTransport = agentHarness.id !== "openclaw";
   const authStages = log.isEnabled("trace") ? createEmbeddedRunStageTracker() : undefined;
   const preparedAuthPlan = await prepareEmbeddedRunAuthPlan({
+    assertCurrent: input.assertCurrent,
     runParams: params,
     provider,
     modelId,
@@ -223,6 +226,7 @@ export async function prepareEmbeddedRunRuntime(input: {
   const requestedThinkLevel = resolveInitialThinkLevel({
     requested: params.thinkLevel,
     config: params.config,
+    agentId: params.agentId,
     provider,
     modelId,
     model: models.effective,
@@ -569,7 +573,13 @@ export async function prepareEmbeddedRunRuntime(input: {
       authoredContextTokenCap,
       contextWindowInfo,
       outerContextTokenMeta,
-      activePreparedAuthPlan,
+      activePreparedAuthPlan: authState.apiKeyInfo
+        ? {
+            ...activePreparedAuthPlan,
+            selectedAuthMode: authState.apiKeyInfo.mode,
+            selectedAuthFlow: authState.apiKeyInfo.authFlow,
+          }
+        : activePreparedAuthPlan,
       thinkLevel: authState.thinkLevel,
       apiKeyInfo: authState.apiKeyInfo,
       lastProfileId: authState.lastProfileId,

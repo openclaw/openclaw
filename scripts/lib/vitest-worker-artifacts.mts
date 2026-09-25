@@ -10,6 +10,7 @@ export type VitestWorkerManifest = {
   inputs: Record<string, string>;
   outputs: Record<string, string>;
   durationMs: number;
+  cacheSignature?: string;
 };
 const root = fileURLToPath(new URL("../../", import.meta.url));
 export const hashVitestWorkerArtifact = (bytes: string | Buffer) =>
@@ -28,6 +29,7 @@ export const VITEST_WORKER_PREPARE_REPLY = "openclaw:test-subprocesses-prepared"
 export async function verifyVitestWorkerArtifacts(
   directory: string,
   manifest?: VitestWorkerManifest,
+  { inputsChangedAfter }: { inputsChangedAfter?: number } = {},
 ) {
   const completed: VitestWorkerManifest =
     manifest ??
@@ -56,6 +58,13 @@ export async function verifyVitestWorkerArtifacts(
           if (hashVitestWorkerArtifact(await fs.promises.readFile(filename)) !== expected) {
             throw new Error(`${changed}: ${name}`);
           }
+          if (
+            !baseDir &&
+            inputsChangedAfter !== undefined &&
+            (await fs.promises.stat(filename)).ctimeMs >= inputsChangedAfter
+          ) {
+            throw new Error(`${changed}: ${name}`);
+          }
         }),
       );
       const failed = settled.find((result) => result.status === "rejected");
@@ -81,13 +90,14 @@ export function isVitestWorkerDeclaration(id: string): boolean {
 }
 
 /** One finite request over the already-owned Node IPC channel; never a path/build request. */
-export function requestVitestWorkerArtifacts(): Promise<void> {
+export function requestVitestWorkerArtifacts(signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     if (!process.send || !process.connected) {
       reject(new Error("Compiled subprocess owner IPC is unavailable"));
       return;
     }
     const finish = (error?: Error) => {
+      signal?.removeEventListener("abort", onAbort);
       process.off("message", onMessage);
       process.off("disconnect", onDisconnect);
       process.channel?.unref();
@@ -97,6 +107,7 @@ export function requestVitestWorkerArtifacts(): Promise<void> {
         resolve();
       }
     };
+    const onAbort = () => finish(new Error("Compiled subprocess preparation request canceled"));
     const onDisconnect = () => finish(new Error("Compiled subprocess owner disconnected"));
     const onMessage = (message: unknown) => {
       if (
@@ -110,6 +121,11 @@ export function requestVitestWorkerArtifacts(): Promise<void> {
     };
     process.on("message", onMessage);
     process.once("disconnect", onDisconnect);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
     process.channel?.ref();
     process.send(VITEST_WORKER_PREPARE_REQUEST, (error) => {
       if (error) {

@@ -134,6 +134,7 @@ struct DashboardNativeBrowserContractTests {
     }
 
     @Test func `state uses the web contract keys and preserves creation order and opener provenance`() throws {
+        let favicon = "data:image/png;base64,AQID"
         let state = DashboardBrowserState(revision: 7, tabs: [
             .init(
                 id: "mac-first",
@@ -144,7 +145,8 @@ struct DashboardNativeBrowserContractTests {
                 canGoBack: true,
                 canGoForward: false,
                 openedBy: "web",
-                openerTabId: nil),
+                openerTabId: nil,
+                favicon: nil),
             .init(
                 id: "mac-second",
                 sessionKey: "session-a",
@@ -154,7 +156,8 @@ struct DashboardNativeBrowserContractTests {
                 canGoBack: false,
                 canGoForward: false,
                 openedBy: "native",
-                openerTabId: "mac-first"),
+                openerTabId: "mac-first",
+                favicon: favicon),
         ])
         let encoded = try JSONEncoder().encode(state)
         let actual = try #require(JSONSerialization.jsonObject(with: encoded) as? NSDictionary)
@@ -181,6 +184,7 @@ struct DashboardNativeBrowserContractTests {
                     "canGoForward": false,
                     "openedBy": "native",
                     "openerTabId": "mac-first",
+                    "favicon": favicon,
                 ],
             ],
         ]
@@ -198,13 +202,36 @@ struct DashboardNativeBrowserContractTests {
                 canGoBack: false,
                 canGoForward: false,
                 openedBy: "web",
-                openerTabId: nil)])
+                openerTabId: nil,
+                favicon: nil)])
             let encoded = try JSONEncoder().encode(state)
             let actual = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
             let tabs = try #require(actual["tabs"] as? [[String: Any]])
             let tab = try #require(tabs.first)
             #expect(tab["sessionKey"] as? String == sessionKey)
             #expect((tab["sessionKey"] == nil) == (sessionKey == nil))
+        }
+    }
+
+    @Test func `favicon results accept only bounded image data URLs`() {
+        let prefix = "data:image/png;base64,"
+        let maximum = prefix + String(repeating: "A", count: 98304 - prefix.utf8.count)
+        for favicon in [prefix + "AQID", "data:image/SVG+xml;base64,AQID", maximum] {
+            #expect(DashboardNativeBrowserHost.acceptedFavicon(favicon) == favicon)
+        }
+        let invalid: [Any?] = [
+            nil, NSNull(), 42, false,
+            "https://example.test/favicon.ico",
+            "data:text/plain;base64,AQID",
+            "data:image/svg+xml;charset=utf-8;base64,AQID",
+            "data:image/png;base64,",
+            "data:image/png;base64,???",
+            "data:image/ſvg+xml;base64,AQID",
+            "data:image/png;base64,KQID",
+            maximum + "A",
+        ]
+        for value in invalid {
+            #expect(DashboardNativeBrowserHost.acceptedFavicon(value) == nil)
         }
     }
 
@@ -287,6 +314,23 @@ struct DashboardNativeBrowserContractTests {
 @Suite(.serialized)
 @MainActor
 struct DashboardNativeBrowserHostTests {
+    @Test func `navigation clears only the navigating tab's favicon from state`() throws {
+        let fixture = self.fixture()
+        defer { fixture.host.dispose() }
+        let blank = try #require(URL(string: "about:blank"))
+        let favicon = "data:image/png;base64,AQID"
+        for tabId in ["mac-first", "mac-second"] {
+            try fixture.host.open(tabId: tabId, url: blank, sessionKey: "")
+            let webView = try #require(fixture.host.webView(for: tabId))
+            let browser = try #require(fixture.host.browserTab(for: webView))
+            browser.favicon = favicon
+        }
+        #expect(fixture.host.state.tabs.map(\.favicon) == [favicon, favicon])
+        let first = try #require(fixture.host.webView(for: "mac-first"))
+        fixture.host.navigationWillStart(try #require(URL(string: "https://example.test/next")), in: first)
+        #expect(fixture.host.state.tabs.map(\.favicon) == [nil, favicon])
+    }
+
     @Test func `releasing a presentation keeps window tabs alive and closing removes only its tab`() throws {
         let fixture = self.fixture()
         defer { fixture.host.dispose() }

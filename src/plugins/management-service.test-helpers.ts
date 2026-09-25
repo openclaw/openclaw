@@ -27,6 +27,8 @@ export function metadataSnapshot(params: {
   packageBuild?: { bundledDist?: boolean };
   packageDependencies?: Record<string, string>;
   iconPath?: string;
+  activityIconPath?: string;
+  toolActivityIconPaths?: Record<string, string>;
   categories?: PluginCategorySlug[];
   packageVersion?: string;
   configSchema?: PluginManifestRecord["configSchema"];
@@ -45,6 +47,10 @@ export function metadataSnapshot(params: {
     ...(params.categories ? { categories: params.categories } : {}),
     ...(params.packageDependencies ? { packageDependencies: params.packageDependencies } : {}),
     ...(params.iconPath ? { iconPath: params.iconPath } : {}),
+    ...(params.activityIconPath ? { activityIconPath: params.activityIconPath } : {}),
+    ...(params.toolActivityIconPaths
+      ? { toolActivityIconPaths: params.toolActivityIconPaths }
+      : {}),
     channels: params.channels ?? [],
     providers: [],
     cliBackends: [],

@@ -14,7 +14,7 @@ import {
   evaluateDmPolicyAllowFromDependency,
 } from "./zod-schema.core.js";
 
-export const bundledChannelSchemaById = new Map<string, unknown>(
+const bundledChannelSchemaById = new Map<string, unknown>(
   GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.filter((entry) => entry.configurable !== false).map(
     (entry) => [entry.channelId, entry.schema] as const,
   ),
@@ -86,17 +86,8 @@ function hasDefinedConfigValue(record: Record<string, unknown>, key: string): bo
   return Object.hasOwn(record, key) && record[key] !== undefined;
 }
 
-function hasConfiguredDmAllowFrom(
-  record: Record<string, unknown>,
-  mode: ChannelDmAllowFromMode,
-): boolean {
+function hasConfiguredDmAllowFrom(record: Record<string, unknown>): boolean {
   const dm = isRecord(record.dm) ? record.dm : null;
-  if (mode === "nestedOnly") {
-    return (
-      (dm !== null && hasDefinedConfigValue(dm, "allowFrom")) ||
-      hasDefinedConfigValue(record, "allowFrom")
-    );
-  }
   return (
     hasDefinedConfigValue(record, "allowFrom") ||
     (dm !== null && hasDefinedConfigValue(dm, "allowFrom"))
@@ -172,9 +163,7 @@ export function collectChannelDmPolicyDependencyWarnings(
       if (!isRecord(accountValue) || !isConfigRecordEnabled(accountValue)) {
         continue;
       }
-      const allowFromSource = hasConfiguredDmAllowFrom(accountValue, mode)
-        ? "explicit"
-        : "inherited";
+      const allowFromSource = hasConfiguredDmAllowFrom(accountValue) ? "explicit" : "inherited";
       const accountViolation = evaluateDmPolicyAllowFromDependency({
         policy: resolveChannelDmPolicy({ account: accountValue, parent: channelValue, mode }),
         allowFrom: resolveChannelDmAllowFrom({ account: accountValue, parent: channelValue, mode }),

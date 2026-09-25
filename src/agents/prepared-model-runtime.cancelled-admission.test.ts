@@ -1,19 +1,13 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import {
-  cleanupPreparedModelRuntimeHarness,
-  getPreparedModelRuntimeMocks,
   getPreparedModelRuntimeTestApi,
-  resetPreparedModelRuntimeHarness,
+  usePreparedModelRuntimeHarness,
 } from "./prepared-model-runtime.test-harness.js";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
 import * as runtimeBuild from "./prepared-model-runtime.build.js";
 import {
   acquireAgentRunPreparedModelRuntime,
@@ -28,15 +22,23 @@ import {
   type PreparedModelRuntimeLease,
 } from "./prepared-model-runtime.js";
 
-const mocks = getPreparedModelRuntimeMocks();
+const fixture = usePreparedModelRuntimeHarness(
+  { label: "prepared-runtime-cancelled-admission" },
+  async () => {
+    for (const release of pendingBuildReleases) {
+      release.resolve();
+    }
+    await Promise.all(
+      buildBatchSpy.mock.results.flatMap((result) =>
+        result.type === "return" ? [result.value.completion] : [],
+      ),
+    );
+    buildBatchSpy.mockRestore();
+  },
+);
+const { mocks } = fixture;
 const testApi = getPreparedModelRuntimeTestApi();
-let state: OpenClawTestState;
-const configuredInput = () => ({
-  config: {},
-  agentId: "default",
-  agentDir: state.agentDir("default"),
-  inheritedAuthDir: state.agentDir("default"),
-});
+const configuredInput = () => fixture.agentInput("default", {});
 
 let buildBatchSpy: Mock<typeof runtimeBuild.startSerializedSnapshotBuildBatch>;
 let pendingBuildReleases: Array<{ resolve: () => void }>;
@@ -56,7 +58,7 @@ function prepareColdBuildGate() {
 function dynamicInput(label: string): PreparedModelRuntimeInput {
   return {
     agentId: "default",
-    agentDir: state.agentDir("default"),
+    agentDir: fixture.state.agentDir("default"),
     config: {},
     workspaceDir: `/tmp/${label}`,
   };
@@ -87,9 +89,7 @@ const coldAdmissionCases: Array<{
 ];
 
 describe("prepared model runtime cancelled admission ownership", () => {
-  beforeEach(async () => {
-    state = await createOpenClawTestState({ label: "prepared-runtime-cancelled-admission" });
-    await resetPreparedModelRuntimeHarness(state);
+  beforeEach(() => {
     pendingBuildReleases = [];
     buildBatchSpy = vi.spyOn(runtimeBuild, "startSerializedSnapshotBuildBatch");
   });
@@ -165,7 +165,7 @@ describe("prepared model runtime cancelled admission ownership", () => {
     expect(mocks.prepareStaticCatalog).toHaveBeenCalledOnce();
     expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
 
-    lease.release();
+    await lease[Symbol.asyncDispose]();
     expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(0);
   });
 
@@ -194,7 +194,7 @@ describe("prepared model runtime cancelled admission ownership", () => {
     secondBuild.release.resolve();
     const lease = await replacement;
     expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
-    lease.release();
+    await lease[Symbol.asyncDispose]();
     expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(0);
   });
 
@@ -223,7 +223,7 @@ describe("prepared model runtime cancelled admission ownership", () => {
     const lease = await survivor;
     expect(mocks.prepareStaticCatalog).toHaveBeenCalledTimes(2);
 
-    lease.release();
+    await lease[Symbol.asyncDispose]();
     expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(0);
   });
 
@@ -257,7 +257,7 @@ describe("prepared model runtime cancelled admission ownership", () => {
     expect(mocks.prepareStaticCatalog).toHaveBeenCalledTimes(2);
     expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(2);
 
-    retainedLease.release();
+    await retainedLease[Symbol.asyncDispose]();
     expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(2);
 
     await refreshPreparedModelRuntimeSnapshots(config, {
@@ -334,31 +334,42 @@ describe("prepared model runtime cancelled admission ownership", () => {
     },
   );
 
-  it("preserves immutable leased data and allows a fresh standalone activation after close", async () => {
-    const input = { config: {}, agentDir: state.agentDir("direct") };
-    const previous = await acquireAgentRunPreparedModelRuntime(input, { retainIdleRunOwner: true });
+  it("preserves immutable leased data while close drains and allows a fresh standalone activation", async ({
+    signal,
+  }) => {
+    const input = { config: {}, agentDir: fixture.state.agentDir("direct") };
+    const options = { retainIdleRunOwner: true, abortSignal: signal };
+    const previous = await acquireAgentRunPreparedModelRuntime(input, options);
+    let closed = false;
+    const closing = drainGlobalSingletonLifecycleState("close").then(() => {
+      closed = true;
+    });
     try {
-      await drainGlobalSingletonLifecycleState("close");
+      await nextTurn(undefined, { signal });
+      expect(closed).toBe(false);
       expect(previous.snapshot.isCurrent()).toBe(false);
       expect(previous.snapshot.createStores()).toBeDefined();
-      const next = await acquireAgentRunPreparedModelRuntime(input, { retainIdleRunOwner: true });
+      await previous[Symbol.asyncDispose]();
+      await closing;
+      const next = await acquireAgentRunPreparedModelRuntime(input, options);
       try {
         expect(next.snapshot).not.toBe(previous.snapshot);
-        previous.release();
+        await previous[Symbol.asyncDispose]();
         expect(getPreparedModelRuntimeSnapshot(input)).toBe(next.snapshot);
         expect(next.snapshot.isCurrent()).toBe(true);
       } finally {
-        next.release();
+        await next[Symbol.asyncDispose]();
       }
     } finally {
-      previous.release();
+      await previous[Symbol.asyncDispose]();
+      await closing;
     }
   });
 
   it("does not revive a queued standalone activation after its process lifetime closes", async () => {
     const entered = createDeferred();
     const release = createDeferred();
-    const input = { config: {}, agentDir: state.agentDir("queued") };
+    const input = { config: {}, agentDir: fixture.state.agentDir("queued") };
     mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, agentDir) => {
       entered.resolve();
       await release.promise;
@@ -382,17 +393,4 @@ describe("prepared model runtime cancelled admission ownership", () => {
       await Promise.allSettled([first, second, closing]);
     }
   });
-});
-
-afterEach(async ({ task }) => {
-  for (const release of pendingBuildReleases) {
-    release.resolve();
-  }
-  await Promise.all(
-    buildBatchSpy.mock.results.flatMap((result) =>
-      result.type === "return" ? [result.value.completion] : [],
-    ),
-  );
-  buildBatchSpy.mockRestore();
-  await cleanupPreparedModelRuntimeHarness(state, task.result?.state === "fail");
 });

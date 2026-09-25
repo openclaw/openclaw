@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements character eval behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
@@ -182,10 +181,7 @@ function sanitizePathPart(value: string) {
 }
 
 function normalizeConcurrency(value: number | undefined, fallback = 1) {
-  if (value === undefined) {
-    return fallback;
-  }
-  if (!Number.isFinite(value)) {
+  if (value === undefined || !Number.isFinite(value)) {
     return fallback;
   }
   return Math.max(1, Math.floor(value));
@@ -385,14 +381,7 @@ function parseJudgeReply(reply: string | null, allowedModels: Set<string>) {
   return rankings;
 }
 
-async function defaultRunJudge(params: {
-  repoRoot: string;
-  judgeModel: string;
-  judgeThinkingDefault: QaThinkingLevel;
-  judgeFastMode: boolean;
-  prompt: string;
-  timeoutMs: number;
-}) {
+async function defaultRunJudge(params: Parameters<RunJudgeFn>[0]) {
   const { runQaManualLane } = await import("./manual-lane.runtime.js");
   const result = await runQaManualLane({
     repoRoot: params.repoRoot,

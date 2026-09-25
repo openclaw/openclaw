@@ -7,6 +7,7 @@ import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
+  closeOpenClawAgentDatabaseByPathAsync,
   confirmOpenClawAgentDatabaseIntegrity,
   listOpenClawRegisteredAgentDatabases,
   recordOpenClawAgentDatabaseOpenFailure,
@@ -21,9 +22,6 @@ import {
   recordOpenClawStateDatabaseOpenFailure,
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
-
-export const OPENCLAW_DATABASE_VERIFY_INITIAL_DELAY_MS = 5 * 60_000;
-export const OPENCLAW_DATABASE_VERIFY_INTERVAL_MS = 24 * 60 * 60_000;
 
 const log = createSubsystemLogger("state/database-verify");
 const DATABASE_VERIFY_CHILD_ARG = "--openclaw-database-verify-child";
@@ -233,11 +231,11 @@ export function collectOpenClawDatabaseVerifyTargets(options: {
 }
 
 /** Reconfirm worker failures on live owners before quarantine and latching. */
-export function applyOpenClawDatabaseVerificationResults(options: {
+export async function applyOpenClawDatabaseVerificationResults(options: {
   env: NodeJS.ProcessEnv;
   results: readonly OpenClawDatabaseVerifyResult[];
   targets: readonly OpenClawDatabaseVerifyTarget[];
-}): void {
+}): Promise<void> {
   const targetByPath = new Map(options.targets.map((target) => [target.path, target]));
 
   for (const result of options.results) {
@@ -264,8 +262,8 @@ export function applyOpenClawDatabaseVerificationResults(options: {
     }
     const confirmation =
       target.kind === "state"
-        ? confirmOpenClawStateDatabaseIntegrity(result.path)
-        : confirmOpenClawAgentDatabaseIntegrity(result.path);
+        ? await confirmOpenClawStateDatabaseIntegrity(result.path)
+        : await confirmOpenClawAgentDatabaseIntegrity(result.path);
     if (confirmation.status === "healthy") {
       log.info("discarding stale database integrity verification result", {
         kind: target.kind,
@@ -302,6 +300,10 @@ export function applyOpenClawDatabaseVerificationResults(options: {
         path: result.path,
       });
       continue;
+    }
+    if (target.kind === "agent") {
+      // Confirmation awaited drainage; retire any actor admitted before the terminal latch.
+      await closeOpenClawAgentDatabaseByPathAsync(result.path);
     }
     const recorded = recordOpenClawDatabaseQuarantine({
       env: options.env,

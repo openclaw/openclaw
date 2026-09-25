@@ -12,8 +12,14 @@ import type { GatewayRequestContext, RespondFn } from "../gateway/server-methods
 import type { WidgetPresenter } from "../plugins/plugin-registration.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { resolveCanvasDocumentsDir } from "./documents.js";
 import { registerTestWidgetContentKind as registerDiagramContentKind } from "./widget-tool.content-kinds.test-support.js";
 import { createShowWidgetTool } from "./widget-tool.js";
@@ -31,7 +37,9 @@ beforeEach(() => {
 
 afterEach(async () => {
   vi.useRealTimers();
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   resetPluginRuntimeStateForTest();
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
@@ -180,8 +188,9 @@ describe("show_widget", () => {
     });
 
     expect(tool.description).toContain(
-      "Inline hosting is disabled; set pin=true to place it on this session's dashboard",
+      "Inline previews are unavailable this turn; set pin=true to save to the session dashboard",
     );
+    expect(tool.description).not.toContain("Keep one-off visualizations inline");
     await expect(
       tool.execute("unpinned", {
         title: "Diagram",
@@ -204,7 +213,7 @@ describe("show_widget", () => {
       status: "pinned",
       boardWidgetName: "diagram",
       capabilityState: "none",
-      text: "Widget pinned to dashboard tab main as diagram",
+      text: "Widget pinned to dashboard tab main as diagram. Open this dashboard tab in Control UI to view it.",
     });
     expect(callGatewayMock).toHaveBeenCalledExactlyOnceWith(
       "board.widget.put",
@@ -619,8 +628,10 @@ describe("show_widget", () => {
       "utf8",
     );
     expect(html).toContain(
-      `Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:;`,
+      `Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' https://cdnjs.cloudflare.com`,
     );
+    expect(html).toContain("font-src data:");
+    expect(html).toContain("img-src data:; media-src data: https: blob:; connect-src 'none'");
     expect(html).toContain("<title>&lt;Status&gt;</title>");
     expect(html).toContain("--accent:#bd4531");
     expect(html).toContain("--accent:#ff5c5c");

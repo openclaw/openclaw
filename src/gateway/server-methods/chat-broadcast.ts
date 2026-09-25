@@ -1,5 +1,6 @@
 import { getReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { projectChatDisplayMessage } from "../chat-display-projection.js";
 import { capLiveAssistantText } from "../live-chat-projector.js";
@@ -96,7 +97,12 @@ type ChatBroadcastParams = {
 
 type ChatTerminal =
   | { state: "final" | "aborted"; message?: Record<string, unknown>; stopReason?: string }
-  | { state: "error"; errorMessage?: string; stopReason?: string; errorKind?: "timeout" };
+  | {
+      state: "error";
+      errorMessage?: string;
+      stopReason?: string;
+      errorKind?: "timeout" | "state_contention";
+    };
 
 type ChatFrame = ChatTerminal | { state: "delta"; text: string };
 
@@ -104,6 +110,10 @@ function broadcastChatFrame(
   params: ChatBroadcastParams & ChatFrame,
   liveText?: GatewayBroadcastOpts["liveText"],
 ): void {
+  const visibility = getAgentRunContext(params.runId);
+  if (visibility?.isControlUiVisible === false && visibility.projectSessionMessages === false) {
+    return;
+  }
   const seq = nextChatSeq(params.context, params.runId);
   const payloadAgentId = parseAgentSessionKey(params.sessionKey) ? undefined : params.agentId;
   const frame =

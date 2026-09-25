@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 // Covers extra-params stream wrapper composition across provider families.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model, SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
@@ -827,12 +828,12 @@ describe("applyExtraParamsToAgent", () => {
   it("fills MiMo V2.6 reasoning_content for unowned OpenAI-compatible proxy models", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "opencode",
-      applyModelId: "xiaomi/mimo-v2.6-pro",
+      applyModelId: "xiaomi/mimo-v2.6-flash",
       thinkingLevel: "high",
       model: {
         api: "openai-completions",
         provider: "opencode",
-        id: "xiaomi/mimo-v2.6-pro",
+        id: "xiaomi/mimo-v2.6-flash",
       } as Model<"openai-completions">,
       payload: {
         messages: [
@@ -876,10 +877,7 @@ describe("applyExtraParamsToAgent", () => {
       id: "xiaomi/mimo-v2-pro",
     } as Model<"openai-completions">;
     const stream = await agent.streamFn?.(model, { messages: [] }, {});
-    expect(stream).toBeDefined();
-    if (!stream) {
-      throw new Error("expected stream function");
-    }
+    assert(stream, "expected stream function");
     const events: unknown[] = [];
     for await (const event of stream) {
       events.push(event);

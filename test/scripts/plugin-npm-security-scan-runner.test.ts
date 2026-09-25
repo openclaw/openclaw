@@ -2,6 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import {
   isProcessAlive,
   waitForChildClose,
@@ -11,6 +12,7 @@ import {
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const testNodeExecPath = resolveTestNodeExecPath();
 const CANDIDATE_SHA = "1".repeat(40);
 const TOOLING_SHA = "2".repeat(40);
 
@@ -58,7 +60,7 @@ renameSync(${JSON.stringify(`${pidPath}.ready`)}, ${JSON.stringify(pidPath)});
     mkdirSync(binDir);
     writeFileSync(
       join(binDir, "ps"),
-      `#!${process.execPath}
+      `#!${testNodeExecPath}
 const { spawnSync } = require("node:child_process");
 const { existsSync, readFileSync, writeFileSync, writeSync } = require("node:fs");
 const args = process.argv.slice(2);
@@ -76,7 +78,7 @@ process.kill(pid, "SIGUSR2");
     );
 
     const result = spawnSync(
-      process.execPath,
+      testNodeExecPath,
       [
         "scripts/plugin-npm-security-scan-runner.mjs",
         "--artifact-root",
@@ -120,7 +122,7 @@ describe("plugin npm security runner process limits", () => {
     const timeoutChild = join(root, "timeout.mjs");
     const oomChild = join(root, "oom.mjs");
     const rssChild = join(root, "rss.mjs");
-    writeFileSync(timeoutChild, "await new Promise(() => {});\n", "utf8");
+    writeFileSync(timeoutChild, "setInterval(() => {}, 1_000);\n", "utf8");
     writeFileSync(
       oomChild,
       "const values = [];\nwhile (true) values.push(new Array(100000).fill(Math.random()));\n",
@@ -138,7 +140,7 @@ describe("plugin npm security runner process limits", () => {
     ] as const) {
       const reportPath = join(root, `${label}.json`);
       const result = spawnSync(
-        process.execPath,
+        testNodeExecPath,
         [
           "scripts/plugin-npm-security-scan-runner.mjs",
           "--artifact-root",
@@ -205,7 +207,7 @@ descendant.unref();
         "utf8",
       );
       const wrapper = spawn(
-        process.execPath,
+        testNodeExecPath,
         [
           "scripts/plugin-npm-security-scan-runner.mjs",
           "--artifact-root",
@@ -277,7 +279,7 @@ descendant.unref();
     chmodSync(join(binDir, "ps"), 0o755);
 
     const result = spawnSync(
-      process.execPath,
+      testNodeExecPath,
       [
         "scripts/plugin-npm-security-scan-runner.mjs",
         "--artifact-root",

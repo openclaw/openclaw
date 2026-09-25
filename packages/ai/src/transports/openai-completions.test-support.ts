@@ -21,17 +21,6 @@ export type CapturedStreamEvent = {
   partial?: unknown;
 };
 
-type RequestTransportConfig = {
-  proxy?: unknown;
-  tls?: unknown;
-  headers?: Record<string, string>;
-  allowPrivateNetwork?: boolean;
-};
-
-const MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL = Symbol.for(
-  "openclaw.modelProviderRequestTransport",
-);
-
 function resolveTestEndpointClass(baseUrl: string | undefined): string {
   if (!baseUrl) {
     return "default";
@@ -134,20 +123,6 @@ configureAiTransportHost({
       : undefined;
   },
 });
-
-export function attachModelProviderRequestTransport<TModel extends object>(
-  model: TModel,
-  request: RequestTransportConfig | undefined,
-): TModel {
-  if (!request) {
-    return model;
-  }
-  const next = { ...model } as TModel & {
-    [MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL]?: RequestTransportConfig;
-  };
-  next[MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL] = request;
-  return next;
-}
 
 export function makeCompletionsModel(
   overrides: Partial<Model<"openai-completions">> = {},

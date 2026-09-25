@@ -15,19 +15,25 @@ import { createWorkboardSqliteStores } from "./src/sqlite-store.js";
 import { WorkboardStore } from "./src/store.js";
 import { sqliteTestAuxStores } from "./src/test/sqlite-store.js";
 
-function createDoctorContext(env: NodeJS.ProcessEnv): PluginDoctorStateMigrationContext {
+const workerModuleUrl = new URL("./src/sqlite-store.worker.ts", import.meta.url);
+
+function createDoctorContext(
+  env: NodeJS.ProcessEnv,
+  supportsCount = true,
+): PluginDoctorStateMigrationContext {
   return {
     openPluginStateKeyedStore<T>(options: OpenKeyedStoreOptions) {
-      return createPluginStateKeyedStore<T>("workboard", {
+      const store = createPluginStateKeyedStore<T>("workboard", {
         ...options,
         env: options.env ?? env,
       });
+      return { ...store, count: supportsCount ? store.count : undefined };
     },
   };
 }
 
 describe("workboard doctor contract", () => {
-  it("migrates shipped .28 plugin-state workboard data into sqlite", async () => {
+  it.each([true, false])("migrates .28 data with count support %s", async (supportsCount) => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-doctor-"));
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
     try {
@@ -103,7 +109,7 @@ describe("workboard doctor contract", () => {
           env,
           stateDir,
           oauthDir: path.join(stateDir, "oauth"),
-          context: createDoctorContext(env),
+          context: createDoctorContext(env, supportsCount),
         }),
       ).resolves.toMatchObject({
         preview: [expect.stringContaining("4 legacy .28 plugin-state KV entries")],
@@ -114,7 +120,7 @@ describe("workboard doctor contract", () => {
         env,
         stateDir,
         oauthDir: path.join(stateDir, "oauth"),
-        context: createDoctorContext(env),
+        context: createDoctorContext(env, supportsCount),
       });
 
       expect(result).toMatchObject({
@@ -126,7 +132,7 @@ describe("workboard doctor contract", () => {
       expect(await notifyStore.entries()).toEqual([]);
       expect(await attachmentStore.entries()).toEqual([]);
 
-      const sqlite = createWorkboardSqliteStores({ env });
+      const sqlite = createWorkboardSqliteStores({ env, workerModuleUrl });
       const store = new WorkboardStore(sqlite.cards, {
         boards: sqlite.boards,
         subscriptions: sqlite.subscriptions,
@@ -151,7 +157,7 @@ describe("workboard doctor contract", () => {
       expect(await store.listNotificationSubscriptions({ boardId: "planning" })).toMatchObject({
         subscriptions: [expect.objectContaining({ id: "sub-1" })],
       });
-      sqlite.close();
+      await sqlite.close();
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });
     }
@@ -178,7 +184,7 @@ describe("workboard doctor contract", () => {
         contentBase64: Buffer.from("ok").toString("base64"),
       });
 
-      const sqlite = createWorkboardSqliteStores({ env });
+      const sqlite = createWorkboardSqliteStores({ env, workerModuleUrl });
       await sqlite.cards.register("card-1", {
         version: 1,
         card: {
@@ -203,7 +209,7 @@ describe("workboard doctor contract", () => {
           },
         },
       });
-      sqlite.close();
+      await sqlite.close();
 
       const result = await expectDefined(
         stateMigrations[0],
@@ -222,11 +228,11 @@ describe("workboard doctor contract", () => {
       });
       expect(await attachmentStore.entries()).toEqual([]);
 
-      const reopenedStores = createWorkboardSqliteStores({ env });
+      const reopenedStores = createWorkboardSqliteStores({ env, workerModuleUrl });
       expect(await reopenedStores.attachments.lookup("attachment-1")).toMatchObject({
         contentBase64: Buffer.from("ok").toString("base64"),
       });
-      reopenedStores.close();
+      await reopenedStores.close();
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });
     }
@@ -254,7 +260,7 @@ describe("workboard doctor contract", () => {
         contentBase64: Buffer.from("ok").toString("base64"),
       });
 
-      const sqlite = createWorkboardSqliteStores({ env });
+      const sqlite = createWorkboardSqliteStores({ env, workerModuleUrl });
       await sqlite.cards.register("card-1", {
         version: 1,
         card: {
@@ -279,7 +285,7 @@ describe("workboard doctor contract", () => {
           },
         },
       });
-      sqlite.close();
+      await sqlite.close();
 
       const result = await expectDefined(
         stateMigrations[0],
@@ -300,11 +306,11 @@ describe("workboard doctor contract", () => {
       ]);
       expect((await attachmentStore.entries()).map((entry) => entry.key)).toEqual(["broken"]);
 
-      const reopenedStores = createWorkboardSqliteStores({ env });
+      const reopenedStores = createWorkboardSqliteStores({ env, workerModuleUrl });
       expect(await reopenedStores.attachments.lookup("attachment-1")).toMatchObject({
         contentBase64: Buffer.from("ok").toString("base64"),
       });
-      reopenedStores.close();
+      await reopenedStores.close();
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });
     }
@@ -369,9 +375,9 @@ describe("workboard doctor contract", () => {
       expect(await cardStore.entries()).toEqual([]);
       expect(await attachmentStore.entries()).toHaveLength(1);
 
-      const reopenedStores = createWorkboardSqliteStores({ env });
+      const reopenedStores = createWorkboardSqliteStores({ env, workerModuleUrl });
       expect(await reopenedStores.attachments.lookup("attachment-1")).toBeUndefined();
-      reopenedStores.close();
+      await reopenedStores.close();
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });
     }
@@ -416,7 +422,7 @@ describe("workboard doctor contract", () => {
         contentBase64: Buffer.from("no").toString("base64"),
       });
 
-      const sqlite = createWorkboardSqliteStores({ env });
+      const sqlite = createWorkboardSqliteStores({ env, workerModuleUrl });
       await sqlite.cards.register("card-1", {
         version: 1,
         card: {
@@ -430,7 +436,7 @@ describe("workboard doctor contract", () => {
           updatedAt: 2,
         },
       });
-      sqlite.close();
+      await sqlite.close();
 
       const result = await expectDefined(
         stateMigrations[0],
@@ -451,11 +457,11 @@ describe("workboard doctor contract", () => {
       expect(await cardStore.entries()).toHaveLength(1);
       expect(await attachmentStore.entries()).toHaveLength(1);
 
-      const reopenedStores = createWorkboardSqliteStores({ env });
+      const reopenedStores = createWorkboardSqliteStores({ env, workerModuleUrl });
       const store = new WorkboardStore(reopenedStores.cards, sqliteTestAuxStores(reopenedStores));
       expect(await store.get("card-1")).toMatchObject({ title: "Current card" });
       expect(await reopenedStores.attachments.lookup("attachment-1")).toBeUndefined();
-      reopenedStores.close();
+      await reopenedStores.close();
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });
     }

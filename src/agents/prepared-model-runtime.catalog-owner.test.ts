@@ -1,28 +1,29 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import {
-  cleanupPreparedModelRuntimeHarness,
-  getPreparedModelRuntimeMocks,
   getPreparedModelRuntimeTestApi,
-  resetPreparedModelRuntimeHarness,
+  usePreparedModelRuntimeHarness,
 } from "./prepared-model-runtime.test-harness.js";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import * as agentDatabase from "../state/openclaw-agent-db-readonly.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
 import { resolveAgentDir } from "./agent-scope.js";
+import { modelCatalogRouteVariantKey } from "./model-catalog-entry.js";
+import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
+import { resolveModelCatalogIdentityKey } from "./openai-model-routes.js";
 import { loadPersistedPluginModelCatalogsReadOnly } from "./plugin-model-catalog.js";
 import {
   preparePublishedModelCatalogOwnerIdentity,
   resolvePublishedModelCatalogOwner,
 } from "./prepared-model-catalog-owner.js";
+import { setPreparedModelFullCatalogAuth } from "./prepared-model-runtime-auth.js";
 import * as runtimeBuild from "./prepared-model-runtime.build.js";
 import { startSerializedSnapshotBuildBatch } from "./prepared-model-runtime.build.js";
+import * as runtimeFacts from "./prepared-model-runtime.facts.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   acquireReadOnlyPreparedModelRuntime,
@@ -34,21 +35,14 @@ import {
   refreshPreparedModelRuntimeSnapshots,
   registerPreparedModelRuntimePublicationListener,
 } from "./prepared-model-runtime.js";
+import { resolvePreparedModelRuntimeOwnerBySnapshot } from "./prepared-model-runtime.owner.js";
 
-const mocks = getPreparedModelRuntimeMocks();
-
-let state: OpenClawTestState;
-beforeEach(async () => {
-  state = await createOpenClawTestState({ label: "prepared-model-runtime" });
-  await resetPreparedModelRuntimeHarness(state);
-});
-afterEach(async ({ task }) => {
-  await cleanupPreparedModelRuntimeHarness(state, task.result?.state === "fail");
-});
+const fixture = usePreparedModelRuntimeHarness();
+const { mocks } = fixture;
 
 describe("prepared fixture containment", () => {
   function assertOwnedPath(target: string) {
-    const relative = path.relative(state.root, path.resolve(target));
+    const relative = path.relative(fixture.state.root, path.resolve(target));
     if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
       throw new Error(`PREPARED_FIXTURE_ESCAPE: ${target}`);
     }
@@ -79,7 +73,7 @@ describe("prepared fixture containment", () => {
     expect(mocks.discoverModels).toHaveBeenCalled();
     for (const agentId of ["default", "worker"]) {
       expect(fs.readFileSync).toHaveBeenCalledWith(
-        path.join(state.agentDir(agentId), "models.json"),
+        path.join(fixture.state.agentDir(agentId), "models.json"),
         "utf8",
       );
     }
@@ -89,7 +83,10 @@ describe("prepared fixture containment", () => {
     expect(loadPersistedPluginModelCatalogsReadOnly(resolveAgentDir({}, "default"))).toEqual([]);
     expect(agentDatabase.withOpenClawAgentDatabaseReadOnly).toHaveBeenCalledWith(
       expect.any(Function),
-      { agentId: "default", path: path.join(state.agentDir("default"), "openclaw-agent.sqlite") },
+      {
+        agentId: "default",
+        path: path.join(fixture.state.agentDir("default"), "openclaw-agent.sqlite"),
+      },
     );
   });
 });
@@ -99,7 +96,7 @@ describe("prepared catalog owner lifecycle", () => {
     "retains the current preparation across adopted auth (previous snapshot: %s)",
     async (previousSnapshot) => {
       mocks.configuredAgentIds = ["alpha"];
-      const agentDir = state.agentDir("alpha");
+      const agentDir = fixture.state.agentDir("alpha");
       if (previousSnapshot) {
         mocks.configuredWorkspaces.set("alpha", "/tmp/old-workspace");
         await refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true });
@@ -177,7 +174,7 @@ describe("prepared catalog owner lifecycle", () => {
   );
 
   it("refreshes a newer beta preparation instead of the completed alpha snapshot", async () => {
-    const agentDir = state.agentDir("rebound-catalog-agent");
+    const agentDir = fixture.state.agentDir("rebound-catalog-agent");
     const workspaceDir = "/tmp/rebound-catalog-workspace";
     const input = { agentDir, inheritedAuthDir: agentDir, workspaceDir, config: {} };
     mocks.configuredAgentIds = ["alpha"];
@@ -220,7 +217,11 @@ describe("prepared catalog owner lifecycle", () => {
   });
 
   it("retains known-unbound identity across auth refresh while runtime reads stay usable", async () => {
-    const input = { config: {}, agentDir: state.agentDir("unbound-catalog-agent"), readOnly: true };
+    const input = {
+      config: {},
+      agentDir: fixture.state.agentDir("unbound-catalog-agent"),
+      readOnly: true,
+    };
     mocks.configuredAgentIds = ["alpha"];
     const first = await publishPreparedModelRuntimeSnapshot(input);
     expect(() => resolvePublishedModelCatalogOwner(first)).toThrow(
@@ -247,7 +248,7 @@ describe("prepared build candidate lifetime", () => {
     { provenance: "ephemeral", acquire: acquireReadOnlyPreparedModelRuntime, readOnly: true },
   ])("unpublished $provenance owners", ({ acquire, readOnly }) => {
     it("retires failed lease acquisition and permits a fresh retry", async () => {
-      const input = { config: {}, agentDir: state.agentDir("failed-admission"), readOnly };
+      const input = { config: {}, agentDir: fixture.state.agentDir("failed-admission"), readOnly };
       const failure = new Error("catalog preparation failed");
       mocks.resolveAmbientCredentials.mockImplementationOnce(() => {
         throw failure;
@@ -261,7 +262,7 @@ describe("prepared build candidate lifetime", () => {
       try {
         expect(await prepareModelRuntimeSnapshot(input)).toBe(lease.snapshot);
       } finally {
-        lease.release();
+        await lease[Symbol.asyncDispose]();
       }
       await expect(prepareModelRuntimeSnapshot(input)).rejects.toBeInstanceOf(
         PreparedModelRuntimeOwnerNotPublishedError,
@@ -271,7 +272,11 @@ describe("prepared build candidate lifetime", () => {
     it("retires a timeout while fencing late work ahead of the retry", async () => {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       getPreparedModelRuntimeTestApi().setModelRuntimeBuildTimeoutMsForTest(1);
-      const input = { config: {}, agentDir: state.agentDir("timed-out-admission"), readOnly };
+      const input = {
+        config: {},
+        agentDir: fixture.state.agentDir("timed-out-admission"),
+        readOnly,
+      };
       const started = createDeferred();
       const finish = createDeferred();
       mocks.resolveAmbientCredentials.mockImplementationOnce(async () => {
@@ -304,7 +309,7 @@ describe("prepared build candidate lifetime", () => {
         expect(mocks.discoverModels).toHaveBeenCalledOnce();
       } finally {
         finish.resolve();
-        await Promise.allSettled([first, retry?.then((lease) => lease.release())]);
+        await Promise.allSettled([first, retry?.then((lease) => lease[Symbol.asyncDispose]())]);
         await Promise.all(builds.mock.results.map((result) => result.value.completion));
         builds.mockRestore();
         vi.useRealTimers();
@@ -313,15 +318,24 @@ describe("prepared build candidate lifetime", () => {
   });
 
   it("fails a timed-out publication without overlapping its late build with a retry", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     getPreparedModelRuntimeTestApi().setModelRuntimeBuildTimeoutMsForTest(1);
+    const sourceStarted = createDeferred();
     const source = createDeferred<{ agentDir: string; wrote: false }>();
-    mocks.ensureOpenClawModelsJson.mockImplementationOnce(async () => await source.promise);
-    const input = { config: {}, agentDir: state.agentDir("timeout") };
+    mocks.ensureOpenClawModelsJson.mockImplementationOnce(async () => {
+      sourceStarted.resolve();
+      return await source.promise;
+    });
+    const input = { config: {}, agentDir: fixture.state.agentDir("timeout") };
     const builds = vi.spyOn(runtimeBuild, "startSerializedSnapshotBuildBatch");
+    const publication = publishPreparedModelRuntimeSnapshot(input);
+    const timedOut = expect(publication).rejects.toThrow(
+      "prepared model runtime publication (agent catalog sources) timed out",
+    );
     try {
-      await expect(publishPreparedModelRuntimeSnapshot(input)).rejects.toThrow(
-        "prepared model runtime publication (agent catalog sources) timed out",
-      );
+      await sourceStarted.promise;
+      await vi.advanceTimersByTimeAsync(1);
+      await timedOut;
       await expect(prepareModelRuntimeSnapshot(input)).rejects.toThrow(
         "prepared model runtime publication (agent catalog sources) timed out",
       );
@@ -342,6 +356,7 @@ describe("prepared build candidate lifetime", () => {
       source.resolve({ agentDir: input.agentDir, wrote: false });
       await Promise.all(builds.mock.results.map((result) => result.value.completion));
       builds.mockRestore();
+      vi.useRealTimers();
     }
   });
 
@@ -352,7 +367,7 @@ describe("prepared build candidate lifetime", () => {
       return { agentDir: String(targetDir), wrote: false };
     });
     const config = {};
-    const agentDir = state.agentDir("workspace-replacement");
+    const agentDir = fixture.state.agentDir("workspace-replacement");
     let first: ReturnType<typeof publishPreparedModelRuntimeSnapshot> | undefined;
     let requestDuringFirstGeneration: ReturnType<typeof prepareModelRuntimeSnapshot> | undefined;
     let replacement: ReturnType<typeof publishPreparedModelRuntimeSnapshot> | undefined;
@@ -401,7 +416,7 @@ describe("prepared build candidate lifetime", () => {
   });
 
   it("serializes conflicting standalone activations for one owner", async () => {
-    const agentDir = state.agentDir("concurrent-standalone");
+    const agentDir = fixture.state.agentDir("concurrent-standalone");
     const firstConfig = {};
     const secondConfig = {};
     const finishFirstBuildGate = createDeferred();
@@ -477,10 +492,15 @@ describe("prepared build candidate lifetime", () => {
       callbacks: false,
     },
   ])("preserves $name semantics", async ({ generation, build, allowed, callbacks }) => {
-    const input = { config: {}, agentDir: state.agentDir("candidate-lifetime"), readOnly: true };
+    const input = {
+      config: {},
+      agentDir: fixture.state.agentDir("candidate-lifetime"),
+      readOnly: true,
+    };
     const candidate = {
       input,
       catalogOwner: preparePublishedModelCatalogOwnerIdentity(input),
+      retirementSignal: new AbortController().signal,
       ...(generation === undefined ? {} : { isGenerationCurrent: () => generation }),
       ...(build === undefined ? {} : { isBuildCurrent: () => build }),
     };
@@ -496,7 +516,7 @@ describe("prepared build candidate lifetime", () => {
           await expect(snapshot.loadFullModelCatalog!()).rejects.toThrow("superseded");
         }
       }
-      expect(mocks.prepareStaticCatalog).toHaveBeenCalledOnce();
+      expect(mocks.prepareStaticCatalog).toHaveBeenCalledTimes(allowed ? 1 : 0);
     } finally {
       await started.completion;
     }
@@ -507,15 +527,26 @@ describe("prepared build candidate lifetime", () => {
     async (checkpoint) => {
       const input = {
         config: {},
-        agentDir: state.agentDir("candidate-checkpoint"),
+        agentDir: fixture.state.agentDir("candidate-checkpoint"),
         readOnly: true,
       };
+      let current = checkpoint === "after";
+      const retirement = new AbortController();
+      const prepareWorkspace = runtimeFacts.prepareWorkspaceBuildGroup;
+      const preparation = vi
+        .spyOn(runtimeFacts, "prepareWorkspaceBuildGroup")
+        .mockImplementationOnce(async (...args) => {
+          const prepared = await prepareWorkspace(...args);
+          current = false;
+          retirement.abort();
+          return prepared;
+        });
       const candidate = {
         input,
         catalogOwner: preparePublishedModelCatalogOwnerIdentity(input),
-        isGenerationCurrent: () => false,
-        isBuildCurrent: () => false,
-        ...(checkpoint === "before" ? { isPreparationCurrent: () => false } : {}),
+        isGenerationCurrent: () => current,
+        retirementSignal: retirement.signal,
+        isBuildCurrent: () => current,
       };
       const build = startSerializedSnapshotBuildBatch([candidate], new Map(), 1_000, "static");
       try {
@@ -524,7 +555,154 @@ describe("prepared build candidate lifetime", () => {
         expect(mocks.discoverModels).not.toHaveBeenCalled();
       } finally {
         await build.completion;
+        preparation.mockRestore();
       }
     },
   );
+});
+
+describe("legacy provider catalog retention", () => {
+  const learned = { provider: "custom", id: "learned", name: "Learned" };
+  const starter = { provider: "custom", id: "starter", name: "Starter" };
+
+  it.each([
+    { name: "nonempty legacy inventory", empty: false, expected: [learned] },
+    { name: "empty legacy inventory", empty: true, expected: [starter] },
+    {
+      name: "profile-specific failure",
+      empty: false,
+      profileId: "custom:account",
+      expected: [starter],
+    },
+    { name: "changed credentials", empty: false, changedKey: true, expected: [starter] },
+    { name: "explicit successful empty inventory", empty: true, ready: true, expected: [] },
+    { name: "previous failed acquisition", empty: false, failed: true, expected: [starter] },
+  ])("preserves the shipped retention boundary for $name", async (scenario) => {
+    const previous: ModelCatalogSnapshot = {
+      entries: scenario.empty ? [] : [learned],
+      routeVariants: scenario.empty ? [] : [learned],
+      ...(scenario.ready
+        ? { providerOutcomes: [{ provider: "custom", status: "ready" as const }] }
+        : scenario.failed
+          ? { providerOutcomes: [{ provider: "custom", status: "unavailable" as const }] }
+          : {}),
+    };
+    mocks.runPreparedModelCatalogWorker.mockResolvedValue(previous);
+    mocks.catalogHookRows = new Map([
+      [
+        "custom",
+        new Set(
+          previous.entries.map((entry) =>
+            modelCatalogRouteVariantKey(entry, resolveModelCatalogIdentityKey(entry)),
+          ),
+        ),
+      ],
+    ]);
+    const config: OpenClawConfig = { agents: { entries: { pro: {} } } };
+    const owner = await publishPreparedModelRuntimeSnapshot(fixture.agentInput("pro", config), {
+      catalogMode: "static",
+      provenance: "standalone",
+    });
+    const stored = resolvePreparedModelRuntimeOwnerBySnapshot(owner)!;
+    expect(stored.catalogInventory?.providers.has("custom")).not.toBe(true);
+    await owner.loadFullModelCatalog!({ refresh: true });
+    expect(stored.catalogInventory?.providers.has("custom")).toBe(true);
+    if (!scenario.ready && !scenario.failed) {
+      expect(stored.catalogInventory?.catalog.providerOutcomes ?? []).toEqual([]);
+      expect(stored.catalogInventory?.discoveryOrigins).toEqual([]);
+    }
+
+    const failed: ModelCatalogSnapshot = {
+      entries: [],
+      routeVariants: [],
+      staticEntries: [starter],
+      providerOutcomes: [
+        { provider: "custom", profileId: scenario.profileId, status: "unavailable" },
+      ],
+    };
+    if (scenario.changedKey) {
+      setPreparedModelFullCatalogAuth(failed, {
+        providerAuthLabels: new Map(),
+        authStore: { version: 1, profiles: {} },
+        authModes: { custom: "api_key" },
+        credentials: { custom: { type: "api_key", key: "replacement-key" } },
+      });
+    }
+    mocks.runPreparedModelCatalogWorker.mockResolvedValue(failed);
+    mocks.catalogHookRows = new Map();
+    const result = await owner.loadFullModelCatalog!({ refresh: true });
+    expect(result.entries.map(({ provider, id, name }) => ({ provider, id, name }))).toEqual(
+      scenario.expected,
+    );
+    expect(result.routeVariants.map(({ provider, id, name }) => ({ provider, id, name }))).toEqual(
+      scenario.expected,
+    );
+    expect(result.providerOutcomes).toEqual(failed.providerOutcomes);
+    expect(result.authoritative).toBe(false);
+  });
+
+  it("does not treat native-first configured rows as a completed provider acquisition", async () => {
+    const configured = {
+      id: "configured",
+      name: "Configured",
+      reasoning: false,
+      input: ["text" as const],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 32768,
+      maxTokens: 4096,
+    };
+    const native = { provider: "custom", id: "native", name: "Native", nativeRuntime: "fixture" };
+    mocks.modelRegistry.getAll.mockReturnValue([{ ...configured, provider: "custom" }]);
+    mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(() => {
+      const registry = createEmptyPluginRegistry();
+      registry.agentHarnesses.push({
+        pluginId: "fixture",
+        source: "fixture",
+        harness: {
+          id: "fixture",
+          label: "Fixture",
+          supports: () => ({ supported: true }),
+          runAttempt: vi.fn(),
+          loadModelCatalog: async () => [native],
+        },
+      });
+      return registry;
+    });
+    const config: OpenClawConfig = {
+      agents: { entries: { pro: { model: "custom/configured" } } },
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://catalog.example.invalid/v1",
+            api: "openai-completions",
+            models: [configured],
+          },
+        },
+      },
+    };
+    const owner = await publishPreparedModelRuntimeSnapshot(fixture.agentInput("pro", config), {
+      catalogMode: "static",
+      provenance: "standalone",
+    });
+    await owner.loadNativeModelCatalog!({
+      provider: "custom",
+      modelId: "native",
+      runtime: "fixture",
+    });
+    const stored = resolvePreparedModelRuntimeOwnerBySnapshot(owner)!;
+    expect(mocks.runPreparedModelCatalogWorker).not.toHaveBeenCalled();
+    expect(stored.catalogInventory?.providers.size).toBe(0);
+    expect(stored.catalogInventory?.catalog.entries).toContainEqual(
+      expect.objectContaining({ provider: "custom", id: "configured" }),
+    );
+    mocks.runPreparedModelCatalogWorker.mockResolvedValue({
+      entries: [],
+      routeVariants: [],
+      staticEntries: [starter],
+      providerOutcomes: [{ provider: "custom", status: "unavailable" }],
+    });
+    const result = await owner.loadFullModelCatalog!({ refresh: true });
+    expect(result.entries).toContainEqual(expect.objectContaining(starter));
+    expect(result.authoritative).toBe(false);
+  });
 });

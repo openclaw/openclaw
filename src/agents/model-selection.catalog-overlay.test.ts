@@ -9,7 +9,7 @@ import { prepareModelCatalogThinkingPolicies } from "../plugins/provider-thinkin
 import {
   type ModelCatalogRoutePolicy,
   projectModelCatalogEntryForRoute,
-  resolveConfiguredModelCatalogOverrides,
+  createConfiguredModelCatalogOverridesResolver,
 } from "./model-catalog-route.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { modelTransportRoutesMatch } from "./model-compat-catalog.js";
@@ -245,11 +245,10 @@ describe("configured catalog route overlays", () => {
         entry: selected,
         projection: { kind: "selected", route, policy: routePolicy },
         catalog: catalog.routeVariants,
-        overrides: resolveConfiguredModelCatalogOverrides({
+        overrides: createConfiguredModelCatalogOverridesResolver({
           cfg: source.config,
-          entry: selected,
           policy: routePolicy,
-        }),
+        })(selected),
       });
       const hasMatchingDonor = !clearsCapturedMetadata && !missingRouteField;
       expect(projected).toMatchObject({

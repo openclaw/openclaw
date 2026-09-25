@@ -107,13 +107,15 @@ function createTelegramInboundHandlers(
           id: post.sender_chat.id,
           is_bot: true as const,
           first_name: post.sender_chat.title || "Channel",
-          username: post.sender_chat.username,
+          ...(post.sender_chat.username !== undefined
+            ? { username: post.sender_chat.username }
+            : {}),
         }
       : {
           id: chatId,
           is_bot: true as const,
           first_name: post.chat.title || "Channel",
-          username: post.chat.username,
+          ...(post.chat.username !== undefined ? { username: post.chat.username } : {}),
         };
     return {
       ...post,
@@ -202,7 +204,7 @@ function createTelegramInboundHandlers(
         threadSpec,
       } = gate.context;
 
-      const sessionState = resolveTelegramSessionState({
+      const sessionState = await resolveTelegramSessionState({
         chatId: event.chatId,
         isGroup: event.isGroup,
         threadSpec,
@@ -400,7 +402,6 @@ export function createTelegramInboundPipeline({
   const processing = createTelegramInboundProcessing({ params, message });
   const handlers = createTelegramInboundHandlers(params, message, authorization, processing);
   return {
-    cancelPending: processing.cancelPending,
     handle: async (ctx) => {
       if (ctx.message) {
         return await handlers.handleMessage(ctx);

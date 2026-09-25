@@ -60,18 +60,9 @@ async function selectAccountChoice<T extends { id: string; label: string; hint?:
   return selected;
 }
 
-async function answerAccountStep(
-  step: WizardStep,
-  signal: AbortSignal,
-  runtime: RuntimeEnv,
-): Promise<unknown> {
+async function answerAccountStep(step: WizardStep, signal: AbortSignal): Promise<unknown> {
   const prompter = createClackPrompter(process.stderr, signal);
   signal.throwIfAborted();
-  if (step.externalUrl) {
-    runtime.error(`Open this URL to continue:\n${sanitizeTerminalText(step.externalUrl)}`);
-    await openUrl(step.externalUrl);
-    signal.throwIfAborted();
-  }
   const message = sanitizeTerminalText(step.message ?? step.title ?? "Continue");
   const options =
     step.options?.map((option) => ({
@@ -150,6 +141,7 @@ async function connectAccount(
       }
     | undefined;
   let displayedProgress: string | undefined;
+  let openedExternalUrl: string | undefined;
   const retirePrompt = async () => {
     active?.controller.abort();
     await active?.answer;
@@ -167,6 +159,13 @@ async function connectAccount(
       if (active?.id !== step?.id) {
         await retirePrompt();
       }
+      signal.throwIfAborted();
+      if (step?.externalUrl && step.externalUrl !== openedExternalUrl) {
+        runtime.error(`Open this URL to continue:\n${sanitizeTerminalText(step.externalUrl)}`);
+        await openUrl(step.externalUrl);
+        signal.throwIfAborted();
+        openedExternalUrl = step.externalUrl;
+      }
       if (step?.type === "progress" || (step?.type === "action" && step.executor !== "client")) {
         if (displayedProgress !== step.id) {
           runtime.error(sanitizeTerminalText(step.message ?? step.title ?? "Working…"));
@@ -177,11 +176,7 @@ async function connectAccount(
         active = {
           id: step.id,
           controller,
-          answer: answerAccountStep(
-            step,
-            AbortSignal.any([signal, controller.signal]),
-            runtime,
-          ).then(
+          answer: answerAccountStep(step, AbortSignal.any([signal, controller.signal])).then(
             (value) => ({ value }),
             (error: unknown) => ({ error }),
           ),

@@ -128,7 +128,9 @@ export function normalizeCompatibilityConfigValues(
   const changes: string[] = [];
   const copilotConfig = removeLegacyCopilotDiscovery(cfg);
   if (copilotConfig !== cfg) {
-    changes.push("Removed retired GitHub Copilot discovery setting.");
+    changes.push(
+      "The GitHub Copilot discovery switch was retired and has been removed. Configured Copilot access now refreshes its model list automatically. Use the model allow list (agents.defaults.modelPolicy.allow) to hide Copilot models; it does not stop discovery requests.",
+    );
   }
   let contextBudgetConfig = copilotConfig;
   let contextBudgetWarnings: string[];
@@ -163,11 +165,11 @@ export function normalizeCompatibilityConfigValues(
     options.blockedModelIdentities,
   );
   const tuningCandidate = structuredClone(next);
-  if (stripRetiredTuningKnobs(tuningCandidate)) {
+  if (stripRetiredTuningKnobs(tuningCandidate, changes)) {
     next = tuningCandidate;
-    changes.push("Removed retired runtime tuning knobs; built-in defaults now apply.");
   }
   const channelMigrations = applyChannelDoctorCompatibilityMigrations(next);
+  contextBudgetWarnings.push(...(channelMigrations.warnings ?? []));
   if (channelMigrations.changes.length > 0) {
     next = channelMigrations.next;
     changes.push(...channelMigrations.changes);

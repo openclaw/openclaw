@@ -1,4 +1,6 @@
 // Shared heartbeat runner fixtures for infra tests.
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { vi } from "vitest";
 import { heartbeatRunnerTelegramPlugin } from "../../test/helpers/infra/heartbeat-runner-channel-plugins.js";
@@ -13,13 +15,21 @@ import {
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { writeCronJobScratch } from "../cron/scratch-store.js";
-import { CronService } from "../cron/service.js";
-import { resolveCronJobsStorePath } from "../cron/store.js";
+import { createJob } from "../cron/service/jobs.js";
+import { createCronServiceState } from "../cron/service/state.js";
+import {
+  loadCronJobsStoreSync,
+  resolveCronJobsStorePath,
+  saveCronJobsStoreWithRevisionNative,
+} from "../cron/store.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { withTempDir } from "../test-utils/temp-dir.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { HeartbeatDeps } from "./heartbeat-runner.js";
@@ -75,19 +85,22 @@ export async function seedHeartbeatScratchForTest(params: {
 }): Promise<string> {
   const agentId = params.agentId ?? "main";
   const storePath = params.storePath ?? resolveCronJobsStorePath();
-  const noop = () => {};
-  const cron = new CronService({
-    storePath,
-    cronEnabled: false,
-    defaultAgentId: "main",
-    log: { debug: noop, info: noop, warn: noop, error: noop },
-    enqueueSystemEvent: () => false,
-    requestHeartbeat: noop,
-    runIsolatedAgentJob: async () => ({ status: "skipped", error: "test" }),
-  });
-  const result = await cron.add(
-    {
-      declarationKey: `heartbeat:${agentId}`,
+  const store = loadCronJobsStoreSync(storePath);
+  const declarationKey = `heartbeat:${agentId}`;
+  let job = store.jobs.find((entry) => entry.declarationKey === declarationKey);
+  if (!job) {
+    const noop = () => {};
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: false,
+      defaultAgentId: "main",
+      log: { debug: noop, info: noop, warn: noop, error: noop },
+      enqueueSystemEvent: () => false,
+      requestHeartbeat: noop,
+      runIsolatedAgentJob: async () => ({ status: "skipped", error: "test" }),
+    });
+    job = createJob(state, {
+      declarationKey,
       displayName: `Heartbeat (${agentId})`,
       name: `heartbeat-${agentId}`,
       agentId,
@@ -96,10 +109,10 @@ export async function seedHeartbeatScratchForTest(params: {
       payload: { kind: "heartbeat" },
       sessionTarget: "main",
       wakeMode: "next-heartbeat",
-    },
-    { enabledExplicit: true, systemOwned: true },
-  );
-  const job = "job" in result ? result.job : result;
+    });
+    // Fixture preparation needs persisted rows, not a cold scheduler worker per case.
+    saveCronJobsStoreWithRevisionNative(storePath, { ...store, jobs: [...store.jobs, job] });
+  }
   writeCronJobScratch({ storePath, jobId: job.id, content: params.content });
   return job.id;
 }
@@ -165,25 +178,28 @@ export async function withTempHeartbeatSandbox<T>(
     unsetEnvVars?: string[];
   },
 ): Promise<T> {
-  return withTempDir(options?.prefix ?? "openclaw-hb-", async (tmpDir) => {
-    const storePath = path.join(tmpDir, "sessions.json");
-    const replySpy = createHeartbeatReplySpy();
-    const envNames = new Set(["OPENCLAW_STATE_DIR", ...(options?.unsetEnvVars ?? [])]);
-    const env = Object.fromEntries(
-      [...envNames].map((envName) => [
-        envName,
-        envName === "OPENCLAW_STATE_DIR" ? path.join(tmpDir, "state") : "",
-      ]),
-    );
-    return withEnvAsync(env, async () => {
-      try {
-        await seedHeartbeatScratchForTest({ content: "- Check status\n" });
-        return await fn({ tmpDir, storePath, replySpy });
-      } finally {
-        replySpy.mockReset();
-        closeOpenClawStateDatabaseForTest();
-      }
-    });
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), options?.prefix ?? "openclaw-hb-"));
+  const storePath = path.join(tmpDir, "sessions.json");
+  const replySpy = createHeartbeatReplySpy();
+  const envNames = new Set(["OPENCLAW_STATE_DIR", ...(options?.unsetEnvVars ?? [])]);
+  const env = Object.fromEntries(
+    [...envNames].map((envName) => [
+      envName,
+      envName === "OPENCLAW_STATE_DIR" ? path.join(tmpDir, "state") : "",
+    ]),
+  );
+  return withEnvAsync(env, async () => {
+    try {
+      await seedHeartbeatScratchForTest({ content: "- Check status\n" });
+      return await fn({ tmpDir, storePath, replySpy });
+    } finally {
+      await closeOpenClawAgentDatabasesAsync(tmpDir);
+      replySpy.mockReset();
+      await closeOpenClawStateDatabaseAsync();
+      closeOpenClawStateDatabaseForTest();
+      // A failed drain retains the sandbox for its still-owned resources.
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
   });
 }
 
@@ -233,3 +249,22 @@ export const getFirstReplyContext = (replySpy: ReturnType<typeof vi.fn>): Heartb
   }
   return ctx as HeartbeatReplyContext;
 };
+
+/** Create the five-minute, wildcard-channel fixture shared by heartbeat tests. */
+export function heartbeatTestConfig(
+  workspace: string,
+  target: "whatsapp" | "telegram" | "last" | "none",
+  channel: "whatsapp" | "telegram",
+  storePath: string,
+): OpenClawConfig {
+  return {
+    agents: {
+      defaults: {
+        workspace,
+        heartbeat: { every: "5m", target },
+      },
+    },
+    channels: { [channel]: { allowFrom: ["*"] } },
+    session: { store: storePath },
+  };
+}

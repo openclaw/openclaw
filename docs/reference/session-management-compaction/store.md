@@ -9,7 +9,36 @@ title: "Session state on disk"
 ## Two persistence layers
 
 1. **Session rows (per-agent SQLite)** - key/value map `sessionKey -> SessionEntry`. Mutable runtime state owned by the Gateway. Tracks metadata: current session id, last activity, toggles, token counters.
-2. **Transcript events (per-agent SQLite)** - append-only, tree-structured (entries have `id` + `parentId`). Stores the conversation, tool calls, and compaction summaries; rebuilds model context for future turns. Compaction checkpoints are metadata over the compacted successor transcript - a new compaction does not write a second `.checkpoint.*.jsonl` copy.
+2. **Transcript events (per-agent SQLite)** - append-only, tree-structured (entries have `id` + `parentId`). Stores the conversation, tool calls, and compaction summaries; rebuilds model context for future turns. Compaction summaries and available token measurements remain in the transcript without a separate checkpoint record or snapshot copy.
+
+Guarded transcript turns retain the selected stored key and session window. A
+qualified identity such as `agent:main:global` can append to its existing raw
+`global` row without renaming it or creating another row. If both spellings
+already exist, the write refuses the ambiguous selection; exact reads keep the
+two stored addresses separate. This also applies to retained history windows.
+
+New chat turns use a qualified admission identity while retaining the selected
+stored key and database. If a raw `global` or `unknown` row and its qualified
+spelling would share that identity, chat execution refuses the ambiguous
+selection, including when the raw row has not been created yet. Choose an
+unambiguous session; the existing rows and history are not merged or renamed.
+Completed-send retries still return their recorded result. Read-only history and
+stored parent, spawn, and fork references keep their physical addresses.
+Input persistence and queued-input cleanup stay bound to the admitted database;
+replacing its path cannot transfer the run to a copied database.
+
+During guarded transcript reads and writes, fully qualified keys such as
+`agent:<agentId>:main` remain literal identities even when historical main-alias
+metadata names another suffix. A queued turn rechecks its selected session and
+lifecycle before restoring cold history and before appending, so a replaced
+selection cannot restore or write the successor's history. These checks do not
+rekey session rows or change database schemas.
+
+Doctor preserves these qualified stored addresses and their parent, spawn, and
+fork references when the configured main alias changes. It still repairs raw
+aliases, delivery-proven legacy keys, and old default-agent main keys stored
+under a replacement agent after the default agent was removed. Request aliases
+continue to follow the current configuration.
 
 Older installs may still have `sessions.json` files under the agent `sessions/`
 directory. Treat those files as legacy session-row migration inputs or explicit
@@ -24,7 +53,9 @@ Recovery uses migration manifests, restores only the affected archived support
 artifacts, prepares a sanitized GitHub issue report when requested, and does not
 make active runtime read JSONL files again.
 
-Gateway history readers avoid materializing the whole transcript unless the surface needs arbitrary historical access. First-page history, embedded chat history, restart recovery, and token/usage checks use bounded tail reads from SQLite. Full transcript scans go through the async transcript index and are shared across concurrent readers.
+Gateway history readers avoid materializing the whole transcript unless the surface needs arbitrary historical access. First-page history, embedded chat history, restart recovery, and token/usage checks use bounded tail reads from SQLite.
+
+Disk-backed history pages run their SQLite reads and display preparation in a dedicated session-transcript worker. Equivalent requests can share a queued read until worker execution starts; completed pages are not cached. The Gateway applies current profile display and rechecks session identity and access before publishing. Cold restoration and projection rebuilds remain with the existing Gateway storage owner. Incognito history stays in the Gateway process, and bound external CLI imports retain their local import owner. The HTTP history endpoint still returns the complete history when no limit is supplied.
 
 ## On-disk locations
 

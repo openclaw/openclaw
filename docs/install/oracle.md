@@ -181,13 +181,17 @@ OpenClaw state lives under:
 - `~/.openclaw/` -- `openclaw.json`, shared and per-agent SQLite auth stores, channel/provider state, and session data.
 - `~/.openclaw/workspace/` -- the agent workspace (SOUL.md, memory, artifacts).
 
-These survive reboots. To take a portable snapshot:
+These survive reboots. To create a backup archive:
 
 ```bash
 openclaw backup create
 openclaw backup restore <archive.tar.gz> --target <fresh-directory>
 ```
 
+Absolute symbolic links keep their original target locations, including links
+to separately backed-up config or credentials. Review these links before
+activating state on another host or at another path; see the
+[backup symbolic-link caveat](/cli/backup#what-gets-backed-up).
 Restore verifies and extracts into a fresh staging directory; activation is a
 separate offline step. See [Restore a full archive](/install/backups#restore-a-full-archive)
 for the rollback warnings and activation sequence.

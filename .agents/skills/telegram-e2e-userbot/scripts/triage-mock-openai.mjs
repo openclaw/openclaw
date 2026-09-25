@@ -66,6 +66,59 @@ function writeIncompleteToolUse(response) {
   ]);
 }
 
+async function writePreviewToolBoundary(response, body) {
+  const toolResults = (body.messages ?? []).filter((message) => message.role === "tool").length;
+  if (scenario === "preview-tool-error" && toolResults > 0) {
+    writeJson(response, 400, {
+      error: { type: "invalid_request_error", message: "PREVIEW_PROVIDER_FAILURE_25592" },
+    });
+    return;
+  }
+  if (body.stream !== true || !body.tools?.some((tool) => tool.function?.name === "exec")) {
+    writeJson(response, 400, { error: { message: "Preview fixture requires streaming and exec" } });
+    return;
+  }
+  response.writeHead(200, {
+    "content-type": "text/event-stream",
+    "cache-control": "no-store",
+    connection: "keep-alive",
+  });
+  const writeChunk = (delta, finishReason = null) =>
+    response.write(
+      `data: ${JSON.stringify({
+        id: `chatcmpl_preview_${toolResults}`,
+        object: "chat.completion.chunk",
+        choices: [{ index: 0, delta, finish_reason: finishReason }],
+      })}\n\n`,
+    );
+  writeChunk({ role: "assistant" });
+  if (toolResults === 0) {
+    writeChunk({ content: "PREVIEW_PREAMBLE_25592: I will inspect the workspace." });
+    // Let the unphased preview become visible before the provider reveals a tool call.
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+  }
+  if (toolResults < 2) {
+    writeChunk({
+      tool_calls: [
+        {
+          index: 0,
+          id: `call_preview_${toolResults}`,
+          type: "function",
+          function: {
+            name: "exec",
+            arguments: JSON.stringify({ command: `printf preview-step-${toolResults}` }),
+          },
+        },
+      ],
+    });
+    writeChunk({}, "tool_calls");
+  } else {
+    writeChunk({ content: "PREVIEW_FINAL_25592" });
+    writeChunk({}, "stop");
+  }
+  response.end("data: [DONE]\n\n");
+}
+
 async function writeStreamingThrottle(response) {
   const itemId = "msg_streaming_throttle_107179";
   const finalText = "STREAM_FINAL_107179";
@@ -333,6 +386,14 @@ const server = http.createServer((request, response) => {
     if (requestLog) fs.appendFileSync(requestLog, `${bodyText}\n`);
     const body = bodyText ? JSON.parse(bodyText) : {};
     if (
+      (scenario === "preview-tool-boundaries" || scenario === "preview-tool-error") &&
+      request.method === "POST" &&
+      url.pathname === "/v1/chat/completions"
+    ) {
+      await writePreviewToolBoundary(response, body);
+      return;
+    }
+    if (
       scenario === "interleaved-monologue" &&
       request.method === "POST" &&
       url.pathname === "/v1/chat/completions"
@@ -492,4 +553,6 @@ const server = http.createServer((request, response) => {
   });
 });
 
-server.listen(port, "127.0.0.1", () => console.log(`mock-openai listening on ${port}`));
+server.listen(port, "127.0.0.1", () => {
+  console.log(`mock-openai listening on ${server.address().port}`);
+});

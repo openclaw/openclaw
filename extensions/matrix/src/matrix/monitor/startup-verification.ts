@@ -1,9 +1,8 @@
-// Matrix plugin module implements startup verification behavior.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { tryReadJson } from "@openclaw/fs-safe/json";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { readJsonFileWithFallback } from "openclaw/plugin-sdk/json-store";
 import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { MatrixConfig } from "../../types.js";
@@ -55,12 +54,12 @@ function normalizeCooldownHours(value: number | undefined): number {
   return Math.max(0, value);
 }
 
-function resolveStartupVerificationStatePath(params: {
+async function resolveStartupVerificationStatePath(params: {
   auth: MatrixAuth;
   env?: NodeJS.ProcessEnv;
   stateDir?: string;
-}): string {
-  const storagePaths = resolveMatrixStoragePaths({
+}): Promise<string> {
+  const storagePaths = await resolveMatrixStoragePaths({
     homeserver: params.auth.homeserver,
     userId: params.auth.userId,
     accessToken: params.auth.accessToken,
@@ -99,7 +98,7 @@ function buildStartupVerificationImportKey(params: {
   auth: MatrixAuth;
   legacyFilePath: string;
 }): string {
-  const accountId = params.auth.accountId.trim() || "default";
+  const accountId = buildStartupVerificationKey(params.auth);
   const digest = createHash("sha256")
     .update(accountId)
     .update("\0")
@@ -111,10 +110,7 @@ function buildStartupVerificationImportKey(params: {
 async function readLegacyStartupVerificationState(
   filePath: string,
 ): Promise<MatrixStartupVerificationState | null> {
-  const { value } = await readJsonFileWithFallback<MatrixStartupVerificationState | null>(
-    filePath,
-    null,
-  );
+  const value = await tryReadJson<MatrixStartupVerificationState>(filePath);
   return value && typeof value === "object" ? value : null;
 }
 
@@ -144,7 +140,7 @@ async function readStartupVerificationState(params: {
       .register(key, legacy)
       .then(async () => {
         if (typeof legacy.deviceId === "string" && legacy.deviceId.trim()) {
-          recordCurrentStorageMetaDeviceId({
+          await recordCurrentStorageMetaDeviceId({
             rootDir: path.dirname(params.legacyFilePath),
             deviceId: legacy.deviceId,
           });
@@ -178,7 +174,7 @@ async function writeStartupVerificationState(params: {
     )
     .catch(() => {});
   if (typeof params.state.deviceId === "string" && params.state.deviceId.trim()) {
-    recordCurrentStorageMetaDeviceId({
+    await recordCurrentStorageMetaDeviceId({
       rootDir: path.dirname(params.legacyFilePath),
       deviceId: params.state.deviceId,
     });
@@ -298,11 +294,11 @@ export async function ensureMatrixStartupVerification(params: {
   const verification = await params.client.getOwnDeviceVerificationStatus();
   const statePath =
     params.stateFilePath ??
-    resolveStartupVerificationStatePath({
+    (await resolveStartupVerificationStatePath({
       auth: params.auth,
       env: params.env,
       stateDir: params.stateDir,
-    });
+    }));
   const stateDir = params.stateDir ?? path.dirname(statePath);
 
   if (verification.verified) {

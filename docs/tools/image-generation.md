@@ -18,6 +18,10 @@ fails, the agent returns a concise visible failure instead. If the requester
 session is inactive or its active wake fails, OpenClaw sends an idempotent
 direct fallback with the generated images so the result is not lost.
 
+In WebChat and the macOS app, generated attachments stay on the completion
+reply instead of appearing again in a separate image-only message. Replaying
+a completed delivery keeps the same message and attachment identities.
+
 <Note>
 The tool only appears when at least one image-generation provider is
 available. If you do not see `image_generate` in your agent's tools,
@@ -245,6 +249,8 @@ For `image_generate`, OpenClaw tries providers in this order:
 If a provider fails (auth error, rate limit, etc.), the next configured
 candidate is tried automatically. If all fail, the error includes details
 from each attempt.
+For reference-image requests, candidates that cannot edit images or accept
+the supplied reference count are skipped.
 
 <AccordionGroup>
   <Accordion title="Per-call model overrides are exact">

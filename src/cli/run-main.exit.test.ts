@@ -9,7 +9,6 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import type { ConfigSnapshotReadOptions } from "../config/io.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
-import { flushDiagnosticsTimeline } from "../infra/diagnostics-timeline.js";
 import { createNewerSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
 import { setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
@@ -22,6 +21,7 @@ import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import { ExpectedCliError } from "./failure-output.js";
 import { getGatewayRunRuntimeHooks } from "./gateway-cli/runtime-hooks.js";
 import type { RootHelpRenderOptions } from "./program/root-help.js";
+import { registerRunMainTimelineTests } from "./run-main.timeline.test-support.js";
 import { getPendingCliDisposers } from "./runtime-cleanup.js";
 import { registerSignalExitBarrier, waitForSignalExitBarriers } from "./signal-exit-barrier.js";
 
@@ -31,7 +31,7 @@ const PREFIXED_TLS_FINGERPRINT = `sha256:${TLS_FINGERPRINT.toUpperCase()}`;
 type RunMainModule = typeof import("./run-main.js");
 
 let runCli: RunMainModule["runCli"];
-let shouldStartProxyForCli: RunMainModule["shouldStartProxyForCli"];
+let shouldStartProxyForCli: typeof import("./run-main-policy.js").shouldStartProxyForCli;
 
 type ConfigSnapshotStub = {
   exists: boolean;
@@ -58,6 +58,7 @@ const pinConfigDirMock = vi.hoisted(() => vi.fn());
 const pinRuntimePathsMock = vi.hoisted(() => vi.fn());
 const ensurePathMock = vi.hoisted(() => vi.fn());
 const assertRuntimeMock = vi.hoisted(() => vi.fn(async () => {}));
+const isCurrentRuntimeSupportedMock = vi.hoisted(() => vi.fn(async () => true));
 const closeActiveMemorySearchManagersMock = vi.hoisted(() => vi.fn(async () => {}));
 const hasMemoryRuntimeMock = vi.hoisted(() => vi.fn(() => false));
 const listRegisteredAgentHarnessesMock = vi.hoisted(() => vi.fn((): unknown[] => []));
@@ -253,8 +254,8 @@ vi.mock("./banner.js", () => ({
   emitCliBanner: emitCliBannerMock,
 }));
 
-vi.mock("../logging.js", async () => ({
-  ...(await vi.importActual<typeof import("../logging.js")>("../logging.js")),
+vi.mock("../logging/console.js", async () => ({
+  ...(await vi.importActual<typeof import("../logging/console.js")>("../logging/console.js")),
   enableConsoleCapture: enableConsoleCaptureMock,
 }));
 
@@ -322,6 +323,7 @@ vi.mock("../infra/path-env.js", () => ({
 vi.mock("../infra/runtime-guard.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/runtime-guard.js")>()),
   assertSupportedRuntime: assertRuntimeMock,
+  isCurrentRuntimeSupported: isCurrentRuntimeSupportedMock,
 }));
 
 vi.mock("../plugins/memory-runtime.js", () => ({
@@ -397,7 +399,7 @@ vi.mock("./program/program-context.js", () => ({
   getProgramContext: getProgramContextMock,
 }));
 
-vi.mock("./program/command-registry.js", () => ({
+vi.mock("./program/command-registry-core.js", () => ({
   registerCoreCliByName: registerCoreCliByNameMock,
 }));
 
@@ -562,7 +564,7 @@ describe("runCli exit behavior", () => {
     const runMainModule = await import("./run-main.js");
     expect(dotenvModuleImportState.count).toBe(0);
     runCli = runMainModule.runCli;
-    shouldStartProxyForCli = runMainModule.shouldStartProxyForCli;
+    ({ shouldStartProxyForCli } = await import("./run-main-policy.js"));
   });
 
   afterAll(() => {
@@ -2373,40 +2375,35 @@ describe("runCli exit behavior", () => {
     expect(shouldStartProxyForCli(argv)).toBe(false);
   });
 
-  it("starts the managed proxy for network-capable commands by default", async () => {
-    tryRouteCliMock.mockResolvedValueOnce(true);
-
-    await runCli(["node", "openclaw", "plugins", "marketplace", "list"]);
-
-    expect(startProxyMock).toHaveBeenCalledWith(undefined);
-  });
-
-  it.each([
-    ["worker", { observe: false, pluginValidation: "core-only" }],
-    ["run", { observe: false, skipPluginValidation: true }],
-  ])(
-    "preserves node %s config ownership when startup tracing is enabled",
-    async (subcommand, readOptions) => {
-      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-node-timeline-"));
-      const timelinePath = path.join(root, "timeline.jsonl");
+  it.each([true, false])(
+    "selects proxy config after async runtime support resolves to %s",
+    async (supported) => {
       tryRouteCliMock.mockResolvedValueOnce(true);
-      loadConfigMock.mockResolvedValueOnce({ diagnostics: { flags: ["timeline"] } });
-      try {
-        await withEnvAsync(
-          { OPENCLAW_DIAGNOSTICS: "", OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: timelinePath },
-          async () => {
-            await runCli(["node", "openclaw", "node", subcommand]);
-          },
-        );
-        expect(loadConfigMock).toHaveBeenCalledWith(readOptions);
-        flushDiagnosticsTimeline();
-        expect(await fs.readFile(timelinePath, "utf8")).toContain("cli.main.argv");
-      } finally {
-        flushDiagnosticsTimeline();
-        await fs.rm(root, { recursive: true, force: true });
+      isCurrentRuntimeSupportedMock.mockResolvedValueOnce(supported);
+      if (supported) {
+        loadConfigMock.mockReturnValueOnce({ proxy: { proxyUrl: "http://validated.invalid" } });
+      } else {
+        readSourceConfigBestEffortMock.mockResolvedValueOnce({
+          proxy: { proxyUrl: "http://source.invalid" },
+        });
       }
+
+      await runCli(["node", "openclaw", "plugins", "marketplace", "list"]);
+
+      expect(readSourceConfigBestEffortMock).toHaveBeenCalledTimes(supported ? 0 : 1);
+      expect(loadConfigMock).toHaveBeenCalledTimes(supported ? 1 : 0);
+      expect(startProxyMock).toHaveBeenCalledWith({
+        proxyUrl: supported ? "http://validated.invalid" : "http://source.invalid",
+      });
     },
   );
+
+  registerRunMainTimelineTests({
+    runCli: (argv) => runCli(argv),
+    loadConfigMock,
+    readSourceConfigBestEffortMock,
+    tryRouteCliMock,
+  });
 
   it.each([
     ["root command", ["node", "openclaw", "update", "--dry-run", "--json"]],
@@ -2432,15 +2429,22 @@ describe("runCli exit behavior", () => {
     expect(startProxyMock).toHaveBeenCalledWith(undefined);
   });
 
-  it("reads source-only proxy config before doctor lint owns plugin-aware validation", async () => {
+  it.each([
+    ["lint", ["--lint", "--json"]],
+    ["repair", ["--fix", "--non-interactive"]],
+    ["diagnosis", []],
+  ])("reads source-only proxy config before Doctor %s owns state access", async (_mode, args) => {
     tryRouteCliMock.mockResolvedValueOnce(true);
-    readSourceConfigBestEffortMock.mockResolvedValueOnce({ proxy: { selected: "doctor-lint" } });
+    readSourceConfigBestEffortMock.mockResolvedValueOnce({ proxy: { selected: "doctor" } });
+    loadConfigMock.mockImplementation(() => {
+      throw new Error("Shared state requires Doctor repair");
+    });
 
-    await runCli(["node", "openclaw", "doctor", "--lint", "--json"]);
+    await runCli(["node", "openclaw", "doctor", ...args]);
 
     expect(readSourceConfigBestEffortMock).toHaveBeenCalledOnce();
     expect(loadConfigMock).not.toHaveBeenCalled();
-    expect(startProxyMock).toHaveBeenCalledWith({ selected: "doctor-lint" });
+    expect(startProxyMock).toHaveBeenCalledWith({ selected: "doctor" });
   });
 
   it.each([
@@ -2583,7 +2587,7 @@ describe("runCli exit behavior", () => {
       "full Commander path with root options",
       ["node", "openclaw", "--log-level", "debug", "gateway", "run"],
     ],
-  ])("loads trusted dotenv and isolates %s gateway proxy config reads", async (_name, argv) => {
+  ])("isolates %s gateway proxy config reads core-only", async (_name, argv) => {
     existsSyncOverride.value = (target) => target === path.join(process.cwd(), ".env");
     if (_name === "full Commander path with root options") {
       tryRouteCliMock.mockResolvedValueOnce(false);
@@ -2602,7 +2606,7 @@ describe("runCli exit behavior", () => {
     expect(loadConfigMock).toHaveBeenCalledWith({
       isolateEnv: true,
       observe: false,
-      skipPluginValidation: true,
+      pluginValidation: "core-only",
     });
     expect(startProxyMock).toHaveBeenCalledWith(undefined);
   });

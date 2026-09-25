@@ -3,6 +3,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
@@ -85,7 +86,7 @@ describe("goal tools", () => {
     expect(getSessionEntry({ storePath, sessionKey: "global" })?.goal?.status).toBe("active");
   });
 
-  it("uses the resolved session agent for global session stores", async () => {
+  it.each([undefined, null, 100])("creates a scoped goal with token_budget=%s", async (budget) => {
     const { config, template } = await createStoreConfig();
     const tool = createCreateGoalTool({
       agentSessionKey: "global",
@@ -100,12 +101,20 @@ describe("goal tools", () => {
       sessionKey: "global",
       entry: { sessionId: "sess-global", updatedAt: 1 },
     });
-    await tool.execute("call-1", { objective: "ship global work" });
+    const args = {
+      objective: "ship global work",
+      ...(budget !== undefined ? { token_budget: budget } : {}),
+    };
+    expect(Value.Check(tool.parameters, args)).toBe(true);
+    await tool.execute("call-1", args);
 
     const mainStorePath = resolveSessionStorePathCore(template, { agentId: "main" });
     expect(
       getSessionEntry({ storePath: researchStorePath, sessionKey: "global" })?.goal?.objective,
     ).toBe("ship global work");
+    expect(
+      getSessionEntry({ storePath: researchStorePath, sessionKey: "global" })?.goal?.tokenBudget,
+    ).toBe(budget ?? undefined);
     expect(
       getSessionEntry({ storePath: mainStorePath, sessionKey: "global" })?.goal,
     ).toBeUndefined();

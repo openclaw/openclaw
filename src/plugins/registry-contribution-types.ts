@@ -244,12 +244,24 @@ export type MemoryPluginRuntime = {
     sandboxed: boolean;
     hits: MemorySearchResult[];
   }): Promise<MemorySearchResult[]>;
+  /** The classifier consumes pinned read sources without probing Gateway-local paths. */
+  supportsWorkspaceMemoryReadSources?: true;
   classifyWorkspaceMemoryPaths?(params: {
     cfg: OpenClawConfig;
     agentId: string;
     workspaceDir: string;
     relativePaths: string[];
+    /** Already-read remote files; an absent canonical path must remain untrusted. */
+    readSources?: readonly { relativePath: string; canonicalRelativePath?: string }[];
   }): Promise<Array<{ relativePath: string; originClass: MemoryOriginClass }>>;
+  /** Fence and drain managers consuming these exact retiring capability objects. */
+  prepareReload?(change: {
+    retireRuntime: boolean;
+    retiringEmbeddingProviders: readonly MemoryEmbeddingProviderAdapter[];
+  }): {
+    drain(): Promise<void | { errors: readonly unknown[] }>;
+    resume(): void;
+  };
   closeMemorySearchManager?(params: { cfg: OpenClawConfig; agentId: string }): Promise<void>;
   closeAllMemorySearchManagers?(): Promise<void>;
 };

@@ -5,7 +5,7 @@ import {
 } from "../agents/command/model-ref.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { withPluginRuntimePluginIdScope } from "../plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimePluginScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
   createGatewaySubagentRuntime,
@@ -86,7 +86,7 @@ function run(override: { provider?: string; model?: string }) {
     () => context,
     resolvePluginSubagentOverridePolicies(config),
   );
-  return withPluginRuntimePluginIdScope("override-fixture", () =>
+  return withPluginRuntimePluginScope({ pluginId: "override-fixture" }, () =>
     runtime.run({
       sessionKey: "agent:worker:subagent:override",
       message: "Use the selected model",
@@ -104,6 +104,16 @@ describe("plugin subagent initial override policy", () => {
         provider: "fixture",
         model: "literal",
       });
+      await expect(run(override)).rejects.toThrow(/not allowlisted/u);
+      expect(dispatch).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([{ provider: "fixture", model: "literal" }, { model: "fixture/literal" }])(
+    "preserves an explicit API owner without configured model rows for %j",
+    async (override) => {
+      config.models!.providers!.fixture!.api = "openai-completions";
+      config.models!.providers!.fixture!.models = [];
       await expect(run(override)).rejects.toThrow(/not allowlisted/u);
       expect(dispatch).not.toHaveBeenCalled();
     },

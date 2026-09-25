@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   formatCliImageTurnContext,
   hashCliImageTurnEntryId,
@@ -21,6 +22,7 @@ import {
   resolveChatHistoryWithCliSessionImports,
 } from "./cli-session-history.js";
 import { mergeImportedChatHistoryMessages } from "./cli-session-history.merge.js";
+import { createClaudeHistoryLines } from "./cli-session-history.test-support.js";
 import { expectRecordFields, requireGatewayRecord } from "./test-helpers.assertions.js";
 
 type ClaudeCliFallbackSeed = NonNullable<ReturnType<typeof readClaudeCliFallbackSeed>>;
@@ -88,84 +90,6 @@ function buildLegacyReseedPrompt(current = "current"): string {
     "<next_user_message>",
     current,
     "</next_user_message>",
-  ].join("\n");
-}
-
-function createClaudeHistoryLines(sessionId: string) {
-  return [
-    JSON.stringify({
-      type: "queue-operation",
-      operation: "enqueue",
-      timestamp: "2026-03-26T16:29:54.722Z",
-      sessionId,
-      content: "[Thu 2026-03-26 16:29 GMT] Reply with exactly: AGENT CLI OK.",
-    }),
-    JSON.stringify({
-      type: "user",
-      uuid: "user-1",
-      timestamp: "2026-03-26T16:29:54.800Z",
-      message: {
-        role: "user",
-        content:
-          'Sender: ⟦openclaw:ctx⟧\n```json\n{"label":"openclaw-control-ui"}\n```\n\n[Thu 2026-03-26 16:29 GMT] hi',
-      },
-    }),
-    JSON.stringify({
-      type: "assistant",
-      uuid: "assistant-1",
-      timestamp: "2026-03-26T16:29:55.500Z",
-      message: {
-        role: "assistant",
-        model: "claude-sonnet-4-6",
-        content: [{ type: "text", text: "hello from Claude" }],
-        stop_reason: "end_turn",
-        usage: {
-          input_tokens: 11,
-          output_tokens: 7,
-          cache_read_input_tokens: 22,
-        },
-      },
-    }),
-    JSON.stringify({
-      type: "assistant",
-      uuid: "assistant-2",
-      timestamp: "2026-03-26T16:29:56.000Z",
-      message: {
-        role: "assistant",
-        model: "claude-sonnet-4-6",
-        content: [
-          {
-            type: "tool_use",
-            id: "toolu_123",
-            name: "Bash",
-            input: {
-              command: "pwd",
-            },
-          },
-        ],
-        stop_reason: "tool_use",
-      },
-    }),
-    JSON.stringify({
-      type: "user",
-      uuid: "user-2",
-      timestamp: "2026-03-26T16:29:56.400Z",
-      message: {
-        role: "user",
-        content: [
-          {
-            type: "tool_result",
-            tool_use_id: "toolu_123",
-            content: "/tmp/demo",
-          },
-        ],
-      },
-    }),
-    JSON.stringify({
-      type: "last-prompt",
-      sessionId,
-      lastPrompt: "ignored",
-    }),
   ].join("\n");
 }
 
@@ -278,6 +202,8 @@ describe("cli session history", () => {
       const streamSpy = vi.spyOn(rawFs, "createReadStream");
       const transcriptRedact = await import("../agents/transcript-redact.js");
       const redactSpy = vi.spyOn(transcriptRedact, "redactTranscriptMessage");
+      const readdirSyncSpy = vi.spyOn(rawFs, "readdirSync");
+      const existsSyncSpy = vi.spyOn(rawFs, "existsSync");
       const initial = await (async () => {
         try {
           const [first, second] = await Promise.all([
@@ -285,8 +211,15 @@ describe("cli session history", () => {
             readChatHistoryCliSessionImportSnapshot(params),
           ]);
           expect(second).toEqual(first);
+          expect(await readChatHistoryCliSessionImportSnapshot(params)).toEqual(first);
           expect(streamSpy).toHaveBeenCalledTimes(1);
           expect(redactSpy).toHaveBeenCalledTimes(first.length);
+          // Scope this to transcript discovery; redaction may load unrelated config.
+          const projectsDir = path.dirname(path.dirname(filePath));
+          expect(
+            readdirSyncSpy.mock.calls.filter(([directory]) => directory === projectsDir),
+          ).toHaveLength(0);
+          expect(existsSyncSpy).not.toHaveBeenCalledWith(filePath);
           return resolveChatHistoryWithCliSessionImports({
             ...params,
             preparedImportedMessages: first,
@@ -294,6 +227,8 @@ describe("cli session history", () => {
         } finally {
           streamSpy.mockRestore();
           redactSpy.mockRestore();
+          readdirSyncSpy.mockRestore();
+          existsSyncSpy.mockRestore();
         }
       })();
       expect(initial.messages).toHaveLength(3);
@@ -324,55 +259,65 @@ describe("cli session history", () => {
         externalId: "replacement-assistant",
       });
 
-      await fs.rm(filePath);
+      const movedProjectDir = path.join(path.dirname(path.dirname(filePath)), "moved-workspace");
+      await fs.mkdir(movedProjectDir);
+      const movedFilePath = path.join(movedProjectDir, path.basename(filePath));
+      await fs.rename(filePath, movedFilePath);
+      expect(await read()).toEqual(replaced);
+
+      await fs.rm(movedFilePath);
       const deleted = await read();
       expect(deleted).toEqual({ messages: [], imported: false, expanded: false });
     });
   });
 
-  it("projects oversized Claude messages after off-thread parsing", async () => {
+  it("preserves project precedence when a later matching transcript is found first", async () => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
-      const oversizedRecord = JSON.stringify({
-        type: "user",
-        uuid: "oversized-user",
-        timestamp: "2026-03-26T16:29:54.700Z",
-        message: { role: "user", content: "q".repeat(2 * 1024 * 1024) },
-      });
+      const projectsDir = path.dirname(path.dirname(filePath));
+      const otherProjectDir = path.join(projectsDir, "other-workspace");
+      await fs.mkdir(otherProjectDir);
       await fs.writeFile(
-        filePath,
-        `${oversizedRecord}\n${createClaudeTextHistoryLines([
-          { role: "user", uuid: "visible-after-oversized", content: "visible" },
-        ])}`,
-        "utf8",
+        path.join(otherProjectDir, path.basename(filePath)),
+        createClaudeTextHistoryLines([
+          { role: "user", uuid: "other-project-user", content: "other project" },
+        ]),
       );
-      const parseSpy = vi.spyOn(JSON, "parse");
+      const [firstPath, secondPath] = (await fs.readdir(projectsDir)).map((project) =>
+        path.join(projectsDir, project, path.basename(filePath)),
+      );
+      const expected = readClaudeCliSessionMessages({ cliSessionId: sessionId, homeDir });
+      const releaseFirst = createDeferred();
+      const foundSecond = createDeferred();
+      const access = fs.access;
+      const accessSpy = vi
+        .spyOn(rawFs.promises, "access")
+        .mockImplementation(async (candidate, mode) => {
+          if (candidate === firstPath) {
+            await releaseFirst.promise;
+          }
+          await access(candidate, mode);
+          if (candidate === secondPath) {
+            foundSecond.resolve();
+          }
+        });
+      const pending = readChatHistoryCliSessionImportSnapshot({
+        entry: {
+          sessionId: "openclaw-session",
+          updatedAt: Date.now(),
+          cliSessionBindings: { "claude-cli": { sessionId } },
+        },
+        provider: "claude-cli",
+        localMessages: [],
+        homeDir,
+      });
       try {
-        const messages = await readChatHistoryCliSessionImportSnapshot({
-          entry: {
-            sessionId: "openclaw-session",
-            updatedAt: Date.now(),
-            cliSessionBindings: { "claude-cli": { sessionId } },
-          },
-          provider: "claude-cli",
-          localMessages: [],
-          homeDir,
-        });
-
-        expect(messages).toHaveLength(2);
-        expectFields(readRecord(messages[0])["__openclaw"], {
-          externalId: "oversized-user",
-        });
-        expect(readRecord(messages[0]).content).toContain("exceeded 1 MiB");
-        expectFields(readRecord(messages[1])["__openclaw"], {
-          externalId: "visible-after-oversized",
-        });
-        expect(
-          parseSpy.mock.calls.some(
-            ([source]) => typeof source === "string" && source.length === oversizedRecord.length,
-          ),
-        ).toBe(false);
+        await Promise.race([foundSecond.promise, pending]);
+        releaseFirst.resolve();
+        expect(await pending).toEqual(expected);
       } finally {
-        parseSpy.mockRestore();
+        releaseFirst.resolve();
+        await pending;
+        accessSpy.mockRestore();
       }
     });
   });
@@ -426,7 +371,7 @@ describe("cli session history", () => {
     });
   });
 
-  it("omits isMeta rows and records visible harness context provenance", async () => {
+  it("omits isMeta rows and records internal Claude context provenance", async () => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
       await fs.writeFile(
         filePath,
@@ -473,6 +418,37 @@ describe("cli session history", () => {
               content: "Transcript-only synthetic context row.",
             },
           },
+          {
+            type: "user",
+            uuid: "task-notification-1",
+            timestamp: "2026-03-26T16:29:58.000Z",
+            origin: { kind: "task-notification" },
+            message: {
+              role: "user",
+              content: [
+                "<task-notification>",
+                "<task-id>task-1</task-id>",
+                "<status>completed</status>",
+                "<summary>Background review finished.</summary>",
+                "</task-notification>",
+              ].join("\n"),
+            },
+          },
+          {
+            type: "user",
+            uuid: "operator-pasted-xml-1",
+            timestamp: "2026-03-26T16:29:59.000Z",
+            message: {
+              role: "user",
+              content: [
+                "<task-notification>",
+                "<task-id>task-1</task-id>",
+                "<status>completed</status>",
+                "<summary>Background review finished.</summary>",
+                "</task-notification>",
+              ].join("\n"),
+            },
+          },
         ]
           .map((line) => JSON.stringify(line))
           .join("\n"),
@@ -481,7 +457,7 @@ describe("cli session history", () => {
 
       const messages = readClaudeCliSessionMessages({ cliSessionId: sessionId, homeDir });
 
-      expect(messages).toHaveLength(3);
+      expect(messages).toHaveLength(5);
       expect(JSON.stringify(messages)).not.toContain("Base directory for this skill");
       // The operator-authored turn stays free of injected provenance.
       expectFields(messages[0], { role: "user" });
@@ -495,6 +471,13 @@ describe("cli session history", () => {
         kind: "internal_system",
         sourceTool: "cli_harness_context",
       });
+      expectFields(readRecord(messages[3]).provenance, {
+        kind: "internal_system",
+        sourceTool: "claude_cli_task_notification",
+      });
+      // Identical envelope text without the native origin stays operator-authored.
+      expectFields(messages[4], { role: "user" });
+      expect(readRecord(messages[4]).provenance).toBeUndefined();
     });
   });
 
@@ -1788,6 +1771,18 @@ describe("cli session history", () => {
 
       for (const cliSessionId of ["../outside", "nested/session", "nested\\session"]) {
         expect(readClaudeCliSessionMessages({ cliSessionId, homeDir })).toEqual([]);
+        expect(
+          await readChatHistoryCliSessionImportSnapshot({
+            entry: {
+              sessionId: "openclaw-session",
+              updatedAt: Date.now(),
+              cliSessionBindings: { "claude-cli": { sessionId: cliSessionId } },
+            },
+            provider: "claude-cli",
+            localMessages: [],
+            homeDir,
+          }),
+        ).toEqual([]);
       }
     });
   });
@@ -2954,7 +2949,11 @@ describe("cli session history", () => {
       await withClaudeProjectsDir(async ({ homeDir, sessionId }) => {
         const { maybeRepairCodexSessionRoutes } =
           await import("../commands/doctor/shared/codex-route-session-repair.js");
+        const { openOpenClawStateDatabase, closeOpenClawStateDatabaseForTest } =
+          await import("../state/openclaw-state-db.js");
         const stateDir = path.join(homeDir, "state");
+        openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
+        closeOpenClawStateDatabaseForTest();
         const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
         const key = "agent:main:cli-history";
         const entry: SessionEntry = {

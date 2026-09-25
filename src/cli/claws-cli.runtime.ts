@@ -61,6 +61,7 @@ import { authorizeLegacyV1Resume } from "./claws-cli-legacy-resume.js";
 import {
   emitClawFailure,
   formatClawDiagnostics,
+  logClawAgentConfiguration,
   logClawExperimentalWarning,
 } from "./claws-cli-output.js";
 import { waitUntilGatewayAgentAvailable } from "./claws-cli.gateway-readiness.js";
@@ -72,12 +73,15 @@ import type {
   ClawsStatusOptions,
 } from "./claws-cli.js";
 import { clawMonitorCleanupGateway } from "./claws-cli.monitor-cleanup.js";
+import { clawPackageRemovalGateway } from "./claws-cli.package-removal.js";
 import { listCronJobsFromGateway } from "./cron-cli/list-jobs.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
+import { resolvePluginBatchReload } from "./plugins-lifecycle-client.js";
 
 function logClawAddPlanSummary(plan: ClawAddPlan, runtime: RuntimeEnv): void {
   runtime.log(`Agent: ${plan.agent.finalId}`);
   runtime.log(`Workspace: ${plan.agent.workspace}`);
+  logClawAgentConfiguration(plan, runtime);
   runtime.log(`Actions: ${plan.summary.totalActions}`);
   runtime.log(`Packages: ${plan.summary.packageActions}`);
   for (const action of plan.actions.filter((candidate) => candidate.kind === "package")) {
@@ -142,37 +146,21 @@ async function matchingResumeState(plan: ClawAddPlan, opts: ClawsAddOptions) {
   };
 }
 
-function failNonDryRun(opts: ClawsAddOptions, runtime: RuntimeEnv): boolean {
-  if (opts.dryRun) {
-    return false;
-  }
-  const consented = opts.yes && opts.planIntegrity;
-  if (consented) {
-    return false;
-  }
-  const code = opts.yes ? "plan_integrity_required" : "consent_required";
-  const message = opts.yes
-    ? "Claw add consent must include --plan-integrity from the exact dry-run plan."
-    : "Claw add requires explicit consent; pass --dry-run to preview or --yes with --plan-integrity to create the new agent and workspace.";
-  emitClawFailure(runtime, opts.json, message, {
-    schemaVersion: CLAW_ADD_PLAN_SCHEMA_VERSION,
-    stability: CLAW_OUTPUT_STABILITY,
-    ok: false,
-    error: { code, message },
-  });
-  return true;
-}
-
-function requireRemoveConsent(opts: ClawsRemoveOptions, runtime: RuntimeEnv): boolean {
+function requireClawPlanConsent(
+  action: "add" | "remove",
+  opts: ClawsAddOptions | ClawsRemoveOptions,
+  runtime: RuntimeEnv,
+): boolean {
   if (opts.dryRun || (opts.yes && opts.planIntegrity)) {
     return false;
   }
   const code = opts.yes ? "plan_integrity_required" : "consent_required";
   const message = opts.yes
-    ? "Claw remove consent must include --plan-integrity from the exact dry-run plan."
-    : "Claw remove requires explicit consent; pass --dry-run to preview or --yes with --plan-integrity to remove owned state.";
+    ? `Claw ${action} consent must include --plan-integrity from the exact dry-run plan.`
+    : `Claw ${action} requires explicit consent; pass --dry-run to preview or --yes with --plan-integrity to ${action === "add" ? "create the new agent and workspace" : "remove owned state"}.`;
   emitClawFailure(runtime, opts.json, message, {
-    schemaVersion: CLAW_REMOVE_PLAN_SCHEMA_VERSION,
+    schemaVersion:
+      action === "add" ? CLAW_ADD_PLAN_SCHEMA_VERSION : CLAW_REMOVE_PLAN_SCHEMA_VERSION,
     stability: CLAW_OUTPUT_STABILITY,
     ok: false,
     error: { code, message },
@@ -253,7 +241,7 @@ export async function runClawsAddCommand(
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
   assertExperimentalClawsEnabled();
-  if (failNonDryRun(opts, runtime)) {
+  if (requireClawPlanConsent("add", opts, runtime)) {
     return;
   }
   let legacyV1ResumeRecord: PersistedClawInstall | undefined;
@@ -286,6 +274,7 @@ export async function runClawsAddCommand(
   );
   const cronStore = await loadCronJobsStoreWithConfigJobsReadOnly(resolveCronJobsStorePath());
   const basePlanContext = {
+    config,
     ...(opts.agentId ? { agentId: opts.agentId } : {}),
     ...(opts.workspace ? { workspace: opts.workspace } : {}),
     existingAgentIds,
@@ -294,24 +283,20 @@ export async function runClawsAddCommand(
     existingCronJobIds: cronStore.store.jobs.map((job) => job.id),
     packagePreflight: preflightClawPackage,
   };
-  let plan = await buildClawAddPlan({
+  const planInput = {
     manifest: result.manifest,
     clawMarkdownBody: result.clawMarkdownBody,
     packageBootstrap: result.packageBootstrap,
     openClawProfile: result.openClawProfile,
     source: result.source,
     diagnostics: result.diagnostics,
-    context: basePlanContext,
-  });
+  };
+  let plan = await buildClawAddPlan({ ...planInput, context: basePlanContext });
   let legacyResumePlan = result.legacyOpenClawProfile
     ? await buildClawAddPlan({
-        manifest: result.manifest,
-        clawMarkdownBody: result.clawMarkdownBody,
-        packageBootstrap: result.packageBootstrap,
+        ...planInput,
         openClawProfile: result.legacyOpenClawProfile,
         reconstructLegacyDynamicToolProfilePlan: true,
-        source: result.source,
-        diagnostics: result.diagnostics,
         context: basePlanContext,
       })
     : undefined;
@@ -378,24 +363,12 @@ export async function runClawsAddCommand(
         : existingWorkspacePaths,
       ...(canResumeWorkspace ? { resumableWorkspace: resumeRecord.workspace } : {}),
     };
-    plan = await buildClawAddPlan({
-      manifest: result.manifest,
-      clawMarkdownBody: result.clawMarkdownBody,
-      packageBootstrap: result.packageBootstrap,
-      openClawProfile: result.openClawProfile,
-      source: result.source,
-      diagnostics: result.diagnostics,
-      context: resumePlanContext,
-    });
+    plan = await buildClawAddPlan({ ...planInput, context: resumePlanContext });
     if (result.legacyOpenClawProfile) {
       legacyResumePlan = await buildClawAddPlan({
-        manifest: result.manifest,
-        clawMarkdownBody: result.clawMarkdownBody,
-        packageBootstrap: result.packageBootstrap,
+        ...planInput,
         openClawProfile: result.legacyOpenClawProfile,
         reconstructLegacyDynamicToolProfilePlan: true,
-        source: result.source,
-        diagnostics: result.diagnostics,
         context: resumePlanContext,
       });
     }
@@ -469,6 +442,7 @@ export async function runClawsAddCommand(
   }
   try {
     addResult = await applyClawAddPlan(plan, {
+      reloadPlugins: await resolvePluginBatchReload(),
       consentPlanIntegrity: opts.planIntegrity,
       resumeRecord: resumableInstallRecord,
       resumePlan: legacyResumePlan,
@@ -498,6 +472,9 @@ export async function runClawsAddCommand(
     runtime.log(`Added agent: ${addResult.agent.finalId}`);
     runtime.log(`Workspace: ${addResult.agent.workspace}`);
     runtime.log(`Status: ${addResult.status}`);
+    if (addResult.error) {
+      runtime.error(addResult.error.message);
+    }
   }
   if (addResult.status !== "complete") {
     runtime.exit(1);
@@ -538,7 +515,7 @@ export async function runClawsRemoveCommand(
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
   assertExperimentalClawsEnabled();
-  if (requireRemoveConsent(opts, runtime)) {
+  if (requireClawPlanConsent("remove", opts, runtime)) {
     return;
   }
   const selected = opts.removeReferenced ?? [];
@@ -594,6 +571,7 @@ export async function runClawsRemoveCommand(
   try {
     const result = await applyClawRemovePlan(plan, {
       monitorGateway: clawMonitorCleanupGateway,
+      packageGateway: clawPackageRemovalGateway,
       consentPlanIntegrity: opts.planIntegrity,
       referencedCleanup,
       cronGateway: {
@@ -605,7 +583,7 @@ export async function runClawsRemoveCommand(
       writeRuntimeJson(runtime, result);
     } else {
       logClawExperimentalWarning(runtime);
-      runtime.log(`Removed agent: ${result.agentId}`);
+      runtime.log(`${result.agentRemoved ? "Removed agent" : "Agent"}: ${result.agentId}`);
       runtime.log(`Status: ${result.status}`);
       for (const pkg of result.packages) {
         runtime.log(
@@ -613,6 +591,17 @@ export async function runClawsRemoveCommand(
         );
       }
       runtime.log(`Package references released: ${result.packageRefsReleased}`);
+      if (result.error) {
+        runtime.error(result.error.message);
+      }
+      for (const warning of result.warnings ?? []) {
+        runtime.log(`Warning: ${warning}`);
+      }
+      if (result.pluginRuntime) {
+        runtime.log(
+          `Plugin runtime changed in Gateway generation ${result.pluginRuntime.generation}.`,
+        );
+      }
     }
     if (result.status !== "complete") {
       runtime.exit(1);

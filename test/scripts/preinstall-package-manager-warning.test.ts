@@ -15,11 +15,13 @@ import {
   warnIfNonPnpmLifecycle,
 } from "../../scripts/preinstall-package-manager-warning.mjs";
 import { isSupportedNodeVersion } from "../../src/infra/runtime-guard.js";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { NODE_RELEASE_VERSION_CASES } from "../helpers/node-version-cases.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const EXPECTED_NODE_ENGINE_RANGE = ">=24.16.0 <25 || >=26.1.0";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const testNodeExecPath = resolveTestNodeExecPath();
 
 describe("install runtime enforcement", () => {
   it("reads the canonical package engine range", () => {
@@ -56,6 +58,7 @@ describe("install runtime enforcement", () => {
       enforceSupportedNodeRuntime(
         {
           version: "24.14.1",
+          bunVersion: null,
           engine: EXPECTED_NODE_ENGINE_RANGE,
           execPath: "/opt/node/bin/node",
         },
@@ -74,6 +77,7 @@ describe("install runtime enforcement", () => {
       enforceSupportedNodeRuntime(
         {
           version: "24.16.0",
+          bunVersion: null,
           engine: EXPECTED_NODE_ENGINE_RANGE,
           execPath: "/opt/node/bin/node",
         },
@@ -102,10 +106,13 @@ describe("install runtime enforcement", () => {
     );
     writeFileSync(join(root, "package.json"), JSON.stringify({ engines: { node: ">=999.0.0" } }));
 
-    const result = spawnSync(process.execPath, [scriptPath], { encoding: "utf8" });
+    const result = spawnSync(testNodeExecPath, [scriptPath], { encoding: "utf8" });
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("requires Node >=999.0.0");
-    expect(result.stderr).toContain(`detected Node ${process.versions.node}`);
+    const nodeVersion = spawnSync(testNodeExecPath, ["-p", "process.versions.node"], {
+      encoding: "utf8",
+    }).stdout.trim();
+    expect(result.stderr).toContain(`detected Node ${nodeVersion}`);
   });
 
   it("allows Bun package lifecycle scripts when the installed CLI will use supported Node", () => {

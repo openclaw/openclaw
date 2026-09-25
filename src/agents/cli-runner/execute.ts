@@ -12,7 +12,6 @@ import {
 } from "../../infra/installation-target-context.js";
 import { compareValidSemver } from "../../infra/semver.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
-import type { CliBackendThinkingLevel } from "../../plugins/cli-backend.types.js";
 import { applySkillEnvOverridesFromSnapshot } from "../../skills/runtime/env-overrides.js";
 import {
   fingerprintCliRuntimeArtifact,
@@ -66,12 +65,6 @@ import { cliBackendLog, CLI_BACKEND_LOG_OUTPUT_ENV } from "./log.js";
 import { createClaudeCliModelCallDiagnostics } from "./model-call-diagnostics.js";
 import { composeCliPromptContext } from "./prompt-context.js";
 import type { PreparedCliRunContext } from "./types.js";
-
-function normalizeCliBackendThinkingLevel(
-  level: PreparedCliRunContext["params"]["thinkLevel"],
-): CliBackendThinkingLevel | undefined {
-  return level === "ultra" ? "max" : level;
-}
 
 function exactToolAvailabilityError(params: {
   code: "unsupported" | "runtime-unavailable";
@@ -504,7 +497,8 @@ export async function executePreparedCliRun(
           provider: params.provider,
           modelId: context.modelId,
           authProfileId: context.effectiveAuthProfileId,
-          thinkingLevel: normalizeCliBackendThinkingLevel(params.thinkLevel),
+          thinkingLevel:
+            params.thinkLevel === "ultra" ? context.providerThinkingLevel : params.thinkLevel,
           fastMode:
             params.fastMode === undefined
               ? undefined
@@ -580,9 +574,6 @@ export async function executePreparedCliRun(
         useResume,
         trigger: params.trigger,
       });
-      if (!useManagedClaudeLiveSession) {
-        toolTracking.beginGatewayCapture(initialGatewayCaptureKey);
-      }
       runOutput = await executeCliProcess({
         context,
         assertCurrent,
@@ -651,25 +642,31 @@ export async function executePreparedCliRun(
     });
   };
   try {
-    completedOutput = await enqueueCliRun(queueKey, async () => {
-      assertCurrent();
-      if (params.lifecycleGeneration) {
-        assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
-      }
-      diagnostics?.emitStarted();
-      if (params.forkCliSessionOnResume && useResume) {
-        if (!params.persistCliSessionForkSuccessor) {
-          throw new Error("CLI session fork successor persistence is unavailable");
+    completedOutput = await enqueueCliRun(queueKey, () => {
+      const runQueuedAttempt = async () => {
+        assertCurrent();
+        if (params.lifecycleGeneration) {
+          assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
         }
-        forkResumeClaimed = (await params.claimCliSessionFork?.()) === true;
-        if (!forkResumeClaimed) {
-          throw new Error("CLI session fork marker is no longer available");
+        diagnostics?.emitStarted();
+        if (params.forkCliSessionOnResume && useResume) {
+          if (!params.persistCliSessionForkSuccessor) {
+            throw new Error("CLI session fork successor persistence is unavailable");
+          }
+          forkResumeClaimed = (await params.claimCliSessionFork?.()) === true;
+          if (!forkResumeClaimed) {
+            throw new Error("CLI session fork marker is no longer available");
+          }
+          // The fork argument only applies at process startup; a cached warm child
+          // would run inside the source session. Force a fresh spawn.
+          await restartCliLiveSession(context);
         }
-        // The fork argument only applies at process startup; a cached warm child
-        // would run inside the source session. Force a fresh spawn.
-        await restartCliLiveSession(context);
-      }
-      return await executeAttempt();
+        return await executeAttempt();
+      };
+      // The retained consumer keeps every plugin call of this queued attempt, including
+      // a fork-on-resume live-session restart, admitted across a plugin hot reload.
+      const consumer = context.pluginExecutionConsumer;
+      return consumer ? consumer.run(runQueuedAttempt) : runQueuedAttempt();
     });
     if (completedOutput.sessionId) {
       observeForkSuccessor(completedOutput.sessionId);

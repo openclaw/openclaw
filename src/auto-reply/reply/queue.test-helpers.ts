@@ -1,8 +1,10 @@
 /** Test helpers for queued follow-up reply runs. */
 import { afterAll, beforeAll } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { defaultRuntime } from "../../runtime.js";
-import type { FollowupRun } from "./queue.js";
+import type { FollowupRun, QueueSettings } from "./queue.js";
+import { scheduleFollowupDrain } from "./queue.js";
 
 /** Builds a minimal queued follow-up run fixture. */
 export function createQueueTestRun(params: {
@@ -56,4 +58,35 @@ export function installQueueRuntimeErrorSilencer(): void {
   afterAll(() => {
     defaultRuntime.error = previousRuntimeError;
   });
+}
+
+export function createQueueSettings(overrides: Partial<QueueSettings> = {}): QueueSettings {
+  return {
+    mode: "collect",
+    debounceMs: 0,
+    cap: 50,
+    dropPolicy: "summarize",
+    ...overrides,
+  };
+}
+
+export function createDrainRecorder(expectedCalls = 1) {
+  const calls: Array<FollowupRun & { currentTurnImagesPrepared?: true }> = [];
+  const done = createDeferred();
+  const runFollowup = async (run: FollowupRun) => {
+    calls.push(run);
+    if (calls.length >= expectedCalls) {
+      done.resolve();
+    }
+  };
+  return { calls, done, runFollowup };
+}
+
+export async function drainRecordedQueue(
+  key: string,
+  runFollowup: ReturnType<typeof createDrainRecorder>["runFollowup"],
+  done: ReturnType<typeof createDrainRecorder>["done"],
+) {
+  scheduleFollowupDrain(key, runFollowup);
+  await done.promise;
 }

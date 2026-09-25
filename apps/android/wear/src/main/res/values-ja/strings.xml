@@ -6,6 +6,8 @@
     <string name="controls" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"コントロール"</string>
     <string name="talk" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"会話"</string>
     <string name="real_time_audio_failed" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ウォッチの音声に失敗しました"</string>
+    <string name="microphone_permission_required" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"マイクの使用許可が必要"</string>
+    <string name="open_settings" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"設定を開く"</string>
     <string name="dictate" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"音声入力する"</string>
     <string name="live" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ライブ"</string>
     <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"スレッド"</string>
@@ -26,6 +28,7 @@
     <string name="speak_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"最新の返信を読み上げる"</string>
     <string name="speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"読み上げ中"</string>
     <string name="listening" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"聞き取り中"</string>
+    <string name="stopping" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"通話を終了中…"</string>
     <string name="connecting" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"接続中"</string>
     <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"思考中"</string>
     <string name="typing" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"入力中"</string>
@@ -123,4 +126,14 @@
     <string name="pulse_phase_counts" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"待機中 %1$d, 実行中 %2$d, 完了 %3$d, 失敗 %4$d, 非表示 %5$d"</string>
     <string name="pulse_more_phases" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"表示されていないフェーズがあります"</string>
     <string name="pulse_unknown" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"不明"</string>
+    <string name="read_full_reply" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"返信の全文を読む"</string>
+    <string name="reply_stream_preview" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"リアルタイムプレビューです。返信が完了すると全文を読めます。"</string>
+    <string name="reply_previous_page" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"前の部分"</string>
+    <string name="reply_next_page" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"次の部分"</string>
+    <string name="reply_loading" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"返信の全文を読み込み中…"</string>
+    <string name="reply_unsupported" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"返信の全文を読むには、スマートフォンのアプリとGatewayを更新してください。"</string>
+    <string name="reply_too_large" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"この返信は長すぎるため、ここでは表示できません。スマートフォンで開いてください。"</string>
+    <string name="reply_changed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"返信または接続が変更されました。最初からやり直してください。"</string>
+    <string name="reply_unavailable" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"全文は現在利用できません。"</string>
+    <string name="reply_failed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"返信の全文を読み込めませんでした。もう一度お試しください。"</string>
 </resources>

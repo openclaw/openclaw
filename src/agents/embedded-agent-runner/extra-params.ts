@@ -37,6 +37,7 @@ import {
   type ProviderRuntimePluginHandle,
 } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
+import type { ProviderPrepareExtraParamsContext } from "../../plugins/provider-runtime.types.js";
 import { resolveModelExtraParamSources } from "../model-extra-params.js";
 import {
   getModelProviderRequestRouteFacts,
@@ -88,49 +89,20 @@ export function resolveExtraParams(params: {
     });
   const sources = [defaultParams, modelParams, agentModelParams, agentParams];
   const merged = Object.assign({}, ...sources);
-  const resolvedParallelToolCalls = resolveAliasedParamValue(
-    sources,
-    "parallel_tool_calls",
-    "parallelToolCalls",
-  );
-  if (resolvedParallelToolCalls !== undefined) {
-    merged.parallel_tool_calls = resolvedParallelToolCalls;
-    delete merged.parallelToolCalls;
-  }
-
-  const resolvedTextVerbosity = resolveAliasedParamValue(
+  canonicalizeExtraParamAlias(merged, sources, ["parallel_tool_calls", "parallelToolCalls"]);
+  canonicalizeExtraParamAlias(
+    merged,
     [modelParams, agentModelParams, agentParams],
-    "text_verbosity",
-    "textVerbosity",
+    ["text_verbosity", "textVerbosity"],
   );
-  if (resolvedTextVerbosity !== undefined) {
-    merged.text_verbosity = resolvedTextVerbosity;
-    delete merged.textVerbosity;
-  }
-
-  const resolvedResponseFormat = resolveAliasedParamValue(
-    sources,
-    "response_format",
-    "responseFormat",
-  );
-  if (resolvedResponseFormat !== undefined) {
-    merged.response_format = resolvedResponseFormat;
-    delete merged.responseFormat;
-  }
-  canonicalizeMaxTokensParam({
+  canonicalizeExtraParamAlias(merged, sources, ["response_format", "responseFormat"]);
+  canonicalizeMaxTokensParam({ merged, sources });
+  canonicalizeExtraParamAlias(
     merged,
     sources,
-  });
-
-  const resolvedCachedContent = resolveAliasedParamValue(
-    sources,
-    "cached_content",
+    ["cached_content", "cachedContent"],
     "cachedContent",
   );
-  if (resolvedCachedContent !== undefined) {
-    merged.cachedContent = resolvedCachedContent;
-    delete merged.cached_content;
-  }
   if (params.provider === "openrouter") {
     canonicalizeOpenRouterResponseCacheParams(merged, sources);
   }
@@ -177,6 +149,7 @@ export function resolvePreparedExtraParams(params: {
   model?: ProviderRuntimeModel;
   resolvedTransport?: SupportedTransport;
   providerRuntimeHandle?: ProviderRuntimePluginHandle;
+  auth?: ProviderPrepareExtraParamsContext["auth"];
 }): Record<string, unknown> {
   const resolvedExtraParams =
     params.resolvedExtraParams ??
@@ -186,16 +159,9 @@ export function resolvePreparedExtraParams(params: {
       modelId: params.modelId,
       agentId: params.agentId,
     });
-  const override =
-    params.extraParamsOverride && Object.keys(params.extraParamsOverride).length > 0
-      ? stripRequestScopedExtraParams(
-          sanitizeExtraParamsRecord(
-            Object.fromEntries(
-              Object.entries(params.extraParamsOverride).filter(([, value]) => value !== undefined),
-            ),
-          ),
-        )
-      : undefined;
+  const override = stripRequestScopedExtraParams(
+    sanitizeExtraParamsOverride(params.extraParamsOverride),
+  );
   const merged = {
     ...sanitizeExtraParamsRecord(resolvedExtraParams),
     ...override,
@@ -204,15 +170,12 @@ export function resolvePreparedExtraParams(params: {
     merged,
     sources: [resolvedExtraParams, override],
   });
-  const resolvedCachedContent = resolveAliasedParamValue(
+  canonicalizeExtraParamAlias(
+    merged,
     [resolvedExtraParams, override],
-    "cached_content",
+    ["cached_content", "cachedContent"],
     "cachedContent",
   );
-  if (resolvedCachedContent !== undefined) {
-    merged.cachedContent = resolvedCachedContent;
-    delete merged.cached_content;
-  }
   if (params.provider === "openrouter") {
     canonicalizeOpenRouterResponseCacheParams(merged, [resolvedExtraParams, override]);
   }
@@ -234,6 +197,7 @@ export function resolvePreparedExtraParams(params: {
     modelId: params.modelId,
     model: params.model,
     thinkingLevel: params.thinkingLevel,
+    auth: params.auth,
   };
   const prepared = plugin?.prepareExtraParams?.({ ...context, extraParams: merged }) ?? merged;
   const transportPatch = plugin?.extraParamsForTransport?.({
@@ -260,6 +224,14 @@ function sanitizeExtraParamsRecord(
       ([key]) => key !== "__proto__" && key !== "prototype" && key !== "constructor",
     ),
   );
+}
+
+function sanitizeExtraParamsOverride(value: Record<string, unknown> | undefined) {
+  return value && Object.keys(value).length > 0
+    ? sanitizeExtraParamsRecord(
+        Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)),
+      )
+    : undefined;
 }
 
 function stripRequestScopedExtraParams(
@@ -379,8 +351,7 @@ function createStreamFnWithExtraParams(
   }
   const resolvedResponseFormat = resolveAliasedParamValue(
     [extraParams],
-    "response_format",
-    "responseFormat",
+    ["response_format", "responseFormat"],
   );
   if (
     resolvedResponseFormat &&
@@ -413,11 +384,11 @@ function createStreamFnWithExtraParams(
   // so transport layers can filter by API type (e.g. openai-responses skips penalty params).
   // Resolve aliased params: camelCase (runtime/request) checked first so
   // per-request gateway overrides take priority over configured snake_case values.
-  const resolvedFrequencyPenalty = resolveAliasedParamValueFromKeys(
+  const resolvedFrequencyPenalty = resolveAliasedParamValue(
     [extraParams],
     ["frequencyPenalty", "frequency_penalty"],
   );
-  const resolvedPresencePenalty = resolveAliasedParamValueFromKeys(
+  const resolvedPresencePenalty = resolveAliasedParamValue(
     [extraParams],
     ["presencePenalty", "presence_penalty"],
   );
@@ -439,19 +410,19 @@ function createStreamFnWithExtraParams(
   const readCacheCompat = (m?: ProviderRuntimeModel) =>
     m?.api === "openai-completions" ? resolveOpenAICompletionsCompat(m) : m?.compat;
 
-  const initialCacheRetention = resolveCacheRetention(
-    extraParams,
-    provider,
-    typeof model?.api === "string" ? model.api : undefined,
-    typeof model?.id === "string" ? model.id : undefined,
-    readCacheCompat(model),
-    model?.baseUrl,
-  );
-  if (Object.keys(streamParams).length > 0 || initialCacheRetention) {
-    const debugParams = initialCacheRetention
-      ? { ...streamParams, cacheRetention: initialCacheRetention }
-      : streamParams;
-    log.debug(`creating streamFn wrapper with params: ${JSON.stringify(debugParams)}`);
+  if (log.isEnabled("debug")) {
+    const initialCacheRetention = resolveCacheRetention(
+      extraParams,
+      provider,
+      typeof model?.api === "string" ? model.api : undefined,
+      typeof model?.id === "string" ? model.id : undefined,
+      readCacheCompat(model),
+      model?.baseUrl,
+    );
+    if (Object.keys(streamParams).length > 0 || initialCacheRetention) {
+      const debugParams = { ...streamParams, cacheRetention: initialCacheRetention };
+      log.debug(`creating streamFn wrapper with params: ${JSON.stringify(debugParams)}`);
+    }
   }
 
   const underlying = requireBaseStreamFn(baseStreamFn);
@@ -481,14 +452,6 @@ function createStreamFnWithExtraParams(
 
 function resolveAliasedParamValue(
   sources: Array<Record<string, unknown> | undefined>,
-  snakeCaseKey: string,
-  camelCaseKey: string,
-): unknown {
-  return resolveAliasedParamValueFromKeys(sources, [snakeCaseKey, camelCaseKey]);
-}
-
-function resolveAliasedParamValueFromKeys(
-  sources: Array<Record<string, unknown> | undefined>,
   keys: readonly string[],
 ): unknown {
   let resolved: unknown = undefined;
@@ -509,49 +472,44 @@ function resolveAliasedParamValueFromKeys(
   return seen ? resolved : undefined;
 }
 
-function applyCanonicalAliasedParamValue(params: {
-  merged: Record<string, unknown>;
-  sources: Array<Record<string, unknown> | undefined>;
-  keys: readonly string[];
-  canonicalKey: string;
-}): void {
-  const resolved = resolveAliasedParamValueFromKeys(params.sources, params.keys);
-  if (resolved === undefined) {
-    return;
+function canonicalizeExtraParamAlias(
+  merged: Record<string, unknown>,
+  sources: Array<Record<string, unknown> | undefined>,
+  keys: readonly [string, string],
+  canonical = keys[0],
+): void {
+  const resolved = resolveAliasedParamValue(sources, keys);
+  if (resolved !== undefined) {
+    merged[canonical] = resolved;
+    delete merged[keys[0] === canonical ? keys[1] : keys[0]];
   }
-  for (const key of params.keys) {
-    delete params.merged[key];
-  }
-  params.merged[params.canonicalKey] = resolved;
 }
+
+const OPENROUTER_RESPONSE_CACHE_PARAM_ALIASES = [
+  ["responseCache", "response_cache"],
+  [
+    "responseCacheTtlSeconds",
+    "response_cache_ttl_seconds",
+    "responseCacheTtl",
+    "response_cache_ttl",
+  ],
+  ["responseCacheClear", "response_cache_clear"],
+] as const;
 
 function canonicalizeOpenRouterResponseCacheParams(
   merged: Record<string, unknown>,
   sources: Array<Record<string, unknown> | undefined>,
 ): void {
-  applyCanonicalAliasedParamValue({
-    merged,
-    sources,
-    keys: ["responseCache", "response_cache"],
-    canonicalKey: "responseCache",
-  });
-  applyCanonicalAliasedParamValue({
-    merged,
-    sources,
-    keys: [
-      "responseCacheTtlSeconds",
-      "response_cache_ttl_seconds",
-      "responseCacheTtl",
-      "response_cache_ttl",
-    ],
-    canonicalKey: "responseCacheTtlSeconds",
-  });
-  applyCanonicalAliasedParamValue({
-    merged,
-    sources,
-    keys: ["responseCacheClear", "response_cache_clear"],
-    canonicalKey: "responseCacheClear",
-  });
+  for (const keys of OPENROUTER_RESPONSE_CACHE_PARAM_ALIASES) {
+    const resolved = resolveAliasedParamValue(sources, keys);
+    if (resolved === undefined) {
+      continue;
+    }
+    for (const key of keys) {
+      delete merged[key];
+    }
+    merged[keys[0]] = resolved;
+  }
 }
 
 function createParallelToolCallsWrapper(
@@ -613,37 +571,21 @@ function sanitizeExtraBodyRecord(value: Record<string, unknown>): Record<string,
   );
 }
 
-function resolveExtraBodyParam(rawExtraBody: unknown): Record<string, unknown> | undefined {
-  if (rawExtraBody === undefined || rawExtraBody === null) {
-    return undefined;
-  }
-  if (typeof rawExtraBody !== "object" || Array.isArray(rawExtraBody)) {
-    const summary = typeof rawExtraBody === "string" ? rawExtraBody : typeof rawExtraBody;
-    log.warn(`ignoring invalid extra_body param: ${summary}`);
-    return undefined;
-  }
-  const extraBody = sanitizeExtraBodyRecord(rawExtraBody as Record<string, unknown>);
-  return Object.keys(extraBody).length > 0 ? extraBody : undefined;
-}
-
-function resolveChatTemplateKwargsParam(
-  rawChatTemplateKwargs: unknown,
+function resolveExtraBodyRecord(
+  value: unknown,
+  param: "extra_body" | "chat_template_kwargs",
 ): Record<string, unknown> | undefined {
-  if (rawChatTemplateKwargs === undefined || rawChatTemplateKwargs === null) {
+  if (value === undefined || value === null) {
     return undefined;
   }
-  if (typeof rawChatTemplateKwargs !== "object" || Array.isArray(rawChatTemplateKwargs)) {
-    const summary =
-      typeof rawChatTemplateKwargs === "string"
-        ? rawChatTemplateKwargs
-        : typeof rawChatTemplateKwargs;
-    log.warn(`ignoring invalid chat_template_kwargs param: ${summary}`);
+  if (typeof value !== "object" || Array.isArray(value)) {
+    log.warn(
+      `ignoring invalid ${param} param: ${typeof value === "string" ? value : typeof value}`,
+    );
     return undefined;
   }
-  const chatTemplateKwargs = sanitizeExtraBodyRecord(
-    rawChatTemplateKwargs as Record<string, unknown>,
-  );
-  return Object.keys(chatTemplateKwargs).length > 0 ? chatTemplateKwargs : undefined;
+  const record = sanitizeExtraBodyRecord(value as Record<string, unknown>);
+  return Object.keys(record).length > 0 ? record : undefined;
 }
 
 function createOpenAICompletionsChatTemplateKwargsWrapper(params: {
@@ -797,10 +739,12 @@ function applyPostPluginStreamWrappers(
 
   const rawChatTemplateKwargs = resolveAliasedParamValue(
     [ctx.effectiveExtraParams, ctx.override],
-    "chat_template_kwargs",
-    "chatTemplateKwargs",
+    ["chat_template_kwargs", "chatTemplateKwargs"],
   );
-  const configuredChatTemplateKwargs = resolveChatTemplateKwargsParam(rawChatTemplateKwargs);
+  const configuredChatTemplateKwargs = resolveExtraBodyRecord(
+    rawChatTemplateKwargs,
+    "chat_template_kwargs",
+  );
   if (configuredChatTemplateKwargs) {
     ctx.agent.streamFn = createOpenAICompletionsChatTemplateKwargsWrapper({
       baseStreamFn: ctx.agent.streamFn,
@@ -810,10 +754,9 @@ function applyPostPluginStreamWrappers(
 
   const rawExtraBody = resolveAliasedParamValue(
     [ctx.effectiveExtraParams, ctx.override],
-    "extra_body",
-    "extraBody",
+    ["extra_body", "extraBody"],
   );
-  const extraBody = resolveExtraBodyParam(rawExtraBody);
+  const extraBody = resolveExtraBodyRecord(rawExtraBody, "extra_body");
   if (extraBody) {
     ctx.agent.streamFn = createOpenAICompletionsExtraBodyWrapper(ctx.agent.streamFn, extraBody);
   }
@@ -821,8 +764,7 @@ function applyPostPluginStreamWrappers(
 
   const rawParallelToolCalls = resolveAliasedParamValue(
     [ctx.effectiveExtraParams, ctx.override],
-    "parallel_tool_calls",
-    "parallelToolCalls",
+    ["parallel_tool_calls", "parallelToolCalls"],
   );
   if (rawParallelToolCalls === undefined) {
     return;
@@ -858,7 +800,9 @@ function isDeepSeekV4OpenAICompletionsModel(model: Parameters<StreamFn>[0]): boo
   const normalizedModelId = normalizeDeepSeekV4CandidateId(model.id);
   return (
     model.api === "openai-completions" &&
-    (normalizedModelId === "deepseek-v4-flash" || normalizedModelId === "deepseek-v4-pro")
+    (normalizedModelId === "deepseek-flash" ||
+      normalizedModelId === "deepseek-v4-flash" ||
+      normalizedModelId === "deepseek-v4-pro")
   );
 }
 
@@ -945,7 +889,7 @@ const MIMO_REASONING_OPENAI_COMPATIBLE_MODEL_IDS = new Set([
   "mimo-v2-omni",
   "mimo-v2.5",
   "mimo-v2.5-pro",
-  "mimo-v2.6-pro",
+  ...["flash", "pro", "pro-ultraspeed"].map((variant) => `mimo-v2.6-${variant}`),
 ]);
 const MIMO_REASONING_AS_VISIBLE_TEXT_MODEL_IDS = new Set(["mimo-v2-pro", "mimo-v2-omni"]);
 
@@ -987,6 +931,7 @@ export function applyExtraParamsToAgent(
   resolvedTransport?: SupportedTransport,
   options?: {
     preparedExtraParams?: Record<string, unknown>;
+    auth?: ProviderPrepareExtraParamsContext["auth"];
     nativeWebSearchPolicyContext?: NativeWebSearchToolPolicyParams;
   },
 ) {
@@ -1003,14 +948,7 @@ export function applyExtraParamsToAgent(
     modelId,
     agentId,
   });
-  const override =
-    extraParamsOverride && Object.keys(extraParamsOverride).length > 0
-      ? sanitizeExtraParamsRecord(
-          Object.fromEntries(
-            Object.entries(extraParamsOverride).filter(([, value]) => value !== undefined),
-          ),
-        )
-      : undefined;
+  const override = sanitizeExtraParamsOverride(extraParamsOverride);
   const effectiveExtraParams =
     options?.preparedExtraParams ??
     resolvePreparedExtraParams({
@@ -1026,6 +964,7 @@ export function applyExtraParamsToAgent(
       model,
       resolvedTransport,
       providerRuntimeHandle,
+      auth: options?.auth,
     });
   const wrapperContext: ApplyExtraParamsContext = {
     agent,
@@ -1057,6 +996,7 @@ export function applyExtraParamsToAgent(
       agentDir,
       workspaceDir,
       agentId,
+      auth: options?.auth,
       nativeWebSearchAllowedByToolPolicy,
       provider,
       modelId,

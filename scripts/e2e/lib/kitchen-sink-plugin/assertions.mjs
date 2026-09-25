@@ -2,6 +2,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { assertClawHubArtifactMetadata } from "../clawhub-artifact-assertions.mjs";
 import { readPositiveIntEnvWithEmptyFallback } from "../env-limits.mjs";
 import { assertRealPathInside, resolveHomePath } from "../openclaw-state-paths.mjs";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
@@ -326,6 +328,7 @@ function assertExpectedDiagnostics(surfaceMode, errorMessages) {
     "control UI descriptor registration requires id, surface, label, and valid optional fields",
     "hosted media resolver registration missing resolver",
     "http route registration missing or invalid auth: /kitchen-sink/http-route",
+    "invalid widget presenter registration",
     "node invoke policy registration missing commands",
     "trusted tool policy registration requires id, description, and evaluate()",
     "plugin must declare contracts.embeddingProviders for adapter: kitchen-sink-embedding-provider",
@@ -339,6 +342,7 @@ function assertExpectedDiagnostics(surfaceMode, errorMessages) {
     "session extension registration requires namespace and description",
     "session scheduler job registration requires unique id, sessionKey, and kind",
     "tool metadata registration missing toolName",
+    "worker provider registration missing method: resolveAllocation",
   ]);
   const optionalErrorMessages = new Set([
     "agent event subscription registration requires id and handle",
@@ -402,27 +406,6 @@ function assertClawHubExternalInstallContract(installPath) {
   }
 }
 
-function assertClawHubArtifactMetadata(record) {
-  if (record.artifactKind === "legacy-zip") {
-    if (record.artifactFormat !== "zip") {
-      throw new Error(
-        `missing kitchen-sink legacy ZIP artifact metadata: ${JSON.stringify(record)}`,
-      );
-    }
-    return;
-  }
-
-  if (record.artifactKind !== "npm-pack" || record.artifactFormat !== "tgz") {
-    throw new Error(`missing kitchen-sink ClawHub artifact metadata: ${JSON.stringify(record)}`);
-  }
-  if (!record.clawpackSha256 || typeof record.clawpackSize !== "number") {
-    throw new Error(`missing kitchen-sink ClawPack metadata: ${JSON.stringify(record)}`);
-  }
-  if (!record.npmIntegrity || !record.npmShasum || !record.npmTarballName) {
-    throw new Error(`missing kitchen-sink npm artifact metadata: ${JSON.stringify(record)}`);
-  }
-}
-
 function inferInstallSource(spec) {
   if (spec?.startsWith("npm:")) {
     return "npm";
@@ -454,7 +437,42 @@ function assertCutoverPreinstalled() {
   }
 }
 
-function assertInstalled() {
+// The sweep deletes captured inspection JSON on exit; retain only the failed plugin's cause.
+async function describeInspectionFailure(report) {
+  try {
+    const redactorPath =
+      process.env.OPENCLAW_E2E_REDACTOR_MODULE ||
+      path.join(process.cwd(), "dist", "plugin-sdk", "logging-core.js");
+    const { redactSensitiveText } = await import(pathToFileURL(redactorPath).href);
+    const bounded = (value, limit) => {
+      if (typeof value !== "string") {
+        return undefined;
+      }
+      // Redact the complete field before shortening it, including credentials spanning the limit.
+      const redacted = redactSensitiveText(value, { mode: "tools" });
+      return redacted.length > limit ? `${redacted.slice(0, limit)}…` : redacted;
+    };
+    const plugin = report.plugin;
+    const diagnostics = (Array.isArray(report.diagnostics) ? report.diagnostics : []).filter(
+      (entry) => entry?.level === "error" && (!entry.pluginId || entry.pluginId === plugin?.id),
+    );
+    return `\ninspection failure details: ${JSON.stringify({
+      id: bounded(plugin?.id, 128),
+      source: bounded(plugin?.source, 1024),
+      error: bounded(plugin?.error, 2048),
+      diagnostics: diagnostics.slice(0, 10).map((entry) => ({
+        message: bounded(entry.message, 512),
+        source: bounded(entry.source, 256),
+      })),
+      omittedDiagnostics: Math.max(0, diagnostics.length - 10),
+    })}`;
+  } catch {
+    // A missing or broken redactor must not expose raw inspection data or change the failure.
+    return "\n[inspection details omitted: canonical redaction unavailable]";
+  }
+}
+
+async function assertInstalled() {
   const pluginId = process.env.KITCHEN_SINK_ID;
   const spec = process.env.KITCHEN_SINK_SPEC;
   const source = process.env.KITCHEN_SINK_SOURCE;
@@ -476,7 +494,7 @@ function assertInstalled() {
   }
   if (!allInspectPlugin.plugin?.enabled || allInspectPlugin.plugin?.status !== "loaded") {
     throw new Error(
-      `expected enabled loaded kitchen-sink plugin in inspect --all, got enabled=${allInspectPlugin.plugin?.enabled} status=${allInspectPlugin.plugin?.status}`,
+      `expected enabled loaded kitchen-sink plugin in inspect --all, got enabled=${allInspectPlugin.plugin?.enabled} status=${allInspectPlugin.plugin?.status}${await describeInspectionFailure(allInspectPlugin)}`,
     );
   }
   if (plugin.status !== "loaded") {
@@ -487,7 +505,7 @@ function assertInstalled() {
   }
   if (!inspect.plugin?.enabled || inspect.plugin?.status !== "loaded") {
     throw new Error(
-      `expected enabled loaded kitchen-sink plugin, got enabled=${inspect.plugin?.enabled} status=${inspect.plugin?.status}`,
+      `expected enabled loaded kitchen-sink plugin, got enabled=${inspect.plugin?.enabled} status=${inspect.plugin?.status}${await describeInspectionFailure(inspect)}`,
     );
   }
 
@@ -616,7 +634,12 @@ function assertInstalled() {
     if (!record.version || !record.integrity || !record.resolvedAt) {
       throw new Error(`missing ClawHub resolution metadata: ${JSON.stringify(record)}`);
     }
-    assertClawHubArtifactMetadata(record);
+    assertClawHubArtifactMetadata(record, {
+      legacyZip: "missing kitchen-sink legacy ZIP artifact metadata",
+      artifact: "missing kitchen-sink ClawHub artifact metadata",
+      clawpack: "missing kitchen-sink ClawPack metadata",
+      npm: "missing kitchen-sink npm artifact metadata",
+    });
   }
   if (typeof record.installPath !== "string" || record.installPath.length === 0) {
     throw new Error("missing kitchen-sink install path");
@@ -684,4 +707,4 @@ const fn = commands[command];
 if (!fn) {
   throw new Error(`unknown kitchen-sink assertion command: ${command}`);
 }
-fn();
+await fn();

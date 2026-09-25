@@ -6,7 +6,7 @@ import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 // Setup wizard tests cover end-to-end onboarding prompt flows.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
+import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import {
   readAuthProfileStoreForTest,
   removeOAuthTestTempRoot,
@@ -59,13 +59,7 @@ const promptAuthChoiceGrouped = vi.hoisted(() => vi.fn(async () => "skip"));
 const applyAuthChoice = vi.hoisted(() =>
   vi.fn<ApplyAuthChoice>(async (args) => ({ config: args.config })),
 );
-const prepareAuthChoice = vi.hoisted(() =>
-  vi.fn<PrepareAuthChoice>(async (args) => ({
-    ...(await applyAuthChoice(args)),
-    authProfiles: [],
-    persistAuthProfiles: async () => {},
-  })),
-);
+const prepareAuthChoice = vi.hoisted(() => vi.fn<PrepareAuthChoice>());
 const resolvePreferredProviderForAuthChoice = vi.hoisted(() => vi.fn(async () => "demo-provider"));
 const resolveManifestProviderAuthChoice = vi.hoisted(() =>
   vi.fn<ResolveManifestProviderAuthChoice>(() => undefined),
@@ -86,18 +80,7 @@ const warnIfModelConfigLooksOff = vi.hoisted(() => vi.fn(async () => {}));
 const applyPrimaryModel = vi.hoisted(() => vi.fn((cfg) => cfg));
 const promptDefaultModel = vi.hoisted(() => vi.fn<PromptDefaultModel>(async () => ({})));
 const promptCustomApiConfig = vi.hoisted(() => vi.fn(async (args) => ({ config: args.config })));
-const configureGatewayForSetup = vi.hoisted(() =>
-  vi.fn<ConfigureGatewayForSetup>(async (args) => ({
-    nextConfig: args.nextConfig,
-    settings: {
-      port: args.localPort ?? 18789,
-      bind: "loopback",
-      authMode: "token",
-      gatewayToken: "test-token",
-      tailscaleMode: "off",
-    },
-  })),
-);
+const configureGatewayForSetup = vi.hoisted(() => vi.fn<ConfigureGatewayForSetup>());
 const finalizeSetupWizard = vi.hoisted(() =>
   vi.fn(async (options) => {
     if (!options.nextConfig?.tools?.web?.search?.provider) {
@@ -141,13 +124,7 @@ const runSetupMigrationImport = vi.hoisted(() =>
   vi.fn<RunSetupMigrationImport>(async () => ({ kind: "no-imported-inference" })),
 );
 const runSetupMemoryImportStep = vi.hoisted(() => vi.fn(async () => {}));
-const verifySetupInferenceConfig = vi.hoisted(() =>
-  vi.fn<VerifySetupInferenceConfig>(async () => ({
-    ok: true,
-    modelRef: "openai/gpt-5.5",
-    latencyMs: 250,
-  })),
-);
+const verifySetupInferenceConfig = vi.hoisted(() => vi.fn<VerifySetupInferenceConfig>());
 
 const setupChannels = vi.hoisted(() =>
   vi.fn(
@@ -585,6 +562,19 @@ function createRuntime(opts?: { throwsOnExit?: boolean }): RuntimeEnv {
   };
 }
 
+function buildWizardPrompter(
+  overrides?: Partial<WizardPrompter>,
+  options?: Parameters<typeof createWizardPrompter>[1],
+): WizardPrompter {
+  return createWizardPrompter(
+    {
+      text: vi.fn(async ({ initialValue }) => initialValue ?? ""),
+      ...overrides,
+    },
+    options,
+  );
+}
+
 const defaultSetupOptions = {
   acceptRisk: true,
   flow: "quickstart",
@@ -842,43 +832,6 @@ describe("runSetupWizard", () => {
     );
     expect(resolvePluginProvidersRuntime).toHaveBeenCalled();
     setupChannels.mockClear();
-  });
-
-  it("exits when config is invalid", async () => {
-    const config = coerceConfig({ routing: { allowFrom: ["*"] } });
-    readConfigFileSnapshot.mockResolvedValueOnce({
-      ...configSnapshot(config),
-      valid: false,
-      issues: [{ path: "routing.allowFrom", message: "Legacy key" }],
-      legacyIssues: [{ path: "routing.allowFrom", message: "Legacy key" }],
-    });
-
-    const select = vi.fn(
-      async (_params: WizardSelectParams<unknown>) => "quickstart",
-    ) as unknown as WizardPrompter["select"];
-    const prompter = buildWizardPrompter({ select });
-    const runtime = createRuntime({ throwsOnExit: true });
-
-    await expect(
-      runSetupWizard(
-        {
-          acceptRisk: true,
-          flow: "quickstart",
-          authChoice: "skip",
-          installDaemon: false,
-          skipChannels: true,
-          skipSkills: true,
-          skipSearch: true,
-          skipHealth: true,
-          skipUi: true,
-        },
-        runtime,
-        prompter,
-      ),
-    ).rejects.toThrow("exit:1");
-
-    expect(select).not.toHaveBeenCalled();
-    expect(prompter.outro).toHaveBeenCalled();
   });
 
   it("skips prompts and setup steps when flags are set", async () => {

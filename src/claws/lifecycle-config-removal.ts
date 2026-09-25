@@ -146,6 +146,7 @@ async function commitClawAgentConfigRemoval(
 }
 
 type CommittedClawAgentRemoval = ClawAgentConfigRemovalResult & {
+  operationId: string;
   assertCurrent: (database?: OpenClawStateDatabase) => void;
   drainMonitors: () => Promise<void>;
   completeDeletion: (database: OpenClawStateDatabase) => void;
@@ -221,7 +222,8 @@ export async function withClawAgentConfigRemoval<T>(
           await params.quiesceMonitors(deletion.entry.operationId);
         }
         assertCurrent();
-        prepareAgentDeleteDatabases(config, params.agentId, effects.agentDir, stateOptions);
+        await prepareAgentDeleteDatabases(config, params.agentId, effects.agentDir, stateOptions);
+        assertCurrent();
         return await apply(async () => {
           assertCurrent();
           const result = await withAgentExecApprovalsRemoved(
@@ -237,6 +239,7 @@ export async function withClawAgentConfigRemoval<T>(
           assertCurrent();
           return {
             ...result,
+            operationId: deletion.entry.operationId,
             assertCurrent,
             drainMonitors: async () => {
               assertCurrent();

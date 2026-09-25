@@ -1,21 +1,16 @@
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 // Cron scratch CLI: private per-job prompt context reads and compare-and-swap writes.
 import type { Command } from "commander";
+import type {
+  CronScratchGetResult,
+  CronScratchSetResult,
+} from "../../../packages/gateway-protocol/src/schema/cron.types.js";
+import { CRON_JOB_SCRATCH_MAX_BYTES } from "../../cron/scratch-contract.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { CronCliError } from "./cron-cli-error.js";
 import { createCronOutputCommand } from "./output-mode.js";
 import { handleCronCliError, printCronJson, requireCronJobId } from "./shared.js";
 import { readCronScratchContent } from "./trigger-options.js";
-
-type ScratchRecord = { content: string; revision: number; updatedAtMs: number };
-type ScratchGetResult = {
-  scratch: ScratchRecord | null;
-  currentRevision: number;
-  maxBytes: number;
-};
-type ScratchSetResult =
-  | { ok: true; scratch: ScratchRecord | null; currentRevision: number; maxBytes: number }
-  | { ok: false; reason: "revision-conflict"; currentRevision: number };
 
 function parseExpectedRevision(value: string | undefined): number | undefined {
   if (value === undefined) {
@@ -48,20 +43,32 @@ export function registerCronScratchCommand(cron: Command) {
           if (mutations > 1) {
             throw new CronCliError("choose only one of --set, --file, or --unset");
           }
-          const current = (await callGatewayFromCli("cron.scratch.get", opts, {
-            id,
-          })) as ScratchGetResult;
-          if (mutations === 0) {
-            if (opts.json) {
-              printCronJson(current);
-            } else if (current.scratch) {
-              process.stdout.write(current.scratch.content);
+          // Inline writes with a valid explicit revision already have their CAS input.
+          // Keep the initial read before file/stdin consumption and input errors.
+          let expectedRevision =
+            mutations === 1 &&
+            opts.expectedRevision !== undefined &&
+            opts.file === undefined &&
+            (opts.unset ||
+              Buffer.byteLength(String(opts.set ?? ""), "utf8") <= CRON_JOB_SCRATCH_MAX_BYTES)
+              ? parseStrictNonNegativeInteger(opts.expectedRevision)
+              : undefined;
+          if (expectedRevision === undefined) {
+            const current = (await callGatewayFromCli("cron.scratch.get", opts, {
+              id,
+            })) as CronScratchGetResult;
+            if (mutations === 0) {
+              if (opts.json) {
+                printCronJson(current);
+              } else if (current.scratch) {
+                process.stdout.write(current.scratch.content);
+              }
+              return;
             }
-            return;
+            expectedRevision =
+              parseExpectedRevision(opts.expectedRevision) ?? current.currentRevision;
           }
 
-          const explicitRevision = parseExpectedRevision(opts.expectedRevision);
-          const expectedRevision = explicitRevision ?? current.currentRevision;
           const content = opts.unset
             ? null
             : opts.file !== undefined
@@ -71,7 +78,7 @@ export function registerCronScratchCommand(cron: Command) {
             id,
             content,
             expectedRevision,
-          })) as ScratchSetResult;
+          })) as CronScratchSetResult;
           if (!result.ok) {
             throw new CronCliError(
               `cron scratch changed concurrently (current revision ${result.currentRevision})`,

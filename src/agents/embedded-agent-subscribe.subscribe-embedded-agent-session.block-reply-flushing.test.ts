@@ -1,5 +1,6 @@
 // Block-reply flush boundaries and optional callback behavior.
 import { describe, expect, it, vi } from "vitest";
+import { markdownToIR } from "../../packages/markdown-core/src/ir.js";
 import {
   createStubSessionHarness,
   emitAssistantTextDelta,
@@ -61,7 +62,14 @@ describe("subscribeEmbeddedAgentSession", () => {
 
     expect(onBlockReplyFlush).toHaveBeenCalledTimes(2);
   });
-  it("flushes buffered block chunks before tool execution", async () => {
+  it.each([
+    { name: "prose", text: "Short chunk.", code: undefined },
+    {
+      name: "indented code with literal trailing spaces",
+      text: "    literal  ",
+      code: "literal  \n",
+    },
+  ])("flushes buffered $name before tool execution", async ({ text, code }) => {
     const { session, emit } = createStubSessionHarness();
 
     const onBlockReply = vi.fn();
@@ -81,7 +89,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       message: { role: "assistant" },
     });
 
-    emitAssistantTextDelta({ emit, delta: "Short chunk." });
+    emitAssistantTextDelta({ emit, delta: text });
 
     expect(onBlockReply).not.toHaveBeenCalled();
 
@@ -94,7 +102,16 @@ describe("subscribeEmbeddedAgentSession", () => {
     await Promise.resolve();
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(firstBlockReplyText(onBlockReply)).toBe("Short chunk.");
+    const delivered = firstBlockReplyText(onBlockReply);
+    if (code === undefined) {
+      expect(delivered).toBe(text);
+    } else {
+      const ir = markdownToIR(delivered ?? "");
+      expect(ir.styles.filter((span) => span.style === "code_block")).toEqual([
+        { start: 0, end: code.length, style: "code_block" },
+      ]);
+      expect(ir.text).toBe(code);
+    }
     expect(onBlockReplyFlush).toHaveBeenCalledTimes(1);
   });
 

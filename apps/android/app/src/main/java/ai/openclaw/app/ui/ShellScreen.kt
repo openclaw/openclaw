@@ -29,6 +29,7 @@ import ai.openclaw.app.ui.design.ClawAgentAvatar
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import ai.openclaw.app.ui.design.ClawEmptyState
 import ai.openclaw.app.ui.design.ClawListItem
+import ai.openclaw.app.ui.design.ClawListPanel
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawPlainIconButton
 import ai.openclaw.app.ui.design.ClawPrimaryButton
@@ -49,16 +50,13 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -124,8 +122,6 @@ internal enum class Tab {
 private val shellContentInsets: WindowInsets
   @Composable get() = WindowInsets.safeDrawing
 
-private val overviewMetricTileMinHeight = 96.dp
-private val overviewTalkPanelMinHeight = 72.dp
 private val overviewListRowMinHeight = 54.dp
 private const val overviewRecentSessionLimit = 50
 private const val overviewRecentSessionVisibleLimit = 3
@@ -148,6 +144,7 @@ fun ShellScreen(
     var commandOpen by rememberSaveable { mutableStateOf(false) }
     var conversationScreenWasActive by rememberSaveable { mutableStateOf(false) }
     val pendingTrust by viewModel.pendingGatewayTrust.collectAsState()
+    val gatewayAddition by viewModel.gatewayAdditionRequest.collectAsState()
     FoldAwareContent(
       features = features,
       modifier = modifier.background(ClawTheme.colors.canvas),
@@ -406,6 +403,10 @@ fun ShellScreen(
           )
         }
 
+        gatewayAddition?.let { request ->
+          key(request) { GatewayAdditionDialog(viewModel, request) }
+        }
+
         pendingTrust?.let { prompt ->
           // Gateway certificate trust is modal across the shell so navigation
           // cannot hide a changed TLS identity prompt.
@@ -509,11 +510,11 @@ private fun OverviewScreen(
   }
 
   ClawScaffold(
-    contentPadding = PaddingValues(start = 16.dp, top = 10.dp, end = 16.dp, bottom = 4.dp),
+    contentPadding = PaddingValues(horizontal = ClawTheme.spacing.sm, vertical = ClawTheme.spacing.xxs),
     contentWindowInsets = shellContentInsets,
   ) {
     Box(modifier = Modifier.fillMaxSize()) {
-      LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 6.dp)) {
+      LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs), contentPadding = PaddingValues(bottom = 6.dp)) {
         item {
           OverviewHeader(
             status = headerState,
@@ -527,7 +528,7 @@ private fun OverviewScreen(
         item {
           Text(
             text = nativeString("Overview"),
-            style = ClawTheme.type.display.copy(fontSize = 24.sp, lineHeight = 28.sp),
+            style = ClawTheme.type.display,
             color = ClawTheme.colors.text,
           )
         }
@@ -550,7 +551,7 @@ private fun OverviewScreen(
         }
 
         item {
-          OverviewMetricGrid(
+          OverviewMetricList(
             cards = metricCards,
             onOpen = { card ->
               val route = card.settingsRoute
@@ -574,7 +575,7 @@ private fun OverviewScreen(
             ClawEmptyState(
               title = nativeString("No recent threads"),
               body = nativeString("Start a chat and your active OpenClaw conversations will appear here."),
-              action = { ClawPrimaryButton(text = nativeString("Start Chat"), onClick = { onSelectTab(Tab.Chat) }) },
+              action = { ClawSecondaryButton(text = nativeString("Start Chat"), onClick = { onSelectTab(Tab.Chat) }) },
             )
           }
         } else {
@@ -610,7 +611,7 @@ private fun OverviewHeader(
   Row(
     modifier = Modifier.fillMaxWidth(),
     verticalAlignment = Alignment.CenterVertically,
-    horizontalArrangement = Arrangement.spacedBy(10.dp),
+    horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs),
   ) {
     if (showSidebarButton) {
       ClawPlainIconButton(
@@ -623,7 +624,7 @@ private fun OverviewHeader(
     OpenClawMascot(modifier = Modifier.size(25.dp))
     Text(
       text = nativeString("OpenClaw"),
-      style = ClawTheme.type.title.copy(fontSize = 17.sp, lineHeight = 21.sp),
+      style = ClawTheme.type.title,
       color = ClawTheme.colors.text,
       modifier = Modifier.weight(1f),
       maxLines = 1,
@@ -651,7 +652,7 @@ private fun OverviewStatusPill(
     onClick = onClick,
     modifier = Modifier.heightIn(min = ClawTheme.spacing.touchTarget),
     shape = RoundedCornerShape(ClawTheme.radii.control),
-    color = backgroundColor.copy(alpha = 0.82f),
+    color = backgroundColor,
     border = BorderStroke(1.dp, ClawTheme.colors.border.copy(alpha = 0.32f)),
   ) {
     Row(
@@ -660,7 +661,7 @@ private fun OverviewStatusPill(
       horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
       Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(dotColor))
-      Text(text = nativeString(status.label), style = ClawTheme.type.caption.copy(fontSize = 13.sp, lineHeight = 17.sp), color = ClawTheme.colors.text, maxLines = 1)
+      Text(text = nativeString(status.label), style = ClawTheme.type.caption, color = ClawTheme.colors.text, maxLines = 1)
       Icon(imageVector = Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(15.dp), tint = ClawTheme.colors.textMuted)
     }
   }
@@ -681,91 +682,31 @@ private fun OverviewPrimaryPanel(
   onOpenAgent: () -> Unit,
   onOpenGateway: () -> Unit,
 ) {
-  OverviewLayeredPanel(contentPadding = PaddingValues(ClawTheme.spacing.sm), elevated = true) {
+  ClawPanel(contentPadding = PaddingValues(ClawTheme.spacing.sm)) {
     Column(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xs)) {
-      Text(text = nativeString("ACTIVE AGENT"), style = ClawTheme.type.caption.copy(fontSize = 12.sp, lineHeight = 15.sp), color = ClawTheme.colors.textMuted)
+      Text(text = nativeString("ACTIVE AGENT"), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
       Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
         OverviewAgentBadge(text = agentBadge, active = isConnected, avatarSource = agentAvatarSource)
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
           Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-            Text(text = if (pendingRunCount > 0) nativeString("\$agentName is working", agentName) else agentName, style = ClawTheme.type.title.copy(fontSize = 19.sp, lineHeight = 23.sp), color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+            Text(text = if (pendingRunCount > 0) nativeString("\$agentName is working", agentName) else agentName, style = ClawTheme.type.title, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
           }
-          Text(text = overviewAgentActivityText(isConnected = isConnected, pendingRunCount = pendingRunCount, sessionCount = sessionCount, cronJobCount = cronJobCount, statusText = statusText), style = ClawTheme.type.caption.copy(fontSize = 13.5.sp, lineHeight = 17.sp), color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+          Text(text = overviewAgentActivityText(isConnected = isConnected, pendingRunCount = pendingRunCount, sessionCount = sessionCount, cronJobCount = cronJobCount, statusText = statusText), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         ClawSecondaryButton(text = nativeString("View"), onClick = onOpenAgent)
       }
-      Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+      Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
         OverviewStateChip(label = nativeString("Runs"), value = if (pendingRunCount > 0) nativeString("\$pendingRunCount active", pendingRunCount) else nativeString("Idle"), modifier = Modifier.weight(1f))
         OverviewStateChip(label = nativeString("Threads"), value = if (sessionCount == 0) nativeString("None") else nativeString("\$sessionCount recent", sessionCount), modifier = Modifier.weight(1f))
         OverviewStateChip(label = nativeString("Cron"), value = cronJobsSummary(cronJobCount), modifier = Modifier.weight(1f))
       }
-      Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        OverviewActionPill(text = nativeString("Chat"), icon = Icons.Outlined.ChatBubbleOutline, emphasized = true, onClick = onOpenChat, modifier = Modifier.weight(1f))
-        OverviewActionPill(text = nativeString("Talk"), icon = Icons.Outlined.MicNone, emphasized = false, onClick = onOpenVoice, modifier = Modifier.weight(1f))
+      Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
+        ClawPrimaryButton(text = nativeString("Chat"), icon = Icons.Outlined.ChatBubbleOutline, onClick = onOpenChat, modifier = Modifier.weight(1f))
+        ClawSecondaryButton(text = nativeString("Talk"), icon = Icons.Outlined.MicNone, onClick = onOpenVoice, modifier = Modifier.weight(1f))
       }
       if (!isConnected) {
         ClawSecondaryButton(text = nativeString("Reconnect gateway"), icon = Icons.Default.Cloud, onClick = onOpenGateway, modifier = Modifier.fillMaxWidth())
       }
-    }
-  }
-}
-
-@Composable
-private fun OverviewActionPill(
-  text: String,
-  icon: ImageVector,
-  emphasized: Boolean,
-  onClick: () -> Unit,
-  modifier: Modifier = Modifier,
-) {
-  Surface(
-    onClick = onClick,
-    modifier = modifier.heightIn(min = ClawTheme.spacing.touchTarget),
-    shape = RoundedCornerShape(ClawTheme.radii.control),
-    color =
-      if (emphasized) {
-        ClawTheme.colors.surfacePressed.copy(alpha = 0.9f)
-      } else {
-        ClawTheme.colors.surfaceRaised.copy(alpha = 0.72f)
-      },
-    contentColor = ClawTheme.colors.text,
-    border =
-      if (emphasized) {
-        null
-      } else {
-        BorderStroke(1.dp, ClawTheme.colors.borderStrong.copy(alpha = 0.7f))
-      },
-    tonalElevation = if (emphasized) 2.dp else 0.dp,
-  ) {
-    Row(
-      modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.Center,
-    ) {
-      Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(17.dp))
-      Spacer(modifier = Modifier.width(8.dp))
-      Text(text = text, style = ClawTheme.type.body, maxLines = 1, overflow = TextOverflow.Ellipsis)
-    }
-  }
-}
-
-@Composable
-private fun OverviewLayeredPanel(
-  modifier: Modifier = Modifier,
-  contentPadding: PaddingValues = PaddingValues(14.dp),
-  elevated: Boolean = false,
-  content: @Composable () -> Unit,
-) {
-  Surface(
-    modifier = modifier.fillMaxWidth(),
-    shape = RoundedCornerShape(ClawTheme.radii.button),
-    color = if (elevated) ClawTheme.colors.surfaceRaised.copy(alpha = 0.98f) else ClawTheme.colors.surfaceRaised.copy(alpha = 0.86f),
-    contentColor = ClawTheme.colors.text,
-    tonalElevation = if (elevated) 4.dp else 1.dp,
-    shadowElevation = if (elevated) 9.dp else 2.dp,
-  ) {
-    Column(modifier = Modifier.padding(contentPadding)) {
-      content()
     }
   }
 }
@@ -781,14 +722,12 @@ private fun OverviewAgentBadge(
     shape = CircleShape,
     color = if (active) ClawTheme.colors.successSoft else ClawTheme.colors.surfacePressed,
     contentColor = if (active) ClawTheme.colors.success else ClawTheme.colors.textMuted,
-    tonalElevation = if (active) 3.dp else 1.dp,
-    shadowElevation = if (active) 5.dp else 1.dp,
   ) {
     ClawAgentAvatar(source = avatarSource, size = 42.dp) {
       Box(contentAlignment = Alignment.Center) {
         Text(
           text = text,
-          style = ClawTheme.type.title.copy(fontSize = 16.sp, lineHeight = 20.sp),
+          style = ClawTheme.type.title,
           maxLines = 1,
         )
       }
@@ -802,45 +741,29 @@ private fun OverviewStateChip(
   value: String,
   modifier: Modifier = Modifier,
 ) {
-  Surface(
-    modifier = modifier.heightIn(min = ClawTheme.spacing.touchTarget),
-    shape = RoundedCornerShape(ClawTheme.radii.control),
-    color = ClawTheme.colors.surfacePressed.copy(alpha = 0.58f),
+  Column(
+    modifier = modifier.padding(vertical = ClawTheme.spacing.xxxs),
+    verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxxs),
   ) {
-    Column(
-      modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
-      verticalArrangement = Arrangement.spacedBy(1.dp),
-    ) {
-      Text(text = localizedUppercase(label, currentAppLanguage().languageTag), style = ClawTheme.type.caption.copy(fontSize = 10.5.sp, lineHeight = 13.sp), color = ClawTheme.colors.textSubtle, maxLines = 1)
-      Text(text = value, style = ClawTheme.type.caption.copy(fontSize = 14.sp, lineHeight = 17.sp), color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-    }
+    Text(text = localizedUppercase(label, currentAppLanguage().languageTag), style = ClawTheme.type.captionSmall, color = ClawTheme.colors.textSubtle)
+    Text(text = value, style = ClawTheme.type.caption, color = ClawTheme.colors.text)
   }
 }
 
 @Composable
-private fun OverviewMetricGrid(
+private fun OverviewMetricList(
   cards: List<OverviewMetricCardSpec>,
   onOpen: (OverviewMetricCardSpec) -> Unit,
 ) {
-  Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-    cards.chunked(2).forEach { row ->
-      Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        row.forEach { card ->
-          OverviewMetricTile(card = card, onClick = { onOpen(card) }, modifier = Modifier.weight(1f))
-        }
-        if (row.size == 1) {
-          Box(modifier = Modifier.weight(1f))
-        }
-      }
-    }
+  ClawListPanel(items = cards) { card ->
+    OverviewMetricRow(card = card, onClick = { onOpen(card) })
   }
 }
 
 @Composable
-private fun OverviewMetricTile(
+private fun OverviewMetricRow(
   card: OverviewMetricCardSpec,
   onClick: () -> Unit,
-  modifier: Modifier = Modifier,
 ) {
   val tint =
     when (card.status) {
@@ -849,28 +772,27 @@ private fun OverviewMetricTile(
       ClawStatus.Danger -> ClawTheme.colors.danger
       ClawStatus.Neutral -> ClawTheme.colors.textMuted
     }
-  Surface(
+  ClawListItem(
+    title = card.title,
+    subtitle = card.subtitle,
+    leading = {
+      Icon(imageVector = card.icon, contentDescription = null, modifier = Modifier.size(ClawTheme.spacing.icon), tint = tint)
+    },
+    trailing = {
+      Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
+        card.value?.let { value ->
+          Text(text = value, style = ClawTheme.type.label, color = ClawTheme.colors.text)
+        }
+        Icon(
+          imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+          contentDescription = nativeString("Open \${card.title}", card.title),
+          modifier = Modifier.size(ClawTheme.spacing.icon),
+          tint = ClawTheme.colors.textMuted,
+        )
+      }
+    },
     onClick = onClick,
-    modifier = modifier.heightIn(min = overviewMetricTileMinHeight),
-    shape = RoundedCornerShape(ClawTheme.radii.button),
-    color = ClawTheme.colors.surfaceRaised.copy(alpha = 0.84f),
-    contentColor = ClawTheme.colors.text,
-    tonalElevation = 2.dp,
-    shadowElevation = 3.dp,
-  ) {
-    Column(modifier = Modifier.padding(ClawTheme.spacing.xs), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-      Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Icon(imageVector = card.icon, contentDescription = null, modifier = Modifier.size(17.dp), tint = tint)
-        Text(text = localizedUppercase(card.title, currentAppLanguage().languageTag), style = ClawTheme.type.caption.copy(fontSize = 10.5.sp, lineHeight = 13.sp), color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-        Icon(imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = nativeString("Open \${card.title}", card.title), modifier = Modifier.size(15.dp), tint = ClawTheme.colors.textMuted)
-      }
-      Text(text = card.value, style = ClawTheme.type.title.copy(fontSize = 22.sp, lineHeight = 25.sp), color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-      Text(text = card.subtitle, style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textSubtle, maxLines = 2, overflow = TextOverflow.Ellipsis)
-      card.progressFraction?.let { progress ->
-        OverviewProgressBar(progress = progress, tint = tint)
-      }
-    }
-  }
+  )
 }
 
 internal fun localizedUppercase(
@@ -886,67 +808,22 @@ internal fun localizedInitial(
 ): String? = value.firstGraphemeOrNull()?.let { localizedUppercase(it, languageTag, fallbackLocale) }
 
 @Composable
-private fun OverviewProgressBar(
-  progress: Float,
-  tint: Color,
-) {
-  val visualProgress =
-    if (progress <= 0f) {
-      0f
-    } else {
-      progress.coerceIn(0.16f, 1f)
-    }
-  Box(
-    modifier =
-      Modifier
-        .fillMaxWidth()
-        .height(4.dp)
-        .clip(RoundedCornerShape(2.dp))
-        .background(ClawTheme.colors.surfacePressed),
-  ) {
-    Box(
-      modifier =
-        Modifier
-          .fillMaxWidth(visualProgress)
-          .height(4.dp)
-          .clip(RoundedCornerShape(2.dp))
-          .background(tint),
-    )
-  }
-}
-
-@Composable
 private fun TalkEntryPanel(
   onOpenVoice: () -> Unit,
   onOpenVoiceSettings: () -> Unit,
 ) {
-  Surface(
-    onClick = onOpenVoice,
-    modifier = Modifier.fillMaxWidth().heightIn(min = overviewTalkPanelMinHeight),
-    shape = RoundedCornerShape(ClawTheme.radii.button),
-    color = ClawTheme.colors.surfaceRaised.copy(alpha = 0.9f),
-    contentColor = ClawTheme.colors.text,
-    tonalElevation = 2.dp,
-    shadowElevation = 3.dp,
-  ) {
-    Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-      Surface(
-        modifier = Modifier.size(44.dp),
-        shape = CircleShape,
-        color = Color(0xFF1976D2),
-        tonalElevation = 2.dp,
-        shadowElevation = 5.dp,
-      ) {
-        Box(contentAlignment = Alignment.Center) {
-          Icon(imageVector = Icons.Default.GraphicEq, contentDescription = null, modifier = Modifier.size(25.dp), tint = Color.White)
-        }
-      }
-      Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(text = nativeString("Talk"), style = ClawTheme.type.caption.copy(fontSize = 12.sp, lineHeight = 15.sp), color = ClawTheme.colors.textMuted)
-        Text(text = nativeString("Open Talk"), style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-      }
-      ClawPlainIconButton(icon = Icons.Default.Tune, contentDescription = nativeString("Talk settings"), onClick = onOpenVoiceSettings)
-    }
+  ClawPanel(contentPadding = PaddingValues(horizontal = ClawTheme.spacing.xs, vertical = ClawTheme.spacing.xxxs)) {
+    ClawListItem(
+      title = nativeString("Talk"),
+      subtitle = nativeString("Open Talk"),
+      leading = {
+        Icon(imageVector = Icons.Default.GraphicEq, contentDescription = null, modifier = Modifier.size(ClawTheme.spacing.icon), tint = ClawTheme.colors.textMuted)
+      },
+      trailing = {
+        ClawPlainIconButton(icon = Icons.Default.Tune, contentDescription = nativeString("Talk settings"), onClick = onOpenVoiceSettings)
+      },
+      onClick = onOpenVoice,
+    )
   }
 }
 
@@ -1013,13 +890,12 @@ private fun ChatSessionEntry.overviewRecentSessionRecencyMs(): Long = lastActivi
 
 internal data class OverviewMetricCardSpec(
   val title: String,
-  val value: String,
+  val value: String?,
   val subtitle: String,
   val icon: ImageVector,
   val status: ClawStatus,
   val tab: Tab,
   val settingsRoute: SettingsRoute? = null,
-  val progressFraction: Float? = null,
 )
 
 internal fun overviewMetricCardSpecs(
@@ -1053,17 +929,14 @@ internal fun overviewMetricCardSpecs(
     ),
     OverviewMetricCardSpec(
       title = nativeString("Nodes"),
-      value = if (nodeCount == 0) nativeString("None") else nativeString("\$onlineNodes/\$nodeCount", onlineNodes, nodeCount),
+      value = null,
       subtitle =
-        if (nodesDevicesSummary.hasNodeCapabilityApprovalPending()) {
-          nativeString("Review node access")
-        } else if (nodeCount > 0) {
-          nativeString(
-            "\${nodeOnlinePercent(onlineNodes = onlineNodes, nodeCount = nodeCount)}% online",
-            nodeOnlinePercent(onlineNodes = onlineNodes, nodeCount = nodeCount),
-          )
-        } else {
-          nodesDevicesSummaryText(nodesDevicesSummary)
+        when {
+          nodesDevicesSummary.hasNodeCapabilityApprovalPending() -> nativeString("Review node access")
+          nodeCount == 0 && (nodesDevicesSummary.pendingDevices.isNotEmpty() || nodesDevicesSummary.pairedDevices.isNotEmpty()) -> nodesDevicesSummaryText(nodesDevicesSummary)
+          nodeCount == 0 -> nativeString("None paired")
+          onlineNodes == nodeCount -> nativeString("\$onlineNodes online", onlineNodes)
+          else -> nativeString("\$onlineNodes of \$nodeCount online", onlineNodes, nodeCount)
         },
       icon = Icons.Default.Cloud,
       status =
@@ -1074,7 +947,6 @@ internal fun overviewMetricCardSpecs(
         },
       tab = Tab.Settings,
       settingsRoute = SettingsRoute.NodesDevices,
-      progressFraction = if (nodeCount > 0) onlineNodes.toFloat() / nodeCount.toFloat() else null,
     ),
     OverviewMetricCardSpec(
       title = nativeString("Approvals"),
@@ -1167,16 +1039,6 @@ internal fun overviewAgentActivityText(
     else -> statusText
   }
 }
-
-internal fun nodeOnlinePercent(
-  onlineNodes: Int,
-  nodeCount: Int,
-): Int =
-  if (nodeCount <= 0) {
-    0
-  } else {
-    ((onlineNodes.coerceAtLeast(0) * 100) + (nodeCount / 2)) / nodeCount
-  }
 
 private fun agentInitials(name: String): String =
   name
@@ -1280,7 +1142,7 @@ private fun HomeAttentionPanel(
   onSelectTab: (Tab) -> Unit,
   onOpenSettingsRoute: (SettingsRoute) -> Unit,
 ) {
-  OverviewLayeredPanel(contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)) {
+  ClawPanel(contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
       Text(text = nativeString("Needs attention"), style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.warning)
       rows.forEach { row ->
@@ -1408,7 +1270,7 @@ private fun RecentSessionList(
   rows: List<RecentSessionListItem>,
   onOpen: (String, String?) -> Unit,
 ) {
-  OverviewLayeredPanel(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)) {
+  ClawPanel(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)) {
     Column {
       rows.forEachIndexed { index, row ->
         RecentSessionRowContent(
@@ -1535,15 +1397,21 @@ private fun SettingsShellScreen(
   val appLanguage = currentAppLanguage()
 
   ClawScaffold(
-    contentPadding = PaddingValues(start = 16.dp, top = 10.dp, end = 16.dp, bottom = 4.dp),
+    contentPadding =
+      PaddingValues(
+        start = ClawTheme.spacing.sm,
+        top = ClawTheme.spacing.xxs,
+        end = ClawTheme.spacing.sm,
+        bottom = ClawTheme.spacing.xxxs,
+      ),
     contentWindowInsets = shellContentInsets,
   ) {
-    LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(9.dp), contentPadding = PaddingValues(bottom = 4.dp)) {
+    LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs), contentPadding = PaddingValues(bottom = ClawTheme.spacing.xxxs)) {
       item {
         Row(
           modifier = Modifier.fillMaxWidth(),
           verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(9.dp),
+          horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs),
         ) {
           if (showSidebarButton) {
             ClawPlainIconButton(
@@ -1553,7 +1421,7 @@ private fun SettingsShellScreen(
               modifier = Modifier.testTag("sidebar-open-settings"),
             )
           }
-          Text(text = nativeString("Settings"), style = ClawTheme.type.display.copy(fontSize = 24.sp, lineHeight = 28.sp), color = ClawTheme.colors.text, modifier = Modifier.weight(1f))
+          Text(text = nativeString("Settings"), style = ClawTheme.type.display, color = ClawTheme.colors.text, modifier = Modifier.weight(1f))
           ClawPlainIconButton(
             icon = Icons.Default.Search,
             contentDescription = nativeString("Search settings"),
@@ -1640,13 +1508,13 @@ private fun SettingsShellScreen(
         SettingsSectionTitle(nativeText("Account"))
       }
       item {
-        ClawPanel(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)) {
+        ClawPanel(contentPadding = PaddingValues(horizontal = ClawTheme.spacing.xs, vertical = ClawTheme.spacing.xxxs)) {
           SettingsListRow(
             title = nativeText("Sign Out"),
             value = nativeText("Return to setup"),
             icon = Icons.AutoMirrored.Filled.ExitToApp,
             opensRoute = false,
-            onClick = viewModel::pairNewGateway,
+            onClick = viewModel::returnToGatewaySetup,
           )
         }
       }
@@ -1663,9 +1531,9 @@ private fun SettingsShellScreen(
 
       item {
         Text(
-          modifier = Modifier.fillMaxWidth().padding(top = 14.dp),
+          modifier = Modifier.fillMaxWidth().padding(top = ClawTheme.spacing.sm),
           text = nativeString("OpenClaw \${BuildConfig.VERSION_NAME} (\${BuildConfig.VERSION_CODE})", BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE),
-          style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp),
+          style = ClawTheme.type.caption,
           color = ClawTheme.colors.textMuted,
           textAlign = TextAlign.Center,
         )
@@ -1840,7 +1708,7 @@ private fun SettingsSectionTitle(title: NativeText) {
   val localizedTitle = title.resolveNativeTextResource()
   Text(
     text = localizedUppercase(localizedTitle, currentAppLanguage().languageTag),
-    style = ClawTheme.type.caption.copy(fontSize = 12.sp, lineHeight = 16.sp),
+    style = ClawTheme.type.caption,
     color = ClawTheme.colors.textMuted,
   )
 }
@@ -1850,7 +1718,7 @@ private fun ProfilePanel(
   displayName: String,
   onClick: () -> Unit,
 ) {
-  ClawPanel(contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)) {
+  ClawPanel(contentPadding = PaddingValues(horizontal = ClawTheme.spacing.xs, vertical = ClawTheme.spacing.xxs)) {
     Row(
       modifier =
         Modifier
@@ -1858,7 +1726,7 @@ private fun ProfilePanel(
           .clip(RoundedCornerShape(ClawTheme.radii.row))
           .clickable(onClick = onClick),
       verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(8.dp),
+      horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs),
     ) {
       Surface(
         modifier = Modifier.size(32.dp),
@@ -1870,15 +1738,15 @@ private fun ProfilePanel(
           Text(
             text =
               localizedInitial(displayName, currentAppLanguage().languageTag) ?: "O",
-            style = ClawTheme.type.title.copy(fontSize = 14.sp, lineHeight = 17.sp),
+            style = ClawTheme.type.label,
             color = ClawTheme.colors.text,
             textAlign = TextAlign.Center,
           )
         }
       }
-      Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+      Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxxs)) {
         Text(text = displayName, style = ClawTheme.type.section, color = ClawTheme.colors.text, maxLines = 1)
-        Text(text = nativeString("OpenClaw mobile"), style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
+        Text(text = nativeString("OpenClaw mobile"), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1)
       }
       Icon(
         imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
@@ -1895,7 +1763,7 @@ private fun SettingsGroup(
   rows: List<SettingsRow>,
   onOpen: (SettingsRoute) -> Unit,
 ) {
-  ClawPanel(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)) {
+  ClawPanel(contentPadding = PaddingValues(horizontal = ClawTheme.spacing.xs, vertical = ClawTheme.spacing.xxxs)) {
     ClawSeparatedColumn(items = rows) { row ->
       SettingsListRow(
         title = row.route.title,
@@ -1925,7 +1793,7 @@ private fun SettingsListRow(
       Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(20.dp), tint = ClawTheme.colors.text)
     },
     trailing = {
-      Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+      Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxxs)) {
         status?.let { active ->
           Box(modifier = Modifier.size(4.5.dp).clip(CircleShape).background(if (active) ClawTheme.colors.success else ClawTheme.colors.textSubtle))
         }

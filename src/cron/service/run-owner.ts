@@ -134,9 +134,7 @@ function emitOwnerlessFinished(
     deliveryStatus: job.state.lastDeliveryStatus,
     deliveryError: job.state.lastDeliveryError,
   };
-  if (manualRun?.runId) {
-    tryFinishCronTaskRun(state, { event, ownerlessManualRun: true });
-  }
+  tryFinishCronTaskRun(state, { event, ownerlessRun: true });
   emit(state, event);
   if (manualRun?.terminalTracker) {
     manualRun.terminalTracker.emitted = true;

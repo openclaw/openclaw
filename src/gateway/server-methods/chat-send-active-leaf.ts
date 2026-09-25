@@ -1,6 +1,7 @@
 import { readSessionTranscriptActivePathEntryRelation } from "../../config/sessions/session-accessor.js";
 import type { loadSessionEntry } from "../session-utils.js";
-import { ACTIVE_LEAF_CHANGED_ERROR_REASON } from "./chat-send-pre-admission.js";
+
+export const ACTIVE_LEAF_CHANGED_ERROR_REASON = "active-leaf-changed";
 
 export function assertExpectedLeafActive(
   session: Pick<ReturnType<typeof loadSessionEntry>, "canonicalKey" | "entry" | "storePath">,

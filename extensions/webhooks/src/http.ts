@@ -23,7 +23,10 @@ import {
   type WebhookAction,
 } from "./http-request-schema.js";
 
-type BoundTaskFlowRuntime = ReturnType<PluginRuntime["tasks"]["managedFlows"]["bindSession"]>;
+type BoundTaskFlowRuntime = ReturnType<
+  PluginRuntime["tasks"]["async"]["managedFlows"]["bindSession"]
+> &
+  Pick<ReturnType<PluginRuntime["tasks"]["managedFlows"]["bindSession"]>, "cancel">;
 
 export type TaskFlowWebhookTarget = {
   routeId: string;
@@ -408,7 +411,7 @@ async function executeWebhookAction(params: {
   const { action, target } = params;
   switch (action.action) {
     case "create_flow": {
-      const flow = target.taskFlow.tryCreateManaged({
+      const flow = await target.taskFlow.tryCreateManaged({
         controllerId: action.controllerId ?? target.defaultControllerId,
         goal: action.goal,
         status: action.status,
@@ -422,23 +425,23 @@ async function executeWebhookAction(params: {
         : { created: false, code: "persist_failed" };
     }
     case "get_flow": {
-      const flow = target.taskFlow.get(action.flowId);
+      const flow = await target.taskFlow.get(action.flowId);
       return { flow: flow ? toFlowView(flow) : null };
     }
     case "list_flows":
-      return { flows: target.taskFlow.list().map(toFlowView) };
+      return { flows: (await target.taskFlow.list()).map(toFlowView) };
     case "find_latest_flow": {
-      const flow = target.taskFlow.findLatest();
+      const flow = await target.taskFlow.findLatest();
       return { flow: flow ? toFlowView(flow) : null };
     }
     case "resolve_flow": {
-      const flow = target.taskFlow.resolve(action.token);
+      const flow = await target.taskFlow.resolve(action.token);
       return { flow: flow ? toFlowView(flow) : null };
     }
     case "get_task_summary":
-      return { summary: target.taskFlow.getTaskSummary(action.flowId) ?? null };
+      return { summary: (await target.taskFlow.getTaskSummary(action.flowId)) ?? null };
     case "set_waiting": {
-      const result = target.taskFlow.setWaiting({
+      const result = await target.taskFlow.setWaiting({
         flowId: action.flowId,
         expectedRevision: action.expectedRevision,
         currentStep: action.currentStep,
@@ -450,7 +453,7 @@ async function executeWebhookAction(params: {
       return mapFlowMutationResult(result);
     }
     case "resume_flow": {
-      const result = target.taskFlow.resume({
+      const result = await target.taskFlow.resume({
         flowId: action.flowId,
         expectedRevision: action.expectedRevision,
         status: action.status,
@@ -460,7 +463,7 @@ async function executeWebhookAction(params: {
       return mapFlowMutationResult(result);
     }
     case "finish_flow": {
-      const result = target.taskFlow.finish({
+      const result = await target.taskFlow.finish({
         flowId: action.flowId,
         expectedRevision: action.expectedRevision,
         stateJson: action.stateJson,
@@ -468,7 +471,7 @@ async function executeWebhookAction(params: {
       return mapFlowMutationResult(result);
     }
     case "fail_flow": {
-      const result = target.taskFlow.fail({
+      const result = await target.taskFlow.fail({
         flowId: action.flowId,
         expectedRevision: action.expectedRevision,
         stateJson: action.stateJson,
@@ -478,7 +481,7 @@ async function executeWebhookAction(params: {
       return mapFlowMutationResult(result);
     }
     case "request_cancel": {
-      const result = target.taskFlow.requestCancel({
+      const result = await target.taskFlow.requestCancel({
         flowId: action.flowId,
         expectedRevision: action.expectedRevision,
       });
@@ -498,7 +501,7 @@ async function executeWebhookAction(params: {
       };
     }
     case "run_task": {
-      const result = target.taskFlow.runTask({
+      const result = await target.taskFlow.runTask({
         flowId: action.flowId,
         runtime: action.runtime,
         sourceId: action.sourceId,

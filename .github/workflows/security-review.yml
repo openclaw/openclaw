@@ -1,0 +1,256 @@
+name: Security Review
+
+on:
+  pull_request_target: # zizmor: ignore[dangerous-triggers] executes trusted workflow scripts only; never checks out PR code
+    types: [opened, reopened, synchronize, ready_for_review, edited, closed]
+  issue_comment:
+    types: [created, edited, deleted]
+  workflow_run: # zizmor: ignore[dangerous-triggers] reads CI metadata only; never downloads artifacts or executes PR code
+    workflows: [CI]
+    types: [completed]
+
+permissions:
+  contents: read
+  pull-requests: read
+  actions: read
+  statuses: write
+
+# Use the event's trusted default-branch checkout in both jobs. An explicit SHA
+# can be mistaken for fork code after a merge when it matches merge_commit_sha.
+# Sparse checkout also enables blobless fetches. PR contents come from the API,
+# so neither job needs the product source tree.
+# Allow checkout recovery and one hourly API quota reset; scripts share a
+# 65-minute recovery deadline after bootstrap.
+jobs:
+  resolve:
+    # PR prose is not an approval input. Keep base/permission changes and
+    # unknown edit payloads, plus command edits/deletions that revoke approval.
+    if: >-
+      ${{ (github.event_name != 'pull_request_target' || github.event.action != 'edited' ||
+      github.event.changes.base || github.event.changes.maintainer_can_modify ||
+      (!github.event.changes.title && !github.event.changes.body)) &&
+      (github.event_name != 'issue_comment' || (github.event.issue.pull_request &&
+      (contains(github.event.comment.body, '/allow-security-sensitive-change') ||
+      contains(github.event.comment.body, '/allow-dependencies-change') ||
+      (github.event.action == 'edited' &&
+      (contains(github.event.changes.body.from, '/allow-security-sensitive-change') ||
+      contains(github.event.changes.body.from, '/allow-dependencies-change')))))) &&
+      (github.event_name != 'workflow_run' || github.event.workflow_run.event == 'pull_request' ||
+      github.event.workflow_run.event == 'workflow_dispatch') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 85
+    outputs:
+      matrix: ${{ steps.event.outputs.matrix }}
+      has-prs: ${{ steps.event.outputs.has-prs }}
+    steps:
+      - name: Check out trusted workflow scripts
+        id: checkout
+        continue-on-error: true
+        timeout-minutes: 5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: security-review-primary
+          persist-credentials: false
+          sparse-checkout: |
+            /scripts/github/guard-shared.mjs
+            /scripts/github/security-review-event.mjs
+            /scripts/lib/bounded-response.mjs
+          sparse-checkout-cone-mode: false
+
+      - name: Report checkout infrastructure retry
+        if: ${{ !cancelled() && steps.checkout.outcome == 'failure' }}
+        run: echo "::warning::Trusted workflow checkout failed; retrying GitHub source transport once."
+
+      - name: Retry trusted workflow checkout
+        id: checkout_retry
+        if: ${{ !cancelled() && steps.checkout.outcome == 'failure' }}
+        timeout-minutes: 5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: security-review-retry
+          persist-credentials: false
+          sparse-checkout: |
+            /scripts/github/guard-shared.mjs
+            /scripts/github/security-review-event.mjs
+            /scripts/lib/bounded-response.mjs
+          sparse-checkout-cone-mode: false
+
+      # A timed-out checkout can leave Git writers or locks behind. Keep its
+      # directory isolated and copy only the successful attempt's runtime files.
+      - name: Stage trusted workflow scripts
+        id: sources
+        env:
+          SOURCE_DIRECTORY: ${{ steps.checkout.outcome == 'success' && 'security-review-primary' || 'security-review-retry' }}
+        run: cp -R "$SOURCE_DIRECTORY/scripts" scripts
+
+      - name: Setup supported Node runtime
+        timeout-minutes: 3
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.21.0"
+          package-manager-cache: false
+
+      - name: Resolve current pull requests
+        id: event
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/github/security-review-event.mjs
+
+  review:
+    needs: resolve
+    if: needs.resolve.outputs.has-prs == 'true'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.resolve.outputs.matrix) }}
+    concurrency:
+      group: security-review-${{ matrix.head }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      pull-requests: write
+      actions: read
+      issues: write
+      statuses: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 85
+    env:
+      OPENCLAW_SECURITY_REVIEW_PR_NUMBER: ${{ matrix.pr }}
+      OPENCLAW_SECURITY_REVIEW_HEAD_SHA: ${{ matrix.head }}
+    steps:
+      - name: Check out trusted workflow scripts
+        id: checkout
+        continue-on-error: true
+        timeout-minutes: 5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: security-review-primary
+          persist-credentials: false
+          sparse-checkout: |
+            /scripts/github/dependency-guard.mjs
+            /scripts/github/guard-review.mjs
+            /scripts/github/guard-shared.mjs
+            /scripts/github/security-review-policy.mjs
+            /scripts/github/security-review-rollout.mjs
+            /scripts/github/security-review.mjs
+            /scripts/github/security-sensitive-guard.mjs
+            /scripts/lib/bounded-response.mjs
+            /.github/security-review-policy.yml
+            /.github/actions/setup-security-review/action.yml
+            /.github/actions/setup-security-review/package.json
+            /.github/actions/setup-security-review/package-lock.json
+          sparse-checkout-cone-mode: false
+
+      - name: Report checkout infrastructure retry
+        if: ${{ !cancelled() && steps.checkout.outcome == 'failure' }}
+        run: echo "::warning::Trusted workflow checkout failed; retrying GitHub source transport once."
+
+      - name: Retry trusted workflow checkout
+        id: checkout_retry
+        if: ${{ !cancelled() && steps.checkout.outcome == 'failure' }}
+        timeout-minutes: 5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: security-review-retry
+          persist-credentials: false
+          sparse-checkout: |
+            /scripts/github/dependency-guard.mjs
+            /scripts/github/guard-review.mjs
+            /scripts/github/guard-shared.mjs
+            /scripts/github/security-review-policy.mjs
+            /scripts/github/security-review-rollout.mjs
+            /scripts/github/security-review.mjs
+            /scripts/github/security-sensitive-guard.mjs
+            /scripts/lib/bounded-response.mjs
+            /.github/security-review-policy.yml
+            /.github/actions/setup-security-review/action.yml
+            /.github/actions/setup-security-review/package.json
+            /.github/actions/setup-security-review/package-lock.json
+          sparse-checkout-cone-mode: false
+
+      - name: Stage trusted workflow scripts
+        id: sources
+        env:
+          SOURCE_DIRECTORY: ${{ steps.checkout.outcome == 'success' && 'security-review-primary' || 'security-review-retry' }}
+        run: |
+          cp -R "$SOURCE_DIRECTORY/scripts" scripts
+          cp -R "$SOURCE_DIRECTORY/.github" .github
+
+      - name: Setup trusted policy runtime
+        id: runtime
+        timeout-minutes: 3
+        uses: ./.github/actions/setup-security-review
+
+      - name: Detect dependency changes
+        id: detect
+        if: github.event_name == 'pull_request_target' && github.event.action != 'closed' && matrix.pr == github.event.pull_request.number
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          OPENCLAW_SECURITY_REVIEW_MODE: detect
+        run: node scripts/github/security-review.mjs
+
+      - name: Create autoscrub app token
+        id: app-token
+        if: github.event_name == 'pull_request_target' && github.event.action != 'closed' && matrix.pr == github.event.pull_request.number && steps.detect.outputs.autoscrub == 'true'
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: "2729701"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: ${{ steps.detect.outputs.autoscrub-owner }}
+          repositories: ${{ steps.detect.outputs.autoscrub-repository }}
+          permission-contents: write
+
+      - name: Create fallback autoscrub app token
+        id: app-token-fallback
+        if: github.event_name == 'pull_request_target' && github.event.action != 'closed' && matrix.pr == github.event.pull_request.number && steps.detect.outputs.autoscrub == 'true' && steps.app-token.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: "2971289"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
+          owner: ${{ steps.detect.outputs.autoscrub-owner }}
+          repositories: ${{ steps.detect.outputs.autoscrub-repository }}
+          permission-contents: write
+
+      - name: Remove package lockfile changes
+        if: github.event_name == 'pull_request_target' && github.event.action != 'closed' && matrix.pr == github.event.pull_request.number && steps.detect.outputs.autoscrub == 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          OPENCLAW_DEPENDENCY_GUARD_AUTOSCRUB_TOKEN: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+          OPENCLAW_SECURITY_REVIEW_MODE: autoscrub
+        run: node scripts/github/security-review.mjs
+
+      - name: Enforce security review
+        if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          OPENCLAW_SECURITY_REVIEW_MODE: enforce
+        run: node scripts/github/security-review.mjs
+
+      # Bootstrap failures cannot load the repository's normal status publisher.
+      # This checkout-independent path can only fail the scheduled head closed.
+      - name: Report security review bootstrap failure
+        if: ${{ failure() && !cancelled() && steps.runtime.outcome != 'success' }}
+        timeout-minutes: 3
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          retries: 3
+          script: |
+            const pull_number = Number(process.env.OPENCLAW_SECURITY_REVIEW_PR_NUMBER);
+            const sha = process.env.OPENCLAW_SECURITY_REVIEW_HEAD_SHA;
+            if (!Number.isSafeInteger(pull_number) || pull_number <= 0 || !/^[a-f0-9]{40}$/.test(sha ?? '')) {
+              throw new Error('Invalid scheduled security review identity.');
+            }
+            const { data: pr } = await github.rest.pulls.get({ ...context.repo, pull_number });
+            if (pr.state !== 'open' || pr.head.sha !== sha) {
+              core.info('The PR closed or moved to another head; skipping the obsolete bootstrap failure.');
+              return;
+            }
+            await github.rest.repos.createCommitStatus({
+              ...context.repo,
+              sha,
+              context: 'openclaw/ci-gate',
+              state: 'failure',
+              description: `PR #${pull_number}: Security review setup failed; see workflow details`,
+              target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+            });

@@ -163,7 +163,7 @@ export function renderConfigAccordionNav(
                 width="14"
                 height="14"
               >
-                <polyline points="6 9 12 15 18 9"></polyline>
+                <polyline points="9 6 15 12 9 18"></polyline>
               </svg>
             </button>
             <div id=${panelId} class="config-accordion-group__items" ?hidden=${!expanded}>

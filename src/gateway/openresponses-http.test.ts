@@ -6,23 +6,14 @@ import path from "node:path";
 import OpenAI from "openai";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import {
-  buildAgentRunTerminalOutcome,
-  buildAgentRunTerminalOutcomeFromLifecycleEvent,
-} from "../agents/agent-run-terminal-outcome.js";
 import { createClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
-import { createAgentCommandLifecycle } from "../agents/command/lifecycle.js";
 import { FailoverError } from "../agents/failover-error.js";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { recordAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
-import { resetConfigRuntimeState } from "../config/config.js";
+import { resetConfigRuntimeState, type GatewayAuthConfig } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
-import {
-  emitAgentEvent,
-  getAgentEventLifecycleGeneration,
-  onAgentEvent,
-} from "../infra/agent-events.js";
+import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { getGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { enqueueCommandInLane } from "../process/command-queue.js";
 import {
@@ -30,12 +21,30 @@ import {
   isGatewaySubordinateWorkAdmissionClosed,
 } from "../process/gateway-work-admission.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
 import { IMAGE_ONLY_USER_MESSAGE } from "./agent-prompt.js";
 import {
   expectDeclaredHttpOwnerIdentity,
   expectHttpForeignSessionAuthority,
   expectSharedSecretHttpOwnerIdentity,
 } from "./http-authority.test-support.js";
+import {
+  assistantSnapshotCases,
+  streamingFailureCases,
+  captureStreamingTerminals,
+  emitResolvedStreamingFailure,
+  incompatibleReplacementCases,
+  compatibleReplacementCases,
+  bufferedReplacementCases,
+  emitIncompatibleAssistantReplacement,
+  emitCompatibleAssistantReplacement,
+  emitBufferedAssistantReplacement,
+  createOpenAiHttpTestClient,
+  parseSseEvents,
+  collectSseEventTypes,
+  findSseEvent,
+  parseSseData,
+} from "./http-stream.test-support.js";
 import type { ResponseResource } from "./open-responses.schema.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
 import {
@@ -45,6 +54,7 @@ import {
   startGatewayServerWithRetries,
   testState,
 } from "./test-helpers.js";
+import { startClaimedGateway } from "./test-helpers.listener.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
@@ -106,41 +116,16 @@ beforeEach(() => {
   fetchWithSsrFGuardMock.mockClear();
 });
 
-async function startServer(port: number, opts?: { openResponsesEnabled?: boolean }) {
-  const { startGatewayServer } = await import("./server.js");
-  const serverOpts = {
-    host: "127.0.0.1",
-    auth: { mode: "none" as const },
-    controlUiEnabled: false,
-  } as const;
-  return await startGatewayServer(
-    port,
-    opts?.openResponsesEnabled === undefined
-      ? serverOpts
-      : { ...serverOpts, openResponsesEnabled: opts.openResponsesEnabled },
-  );
-}
-
-async function startSharedSecretServer(
-  port: number,
-  mode: "token" | "password",
-  opts?: { openResponsesEnabled?: boolean },
-) {
-  const { startGatewayServer } = await import("./server.js");
-  const serverOpts = {
-    host: "127.0.0.1",
-    auth:
-      mode === "token"
-        ? { mode: "token" as const, token: "secret" }
-        : { mode: "password" as const, password: "secret" },
-    controlUiEnabled: false,
-  } as const;
-  return await startGatewayServer(
-    port,
-    opts?.openResponsesEnabled === undefined
-      ? { ...serverOpts, openResponsesEnabled: true }
-      : { ...serverOpts, openResponsesEnabled: opts.openResponsesEnabled },
-  );
+async function startServer(port: TestPortClaim, auth: GatewayAuthConfig = { mode: "none" }) {
+  return await startClaimedGateway(port, async () => {
+    const { startGatewayServer } = await import("./server.js");
+    return await startGatewayServer(port.port, {
+      host: "127.0.0.1",
+      auth,
+      controlUiEnabled: false,
+      openResponsesEnabled: true,
+    });
+  });
 }
 
 async function writeGatewayConfig(config: Record<string, unknown>) {
@@ -169,51 +154,6 @@ async function postResponses(
     ...(signal ? { signal } : {}),
   });
   return res;
-}
-
-type SseEvent = { event?: string; data: string };
-
-function parseSseEvents(text: string): SseEvent[] {
-  const events: SseEvent[] = [];
-  const lines = text.split("\n");
-  let currentEvent: string | undefined;
-  let currentData: string[] = [];
-
-  for (const line of lines) {
-    if (line.startsWith("event: ")) {
-      currentEvent = line.slice("event: ".length);
-    } else if (line.startsWith("data: ")) {
-      currentData.push(line.slice("data: ".length));
-    } else if (line.trim() === "" && currentData.length > 0) {
-      events.push({ event: currentEvent, data: currentData.join("\n") });
-      currentEvent = undefined;
-      currentData = [];
-    }
-  }
-
-  return events;
-}
-
-function collectSseEventTypes(events: readonly SseEvent[]): string[] {
-  const eventTypes: string[] = [];
-  for (const event of events) {
-    if (event.event) {
-      eventTypes.push(event.event);
-    }
-  }
-  return eventTypes;
-}
-
-function findSseEvent(events: SseEvent[], eventName: string): SseEvent {
-  const event = events.find((candidate) => candidate.event === eventName);
-  if (!event) {
-    throw new Error(`expected SSE event ${eventName}`);
-  }
-  return event;
-}
-
-function parseSseData(event: SseEvent): unknown {
-  return JSON.parse(event.data) as unknown;
 }
 
 function requireSessionKey(value: string | undefined, label: string): string {
@@ -399,24 +339,31 @@ describe("OpenResponses HTTP API (e2e)", () => {
   });
 
   it.each([
-    { stream: false, text: "SDK plain-text response", expected: "SDK plain-text response" },
-    { stream: true, text: "SDK plain-text response", expected: "SDK plain-text response" },
-    { stream: false, text: "", expected: "No response from OpenClaw." },
-    { stream: true, text: "", expected: "No response from OpenClaw." },
+    [false, [{ text: "SDK plain-text response", mediaUrl: null }], "SDK plain-text response"],
+    [true, [{ text: "SDK plain-text response", mediaUrl: null }], "SDK plain-text response"],
+    [false, [{ text: "", mediaUrl: null }], "No response from OpenClaw."],
+    [true, [{ text: "", mediaUrl: null }], "No response from OpenClaw."],
+    [
+      false,
+      [
+        { text: "", mediaUrl: "/tmp/image.png" },
+        { text: "First caption.", mediaUrl: null },
+        { text: "", mediaUrl: null },
+        { text: "", mediaUrl: "/tmp/voice.ogg", audioAsVoice: true },
+        { text: "Second caption.", mediaUrl: null },
+      ],
+      "First caption.\n\nSecond caption.",
+    ],
   ])(
-    "returns visible official SDK response text (stream: $stream, text: $text)",
-    async ({ stream, text, expected }) => {
+    "returns visible official SDK response text (stream: %s, payloads: %j)",
+    async (stream, payloads, expected) => {
       agentCommandMock.mockClear();
       agentCommandMock.mockResolvedValueOnce({
-        payloads: [{ text }],
-      } as never);
-
-      const client = new OpenAI({
-        apiKey: "test",
-        baseURL: `http://127.0.0.1:${enabledPort}/v1`,
-        defaultHeaders: { "x-openclaw-scopes": "operator.write" },
-        maxRetries: 0,
+        payloads,
+        meta: { durationMs: 0 },
       });
+
+      const client = createOpenAiHttpTestClient(enabledPort);
       const request = {
         model: "openclaw",
         input: "Return the plain-text response.",
@@ -445,69 +392,13 @@ describe("OpenResponses HTTP API (e2e)", () => {
     },
   );
 
-  it.each([
-    {
+  it.each(
+    assistantSnapshotCases({
       name: "buffered leading text in cumulative assistant snapshots",
       events: [{ text: "<tag>ok</tag>", delta: "tag>ok</tag>" }],
       expected: "<tag>ok</tag>",
-    },
-    {
-      name: "identical snapshots from distinct assistant items",
-      events: [
-        { itemId: "answer-1", text: "Echo", delta: "Echo" },
-        { itemId: "answer-2", text: "Echo", delta: "Echo" },
-      ],
-      expected: "Echo\n\nEcho",
-      resultTexts: ["Echo", "Echo"],
-    },
-    {
-      name: "replayed and growing snapshots across assistant items",
-      events: [
-        { itemId: "answer-1", text: "Echo", delta: "Echo" },
-        { itemId: "answer-1", text: "Echo", delta: "Echo" },
-        { itemId: "answer-2", text: "Echo", delta: "Echo" },
-        { itemId: "answer-2", text: "Echo", delta: "Echo" },
-        { itemId: "answer-2", text: "Echo!", delta: "!" },
-      ],
-      expected: "Echo\n\nEcho!",
-    },
-    {
-      name: "repeated delta-only text within an assistant item",
-      events: [
-        { itemId: "answer-1", delta: "Echo" },
-        { itemId: "answer-1", delta: "Echo" },
-      ],
-      expected: "EchoEcho",
-    },
-    {
-      name: "split leading newlines followed by the matching item snapshot",
-      events: [
-        { itemId: "answer-1", text: "First." },
-        { itemId: "answer-2", delta: "\n" },
-        { itemId: "answer-2", delta: "\nSecond." },
-        { itemId: "answer-2", text: "\n\nSecond." },
-      ],
-      expected: "First.\n\nSecond.",
-    },
-    {
-      name: "an empty new item followed by deltas and a matching snapshot",
-      events: [
-        { itemId: "answer-1", text: "First." },
-        { itemId: "answer-2", delta: "" },
-        { itemId: "answer-2", delta: "Second." },
-        { itemId: "answer-2", text: "Second." },
-      ],
-      expected: "First.\n\nSecond.",
-    },
-    {
-      name: "text beyond the live display cap",
-      events: [
-        { itemId: "answer-1", text: "x".repeat(500_001), delta: "x".repeat(500_001) },
-        { itemId: "answer-2", text: "tail", delta: "tail" },
-      ],
-      expected: `${"x".repeat(500_001)}\n\ntail`,
-    },
-  ])(
+    }),
+  )(
     "preserves $name in official SDK assistant streams",
     async ({ events, expected, resultTexts }) => {
       agentCommandMock.mockClear();
@@ -523,12 +414,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         return { payloads: (resultTexts ?? [expected]).map((text) => ({ text })) };
       }) as never);
 
-      const client = new OpenAI({
-        apiKey: "test",
-        baseURL: `http://127.0.0.1:${enabledPort}/v1`,
-        defaultHeaders: { "x-openclaw-scopes": "operator.write" },
-        maxRetries: 0,
-      });
+      const client = createOpenAiHttpTestClient(enabledPort);
       const stream = client.responses.stream({
         model: "openclaw",
         input: "Preserve the complete assistant snapshot.",
@@ -545,95 +431,27 @@ describe("OpenResponses HTTP API (e2e)", () => {
     },
   );
 
-  it.each([
-    { name: "rewritten", replacementText: "final answer" },
-    { name: "shortened", replacementText: "dra" },
-    { name: "cleared", replacementText: "" },
-    {
-      name: "replaced by a held provisional item",
-      previousText: "Echo",
-      replacementText: "Replacement",
-      replaceable: true,
-    },
-    {
-      name: "cleared by a held provisional item",
-      previousText: "Echo",
-      replacementText: "",
-      replaceable: true,
-    },
-    {
-      name: "cleared by an explicit empty final result",
-      previousText: "Echo",
-      replacementText: "Echo tail",
-      resultText: "",
-      replaceable: true,
-    },
-    {
-      name: "cleared by held output without a text-bearing result",
-      previousText: "Echo",
-      replacementText: "",
-      noResultText: true,
-      replaceable: true,
-    },
-    {
-      name: "replaced by a held item followed by its native terminal echo",
-      previousText: "Echo",
-      replacementText: "Replacement",
-      replaceable: true,
-      terminalEcho: true,
-    },
-  ])(
+  it.each(incompatibleReplacementCases)(
     "fails an official SDK Responses stream when streamed text is $name",
-    async ({
-      replacementText,
-      previousText = "draft answer",
-      replaceable,
-      resultText,
-      noResultText,
-      terminalEcho,
-    }) => {
+    async (scenario) => {
+      const { previousText = "draft answer" } = scenario;
       agentCommandMock.mockClear();
       agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
         const runId = (opts as { runId?: string }).runId;
         if (!runId) {
           throw new Error("expected a streaming response run ID");
         }
-        emitAgentEvent({
-          runId,
-          stream: "assistant",
-          data: {
-            text: previousText,
-            delta: previousText,
-            ...(replaceable ? { itemId: "answer-1" } : {}),
-          },
-        });
-        emitAgentEvent({
-          runId,
-          stream: "assistant",
-          data: {
-            text: replacementText,
-            replace: true,
-            ...(replaceable
-              ? { itemId: "answer-2", delta: "", replaceable: true }
-              : { phase: "commentary" }),
-          },
-        });
-        if (terminalEcho) {
-          emitAgentEvent({ runId, stream: "assistant", data: { text: replacementText } });
-        }
-        emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
         return {
-          payloads: noResultText ? [] : [{ text: resultText ?? replacementText }],
+          ...emitIncompatibleAssistantReplacement(
+            runId,
+            scenario,
+            scenario.replaceable ? "" : undefined,
+          ),
           meta: { agentMeta: { usage: { input: 11, output: 7, total: 18 } } },
         };
       }) as never);
 
-      const client = new OpenAI({
-        apiKey: "test",
-        baseURL: `http://127.0.0.1:${enabledPort}/v1`,
-        defaultHeaders: { "x-openclaw-scopes": "operator.write" },
-        maxRetries: 0,
-      });
+      const client = createOpenAiHttpTestClient(enabledPort);
       const events = await client.responses.create({
         model: "openclaw",
         input: "Reject an incompatible replacement snapshot.",
@@ -680,213 +498,71 @@ describe("OpenResponses HTTP API (e2e)", () => {
     },
   );
 
-  it.each([
-    {
-      name: "a producer replacement snapshot without a delta",
-      previousDelta: undefined,
-      replacementDelta: undefined,
-      expectedDeltas: "final answer",
-    },
-    {
-      name: "a producer replacement snapshot with its own delta",
-      previousDelta: undefined,
-      replacementDelta: "final answer",
-      expectedDeltas: "final answer",
-    },
-    {
-      name: "an append-compatible replacement after streamed partial text",
-      previousDelta: "final ",
-      replacementDelta: "answer",
-      expectedDeltas: "final answer",
-    },
-    {
-      name: "a held append-compatible replacement",
-      previousDelta: "Echo",
-      replacementText: "Echo tail",
-      replacementDelta: "",
-      replaceable: true,
-      expectedDeltas: "Echo tail",
-    },
-    {
-      name: "a corrected held replacement",
-      previousDelta: "Echo",
-      intermediateText: "Replacement",
-      replacementText: "Echo tail",
-      replacementDelta: "",
-      replaceable: true,
-      expectedDeltas: "Echo tail",
-    },
-    {
+  it.each(
+    compatibleReplacementCases.toSpliced(5, 0, {
       name: "an explicit non-provisional recovery",
       previousDelta: "final ",
       intermediateText: "incompatible correction",
       replacementDelta: "answer",
       expectedDeltas: "final answer",
-    },
-    {
-      name: "a held draft recovered only by the authoritative final result",
-      previousDelta: "Echo",
-      replacementText: "Replacement",
-      replacementDelta: "",
-      resultText: "Echo tail",
-      expectedDeltas: "Echo tail",
-      replaceable: true,
-    },
-    {
-      name: "held text without a text-bearing final payload",
-      previousDelta: "Echo",
-      replacementText: "Echo tail",
-      replacementDelta: "",
-      noResultText: true,
-      expectedDeltas: "Echo tail",
-      replaceable: true,
-    },
-    {
-      name: "an initial held draft cleared by an explicit empty result",
-      replacementText: "Draft",
-      replacementDelta: "",
-      resultText: "",
-      expectedDeltas: "",
-      replaceable: true,
-    },
-    {
-      name: "a held replacement completed by its native terminal echo",
-      previousDelta: "Echo",
-      replacementText: "Echo tail",
-      replacementDelta: "",
-      expectedDeltas: "Echo tail",
-      replaceable: true,
-      terminalEcho: true,
-    },
-    {
-      name: "an incompatible native echo recovered by the final result",
-      previousDelta: "Echo",
-      replacementText: "Replacement",
-      replacementDelta: "",
-      resultText: "Echo tail",
-      expectedDeltas: "Echo tail",
-      replaceable: true,
-      terminalEcho: true,
-    },
-  ])(
-    "keeps official SDK Responses text consistent for $name",
-    async ({
-      previousDelta,
-      replacementDelta,
-      expectedDeltas,
-      replacementText = "final answer",
-      replaceable,
-      intermediateText,
-      resultText,
-      noResultText,
-      terminalEcho,
-    }) => {
-      agentCommandMock.mockClear();
-      agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
-        const runId = (opts as { runId?: string }).runId;
-        if (!runId) {
-          throw new Error("expected a streaming response run ID");
-        }
-        if (previousDelta) {
-          emitAgentEvent({
-            runId,
-            stream: "assistant",
-            data: {
-              text: previousDelta,
-              delta: previousDelta,
-              ...(replaceable ? { itemId: "answer-1" } : {}),
-            },
-          });
-        }
-        if (intermediateText !== undefined) {
-          emitAgentEvent({
-            runId,
-            stream: "assistant",
-            data: {
-              text: intermediateText,
-              delta: "",
-              replace: true,
-              ...(replaceable ? { itemId: "answer-2", replaceable: true } : {}),
-            },
-          });
-        }
-        emitAgentEvent({
-          runId,
-          stream: "assistant",
-          data: {
-            text: replacementText,
-            replace: true,
-            ...(replaceable
-              ? {
-                  itemId: intermediateText === undefined ? "answer-2" : "answer-3",
-                  replaceable: true,
-                }
-              : { phase: "commentary" }),
-            ...(replacementDelta === undefined ? {} : { delta: replacementDelta }),
-          },
-        });
-        if (terminalEcho) {
-          emitAgentEvent({ runId, stream: "assistant", data: { text: replacementText } });
-        }
-        emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
-        return { payloads: noResultText ? [] : [{ text: resultText ?? replacementText }] };
-      }) as never);
-
-      const client = new OpenAI({
-        apiKey: "test",
-        baseURL: `http://127.0.0.1:${enabledPort}/v1`,
-        defaultHeaders: { "x-openclaw-scopes": "operator.write" },
-        maxRetries: 0,
-      });
-      const events = await client.responses.create({
-        model: "openclaw",
-        input: "Stream a replacement snapshot exactly once.",
-        stream: true,
-      });
-
-      const deltas: string[] = [];
-      const doneTexts: string[] = [];
-      const completedTexts: string[] = [];
-      for await (const event of events) {
-        if (event.type === "response.output_text.delta") {
-          deltas.push(event.delta);
-        } else if (event.type === "response.output_text.done") {
-          doneTexts.push(event.text);
-        } else if (event.type === "response.completed") {
-          completedTexts.push(
-            ...event.response.output.flatMap((item) =>
-              item.type === "message"
-                ? item.content.flatMap((part) => (part.type === "output_text" ? [part.text] : []))
-                : [],
-            ),
-          );
-        }
+    }),
+  )("keeps official SDK Responses text consistent for $name", async (scenario) => {
+    const { resultText, replacementText = "final answer", expectedDeltas } = scenario;
+    agentCommandMock.mockClear();
+    agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
+      const runId = (opts as { runId?: string }).runId;
+      if (!runId) {
+        throw new Error("expected a streaming response run ID");
       }
+      return emitCompatibleAssistantReplacement(runId, scenario);
+    }) as never);
 
-      expect(deltas.join("")).toBe(expectedDeltas);
-      expect(doneTexts).toEqual([resultText ?? replacementText]);
-      expect(completedTexts).toEqual([resultText ?? replacementText]);
-      expect(agentCommandMock).toHaveBeenCalledTimes(1);
-    },
-  );
+    const client = createOpenAiHttpTestClient(enabledPort);
+    const events = await client.responses.create({
+      model: "openclaw",
+      input: "Stream a replacement snapshot exactly once.",
+      stream: true,
+    });
+
+    const deltas: string[] = [];
+    const doneTexts: string[] = [];
+    const completedTexts: string[] = [];
+    for await (const event of events) {
+      if (event.type === "response.output_text.delta") {
+        deltas.push(event.delta);
+      } else if (event.type === "response.output_text.done") {
+        doneTexts.push(event.text);
+      } else if (event.type === "response.completed") {
+        completedTexts.push(
+          ...event.response.output.flatMap((item) =>
+            item.type === "message"
+              ? item.content.flatMap((part) => (part.type === "output_text" ? [part.text] : []))
+              : [],
+          ),
+        );
+      }
+    }
+
+    expect(deltas.join("")).toBe(expectedDeltas);
+    expect(doneTexts).toEqual([resultText ?? replacementText]);
+    expect(completedTexts).toEqual([resultText ?? replacementText]);
+    expect(agentCommandMock).toHaveBeenCalledTimes(1);
+  });
 
   it.each([
-    { name: "JSON-object output", text: { format: { type: "json_object" } } },
-    {
-      name: "JSON-schema output",
-      text: {
+    ["JSON-object output", { format: { type: "json_object" } }],
+    [
+      "JSON-schema output",
+      {
         format: {
           type: "json_schema",
           name: "value",
           schema: { type: "object" },
         },
       },
-    },
-    {
-      name: "unenforced verbosity",
-      text: { format: { type: "text" }, verbosity: "high" },
-    },
-  ])("rejects unsupported SDK text options ($name)", async ({ text }) => {
+    ],
+    ["unenforced verbosity", { format: { type: "text" }, verbosity: "high" }],
+  ])("rejects unsupported SDK text options (%s)", async (_name, text) => {
     agentCommandMock.mockClear();
 
     const res = await postResponses(enabledPort, {
@@ -1770,12 +1446,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       },
     } as never);
 
-    const client = new OpenAI({
-      apiKey: "test",
-      baseURL: `http://127.0.0.1:${enabledPort}/v1`,
-      defaultHeaders: { "x-openclaw-scopes": "operator.write" },
-      maxRetries: 0,
-    });
+    const client = createOpenAiHttpTestClient(enabledPort);
     const response = await client.responses
       .stream({
         model: "openclaw",
@@ -1848,12 +1519,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         return result;
       }) as never);
 
-      const client = new OpenAI({
-        apiKey: "test",
-        baseURL: `http://127.0.0.1:${enabledPort}/v1`,
-        defaultHeaders: { "x-openclaw-scopes": "operator.write" },
-        maxRetries: 0,
-      });
+      const client = createOpenAiHttpTestClient(enabledPort);
       const stream = client.responses.stream({
         model: "openclaw",
         input: "Finish the streamed response.",
@@ -1899,12 +1565,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       }) as never);
 
       try {
-        const client = new OpenAI({
-          apiKey: "test",
-          baseURL: `http://127.0.0.1:${enabledPort}/v1`,
-          defaultHeaders: { "x-openclaw-scopes": "operator.write" },
-          maxRetries: 0,
-        });
+        const client = createOpenAiHttpTestClient(enabledPort);
         const stream = client.responses.stream({
           model: "openclaw",
           input: "Flush the final assistant microtask.",
@@ -1970,12 +1631,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
     }) as never);
 
     try {
-      const client = new OpenAI({
-        apiKey: "test",
-        baseURL: `http://127.0.0.1:${enabledPort}/v1`,
-        defaultHeaders: { "x-openclaw-scopes": "operator.write" },
-        maxRetries: 0,
-      });
+      const client = createOpenAiHttpTestClient(enabledPort);
       const stream = client.responses.stream({
         model: "openclaw",
         input: "Reject a late incompatible assistant replacement.",
@@ -2026,12 +1682,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         };
       }) as never);
 
-      const client = new OpenAI({
-        apiKey: "test",
-        baseURL: `http://127.0.0.1:${enabledPort}/v1`,
-        defaultHeaders: { "x-openclaw-scopes": "operator.write" },
-        maxRetries: 0,
-      });
+      const client = createOpenAiHttpTestClient(enabledPort);
       const stream = client.responses.stream({
         model: "openclaw",
         input: "Report the provider failure.",
@@ -2065,44 +1716,14 @@ describe("OpenResponses HTTP API (e2e)", () => {
   );
 
   it.each([
-    {
-      name: "completed",
-      label: "completed response without a provider terminal",
-      failed: false,
-      providerTerminal: false,
-      reject: false,
-    },
-    {
-      name: "completed",
-      label: "completed response with a provider terminal",
-      failed: false,
-      providerTerminal: true,
-      reject: false,
-    },
-    {
-      name: "failed",
-      label: "provider-failed response with a resolved run",
-      failed: true,
-      providerTerminal: true,
-      reject: false,
-    },
-    {
-      name: "failed",
-      label: "rejected response with a provider terminal",
-      failed: true,
-      providerTerminal: true,
-      reject: true,
-    },
-    {
-      name: "failed",
-      label: "rejected response without a provider terminal",
-      failed: true,
-      providerTerminal: false,
-      reject: true,
-    },
+    ["completed response without a provider terminal", "completed", false, false, false],
+    ["completed response with a provider terminal", "completed", false, true, false],
+    ["provider-failed response with a resolved run", "failed", true, true, false],
+    ["rejected response with a provider terminal", "failed", true, true, true],
+    ["rejected response without a provider terminal", "failed", true, false, true],
   ])(
-    "keeps the $label admitted until its deferred SSE terminal is written",
-    async ({ name, failed, providerTerminal, reject }) => {
+    "keeps the %s admitted until its deferred SSE terminal is written",
+    async (_label, name, failed, providerTerminal, reject) => {
       const idleRootCount = getActiveGatewayRootWorkCount();
       const terminalAdmission = createDeferred<{ active: number }>();
       const wireResponse = createDeferred<string>();
@@ -2251,15 +1872,15 @@ describe("OpenResponses HTTP API (e2e)", () => {
   });
 
   it.each([
-    { name: "error stop", meta: { stopReason: "error" }, outcome: "failed", status: 500 },
-    {
-      name: "run-budget timeout without error metadata",
-      meta: { aborted: false, timeoutPhase: "provider", providerStarted: true },
-      outcome: "failed",
-      status: 500,
-    },
-    { name: "completed run with an error payload", meta: {}, outcome: "completed", status: 200 },
-  ] as const)("uses the recorded outcome for $name", async ({ meta, outcome, status }) => {
+    ["error stop", { stopReason: "error" }, "failed", 500],
+    [
+      "run-budget timeout without error metadata",
+      { aborted: false, timeoutPhase: "provider", providerStarted: true },
+      "failed",
+      500,
+    ],
+    ["completed run with an error payload", {}, "completed", 200],
+  ] as const)("uses the recorded outcome for %s", async (_name, meta, outcome, status) => {
     agentCommandMock.mockClear();
     agentCommandMock.mockResolvedValueOnce(
       recordAgentRunTerminalOutcome(
@@ -2273,103 +1894,33 @@ describe("OpenResponses HTTP API (e2e)", () => {
     await res.text();
   });
 
-  it.each(
-    [
-      {
-        label: "terminal metadata",
-        meta: { error: { kind: "incomplete_turn" as const, message: "private provider failure" } },
-        expectedPhase: "error" as const,
-      },
-      {
-        label: "an error stop reason",
-        meta: { stopReason: "error" },
-        expectedPhase: "end" as const,
-      },
-      {
-        label: "a run-budget timeout without error metadata",
-        meta: { aborted: false, timeoutPhase: "provider" as const, providerStarted: true },
-        expectedPhase: "end" as const,
-      },
-    ].flatMap((failure) =>
-      [false, true].map((producerTerminal) => ({
-        meta: failure.meta,
-        expectedPhase: failure.expectedPhase,
-        producerTerminal,
-        label: `${failure.label} ${producerTerminal ? "after" : "without"} a producer terminal`,
-      })),
-    ),
-  )(
+  it.each(streamingFailureCases)(
     "fails resolved streaming agent failures from $label",
     async ({ meta, expectedPhase, producerTerminal }) => {
       let runId: string | undefined;
-      const terminals: Array<{ phase: "end" | "error"; status: string }> = [];
-      const unsubscribe = onAgentEvent((event) => {
-        if (event.runId === runId && event.stream === "lifecycle") {
-          const phase = event.data?.phase;
-          if (phase === "end" || phase === "error") {
-            terminals.push({
-              phase,
-              status: buildAgentRunTerminalOutcomeFromLifecycleEvent({ phase, data: event.data })
-                .status,
-            });
-          }
-        }
-      });
+      const { terminals, unsubscribe } = captureStreamingTerminals(() => runId);
       agentCommandMock.mockClear();
       agentCommandMock.mockImplementationOnce((async (options: unknown) => {
         runId = (options as { runId?: string }).runId;
         if (!runId) {
           throw new Error("expected a streaming response run ID");
         }
-        emitAgentEvent({ runId, stream: "assistant", data: { delta: "partial answer" } });
-        const result = {
-          payloads: [{ text: "Command may have changed state", isError: true }],
-          meta: {
-            durationMs: 0,
+        return emitResolvedStreamingFailure(
+          runId,
+          { meta, producerTerminal },
+          {
             agentMeta: {
               sessionId: "failed-stream-session",
               provider: "openai",
               model: "test-model",
               usage: { input: 11, output: 7, total: 18 },
             },
-            ...meta,
           },
-        };
-        if (producerTerminal) {
-          const lifecycle = createAgentCommandLifecycle({
-            runId,
-            lifecycleGeneration: getAgentEventLifecycleGeneration,
-            startedAt: Date.now(),
-            state: {
-              currentTurnUserMessagePersisted: true,
-              lifecycleFinishing: false,
-              lifecycleEnded: false,
-            },
-          });
-          const terminal = {
-            metadata: {},
-            outcome: buildAgentRunTerminalOutcome({
-              status: meta.timeoutPhase ? "timeout" : "error",
-              stopReason: meta.timeoutPhase ? undefined : "error",
-              timeoutPhase: meta.timeoutPhase,
-            }),
-          };
-          if (lifecycle.resolveResultError(result, false)) {
-            lifecycle.emitResultError(result, false, terminal);
-          } else {
-            lifecycle.emitEnd(terminal);
-          }
-        }
-        return recordAgentRunTerminalOutcome(result, "failed");
+        );
       }) as never);
 
       try {
-        const client = new OpenAI({
-          apiKey: "test",
-          baseURL: `http://127.0.0.1:${enabledPort}/v1`,
-          defaultHeaders: { "x-openclaw-scopes": "operator.write" },
-          maxRetries: 0,
-        });
+        const client = createOpenAiHttpTestClient(enabledPort);
         const stream = client.responses.stream({ model: "openclaw", input: "hi" });
         const terminalEvents: string[] = [];
         const content: string[] = [];
@@ -2507,7 +2058,6 @@ describe("OpenResponses HTTP API (e2e)", () => {
     await withEnvAsync(
       { OPENCLAW_GATEWAY_TOKEN: undefined, OPENCLAW_GATEWAY_PASSWORD: undefined },
       async () => {
-        const port = await getGatewayTestPort();
         const { startGatewayServer } = await import("./server.js");
         let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
         const previousGatewayAuth = testState.gatewayAuth;
@@ -2528,12 +2078,16 @@ describe("OpenResponses HTTP API (e2e)", () => {
             },
           });
           resetConfigRuntimeState();
-          server = await startGatewayServer(port, {
-            host: "127.0.0.1",
-            auth: trustedProxyAuth,
-            controlUiEnabled: false,
-            openResponsesEnabled: true,
-          });
+          const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+          const port = portClaim.port;
+          server = await startClaimedGateway(portClaim, () =>
+            startGatewayServer(port, {
+              host: "127.0.0.1",
+              auth: trustedProxyAuth,
+              controlUiEnabled: false,
+              openResponsesEnabled: true,
+            }),
+          );
 
           const incognitoSessionKey = "agent:main:dashboard:incognito-openresponses-http";
           await upsertSessionEntryCore(
@@ -2689,8 +2243,12 @@ describe("OpenResponses HTTP API (e2e)", () => {
   it.each(["token", "password"] as const)(
     "preserves owner identity for streaming and non-streaming %s-authenticated callers",
     async (mode) => {
-      const port = await getGatewayTestPort();
-      const server = await startSharedSecretServer(port, mode);
+      const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      const port = portClaim.port;
+      const server = await startServer(
+        portClaim,
+        mode === "token" ? { mode, token: "secret" } : { mode, password: "secret" },
+      );
       try {
         await expectSharedSecretHttpOwnerIdentity({
           post: (stream, headers) =>
@@ -2738,46 +2296,58 @@ describe("OpenResponses HTTP API (e2e)", () => {
     await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount));
   });
 
-  it("preserves assistant text alongside non-stream function_call output", async () => {
-    const port = enabledPort;
-    agentCommandMock.mockClear();
-    agentCommandMock.mockResolvedValueOnce({
-      payloads: [{ text: "Let me check that." }],
-      meta: {
-        stopReason: "tool_calls",
-        pendingToolCalls: [
-          {
-            id: "call_1",
-            name: "get_weather",
-            arguments: '{"city":"Taipei"}',
-          },
-        ],
-      },
-    } as never);
+  it.each([true, false])(
+    "preserves non-stream function_call output (commentary: %s)",
+    async (commentary) => {
+      const port = enabledPort;
+      agentCommandMock.mockClear();
+      agentCommandMock.mockResolvedValueOnce({
+        payloads: commentary
+          ? [{ text: "Let me check that.", mediaUrl: null }]
+          : [{ text: "", mediaUrl: "/tmp/image.png" }],
+        meta: {
+          durationMs: 0,
+          stopReason: "tool_calls",
+          pendingToolCalls: [
+            {
+              id: "call_1",
+              name: "get_weather",
+              arguments: '{"city":"Taipei"}',
+            },
+          ],
+        },
+      });
 
-    const res = await postResponses(port, {
-      stream: false,
-      model: "openclaw",
-      input: "check the weather",
-      tools: WEATHER_TOOL,
-    });
+      const res = await postResponses(port, {
+        stream: false,
+        model: "openclaw",
+        input: "check the weather",
+        tools: WEATHER_TOOL,
+      });
 
-    expect(res.status).toBe(200);
-    const json = (await res.json()) as {
-      status?: string;
-      output?: Array<Record<string, unknown>>;
-    };
-    expect(json.status).toBe("completed");
-    expect(json.output?.map((item) => item.type)).toEqual(["message", "function_call"]);
-    expect(json.output?.[0]?.phase).toBe("commentary");
-    expect(
-      ((json.output?.[0]?.content as Array<Record<string, unknown>> | undefined)?.[0]?.text as
-        | string
-        | undefined) ?? "",
-    ).toBe("Let me check that.");
-    expect(json.output?.[1]?.name).toBe("get_weather");
-    await ensureResponseConsumed(res);
-  });
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as {
+        status?: string;
+        output?: Array<Record<string, unknown>>;
+      };
+      expect(json.status).toBe("completed");
+      expect(json.output?.map((item) => item.type)).toEqual(
+        commentary ? ["message", "function_call"] : ["function_call"],
+      );
+      if (commentary) {
+        expect(json.output?.[0]).toMatchObject({
+          phase: "commentary",
+          content: [{ type: "output_text", text: "Let me check that." }],
+        });
+      }
+      expect(json.output?.at(-1)).toMatchObject({
+        name: "get_weather",
+        call_id: "call_1",
+        arguments: '{"city":"Taipei"}',
+      });
+      await ensureResponseConsumed(res);
+    },
+  );
 
   it("rejects an unsatisfied required tool_choice on the non-streaming path", async () => {
     const port = enabledPort;
@@ -3132,16 +2702,12 @@ describe("OpenResponses HTTP API (e2e)", () => {
   );
 
   it.each([
-    { name: "an initial replacement", previousDelta: undefined, replacementDelta: undefined },
-    { name: "a replacement after buffered text", previousDelta: "draft", replacementDelta: "" },
-    {
-      name: "a replacement with an explicit delta",
-      previousDelta: "draft",
-      replacementDelta: "final answer",
-    },
+    ["an initial replacement", undefined, undefined],
+    ["a replacement after buffered text", "draft", ""],
+    ["a replacement with an explicit delta", "draft", "final answer"],
   ])(
-    "buffers $name until the required client tool is validated",
-    async ({ previousDelta, replacementDelta }) => {
+    "buffers %s until the required client tool is validated",
+    async (_name, previousDelta, replacementDelta) => {
       agentCommandMock.mockClear();
       agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
         const runId = (opts as { runId?: string }).runId;
@@ -3206,60 +2772,16 @@ describe("OpenResponses HTTP API (e2e)", () => {
     },
   );
 
-  it.each([
-    {
-      name: "a completed replacement",
-      replacement: { text: "final answer", delta: "", replace: true },
-      finalText: "final answer",
-      expected: "final answer",
-    },
-    {
-      name: "an empty snapshot",
-      replacement: { text: "", delta: "" },
-      finalText: "",
-      expected: "No response from OpenClaw.",
-    },
-    {
-      name: "an empty replacement snapshot",
-      replacement: { text: "", delta: "", replace: true },
-      finalText: "",
-      expected: "No response from OpenClaw.",
-    },
-    {
-      name: "an empty delta without a snapshot",
-      replacement: { delta: "" },
-      finalText: "",
-      expected: "coordination draft",
-    },
-  ])(
+  it.each(bufferedReplacementCases)(
     "buffers replaceable assistant events through $name",
     async ({ replacement, finalText, expected }) => {
       agentCommandMock.mockClear();
       agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
         const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
-        emitAgentEvent({
-          runId,
-          stream: "assistant",
-          data: { text: "coordination draft", delta: "coordination draft", replaceable: true },
-        });
-        emitAgentEvent({
-          runId,
-          stream: "assistant",
-          data: { ...replacement, replaceable: true },
-        });
-        if (finalText) {
-          emitAgentEvent({ runId, stream: "assistant", data: { text: finalText } });
-        }
-        emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
-        return { payloads: finalText ? [{ text: finalText }] : [] };
+        return emitBufferedAssistantReplacement(runId, { replacement, finalText });
       }) as never);
 
-      const client = new OpenAI({
-        apiKey: "test",
-        baseURL: `http://127.0.0.1:${enabledPort}/v1`,
-        defaultHeaders: { "x-openclaw-scopes": "operator.write" },
-        maxRetries: 0,
-      });
+      const client = createOpenAiHttpTestClient(enabledPort);
       const stream = client.responses.stream({
         model: "openclaw",
         input: "hi",
@@ -3521,13 +3043,13 @@ describe("OpenResponses HTTP API (e2e)", () => {
   });
 
   it.each([
-    { stream: false, tools: false },
-    { stream: true, tools: false },
-    { stream: false, tools: true },
-    { stream: true, tools: true },
+    [false, false],
+    [true, false],
+    [false, true],
+    [true, true],
   ])(
-    "replays returned items into a stateless turn (stream=$stream, tools=$tools)",
-    async ({ stream, tools }) => {
+    "replays returned items into a stateless turn (stream=%s, tools=%s)",
+    async (stream, tools) => {
       agentCommandMock.mockClear();
       const calls = [
         { id: "call_1", name: "get_weather", arguments: '{"city":"Taipei"}' },
@@ -3584,68 +3106,60 @@ describe("OpenResponses HTTP API (e2e)", () => {
   );
 
   it.each([
-    { stream: false, output: "" },
-    { stream: true, output: "" },
-    { stream: false, output: " \n " },
-    { stream: true, output: "0" },
-    { stream: false, output: "Sunny, 70F." },
-  ])(
-    "continues a client tool result (stream=$stream, output=$output)",
-    async ({ stream, output }) => {
-      const port = enabledPort;
-      const client = new OpenAI({
-        apiKey: "test",
-        baseURL: `http://127.0.0.1:${port}/v1`,
-        defaultHeaders: { "x-openclaw-scopes": "operator.write" },
-        maxRetries: 0,
-      });
-      agentCommandMock.mockClear();
-      agentCommandMock.mockResolvedValueOnce({
-        payloads: [{ text: "Let me check that." }],
-        meta: {
-          stopReason: "tool_calls",
-          pendingToolCalls: [
-            {
-              id: "call_1",
-              name: "get_weather",
-              arguments: '{"city":"Taipei"}',
-            },
-          ],
-        },
-      } as never);
+    [false, ""],
+    [true, ""],
+    [false, " \n "],
+    [true, "0"],
+    [false, "Sunny, 70F."],
+  ])("continues a client tool result (stream=%s, output=%s)", async (stream, output) => {
+    const port = enabledPort;
+    const client = createOpenAiHttpTestClient(port);
+    agentCommandMock.mockClear();
+    agentCommandMock.mockResolvedValueOnce({
+      payloads: [{ text: "Let me check that." }],
+      meta: {
+        stopReason: "tool_calls",
+        pendingToolCalls: [
+          {
+            id: "call_1",
+            name: "get_weather",
+            arguments: '{"city":"Taipei"}',
+          },
+        ],
+      },
+    } as never);
 
-      const firstJson = await client.responses.create({
-        stream: false,
-        model: "openclaw",
-        input: "check the weather",
-        tools: [{ ...WEATHER_TOOL[0], parameters: {}, strict: false }],
-      });
-      expect(firstJson.status).toBe("completed");
-      const firstOpts = firstAgentOpts() as { sessionKey?: string } | undefined;
-      expect(firstJson.id).toMatch(/^resp_/);
-      const firstSessionKey = requireSessionKey(firstOpts?.sessionKey, "first response");
+    const firstJson = await client.responses.create({
+      stream: false,
+      model: "openclaw",
+      input: "check the weather",
+      tools: [{ ...WEATHER_TOOL[0], parameters: {}, strict: false }],
+    });
+    expect(firstJson.status).toBe("completed");
+    const firstOpts = firstAgentOpts() as { sessionKey?: string } | undefined;
+    expect(firstJson.id).toMatch(/^resp_/);
+    const firstSessionKey = requireSessionKey(firstOpts?.sessionKey, "first response");
 
-      agentCommandMock.mockResolvedValueOnce({
-        payloads: [{ text: "It is sunny." }],
-      } as never);
+    agentCommandMock.mockResolvedValueOnce({
+      payloads: [{ text: "It is sunny." }],
+    } as never);
 
-      const request = {
-        model: "openclaw",
-        previous_response_id: firstJson.id,
-        input: [{ type: "function_call_output" as const, call_id: "call_1", output }],
-      };
-      const secondResponse = stream
-        ? await client.responses.stream(request).finalResponse()
-        : await client.responses.create(request);
-      expect(secondResponse.status).toBe("completed");
-      expect(secondResponse.output_text).toBe("It is sunny.");
-      expect(agentCommandMock).toHaveBeenCalledTimes(2);
-      expect(firstAgentOpts(1)).toMatchObject({
-        sessionKey: firstSessionKey,
-        message: `Tool:call_1: ${output}`,
-      });
-    },
-  );
+    const request = {
+      model: "openclaw",
+      previous_response_id: firstJson.id,
+      input: [{ type: "function_call_output" as const, call_id: "call_1", output }],
+    };
+    const secondResponse = stream
+      ? await client.responses.stream(request).finalResponse()
+      : await client.responses.create(request);
+    expect(secondResponse.status).toBe("completed");
+    expect(secondResponse.output_text).toBe("It is sunny.");
+    expect(agentCommandMock).toHaveBeenCalledTimes(2);
+    expect(firstAgentOpts(1)).toMatchObject({
+      sessionKey: firstSessionKey,
+      message: `Tool:call_1: ${output}`,
+    });
+  });
 
   it.each([undefined, null, 0, {}, []].map((output) => ({ output })))(
     "rejects malformed function output: %j",
@@ -3921,8 +3435,9 @@ describe("OpenResponses HTTP API (e2e)", () => {
     const allowlistConfig = buildResponsesUrlPolicyConfig(1);
     await writeGatewayConfig(allowlistConfig);
 
-    const allowlistPort = await getGatewayTestPort();
-    const allowlistServer = await startServer(allowlistPort, { openResponsesEnabled: true });
+    const allowlistClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+    const allowlistPort = allowlistClaim.port;
+    const allowlistServer = await startServer(allowlistClaim);
     try {
       agentCommandMock.mockClear();
 
@@ -3942,8 +3457,9 @@ describe("OpenResponses HTTP API (e2e)", () => {
     const capConfig = buildResponsesUrlPolicyConfig(0);
     await writeGatewayConfig(capConfig);
 
-    const capPort = await getGatewayTestPort();
-    const capServer = await startServer(capPort, { openResponsesEnabled: true });
+    const capClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+    const capPort = capClaim.port;
+    const capServer = await startServer(capClaim);
     try {
       agentCommandMock.mockClear();
       const maxUrlBlocked = await postResponses(capPort, {

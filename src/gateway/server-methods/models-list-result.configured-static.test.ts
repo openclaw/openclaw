@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import {
   clearUserProfileAuthLink,
   connectUserModelAccount,
@@ -15,13 +16,95 @@ import {
   WITHOUT_OPENAI_ENV_AUTH,
 } from "./models-list-result.openai-routes.test-support.js";
 import { modelsHandlers } from "./models.js";
-import type { GatewayClient, RespondFn } from "./types.js";
+import type { RespondFn } from "./types.js";
 
 describe("models.list configured static entries", () => {
   afterEach(() => {
     vi.clearAllTimers();
     vi.useRealTimers();
   });
+
+  it.each([
+    { name: "automatic", utilityModel: undefined, defaultUtilityModel: "small" },
+    { name: "explicit", utilityModel: "custom/explicit", defaultUtilityModel: "small" },
+    { name: "disabled", utilityModel: "", defaultUtilityModel: "small" },
+    { name: "no provider default", utilityModel: undefined, defaultUtilityModel: undefined },
+  ])(
+    "previews global automatic utility routing with $name configuration",
+    async ({ utilityModel, defaultUtilityModel }) => {
+      await withOpenClawTestState(
+        { layout: "state-only", prefix: "global-utility-catalog-" },
+        async (state) => {
+          const cfg: OpenClawConfig = {
+            agents: {
+              defaults: {
+                model: "global-primary@work",
+                models: { "custom/primary": { alias: "global-primary" } },
+                utilityModel,
+              },
+              entries: {
+                worker: {
+                  model: "other/primary@personal",
+                  utilityModel: "other/explicit",
+                  models: { "other/primary": { alias: "global-primary" } },
+                },
+              },
+            },
+          };
+          const metadataSnapshot = createPluginMetadataSnapshotFixture({
+            plugins: [
+              {
+                id: "custom",
+                providers: ["custom", "other"],
+                syntheticAuthRefs: ["custom", "other"],
+                modelCatalog: {
+                  providers: {
+                    custom: { defaultUtilityModel, models: [{ id: "primary" }] },
+                    other: { defaultUtilityModel: "other-small", models: [{ id: "primary" }] },
+                  },
+                },
+              },
+            ],
+          });
+          const context = createModelsListTestContext({
+            cfg,
+            agentId: "worker",
+            agentDir: state.agentDir("worker"),
+            workspaceDir: state.workspaceDir,
+            catalog: [
+              providerCatalogEntry("custom", "primary"),
+              providerCatalogEntry("other", "primary"),
+            ],
+            metadataSnapshot,
+          });
+          const params = {
+            agentId: "worker",
+            view: "configured",
+            preparedOnly: true,
+          };
+          const respond = vi.fn<RespondFn>();
+          await modelsHandlers["models.list"]!({
+            req: { type: "req", id: "global-utility", method: "models.list", params },
+            client: null,
+            context,
+            params,
+            respond,
+            isWebchatConnect: () => false,
+          });
+
+          expect(respond).toHaveBeenCalledWith(
+            true,
+            expect.objectContaining({
+              defaultModels: {
+                automaticUtilityModel: defaultUtilityModel ? "custom/small@work" : null,
+              },
+            }),
+            undefined,
+          );
+        },
+      );
+    },
+  );
 
   it("projects personal-only models for the authenticated requester without publishing shared auth", async () => {
     await withOpenClawTestState(
@@ -37,12 +120,30 @@ describe("models.list configured static entries", () => {
           staticEntries: [catalogEntry("gpt-5.6-luna", "openai-chatgpt-responses")],
         });
         const read = async (profileId?: string) => {
-          const params = { agentId: "main", view: "configured", preparedOnly: true };
+          const params = {
+            agentId: "main",
+            view: "configured",
+            preparedOnly: true,
+            includeDefaultModels: false,
+          };
           const respond = vi.fn<RespondFn>();
           await modelsHandlers["models.list"]!({
             req: { type: "req", id: "personal-catalog", method: "models.list", params },
             client: profileId
-              ? ({ authenticatedUserProfile: { profileId } } as GatewayClient)
+              ? {
+                  connect: {
+                    minProtocol: 4,
+                    maxProtocol: 4,
+                    client: { id: "cli", version: "test", platform: "test", mode: "cli" },
+                    caps: [],
+                  },
+                  authenticatedUserProfile: {
+                    profileId,
+                    displayName: null,
+                    hasAvatar: false,
+                    updatedAt: 1,
+                  },
+                }
               : null,
             context,
             params,
@@ -184,6 +285,7 @@ describe("models.list configured static entries", () => {
         view: "configured",
       }),
     ).resolves.toEqual({
+      defaultModels: { automaticUtilityModel: "openai/gpt-5.6-luna" },
       models: [
         expect.objectContaining({
           id: "gpt-5.6-sol",

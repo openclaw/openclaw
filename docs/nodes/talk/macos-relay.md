@@ -60,8 +60,17 @@ The Gateway must also advertise `gateway-relay` and `agent-consult` for the sele
 Talk and Voice Wake controls are unavailable.
 
 On Apple clients, relay playback stays active until the device finishes the queued audio, not
-until an estimated duration expires. Playback acknowledgments and microphone echo suppression
-follow that completion; pause, barge-in, and cancellation can still stop playback earlier.
+until an estimated duration expires. Playback acknowledgments follow that completion.
+Turn-based providers retain device-route microphone echo suppression and local speech interruption.
+Continuous providers such as GPT Live keep microphone input open during playback and own speech
+interruptions themselves. Apple clients use the selected provider's `talk.catalog` capability;
+if catalog access is unavailable, they leave speech interruption to the provider.
+
+Explicitly stopping GPT Live output ends the voice session. Apple clients preserve that stop
+instead of reconnecting automatically. On macOS, pausing keeps Talk paused; resuming starts a
+fresh session if the provider closed the paused session. Ordinary connection failures still
+use the recovery path below. Use headphones to avoid speaker audio feeding back into an open
+microphone.
 
 ### When realtime cannot start
 

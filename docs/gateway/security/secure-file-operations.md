@@ -1,5 +1,5 @@
 ---
-summary: "How OpenClaw handles local file access safely, and why optional fs-safe native acceleration is off by default"
+summary: "How OpenClaw handles local file access safely, including native Windows credential checks"
 read_when:
   - Changing file access, archive extraction, workspace storage, or plugin filesystem helpers
 title: "Secure file operations"
@@ -9,19 +9,22 @@ OpenClaw uses [`@openclaw/fs-safe`](https://github.com/openclaw/fs-safe) for sec
 
 It is a **library guardrail** for trusted OpenClaw code that receives untrusted path names, not a sandbox. Host filesystem permissions, OS users, containers, and the agent/tool policy still define the real blast radius.
 
-## Default: JavaScript fallback
+<a id="default-javascript-fallback" />
 
-OpenClaw sets fs-safe's optional native helper to **off** by default:
+## Platform defaults
 
-- the guarded JavaScript paths support OpenClaw's normal filesystem operations.
-- disabling native loading keeps runtime behavior deterministic across desktop, Docker, CI, and bundled-app environments.
+OpenClaw retains fs-safe's **auto** native mode on macOS, Linux, and Windows. Supported operations use the installed native helper; operations with documented JavaScript fallbacks can use those paths when native support is unavailable.
 
-fs-safe publishes prebuilt native helpers as optional platform packages for Linux x64/arm64 (glibc and musl), macOS x64/arm64, and Windows x64. A normal package install selects the matching package without a compiler. OpenClaw loads it through fs-safe's own dependency scope, including nested pnpm installs. Installs that omit optional dependencies retain the guarded JavaScript path. The `require` mode fails when the binding is unavailable.
+No-clobber `Root.move()` calls, including the default and `{ overwrite: false }`, require native support for an atomic no-replace rename. With native mode `off`, or a missing or unsupported helper, moving to an absent destination fails with `helper-unavailable` and leaves the source in place. A collision returns `already-exists`, preserving both the source and competing destination. A failed identity check after dispatch can still reject after the move has completed.
 
-OpenClaw only changes the _default_. An explicit setting always wins:
+On Windows, secure credential reads need the matching native helper to verify ownership and ACLs on the same open file descriptor that supplies the bytes.
+
+fs-safe publishes prebuilt native helpers as optional platform packages for Linux x64/arm64 (glibc and musl), macOS x64/arm64, and Windows x64. A normal package install selects the matching package without a compiler. OpenClaw loads it through fs-safe's own dependency scope, including nested pnpm installs. Windows secure reads fail with `permission-unverified` when the helper is missing, outdated, disabled, or unsupported; there is no pathname-based permission fallback. This includes installs that omit optional dependencies and native Windows ARM64 runtimes. File SecretRef providers and GitHub identity credentials require these secure reads.
+
+OpenClaw leaves fs-safe's explicit environment settings and programmatic `configureFsSafeNative()` precedence unchanged:
 
 ```bash
-# Default OpenClaw behavior: guarded JavaScript fs-safe paths.
+# Guarded JavaScript paths; no-clobber moves and Windows secure reads are unavailable.
 OPENCLAW_FS_SAFE_NATIVE_MODE=off
 
 # Prefer native primitives when the installed platform helper loads.
@@ -33,9 +36,11 @@ OPENCLAW_FS_SAFE_NATIVE_MODE=require
 
 The generic fs-safe environment name also works: `FS_SAFE_NATIVE_MODE`.
 
+[Managed worktree acceleration](/concepts/managed-worktrees#filesystem-acceleration) uses isolated native operations for APFS and Btrfs cloning and metadata reads. Those operations retain automatic native selection without changing the Gateway process's configuration. An explicit native mode applies to the isolated operations too; `off` selects normal Git checkout. Native writes remain owned by a supervised child until it exits, so cancellation cannot release the destination for cleanup while the child is still writing.
+
 fs-safe still maps the retired `FS_SAFE_PYTHON_MODE` and `OPENCLAW_FS_SAFE_PYTHON_MODE` values to native modes with a deprecation warning. Replace them with `FS_SAFE_NATIVE_MODE` or `OPENCLAW_FS_SAFE_NATIVE_MODE`. Python interpreter path settings are no longer used.
 
-Use `require` (not `auto`) when native primitives are part of your security posture. `auto` uses the guarded JavaScript implementation when the platform binding is unavailable.
+Use `require` when all native-capable operations must fail if the platform binding is unavailable. `auto` allows documented JavaScript fallbacks; no-clobber Root moves and Windows secure credential reads always require their native primitives.
 
 ## What stays protected without native acceleration
 
@@ -51,9 +56,14 @@ With the helper off, OpenClaw still gets fs-safe's Node-only guardrails:
 
 This covers OpenClaw's normal threat model: trusted gateway code handling untrusted model/plugin/channel path input inside a single trusted operator boundary.
 
+Ordinary reads return bytes from an admitted file handle without freezing the file
+against in-place writes. Writers should use atomic replacement when readers need
+complete old-or-new contents. Migration and publication owners separately verify
+their recorded content and ownership before removing or replacing files.
+
 ## What native acceleration adds
 
-The native helper provides policy-free filesystem primitives. fs-safe uses them for create-only writes, guarded hard-link publication, asynchronous sidecar creation, and explicit no-replace rename publication. Linux uses `openat2` and `renameat2`. macOS uses descriptor-relative component checks and `renameatx_np`. Windows uses handle-relative operations and replacement-disabled rename.
+The native helper provides policy-free filesystem primitives. fs-safe uses them for create-only writes, guarded hard-link publication, asynchronous sidecar creation, and explicit no-replace rename publication. Linux uses `openat2` and `renameat2`. macOS uses descriptor-relative component checks and `renameatx_np`. Windows uses handle-relative operations, replacement-disabled rename, and descriptor-bound ACL inspection for secure credential reads.
 
 The TypeScript layer still owns policy, validation, retries, cleanup, and fallback decisions. Native support narrows filesystem race windows. It does not turn fs-safe into a sandbox.
 
@@ -63,12 +73,12 @@ If your package deployment requires those native primitives, set:
 OPENCLAW_FS_SAFE_NATIVE_MODE=require
 ```
 
-In `require` mode, an unavailable or unloadable helper causes `helper-unavailable` instead of silently using the JavaScript path. Standalone sealed worker bundles have no dependency tree. They explicitly disable native loading, even when the host sets a mode override.
+In `require` mode, an unavailable or unloadable helper normally causes `helper-unavailable`; Windows secure credential reads report `permission-unverified`. Standalone sealed worker bundles have no dependency tree. They explicitly disable native loading, even when the host sets a mode override.
 
 ## Plugin and core guidance
 
-- Plugin-facing file access should go through `openclaw/plugin-sdk/*` helpers, not raw `fs`. This applies when a path comes from a message, model output, config, or plugin input.
-- Core code should use the fs-safe wrappers under `src/infra/*` so OpenClaw's process policy applies consistently.
+- Plugin-facing file access should use `openclaw/plugin-sdk/*` helpers when a path comes from a message, model output, config, or plugin input. Plugins can use reviewed fs-safe primitives directly when they declare their own fs-safe dependency and retain the applicable path policy.
+- Core code should import fs-safe primitives from their focused package entry points. Keep OpenClaw adapters where they own behavior, including secret-directory mode repair, archive durability, producer isolation, and public SDK compatibility. Pure re-exports are unnecessary: fs-safe owns its process defaults.
 - Archive extraction should use the fs-safe archive helpers with explicit size, entry-count, link, and destination limits.
 - Secrets should use OpenClaw secret helpers or fs-safe secret/private-state helpers. Do not hand-roll mode checks around `fs.writeFile`.
 - For hostile local-user isolation, do not rely on fs-safe alone. Run separate gateways under separate OS users/hosts, or use sandboxing.

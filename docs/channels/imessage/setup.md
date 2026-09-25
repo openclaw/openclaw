@@ -12,11 +12,13 @@ Install the plugin, install and verify `imsg` on the signed-in Messages Mac, con
 
 ## Install the plugin
 
-Install the official iMessage plugin on the Gateway host, then restart the Gateway:
+Install the official iMessage plugin on the Gateway host:
 
 ```bash
 openclaw plugins install @openclaw/imessage
 ```
+
+Check the [application result](/plugins/manage-plugins#apply-changes-and-inspect) before continuing.
 
 <CardGroup cols={3}>
   <Card title="Private API actions" icon="wand-sparkles" href="/channels/imessage/rich-messages#private-api-actions">

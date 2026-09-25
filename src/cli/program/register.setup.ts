@@ -39,13 +39,6 @@ export function resolveSetupCommandRoute(input: {
   return "onboarding";
 }
 
-function hasExplicitOnboardingOption(command: Command): boolean {
-  return command.options.some((option) => {
-    const name = option.attributeName();
-    return !SYSTEM_AGENT_OPTION_NAMES.has(name) && command.getOptionValueSource(name) === "cli";
-  });
-}
-
 async function runSystemAgentEntry(
   options: Record<string, unknown>,
   runtime: RuntimeEnv,
@@ -118,7 +111,8 @@ export function registerSetupCommand(program: Command): void {
       "--workspace <dir>",
       "Workspace proposal for guided setup; persisted by baseline/classic/non-interactive setup",
     )
-    .option("--agent-name <name>", "Name for the first agent (default: main)")
+    .option("--agent-name <name>", "Name for the first agent (or team coordinator)")
+    .option("--team", "Create a coordinator with researcher, writer, and reviewer specialists")
     .option("--wizard", "Run interactive onboarding", false)
     .option(
       "--baseline",
@@ -150,7 +144,8 @@ export function registerSetupCommand(program: Command): void {
     const { defaultRuntime } = await import("../../runtime.js");
     await runCommandWithRuntime(defaultRuntime, async () => {
       const options = rawOptions as Record<string, unknown>;
-      const hasOnboardingFlag = hasExplicitOnboardingOption(commandRuntime);
+      const hasOnboardingFlag =
+        listExplicitOptionFlagsExcept(commandRuntime, SYSTEM_AGENT_OPTION_NAMES).length > 0;
       const hasSystemAgentRequest = hasExplicitOptions(commandRuntime, ["message", "yes"]);
       let configured = false;
       if (!hasOnboardingFlag && !hasSystemAgentRequest) {

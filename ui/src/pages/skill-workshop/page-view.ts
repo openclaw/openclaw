@@ -3,6 +3,7 @@ import { pathForRoute } from "../../app-route-paths.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSkillWorkshopEnglish } from "../../i18n/locales/en-skill-workshop.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import {
   filterSkillWorkshopProposals,
@@ -19,6 +20,8 @@ import {
   type SkillWorkshopState,
 } from "./proposals.ts";
 import { renderSkillWorkshop } from "./view.ts";
+
+registerSkillWorkshopEnglish();
 
 export function renderSkillWorkshopPage(
   state: SkillWorkshopState,

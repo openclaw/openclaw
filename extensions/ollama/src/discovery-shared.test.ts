@@ -1,6 +1,7 @@
 // Ollama tests cover discovery shared plugin behavior.
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { describe, expect, it, vi } from "vitest";
+import { createModelProviderConfig } from "../../test-support/model-provider-config.test-support.js";
 import {
   isLocalOllamaBaseUrl,
   resolveOllamaDiscoveryResult,
@@ -224,18 +225,14 @@ describe("resolveOllamaDiscoveryResult — hosted Ollama Cloud guard", () => {
     async ({ apiKey, resolvedAuth }) => {
       const result = await resolveOllamaDiscoveryResult({
         ctx: {
-          config: {
-            models: {
-              providers: {
-                ollama: {
-                  baseUrl: "http://127.0.0.1:11434",
-                  api: "ollama",
-                  apiKey,
-                  models: [cloudModel],
-                },
-              },
+          config: createModelProviderConfig({
+            ollama: {
+              baseUrl: "http://127.0.0.1:11434",
+              api: "ollama",
+              apiKey,
+              models: [cloudModel],
             },
-          },
+          }),
           env: { RESOLVED_OLLAMA_TOKEN: "resolved-ollama-fixture" },
           resolveProviderApiKey: () => resolvedAuth,
         },
@@ -281,18 +278,14 @@ describe("resolveOllamaDiscoveryResult — hosted Ollama Cloud guard", () => {
   it("returns explicit models for remote base URL when models are configured", async () => {
     const result = await resolveOllamaDiscoveryResult({
       ctx: {
-        config: {
-          models: {
-            providers: {
-              ollama: {
-                baseUrl: "https://ollama.com",
-                apiKey: "test-key",
-                api: "ollama",
-                models: [cloudModel],
-              },
-            },
+        config: createModelProviderConfig({
+          ollama: {
+            baseUrl: "https://ollama.com",
+            apiKey: "test-key",
+            api: "ollama",
+            models: [cloudModel],
           },
-        },
+        }),
         env: {},
         resolveProviderApiKey: () => ({ apiKey: "test-key" }),
       },
@@ -306,17 +299,13 @@ describe("resolveOllamaDiscoveryResult — hosted Ollama Cloud guard", () => {
     let providerCalled = false;
     const result = await resolveOllamaDiscoveryResult({
       ctx: {
-        config: {
-          models: {
-            providers: {
-              ollama: {
-                baseUrl: "http://127.0.0.1:11434",
-                api: "ollama",
-                models: [cloudModel],
-              },
-            },
+        config: createModelProviderConfig({
+          ollama: {
+            baseUrl: "http://127.0.0.1:11434",
+            api: "ollama",
+            models: [cloudModel],
           },
-        },
+        }),
         env: {},
         resolveProviderApiKey: () => ({}),
       },

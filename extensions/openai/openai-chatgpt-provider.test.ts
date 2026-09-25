@@ -1,7 +1,7 @@
 // Openai tests cover openai chatgpt provider plugin behavior.
 import { markdownToIR } from "openclaw/plugin-sdk/text-chunking";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { OPENAI_CODEX_DEFAULT_MODEL } from "./default-models.js";
+import { OPENAI_CODEX_DEFAULT_MODEL, OPENAI_DEFAULT_MODEL } from "./default-models.js";
 
 const refreshOpenAICodexTokenMock = vi.hoisted(() => vi.fn());
 const loginOpenAICodexDeviceCodeMock = vi.hoisted(() => vi.fn());
@@ -36,17 +36,23 @@ describe("OpenAI provider Codex transport hooks", () => {
     expect(provider.id).toBe("openai");
     expect(provider.aliases).toBeUndefined();
     expect(provider.hookAliases).toEqual(["azure-openai", "azure-openai-responses"]);
-    expect(provider.auth?.map((method) => method.id)).toEqual(["oauth", "device-code", "api-key"]);
+    expect(provider.auth?.map((method) => method.id)).toEqual([
+      "oauth",
+      "device-code",
+      "siwc",
+      "api-key",
+    ]);
     expect(provider.auth?.map((method) => method.wizard?.choiceId)).toEqual([
       "openai",
       "openai-device-code",
+      "openai-token-sharing",
       "openai-api-key",
     ]);
     expect(
       provider.auth
         .filter((method) => method.kind === "oauth" || method.kind === "device_code")
         .map((method) => method.starterModel),
-    ).toEqual([OPENAI_CODEX_DEFAULT_MODEL, OPENAI_CODEX_DEFAULT_MODEL]);
+    ).toEqual([OPENAI_CODEX_DEFAULT_MODEL, OPENAI_CODEX_DEFAULT_MODEL, OPENAI_DEFAULT_MODEL]);
     expect(provider.oauthProfileIdRepairs).toBeUndefined();
   });
 
@@ -86,9 +92,9 @@ describe("OpenAI provider Codex transport hooks", () => {
         refresh: "refresh-token",
       },
     });
-    expect(result?.defaultModel).toBe("openai/gpt-5.6-sol");
+    expect(result?.defaultModel).toBe("openai/gpt-6-astra");
     expect(result?.configPatch?.agents?.defaults?.models).toEqual({
-      "openai/gpt-5.6-sol": {},
+      "openai/gpt-6-astra": {},
     });
   });
 
@@ -148,11 +154,9 @@ describe("OpenAI provider Codex transport hooks", () => {
         title: "OpenAI Codex device code",
         code: "ABCD-EFGH",
         expiresInMinutes: 15,
-        message: [
-          "Open this URL in your LOCAL browser and enter the code below.",
-          "URL: <https://auth.openai.com/codex/device>",
-        ].join("\n"),
+        message: "Enter this one-time code on the sign-in page.",
       });
+      expect(openUrl).toHaveBeenCalledWith("https://auth.openai.com/codex/device");
       expect(note).not.toHaveBeenCalled();
     },
   );

@@ -791,7 +791,10 @@ run_plugin_fixture_phase fixture-phase true
       orchestration.indexOf("if companion_survivor_scenario"),
       orchestration.indexOf("\nphase prepare-update-restart-probe"),
     );
-    const recoveryStart = orchestration.indexOf("run_plugin_fixture_phase fixture-plugin-consent");
+    const recoveryStart = orchestration.indexOf(
+      "\n",
+      orchestration.indexOf("phase assert-survival assert_survival"),
+    );
     const fixtureRecovery = orchestration.slice(
       recoveryStart,
       orchestration.indexOf('if [ "$SCENARIO" = "recovery-cleanup" ]; then', recoveryStart),

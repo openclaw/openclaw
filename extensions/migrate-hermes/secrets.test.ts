@@ -1162,9 +1162,9 @@ describe("Hermes migration secret items", () => {
       }),
     );
     expect(config.agents?.defaults?.model).toEqual({
-      primary: "openai/gpt-5.6-sol",
+      primary: "openai/gpt-6-astra",
     });
-    expect(config.agents?.defaults?.models?.["openai/gpt-5.6-sol"]).toEqual({});
+    expect(config.agents?.defaults?.models?.["openai/gpt-6-astra"]).toEqual({});
   });
 
   it("does not apply a planned OpenCode OpenAI OAuth credential after the source token changes", async () => {

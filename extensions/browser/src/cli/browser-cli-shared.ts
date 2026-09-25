@@ -1,3 +1,5 @@
+import { runCommandWithRuntime } from "openclaw/plugin-sdk/cli-runtime";
+import { callGatewayFromCli, type GatewayRpcOpts } from "openclaw/plugin-sdk/gateway-runtime";
 /**
  * Shared Browser CLI option parsing and gateway request helpers.
  */
@@ -6,19 +8,14 @@ import {
   parseStrictNonNegativeInteger,
   parseStrictPositiveInteger,
 } from "openclaw/plugin-sdk/number-runtime";
+import { danger, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import {
   BROWSER_REQUEST_GATEWAY_METHOD,
   BROWSER_REQUEST_GATEWAY_SCOPES,
 } from "../browser-gateway-contract.js";
+import { resolveBrowserProxyTimeouts } from "../browser-proxy-timeouts.js";
 import { BROWSER_ACTION_TRANSPORT_SLACK_MS } from "../browser/act-policy.js";
 import { normalizeBrowserTimerDelayMs } from "../browser/timer-delay.js";
-import {
-  callGatewayFromCli,
-  danger,
-  defaultRuntime,
-  runCommandWithRuntime,
-  type GatewayRpcOpts,
-} from "./core-api.js";
 
 /** Parent Browser CLI options inherited by subcommands. */
 export type BrowserParentOpts = GatewayRpcOpts & {
@@ -48,6 +45,60 @@ export function runBrowserCliCommand(action: () => Promise<void>) {
     defaultRuntime.error(danger(String(error)));
     defaultRuntime.exit(1);
   });
+}
+
+/** Execute a scoped request with the command family's existing error and output policy. */
+export async function runBrowserCliRequest<T = unknown>(params: {
+  parent: BrowserParentOpts;
+  method?: BrowserRequestParams["method"];
+  path: string;
+  query?: BrowserRequestParams["query"];
+  body?: unknown;
+  /** Global commands pass null instead of applying the selected profile. */
+  profile?: string | null;
+  timeoutMs?: number;
+  errorPolicy?: "runtime" | "inline";
+  successMessage?: string | ((result: T) => string);
+  print?: (result: T) => void;
+  json?: (result: T) => unknown;
+}): Promise<void> {
+  const action = async () => {
+    const profile =
+      params.profile === null ? undefined : (params.profile ?? params.parent.browserProfile);
+    const result = await callBrowserRequest<T>(
+      params.parent,
+      {
+        method: params.method ?? "POST",
+        path: params.path,
+        query: resolveBrowserProfileQuery(profile, params.query),
+        body: params.body,
+      },
+      { timeoutMs: params.timeoutMs },
+    );
+    if (params.parent.json) {
+      defaultRuntime.writeJson(params.json ? params.json(result) : result);
+    } else if (params.print) {
+      params.print(result);
+    } else if (params.successMessage !== undefined) {
+      defaultRuntime.log(
+        typeof params.successMessage === "function"
+          ? params.successMessage(result)
+          : params.successMessage,
+      );
+    }
+  };
+  if (params.errorPolicy !== "inline") {
+    await runBrowserCliCommand(action);
+    return;
+  }
+  // These older commands report even expected/JSON-mode errors locally. Keep
+  // that public CLI behavior distinct from runCommandWithRuntime's rethrow path.
+  try {
+    await action();
+  } catch (err) {
+    defaultRuntime.error(danger(String(err)));
+    defaultRuntime.exit(1);
+  }
 }
 
 /** Writes a Browser command result when structured output was requested. */
@@ -82,19 +133,9 @@ function normalizeQuery(query: BrowserRequestParams["query"]): Record<string, st
   return Object.keys(out).length ? out : undefined;
 }
 
-/** Parses a positive integer value for Browser CLI options. */
-export function parseBrowserPositiveIntegerValue(value: unknown): number | undefined {
-  return parseStrictPositiveInteger(value);
-}
-
-/** Parses a non-negative integer value for Browser CLI options. */
-export function parseBrowserNonNegativeIntegerValue(value: unknown): number | undefined {
-  return parseStrictNonNegativeInteger(value);
-}
-
 /** Parses and validates a required positive integer CLI option. */
 export function parseBrowserPositiveIntegerOption(raw: string, flag: string): number {
-  const parsed = parseBrowserPositiveIntegerValue(raw);
+  const parsed = parseStrictPositiveInteger(raw);
   if (parsed === undefined) {
     throw new Error(`${flag} must be a positive integer.`);
   }
@@ -103,7 +144,7 @@ export function parseBrowserPositiveIntegerOption(raw: string, flag: string): nu
 
 /** Parses and validates a required non-negative integer CLI option. */
 export function parseBrowserNonNegativeIntegerOption(raw: string, flag: string): number {
-  const parsed = parseBrowserNonNegativeIntegerValue(raw);
+  const parsed = parseStrictNonNegativeInteger(raw);
   if (parsed === undefined) {
     throw new Error(`${flag} must be a non-negative integer.`);
   }
@@ -122,16 +163,17 @@ export async function callBrowserRequest<T>(
       : typeof opts.timeout === "string"
         ? normalizeBrowserTimerDelayMs(parseBrowserPositiveIntegerOption(opts.timeout, "--timeout"))
         : undefined;
-  const timeout = resolvedTimeout === undefined ? opts.timeout : String(resolvedTimeout);
+  const budgets =
+    resolvedTimeout === undefined ? undefined : resolveBrowserProxyTimeouts(resolvedTimeout);
   const payload = await callGatewayFromCli(
     BROWSER_REQUEST_GATEWAY_METHOD,
-    { ...opts, timeout },
+    { ...opts, timeout: budgets ? String(budgets.gatewayTimeoutMs) : opts.timeout },
     {
       method: params.method,
       path: params.path,
       query: normalizeQuery(params.query),
       body: params.body,
-      timeoutMs: resolvedTimeout,
+      timeoutMs: budgets?.proxyTimeoutMs,
     },
     { progress: extra?.progress, scopes: [...BROWSER_REQUEST_GATEWAY_SCOPES] },
   );

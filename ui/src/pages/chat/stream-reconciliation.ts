@@ -1,4 +1,5 @@
 import {
+  projectSessionTerminalReplyMessage,
   readAssistantStreamSegmentIdentity,
   readSessionMessageIdentity,
 } from "@openclaw/gateway-client/browser";
@@ -33,7 +34,7 @@ import {
   resolveLiveToolStreamRefs,
   resolveMatchingLiveToolIdentity,
 } from "./tool-stream-identity.ts";
-import { resetToolStream, resetToolStreamRun } from "./tool-stream-state.ts";
+import { canResetToolStream, resetToolStream, resetToolStreamRun } from "./tool-stream-state.ts";
 
 type StreamReconciliationState = StreamCausalBoundaryState & {
   chatStream: string | null;
@@ -70,18 +71,6 @@ type MaterializeVisibleStreamOptions = {
   isHiddenStreamText: StreamVisibility;
 };
 
-function resettableToolStreamHost(
-  state: StreamReconciliationState,
-): Parameters<typeof resetToolStream>[0] | null {
-  const toolHost = state as ToolStreamHost & Partial<Parameters<typeof resetToolStream>[0]>;
-  return toolHost.toolStreamById instanceof Map &&
-    Array.isArray(toolHost.toolStreamOrder) &&
-    Array.isArray(toolHost.chatToolMessages) &&
-    Array.isArray(toolHost.chatStreamSegments)
-    ? (toolHost as Parameters<typeof resetToolStream>[0])
-    : null;
-}
-
 export function currentLiveToolCallIds(state: StreamReconciliationState): string[] {
   const toolHost = state as ToolStreamHost;
   return Array.isArray(toolHost.toolStreamOrder)
@@ -107,23 +96,21 @@ export function maybeResetToolStream(
   state: StreamReconciliationState,
   opts?: { preserveStreamSegments?: boolean },
 ) {
-  const toolHost = resettableToolStreamHost(state);
-  if (!toolHost) {
+  if (!canResetToolStream(state)) {
     return;
   }
   const preservedStreamSegments = opts?.preserveStreamSegments
-    ? [...toolHost.chatStreamSegments]
+    ? [...state.chatStreamSegments]
     : null;
-  resetToolStream(toolHost);
+  resetToolStream(state);
   if (preservedStreamSegments) {
-    toolHost.chatStreamSegments = preservedStreamSegments;
+    state.chatStreamSegments = preservedStreamSegments;
   }
 }
 
 export function maybeResetToolStreamRun(state: StreamReconciliationState, runId: string) {
-  const toolHost = resettableToolStreamHost(state);
-  if (toolHost) {
-    resetToolStreamRun(toolHost, runId);
+  if (canResetToolStream(state)) {
+    resetToolStreamRun(state, runId);
   }
 }
 
@@ -142,6 +129,7 @@ function buildAssistantStreamMessage(
   itemId?: string,
   runId?: string,
   afterBoundaryRunId?: string,
+  afterSequence?: number,
 ): Record<string, unknown> {
   return {
     role: "assistant",
@@ -153,13 +141,13 @@ function buildAssistantStreamMessage(
       ...(itemId ? { itemId } : {}),
       ...(runId ? { runId } : {}),
       ...(afterBoundaryRunId ? { afterBoundaryRunId } : {}),
+      ...(afterSequence === undefined ? {} : { afterSequence }),
     },
   };
 }
 
 function streamFallbackMetadata(message: unknown): Record<string, unknown> | null {
-  const metadata = asNullableRecord(asNullableRecord(message)?.openclawStreamFallback);
-  return metadata;
+  return asNullableRecord(asNullableRecord(message)?.openclawStreamFallback);
 }
 
 function unkeyedStreamFallbackMetadata(message: unknown): Record<string, unknown> | null {
@@ -192,7 +180,7 @@ export function appendTerminalAssistantMessage(
     ...(terminalRunId ? { runId: terminalRunId } : {}),
     ...(afterBoundaryRunId ? { afterBoundaryRunId } : {}),
   });
-  const terminalText = extractText(message)?.trim() ?? "";
+  const terminalText = extractText(projectSessionTerminalReplyMessage(message))?.trim() ?? "";
   const removedIndexes = new Set<number>();
   const currentFallbackIndexes: number[] = [];
   let terminalCursor = 0;
@@ -453,7 +441,7 @@ export function terminalMessageReplacesVisibleStream(
   state: StreamReconciliationState,
   opts: Pick<MaterializeVisibleStreamOptions, "isHiddenStreamText" | "persistCommentary">,
 ): boolean {
-  const terminalText = extractText(message)?.trim();
+  const terminalText = extractText(projectSessionTerminalReplyMessage(message))?.trim();
   if (!terminalText) {
     return false;
   }
@@ -585,6 +573,10 @@ export function materializeVisibleStreamState(
       part.itemId,
       part.runId,
       part.afterBoundaryRunId,
+      nextMessages
+        .slice(0, insertIndex)
+        .map((message) => readSessionMessageIdentity(message)?.sequence)
+        .findLast((sequence): sequence is number => typeof sequence === "number"),
     );
     nextMessages = [
       ...nextMessages.slice(0, insertIndex),

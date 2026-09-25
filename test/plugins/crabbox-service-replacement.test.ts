@@ -58,7 +58,7 @@ describe("Crabbox service replacement", () => {
         return {
           stdout:
             argv[1] === "--version"
-              ? "0.55.0"
+              ? "0.56.0"
               : JSON.stringify({
                   id: "cbx_replacement",
                   providerMetadata: { instanceProfileAttached: false },
@@ -86,6 +86,7 @@ describe("Crabbox service replacement", () => {
         registerService: (service) => {
           registry.services.push({
             pluginId: "crabbox",
+            id: service.id.trim(),
             service,
             source: "test",
             origin: "bundled",

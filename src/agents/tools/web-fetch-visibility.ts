@@ -13,7 +13,7 @@ import {
   readTagToken,
   skipHtmlComment,
   startsLikeHtmlTag,
-} from "./web-fetch-html-tag.js";
+} from "../../../packages/markdown-core/src/html-scanner.js";
 
 // Compile property matchers once: this list is checked for every styled element.
 const HIDDEN_STYLE_PATTERNS = (
@@ -26,6 +26,11 @@ const HIDDEN_STYLE_PATTERNS = (
     ["color", /^\s*transparent\s*$/i],
     ["color", /^\s*rgba\s*\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*0(?:\.0+)?\s*\)\s*$/i],
     ["color", /^\s*hsla\s*\(\s*[\d.]+\s*,\s*[\d.]+%?\s*,\s*[\d.]+%?\s*,\s*0(?:\.0+)?\s*\)\s*$/i],
+    // clip-path: none and inset(0%) remain visible.
+    ["clip-path", /inset\s*\(\s*(?:0*\.\d+|[1-9]\d*(?:\.\d+)?)%/i],
+    ["transform", /scale\s*\(\s*0\s*\)|translate[XY]\s*\(\s*-\d{4,}px\s*\)/i],
+    ["left", /^\s*-\d{4,}px\s*$/i],
+    ["top", /^\s*-\d{4,}px\s*$/i],
   ] satisfies Array<[string, RegExp]>
 ).map(([prop, valuePattern]) => {
   const escapedProp = prop.replace(/-/g, "\\-");
@@ -73,56 +78,18 @@ function isStyleHidden(style: string): boolean {
     }
   }
 
-  // clip-path: none is not hidden, but positive percentage inset() clipping hides content.
-  const clipPath = style.match(/(?:^|;)\s*clip-path\s*:\s*([^;]+)/i);
-  const clipPathValue = clipPath?.at(1);
-  if (clipPathValue && !/^\s*none\s*$/i.test(clipPathValue)) {
-    if (/inset\s*\(\s*(?:0*\.\d+|[1-9]\d*(?:\.\d+)?)%/i.test(clipPathValue)) {
-      return true;
-    }
-  }
-
-  // transform: scale(0)
-  const transform = style.match(/(?:^|;)\s*transform\s*:\s*([^;]+)/i);
-  const transformValue = transform?.at(1);
-  if (transformValue) {
-    if (/scale\s*\(\s*0\s*\)/i.test(transformValue)) {
-      return true;
-    }
-    if (/translateX\s*\(\s*-\d{4,}px\s*\)/i.test(transformValue)) {
-      return true;
-    }
-    if (/translateY\s*\(\s*-\d{4,}px\s*\)/i.test(transformValue)) {
-      return true;
-    }
-  }
-
   // width:0 + height:0 + overflow:hidden
   const width = style.match(/(?:^|;)\s*width\s*:\s*([^;]+)/i);
   const height = style.match(/(?:^|;)\s*height\s*:\s*([^;]+)/i);
   const overflow = style.match(/(?:^|;)\s*overflow\s*:\s*([^;]+)/i);
-  if (
+  return Boolean(
     width &&
     /^\s*0(px)?\s*$/i.test(width.at(1) ?? "") &&
     height &&
     /^\s*0(px)?\s*$/i.test(height.at(1) ?? "") &&
     overflow &&
-    /^\s*hidden\s*$/i.test(overflow.at(1) ?? "")
-  ) {
-    return true;
-  }
-
-  // Offscreen positioning: left/top far negative
-  const left = style.match(/(?:^|;)\s*left\s*:\s*([^;]+)/i);
-  const top = style.match(/(?:^|;)\s*top\s*:\s*([^;]+)/i);
-  if (left && /^\s*-\d{4,}px\s*$/i.test(left.at(1) ?? "")) {
-    return true;
-  }
-  if (top && /^\s*-\d{4,}px\s*$/i.test(top.at(1) ?? "")) {
-    return true;
-  }
-
-  return false;
+    /^\s*hidden\s*$/i.test(overflow.at(1) ?? ""),
+  );
 }
 
 // Consume complete attributes so quoted values and framework names cannot become visibility names.
@@ -192,35 +159,27 @@ const readHidden = createAttributeReader("hidden");
 const readClass = createAttributeReader("class");
 const readStyle = createAttributeReader("style");
 const readEncoding = createAttributeReader("encoding");
+const VISIBILITY_ATTRIBUTE_HINT = /hidden|class|style|type|[\u0080-\uffff]/i;
 
 function shouldRemoveElement(tagName: string, attrs: string): boolean {
   if (["meta", "template", "svg", "canvas", "iframe", "object", "embed"].includes(tagName)) {
     return true;
   }
 
-  if (tagName === "input" && normalizeOptionalLowercaseString(readType(attrs)) === "hidden") {
+  // Only skip plain ASCII attributes; every hint still uses the complete grammar.
+  if (!VISIBILITY_ATTRIBUTE_HINT.test(attrs)) {
+    return false;
+  }
+  if (
+    (tagName === "input" && normalizeOptionalLowercaseString(readType(attrs)) === "hidden") ||
+    normalizeOptionalLowercaseString(readAriaHidden(attrs)) === "true" ||
+    readHidden(attrs) !== undefined ||
+    hasHiddenClass(readClass(attrs) ?? "")
+  ) {
     return true;
   }
-
-  if (normalizeOptionalLowercaseString(readAriaHidden(attrs)) === "true") {
-    return true;
-  }
-
-  if (readHidden(attrs) !== undefined) {
-    return true;
-  }
-
-  const className = readClass(attrs) ?? "";
-  if (hasHiddenClass(className)) {
-    return true;
-  }
-
   const style = readStyle(attrs) ?? "";
-  if (style && isStyleHidden(style)) {
-    return true;
-  }
-
-  return false;
+  return style ? isStyleHidden(style) : false;
 }
 
 const LIST_CONTAINERS = new Set(["ul", "ol", "menu"]);
@@ -387,7 +346,7 @@ type OpenElement = {
   childNamespace: "html" | "math" | "svg";
 };
 
-function removeMarkedElements(html: string): string {
+export async function sanitizeHtml(html: string): Promise<string> {
   let output = "";
   let cursor = 0;
   // Scope facts belong to each open frame and restore when it closes. Indexed names
@@ -700,8 +659,4 @@ function removeMarkedElements(html: string): string {
   }
 
   return output;
-}
-
-export async function sanitizeHtml(html: string): Promise<string> {
-  return removeMarkedElements(html);
 }

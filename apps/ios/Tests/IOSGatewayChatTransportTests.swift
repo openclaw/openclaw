@@ -189,7 +189,8 @@ struct IOSGatewayChatTransportTests {
                     OpenClawChatAgentChoice(id: "zeta", name: " Zeta ", workspaceGit: true),
                     OpenClawChatAgentChoice(id: "legacy"),
                     OpenClawChatAgentChoice(id: "alpha", workspaceGit: false),
-                ]))
+                ],
+                sessionRoutingContract: "per-sender|main|system"))
             await transport.gateway.disconnect()
             await #expect(throws: Error.self) {
                 _ = try await lease.listAgents()

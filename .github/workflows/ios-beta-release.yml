@@ -6,13 +6,14 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: Upload and record, or recover recording after a terminal upload run failure
+        description: Upload and record, recover recording, or inspect without publication
         required: true
         default: upload-and-record
         type: choice
         options:
           - upload-and-record
           - record-only
+          - inspect
       target_ref:
         description: Canonical mobile release branch (release/YYYY.M.PATCH-mobile)
         required: true
@@ -20,6 +21,10 @@ on:
       target_sha:
         description: Exact lowercase commit SHA at the release branch head
         required: true
+        type: string
+      inspect_build_number:
+        description: Existing build number to inspect within the candidate App Store version; inspect only
+        required: false
         type: string
       source_run_id:
         description: Original failed upload run ID; required only for record-only recovery
@@ -30,7 +35,7 @@ permissions: {}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.19.0"
+  NODE_VERSION: "24.21.0"
 
 jobs:
   authorize:
@@ -96,7 +101,7 @@ jobs:
       actions: read
       attestations: read
       contents: read
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 120
     environment: ios-beta-release
     concurrency:
@@ -192,10 +197,10 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Setup Ruby
-        uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1
+        uses: ruby/setup-ruby@984c0c890880bbf811283d6f09c4607c62d210a4 # v1.323.0
         with:
           ruby-version: "3.4.10"
-          bundler: "2.6.9"
+          bundler: "4.0.21"
           bundler-cache: false
           working-directory: apps/ios
 
@@ -203,24 +208,15 @@ jobs:
         working-directory: apps/ios
         run: |
           set -euo pipefail
-          bundle _2.6.9_ install --jobs 4 --retry 3
-          bundle _2.6.9_ check
-          test "$(bundle _2.6.9_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.238.0"
+          bundle _4.0.21_ install --jobs 4 --retry 3
+          bundle _4.0.21_ check
+          test "$(bundle _4.0.21_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.240.1"
 
-      - name: Select Xcode 26
+      - name: Select Xcode 27
         run: |
           set -euo pipefail
-          for xcode_app in /Applications/Xcode_26.6.app /Applications/Xcode-26.6.0.app; do
-            if [[ -d "${xcode_app}/Contents/Developer" ]]; then
-              sudo xcode-select -s "${xcode_app}/Contents/Developer"
-              break
-            fi
-          done
-          xcode_version="$(xcodebuild -version | awk 'NR == 1 { print $2 }')"
-          [[ "$xcode_version" == 26.6* ]] || {
-            echo "Expected Xcode 26.6, got ${xcode_version}." >&2
-            exit 1
-          }
+          source apps/ios/build/mobile-release-ci/authority/scripts/lib/swift-toolchain.sh
+          select_xcode_toolchain 27.0
 
       - name: Install pinned Swift build tools
         run: |
@@ -398,3 +394,109 @@ jobs:
           authority-run-id: ${{ inputs.source_run_id }}
           recovery: "true"
           release-ref-private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+
+  inspect:
+    name: Inspect iOS release state without publication
+    if: inputs.operation == 'inspect'
+    permissions:
+      actions: read
+      contents: read
+    runs-on: macos-26
+    timeout-minutes: 30
+    environment: ios-beta-release
+    concurrency:
+      group: ios-beta-release-openclaw
+      cancel-in-progress: false
+    env:
+      BUNDLE_DEPLOYMENT: "true"
+    steps:
+      - name: Checkout trusted inspection tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Setup trusted Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: off
+          install-bun: "false"
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Checkout candidate data only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.target_sha }}
+          path: .ios-inspection-candidate
+          persist-credentials: false
+          fetch-depth: 0
+          sparse-checkout: |
+            apps/mobile/version.json
+            apps/ios/CHANGELOG.md
+
+      - name: Setup trusted Ruby
+        uses: ruby/setup-ruby@984c0c890880bbf811283d6f09c4607c62d210a4 # v1.323.0
+        with:
+          ruby-version: "3.4.10"
+          bundler: "4.0.21"
+          bundler-cache: false
+          working-directory: apps/ios
+
+      - name: Install locked inspection Fastlane bundle
+        working-directory: apps/ios
+        run: |
+          set -euo pipefail
+          bundle _4.0.21_ install --jobs 4 --retry 3
+          bundle _4.0.21_ check
+          test "$(bundle _4.0.21_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.240.1"
+
+      - name: Revalidate inspection authority immediately before credential access
+        id: inspection-authority
+        uses: ./.github/actions/mobile-release-authority
+        with:
+          operation: inspect
+          platform: ios
+          workflow-path: .github/workflows/ios-beta-release.yml
+          workflow-full-ref: ${{ github.workflow_ref }}
+          workflow-sha: ${{ github.workflow_sha }}
+          target-ref: ${{ inputs.target_ref }}
+          target-sha: ${{ inputs.target_sha }}
+          authority-run-id: ${{ github.run_id }}
+
+      - name: Inspect iOS plan and exact build relationships
+        env:
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_KEY_CONTENT: ${{ secrets.APP_STORE_CONNECT_KEY_CONTENT }}
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          TESTFLIGHT_INTERNAL_GROUP: ${{ vars.TESTFLIGHT_INTERNAL_GROUP }}
+          INSPECT_APP_STORE_VERSION: ${{ steps.inspection-authority.outputs.inspection-app-store-version }}
+          INSPECT_BUILD_NUMBER: ${{ inputs.inspect_build_number }}
+        run: |
+          set -euo pipefail
+          source ./scripts/lib/ios-fastlane.sh
+          (cd apps/ios && run_ios_fastlane ios release_inspect \
+            "source_root:${GITHUB_WORKSPACE}/.ios-inspection-candidate" \
+            "app_store_version:${INSPECT_APP_STORE_VERSION}" \
+            "build_number:${INSPECT_BUILD_NUMBER}" \
+            "output_directory:${RUNNER_TEMP}/ios-release-inspection")
+
+      - name: Revalidate inspection authority before retaining observations
+        uses: ./.github/actions/mobile-release-authority
+        with:
+          operation: inspect
+          platform: ios
+          workflow-path: .github/workflows/ios-beta-release.yml
+          workflow-full-ref: ${{ github.workflow_ref }}
+          workflow-sha: ${{ github.workflow_sha }}
+          target-ref: ${{ inputs.target_ref }}
+          target-sha: ${{ inputs.target_sha }}
+          authority-run-id: ${{ github.run_id }}
+
+      - name: Upload read-only inspection observations
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ios-release-inspection-${{ github.run_id }}-1
+          path: ${{ runner.temp }}/ios-release-inspection/*.json
+          if-no-files-found: error
+          retention-days: 7

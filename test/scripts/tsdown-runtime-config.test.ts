@@ -3,7 +3,10 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
-import { describe, expect, it } from "vitest";
+import type { TsdownPluginOption } from "tsdown";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildPluginSdkPackageExports } from "../../scripts/lib/plugin-sdk-entries.mts";
+import { importFreshModule } from "../../src/plugin-sdk/test-helpers/import-fresh.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../src/state/openclaw-agent-schema.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../src/state/openclaw-state-schema.js";
 import tsdownConfig, {
@@ -21,10 +24,10 @@ type TsdownConfigEntry = {
   minify?: unknown;
   dts?: boolean | { emitDtsOnly?: boolean };
   define?: Record<string, unknown>;
-  outputOptions?: { codeSplitting?: boolean };
+  outputOptions?: { codeSplitting?: boolean; chunkFileNames?: string };
   outExtensions?: () => { js: string };
   outDir?: string;
-  plugins?: Array<{ name?: string }>;
+  plugins?: TsdownPluginOption;
 };
 
 type TsdownLog = {
@@ -59,6 +62,21 @@ function asConfigArray(config: unknown): TsdownConfigEntry[] {
   return Array.isArray(config) ? (config as TsdownConfigEntry[]) : [config as TsdownConfigEntry];
 }
 
+// Keep config assertions aligned with tsdown's nested, async plugin slots.
+async function resolvePluginNames(plugins: TsdownPluginOption): Promise<string[]> {
+  const resolved = await plugins;
+  if (!resolved) {
+    return [];
+  }
+  if (Array.isArray(resolved)) {
+    return (await Promise.all(resolved.map(resolvePluginNames))).flat();
+  }
+  if (!("name" in resolved)) {
+    throw new Error("expected a named plugin in build config assertions");
+  }
+  return [resolved.name];
+}
+
 function entryKeys(config: TsdownConfigEntry): string[] {
   if (!config.entry || Array.isArray(config.entry)) {
     return [];
@@ -73,14 +91,22 @@ function entrySources(config: TsdownConfigEntry): Record<string, string> {
   return config.entry;
 }
 
-function requireSqliteReadOnlyChildGraph(): TsdownConfigEntry {
+function requireStandaloneRuntimeGraph(entry: string): TsdownConfigEntry {
   const graphs = asConfigArray(tsdownConfig).filter(
     (config) =>
       !(typeof config.dts === "object" && config.dts.emitDtsOnly) &&
-      entryKeys(config).includes("infra/sqlite-readonly-location.worker"),
+      entryKeys(config).includes(entry),
   );
   expect(graphs).toHaveLength(1);
-  return expectDefined(graphs[0], "read-only snapshot child graph");
+  return expectDefined(graphs[0], `${entry} standalone graph`);
+}
+
+function requireNativeHookRelayGraph(): TsdownConfigEntry {
+  const graphs = asConfigArray(tsdownConfig).filter((config) =>
+    entryKeys(config).includes("native-hook-relay/entry"),
+  );
+  expect(graphs).toHaveLength(1);
+  return expectDefined(graphs[0], "native hook relay graph");
 }
 
 function bundledEntry(pluginId: string): string {
@@ -109,7 +135,30 @@ function readAgentAuthDiscoverySource(): string {
   return readFileSync(new URL("../../src/agents/agent-auth-discovery.ts", import.meta.url), "utf8");
 }
 
+afterEach(() => vi.unstubAllEnvs());
+
 describe("tsdown config", () => {
+  it.each(["0", "1"])(
+    "emits QA transport facades only for private QA builds (%s)",
+    async (mode) => {
+      vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", mode);
+      const { default: selectedConfigs } = await importFreshModule<
+        typeof import("../../tsdown.config.ts")
+      >(import.meta.url, `../../tsdown.config.ts?private-qa=${mode}`);
+      const runtimeEntries = asConfigArray(selectedConfigs)
+        .filter((config) => !(typeof config.dts === "object" && config.dts.emitDtsOnly))
+        .flatMap((config) => Object.entries(entrySources(config)));
+      const packageExports = buildPluginSdkPackageExports();
+      for (const subpath of ["qa-channel", "qa-channel-protocol", "qa-lab", "qa-runtime"]) {
+        const matches = runtimeEntries.filter(([name]) => name === `plugin-sdk/${subpath}`);
+        expect(matches).toEqual(
+          mode === "1" ? [[`plugin-sdk/${subpath}`, `src/plugin-sdk/${subpath}.ts`]] : [],
+        );
+        expect(Object.hasOwn(packageExports, `./plugin-sdk/${subpath}`)).toBe(false);
+      }
+    },
+  );
+
   it("minifies only the sealed deploy worker while preserving runtime names", () => {
     const configs = asConfigArray(tsdownConfig);
     const deployWorker = configs.find((config) => entryKeys(config).includes("worker/worker"));
@@ -174,42 +223,51 @@ describe("tsdown config", () => {
     expect(cacheKeyGenerator?.({ id: path.resolve(rootDir, "src/index.ts") })).toBeUndefined();
   });
 
-  it("installs schema inlining only on executable runtime graphs", () => {
+  it("installs schema inlining only on executable runtime graphs", async () => {
     const configs = asConfigArray(tsdownConfig);
     const unifiedGraph = requireUnifiedDistGraph();
-    const workerGraph = configs.find((config) => {
-      const entry = config.entry;
-      return (
-        typeof entry === "object" &&
-        entry !== null &&
-        !Array.isArray(entry) &&
-        (entry as Record<string, unknown>)["worker/worker"] === "src/worker/worker-deploy-entry.ts"
-      );
-    });
+    const workerGraph = configs.find(
+      (config) => entrySources(config)["worker/worker"] === "src/worker/worker-deploy-entry.ts",
+    );
     const handoffGraph = configs.find((config) =>
       entryKeys(config).includes("managed-handoff-runtime"),
     );
-    const inlinePlugins = configs.flatMap(
-      (config) =>
-        config.plugins?.filter((plugin) => plugin.name === STATE_SCHEMA_INLINE_PLUGIN_NAME) ?? [],
-    );
+    const executableGraphs = new Set([
+      unifiedGraph,
+      expectDefined(workerGraph, "deploy worker graph"),
+      requireStandaloneRuntimeGraph("worker/image-processor.worker"),
+      requireStandaloneRuntimeGraph("worker/sqlite-store.worker"),
+      expectDefined(handoffGraph, "managed handoff graph"),
+      requireNativeHookRelayGraph(),
+      requireStandaloneRuntimeGraph("infra/sqlite-readonly-location.worker"),
+      requireStandaloneRuntimeGraph("infra/sqlite-source-revision.worker"),
+      requireStandaloneRuntimeGraph("state/openclaw-state-read.worker"),
+      requireStandaloneRuntimeGraph("agents/harness/native-hook-relay-client.worker"),
+      requireStandaloneRuntimeGraph("process/spawn-broker/worker"),
+      requireStandaloneRuntimeGraph("state/openclaw-state-lease-heartbeat.worker"),
+    ]);
 
-    expect(unifiedGraph.plugins).toContainEqual(
-      expect.objectContaining({ name: STATE_SCHEMA_INLINE_PLUGIN_NAME }),
+    for (const config of configs) {
+      const inlinePlugins = (await resolvePluginNames(config.plugins)).filter(
+        (name) => name === STATE_SCHEMA_INLINE_PLUGIN_NAME,
+      );
+      expect(inlinePlugins).toHaveLength(executableGraphs.has(config) ? 1 : 0);
+    }
+  });
+
+  it("isolates relay startup from shared runtime chunks while retaining lazy fallback", async () => {
+    const relay = requireNativeHookRelayGraph();
+    expect(entrySources(relay)).toEqual({
+      "native-hook-relay/entry": "src/cli/native-hook-relay-entry.ts",
+    });
+    expect(relay).not.toBe(requireUnifiedDistGraph());
+    expect(relay.dts).toBe(false);
+    expect(relay.outputOptions?.codeSplitting).not.toBe(false);
+    expect(relay.outputOptions?.chunkFileNames).toBe("native-hook-relay/[name]-[hash].mjs");
+    // Only the shared graph may publish the global plugin ownership manifest.
+    expect(await resolvePluginNames(relay.plugins)).not.toContain(
+      "openclaw:runtime-dependency-ownership",
     );
-    expect(workerGraph?.plugins).toContainEqual(
-      expect.objectContaining({ name: STATE_SCHEMA_INLINE_PLUGIN_NAME }),
-    );
-    expect(handoffGraph?.plugins).toContainEqual(
-      expect.objectContaining({ name: STATE_SCHEMA_INLINE_PLUGIN_NAME }),
-    );
-    expect(entrySources(unifiedGraph)["native-hook-relay/entry"]).toBe(
-      "src/cli/native-hook-relay-entry.ts",
-    );
-    expect(requireSqliteReadOnlyChildGraph().plugins).toContainEqual(
-      expect.objectContaining({ name: STATE_SCHEMA_INLINE_PLUGIN_NAME }),
-    );
-    expect(inlinePlugins).toHaveLength(4);
   });
 
   it("keeps core, plugin runtime, plugin-sdk, bundled root plugins, and bundled hooks in one dist graph", () => {
@@ -250,13 +308,40 @@ describe("tsdown config", () => {
     }
   });
 
-  it("emits the read-only snapshot child once without sealing its package loaders", () => {
-    const child = requireSqliteReadOnlyChildGraph();
-    expect(entrySources(child)).toEqual({
-      "infra/sqlite-readonly-location.worker": path.resolve(
-        "src/infra/sqlite-readonly-location.worker.ts",
-      ),
-    });
+  it.each([
+    {
+      label: "read-only snapshot child",
+      entry: "infra/sqlite-readonly-location.worker",
+      source: "src/infra/sqlite-readonly-location.worker.ts",
+    },
+    {
+      label: "raw source revision child",
+      entry: "infra/sqlite-source-revision.worker",
+      source: "src/infra/sqlite-source-revision.worker.ts",
+    },
+    {
+      label: "shared-state reader",
+      entry: "state/openclaw-state-read.worker",
+      source: "src/state/openclaw-state-read.worker.ts",
+    },
+    {
+      label: "native hook locator worker",
+      entry: "agents/harness/native-hook-relay-client.worker",
+      source: "src/agents/harness/native-hook-relay-client.worker.ts",
+    },
+    {
+      label: "spawn broker",
+      entry: "process/spawn-broker/worker",
+      source: "src/process/spawn-broker/worker.ts",
+    },
+    {
+      label: "state lease heartbeat",
+      entry: "state/openclaw-state-lease-heartbeat.worker",
+      source: "src/state/openclaw-state-lease-heartbeat.worker.ts",
+    },
+  ])("emits the $label once without sealing its package loaders", ({ entry, source }) => {
+    const child = requireStandaloneRuntimeGraph(entry);
+    expect(entrySources(child)).toEqual({ [entry]: path.resolve(source) });
     expect(child.outputOptions).toEqual({ codeSplitting: false });
     expect(child.outExtensions?.().js).toBe(".js");
     expect(child.define?.SEALED_RUNTIME_BUILD).toBeUndefined();
@@ -283,6 +368,14 @@ describe("tsdown config", () => {
 
     expect(entrySources(distGraph)["cli/gateway-lifecycle.runtime"]).toBe(
       "src/cli/gateway-cli/lifecycle.runtime.ts",
+    );
+  });
+
+  it("keeps lazy transcript reconciliation behind one stable dist entry", () => {
+    const distGraph = requireUnifiedDistGraph();
+
+    expect(entrySources(distGraph)["config/sessions/session-transcript-reconcile"]).toBe(
+      "src/config/sessions/session-transcript-reconcile.ts",
     );
   });
 
@@ -368,8 +461,11 @@ describe("tsdown config", () => {
     expect(hookEntries).toStrictEqual([]);
   });
 
-  it("bundles SDK-owned helpers while retaining fs-safe package ownership", () => {
-    for (const graph of [requireUnifiedDistGraph(), requireSqliteReadOnlyChildGraph()]) {
+  it("bundles SDK-owned helpers while retaining native package ownership", () => {
+    for (const graph of [
+      requireUnifiedDistGraph(),
+      requireStandaloneRuntimeGraph("infra/sqlite-readonly-location.worker"),
+    ]) {
       const alwaysBundle = graph.deps?.alwaysBundle;
       const external = graph.inputOptions?.({})?.external;
       if (typeof alwaysBundle !== "function" || typeof external !== "function") {
@@ -383,6 +479,10 @@ describe("tsdown config", () => {
       expect(alwaysBundle("openclaw/plugin-sdk/ssrf-runtime")).toBe(false);
       expect(alwaysBundle("zod")).toBe(true);
       expect(alwaysBundle("zod/v4/core")).toBe(true);
+      for (const id of ["typebox", "typebox/schema", "typebox/format", "typebox/system"]) {
+        expect(alwaysBundle(id)).toBe(false);
+        expect(external(id, undefined, false)).toBe(true);
+      }
       expect(alwaysBundle("not-a-runtime-dependency")).toBe(false);
     }
   });

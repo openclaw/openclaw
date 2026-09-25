@@ -221,6 +221,7 @@ export function readySessionMeta(overrides: Partial<SessionAcpMeta> = {}): Sessi
 export function mockParentedAcpSessionEntries(params: {
   childSessionKey: string;
   parentSessionKey: string;
+  label?: string;
 }): void {
   hoisted.readAcpSessionEntryMock.mockImplementation((input: unknown) => {
     const sessionKey = (input as { sessionKey?: string }).sessionKey;
@@ -232,6 +233,7 @@ export function mockParentedAcpSessionEntries(params: {
           sessionId: "child-1",
           updatedAt: Date.now(),
           spawnedBy: params.parentSessionKey,
+          ...(params.label === undefined ? {} : { label: params.label }),
         },
         acp: readySessionMeta(),
       };

@@ -76,11 +76,7 @@ export function hasForwardedRequestHeaders(req?: IncomingMessage): boolean {
 }
 
 /** Return whether a request is a clean loopback request without forwarded identity headers. */
-export function isLocalDirectRequest(
-  req?: IncomingMessage,
-  _trustedProxies?: string[],
-  _allowRealIpFallback = false,
-): boolean {
+export function isLocalDirectRequest(req?: IncomingMessage): boolean {
   return Boolean(
     req && !hasForwardedRequestHeaders(req) && isLoopbackAddress(req.socket?.remoteAddress),
   );
@@ -358,15 +354,22 @@ export function defaultGatewayBindMode(tailscaleMode?: string): GatewayBindMode 
 async function canBindToHost(host: string): Promise<boolean> {
   return new Promise((resolve) => {
     const testServer = net.createServer();
-    testServer.once("error", () => {
-      resolve(false);
-    });
-    testServer.once("listening", () => {
+    const timeout = setTimeout(() => finish(false), 3000);
+    const finish = (canBind: boolean) => {
+      clearTimeout(timeout);
       testServer.close();
-      resolve(true);
-    });
-    // Use port 0 to let OS pick an available port for testing
-    testServer.listen(0, host);
+      resolve(canBind);
+    };
+    testServer.once("error", () => finish(false));
+    // Keep this handler after timeout: a late bind must still close its socket.
+    // Promise settlement is one-shot, so late events cannot change the result.
+    testServer.once("listening", () => finish(true));
+    try {
+      // Use port 0 to let OS pick an available port for testing.
+      testServer.listen(0, host);
+    } catch {
+      finish(false);
+    }
   });
 }
 

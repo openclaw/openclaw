@@ -14,10 +14,12 @@ import {
   resolveAnthropicImageMediaType,
   type AnthropicInlineImageBudget,
 } from "../internal/anthropic-inline-images.js";
+import { isImageWithMediaPayload } from "../media-payload.js";
 import type { AnthropicOptions, AnthropicThinkingDisplay } from "../provider-options.js";
 import {
   bindsClaudeThinkingPrefix,
   requiresClaudeAdaptiveThinking,
+  resolveAnthropicThinkingEffort,
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeXhighEffort,
 } from "../providers/anthropic-model-contract.js";
@@ -36,7 +38,6 @@ import {
   describeToolResultMediaPlaceholder,
   extractToolResultBlockText,
   extractToolResultText,
-  isImageWithMediaPayload,
 } from "../providers/tool-result-text.js";
 import type { AnthropicCompactionBlock } from "./anthropic-compaction-replay.js";
 import {
@@ -142,8 +143,7 @@ export async function convertAnthropicMessages(
   },
 ): Promise<AnthropicWireMessage[]> {
   const params: AnthropicWireMessage[] = [];
-  // Cache eligibility follows the same model contract as session context retention.
-  const retainRuntimeContext = bindsClaudeThinkingPrefix(model);
+  const modelRetainsRuntimeContext = bindsClaudeThinkingPrefix(model);
   const imageBudget = createAnthropicInlineImageBudget();
   const allowReasoningContentReplay = options.allowReasoningContentReplay === true;
   const replayThinkingEnabled = options.replayThinkingEnabled !== false;
@@ -159,7 +159,10 @@ export async function convertAnthropicMessages(
     if (msg.role === "user") {
       if (typeof msg.content === "string") {
         if (msg.content.trim().length > 0) {
-          if (msg.runtimeContextCarrier && !retainRuntimeContext) {
+          if (
+            msg.runtimeContextCarrier &&
+            !(msg.runtimeContextCarrierRetained ?? modelRetainsRuntimeContext)
+          ) {
             options.cacheBreakpointOptOutMessageIndexes?.add(params.length);
           }
           const userParam: AnthropicWireMessage = {
@@ -203,7 +206,10 @@ export async function convertAnthropicMessages(
       if (filteredBlocks.length === 0) {
         continue;
       }
-      if (msg.runtimeContextCarrier && !retainRuntimeContext) {
+      if (
+        msg.runtimeContextCarrier &&
+        !(msg.runtimeContextCarrierRetained ?? modelRetainsRuntimeContext)
+      ) {
         options.cacheBreakpointOptOutMessageIndexes?.add(params.length);
       }
       const userParam: AnthropicWireMessage = {
@@ -396,7 +402,11 @@ export function buildAnthropicGenerationParams({
       if (supportsClaudeAdaptiveThinking(model)) {
         // Adaptive thinking: Claude decides when and how much to think.
         params.thinking = { type: "adaptive", display };
-        const effort = options?.effort ?? (mandatoryAdaptiveThinking ? "high" : undefined);
+        const effort =
+          options?.effort ??
+          (mandatoryAdaptiveThinking
+            ? resolveAnthropicThinkingEffort(model, undefined)
+            : undefined);
         if (effort) {
           params.output_config = { effort };
         }

@@ -10,6 +10,11 @@ import { createNodeWorkerWorkspaceActions } from "./node-worker-workspace-action
 import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import { startNodeWorkspaceTransferTestServer } from "./node-workspace-transfer.test-support.js";
 import type { WorkerWorkspaceReconcileRequest } from "./tunnel-contract.js";
+import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
+import {
+  parseRemoteWorkspaceManifestEnvelope,
+  type RemoteWorkspaceManifestEnvelope,
+} from "./workspace-hash-memo.js";
 import { createWorkerWorkspaceActions } from "./workspace-sync.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -165,6 +170,7 @@ it.each([
       root: path.join(home, "node-host"),
       env: { PATH: process.env.PATH, HOME: home },
     });
+    const manifestCaptures: RemoteWorkspaceManifestEnvelope[] = [];
     const createActions = () => {
       const ownerEpoch = epoch;
       const ownerSignal = new AbortController().signal;
@@ -180,7 +186,7 @@ it.each([
             throw new Error("node workspace authority closed");
           }
           try {
-            return await runtime.exec(
+            const result = await runtime.exec(
               {
                 gatewayNamespace: "gateway-1",
                 environmentId: "environment-1",
@@ -192,6 +198,10 @@ it.each([
               ownerSignal,
               { url: server.gatewayUrl },
             );
+            if (command.argv.at(-1) === "memo-v1") {
+              manifestCaptures.push(parseRemoteWorkspaceManifestEnvelope(result.stdout));
+            }
+            return result;
           } catch (error) {
             if (
               closeOwner &&
@@ -239,6 +249,7 @@ it.each([
         | undefined;
       let revision = 0;
       const capture = async (active = actions, directory = first.remoteWorkspaceDir) => {
+        const firstCapture = manifestCaptures.length;
         const result = await active.reconcileWorkspace({
           remoteWorkspaceDir: directory,
           baseManifestRef: first.baseManifestRef,
@@ -285,9 +296,15 @@ it.each([
             },
           },
         });
-        await result.verifyStable();
-        await result.verifyLocalStable();
-        await result.publishStagedResult?.();
+        await verifyReconciledWorkspaceFinal(result, {
+          assertActive: async () => {},
+          resume: async () => {},
+        });
+        const captures = manifestCaptures.slice(firstCapture);
+        expect(captures).toHaveLength(5);
+        expect(captures.slice(1).every(({ metrics }) => metrics.contentHashCount === 0)).toBe(true);
+        expect(captures.slice(1).every(({ metrics }) => metrics.memoHitCount > 0)).toBe(true);
+        return captures;
       };
       if (closeOwner) {
         await expect(capture()).rejects.toThrow();
@@ -296,7 +313,8 @@ it.each([
         return;
       }
       // Startup must accept setup output even when GitHub normalization is unavailable.
-      await capture();
+      const initialCaptures = await capture();
+      expect(initialCaptures[0]!.metrics.contentHashCount).toBeGreaterThan(0);
       expect(revision).toBe(1);
       expect(checkpoint).toBeDefined();
       await gitAt(first.remoteWorkspaceDir, "rm", "--cached", "retained-removal.ignored");
@@ -317,7 +335,9 @@ it.each([
         "published[1].ignored",
       );
       await fs.writeFile(path.join(first.remoteWorkspaceDir, "first.txt"), "turn one\n");
-      await capture();
+      const changedCaptures = await capture();
+      expect(changedCaptures[0]!.metrics.contentHashCount).toBeGreaterThan(0);
+      expect(changedCaptures[0]!.metrics.memoHitCount).toBeGreaterThan(0);
       await fs.writeFile(path.join(first.remoteWorkspaceDir, "second.txt"), "turn two\n");
       await fs.rm(path.join(first.remoteWorkspaceDir, "tracked.txt"));
       await capture();

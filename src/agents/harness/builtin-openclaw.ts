@@ -4,10 +4,10 @@
  * Harness selection uses this factory to expose the embedded OpenClaw runtime
  * through the same AgentHarness contract as external harness plugins.
  */
-import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { runEmbeddedAttempt } from "../embedded-agent-runner/run/attempt.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import { runHostPreparedIsolatedCompletion } from "../host-prepared-isolated-completion.js";
+import { BUILTIN_AGENT_HARNESS_METADATA } from "./builtin-openclaw-metadata.js";
 import { projectSettledTurnFinalizationAttemptResult } from "./settled-turn-finalization-result.js";
 import type {
   AgentHarness,
@@ -86,10 +86,7 @@ function buildRestrictedFinalizationAttempt(
 /** Creates the built-in harness backed by the embedded OpenClaw agent runner. */
 export function createOpenClawAgentHarness(): AgentHarnessV2 {
   const harness: AgentHarnessV2 = {
-    id: "openclaw",
-    label: "OpenClaw embedded agent",
-    contextEngineHostCapabilities: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST.capabilities,
-    supports: () => ({ supported: true, priority: 0 }),
+    ...BUILTIN_AGENT_HARNESS_METADATA,
     runAttempt: (params) => runEmbeddedAttempt(params as EmbeddedRunAttemptParams),
     runIsolatedCompletionV2: runHostPreparedIsolatedCompletion,
     finalizeSettledTurn: async ({ attempt }) => {

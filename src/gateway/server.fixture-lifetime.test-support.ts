@@ -254,9 +254,13 @@ test("observes startup cleanup ownership through fixture teardown", async () => 
     if (!address || typeof address === "string") throw new Error("expected owned TCP blocker");
     const retain = metadataModule.retainGatewayPluginMetadata;
     const metadataSpy = vi.spyOn(metadataModule, "retainGatewayPluginMetadata").mockImplementation(() => {
-      const release = retain();
+      const owner = retain();
       metadataRetains++;
-      return () => { release(); metadataReleases++; };
+      return { ...owner, close: async (...args) => {
+        const result = await own(owner.close(...args));
+        metadataReleases++;
+        return result;
+      } };
     });
     restorers.push(() => metadataSpy.mockRestore());
     const prepare = lifecycleModule.prepareGatewayLifecycle;
@@ -265,7 +269,7 @@ test("observes startup cleanup ownership through fixture teardown", async () => 
       return own(preparing.then(async runtime => {
         lifecycle = runtime;
         tlsError = runtime.gatewayTls.error;
-        runtime.registerGatewayLifetimeSidecars([sidecar]);
+        runtime.registerGatewayLifetimeSidecars(sidecar);
         const close = runtime.closeOnStartupFailure;
         const closeSpy = vi.spyOn(runtime, "closeOnStartupFailure").mockImplementation(() => {
           const closing = own(close());
@@ -305,9 +309,12 @@ test("observes startup cleanup ownership through fixture teardown", async () => 
         keyPath: path.join(dir, "synthetic-missing-key.pem"),
       } } }));
     }
-    acquisition = own(gateway.startTestGatewayServer(address.port, {
+    const startupOptions = {
       bind: "loopback", auth: { mode: "none" }, controlUiEnabled: false,
-    }));
+    };
+    acquisition = own(scenario.failCleanup && !scenario.missingTls
+      ? gateway.startGatewayServerWithRetries({ port: address.port, opts: startupOptions })
+      : gateway.startTestGatewayServer(address.port, startupOptions));
     const [acquired] = await Promise.allSettled([acquisition]);
     expect(acquired.status).toBe("rejected");
     const failure = acquired.reason;
@@ -371,7 +378,7 @@ test("observes startup cleanup ownership through fixture teardown", async () => 
       kernelReturned: kernelResult.status === "fulfilled", listenCalls: nativeListens.length,
       probeListening: probe.listening, blockerListening: blocker.listening,
       stopCalls: stopProbe.mock.calls.length, lowerStops, metadataRetains, metadataReleases,
-      nativeOwnerRetained: lifecycle.runtimeState.gatewayLifetimeSidecars.includes(sidecar),
+      nativeOwnerRetained: lifecycle.runtimeState.gatewayLifetimeSidecars.snapshot().includes(sidecar),
       fixtureRelease, afterEach, cleanup, successorSetup, successorStarted, homeRestored,
       beforeCleanup, afterCleanup, afterSuccessor: readState(),
     };

@@ -1,7 +1,13 @@
-import type { PluginListResult } from "../../lib/plugins/index.ts";
-import { fetchPluginIconBlobUrl, type PluginIconFetchContext } from "./icon-loader.ts";
+import type { ApplicationContext } from "../../app/context.ts";
+import type { PluginDiscoveryEntry, PluginListResult } from "../../lib/plugins/index.ts";
+import {
+  fetchCatalogIconBlobUrl,
+  fetchPluginIconBlobUrl,
+  type PluginIconFetchContext,
+} from "./icon-loader.ts";
 
 type PluginIconControllerHost = {
+  readonly kind?: "plugin" | "catalog";
   getFetchContext: () => PluginIconFetchContext;
   isConnected: (key: string) => boolean;
   fetchIcon?: (
@@ -14,15 +20,38 @@ type PluginIconControllerHost = {
   onLoadingChange?: () => void;
 };
 
+export function pluginIconFetchContext(context: ApplicationContext): PluginIconFetchContext {
+  return {
+    resourceBasePath: context.resourceBasePath,
+    gatewayUrl: context.gateway.connection.gatewayUrl,
+    auth: {
+      hello: context.gateway.snapshot.hello,
+      settings: { token: context.gateway.connection.token },
+      password: context.gateway.connection.password,
+    },
+  };
+}
+
 export class PluginIconController {
   private readonly misses = new Set<string>();
   private readonly requests = new Map<
     string,
-    { controller: AbortController; timeout: ReturnType<typeof setTimeout> }
+    { controller: AbortController; timeout: ReturnType<typeof setTimeout> | undefined }
   >();
   private urls: Record<string, string> = {};
 
   constructor(private readonly host: PluginIconControllerHost) {}
+
+  syncCatalog(entries: readonly PluginDiscoveryEntry[], extraUrls: readonly string[] = []): void {
+    const eligible = new Set([
+      ...entries.flatMap((entry) => (entry.catalog.imageUrl ? [entry.catalog.imageUrl] : [])),
+      ...extraUrls,
+    ]);
+    this.reconcileKeys(eligible);
+    for (const key of eligible) {
+      this.load(key);
+    }
+  }
 
   isLoading(key: string): boolean {
     return this.requests.has(key);
@@ -45,7 +74,7 @@ export class PluginIconController {
         urlsChanged = true;
       }
     }
-    if (urlsChanged) {
+    if (urlsChanged && this.host.kind !== "catalog") {
       this.publish(nextUrls);
     }
     for (const [pluginId, request] of this.requests) {
@@ -55,6 +84,13 @@ export class PluginIconController {
         this.requests.delete(pluginId);
         this.host.onLoadingChange?.();
       }
+    }
+    // Catalog keeps failures until reset and publishes pruning after cancellation notifications.
+    if (this.host.kind === "catalog") {
+      if (urlsChanged) {
+        this.publish(nextUrls);
+      }
+      return;
     }
     for (const pluginId of this.misses) {
       if (!eligiblePluginIds.has(pluginId)) {
@@ -74,7 +110,9 @@ export class PluginIconController {
     this.requests.clear();
     this.host.onLoadingChange?.();
     this.misses.clear();
-    this.publish({});
+    if (this.host.kind !== "catalog" || Object.keys(this.urls).length > 0) {
+      this.publish({});
+    }
   }
 
   sync(result: PluginListResult | null, renderedPluginIds: ReadonlySet<string>) {
@@ -121,21 +159,26 @@ export class PluginIconController {
 
   private fetch(pluginId: string) {
     const controller = new AbortController();
-    const timeout = setTimeout(
-      () =>
-        controller.abort(
-          this.host.timeoutError?.() ??
-            new DOMException("plugin icon fetch timed out", "TimeoutError"),
-        ),
-      10_000,
-    );
+    const timeout =
+      this.host.kind === "catalog"
+        ? undefined
+        : setTimeout(
+            () =>
+              controller.abort(
+                this.host.timeoutError?.() ??
+                  new DOMException("plugin icon fetch timed out", "TimeoutError"),
+              ),
+            10_000,
+          );
     const request = { controller, timeout };
     this.requests.set(pluginId, request);
     this.host.onLoadingChange?.();
     const context = this.host.getFetchContext();
     const pending = this.host.fetchIcon
       ? this.host.fetchIcon(pluginId, context, controller.signal)
-      : fetchPluginIconBlobUrl({ pluginId, ...context, signal: controller.signal });
+      : this.host.kind === "catalog"
+        ? fetchCatalogIconBlobUrl({ iconUrl: pluginId, ...context, signal: controller.signal })
+        : fetchPluginIconBlobUrl({ pluginId, ...context, signal: controller.signal });
     void pending
       .then((url) => {
         if (this.requests.get(pluginId) !== request || !this.host.isConnected(pluginId)) {
@@ -151,7 +194,10 @@ export class PluginIconController {
         }
       })
       .catch(() => {
-        if (this.requests.get(pluginId) === request) {
+        if (
+          this.requests.get(pluginId) === request &&
+          (this.host.kind !== "catalog" || !controller.signal.aborted)
+        ) {
           this.misses.add(pluginId);
         }
       })

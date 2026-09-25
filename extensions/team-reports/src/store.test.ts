@@ -2,14 +2,16 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { afterEach, describe, expect, it } from "vitest";
 import { githubCounts as counts } from "./reports.fixtures.js";
+import { teamReportsSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
 import { createTeamReportsStore, type TeamReportsStore } from "./store.js";
 import type { PeriodDescriptor, ReportDocument, SummaryDocument } from "./types.js";
 
 const DAY_MS = 86_400_000;
-const workerModuleUrl = new URL("./store.worker.ts", import.meta.url);
+const workerModuleUrl = resolveRuntimeWorkerUrl(teamReportsSqliteBackendEntrypoint);
 const resources: Array<{ store: TeamReportsStore; directory: string }> = [];
 
 async function openStore() {
@@ -94,10 +96,19 @@ describe("Team Reports storage", () => {
         summary,
         markdown: "# Daily report",
       });
+      expect(await reopened.getPeriodDocument("day", "2026-08-20")).toEqual({
+        report: report(),
+        summary,
+      });
+      expect((await reopened.latestPeople())?.members.map((member) => member.login)).toEqual([
+        "alice",
+        "bob",
+      ]);
     } finally {
       await reopened.close();
     }
     await expect(store.listPeriods()).rejects.toThrow("store is closed");
+    await expect(store.getPeriodDocument("day", "2026-08-20")).rejects.toThrow("store is closed");
   });
 
   it("keeps timers responsive during lock contention and drains admitted writes before closing", async () => {
@@ -140,14 +151,32 @@ describe("Team Reports storage", () => {
     expect(await store.listPersonDays("ALICE")).toMatchObject([
       { dayKey: "2026-08-20", githubTotal: 1, commits: 1, discordMessages: 2 },
     ]);
-    await expect(
-      store.upsertPeriod({
-        report: report("2026-08-20", ["alice", "alice"]),
-        markdown: "failed refresh",
-      }),
-    ).rejects.toThrow();
-    expect((await store.getPeriod("day", "2026-08-20"))?.markdown).toBe("original");
-    expect(await store.listPersonDays("bob")).toHaveLength(1);
+    const lateDuplicate = [
+      "alice",
+      ...Array.from({ length: 3000 }, (_, index) => `new-${index}`),
+      "ALICE",
+    ];
+    for (const logins of [["alice", "alice"], lateDuplicate]) {
+      await expect(
+        store.upsertPeriod({
+          report: report("2026-08-20", logins),
+          markdown: "failed refresh",
+        }),
+      ).rejects.toThrow();
+      expect(await store.getPeriod("day", "2026-08-20")).toEqual({
+        report: report(),
+        summary,
+        markdown: "original",
+      });
+      expect(await store.getPeriodDocument("day", "2026-08-20")).toEqual({
+        report: report(),
+        summary,
+      });
+      expect((await store.listPersonDaysSince("2026-08-20")).map((day) => day.login)).toEqual([
+        "alice",
+        "bob",
+      ]);
+    }
     const refreshed = report("2026-08-20", ["alice"]);
     refreshed.members[0]!.github.commits = 3;
     refreshed.members[0]!.github.total = 3;
@@ -157,6 +186,10 @@ describe("Team Reports storage", () => {
       report: refreshed,
       summary: null,
       markdown: "refreshed",
+    });
+    expect(await store.getPeriodDocument("day", "2026-08-20")).toEqual({
+      report: refreshed,
+      summary: null,
     });
     expect((await store.listPersonDays("alice"))[0]).toMatchObject({ githubTotal: 3, commits: 3 });
     expect(await store.listPersonDays("bob")).toEqual([]);
@@ -228,8 +261,8 @@ describe("Team Reports storage", () => {
   it("lists all logins since an inclusive day without the individual timeline limit", async () => {
     const { store } = await openStore();
     const logins = Array.from(
-      { length: 30 },
-      (_, index) => `member-${String(index).padStart(2, "0")}`,
+      { length: 3000 },
+      (_, index) => `member-${String(index).padStart(4, "0")}`,
     );
     await store.upsertPeriod({ report: report("2026-08-18", ["older"]), markdown: "older" });
     await store.upsertPeriod({ report: report("2026-08-19", logins), markdown: "boundary" });
@@ -241,7 +274,7 @@ describe("Team Reports storage", () => {
     ]);
     expect(days[1]).toEqual({
       dayKey: "2026-08-19",
-      login: "member-00",
+      login: "member-0000",
       githubTotal: 1,
       commits: 1,
       prsOpened: 0,
@@ -254,6 +287,11 @@ describe("Team Reports storage", () => {
       discordMessages: 2,
     });
     expect(await store.listPersonDaysSince("2026-08-21")).toEqual([]);
+    await store.upsertPeriod({ report: report("2026-08-19", []), markdown: "empty roster" });
+    expect((await store.listPersonDaysSince("2026-08-19")).map((day) => day.login)).toEqual([
+      "latest",
+    ]);
+    expect((await store.getPeriod("day", "2026-08-19"))?.report.members).toEqual([]);
   });
 
   it("reads a complete month of individually valid reports across the worker boundary", async () => {
@@ -316,6 +354,167 @@ describe("Team Reports storage", () => {
       ),
     ).toEqual(["2026-08-19", "2026-08-18"]);
     expect(await store.getPeriod("month", "2026-08")).toBeUndefined();
+    expect(await store.getPeriodDocument("month", "2026-08")).toBeUndefined();
+  });
+
+  it("reads latest daily warnings and people in source order through replacement and pruning", async () => {
+    const { store } = await openStore();
+    expect(await store.latestSourceWarnings()).toEqual([]);
+    expect(await store.latestPeople()).toBeUndefined();
+    const first = report("2026-08-19");
+    Object.assign(first.members[0]!, {
+      aliases: ["Alice-Other"],
+      display: "Alice Profile",
+      affiliation: "Example",
+      roleGroup: "volunteer",
+      roleLabel: "Reviewer",
+      access: ["review"],
+      areas: ["reports"],
+    });
+    first.sources.github.warnings = ["github", "shared"];
+    first.sources.discord = { ok: true, warnings: ["discord", "shared"], stats: {} };
+    await store.upsertPeriod({ report: first, summary, markdown: "first" });
+    expect(await store.latestPeople()).toEqual({
+      key: "2026-08-19",
+      members: [
+        {
+          login: "alice",
+          aliases: ["Alice-Other"],
+          display: "Alice Profile",
+          affiliation: "Example",
+          roleGroup: "volunteer",
+          roleLabel: "Reviewer",
+          access: ["review"],
+          areas: ["reports"],
+        },
+        { login: "bob", aliases: [], display: "bob", access: [], areas: [] },
+      ],
+    });
+    expect(await store.latestSourceWarnings()).toEqual([
+      "github",
+      "shared",
+      "discord",
+      "shared",
+      "Model summary unavailable: completion failed",
+    ]);
+    const laterWeek = report("2026-08-25");
+    laterWeek.period.period = "week";
+    laterWeek.period.key = "2026-W35";
+    laterWeek.sources.github.warnings = ["weekly"];
+    await store.upsertPeriod({ report: laterWeek, markdown: "week" });
+    const latest = report("2026-08-20");
+    latest.status = "partial";
+    latest.sources.github.warnings = ["latest partial"];
+    await store.upsertPeriod({ report: latest, markdown: "latest" });
+    expect(await store.latestSourceWarnings()).toEqual(["latest partial"]);
+    expect((await store.latestPeople())?.key).toBe("2026-08-20");
+    latest.sources.github.warnings = [];
+    latest.members = [];
+    await store.upsertPeriod({ report: latest, markdown: "refreshed" });
+    expect(await store.latestSourceWarnings()).toEqual([]);
+    expect(await store.latestPeople()).toEqual({ key: "2026-08-20", members: [] });
+    await store.prune(1, Date.parse("2026-08-23T00:00:00Z"));
+    expect(await store.latestSourceWarnings()).toEqual([]);
+    expect(await store.latestPeople()).toBeUndefined();
+    await store.close();
+    await expect(store.latestSourceWarnings()).rejects.toThrow("store is closed");
+    await expect(store.latestPeople()).rejects.toThrow("store is closed");
+  });
+
+  it.each([
+    "report member schema",
+    "report JSON syntax",
+    "null report",
+    "summary schema",
+    "summary JSON syntax",
+    "report and summary JSON syntax",
+    "unsafe since timestamp",
+    "unsafe until timestamp",
+    "unsafe timestamp",
+    "unsafe extracted total",
+  ])("preserves latest warning and people failures for %s", async (failure) => {
+    const { store, dbPath } = await openStore();
+    await store.upsertPeriod({ report: report(), summary, markdown: "kept" });
+    const database = openNodeSqliteDatabase(dbPath);
+    try {
+      const data = report();
+      switch (failure) {
+        case "report member schema":
+          database
+            .prepare("UPDATE team_reports_periods SET data_json = ?")
+            .run(JSON.stringify({ ...data, members: "invalid" }));
+          break;
+        case "report JSON syntax":
+          database.prepare("UPDATE team_reports_periods SET data_json = ?").run("{");
+          break;
+        case "null report":
+          database.prepare("UPDATE team_reports_periods SET data_json = ?").run("null");
+          break;
+        case "summary schema":
+          database
+            .prepare("UPDATE team_reports_periods SET summary_json = ?")
+            .run(JSON.stringify({ ...summary, globalSummary: 123 }));
+          break;
+        case "summary JSON syntax":
+          database.prepare("UPDATE team_reports_periods SET summary_json = ?").run("{");
+          break;
+        case "report and summary JSON syntax":
+          database
+            .prepare("UPDATE team_reports_periods SET data_json = ?, summary_json = ?")
+            .run("{broken report", "[broken summary");
+          break;
+        case "unsafe since timestamp":
+          database.exec("UPDATE team_reports_periods SET since_ms = 9007199254740992");
+          break;
+        case "unsafe until timestamp":
+          database.exec("UPDATE team_reports_periods SET until_ms = 9007199254740992");
+          break;
+        case "unsafe timestamp":
+          database.exec("UPDATE team_reports_periods SET generated_at_ms = 9007199254740992");
+          break;
+        case "unsafe extracted total":
+          database
+            .prepare("UPDATE team_reports_periods SET data_json = ?")
+            .run(JSON.stringify({ ...data, activeMembers: 9_007_199_254_740_992 }));
+          break;
+      }
+      const originalRead = async () => {
+        const latest = (await store.listPeriods({ period: "day", limit: 1 }))[0];
+        return latest ? store.getPeriod("day", latest.key) : undefined;
+      };
+      const originalError = await originalRead().catch((error: unknown) => error);
+      if (!(originalError instanceof Error)) {
+        throw new Error("The existing period read must reject this fixture");
+      }
+      await expect(store.latestSourceWarnings()).rejects.toMatchObject({
+        name: originalError.name,
+        message: originalError.message,
+      });
+      await expect(store.latestPeople()).rejects.toMatchObject({
+        name: originalError.name,
+        message: originalError.message,
+      });
+      if (failure === "unsafe extracted total") {
+        // Direct document reads validate JSON numbers without SQLite's integer extraction.
+        expect(await store.getPeriodDocument("day", "2026-08-20")).toEqual({
+          report: { ...data, activeMembers: 9_007_199_254_740_992 },
+          summary,
+        });
+      } else {
+        const directError = await store
+          .getPeriod("day", "2026-08-20")
+          .catch((error: unknown) => error);
+        if (!(directError instanceof Error)) {
+          throw new Error("The complete period read must reject this fixture");
+        }
+        await expect(store.getPeriodDocument("day", "2026-08-20")).rejects.toMatchObject({
+          name: directError.name,
+          message: directError.message,
+        });
+      }
+    } finally {
+      database.close();
+    }
   });
 
   it("records run outcomes once, including bounded failures and collector statistics", async () => {

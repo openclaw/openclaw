@@ -27,6 +27,7 @@ async function createTempRoot(): Promise<string> {
 async function createTarArchive(
   root: string,
   build: (buildDir: string) => Promise<void>,
+  entries: readonly string[] = [TEST_ARCHIVE_ROOT],
 ): Promise<{ archivePath: string; destDir: string }> {
   const stageDir = path.join(root, "stage");
   const buildDir = path.join(stageDir, TEST_ARCHIVE_ROOT);
@@ -34,7 +35,7 @@ async function createTarArchive(
   await build(buildDir);
   const archivePath = path.join(root, "asset.tar.gz");
   // Keep tiny fixtures synchronous: node-tar's async hard-link queue can close gzip twice.
-  tar.c({ file: archivePath, cwd: stageDir, gzip: true, sync: true }, [TEST_ARCHIVE_ROOT]);
+  tar.c({ file: archivePath, cwd: stageDir, gzip: true, sync: true }, [...entries]);
   const destDir = path.join(root, "dest");
   await fs.mkdir(destDir, { recursive: true });
   return { archivePath, destDir };
@@ -105,11 +106,18 @@ describe("extractLlamaServerArchive", () => {
   it("does not publish archive-provided hard links", async () => {
     const root = await createTempRoot();
     const asset = withoutAliases(selectLlamaServerAsset("linux", "x64"));
-    const { archivePath, destDir } = await createTarArchive(root, async (buildDir) => {
-      const executable = path.join(buildDir, asset.executable);
-      await fs.writeFile(executable, "binary");
-      await fs.link(executable, path.join(buildDir, "unexpected-hardlink"));
-    });
+    const { archivePath, destDir } = await createTarArchive(
+      root,
+      async (buildDir) => {
+        const executable = path.join(buildDir, asset.executable);
+        await fs.writeFile(executable, "binary");
+        await fs.link(executable, path.join(buildDir, "unexpected-hardlink"));
+      },
+      [
+        path.posix.join(TEST_ARCHIVE_ROOT, asset.executable),
+        path.posix.join(TEST_ARCHIVE_ROOT, "unexpected-hardlink"),
+      ],
+    );
 
     await extractLlamaServerArchive({ archivePath, destDir, asset });
 

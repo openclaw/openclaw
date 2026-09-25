@@ -226,6 +226,11 @@ Local-path behavior follows the same file-read trust model as the agent:
 
 Keep sensitive files outside the agent-readable filesystem, or keep `tools.fs.workspaceOnly: true` for stricter local-path sends.
 
+When the message tool cannot stage an attachment for the current conversation,
+its error identifies the file and the reported reason, such as a missing file or
+an unsupported local format. Being inside the workspace does not make every
+file type eligible for host-local attachment reads.
+
 ## Operations checklist
 
 ```bash

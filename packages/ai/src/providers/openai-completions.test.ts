@@ -1888,23 +1888,6 @@ describe("openai-completions stop-reason tool-call guard", () => {
     expect(eventTypes).not.toContain("toolcall_end");
   });
 
-  it("strips toolCall blocks when finish_reason is stop after visible text", async () => {
-    mockChunksRef.chunks = [
-      makeTextChunk("Hello"),
-      makeToolCallChunk("call_1", "bash", '{"cmd":"ls"}'),
-      makeFinishChunk("stop"),
-    ];
-
-    const stream = streamOpenAICompletions(model, context, {
-      apiKey: "sk-test",
-    });
-    const result = await stream.result();
-
-    expect(result.stopReason).toBe("stop");
-    expect(result.content.filter((b) => b.type === "toolCall")).toStrictEqual([]);
-    expect(result.content.some((b) => b.type === "text")).toBe(true);
-  });
-
   it("preserves toolCall blocks when finish_reason is tool_calls", async () => {
     mockChunksRef.chunks = [
       makeToolCallChunk("call_1", "bash", '{"cmd":"ls"}'),

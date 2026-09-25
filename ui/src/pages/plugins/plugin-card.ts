@@ -1,6 +1,9 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
+
+registerPluginManagementEnglish();
 
 export type PluginCardAttribution = {
   author?: string;
@@ -45,6 +48,7 @@ export function renderPluginStateStatus(
 export function renderPluginOfficialBadge(): TemplateResult {
   return html`<span
     class="plugin-official-badge"
+    role="img"
     aria-label=${t("pluginsPage.official")}
     title=${t("pluginsPage.official")}
     >${icons.badgeCheck}</span

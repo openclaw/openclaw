@@ -1,3 +1,4 @@
+import type * as Lark from "@larksuiteoapi/node-sdk";
 /**
  * Table utilities and row/column manipulation operations for Feishu documents.
  *
@@ -6,8 +7,7 @@
  * - Block cleaning for Descendant API (removes read-only fields)
  * - Table row/column insert, delete, and merge operations
  */
-
-import type * as Lark from "@larksuiteoapi/node-sdk";
+import { assertFeishuApiSuccess } from "./api-response.js";
 import type { FeishuDocParams } from "./doc-schema.js";
 import type { FeishuBlockTable, FeishuDocxBlock } from "./docx-types.js";
 
@@ -45,7 +45,11 @@ function createDescendantTable(
   };
 }
 
-function calculateAdaptiveColumnWidths(blocks: FeishuDocxBlock[], tableBlockId: string): number[] {
+function calculateAdaptiveColumnWidths(
+  blocks: FeishuDocxBlock[],
+  tableBlockId: string,
+  getBlockMap: () => ReadonlyMap<string, FeishuDocxBlock>,
+): number[] {
   // Find the table block
   const tableBlock = blocks.find((b) => b.block_id === tableBlockId && b.block_type === 31);
 
@@ -65,13 +69,7 @@ function calculateAdaptiveColumnWidths(blocks: FeishuDocxBlock[], tableBlockId: 
       : DEFAULT_TABLE_WIDTH;
   const cellIds = normalizeChildBlockIds(tableBlock.children);
 
-  // Build block lookup map
-  const blockMap = new Map<string, FeishuDocxBlock>();
-  for (const block of blocks) {
-    if (block.block_id) {
-      blockMap.set(block.block_id, block);
-    }
-  }
+  const blockMap = getBlockMap();
 
   // Extract text content from a table cell
   function getCellText(cellId: string): string {
@@ -95,9 +93,18 @@ function calculateAdaptiveColumnWidths(blocks: FeishuDocxBlock[], tableBlockId: 
   // Calculate weighted length (CJK chars count as 2)
   // CJK (Chinese/Japanese/Korean) characters render ~2x wider than ASCII
   function getWeightedLength(text: string): number {
-    return Array.from(text).reduce((sum, char) => {
-      return sum + (char.charCodeAt(0) > 255 ? 2 : 1);
-    }, 0);
+    let length = 0;
+    for (let index = 0; index < text.length; index += 1) {
+      const code = text.charCodeAt(index);
+      length += code > 255 ? 2 : 1;
+      if (code >= 0xd800 && code <= 0xdbff) {
+        const next = text.charCodeAt(index + 1);
+        if (next >= 0xdc00 && next <= 0xdfff) {
+          index += 1;
+        }
+      }
+    }
+    return length;
   }
 
   // Find max content length per column
@@ -177,11 +184,24 @@ function calculateAdaptiveColumnWidths(blocks: FeishuDocxBlock[], tableBlockId: 
  * @returns Cleaned blocks ready for Descendant API
  */
 export function cleanBlocksForDescendant(blocks: FeishuDocxBlock[]): FeishuDocxBlock[] {
+  // Each batch owns its lookup; later conversions may reuse IDs with different content.
+  let blockMap: Map<string, FeishuDocxBlock> | undefined;
+  const getBlockMap = () => {
+    if (!blockMap) {
+      blockMap = new Map();
+      for (const block of blocks) {
+        if (block.block_id) {
+          blockMap.set(block.block_id, block);
+        }
+      }
+    }
+    return blockMap;
+  };
   // Pre-calculate adaptive widths for all tables
   const tableWidths = new Map<string, number[]>();
   for (const block of blocks) {
     if (block.block_type === 31 && block.block_id) {
-      const widths = calculateAdaptiveColumnWidths(blocks, block.block_id);
+      const widths = calculateAdaptiveColumnWidths(blocks, block.block_id, getBlockMap);
       tableWidths.set(block.block_id, widths);
     }
   }
@@ -273,8 +293,6 @@ export async function patchTable(client: Lark.Client, params: TableAction) {
     path: { document_id: doc_token, block_id },
     data,
   });
-  if (res.code !== 0) {
-    throw new Error(res.msg);
-  }
+  assertFeishuApiSuccess(res);
   return { success: true, ...counts, block: res.data?.block };
 }

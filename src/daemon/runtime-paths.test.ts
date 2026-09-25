@@ -1,8 +1,10 @@
+import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 // Daemon runtime path tests cover executable and config path resolution.
 import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 
 const fsMocks = vi.hoisted(() => ({
   access: vi.fn(),
@@ -25,7 +27,6 @@ vi.mock("node:fs/promises", async () => {
 
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import { resolveStableNodePath } from "../infra/stable-node-path.js";
 import { resolveNodeProgramArguments } from "./program-args.js";
 import {
   renderSystemNodeWarning,
@@ -34,6 +35,8 @@ import {
   resolvePreferredNodePath,
   resolveSystemNodeInfo,
 } from "./runtime-paths.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => {
   vi.resetAllMocks();
@@ -230,6 +233,35 @@ describe("resolvePreferredNodePath", () => {
       /Node runtime probe failed.*\/usr\/bin\/node.*cwd.*EACCES/s,
     );
   });
+
+  it.each([
+    { platform: "linux", execPath: "/custom/bin/node", isNode: true },
+    { platform: "linux", execPath: "/custom/bin/nodejs", isNode: true },
+    { platform: "linux", execPath: "/custom/bin/node24", isNode: true },
+    { platform: "linux", execPath: "/custom/bin/node-24", isNode: true },
+    { platform: "linux", execPath: "/custom/bin/bun", isNode: false },
+    { platform: "win32", execPath: "D:\\Tools\\node.exe", isNode: true },
+    { platform: "win32", execPath: "D:\\Tools\\nodejs.exe", isNode: true },
+    { platform: "win32", execPath: "D:\\Tools\\node24.exe", isNode: true },
+    { platform: "win32", execPath: "D:\\Tools\\bun.exe", isNode: false },
+  ] as const)(
+    "selects a supported current Node at $execPath on $platform",
+    async ({ platform, execPath, isNode }) => {
+      mockNodePathPresent();
+      const execFile = vi.fn().mockResolvedValue(nodeRuntime("24.16.0"));
+
+      const result = await resolvePreferredNodePath({
+        env: {},
+        runtime: "node",
+        platform,
+        execFile,
+        execPath,
+      });
+
+      expect(result).toBe(isNode ? execPath : undefined);
+      expect(execFile).toHaveBeenCalledTimes(isNode ? 1 : 0);
+    },
+  );
 
   it("prefers supported system node over version-manager execPath", async () => {
     mockNodePathPresent(darwinNode);
@@ -712,60 +744,14 @@ describe("resolvePreferredBunPath", () => {
   });
 });
 
-describe("resolveStableNodePath", () => {
-  it("resolves Homebrew Cellar path to opt symlink", async () => {
-    mockNodePathPresent("/opt/homebrew/opt/node/bin/node");
-
-    const result = await resolveStableNodePath("/opt/homebrew/Cellar/node/26.1.0/bin/node");
-    expect(result).toBe("/opt/homebrew/opt/node/bin/node");
-  });
-
-  it("falls back to bin symlink for default node formula", async () => {
-    mockNodePathPresent("/opt/homebrew/bin/node");
-
-    const result = await resolveStableNodePath("/opt/homebrew/Cellar/node/26.1.0/bin/node");
-    expect(result).toBe("/opt/homebrew/bin/node");
-  });
-
-  it("resolves Intel Mac Cellar path to opt symlink", async () => {
-    mockNodePathPresent("/usr/local/opt/node/bin/node");
-
-    const result = await resolveStableNodePath("/usr/local/Cellar/node/26.1.0/bin/node");
-    expect(result).toBe("/usr/local/opt/node/bin/node");
-  });
-
-  it("resolves versioned node@24 formula to opt symlink", async () => {
-    mockNodePathPresent("/opt/homebrew/opt/node@24/bin/node");
-
-    const result = await resolveStableNodePath("/opt/homebrew/Cellar/node@24/24.16.0/bin/node");
-    expect(result).toBe("/opt/homebrew/opt/node@24/bin/node");
-  });
-
-  it("returns original path when no stable symlink exists", async () => {
-    fsMocks.access.mockRejectedValue(new Error("missing"));
-
-    const cellarPath = "/opt/homebrew/Cellar/node/26.1.0/bin/node";
-    const result = await resolveStableNodePath(cellarPath);
-    expect(result).toBe(cellarPath);
-  });
-
-  it("returns non-Cellar paths unchanged", async () => {
-    const fnmPath = "/Users/test/.fnm/node-versions/v24.16.0/installation/bin/node";
-    const result = await resolveStableNodePath(fnmPath);
-    expect(result).toBe(fnmPath);
-  });
-
-  it("returns system paths unchanged", async () => {
-    const result = await resolveStableNodePath("/opt/homebrew/bin/node");
-    expect(result).toBe("/opt/homebrew/bin/node");
-  });
-});
-
 describe("resolvePreferredNodePath — Homebrew Cellar", () => {
-  it("resolves Cellar execPath to stable Homebrew symlink", async () => {
-    const cellarNode = "/opt/homebrew/Cellar/node/26.1.0/bin/node";
-    const stableNode = "/opt/homebrew/opt/node/bin/node";
-    mockNodePathPresent(stableNode);
+  it("resolves Cellar execPath to the stable Homebrew path", async () => {
+    const fs = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    const prefix = tempDirs.make("openclaw-daemon-homebrew-");
+    const cellarNode = path.join(prefix, "Cellar", "node", "26.1.0", "bin", "node");
+    const stableNode = path.join(prefix, "opt", "node", "bin", "node");
+    await fs.mkdir(path.dirname(stableNode), { recursive: true });
+    await fs.writeFile(stableNode, "");
 
     const execFile = vi.fn().mockResolvedValue(nodeRuntime("26.1.0"));
 
@@ -778,6 +764,8 @@ describe("resolvePreferredNodePath — Homebrew Cellar", () => {
     });
 
     expect(result).toBe(stableNode);
+    expect(execFile).toHaveBeenCalledTimes(1);
+    expect(execFile.mock.calls[0]?.[0]).toBe(cellarNode);
   });
 });
 

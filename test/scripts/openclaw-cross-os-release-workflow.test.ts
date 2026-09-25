@@ -1,10 +1,15 @@
 // Openclaw Cross Os Release Workflow tests cover openclaw cross os release workflow script behavior.
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { runInNewContext } from "node:vm";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { resolveRunnerMatrix } from "../../scripts/lib/cross-os-release-checks/config.ts";
 import { createReleaseCheckSelection } from "../../scripts/plan-release-workflow-matrix.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.ts";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const WORKFLOW_PATH = ".github/workflows/openclaw-cross-os-release-checks-reusable.yml";
 const RELEASE_CHECKS_PATH = ".github/workflows/openclaw-release-checks.yml";
@@ -59,6 +64,134 @@ function step(workflowJob: WorkflowJob, name: string): WorkflowStep {
 }
 
 describe("cross-OS release checks workflow", () => {
+  it("covers both packaged Node lines while preserving platform exceptions and proof identities", () => {
+    const matrix = resolveRunnerMatrix({
+      mode: "both",
+      ref: "main",
+      ubuntuRunner: "",
+      windowsRunner: "",
+      macosRunner: "",
+      varUbuntuRunner: "",
+      varWindowsRunner: "",
+      varMacosRunner: "",
+    });
+
+    expect(matrix.include).toHaveLength(18);
+    expect(
+      new Set(matrix.include.map((entry) => `${entry.display_name}/${entry.suite_label}`)).size,
+    ).toBe(18);
+    expect(
+      new Set(matrix.include.map((entry) => `${entry.artifact_name}/${entry.suite}`)).size,
+    ).toBe(18);
+    for (const osId of ["ubuntu", "windows", "macos"]) {
+      for (const suite of ["packaged-fresh", "packaged-upgrade"]) {
+        expect(
+          matrix.include
+            .filter((entry) => entry.os_id === osId && entry.suite === suite)
+            .map((entry) => entry.node_version),
+        ).toEqual([
+          osId === "windows" && suite === "packaged-fresh" ? "24.16.0" : "24.19.0",
+          "26.1.0",
+        ]);
+      }
+    }
+    expect(
+      matrix.include.find((entry) => entry.os_id === "windows" && entry.suite === "dev-update"),
+    ).toEqual({
+      artifact_name: "windows",
+      display_name: "Windows",
+      node_version: "24.19.0",
+      lane: "upgrade",
+      os_id: "windows",
+      runner: "blacksmith-32vcpu-windows-2025",
+      suite: "dev-update",
+      suite_label: "dev update",
+    });
+    expect(
+      matrix.include.find((entry) => entry.os_id === "ubuntu" && entry.suite === "installer-fresh"),
+    ).toEqual({
+      artifact_name: "linux",
+      display_name: "Linux",
+      node_version: "24.19.0",
+      lane: "fresh",
+      os_id: "ubuntu",
+      runner: "blacksmith-8vcpu-ubuntu-2404",
+      suite: "installer-fresh",
+      suite_label: "installer fresh",
+    });
+    expect(
+      matrix.include.find((entry) => entry.os_id === "macos" && entry.suite === "packaged-fresh"),
+    ).toEqual({
+      artifact_name: "macos",
+      display_name: "macOS",
+      node_version: "24.19.0",
+      lane: "fresh",
+      os_id: "macos",
+      runner: "blacksmith-6vcpu-macos-15",
+      suite: "packaged-fresh",
+      suite_label: "packaged fresh",
+    });
+  });
+
+  it("filters the cross-OS runner matrix to a focused OS suite", () => {
+    const matrix = resolveRunnerMatrix({
+      mode: "both",
+      ref: "main",
+      suiteFilter: "windows/packaged-upgrade",
+      ubuntuRunner: "",
+      windowsRunner: "",
+      macosRunner: "",
+      varUbuntuRunner: "",
+      varWindowsRunner: "",
+      varMacosRunner: "",
+    });
+
+    expect(matrix.include).toEqual([
+      {
+        artifact_name: "windows",
+        display_name: "Windows",
+        node_version: "24.19.0",
+        lane: "upgrade",
+        os_id: "windows",
+        runner: "blacksmith-32vcpu-windows-2025",
+        suite: "packaged-upgrade",
+        suite_label: "packaged upgrade",
+      },
+      {
+        artifact_name: "windows-node26.1.0",
+        display_name: "Windows",
+        node_version: "26.1.0",
+        lane: "upgrade",
+        os_id: "windows",
+        runner: "blacksmith-32vcpu-windows-2025",
+        suite: "packaged-upgrade",
+        suite_label: "packaged upgrade (Node 26.1.0)",
+      },
+    ]);
+  });
+
+  it("filters the cross-OS runner matrix by suite across platforms", () => {
+    const matrix = resolveRunnerMatrix({
+      mode: "both",
+      ref: "main",
+      suiteFilter: "packaged-fresh",
+      ubuntuRunner: "",
+      windowsRunner: "",
+      macosRunner: "",
+      varUbuntuRunner: "",
+      varWindowsRunner: "",
+      varMacosRunner: "",
+    });
+
+    expect(matrix.include).toHaveLength(6);
+    expect([...new Set(matrix.include.map((entry) => entry.os_id))].toSorted()).toEqual([
+      "macos",
+      "ubuntu",
+      "windows",
+    ]);
+    expect(matrix.include.every((entry) => entry.suite === "packaged-fresh")).toBe(true);
+  });
+
   it("runs the TypeScript release harness through the Windows-safe wrapper", () => {
     const workflow = readFileSync(WORKFLOW_PATH, "utf8");
 
@@ -68,40 +201,75 @@ describe("cross-OS release checks workflow", () => {
     expect(workflow).not.toContain("TSX_VERSION");
   });
 
-  it.each([
-    ["ubuntu", false],
-    ["windows", true],
-    ["macos", true],
-  ])("makes %s cross-OS coverage advisory=%s without masking failed steps", (osId, advisory) => {
+  it("preserves failed preparation and cross-OS test job conclusions", () => {
     const workflow = readWorkflow(WORKFLOW_PATH);
     const prepare = job(workflow, "prepare");
     const lane = job(workflow, "cross_os_release_checks");
-    const context = { inputs: { advisory: false }, matrix: { os_id: osId } };
-    const evaluate = (expression: unknown) =>
-      runInNewContext(String(expression).replace(/^\$\{\{(.*)\}\}$/u, "$1"), context);
 
-    expect(evaluate(prepare["continue-on-error"])).toBe(false);
-    expect(evaluate(lane["continue-on-error"])).toBe(advisory);
+    expect(prepare["continue-on-error"]).toBeUndefined();
+    expect(lane["continue-on-error"]).toBeUndefined();
     expect(step(lane, "Run cross-OS release checks")["continue-on-error"]).toBeUndefined();
-    context.inputs.advisory = true;
-    expect(evaluate(lane["continue-on-error"])).toBe(true);
   });
 
-  it("pins only Windows packaged-fresh checks to the known-good Node release", () => {
+  it.each([
+    ["candidate", "download_candidate"],
+    ["baseline", "download_baseline"],
+    ["prerelease plugin registry", "download_prepublish_plugin_registry"],
+  ])("retries only failed %s artifact acquisition once before tests", (artifact, downloadId) => {
+    const consumer = job(readWorkflow(WORKFLOW_PATH), "cross_os_release_checks");
+    const first = step(consumer, `Download ${artifact} artifact`);
+    const warning = step(consumer, `Warn about ${artifact} artifact acquisition retry`);
+    const retry = step(consumer, `Retry ${artifact} artifact download`);
+
+    expect(first.id).toBe(downloadId);
+    expect(first["continue-on-error"]).toBe(true);
+    expect(first.uses).toMatch(/^actions\/download-artifact@/u);
+    expect(retry.uses).toBe(first.uses);
+    expect(retry.with).toEqual(first.with);
+    expect(retry["continue-on-error"]).toBeUndefined();
+    expect(warning.if).toBe(retry.if);
+    expect(warning.run).toContain("::warning::");
+    expect(warning.run).toContain("retrying infrastructure acquisition once before tests");
+    for (const outcome of ["success", "failure", "skipped", "cancelled"]) {
+      const retryEnabled = runInNewContext(retry.if!.replace(/^\$\{\{(.*)\}\}$/u, "$1"), {
+        steps: { [downloadId]: { outcome } },
+      });
+      expect(retryEnabled, outcome).toBe(outcome === "failure");
+    }
+    const steps = consumer.steps!;
+    expect(steps.indexOf(first)).toBeLessThan(steps.indexOf(warning));
+    expect(steps.indexOf(warning)).toBeLessThan(steps.indexOf(retry));
+    expect(steps.indexOf(retry)).toBeLessThan(
+      steps.indexOf(step(consumer, "Verify release-check inputs")),
+    );
+  });
+
+  it("uses the matrix runtime consistently for both consumer setup steps", () => {
     const workflow = readWorkflow(WORKFLOW_PATH);
     const prepare = job(workflow, "prepare");
     const consumer = job(workflow, "cross_os_release_checks");
-    const windowsPackagedFreshNodeVersion =
-      "${{ matrix.os_id == 'windows' && matrix.suite == 'packaged-fresh' && '24.16.0' || env.NODE_VERSION }}";
-
     expect(step(prepare, "Setup Node.js").with?.["node-version"]).toBe("${{ env.NODE_VERSION }}");
     expect(step(prepare, "Setup pnpm").with?.["node-version"]).toBe("${{ env.NODE_VERSION }}");
-    expect(step(consumer, "Setup Node.js").with?.["node-version"]).toBe(
-      windowsPackagedFreshNodeVersion,
-    );
-    expect(step(consumer, "Setup pnpm").with?.["node-version"]).toBe(
-      windowsPackagedFreshNodeVersion,
-    );
+    for (const setupName of ["Setup Node.js", "Setup pnpm"]) {
+      const expression = String(step(consumer, setupName).with?.["node-version"]);
+      for (const [osId, suite, nodeVersion, expected] of [
+        ["windows", "packaged-fresh", "26.1.0", "26.1.0"],
+        ["windows", "packaged-fresh", "24.16.0", "24.16.0"],
+        ["ubuntu", "packaged-upgrade", "26.1.0", "26.1.0"],
+        // The public workflow_ref input can select a pre-field tooling revision.
+        ["windows", "packaged-fresh", undefined, "24.16.0"],
+        ["windows", "packaged-upgrade", undefined, "24.19.0"],
+        ["macos", "packaged-fresh", undefined, "24.19.0"],
+      ]) {
+        expect(
+          runInNewContext(expression.replace(/^\$\{\{(.*)\}\}$/u, "$1"), {
+            matrix: { os_id: osId, suite, node_version: nodeVersion },
+            env: { NODE_VERSION: "24.19.0" },
+          }),
+          `${setupName}: ${osId}/${suite}/${nodeVersion ?? "legacy"}`,
+        ).toBe(expected);
+      }
+    }
   });
 
   it("reuses npm downloads across isolated lane homes without caching installed state", () => {
@@ -130,20 +298,41 @@ describe("cross-OS release checks workflow", () => {
     expect(steps.indexOf(save)).toBeGreaterThan(steps.indexOf(run));
   });
 
-  it("retries only an interrupted Windows dashboard probe", () => {
+  it("fails the Windows lane on its first interrupted dashboard probe", () => {
     const workflow = readWorkflow(WORKFLOW_PATH);
     const consumer = job(workflow, "cross_os_release_checks");
-    const run = step(consumer, "Run cross-OS release checks").run;
+    const run = step(consumer, "Run cross-OS release checks");
+    const root = tempDirs.make("cross-os-first-failure-");
+    const harness = join(root, "workflow/scripts/github");
+    const outputDir = join(root, "output");
+    mkdirSync(harness, { recursive: true });
+    mkdirSync(join(outputDir, "logs"), { recursive: true });
+    writeFileSync(
+      join(outputDir, "logs/fresh-dashboard.log"),
+      "attempt=1 url=http://127.0.0.1:1/\n",
+    );
+    writeFileSync(
+      join(harness, "run-openclaw-cross-os-release-checks.sh"),
+      [
+        'if [[ -f "$OUTPUT_DIR/attempt" ]]; then exit 0; fi',
+        'printf "first\\n" > "$OUTPUT_DIR/attempt"',
+        "exit 127",
+      ].join("\n"),
+    );
+    const result = spawnSync(BASH_BIN, ["-e", "-o", "pipefail", "-c", run.run!], {
+      cwd: root,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        ...Object.fromEntries(Object.keys(run.env ?? {}).map((key) => [key, ""])),
+        MODE: "fresh",
+        OPENCLAW_RELEASE_CHECK_OS: "windows",
+        OUTPUT_DIR: outputDir,
+      },
+    });
 
-    expect(run).toContain("run_cross_os_release_checks() {");
-    expect(run).toContain("if run_cross_os_release_checks; then");
-    expect(run).toContain('"${OPENCLAW_RELEASE_CHECK_OS}" != "windows"');
-    expect(run).toContain('"$status" -ne 127');
-    expect(run).toContain('dashboard_log="${OUTPUT_DIR}/logs/${MODE}-dashboard.log"');
-    expect(run).toContain('-f "${OUTPUT_DIR}/summary.json"');
-    expect(run).toContain("attempt=.*url=http://127.0.0.1:");
-    expect(run).toContain("retrying Windows release checks after the outer process exited 127");
-    expect(run).toContain("run_cross_os_release_checks\n");
+    expect(result.status, result.stdout + result.stderr).toBe(127);
+    expect(readFileSync(join(outputDir, "attempt"), "utf8")).toBe("first\n");
   });
 
   it("bounds npm baseline packing during prepare", () => {
@@ -224,10 +413,10 @@ describe("cross-OS release checks workflow", () => {
     const install = step(prepare, "Install workflow validation dependencies");
 
     expect(install).toMatchObject({
-      if: "inputs.candidate_artifact_name != '' || inputs.mode != 'fresh'",
       "working-directory": "workflow",
       run: "pnpm install --frozen-lockfile --prefer-offline --ignore-scripts",
     });
+    expect(install.if).toBeUndefined();
     expect(step(prepare, "Build candidate artifact once").if).toBe(
       "inputs.candidate_artifact_name == ''",
     );
@@ -238,6 +427,7 @@ describe("cross-OS release checks workflow", () => {
         (candidate) => candidate.name === "Install workflow validation dependencies",
       ) ?? -1;
     for (const dependentStep of [
+      "Resolve provider-owned companion requirements",
       "Resolve provided candidate package",
       "Capture baseline metadata",
     ]) {
@@ -699,7 +889,15 @@ describe("cross-OS release checks workflow", () => {
     expect(JSON.parse(result.stdout)).toEqual(expected);
   });
 
-  it("executes the release harness directly with Node", () => {
+  it("executes the release harness directly with Node without installed packages", () => {
+    // Lane tooling has no installed packages. Keep the fixture outside the checkout
+    // so a developer's node_modules cannot satisfy an accidental runtime import.
+    const fixture = tempDirs.make("cross-os-no-packages-");
+    for (const source of ["package.json", "scripts", "packages/normalization-core"]) {
+      const target = join(fixture, source);
+      mkdirSync(dirname(target), { recursive: true });
+      cpSync(source, target, { recursive: true });
+    }
     const wrapper = readFileSync(WRAPPER_PATH, "utf8");
     const script = readFileSync(SCRIPT_PATH, "utf8");
     const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
@@ -732,11 +930,13 @@ describe("cross-OS release checks workflow", () => {
         "windows-2025",
       ],
       {
-        cwd: process.cwd(),
+        cwd: fixture,
         encoding: "utf8",
         env: {
           ...process.env,
           OPENCLAW_RELEASE_CHECKS_SCRIPT: SCRIPT_PATH,
+          NODE_OPTIONS: "",
+          NODE_PATH: "",
         },
       },
     );
@@ -750,8 +950,19 @@ describe("cross-OS release checks workflow", () => {
           display_name: "Windows",
           runner: "windows-2025",
           artifact_name: "windows",
+          node_version: "24.16.0",
           suite: "packaged-fresh",
           suite_label: "packaged fresh",
+          lane: "fresh",
+        },
+        {
+          os_id: "windows",
+          display_name: "Windows",
+          runner: "windows-2025",
+          artifact_name: "windows-node26.1.0",
+          node_version: "26.1.0",
+          suite: "packaged-fresh",
+          suite_label: "packaged fresh (Node 26.1.0)",
           lane: "fresh",
         },
       ],

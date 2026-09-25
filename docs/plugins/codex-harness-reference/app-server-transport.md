@@ -13,7 +13,7 @@ How OpenClaw starts and reaches the Codex app-server, and every `appServer` fiel
 ## App-server transport
 
 For ordinary harness turns, OpenClaw starts the managed Codex binary shipped
-with the official plugin (currently `@openai/codex` `0.153.4`):
+with the official plugin (currently `@openai/codex` `0.155.1`):
 
 ```bash
 codex app-server --listen stdio://
@@ -159,6 +159,7 @@ required.
       codex: {
         config: {
           appServer: {
+            approvalPolicy: "never",
             sandbox: "workspace-write",
             networkProxy: {
               enabled: true,
@@ -166,8 +167,6 @@ required.
                 "api.openai.com": "allow",
                 "blocked.example.com": "deny",
               },
-              allowUpstreamProxy: true,
-              proxyUrl: "http://127.0.0.1:3128",
             },
           },
         },
@@ -177,12 +176,18 @@ required.
 }
 ```
 
+Hosts absent from the effective native allowlist are denied. The example's
+`approvalPolicy: "never"` prevents approval-based exceptions; native system
+requirements can still contribute allowed domains. These restrictions apply to
+Codex sandbox commands. See the [network proxy configuration reference](/plugins/codex-harness/config-fields)
+for matching, policy inheritance, scope, and explicit Doctor repair of blank optional fields after updates.
+
 If the normal app-server runtime would be `danger-full-access`, enabling
 `networkProxy` uses workspace-style filesystem access for the generated
 permission profile instead. Codex-managed network enforcement is sandboxed
 networking, so a full-access profile would not protect outbound traffic.
 
-The plugin manages stable Codex app-server `0.153.4`. Explicit custom
+The plugin manages stable Codex app-server `0.155.1`. Explicit custom
 executables, remote app-servers, and macOS desktop binaries must report a
 parseable semantic version of `0.149.0` or newer. Older, malformed, and
 unversioned handshakes are rejected. Newer versions log a compatibility warning

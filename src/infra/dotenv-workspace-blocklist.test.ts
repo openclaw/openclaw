@@ -10,9 +10,10 @@ import {
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
+import { buildPluginMetadataProviderFacts } from "../plugins/plugin-metadata-provider-facts.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { buildDeclaredProviderOwnerIndex } from "../plugins/provider-owner-index.js";
-import { listKnownProviderAuthEnvVarNames } from "../secrets/provider-env-vars.js";
+import { listKnownProviderAuthEnvVarNamesCore } from "../secrets/provider-env-vars.js";
 import { captureFullEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { loadDotEnv, loadWorkspaceDotEnvFile } from "./dotenv.js";
 
@@ -79,7 +80,10 @@ function createManifestBackedProviderSnapshot(
     byPluginId: new Map([[plugin.id, plugin]]),
     normalizePluginId: (pluginId: string) => pluginId,
     declaredProviderOwners: buildDeclaredProviderOwnerIndex([plugin]),
-    owners: makeEmptyPluginMetadataOwners(),
+    owners: {
+      ...makeEmptyPluginMetadataOwners(),
+      ...buildPluginMetadataProviderFacts([plugin]),
+    },
     metrics: {
       registrySnapshotMs: 0,
       manifestRegistryMs: 0,
@@ -140,7 +144,7 @@ describe("workspace .env blocklist completeness", () => {
   it("keeps registered provider auth vars from trusted global dotenv", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ cwdDir, stateDir }) => {
-        const providerAuthKeys = listKnownProviderAuthEnvVarNames().toSorted();
+        const providerAuthKeys = listKnownProviderAuthEnvVarNamesCore().toSorted();
         await writeEnvFile(
           path.join(cwdDir, ".env"),
           `${providerAuthKeys.map((key) => `${key}=workspace-${key}`).join("\n")}\n`,
@@ -186,10 +190,13 @@ describe("workspace .env blocklist completeness", () => {
           "OPENCLAW_WHATSAPP_WEB_SOCKET_URL",
           "EXAMPLE_API_HOST",
           "HOMEBREW_BREW_FILE",
+          "HOMEBREW_CURL_PATH",
+          "HOMEBREW_GIT_PATH",
           "HOMEBREW_PREFIX",
           "IRC_HOST",
           "APPDATA",
           "LOCALAPPDATA",
+          "DISCORD_API_URL",
           "MATTERMOST_URL",
           "MATRIX_HOMESERVER",
           "MINIMAX_API_HOST",
@@ -250,6 +257,8 @@ describe("workspace .env blocklist completeness", () => {
           "OPENCLAW_ALLOW_PROJECT_LOCAL_BIN",
           "PATH",
           "HOMEBREW_BREW_FILE",
+          "HOMEBREW_CURL_PATH",
+          "HOMEBREW_GIT_PATH",
           "HOMEBREW_PREFIX",
           "SystemRoot",
           "WINDIR",
@@ -324,6 +333,7 @@ describe("workspace .env blocklist completeness", () => {
           [
             "MATRIX_HOMESERVER=https://evil-matrix.example.com",
             "MATTERMOST_URL=https://evil-mattermost.example.com",
+            "DISCORD_API_URL=https://evil-discord.example.com/api/v10",
             "IRC_HOST=evil-irc.example.com",
             "BUZZ_RELAY_URL=wss://evil-buzz.example.com/relay",
             "SYNOLOGY_CHAT_INCOMING_URL=https://evil-synology.example.com/incoming",
@@ -335,6 +345,7 @@ describe("workspace .env blocklist completeness", () => {
 
         delete process.env.MATRIX_HOMESERVER;
         delete process.env.MATTERMOST_URL;
+        delete process.env.DISCORD_API_URL;
         delete process.env.IRC_HOST;
         delete process.env.BUZZ_RELAY_URL;
         delete process.env.SYNOLOGY_CHAT_INCOMING_URL;
@@ -346,6 +357,7 @@ describe("workspace .env blocklist completeness", () => {
 
         expect(process.env.MATRIX_HOMESERVER).toBeUndefined();
         expect(process.env.MATTERMOST_URL).toBeUndefined();
+        expect(process.env.DISCORD_API_URL).toBeUndefined();
         expect(process.env.IRC_HOST).toBeUndefined();
         expect(process.env.BUZZ_RELAY_URL).toBeUndefined();
         expect(process.env.SYNOLOGY_CHAT_INCOMING_URL).toBeUndefined();

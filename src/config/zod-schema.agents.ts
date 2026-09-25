@@ -92,6 +92,12 @@ export const AgentsSchema = z
 const BindingMatchSchema = z
   .object({
     channel: z.string(),
+    /**
+     * Channel account to match.
+     * - Omitted/empty: matches only the channel default account.
+     * - "*": matches every account on the channel.
+     * - Any other string: matches that specific account id.
+     */
     accountId: z.string().optional(),
     peer: z
       .object({
@@ -102,12 +108,14 @@ const BindingMatchSchema = z
       .optional(),
     guildId: z.string().optional(),
     teamId: z.string().optional(),
+    /** Discord role IDs used for role-based routing. */
     roles: z.array(z.string()).optional(),
   })
   .strict();
 
 const BindingSessionSchema = z
   .object({
+    /** Optional session scoping override for conversations matched by this binding. */
     dmScope: z
       .enum(["main", "per-peer", "per-channel-peer", "per-account-channel-peer"])
       .optional(),
@@ -117,6 +125,7 @@ const BindingSessionSchema = z
 
 const RouteBindingSchema = z
   .object({
+    /** Missing type is interpreted as route for backward compatibility. */
     type: z.literal("route").optional(),
     agentId: z.string(),
     comment: z.string().optional(),

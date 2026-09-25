@@ -1,15 +1,12 @@
-// Discord plugin module implements agent components dm auth behavior.
+import { readChannelIngressStoreAllowFromForDmPolicy } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
+import { upsertChannelPairingRequest } from "openclaw/plugin-sdk/conversation-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   resolveComponentInteractionContext,
   resolveDiscordChannelContext,
 } from "./agent-components-context.js";
-import {
-  readChannelIngressStoreAllowFromForDmPolicy,
-  upsertChannelPairingRequest,
-} from "./agent-components-helpers.runtime.js";
 import { resolveAgentComponentPolicyContext } from "./agent-components-live-policy.js";
 import { replySilently } from "./agent-components-reply.js";
 import type {

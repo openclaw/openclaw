@@ -19,6 +19,7 @@ import {
   resolveTaskScriptPath,
 } from "./schtasks-layout.js";
 import {
+  findInstalledGatewayChildPid,
   findInstalledProcessPid,
   isNodeHostArgv,
   probeProcessState,
@@ -30,6 +31,7 @@ import {
   terminateGatewayProcessTree,
 } from "./schtasks-process.js";
 import { probeScheduledTaskExists, probeScheduledTaskState } from "./schtasks-state-probe.js";
+import { mergeGatewayServiceEnv } from "./service-env-merge.js";
 import { resolveServiceManagerEnv } from "./service-process-env.js";
 import {
   createServiceRuntimeInspectionFailure,
@@ -42,6 +44,10 @@ import type {
   GatewayServiceReadOptions,
   GatewayServiceRestartResult,
 } from "./service-types.js";
+import {
+  assertGatewayServiceUpdateCurrent,
+  isUpdateOwnedGatewayServiceCommand,
+} from "./service-update-authority.js";
 import { WINDOWS_TASK_SUPERVISOR_FLAG } from "./windows-task-supervisor-contract.js";
 
 export const SCHEDULED_TASK_FALLBACK_POLL_MS = 250;
@@ -80,9 +86,12 @@ export async function isStartupEntryInstalled(env: GatewayServiceEnv): Promise<b
 export async function removeStartupEntries(
   env: GatewayServiceEnv,
   stdout: NodeJS.WritableStream,
+  assertCurrent?: () => void,
 ): Promise<void> {
   for (const startupEntryPath of resolveStartupEntryPaths(env)) {
+    assertCurrent?.();
     try {
+      assertGatewayServiceUpdateCurrent();
       await fs.unlink(startupEntryPath);
       stdout.write(`${formatLine("Removed Windows login item", startupEntryPath)}\n`);
     } catch (error) {
@@ -134,6 +143,11 @@ export async function launchFallbackTaskScript(
   installedCommand?: GatewayServiceCommandConfig | null,
   assertCurrent?: () => void,
 ): Promise<void> {
+  if (isUpdateOwnedGatewayServiceCommand()) {
+    throw new Error(
+      "UPDATE_NATIVE_AUTHORITY: update-owned native commands require Task Scheduler; standalone startup fallback is unsupported.",
+    );
+  }
   const scriptPath = resolveTaskScriptPath(env);
   const command =
     installedCommand === undefined ? await readScheduledTaskCommand(env) : installedCommand;
@@ -246,7 +260,7 @@ export async function resolveFallbackRuntime(
   const snapshot = shouldInspectProcess ? readWindowsProcessSnapshot() : null;
   const processPid =
     snapshot && installedArguments
-      ? findInstalledProcessPid(snapshot, port, installedArguments, () => true)
+      ? findInstalledGatewayChildPid(snapshot, port, installedArguments)
       : null;
   if (processPid) {
     return {
@@ -292,9 +306,9 @@ export async function resolveFallbackRuntime(
   }
   const matchedGatewayPids = resolveGatewayListenerPids(diagnostics.listeners);
   const scopedListenerPids = new Set(diagnostics.listeners.map((listener) => listener.pid));
-  const verifiedGatewayPids = findVerifiedGatewayListenerPidsOnPortSync(port).filter((pid) =>
-    scopedListenerPids.has(pid),
-  );
+  const verifiedGatewayPids = findVerifiedGatewayListenerPidsOnPortSync(port, {
+    env: mergeGatewayServiceEnv(env, command),
+  }).filter((pid) => scopedListenerPids.has(pid));
   const ownedGatewayPids = matchedGatewayPids.length > 0 ? matchedGatewayPids : verifiedGatewayPids;
   if (ownedGatewayPids.length > 0) {
     return requireCommandOwnership
@@ -409,13 +423,14 @@ export async function restartStartupEntry(
   env: GatewayServiceEnv,
   stdout: NodeJS.WritableStream,
   onMutation?: (kind: "stop" | "restart") => void,
+  assertCurrent?: () => void,
 ): Promise<GatewayServiceRestartResult> {
   const runtime = await resolveControllableFallbackRuntime(env);
   if (runtime.pid) {
-    await terminateGatewayProcessTree(runtime.pid, 300);
+    await terminateGatewayProcessTree(runtime.pid, 300, assertCurrent);
     onMutation?.("stop");
   }
-  await launchFallbackTaskScript(env);
+  await launchFallbackTaskScript(env, undefined, assertCurrent);
   onMutation?.("restart");
   stdout.write(`${formatLine("Restarted Windows login item", resolveTaskName(env))}\n`);
   return { outcome: "completed" };

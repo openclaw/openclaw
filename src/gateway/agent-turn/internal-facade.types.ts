@@ -16,7 +16,16 @@ export type AgentTurnStartOwner = {
   abort: () => boolean;
 };
 
+/** A live frozen settle cohort may identify an already accepted legacy source. */
+export type RequesterSettleWakeReplay = {
+  sourceSessionKeys: readonly string[];
+  assertCurrent: () => void;
+};
+
 export type InternalAgentTurnDispatchOptions = {
+  /** Internal completion delivery owns its hidden input and durable processing receipt. */
+  privateCompletion?: true;
+  settleWakeReplay?: RequesterSettleWakeReplay;
   // The source owns admission only; accepted children execute under their own lifetime.
   assertAdmissionCurrent?: () => void;
   cancelOnDeadline?: boolean;

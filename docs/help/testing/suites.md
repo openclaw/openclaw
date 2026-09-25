@@ -18,10 +18,22 @@ Most days:
 - Docker-backed QA site: `pnpm qa:lab:up`
 - Linux VM-backed QA lane: `pnpm openclaw qa suite --runner multipass --scenario channel-chat-baseline`
 
+The last two lanes need tooling the other commands do not: `qa:lab:up` needs a
+running Docker daemon and a source checkout, because the npm tarball omits QA
+Lab, and the `multipass` runner needs Multipass installed. See
+[QA-specific runners](/help/testing/qa-runners).
+
 When you touch tests or want extra confidence:
 
 - Informational V8 coverage report: `pnpm test:coverage`
 - E2E suite: `pnpm test:e2e`
+
+Oxlint's `max-lines` rule warns when files exceed the per-scope limits in
+`.oxlintrc.json`; these warnings remain visible in lint logs and do not fail CI.
+PR CI and `pnpm check:changed` separately reject new line-cap violations and
+growth in already over-cap files. The suppression baseline ratchet remains a
+required check. See [surface ratchets](/ci/local-proof#surface-ratchets) for
+comparison bases and shrink-only maintenance.
 
 ## Test suites (what runs where)
 
@@ -94,19 +106,27 @@ Native dependency policy:
 
   <Accordion title="Vitest pool and isolation defaults">
 
-    - Base Vitest config defaults to `threads`.
+    - Base Vitest config defaults to `forks` on Windows and `threads` elsewhere.
+      Windows workers need separate native handle tables: concurrent thread
+      spawns can inherit another worker's temporary output pipe handles and
+      prevent that worker's child cleanup from observing EOF. Worker counts
+      and file parallelism remain unchanged.
     - The shared Vitest config fixes `isolate: false` and uses the
       non-isolated runner across the root projects, e2e, and live configs.
     - The root UI lane keeps its `jsdom` setup and optimizer, but runs on the
       shared non-isolated runner too.
-    - Each `pnpm test` shard inherits the same `threads` + `isolate: false`
-      defaults from the shared Vitest config.
+    - Provider plugin shards reuse workers with the shared cleanup runner.
+      Track global replacements with `vi.stubGlobal` so cleanup can restore them
+      before the next file.
+    - Each `pnpm test` shard inherits the platform pool and `isolate: false`
+      defaults from the shared Vitest config unless its owner selects otherwise.
     - `scripts/run-vitest.mjs` adds `--no-maglev` for Vitest child Node
       processes by default to reduce V8 compile churn during big local runs.
       Set `OPENCLAW_VITEST_ENABLE_MAGLEV=1` to compare against stock V8
       behavior.
     - `scripts/run-vitest.mjs` terminates explicit non-watch Vitest runs
-      after 5 minutes with no stdout or stderr output. Set
+      when their configured no-output deadline expires. Expiry fails the run
+      without retrying the shard, even when the child shuts down with exit code zero. Set
       `OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=0` to disable the watchdog for
       an intentionally silent investigation.
     - `scripts/run-tsgo.mjs` leaves tsgo unbounded by default, preserving the
@@ -141,12 +161,39 @@ Native dependency policy:
     - Local worker auto-scaling is intentionally conservative and backs off
       when the host load average is already high, so multiple concurrent
       Vitest runs do less damage by default.
+      CI hosts with at least eight available CPUs can use six workers at
+      24 to below 28 GiB and eight workers at 28–128 GiB. The measured memory allowance
+      reserves 25% of RAM even for two heavy test processes. Interactive local
+      sizing is unchanged; explicit worker overrides, load backoff, process
+      memory constraints, free-memory pressure limits, and the 16-worker cap
+      still apply. See [CI worker sizing](/ci/capacity#vitest-worker-sizing)
+      for the measurements and workflow limits.
     - The base Vitest config marks the projects/config files as
       `forceRerunTriggers` so changed-mode reruns stay correct when test
       wiring changes.
     - The config keeps `OPENCLAW_VITEST_FS_MODULE_CACHE` enabled on
       supported hosts; set `OPENCLAW_VITEST_FS_MODULE_CACHE_PATH=/abs/path`
       for one explicit cache location for direct profiling.
+    - Local Node runs also reuse compiled runtime-worker outputs from
+      `.artifacts/vitest-worker-cache`. The runner reserves an exclusive
+      checkout-local output slot and transfers verified artifacts into that slot.
+      After its borrowers and resources join, it transfers completed artifacts
+      back to the cache and removes the invocation directory. Occupied or
+      uncertain generations are never reclaimed automatically.
+      Content, compiler, configuration, or resolution changes invalidate the
+      seed; timestamp-only touches do not. Build provenance and resource receipts
+      are refreshed for each invocation, and source/output verification still
+      runs before lending and after completion. Cold cache-enabled preparation overlaps
+      the independent worker and finalizer builds when at least 8 GiB of memory
+      is available; smaller hosts keep sequential compilation. CI keeps fresh compilation
+      unless its workflow enables `OPENCLAW_VITEST_WORKER_CACHE=1` after restoring
+      a protected cache. Only the protected warmer publishes shared generations;
+      ordinary CI jobs remain remote-cache readers. Reuse requires the same
+      absolute checkout and reserved output paths, Node version, compiler options,
+      and verified inputs. Incompatible or missing generations compile normally.
+      Bun and custom Node loader runs keep fresh compilation.
+      This cache does not share Vitest's writable
+      filesystem module cache with another checkout.
 
   </Accordion>
 
@@ -241,7 +288,33 @@ Native dependency policy:
   - No provider keys required; `OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY=1` excludes real-Gateway suites
   - Browser dependency must be present (`pnpm --dir ui exec playwright install chromium`)
 
-The dedicated real-Gateway CI job uses `test/vitest/vitest.ui-e2e-prebuilt.config.ts` after `OPENCLAW_BUILD_PRIVATE_QA=1 pnpm build:ci-artifacts` completes in a clean checkout. Keep source and built outputs unchanged until all workers and children finish. MCP conformance runs serially first, then the other 13 files share at most two workers in the same invocation, with no extra jobs or shards. Readiness failures stop execution without rebuilding or falling back. The ordinary local config keeps real-Gateway files serial; frozen targets without the prebuilt config keep their original serial command. See [CI](/ci) for the resource policy and bounded timing evidence.
+The dedicated real-Gateway CI lane uses `test/vitest/vitest.ui-e2e-prebuilt.config.ts` after `OPENCLAW_BUILD_PRIVATE_QA=1 OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=1 pnpm build` completes in each clean checkout. The separate artifact job retains SDK declaration validation. The planner balances existing serial files and selected standalone companions in one row, with the remaining audited parallel files in another. The companions share the existing two-worker phase after serial execution without an extra bundled preview. The real node/SSH desktop resize tour is release-only: when its file is selected by full manual/release validation or a direct spec edit, the first row runs `node --import tsx scripts/test-desktop-resize-real.mts` once for both carriers. The bootstrap remains required; invoking the desktop spec without its real fixture is not equivalent proof. Frequent resize, revocation, view-only filtering, takeover, and UI sizing tests remain in ordinary CI. Placement consumes the parallel-eligibility allowlist from `vitest.ui-paths.mjs` without changing Vitest scheduling. Each selected file has one CI owner; the desktop bootstrap executes each carrier once. Full manual and release selection retain the complete inventory. Prebuilt previews borrow the validated canonical Control UI assets without rebuilding or deleting them; default mocked Gateway hellos use the same artifact identity, and explicit mock identity overrides still apply. Ordinary local runs retain their private builds. Keep source and built outputs unchanged until all workers and children finish. Fixtures retain their private HOME, state, ports, cleanup, and existing worker limits. Readiness failures stop without rebuilding or falling back. The ordinary local config keeps real-Gateway files serial; frozen targets and older planners retain one complete CI row and their own config/command. See [CI](/ci) for the resource policy and timing evidence.
+
+### Network-isolated local E2E
+
+When Chromium is available, UI E2E setup proves loopback HTTP through the parent
+Node process's normal `fetch` before acquiring Gateway fixtures or the shared UI
+build. A proxy refusal or malformed response fails this environment preflight
+with a sanitized error instead of consuming the Gateway startup budget. Existing
+optional missing-browser skips remain unchanged. If later Gateway readiness
+expires, its error also retains the last completed HTTP failure so a final
+deadline-edge timeout does not hide useful status and error-category evidence.
+
+Gateway-hosted exec can inherit the [secret egress proxy](/gateway/secrets/secret-store-and-egress#secret-egress-proxy). Its plain-HTTP refusal also applies to a test process calling its own loopback fixture. A Gateway can therefore log that it is ready while its parent receives a proxy error from `/readyz`. Building the UI again or increasing the readiness timeout does not repair that transport mismatch.
+
+For trusted, keyless local tests, run the complete invocation in an isolated Linux container instead. Select an already prepared, trusted image by its full image ID or digest; the runner never pulls an image or falls back to the host:
+
+```bash
+node scripts/run-vitest.mjs --isolated-image "$IMAGE_ID" run \
+  --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner \
+  ui/src/e2e/command-palette-catalog.real-gateway.e2e.test.ts
+```
+
+The adapter requires Linux, an existing rootless Podman installation, checkout-local `pnpm install --frozen-lockfile` dependencies, and native Node and pnpm executables compatible with the image. Put the native pnpm executable matching `package.json` on `PATH`, or select it through the existing `npm_execpath` environment variable; a Corepack/download shim is not an offline executable. The image must already contain the Chromium revision required by the installed Playwright package under `/ms-playwright`, including its headless shell and system libraries. The runner checks versions and launches Chromium before starting the test command. SELinux-labeled hosts are not supported by this initial adapter: it refuses before creating a container rather than relabeling shared host files or disabling enforcement. Use an already supported isolated runner instead of changing host security policy.
+
+It runs Vitest, Chromium, the provider fixture, and the test Gateway in the same network-none namespace. Host proxy settings stay unchanged; host credentials, Gateway state, Git metadata, and private scratch are not exposed to the container. There are no published ports or external network access. Missing prerequisites fail with setup guidance instead of installing packages or weakening isolation.
+
+Use the ordinary local config, not the CI-only prebuilt config. For the canonical Control UI E2E config, the adapter runs the existing private-QA `ciArtifacts` build inside the container before admitting tests; backend readiness alone does not mean the dashboard assets are ready. The isolated source snapshot uses tracked working-tree files, including staged new files; stage a new test before selecting it. Keep source and dependencies unchanged during the invocation, and keep dependency installation separate. The initial interface supports exact tracked test files, a tracked config, and console reporters; it does not export files from the disposable snapshot. This route is not suitable for live-provider tests or tests that must contact services outside their own container.
 
 ### E2E: OpenShell backend smoke
 

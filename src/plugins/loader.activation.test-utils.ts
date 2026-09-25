@@ -332,22 +332,20 @@ describe("loadOpenClawPlugins", () => {
     const plugin = writePlugin({
       id: "channel-meta-repair",
       filename: "channel-meta-repair.cjs",
-      body: `module.exports = { id: "channel-meta-repair", register(api) {
-    api.registerChannel({
-      plugin: {
-        id: "telegram",
-        meta: {
-          id: "telegram"
-        },
-        capabilities: { chatTypes: ["direct"] },
-        config: {
-          listAccountIds: () => [],
-          resolveAccount: () => ({ accountId: "default" })
-        },
-        outbound: { deliveryMode: "direct" }
-      }
-    });
-  } };`,
+      registration: `api.registerChannel({
+        plugin: {
+          id: "telegram",
+          meta: {
+            id: "telegram"
+          },
+          capabilities: { chatTypes: ["direct"] },
+          config: {
+            listAccountIds: () => [],
+            resolveAccount: () => ({ accountId: "default" })
+          },
+          outbound: { deliveryMode: "direct" }
+        }
+      });`,
     });
 
     const registry = loadRegistryFromSinglePlugin({
@@ -850,10 +848,8 @@ describe("loadOpenClawPlugins", () => {
     const plugin = writePlugin({
       id: "service-owner-self",
       filename: "service-owner-self.cjs",
-      body: `module.exports = { id: "service-owner-self", register(api) {
-    api.registerService({ id: "shared-service", start() {} });
-    api.registerService({ id: "shared-service", start() {} });
-  } };`,
+      registration: `api.registerService({ id: "shared-service", start() {} });
+      api.registerService({ id: "shared-service", start() {} });`,
     });
 
     const registry = loadRegistryFromSinglePlugin({
@@ -877,10 +873,8 @@ describe("loadOpenClawPlugins", () => {
     const plugin = writePlugin({
       id: "split-service-owner",
       filename: "split-service-owner.cjs",
-      body: `module.exports = { id: "split-service-owner", register(api) {
-    api.registerService({ id: "shared-service", start() {} });
-    api.registerGatewayDiscoveryService({ id: "shared-service", advertise() {} });
-  } };`,
+      registration: `api.registerService({ id: "shared-service", start() {} });
+      api.registerGatewayDiscoveryService({ id: "shared-service", advertise() {} });`,
     });
 
     const registry = loadRegistryFromSinglePlugin({
@@ -903,9 +897,7 @@ describe("loadOpenClawPlugins", () => {
     const plugin = writePlugin({
       id: "http-handler-legacy",
       filename: "http-handler-legacy.cjs",
-      body: `module.exports = { id: "http-handler-legacy", register(api) {
-    api.registerHttpHandler({ path: "/legacy", handler: async () => true });
-  } };`,
+      registration: `api.registerHttpHandler({ path: "/legacy", handler: async () => true });`,
     });
 
     const errors: string[] = [];
@@ -965,9 +957,7 @@ describe("loadOpenClawPlugins", () => {
           writePlugin({
             id: "http-route-missing-auth",
             filename: "http-route-missing-auth.cjs",
-            body: `module.exports = { id: "http-route-missing-auth", register(api) {
-    api.registerHttpRoute({ path: "/demo", handler: async () => true });
-  } };`,
+            registration: `api.registerHttpRoute({ path: "/demo", handler: async () => true });`,
           }),
         ],
         assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
@@ -986,10 +976,8 @@ describe("loadOpenClawPlugins", () => {
           writePlugin({
             id: "http-route-replace-self",
             filename: "http-route-replace-self.cjs",
-            body: `module.exports = { id: "http-route-replace-self", register(api) {
-    api.registerHttpRoute({ path: "/Demo//", auth: "plugin", handler: async () => false });
-    api.registerHttpRoute({ path: "/demo", auth: "plugin", handler: async () => true });
-  } };`,
+            registration: `api.registerHttpRoute({ path: "/Demo//", auth: "plugin", handler: async () => false });
+            api.registerHttpRoute({ path: "/demo", auth: "plugin", handler: async () => true });`,
           }),
         ],
         assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
@@ -1007,10 +995,8 @@ describe("loadOpenClawPlugins", () => {
           writePlugin({
             id: "http-route-replace-prefix",
             filename: "http-route-replace-prefix.cjs",
-            body: `module.exports = { id: "http-route-replace-prefix", register(api) {
-    api.registerHttpRoute({ path: "/Webhooks//SMS/", auth: "plugin", match: "prefix", handler: async () => false });
-    api.registerHttpRoute({ path: "/webhooks/sms", auth: "plugin", match: "prefix", handler: async () => true });
-  } };`,
+            registration: `api.registerHttpRoute({ path: "/Webhooks//SMS/", auth: "plugin", match: "prefix", handler: async () => false });
+            api.registerHttpRoute({ path: "/webhooks/sms", auth: "plugin", match: "prefix", handler: async () => true });`,
           }),
         ],
         assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
@@ -1031,16 +1017,12 @@ describe("loadOpenClawPlugins", () => {
           writePlugin({
             id: "http-route-owner-a",
             filename: "http-route-owner-a.cjs",
-            body: `module.exports = { id: "http-route-owner-a", register(api) {
-    api.registerHttpRoute({ path: "/Demo//", auth: "plugin", handler: async () => false });
-  } };`,
+            registration: `api.registerHttpRoute({ path: "/Demo//", auth: "plugin", handler: async () => false });`,
           }),
           writePlugin({
             id: "http-route-owner-b",
             filename: "http-route-owner-b.cjs",
-            body: `module.exports = { id: "http-route-owner-b", register(api) {
-    api.registerHttpRoute({ path: "/demo", auth: "plugin", replaceExisting: true, handler: async () => true });
-  } };`,
+            registration: `api.registerHttpRoute({ path: "/demo", auth: "plugin", replaceExisting: true, handler: async () => true });`,
           }),
         ],
         assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
@@ -1061,10 +1043,8 @@ describe("loadOpenClawPlugins", () => {
           writePlugin({
             id: "http-route-overlap",
             filename: "http-route-overlap.cjs",
-            body: `module.exports = { id: "http-route-overlap", register(api) {
-    api.registerHttpRoute({ path: "/plugin/secure", auth: "gateway", match: "prefix", handler: async () => true });
-    api.registerHttpRoute({ path: "/plugin/secure/report", auth: "plugin", match: "exact", handler: async () => true });
-  } };`,
+            registration: `api.registerHttpRoute({ path: "/plugin/secure", auth: "gateway", match: "prefix", handler: async () => true });
+            api.registerHttpRoute({ path: "/plugin/secure/report", auth: "plugin", match: "exact", handler: async () => true });`,
           }),
         ],
         assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
@@ -1085,10 +1065,8 @@ describe("loadOpenClawPlugins", () => {
           writePlugin({
             id: "http-route-overlap-same-auth",
             filename: "http-route-overlap-same-auth.cjs",
-            body: `module.exports = { id: "http-route-overlap-same-auth", register(api) {
-    api.registerHttpRoute({ path: "/plugin/public", auth: "plugin", match: "prefix", handler: async () => true });
-    api.registerHttpRoute({ path: "/plugin/public/report", auth: "plugin", match: "exact", handler: async () => true });
-  } };`,
+            registration: `api.registerHttpRoute({ path: "/plugin/public", auth: "plugin", match: "prefix", handler: async () => true });
+            api.registerHttpRoute({ path: "/plugin/public/report", auth: "plugin", match: "exact", handler: async () => true });`,
           }),
         ],
         assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {

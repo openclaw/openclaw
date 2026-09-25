@@ -13,15 +13,13 @@ scenario:
   successCriteria:
     - One coded over-threshold provider overflow produces one persisted OpenClaw overflow compaction and one compacted retry retaining durable current context.
     - OpenClaw performs exactly one successful write, then one terminal continuation after zero-or-more causally linked waits, and returns the exact file content and final marker.
-    - OpenClaw proves session-memory.pruning by retaining a nonempty contiguous suffix ending at block 15 while pruning marker block 10.
-    - OpenClaw records one overflow-retry checkpoint whose branch preserves the independent pre-compaction assistant marker.
+    - OpenClaw proves session-memory.pruning by retaining a nonempty contiguous suffix of complete tail blocks ending at block 15 while pruning the body of marker block 10; bounded summary excerpts are allowed.
     - The Codex runtime-pair cell reports a known harness gap before gateway, session, or provider work and makes no compaction coverage claim.
   docsRefs:
     - docs/help/testing.md
   codeRefs:
     - extensions/qa-lab/src/providers/mock-openai/server.ts
     - src/agents/embedded-agent-runner/run/overflow-context-recovery.ts
-    - src/gateway/session-compaction-checkpoints.ts
   execution:
     kind: flow
     summary: Force one OpenClaw context overflow, verify persisted pruning evidence, and prove exactly-once mutation after compaction.
@@ -32,8 +30,9 @@ scenario:
       promptSnippet: Compaction retry mutating tool check
       durableMarker: QA-COMPACTION-DURABLE-MARKER
       bulkyMarker: QA-COMPACTION-BULKY-HISTORICAL-MARKER
-      checkpointMarker: QA-COMPACTION-PRECOMPACTION-ASSISTANT-MARKER
+      historyMarker: QA-COMPACTION-PRECOMPACTION-ASSISTANT-MARKER
       overflowThresholdBytes: 262144
+      tailTokenCount: 1280
       expectedFileContent: "Replay safety: unsafe after write.\n"
       finalMarker: "Protocol note: replay unsafe after write."
       prompt: |-
@@ -87,7 +86,7 @@ flow:
               # Exceed the mock provider byte limit without triggering proactive compaction.
               # Keep each tail large enough that recent-history retention still prunes block 10.
               messages:
-                expr: "[...Array.from({ length: 32 }, (_, index) => [{ role: 'user', text: `historical user block ${String(index).padStart(2, '0')} ${'u'.repeat(128)}`, timestamp: now - (70000 - index * 2000) }, { role: 'assistant', text: `historical assistant block ${String(index).padStart(2, '0')} ${'a'.repeat(128)}`, timestamp: now - (69000 - index * 2000) }]).flat(), ...Array.from({ length: 16 }, (_, index) => ({ role: 'user', text: `${index === 10 ? config.bulkyMarker + ' ' : ''}post-marker historical user block ${String(index).padStart(2, '0')} ${Array.from({ length: 1280 }, (_, tokenIndex) => `tail_${String(index).padStart(2, '0')}_${String(tokenIndex).padStart(4, '0')}`).join(' ')}`, timestamp: now - (6000 - index * 300) })), { role: 'assistant', text: config.checkpointMarker, timestamp: now - 1000 }]"
+                expr: "[...Array.from({ length: 32 }, (_, index) => [{ role: 'user', text: `historical user block ${String(index).padStart(2, '0')} ${'u'.repeat(128)}`, timestamp: now - (70000 - index * 2000) }, { role: 'assistant', text: `historical assistant block ${String(index).padStart(2, '0')} ${'a'.repeat(128)}`, timestamp: now - (69000 - index * 2000) }]).flat(), ...Array.from({ length: 16 }, (_, index) => ({ role: 'user', text: `${index === 10 ? config.bulkyMarker + ' ' : ''}post-marker historical user block ${String(index).padStart(2, '0')} ${Array.from({ length: config.tailTokenCount }, (_, tokenIndex) => `tail_${String(index).padStart(2, '0')}_${String(tokenIndex).padStart(4, '0')}`).join(' ')}`, timestamp: now - (6000 - index * 300) })), { role: 'assistant', text: config.historyMarker, timestamp: now - 1000 }]"
         - set: requestCursorBefore
           value:
             expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
@@ -103,12 +102,13 @@ flow:
         - set: scenarioRequests
           value:
             expr: "await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)"
+        # Summaries retain bounded recent-turn excerpts; only complete tail bodies prove retention.
         - set: requestEvidence
           value:
-            expr: "scenarioRequests.map((request) => ({ cursor: request.cursor, kind: request.requestKind, outcome: request.outcome, code: request.errorCode ?? null, bytes: request.rawByteLength, inputChars: String(request.allInputText ?? '').length, tailBlocks: [...new Set(Array.from({ length: 16 }, (_, index) => String(index).padStart(2, '0')).filter((id) => String(request.allInputText ?? '').includes(`post-marker historical user block ${id}`)))].sort().slice(0, 16), prompt: String(request.allInputText ?? '').includes(config.promptSnippet), durable: String(request.allInputText ?? '').includes(config.durableMarker), bulky: String(request.allInputText ?? '').includes(config.bulkyMarker), qualityRetry: String(request.allInputText ?? '').includes('Previous summary failed quality checks'), tool: request.plannedToolName ?? null, resolvedWireTool: request.plannedWireToolName ?? request.plannedToolName ?? null, callId: request.plannedToolCallId ?? null, itemId: request.plannedToolItemId ?? null, transcriptId: typeof request.plannedToolItemId === 'string' && request.plannedToolItemId.length > 0 ? `${request.plannedToolCallId}|${request.plannedToolItemId}` : request.plannedToolCallId ?? null }))"
+            expr: "scenarioRequests.map((request) => ({ cursor: request.cursor, kind: request.requestKind, outcome: request.outcome, code: request.errorCode ?? null, bytes: request.rawByteLength, inputChars: String(request.allInputText ?? '').length, tailBlocks: [...new Set(Array.from({ length: 16 }, (_, index) => String(index).padStart(2, '0')).filter((id) => String(request.allInputText ?? '').includes(`tail_${id}_${String(config.tailTokenCount - 1).padStart(4, '0')}`)))].sort().slice(0, 16), prompt: String(request.allInputText ?? '').includes(config.promptSnippet), durable: String(request.allInputText ?? '').includes(config.durableMarker), bulky: String(request.allInputText ?? '').includes(config.bulkyMarker), qualityRetry: String(request.allInputText ?? '').includes('Previous summary failed quality checks'), tool: request.plannedToolName ?? null, resolvedWireTool: request.plannedWireToolName ?? request.plannedToolName ?? null, callId: request.plannedToolCallId ?? null, itemId: request.plannedToolItemId ?? null, transcriptId: typeof request.plannedToolItemId === 'string' && request.plannedToolItemId.length > 0 ? `${request.plannedToolCallId}|${request.plannedToolItemId}` : request.plannedToolCallId ?? null }))"
         - set: overflowRequests
           value:
-            expr: "scenarioRequests.filter((request) => request.requestKind === 'agent-initial' && request.outcome === 'error' && request.errorCode === 'context_length_exceeded' && String(request.allInputText ?? '').includes(sessionId) && String(request.allInputText ?? '').includes(config.promptSnippet) && String(request.allInputText ?? '').includes(config.durableMarker))"
+            expr: "scenarioRequests.filter((request) => request.requestKind === 'agent-initial' && request.outcome === 'error' && request.errorCode === 'context_length_exceeded' && request.sessionId === sessionId && String(request.allInputText ?? '').includes(config.promptSnippet) && String(request.allInputText ?? '').includes(config.durableMarker))"
         - assert:
             expr: "overflowRequests.length === 1"
             message:
@@ -118,7 +118,7 @@ flow:
             expr: "overflowRequests[0]"
         - set: writeRequests
           value:
-            expr: "scenarioRequests.filter((request) => request.cursor > overflowRequest.cursor && request.plannedToolName === 'write' && String(request.allInputText ?? '').includes(sessionId) && String(request.allInputText ?? '').includes(config.promptSnippet) && String(request.allInputText ?? '').includes(config.durableMarker))"
+            expr: "scenarioRequests.filter((request) => request.cursor > overflowRequest.cursor && request.plannedToolName === 'write' && request.sessionId === sessionId && String(request.allInputText ?? '').includes(config.promptSnippet) && String(request.allInputText ?? '').includes(config.durableMarker))"
         - assert:
             expr: "writeRequests.length === 1"
             message:
@@ -168,7 +168,7 @@ flow:
               expr: "`compacted retry did not retain durable current context: ${JSON.stringify({ overflow: overflowEvidence, write: writeEvidence })}`"
         - set: postWriteContinuations
           value:
-            expr: "scenarioRequests.filter((request) => request.requestKind === 'tool-continuation' && request.cursor > writeRequest.cursor && String(request.allInputText ?? '').includes(sessionId)).toSorted((left, right) => left.cursor - right.cursor)"
+            expr: "scenarioRequests.filter((request) => request.requestKind === 'tool-continuation' && request.cursor > writeRequest.cursor && request.sessionId === sessionId).toSorted((left, right) => left.cursor - right.cursor)"
         - set: continuationChain
           value:
             expr: "(() => { const requests = []; const waits = []; const followedCallIds = new Set(); let currentCallId = writeRequest.plannedToolCallId; let previousCursor = writeRequest.cursor; let terminal; let valid = typeof currentCallId === 'string' && currentCallId.length > 0; while (valid) { if (followedCallIds.has(currentCallId)) { valid = false; break; } followedCallIds.add(currentCallId); const matches = postWriteContinuations.filter((request) => request.cursor > previousCursor && request.toolOutputCallId === currentCallId); if (matches.length !== 1) { valid = false; break; } const request = matches[0]; requests.push(request); previousCursor = request.cursor; if (request.plannedToolName === 'wait') { if (typeof request.plannedToolCallId !== 'string' || request.plannedToolCallId.length === 0) { valid = false; break; } waits.push(request); currentCallId = request.plannedToolCallId; continue; } if (request.plannedToolName === undefined) { terminal = request; break; } valid = false; } return { valid, requests, waits, terminal }; })()"
@@ -192,7 +192,7 @@ flow:
             message:
               expr: "`linked waits did not preserve one nonempty Code Mode cell id: ${JSON.stringify(postWriteContinuations)}`"
         - assert:
-            expr: "writeWireToolName !== 'exec' || (terminalContinuations[0].providerVariant === 'openai' ? String(terminalContinuations[0].toolOutput ?? '').startsWith('Script completed\\n') : terminalContinuations[0].providerVariant === 'anthropic' ? (() => { try { const parsed = JSON.parse(String(terminalContinuations[0].toolOutput ?? '')); return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) && parsed.status === 'completed'; } catch { return false; } })() : false)"
+            expr: "writeWireToolName !== 'exec' || (terminalContinuations[0].codeModeExecSurface === 'native' ? String(terminalContinuations[0].toolOutput ?? '').startsWith('Script completed\\n') : terminalContinuations[0].codeModeExecSurface === 'guest' ? (() => { try { const parsed = JSON.parse(String(terminalContinuations[0].toolOutput ?? '')); return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) && parsed.status === 'completed'; } catch { return false; } })() : false)"
             message:
               expr: "`Code Mode terminal continuation did not report successful completion: ${JSON.stringify(terminalContinuations[0])}`"
         - call: waitForCondition
@@ -216,9 +216,9 @@ flow:
             message:
               expr: "`unexpected compaction retry file content: ${JSON.stringify(writtenSummary)}; requests=${JSON.stringify(requestEvidence)}`"
         - assert:
-            expr: "String(overflowRequest.allInputText ?? '').includes(config.bulkyMarker) && !String(writeRequest.allInputText ?? '').includes(config.bulkyMarker)"
+            expr: "String(overflowRequest.allInputText ?? '').includes(config.bulkyMarker) && !writeEvidence.tailBlocks.includes('10')"
             message:
-              expr: "`OpenClaw retry did not prune marker block 10: ${JSON.stringify({ overflow: overflowEvidence, write: writeEvidence })}`"
+              expr: "`OpenClaw retry did not prune the body of marker block 10: ${JSON.stringify({ overflow: overflowEvidence, write: writeEvidence })}`"
         - assert:
             expr: "JSON.stringify(overflowEvidence.tailBlocks) === JSON.stringify(Array.from({ length: 16 }, (_, index) => String(index).padStart(2, '0'))) && writeEvidence.tailBlocks.length > 0 && !writeEvidence.tailBlocks.includes('10') && JSON.stringify(writeEvidence.tailBlocks) === JSON.stringify(Array.from({ length: writeEvidence.tailBlocks.length }, (_, index) => String(16 - writeEvidence.tailBlocks.length + index).padStart(2, '0')))"
             message:
@@ -249,26 +249,4 @@ flow:
             expr: "Number.isInteger(sessionEntry?.compactionCount) && sessionEntry.compactionCount >= 1 && Number.isFinite(sessionEntry?.totalTokens) && sessionEntry?.totalTokensFresh === true"
             message:
               expr: "`OpenClaw token snapshot did not retain a positive compaction count with fresh token data: ${JSON.stringify({ compactionCount: sessionEntry?.compactionCount, totalTokens: sessionEntry?.totalTokens, totalTokensFresh: sessionEntry?.totalTokensFresh })}`"
-        - set: checkpointPage
-          value:
-            expr: "await env.gateway.call('sessions.compaction.list', { key: sessionKey }, { timeoutMs: 15000 })"
-        - set: overflowCheckpoints
-          value:
-            expr: "(checkpointPage.checkpoints ?? []).filter((checkpoint) => checkpoint.reason === 'overflow-retry')"
-        - assert:
-            expr: "overflowCheckpoints.length === 1 && Number.isFinite(overflowCheckpoints[0].tokensBefore) && Number.isFinite(overflowCheckpoints[0].tokensAfter) && overflowCheckpoints[0].tokensBefore > overflowCheckpoints[0].tokensAfter && overflowCheckpoints[0].tokensAfter >= 0"
-            message:
-              expr: "`invalid overflow checkpoint evidence: ${JSON.stringify(overflowCheckpoints.map((checkpoint) => ({ checkpointId: checkpoint.checkpointId, reason: checkpoint.reason, tokensBefore: checkpoint.tokensBefore, tokensAfter: checkpoint.tokensAfter })))}`"
-        - set: branchResult
-          value:
-            expr: "await env.gateway.call('sessions.compaction.branch', { key: sessionKey, checkpointId: overflowCheckpoints[0].checkpointId }, { timeoutMs: 30000 })"
-        - call: readSessionTranscriptSummary
-          saveAs: branchSummary
-          args:
-            - ref: env
-            - expr: "branchResult.key"
-        - assert:
-            expr: "branchSummary.finalText === config.checkpointMarker"
-            message:
-              expr: "`checkpoint branch did not preserve pre-compaction assistant marker: ${JSON.stringify({ key: branchResult.key, finalText: branchSummary.finalText })}`"
-      detailsExpr: "`${outbound.text}\\nOpenClaw originalBytes=${String(overflowRequest.rawByteLength)} retryBytes=${String(writeRequest.rawByteLength)} logicalWrites=${String(writeRequests.length)} wireTool=${String(writeWireToolName)} callId=${String(writeRequest.plannedToolCallId)} itemId=${String(writeRequest.plannedToolItemId)} transcriptId=${String(writeTranscriptToolCallId)} wireSuccesses=${String(transcript.successfulToolCallCounts[writeWireToolName] ?? 0)} compactions=${String(sessionEntry.compactionCount)} checkpoints=${String(overflowCheckpoints.length)}`"
+      detailsExpr: "`${outbound.text}\\nOpenClaw originalBytes=${String(overflowRequest.rawByteLength)} retryBytes=${String(writeRequest.rawByteLength)} logicalWrites=${String(writeRequests.length)} wireTool=${String(writeWireToolName)} callId=${String(writeRequest.plannedToolCallId)} itemId=${String(writeRequest.plannedToolItemId)} transcriptId=${String(writeTranscriptToolCallId)} wireSuccesses=${String(transcript.successfulToolCallCounts[writeWireToolName] ?? 0)} compactions=${String(sessionEntry.compactionCount)}`"

@@ -3,8 +3,14 @@ import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sha256Hex } from "../../infra/crypto-digest.js";
-import { executeSqliteQuerySync, sqliteStringSet } from "../../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  sqliteStringSet,
+} from "../../infra/kysely-sync.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
+import { hashCronJobDefinition } from "../definition-hash.js";
 import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
 import { normalizeCronJobInput } from "../normalize.js";
 import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
@@ -18,8 +24,17 @@ import {
 import type { CronJobState, CronStoredJob, CronStoreFile } from "../types.js";
 import { deliveryFromJson, deliveryToJson } from "./delivery-codec.js";
 import { normalizeNumber, tryParseJsonObject } from "./scalar-codec.js";
-import type { CronJobInsert, CronJobRow } from "./schema.js";
-import { getCronStoreKysely } from "./schema.js";
+import type {
+  CronJobGenerationReadRow,
+  CronJobInsert,
+  CronJobReadRow,
+  CronJobRow,
+} from "./schema.js";
+import {
+  CRON_JOB_GENERATION_READ_COLUMNS,
+  CRON_JOB_READ_COLUMNS,
+  getCronStoreKysely,
+} from "./schema.js";
 import type { LoadedCronStore } from "./types.js";
 
 function stripJobRuntimeFields(job: CronStoreFile["jobs"][number]): Record<string, unknown> {
@@ -49,6 +64,17 @@ function stripJobRuntimeFields(job: CronStoreFile["jobs"][number]): Record<strin
   };
 }
 
+export function resolveCronJobGrantDefinitionRevision(job: CronStoredJob): string {
+  // Match job_json: drop ordinary undefined fields after deliveryToJson has
+  // encoded meaningful explicit destination clears as null.
+  const storedDefinition = tryParseJsonObject(JSON.stringify(stripJobRuntimeFields(job)));
+  if (!storedDefinition) {
+    throw new Error(`Cannot canonicalize cron job ${job.id} for grant revision`);
+  }
+  const { enabled: _enabled, state: _state, ...definition } = storedDefinition;
+  return hashCronJobDefinition(definition);
+}
+
 function serializeCronJobState(state: CronJobState): string {
   return JSON.stringify({
     ...state,
@@ -71,6 +97,9 @@ function bindCronJobRow(storeKey: string, job: CronStoredJob, sortOrder: number)
     agent_id: job.agentId ?? null,
     payload_kind: job.payload.kind,
     job_json: JSON.stringify(stripJobRuntimeFields(job)),
+    grant_definition_revision: resolveCronJobGrantDefinitionRevision(job),
+    grant_definition_generation: 1,
+    grant_definition_updated_at: job.updatedAtMs,
     state_json: serializeCronJobState(job.state ?? {}),
     runtime_updated_at_ms: job.updatedAtMs,
     schedule_identity: tryCronScheduleIdentity({ ...job }) ?? null,
@@ -124,7 +153,10 @@ function decodeCronJobConfig(jobJson: Record<string, unknown>): Record<string, u
   return delivery ? { ...jobJson, delivery } : jobJson;
 }
 
-function rowToCronJob(row: CronJobRow, jobJson: Record<string, unknown>): CronStoredJob | null {
+export function rowToCronJob(
+  row: Pick<CronJobReadRow, "job_id" | "state_json" | "runtime_updated_at_ms" | "updated_at">,
+  jobJson: Record<string, unknown>,
+): CronStoredJob | null {
   const state = tryParseJsonObject(row.state_json);
   if (!state || getInvalidPersistedCronJobReason(jobJson)) {
     return null;
@@ -178,8 +210,14 @@ export function projectCronJobThroughStorageCodec(job: CronStoredJob): CronStore
   if (!normalized) {
     throw new Error(`cannot project invalid cron job ${job.id}`);
   }
-  const row = bindCronJobRow("config-revision", normalized, 0) as CronJobRow;
-  const projected = rowToCronJob(row, tryParseJsonObject(row.job_json) ?? {});
+  const jobJson = JSON.stringify(stripJobRuntimeFields(normalized));
+  const row = {
+    job_id: normalized.id,
+    updated_at: normalized.updatedAtMs,
+    state_json: serializeCronJobState(normalized.state ?? {}),
+    runtime_updated_at_ms: normalized.updatedAtMs,
+  };
+  const projected = rowToCronJob(row, tryParseJsonObject(jobJson) ?? {});
   if (!projected) {
     throw new Error(`cannot project cron job ${job.id} through storage codecs`);
   }
@@ -191,10 +229,23 @@ export function loadCronRows(
   db: DatabaseSync,
   storeKey: string,
   jobIds?: ReadonlySet<string>,
-): CronJobRow[] {
+): CronJobReadRow[];
+export function loadCronRows(
+  db: DatabaseSync,
+  storeKey: string,
+  jobIds: ReadonlySet<string> | undefined,
+  opts: { includeGrantDefinitionProjection: true },
+): CronJobGenerationReadRow[];
+export function loadCronRows(
+  db: DatabaseSync,
+  storeKey: string,
+  jobIds?: ReadonlySet<string>,
+  opts?: { includeGrantDefinitionProjection: true },
+) {
+  // Preserve authorization of every stored column even when no row matches.
   let query = getCronStoreKysely(db)
-    .selectFrom("cron_jobs")
-    .selectAll()
+    .selectFrom(getCronStoreKysely(db).selectFrom("cron_jobs").selectAll().as("cron_rows"))
+    .select(opts ? CRON_JOB_GENERATION_READ_COLUMNS : CRON_JOB_READ_COLUMNS)
     .where("store_key", "=", storeKey)
     .orderBy("sort_order", "asc")
     .orderBy("updated_at", "asc")
@@ -266,10 +317,17 @@ export function materializeCronRowAgentOwners(
       db,
       getCronStoreKysely(db)
         .updateTable("cron_jobs")
-        .set({
+        .set((eb) => ({
           agent_id: agentId,
           ...(jobJson ? { job_json: JSON.stringify(jobJson) } : {}),
-        })
+          grant_definition_revision: null,
+          grant_definition_generation: eb(
+            eb.fn.coalesce("grant_definition_generation", eb.val(0)),
+            "+",
+            1,
+          ),
+          grant_definition_updated_at: null,
+        }))
         .where("store_key", "=", storeKey)
         .where("job_id", "=", row.job_id),
     );
@@ -294,7 +352,20 @@ export function deleteStaleCronJobFamilyRows(
     db,
     getCronStoreKysely(db)
       .selectFrom("cron_jobs")
-      .select(["store_key", "job_id", "declaration_key", "name", "description"])
+      .select(["store_key", "job_id", "declaration_key", "name"])
+      .select((eb) => [
+        // Native UTF-8 decoding can replace malformed bytes; only ASCII names
+        // admit an exact SQL comparison before the existing JavaScript filter.
+        /^\p{ASCII}*$/u.test(family.name)
+          ? eb
+              .case()
+              .when("name", "=", family.name)
+              .then(eb.ref("description"))
+              .else(null)
+              .end()
+              .as("description")
+          : "description",
+      ])
       .where("store_key", "!=", activeStoreKey),
   ).rows.filter(
     (row) =>
@@ -302,20 +373,7 @@ export function deleteStaleCronJobFamilyRows(
       (row.name === family.name && row.description?.includes(family.ownerPluginTag) === true),
   );
   for (const row of staleRows) {
-    executeSqliteQuerySync(
-      db,
-      getCronStoreKysely(db)
-        .deleteFrom("cron_job_scratch")
-        .where("store_key", "=", row.store_key)
-        .where("job_id", "=", row.job_id),
-    );
-    executeSqliteQuerySync(
-      db,
-      getCronStoreKysely(db)
-        .deleteFrom("cron_jobs")
-        .where("store_key", "=", row.store_key)
-        .where("job_id", "=", row.job_id),
-    );
+    deleteCronJobRowInDatabase(db, row.store_key, row.job_id);
   }
   return staleRows.length;
 }
@@ -323,6 +381,7 @@ export function deleteStaleCronJobFamilyRows(
 /** Replaces all persisted cron rows and returns the canonical jobs that were written. */
 type CronRowReplaceOptions = {
   preserveRuntimeState?: boolean;
+  knownExistingRow?: CronJobGenerationReadRow | null;
 };
 
 type CronRowReplaceResult = {
@@ -341,7 +400,8 @@ export function replaceCronRows(
     db,
     getCronStoreKysely(db)
       .selectFrom("cron_jobs")
-      .select(["job_id", "job_json"])
+      .select("job_id")
+      .$if(opts?.preserveRuntimeState === true, (query) => query.select("job_json"))
       .where("store_key", "=", storeKey),
   ).rows;
   const normalizedJobs: CronStoredJob[] = [];
@@ -353,7 +413,7 @@ export function replaceCronRows(
   const legacyAuthorityJobIds = new Set<string>();
   for (const row of existingRows) {
     existingJobIds.add(row.job_id);
-    const storedJob = tryParseJsonObject(row.job_json);
+    const storedJob = row.job_json === undefined ? undefined : tryParseJsonObject(row.job_json);
     if (
       storedJob &&
       (Object.hasOwn(storedJob, "runtimeAuthority") ||
@@ -366,6 +426,7 @@ export function replaceCronRows(
     }
     // Reconcile removed jobs only; deleting the partition first rewrites every
     // unrelated row and defeats SQLite's row-owned cron storage boundary.
+    revokeCronJobStandingGrants(db, row.job_id);
     executeSqliteQuerySync(
       db,
       getCronStoreKysely(db)
@@ -389,24 +450,168 @@ export function upsertCronJobRow(
   if (!normalized) {
     throw new Error(`Cannot persist invalid cron job ${job.id}`);
   }
-  const values = bindCronJobRow(storeKey, normalized, sortOrder);
+  const existingRow =
+    opts?.knownExistingRow === undefined
+      ? executeSqliteQueryTakeFirstSync(
+          db,
+          getCronStoreKysely(db)
+            .selectFrom("cron_jobs")
+            .selectAll()
+            .where("store_key", "=", storeKey)
+            .where("job_id", "=", normalized.id),
+        )
+      : (opts.knownExistingRow ?? undefined);
+  const retainedGrantGeneration = readMaximumRetainedGrantDefinitionGeneration(db, normalized.id);
+  const values = {
+    ...bindCronJobRow(storeKey, normalized, sortOrder),
+    grant_definition_generation: retainedGrantGeneration + 1,
+  };
+  const existingJobJson = existingRow ? tryParseJsonObject(existingRow.job_json) : null;
+  const existingJob =
+    existingRow && existingJobJson ? rowToCronJob(existingRow, existingJobJson) : null;
+  const existingDefinitionRevision = existingJob
+    ? resolveCronJobGrantDefinitionRevision(existingJob)
+    : null;
+  const generationPreservationGuard =
+    existingRow &&
+    existingDefinitionRevision === values.grant_definition_revision &&
+    existingRow.grant_definition_revision === existingDefinitionRevision &&
+    existingRow.grant_definition_updated_at === existingRow.updated_at
+      ? {
+          jobJson: existingRow.job_json,
+          revision: existingDefinitionRevision,
+          updatedAt: existingRow.updated_at,
+        }
+      : null;
+  const invalidatedGenerationFloor =
+    Math.max(
+      retainedGrantGeneration,
+      typeof existingRow?.grant_definition_generation === "number" &&
+        Number.isSafeInteger(existingRow.grant_definition_generation) &&
+        existingRow.grant_definition_generation >= 1
+        ? existingRow.grant_definition_generation
+        : 0,
+    ) + 1;
   const {
     state_json: _stateJson,
     runtime_updated_at_ms: _runtimeUpdatedAtMs,
+    grant_definition_generation: _grantDefinitionGeneration,
     ...definitionValues
   } = values;
+  const { grant_definition_generation: _fullGrantDefinitionGeneration, ...fullValues } = values;
+  const stateDb = getCronStoreKysely(db);
+  const insert = stateDb.insertInto("cron_jobs");
+  // The point reads above are not insert preconditions. Compute the retained
+  // generation floor inside the INSERT statement so a concurrent mint and
+  // delete cannot make a recreated job reuse that grant's generation.
+  const insertWithValues = hasStandingGrantGenerationCompanion(db)
+    ? insert.values((eb) => ({
+        ...values,
+        grant_definition_generation: eb
+          .selectFrom("operator_approval_standing_grant_generations")
+          .innerJoin(
+            "operator_approval_standing_grants",
+            "operator_approval_standing_grants.grant_id",
+            "operator_approval_standing_grant_generations.grant_id",
+          )
+          .select((inner) =>
+            inner(
+              inner.fn.coalesce(
+                inner.fn.max<number>(
+                  "operator_approval_standing_grant_generations.job_definition_generation",
+                ),
+                inner.val(0),
+              ),
+              "+",
+              1,
+            ).as("next_generation"),
+          )
+          .where("operator_approval_standing_grants.cron_job_id", "=", normalized.id),
+      }))
+    : insert.values(values);
   executeSqliteQuerySync(
     db,
-    getCronStoreKysely(db)
-      .insertInto("cron_jobs")
-      .values(values)
-      .onConflict((conflict) =>
-        conflict
-          .columns(["store_key", "job_id"])
-          .doUpdateSet(opts?.preserveRuntimeState ? definitionValues : values),
-      ),
+    insertWithValues.onConflict((conflict) =>
+      conflict.columns(["store_key", "job_id"]).doUpdateSet((eb) => {
+        const incrementedGeneration = eb(
+          eb.fn.coalesce("cron_jobs.grant_definition_generation", eb.val(0)),
+          "+",
+          1,
+        );
+        const invalidatedGeneration = eb
+          .case()
+          .when("cron_jobs.grant_definition_generation", ">=", invalidatedGenerationFloor)
+          .then(incrementedGeneration)
+          .else(invalidatedGenerationFloor)
+          .end();
+        return {
+          ...(opts?.preserveRuntimeState ? definitionValues : fullValues),
+          grant_definition_generation: generationPreservationGuard
+            ? eb
+                .case()
+                .when(
+                  eb.and([
+                    eb("cron_jobs.job_json", "=", generationPreservationGuard.jobJson),
+                    eb(
+                      "cron_jobs.grant_definition_revision",
+                      "=",
+                      generationPreservationGuard.revision,
+                    ),
+                    eb("cron_jobs.updated_at", "=", generationPreservationGuard.updatedAt),
+                    eb(
+                      "cron_jobs.grant_definition_updated_at",
+                      "=",
+                      generationPreservationGuard.updatedAt,
+                    ),
+                  ]),
+                )
+                .then(eb.fn.coalesce("cron_jobs.grant_definition_generation", eb.val(1)))
+                .else(invalidatedGeneration)
+                .end()
+            : invalidatedGeneration,
+        };
+      }),
+    ),
   );
   return normalized;
+}
+
+function hasStandingGrantGenerationCompanion(db: DatabaseSync): boolean {
+  return (
+    tableExists(db, "operator_approval_standing_grants") &&
+    tableExists(db, "operator_approval_standing_grant_generations")
+  );
+}
+
+function readMaximumRetainedGrantDefinitionGeneration(db: DatabaseSync, jobId: string): number {
+  if (!hasStandingGrantGenerationCompanion(db)) {
+    return 0;
+  }
+  const row = executeSqliteQueryTakeFirstSync(
+    db,
+    getCronStoreKysely(db)
+      .selectFrom("operator_approval_standing_grant_generations")
+      .innerJoin(
+        "operator_approval_standing_grants",
+        "operator_approval_standing_grants.grant_id",
+        "operator_approval_standing_grant_generations.grant_id",
+      )
+      .select((eb) =>
+        eb.fn
+          .max<number>("operator_approval_standing_grant_generations.job_definition_generation")
+          .as("max_generation"),
+      )
+      .where("operator_approval_standing_grants.cron_job_id", "=", jobId),
+  );
+  const maximum = row?.max_generation;
+  return typeof maximum === "number" && Number.isSafeInteger(maximum) && maximum >= 1 ? maximum : 0;
+}
+
+export function resolveCronJobGrantDefinitionGenerationFloor(
+  db: DatabaseSync,
+  jobId: string,
+): number {
+  return readMaximumRetainedGrantDefinitionGeneration(db, jobId) + 1;
 }
 
 export function deleteCronJobRowInDatabase(
@@ -414,6 +619,7 @@ export function deleteCronJobRowInDatabase(
   storeKey: string,
   jobId: string,
 ): void {
+  revokeCronJobStandingGrants(db, jobId);
   executeSqliteQuerySync(
     db,
     getCronStoreKysely(db)
@@ -428,6 +634,19 @@ export function deleteCronJobRowInDatabase(
       .where("store_key", "=", storeKey)
       .where("job_id", "=", jobId),
   );
+}
+
+function revokeCronJobStandingGrants(db: DatabaseSync, jobId: string): void {
+  if (tableExists(db, "operator_approval_standing_grants")) {
+    executeSqliteQuerySync(
+      db,
+      getCronStoreKysely(db)
+        .updateTable("operator_approval_standing_grants")
+        .set({ revoked_at_ms: Date.now(), revoked_by: "cron-job-deleted" })
+        .where("cron_job_id", "=", jobId)
+        .where("revoked_at_ms", "is", null),
+    );
+  }
 }
 
 /** Updates only mutable runtime columns without rewriting full job config JSON. */
@@ -453,7 +672,7 @@ export function updateCronRuntimeRows(
 }
 
 /** Reconstructs loaded cron store data and config-runtime sidecars from SQLite rows. */
-export function loadedCronStoreFromRows(rows: CronJobRow[]): LoadedCronStore {
+export function loadedCronStoreFromRows(rows: CronJobReadRow[]): LoadedCronStore {
   const jobs: CronStoredJob[] = [];
   const configJobs: LoadedCronStore["configJobs"] = [];
   const configJobIndexes: number[] = [];

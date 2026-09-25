@@ -41,8 +41,11 @@ function approvalConfig(allowFrom: string[]) {
   };
 }
 
-function registerExecApprovalTarget(params: { remoteJid: string; approvalId?: string }): void {
-  registerWhatsAppApprovalReactionTarget({
+async function registerExecApprovalTarget(params: {
+  remoteJid: string;
+  approvalId?: string;
+}): Promise<void> {
+  await registerWhatsAppApprovalReactionTarget({
     accountId: "default",
     remoteJid: params.remoteJid,
     messageId: "approval-message",
@@ -93,7 +96,7 @@ describe("WhatsApp approval reactions", () => {
 
   it("registers reaction state when only allow-always is available", async () => {
     expect(
-      registerWhatsAppApprovalReactionTarget({
+      await registerWhatsAppApprovalReactionTarget({
         accountId: "default",
         remoteJid: "15551230000@s.whatsapp.net",
         messageId: "msg-allow-always",
@@ -120,9 +123,9 @@ describe("WhatsApp approval reactions", () => {
     });
   });
 
-  it("rejects reaction targets without an explicit approval kind", () => {
+  it("rejects reaction targets without an explicit approval kind", async () => {
     expect(
-      registerWhatsAppApprovalReactionTarget({
+      await registerWhatsAppApprovalReactionTarget({
         accountId: "default",
         remoteJid: "15551230000@s.whatsapp.net",
         messageId: "msg-missing-kind",
@@ -134,7 +137,7 @@ describe("WhatsApp approval reactions", () => {
   });
 
   it("resolves a registered reaction target", async () => {
-    registerWhatsAppApprovalReactionTarget({
+    await registerWhatsAppApprovalReactionTarget({
       accountId: "default",
       remoteJid: "15551230000@s.whatsapp.net",
       messageId: "msg-1",
@@ -191,7 +194,7 @@ describe("WhatsApp approval reactions", () => {
   });
 
   it("authorizes group reactions using the participant, not the group chat", async () => {
-    registerWhatsAppApprovalReactionTarget({
+    await registerWhatsAppApprovalReactionTarget({
       accountId: "default",
       remoteJid: "120363401234567890@g.us",
       messageId: "approval-message",
@@ -225,7 +228,7 @@ describe("WhatsApp approval reactions", () => {
   });
 
   it("consumes a losing reaction binding and reports the canonical first answer", async () => {
-    registerWhatsAppApprovalReactionTarget({
+    await registerWhatsAppApprovalReactionTarget({
       accountId: "default",
       remoteJid: "15551230000@s.whatsapp.net",
       messageId: "approval-message",
@@ -268,7 +271,7 @@ describe("WhatsApp approval reactions", () => {
   });
 
   it("authorizes direct self-chat reactions from the account owner", async () => {
-    registerWhatsAppApprovalReactionTarget({
+    await registerWhatsAppApprovalReactionTarget({
       accountId: "default",
       remoteJid: "276853659042038@lid",
       messageId: "approval-message",
@@ -337,7 +340,7 @@ describe("WhatsApp approval reactions", () => {
       actorId: "+15551230001",
     },
   ])("resolves direct approval reactions across PN/LID target drift: $name", async (testCase) => {
-    registerExecApprovalTarget({ remoteJid: testCase.storedRemoteJid });
+    await registerExecApprovalTarget({ remoteJid: testCase.storedRemoteJid });
     const lidLookup: LidLookup = {
       getLIDForPN: vi.fn().mockResolvedValue(testCase.lidForPn ?? null),
       getPNForLID: vi.fn().mockResolvedValue(testCase.pnForLid ?? null),
@@ -369,7 +372,7 @@ describe("WhatsApp approval reactions", () => {
   });
 
   it("does not use a group reaction actor as a direct-chat target candidate", async () => {
-    registerExecApprovalTarget({ remoteJid: "15551230000@s.whatsapp.net" });
+    await registerExecApprovalTarget({ remoteJid: "15551230000@s.whatsapp.net" });
     const lidLookup: LidLookup = {
       getLIDForPN: vi.fn().mockResolvedValue("15551230000@s.whatsapp.net"),
       getPNForLID: vi.fn().mockResolvedValue("15551230000@s.whatsapp.net"),
@@ -392,7 +395,7 @@ describe("WhatsApp approval reactions", () => {
   });
 
   it("unregisters the matched target candidate when an approval expired", async () => {
-    registerExecApprovalTarget({
+    await registerExecApprovalTarget({
       remoteJid: "15551230000@s.whatsapp.net",
       approvalId: "exec-expired",
     });
@@ -424,7 +427,7 @@ describe("WhatsApp approval reactions", () => {
   });
 
   it("retains the target and propagates transient failures for durable replay", async () => {
-    registerExecApprovalTarget({ remoteJid: "15551230000@s.whatsapp.net" });
+    await registerExecApprovalTarget({ remoteJid: "15551230000@s.whatsapp.net" });
     const gatewayError = new Error("Gateway 503 Service Unavailable");
     resolverMocks.resolveWhatsAppApproval.mockRejectedValueOnce(gatewayError);
     const reaction = {
@@ -444,7 +447,7 @@ describe("WhatsApp approval reactions", () => {
   });
 
   it("does not attribute a peer DM fromMe reaction to the peer", async () => {
-    registerWhatsAppApprovalReactionTarget({
+    await registerWhatsAppApprovalReactionTarget({
       accountId: "default",
       remoteJid: "15551230000@s.whatsapp.net",
       messageId: "approval-message",
@@ -478,7 +481,7 @@ describe("WhatsApp approval reactions", () => {
   });
 
   it("fails closed when a group reaction is missing actor identity", async () => {
-    registerWhatsAppApprovalReactionTarget({
+    await registerWhatsAppApprovalReactionTarget({
       accountId: "default",
       remoteJid: "120363401234567890@g.us",
       messageId: "approval-message",
@@ -499,7 +502,7 @@ describe("WhatsApp approval reactions", () => {
   });
 
   it("requires explicit approvers for direct approval reactions", async () => {
-    registerWhatsAppApprovalReactionTarget({
+    await registerWhatsAppApprovalReactionTarget({
       accountId: "default",
       remoteJid: "15551230000@s.whatsapp.net",
       messageId: "approval-message",
@@ -524,7 +527,7 @@ describe("WhatsApp approval reactions", () => {
   });
 
   it("requires explicit approvers for group approval reactions", async () => {
-    registerWhatsAppApprovalReactionTarget({
+    await registerWhatsAppApprovalReactionTarget({
       accountId: "default",
       remoteJid: "120363401234567890@g.us",
       messageId: "approval-message",

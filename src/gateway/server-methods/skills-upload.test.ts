@@ -6,10 +6,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import JSZip from "jszip";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -40,8 +43,8 @@ vi.mock("../../plugins/install-security-scan.js", () => ({
   evaluateSkillInstallPolicy: installSecurityScanState.evaluateSkillInstallPolicy,
 }));
 
-vi.mock("../../infra/replace-file.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../infra/replace-file.js")>();
+vi.mock("@openclaw/fs-safe/atomic", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@openclaw/fs-safe/atomic")>();
   return {
     ...actual,
     movePathWithCopyFallback: async (
@@ -70,13 +73,11 @@ type CallResult = {
   error?: { code?: string; message?: string };
 };
 
-async function makeHarness(): Promise<{
+async function makeHarness(uploadOnly = false): Promise<{
   handlers: GatewayRequestHandlers;
   stateDir: string;
   workspaceDir: string;
 }> {
-  // Bind fixture cleanup to the same module generation as the handlers.
-  vi.resetModules();
   const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
   const testState = await createOpenClawTestState({
     layout: "state-only",
@@ -86,8 +87,10 @@ async function makeHarness(): Promise<{
   const stateDir = testState.stateDir;
   const workspaceDir = testState.workspaceDir;
   agentScopeState.workspaceDir = workspaceDir;
-  const { skillsHandlers } = await import("./skills.js");
-  return { handlers: skillsHandlers, stateDir, workspaceDir };
+  const handlers = uploadOnly
+    ? (await import("./skills-upload.js")).skillsUploadHandlers
+    : (await import("./skills.js")).skillsHandlers;
+  return { handlers, stateDir, workspaceDir };
 }
 
 function makeContext(
@@ -158,6 +161,22 @@ function skillUploadExists(stateDir: string, uploadId: string): boolean {
 function expectError(result: CallResult, code: string, message: string): void {
   expect(result.error?.code).toBe(code);
   expect(result.error?.message).toBe(message);
+}
+
+function observeCommitSql() {
+  const { DatabaseSync } = requireNodeSqlite();
+  const sql = observeMainThreadSql();
+  const close = vi.spyOn(DatabaseSync.prototype, "close");
+  return {
+    expectIdle() {
+      sql.expectIdle();
+      expect(close).not.toHaveBeenCalled();
+    },
+    restore() {
+      close.mockRestore();
+      sql.restore();
+    },
+  };
 }
 
 function firstCallArg<T>(mock: { mock: { calls: unknown[][] } }, _type?: (value: T) => T): T {
@@ -251,6 +270,136 @@ describe("skill upload gateway handlers", () => {
       ...testStates.splice(0).map((state) => state.cleanup()),
     ]);
   });
+
+  it("stages uploads through the registered handlers without caller-thread SQLite", async () => {
+    const { handlers } = await makeHarness(true);
+    await closeOpenClawStateDatabaseAsync();
+    const sql = observeCommitSql();
+    try {
+      const archive = Buffer.from("worker-owned upload staging");
+      const begin = await call(handlers, "skills.upload.begin", {
+        kind: "skill-archive",
+        slug: "worker-staging",
+        sizeBytes: archive.length,
+      });
+      expect(begin.ok).toBe(true);
+      sql.expectIdle();
+      const uploadId = (begin.payload as { uploadId: string }).uploadId;
+      expect(
+        await call(handlers, "skills.upload.chunk", {
+          uploadId,
+          offset: 0,
+          dataBase64: archive.toString("base64"),
+        }),
+      ).toMatchObject({ ok: true });
+      expect(await call(handlers, "skills.upload.commit", { uploadId })).toMatchObject({
+        ok: true,
+      });
+      await closeOpenClawStateDatabaseAsync();
+      sql.expectIdle();
+    } finally {
+      sql.restore();
+    }
+  });
+
+  it("commits and replays staged archives without caller-thread SQLite", async () => {
+    const { handlers, stateDir } = await makeHarness();
+    const archive = Buffer.from("worker-owned archive commit");
+    const digest = sha256(archive);
+    const begin = await call(handlers, "skills.upload.begin", {
+      kind: "skill-archive",
+      slug: "worker-commit",
+      sizeBytes: archive.length,
+      sha256: digest,
+    });
+    expect(begin.ok).toBe(true);
+    const uploadId = (begin.payload as { uploadId: string }).uploadId;
+    expect(
+      (
+        await call(handlers, "skills.upload.chunk", {
+          uploadId,
+          offset: 0,
+          dataBase64: archive.toString("base64"),
+        })
+      ).ok,
+    ).toBe(true);
+    closeOpenClawStateDatabaseForTest();
+    const sql = observeCommitSql();
+    try {
+      const committed = await call(handlers, "skills.upload.commit", { uploadId, sha256: digest });
+      expect(committed).toMatchObject({
+        ok: true,
+        payload: { uploadId, receivedBytes: archive.length, sha256: digest },
+      });
+      expect(await call(handlers, "skills.upload.commit", { uploadId })).toEqual(committed);
+      const mismatch = await call(handlers, "skills.upload.commit", {
+        uploadId,
+        sha256: "0".repeat(64),
+      });
+      expectError(mismatch, "INVALID_REQUEST", "upload sha256 mismatch");
+      await closeOpenClawStateDatabaseAsync();
+      sql.expectIdle();
+    } finally {
+      sql.restore();
+    }
+    const { db } = openOpenClawStateDatabase({
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+    });
+    const stored = db
+      .prepare(
+        "SELECT archive_blob, actual_sha256, committed FROM skill_uploads WHERE upload_id = ?",
+      )
+      .get(uploadId);
+    expect(stored).toMatchObject({
+      archive_blob: new Uint8Array(archive),
+      actual_sha256: digest,
+      committed: 1,
+    });
+    expect(
+      db
+        .prepare("SELECT count(*) AS count FROM skill_upload_chunks WHERE upload_id = ?")
+        .get(uploadId),
+    ).toEqual({ count: 0 });
+  });
+
+  it.each([false, true])(
+    "settles an expired commit without caller SQLite with external install lease=%s",
+    async (leased) => {
+      const { handlers, stateDir } = await makeHarness();
+      const { uploadId } = await uploadArchive(handlers, {
+        archive: Buffer.from("expired archive"),
+        slug: "expired-commit",
+      });
+      const { db } = openOpenClawStateDatabase();
+      const now = Date.now();
+      db.prepare("UPDATE skill_uploads SET expires_at = ? WHERE upload_id = ?").run(
+        now - 1,
+        uploadId,
+      );
+      if (leased) {
+        db.prepare(
+          "INSERT INTO state_leases (scope, lease_key, owner, expires_at, heartbeat_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ).run("skill-upload-install", uploadId, "external-install", now + 60_000, now, now, now);
+      }
+      await closeOpenClawStateDatabaseAsync();
+      const sql = observeCommitSql();
+      try {
+        const result = await call(handlers, "skills.upload.commit", { uploadId });
+        expectError(result, "INVALID_REQUEST", "upload has expired");
+        await closeOpenClawStateDatabaseAsync();
+        sql.expectIdle();
+      } finally {
+        sql.restore();
+      }
+      expect(skillUploadExists(stateDir, uploadId)).toBe(leased);
+      const reopened = openOpenClawStateDatabase().db;
+      expect(
+        reopened
+          .prepare("SELECT count(*) AS count FROM state_leases WHERE scope = ? AND lease_key = ?")
+          .get("skill-upload-install", uploadId),
+      ).toEqual({ count: leased ? 1 : 0 });
+    },
+  );
 
   it("rejects upload archive RPCs and upload installs when disabled by config", async () => {
     const { handlers, stateDir } = await makeHarness();

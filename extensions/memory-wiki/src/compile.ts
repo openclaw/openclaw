@@ -1,6 +1,7 @@
 // Memory Wiki plugin module implements compile behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import { retryTransientMemoryRead } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
@@ -194,7 +195,7 @@ const DASHBOARD_PAGES: DashboardPageDefinition[] = [
     buildBody: ({ config, pages, now, sourceRelativeTo }) => {
       const claimHealth = collectWikiClaimHealth(pages, now);
       const missingEvidence = claimHealth.filter((claim) => claim.missingEvidence);
-      const contestedClaims = claimHealth.filter((claim) => isClaimHealthContested(claim));
+      const contestedClaims = claimHealth.filter((claim) => isClaimContestedStatus(claim.status));
       const staleClaims = claimHealth.filter(
         (claim) => claim.freshness.level === "stale" || claim.freshness.level === "unknown",
       );
@@ -374,12 +375,6 @@ type CompileMemoryWikiOptions = {
   signal?: AbortSignal;
 };
 
-function yieldToEventLoop(): Promise<void> {
-  return new Promise((resolve) => {
-    setImmediate(resolve);
-  });
-}
-
 async function collectMarkdownFiles(rootDir: string, relativeDir: string): Promise<string[]> {
   const entries = await walkMemoryWikiDirectory(rootDir, relativeDir);
   return entries
@@ -420,9 +415,9 @@ async function readPageSummaries(
       if (scan.status !== "valid") {
         return { scan, importInsight: null, overviewItem: null };
       }
-      const parsed = parseWikiMarkdown(raw);
+      const { parsed, ...summaryScan } = scan;
       return {
-        scan,
+        scan: summaryScan,
         importInsight: projectMemoryWikiImportInsight(scan.page, parsed),
         overviewItem: projectMemoryWikiOverviewItem(scan.page, parsed.body),
       };
@@ -638,10 +633,6 @@ function collectPrivacyReviewEntries(
 
 function formatClaimIdentity(claim: WikiClaimHealth): string {
   return claim.claimId ? `\`${claim.claimId}\`: ${claim.text}` : claim.text;
-}
-
-function isClaimHealthContested(claim: WikiClaimHealth): boolean {
-  return isClaimContestedStatus(claim.status);
 }
 
 function formatClaimHealthLine(

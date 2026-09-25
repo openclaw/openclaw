@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isHiddenAssistantStreamText } from "../../lib/chat/message-visibility.ts";
 import { visibleAssistantStreamParts } from "./stream-reconciliation.ts";
+import { reconcilePersistedAssistantStream } from "./stream-segment-pruning.ts";
 import {
   createHost,
   TOOL_STREAM_TEST_NOW,
@@ -209,7 +210,17 @@ describe("keyed commentary after an unphased live stream", () => {
   it("keeps earlier different cumulative text visible when a later occurrence becomes keyed", () => {
     useToolStreamFakeTimers();
     const earlier = "The first observation stays visible.";
-    const host = createHost({ chatRunId: "run-1", chatStream: `${earlier}\n\n` });
+    const saved = {
+      role: "assistant",
+      content: earlier,
+      __openclaw: { id: "earlier", seq: 1, runId: "run-1" },
+    };
+    const host = createHost({
+      chatRunId: "run-1",
+      chatStream: `${earlier}\n\n`,
+      chatMessages: [saved],
+    });
+    reconcilePersistedAssistantStream(host);
     handleAgentEvent(host, {
       runId: "run-1",
       seq: 1,
@@ -220,10 +231,8 @@ describe("keyed commentary after an unphased live stream", () => {
     });
     host.chatStream = `${earlier}\n\n${COMMENTARY}\n\n`;
     preamble(host, "item-a", COMMENTARY, 2);
-    expect(visibleParts(host)).toEqual([
-      { text: earlier, itemId: undefined },
-      { text: COMMENTARY, itemId: "item-a" },
-    ]);
+    expect(host.chatMessages).toEqual([saved]);
+    expect(visibleParts(host)).toEqual([{ text: COMMENTARY, itemId: "item-a" }]);
   });
   it("completes a keyed handoff when the last chat chunk arrives between update and end", () => {
     const text =

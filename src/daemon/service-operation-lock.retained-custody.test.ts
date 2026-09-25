@@ -414,6 +414,47 @@ function seedDatabase(sql: string) {
   return file;
 }
 
+const unix = process.platform === "win32" ? it.skip : it;
+
+// An interrupted first write leaves the store readable, because `open` creates it
+// under the caller's umask before the store chmods it. Refusing that forever locked
+// every install root out of config and service mutation on the host.
+// chmod cannot revoke a descriptor another user may already hold, so these bytes
+// are never adopted. Refusing them outright used to brick config and service
+// mutation for the whole host, so retain them for diagnosis and start clean.
+unix("recovers writable-mode storage by retaining it instead of adopting it", async () => {
+  const file = seedDatabase("CREATE TABLE fixture_marker (id INTEGER PRIMARY KEY) STRICT");
+  const config = source.configPaths[0]!;
+  fs.writeFileSync(config, "before");
+  fs.chmodSync(file, 0o660);
+
+  const mutate = vi.fn(async () => undefined);
+  await expect(withGatewayServiceOperationLock(env, mutate)).resolves.toBeUndefined();
+  expect(mutate).toHaveBeenCalledTimes(1);
+  expect(
+    fs.readdirSync(fixture.root).filter((name) => name.includes(".sqlite.unsafe-file.")),
+  ).toHaveLength(1);
+  expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+});
+
+unix("repairs read-only mode drift and admits both lock owners", async () => {
+  const file = seedDatabase("CREATE TABLE fixture_marker (id INTEGER PRIMARY KEY) STRICT");
+  const config = source.configPaths[0]!;
+  fs.writeFileSync(config, "before");
+  fs.chmodSync(file, 0o644);
+
+  expect(() => store.assertSourceUnborrowed(config)).not.toThrow();
+  expect(fs.lstatSync(file).mode & 0o777).toBe(0o600);
+
+  const mutateConfig = vi.fn(async () => fs.writeFileSync(config, "after"));
+  await expect(withConfigWriteLock(config, mutateConfig, env)).resolves.toBeUndefined();
+  expect(mutateConfig).toHaveBeenCalledTimes(1);
+
+  const mutateService = vi.fn(async () => undefined);
+  await expect(withGatewayServiceOperationLock(env, mutateService)).resolves.toBeUndefined();
+  expect(mutateService).toHaveBeenCalledTimes(1);
+});
+
 function databaseSnapshot(file: string) {
   const { dev, ino, mode, size, mtimeMs } = fs.lstatSync(file);
   return { dev, ino, mode, size, mtimeMs, bytes: fs.readFileSync(file) };
@@ -454,41 +495,31 @@ it("keeps captured source inspection strict when the handoff table is missing", 
   expect(fs.readdirSync(fixture.root).toSorted()).toEqual(entries);
 });
 
-it.each(
-  (
-    [
-      "wrong-table",
-      "wrong-view",
-      "upper-case-table",
-      "same-named-index",
-      "corrupt",
-      "unsafe-mode",
-    ] as const
-  ).filter((kind) => kind !== "unsafe-mode" || process.platform !== "win32"),
-)("refuses %s storage without admitting source callbacks or repairing it", async (kind) => {
-  const sql =
-    kind === "wrong-table"
-      ? "CREATE TABLE managed_update_handoffs (wrong TEXT) STRICT"
-      : kind === "wrong-view"
-        ? "CREATE VIEW managed_update_handoffs AS SELECT 1 AS wrong"
-        : kind === "upper-case-table"
-          ? "CREATE TABLE MANAGED_UPDATE_HANDOFFS (wrong TEXT) STRICT"
-          : kind === "same-named-index"
-            ? "CREATE TABLE fixture_marker (id INTEGER); CREATE INDEX managed_update_handoffs ON fixture_marker(id)"
-            : "CREATE TABLE fixture_marker (id INTEGER PRIMARY KEY) STRICT";
-  const file = seedDatabase(sql);
-  if (kind === "corrupt") {
-    fs.writeFileSync(file, "not a SQLite database");
-  } else if (kind === "unsafe-mode") {
-    fs.chmodSync(file, 0o640);
-  }
-  const before = databaseSnapshot(file);
-  const entries = fs.readdirSync(fixture.root).toSorted();
-  const mutate = vi.fn(async () => undefined);
-  expect(() => store.assertSourceUnborrowed(source.configPaths[0]!)).toThrow();
-  await expect(withConfigWriteLock(source.configPaths[0]!, mutate, env)).rejects.toThrow();
-  await expect(withGatewayServiceOperationLock(env, mutate)).rejects.toThrow();
-  expect(mutate).not.toHaveBeenCalled();
-  expect(databaseSnapshot(file)).toEqual(before);
-  expect(fs.readdirSync(fixture.root).toSorted()).toEqual(entries);
-});
+it.each(["wrong-table", "wrong-view", "upper-case-table", "same-named-index", "corrupt"] as const)(
+  "refuses %s storage without admitting source callbacks or repairing it",
+  async (kind) => {
+    const sql =
+      kind === "wrong-table"
+        ? "CREATE TABLE managed_update_handoffs (wrong TEXT) STRICT"
+        : kind === "wrong-view"
+          ? "CREATE VIEW managed_update_handoffs AS SELECT 1 AS wrong"
+          : kind === "upper-case-table"
+            ? "CREATE TABLE MANAGED_UPDATE_HANDOFFS (wrong TEXT) STRICT"
+            : kind === "same-named-index"
+              ? "CREATE TABLE fixture_marker (id INTEGER); CREATE INDEX managed_update_handoffs ON fixture_marker(id)"
+              : "CREATE TABLE fixture_marker (id INTEGER PRIMARY KEY) STRICT";
+    const file = seedDatabase(sql);
+    if (kind === "corrupt") {
+      fs.writeFileSync(file, "not a SQLite database");
+    }
+    const before = databaseSnapshot(file);
+    const entries = fs.readdirSync(fixture.root).toSorted();
+    const mutate = vi.fn(async () => undefined);
+    expect(() => store.assertSourceUnborrowed(source.configPaths[0]!)).toThrow();
+    await expect(withConfigWriteLock(source.configPaths[0]!, mutate, env)).rejects.toThrow();
+    await expect(withGatewayServiceOperationLock(env, mutate)).rejects.toThrow();
+    expect(mutate).not.toHaveBeenCalled();
+    expect(databaseSnapshot(file)).toEqual(before);
+    expect(fs.readdirSync(fixture.root).toSorted()).toEqual(entries);
+  },
+);

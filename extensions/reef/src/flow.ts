@@ -1,7 +1,5 @@
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  appendAudit,
-  appendInboxRead,
   bodyHash as hashMessageBody,
   composeInbound,
   composeOutbound,
@@ -224,7 +222,7 @@ export class ReefMessageFlow {
     // observation per park keeps the audit chain from filling with retries.
     const unreadIds = entries.map((entry) => entry.id).filter((id) => !this.parkedReadIds.has(id));
     if (unreadIds.length > 0) {
-      await appendInboxRead(this.options.audit, unreadIds);
+      await this.options.audit.appendEvent("read", { ids: unreadIds });
     }
     for (const entry of entries) {
       if (entry.kind === "receipt") {
@@ -387,7 +385,7 @@ export class ReefMessageFlow {
   private async quarantineReceipt(entry: InboxEntry): Promise<undefined> {
     // A peer-protocol violation must not poison the relay cursor. Keep any
     // outbound binding intact so a later valid receipt can still complete it.
-    await appendAudit(this.options.audit, "invalid_delivery_receipt", {
+    await this.options.audit.appendEvent("invalid_delivery_receipt", {
       id: entry.id,
       peer: entry.peer,
     });
@@ -432,13 +430,21 @@ export class ReefMessageFlow {
       if (error instanceof PipelineError && isParkedInboundPipelineError(error)) {
         throw new ReefInboxEntryParkedError(error.message);
       }
+      if (isPluginStateCapacityError(error)) {
+        // Shared replay state is at capacity. Park instead of tearing down the
+        // shared inbox: the entry stays un-acked at the relay and re-polls
+        // without head-of-line blocking entries from other peers.
+        throw new ReefInboxEntryParkedError(
+          "Reef replay state is at capacity; entry parked for retry",
+        );
+      }
       throw error;
     }
     if (!result.body) {
       await this.options.transport.acknowledge(relayPeer, envelope.id, result.receipt);
       return;
     }
-    if (await this.options.delivered.has(envelope.id)) {
+    if ((await this.options.delivered.status(envelope.id)) === "delivered") {
       await this.options.transport.acknowledge(relayPeer, envelope.id, result.receipt);
       return;
     }
@@ -458,7 +464,18 @@ export class ReefMessageFlow {
         autonomy: friend.autonomy,
       });
     }
-    await this.options.delivered.add(envelope.id);
+    try {
+      await this.options.delivered.confirm(envelope.id);
+    } catch (error) {
+      if (isPluginStateCapacityError(error)) {
+        // Failed confirm means no delivered marker persisted, so the re-poll
+        // re-ingests the entry instead of unwinding the shared inbox.
+        throw new ReefInboxEntryParkedError(
+          "Reef delivered-marker store is at capacity; entry parked for retry",
+        );
+      }
+      throw error;
+    }
     await this.options.transport.acknowledge(relayPeer, envelope.id, result.receipt);
   }
 
@@ -497,5 +514,15 @@ function isParkedInboundPipelineError(error: PipelineError): boolean {
     error.stage === "guard" &&
     error.verdict?.decision === "deny" &&
     error.verdict.category === "guard_failure"
+  );
+}
+
+// PluginStateStoreError is not part of the plugin SDK import surface; its
+// stable error code identifies bounded-store capacity exhaustion (reject-new).
+function isPluginStateCapacityError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    // SAFETY: PluginStateStoreError carries a stable string code; the class is not on the plugin-SDK import surface.
+    (error as { code?: unknown }).code === "PLUGIN_STATE_LIMIT_EXCEEDED"
   );
 }

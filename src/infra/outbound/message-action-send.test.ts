@@ -2,7 +2,6 @@
 // and plugin tool-result extraction.
 import fs from "node:fs/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
@@ -11,68 +10,58 @@ import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
   createAlwaysConfiguredPluginConfig,
-  createActionHubPluginFixture,
   createGatewayActionPlugin,
   messageActionRunnerMocks as mocks,
   resetMessageActionRunnerMocks,
   runMessageAction,
   setMessageActionTestPlugin as setTestPlugin,
+  useActionHubPluginFixture,
+  readFirstPluginCall,
+  readMockCallArg,
+  readRecordField,
+  expectRecordFields,
+  createEnabledMessageActionConfig,
 } from "./message-action-runner.test-helpers.js";
 import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbound-session.js";
-
-const requireRecord = createRequireRecord("record", "expected-non-array-record");
-const requireLabeledRecord = createRequireRecord("record", "expected-label");
-
-function readFirstPluginCall(mock: { mock: { calls: unknown[][] } }): Record<string, unknown> {
-  const [mockCall] = mock.mock.calls;
-  const call = mockCall?.[0];
-  return requireRecord(call);
-}
-
-function readMockCallArg(
-  mock: { mock: { calls: unknown[][] } },
-  label: string,
-  callIndex = 0,
-  argIndex = 0,
-): Record<string, unknown> {
-  const mockCall = mock.mock.calls[callIndex];
-  const value = mockCall?.[argIndex];
-  return requireLabeledRecord(value, label);
-}
-
-function readRecordField(record: Record<string, unknown>, key: string, label: string) {
-  const value = record[key];
-  return requireLabeledRecord(value, label);
-}
-
-function expectRecordFields(
-  record: Record<string, unknown>,
-  expected: Record<string, unknown>,
-  label: string,
-) {
-  for (const [key, value] of Object.entries(expected)) {
-    expect(record[key], `${label}.${key}`).toEqual(value);
-  }
-}
 
 describe("runMessageAction plugin dispatch", () => {
   beforeEach(() => {
     resetMessageActionRunnerMocks();
   });
   describe("alias-based plugin action dispatch", () => {
-    const { handleAction, plugin: actionHubPlugin } = createActionHubPluginFixture();
-
-    beforeEach(() => {
-      setTestPlugin(actionHubPlugin, "actionhub");
-      handleAction.mockClear();
-    });
-
-    afterEach(() => {
-      setActivePluginRegistry(createTestRegistry([]));
-      vi.clearAllMocks();
-      vi.unstubAllEnvs();
-    });
-    it("does not persist a route for Gateway-relayed suppression", async () => {
+    useActionHubPluginFixture();
+    it.each([
+      {
+        name: "suppressed",
+        receipt: { status: "suppressed", reason: "cancelled_by_message_sending_hook" },
+        accepted: false,
+      },
+      {
+        name: "failed with an attempt ID",
+        receipt: { ok: false, error: "send failed", messageId: "attempt-id" },
+        accepted: false,
+      },
+      {
+        name: "dry-run",
+        receipt: { ok: true, dryRun: true, messageId: "dry-run-id" },
+        accepted: false,
+      },
+      {
+        name: "explicit partial delivery",
+        receipt: {
+          ok: false,
+          error: "second part failed",
+          sentBeforeError: true,
+          messageId: "partial-receipt",
+        },
+        accepted: true,
+      },
+      {
+        name: "successful delivery",
+        receipt: { ok: true, messageId: "sent-1" },
+        accepted: true,
+      },
+    ])("handles Gateway-relayed $name receipts", async ({ receipt, accepted }) => {
       vi.mocked(resolveOutboundSessionRoute).mockResolvedValueOnce({
         sessionKey: "agent:main:gatewaychat:direct:user-123",
         baseSessionKey: "agent:main:gatewaychat:direct:user-123",
@@ -92,22 +81,16 @@ describe("runMessageAction plugin dispatch", () => {
         }),
         "gatewaychat",
       );
-      mocks.callGatewayLeastPrivilege.mockResolvedValue({
-        status: "suppressed",
-        reason: "cancelled_by_message_sending_hook",
-      });
+      mocks.callGatewayLeastPrivilege.mockResolvedValue(receipt);
       const result = await runMessageAction({
-        cfg: { channels: { gatewaychat: { enabled: true } } } as OpenClawConfig,
+        cfg: createEnabledMessageActionConfig("gatewaychat"),
         action: "send",
         params: { channel: "gatewaychat", target: "user-123", message: "omitted" },
         agentId: "main",
         gateway: { clientName: "cli", mode: "cli" },
       });
-      expect(result.payload).toEqual({
-        status: "suppressed",
-        reason: "cancelled_by_message_sending_hook",
-      });
-      expect(ensureOutboundSessionEntry).not.toHaveBeenCalled();
+      expect(result.payload).toEqual(receipt);
+      expect(ensureOutboundSessionEntry).toHaveBeenCalledTimes(accepted ? 1 : 0);
     });
     it.each([
       { name: "raw base64", buffer: "SGVsbG8=" },
@@ -132,13 +115,7 @@ describe("runMessageAction plugin dispatch", () => {
       });
 
       await runMessageAction({
-        cfg: {
-          channels: {
-            gatewaychat: {
-              enabled: true,
-            },
-          },
-        } as OpenClawConfig,
+        cfg: createEnabledMessageActionConfig("gatewaychat"),
         action: "send",
         params: {
           channel: "gatewaychat",
@@ -207,7 +184,7 @@ describe("runMessageAction plugin dispatch", () => {
       });
 
       await runMessageAction({
-        cfg: { channels: { gatewaychat: { enabled: true } } } as OpenClawConfig,
+        cfg: createEnabledMessageActionConfig("gatewaychat"),
         action: "send",
         params: {
           channel: "gatewaychat",
@@ -295,13 +272,7 @@ describe("runMessageAction plugin dispatch", () => {
       });
 
       await runMessageAction({
-        cfg: {
-          channels: {
-            gatewaydeliver: {
-              enabled: true,
-            },
-          },
-        } as OpenClawConfig,
+        cfg: createEnabledMessageActionConfig("gatewaydeliver"),
         action: "send",
         params: {
           channel: "gatewaydeliver",
@@ -512,13 +483,7 @@ describe("runMessageAction plugin dispatch", () => {
     });
 
     it("keeps presentation-only sends on action-only gateway plugins", async () => {
-      const cfg = {
-        channels: {
-          cardchat: {
-            enabled: true,
-          },
-        },
-      } as OpenClawConfig;
+      const cfg = createEnabledMessageActionConfig("cardchat");
 
       const presentation = {
         blocks: [{ type: "text", text: "Presentation-only payload" }],
@@ -627,13 +592,7 @@ describe("runMessageAction plugin dispatch", () => {
       );
 
       const result = await runMessageAction({
-        cfg: {
-          channels: {
-            cardchat: {
-              enabled: true,
-            },
-          },
-        } as OpenClawConfig,
+        cfg: createEnabledMessageActionConfig("cardchat"),
         action: "send",
         params: {
           channel: "cardchat",
@@ -711,13 +670,7 @@ describe("runMessageAction plugin dispatch", () => {
       );
 
       const result = await runMessageAction({
-        cfg: {
-          channels: {
-            cardchat: {
-              enabled: true,
-            },
-          },
-        } as OpenClawConfig,
+        cfg: createEnabledMessageActionConfig("cardchat"),
         action: "send",
         params: {
           channel: "cardchat",
@@ -783,7 +736,7 @@ describe("runMessageAction plugin dispatch", () => {
       );
 
       await runMessageAction({
-        cfg: { channels: { cardchat: { enabled: true } } } as OpenClawConfig,
+        cfg: createEnabledMessageActionConfig("cardchat"),
         action: "send",
         ...(actionOrigin ? { actionOrigin } : {}),
         params: {

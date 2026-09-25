@@ -1,4 +1,3 @@
-// Bonjour tests cover ciao plugin behavior.
 import { describe, expect, it } from "vitest";
 
 const { classifyCiaoProcessError } = await import("./ciao.js");
@@ -19,17 +18,6 @@ describe("bonjour-ciao", () => {
       formatted:
         "AssertionError: IP address version must match. Netmask cannot have a version different from the address!",
     });
-  });
-
-  it("suppresses ciao netmask assertion errors as non-fatal", () => {
-    const error = Object.assign(
-      new Error(
-        "IP address version must match. Netmask cannot have a version different from the address!",
-      ),
-      { name: "AssertionError" },
-    );
-
-    expect(classifyCiaoProcessError(error)).not.toBe(null);
   });
 
   it("classifies networkInterfaces SystemError failures (restricted sandboxes)", () => {

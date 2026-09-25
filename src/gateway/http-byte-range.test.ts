@@ -3,6 +3,7 @@ import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   createGatewayByteStream,
   createImmutableFileValidators,
@@ -567,10 +568,7 @@ describe("Gateway byte response descriptor lifecycle", () => {
     const handle = await fs.open(filePath, "r");
     const closeHandle = vi.spyOn(handle, "close");
     const createReadStream = vi.spyOn(handle, "createReadStream");
-    let resolveResponseClose!: () => void;
-    const responseClosed = new Promise<void>((resolve) => {
-      resolveResponseClose = resolve;
-    });
+    const { promise: responseClosed, resolve: resolveResponseClose } = createDeferred();
     const server = http.createServer((_request, response) => {
       const owner = createGatewayByteStream(response, handle, () => {
         response.statusCode = 404;

@@ -11,10 +11,10 @@ import {
   resolveWindowsSpawnProgram,
 } from "../plugin-sdk/windows-spawn.js";
 import {
-  listKnownProviderAuthEnvVarNames,
+  listKnownProviderAuthEnvVarNamesCore,
   omitEnvKeysCaseInsensitive,
 } from "../secrets/provider-env-vars.js";
-import { classifyAcpToolApproval, type AcpApprovalClass } from "./approval-classifier.js";
+import { classifyAcpToolApproval } from "./approval-classifier.js";
 
 type PermissionOption = RequestPermissionRequest["options"][number];
 
@@ -24,22 +24,6 @@ type PermissionResolverDeps = {
   log?: (line: string) => void;
   cwd?: string;
 };
-
-function resolveToolKindForPermission(
-  toolName: string | undefined,
-  approvalClass: AcpApprovalClass,
-): string | undefined {
-  if (!toolName && approvalClass === "unknown") {
-    return undefined;
-  }
-  if (approvalClass === "readonly_scoped") {
-    return "readonly_scoped";
-  }
-  if (approvalClass === "readonly_search") {
-    return "readonly_search";
-  }
-  return approvalClass;
-}
 
 function pickOption(
   options: PermissionOption[],
@@ -114,7 +98,10 @@ export async function resolvePermissionRequest(
   const toolTitle = sanitizeTerminalText(params.toolCall?.title ?? "tool");
   const classification = classifyAcpToolApproval({ toolCall: params.toolCall, cwd });
   const toolName = classification.toolName;
-  const toolKind = resolveToolKindForPermission(toolName, classification.approvalClass);
+  const toolKind =
+    !toolName && classification.approvalClass === "unknown"
+      ? undefined
+      : classification.approvalClass;
 
   if (options.length === 0) {
     log(`[permission cancelled] ${toolName ?? "unknown"}: no options available`);
@@ -198,7 +185,7 @@ export function buildAcpClientStripKeys(params: {
 }): Set<string> {
   const stripKeys = new Set<string>(params.activeSkillEnvKeys ?? []);
   if (params.stripProviderAuthEnvVars) {
-    for (const key of listKnownProviderAuthEnvVarNames()) {
+    for (const key of listKnownProviderAuthEnvVarNamesCore()) {
       stripKeys.add(key);
     }
   }

@@ -16,15 +16,22 @@ import {
   type MessageToolSchemaBuilders,
 } from "./message-tool-schema-scoping.js";
 
-const AllMessageActions = CHANNEL_MESSAGE_ACTION_NAMES;
-function buildRoutingSchema() {
-  return {
+function buildRoutingSchema(options: { includeTeamId?: boolean }) {
+  const props: Record<string, TSchema> = {
     channel: Type.Optional(Type.String()),
     target: Type.Optional(channelTargetSchema()),
     targets: Type.Optional(channelTargetsSchema()),
     accountId: Type.Optional(Type.String()),
     dryRun: Type.Optional(Type.Boolean()),
   };
+  if (options.includeTeamId) {
+    props.teamId = Type.Optional(
+      Type.String({
+        description: "Team or workspace ID for channel-info, channel-list, or conversation-open.",
+      }),
+    );
+  }
+  return props;
 }
 
 const presentationCommandActionSchema = Type.Object({
@@ -205,7 +212,7 @@ function buildSendSchema(options: {
         {
           additionalProperties: false,
           description:
-            "Search official ClawHub capabilities and show install or Installed cards in the current Control UI conversation. Omit kind to check plugins, then skills. This presents options; the user chooses installation.",
+            "Official plugin/skill cards in current chat; user chooses install. Omit kind: plugins, then skills.",
         },
       ),
     );
@@ -412,10 +419,6 @@ function buildModerationSchema() {
   };
 }
 
-function buildGatewaySchema() {
-  return gatewayCallOptionSchemaProperties();
-}
-
 function buildPresenceSchema() {
   return {
     activityType: Type.Optional(
@@ -468,13 +471,14 @@ function buildChannelManagementSchema() {
 }
 
 function buildMessageToolSchemaProps(options: {
+  includeTeamId?: boolean;
   includePresentation: boolean;
   includeDeliveryPin: boolean;
   includeBestEffort: boolean;
   extraProperties?: Record<string, TSchema>;
 }) {
   return {
-    ...buildRoutingSchema(),
+    ...buildRoutingSchema(options),
     ...buildSendSchema(options),
     ...buildReactionSchema(),
     ...buildFetchSchema(),
@@ -485,7 +489,7 @@ function buildMessageToolSchemaProps(options: {
     ...buildThreadSchema(),
     ...buildEventSchema(),
     ...buildModerationSchema(),
-    ...buildGatewaySchema(),
+    ...gatewayCallOptionSchemaProperties(),
     ...buildChannelManagementSchema(),
     ...buildPresenceSchema(),
     ...options.extraProperties,
@@ -495,9 +499,9 @@ function buildMessageToolSchemaProps(options: {
 export const MESSAGE_TOOL_SCHEMA_BUILDERS = {
   full: buildMessageToolSchemaProps,
   base: (options) => ({
-    ...buildRoutingSchema(),
+    ...buildRoutingSchema(options),
     ...buildSendSchema(options),
-    ...buildGatewaySchema(),
+    ...gatewayCallOptionSchemaProperties(),
   }),
   groups: {
     reaction: buildReactionSchema,
@@ -515,7 +519,7 @@ export const MESSAGE_TOOL_SCHEMA_BUILDERS = {
 } satisfies MessageToolSchemaBuilders;
 
 export const MessageToolSchema = buildMessageToolSchemaFromActions(
-  AllMessageActions,
+  CHANNEL_MESSAGE_ACTION_NAMES,
   {
     includePresentation: true,
     includeDeliveryPin: true,

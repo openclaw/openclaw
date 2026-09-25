@@ -35,7 +35,7 @@ describe("captured plugin registration", () => {
         throw new Error("not provider execution");
       };
       const factory = vi.fn((context: PluginCapabilityCatalogContext) => {
-        expect(context).toBe(resolvePluginCapabilityCatalogContext());
+        expect(context.formatErrorMessage(new Error("context-ready"))).toBe("context-ready");
         const provider = {
           id: "factory-provider",
           label: "Factory provider",

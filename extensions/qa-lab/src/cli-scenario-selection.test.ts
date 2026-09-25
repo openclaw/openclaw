@@ -6,7 +6,8 @@ const { runQaProfileCommand, runQaSuiteCommand } = vi.hoisted(() => ({
   runQaSuiteCommand: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/qa-runner-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/qa-runner-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/qa-runner-runtime")>()),
   listQaRunnerCliContributions: () => [],
 }));
 

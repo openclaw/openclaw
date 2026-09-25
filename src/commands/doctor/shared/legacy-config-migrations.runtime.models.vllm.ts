@@ -89,8 +89,7 @@ function hasLegacyVllmQwenThinkingFormat(defaultModels: unknown): boolean {
 }
 
 function hasLegacyVllmQwenThinkingProviderParams(provider: unknown): boolean {
-  const params = getRecord(getRecord(provider)?.params);
-  return Boolean(params && getLegacyVllmQwenThinkingFormat(params));
+  return hasLegacyVllmQwenThinkingParams(getRecord(provider)?.params);
 }
 
 function hasLegacyVllmQwenThinkingModelParams(provider: unknown): boolean {
@@ -98,10 +97,7 @@ function hasLegacyVllmQwenThinkingModelParams(provider: unknown): boolean {
   if (!Array.isArray(models)) {
     return false;
   }
-  return models.some((model) => {
-    const params = getRecord(getRecord(model)?.params);
-    return Boolean(params && getLegacyVllmQwenThinkingFormat(params));
-  });
+  return models.some((model) => hasLegacyVllmQwenThinkingParams(getRecord(model)?.params));
 }
 
 function hasLegacyVllmQwenThinkingParams(params: unknown): boolean {
@@ -331,12 +327,20 @@ export function applyLegacyVllmQwenThinkingFormat(params: {
   return true;
 }
 
-export function removeUntargetedLegacyVllmQwenThinkingFormat(params: {
+export function applyLegacyVllmQwenThinkingFormatToTargets(params: {
   sourcePath: string;
   legacyParams: Record<string, unknown>;
+  targets: Array<{ model: Record<string, unknown>; index: number }>;
   legacyFormat: NonNullable<ReturnType<typeof getLegacyVllmQwenThinkingFormat>>;
   changes: string[];
 }): void {
+  if (params.targets.length > 0) {
+    // Reuse the captured format after the first target removes the legacy keys.
+    for (const target of params.targets) {
+      applyLegacyVllmQwenThinkingFormat({ ...params, target });
+    }
+    return;
+  }
   removeLegacyVllmQwenThinkingParams(params.legacyParams);
   params.changes.push(
     `Removed ${params.sourcePath}.${params.legacyFormat.key}; no concrete vLLM model row or agent model ref exists, so configure models.providers.vllm.models[].compat.thinkingFormat on each Qwen model that needs it.`,

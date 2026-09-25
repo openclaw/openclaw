@@ -3,6 +3,7 @@ import { createAssistantMessageEventStream, type AssistantMessage } from "opencl
 // Lmstudio tests cover stream plugin behavior.
 import { createRequireRecord, createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createModelProviderConfig } from "../../test-support/model-provider-config.test-support.js";
 
 let wrapLmstudioInferencePreload: typeof import("./stream.js").wrapLmstudioInferencePreload;
 let defaultBaseUrl: string;
@@ -148,16 +149,12 @@ function createWrappedLmstudioStream(
   return wrapLmstudioInferencePreload({
     provider: "lmstudio",
     modelId: "qwen3-8b-instruct",
-    config: {
-      models: {
-        providers: {
-          lmstudio: {
-            baseUrl: params?.baseUrl ?? defaultBaseUrl,
-            models: [],
-          },
-        },
+    config: createModelProviderConfig({
+      lmstudio: {
+        baseUrl: params?.baseUrl ?? defaultBaseUrl,
+        models: [],
       },
-    },
+    }),
     streamFn: baseStream,
     thinkingLevel: params?.thinkingLevel,
   } as never);
@@ -313,16 +310,12 @@ describe("lmstudio stream wrapper", () => {
     const wrapped = wrapLmstudioInferencePreload({
       provider: "lmstudio",
       modelId: "qwen3-8b-instruct",
-      config: {
-        models: {
-          providers: {
-            lmstudio: {
-              baseUrl: defaultBaseUrl,
-              models: [],
-            },
-          },
+      config: createModelProviderConfig({
+        lmstudio: {
+          baseUrl: defaultBaseUrl,
+          models: [],
         },
-      },
+      }),
       streamFn: baseStream,
     } as never);
 
@@ -446,16 +439,12 @@ describe("lmstudio stream wrapper", () => {
     const wrapped = wrapLmstudioInferencePreload({
       provider: "lmstudio",
       modelId: "qwen3-8b-instruct",
-      config: {
-        models: {
-          providers: {
-            lmstudio: {
-              baseUrl: defaultBaseUrl,
-              models: [],
-            },
-          },
+      config: createModelProviderConfig({
+        lmstudio: {
+          baseUrl: defaultBaseUrl,
+          models: [],
         },
-      },
+      }),
       streamFn: baseStream,
     } as never);
 
@@ -565,16 +554,12 @@ describe("lmstudio stream wrapper", () => {
     const wrapped = wrapLmstudioInferencePreload({
       provider: "lmstudio",
       modelId: "qwen3-8b-instruct",
-      config: {
-        models: {
-          providers: {
-            lmstudio: {
-              baseUrl: defaultBaseUrl,
-              models: [],
-            },
-          },
+      config: createModelProviderConfig({
+        lmstudio: {
+          baseUrl: defaultBaseUrl,
+          models: [],
         },
-      },
+      }),
       streamFn: baseStream,
     } as never);
 
@@ -642,16 +627,12 @@ describe("lmstudio stream wrapper", () => {
     const wrapped = wrapLmstudioInferencePreload({
       provider: "lmstudio",
       modelId: "qwen3-8b-instruct",
-      config: {
-        models: {
-          providers: {
-            lmstudio: {
-              baseUrl: defaultBaseUrl,
-              models: [],
-            },
-          },
+      config: createModelProviderConfig({
+        lmstudio: {
+          baseUrl: defaultBaseUrl,
+          models: [],
         },
-      },
+      }),
       streamFn: baseStream,
     } as never);
 
@@ -728,16 +709,12 @@ describe("lmstudio stream wrapper", () => {
     const wrapped = wrapLmstudioInferencePreload({
       provider: "lmstudio",
       modelId: "qwen3-8b-instruct",
-      config: {
-        models: {
-          providers: {
-            lmstudio: {
-              baseUrl: defaultBaseUrl,
-              models: [],
-            },
-          },
+      config: createModelProviderConfig({
+        lmstudio: {
+          baseUrl: defaultBaseUrl,
+          models: [],
         },
-      },
+      }),
       streamFn: baseStream,
     } as never);
 

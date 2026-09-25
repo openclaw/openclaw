@@ -1,6 +1,6 @@
 // Matrix tests cover format plugin behavior.
 import { describe, expect, it } from "vitest";
-import { findMatrixSpoilerDelimiterOffsets } from "./format-spoiler-ranges.js";
+import { analyzeMatrixSpoilers } from "./format-spoiler-ranges.js";
 import {
   MATRIX_FORMAT_PROFILE,
   markdownToMatrixBody,
@@ -134,7 +134,7 @@ describe("Matrix formatting migration goldens", () => {
 
   it("does not treat pipes in link destinations as spoiler delimiters", () => {
     const markdown = "[docs\nmore](https://example.test/a(b)||literal||) ||secret||";
-    expect(findMatrixSpoilerDelimiterOffsets(markdown)).toEqual([
+    expect(analyzeMatrixSpoilers(markdown).delimiterOffsets).toEqual([
       markdown.indexOf("||secret||"),
       markdown.lastIndexOf("||"),
     ]);
@@ -237,7 +237,7 @@ describe("Matrix formatting migration goldens", () => {
 
   it("leaves compact empty-cell pipes to native table grammar", () => {
     const markdown = "| A | B | C |\n|---|---|---|\n| x || y || z |";
-    expect(findMatrixSpoilerDelimiterOffsets(markdown)).toEqual([]);
+    expect(analyzeMatrixSpoilers(markdown).delimiterOffsets).toEqual([]);
     expect(markdownToMatrixHtml(markdown)).toContain("<table>");
     expect(markdownToMatrixBody(markdown)).toBe(markdown);
   });

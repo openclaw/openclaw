@@ -1,6 +1,7 @@
 /**
  * Estimates message and tool-result character costs for context guards.
  */
+import { collectTextContentBlocks } from "../content-blocks.js";
 import type { AgentMessage } from "../runtime/index.js";
 import {
   BRANCH_SUMMARY_PREFIX,
@@ -9,7 +10,7 @@ import {
   COMPACTION_SUMMARY_SUFFIX,
   bashExecutionToText,
 } from "../runtime/index.js";
-import { estimateToolResultTextChars } from "./tool-result-text-budget.js";
+import { prepareToolResultTextChars } from "./tool-result-text-budget.js";
 
 export const TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE = 2;
 const IMAGE_CHAR_ESTIMATE = 8_000;
@@ -64,48 +65,28 @@ function getToolResultContent(msg: AgentMessage): unknown[] {
   return Array.isArray(content) ? content : [];
 }
 
-function estimateContentBlockChars(content: unknown[]): number {
+function estimateContentBlockChars(content: unknown[], toolResult = false): number {
+  const weight = toolResult ? TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE : 1;
   let chars = 0;
   for (const block of content) {
     if (isTextBlock(block)) {
-      chars += block.text.length;
+      chars += toolResult
+        ? prepareToolResultTextChars(block, block.text, weight)
+        : block.text.length;
     } else if (isImageBlock(block)) {
-      chars += IMAGE_CHAR_ESTIMATE;
+      chars += IMAGE_CHAR_ESTIMATE * weight;
     } else {
-      chars += estimateUnknownChars(block);
-    }
-  }
-  return chars;
-}
-
-function estimateToolResultContentChars(content: unknown[]): number {
-  let chars = 0;
-  for (const block of content) {
-    if (isTextBlock(block)) {
-      chars += estimateToolResultTextChars(block.text, {
-        minimumRawWeight: TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
-      });
-    } else if (isImageBlock(block)) {
-      chars += TOOL_IMAGE_CHARS;
-    } else {
-      chars += estimateUnknownChars(block) * TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE;
+      chars += estimateUnknownChars(block) * weight;
     }
   }
   return chars;
 }
 
 export function getToolResultText(msg: AgentMessage): string {
-  const content = getToolResultContent(msg);
-  const chunks: string[] = [];
-  for (const block of content) {
-    if (isTextBlock(block)) {
-      chunks.push(block.text);
-    }
-  }
-  return chunks.join("\n");
+  return collectTextContentBlocks(getToolResultContent(msg)).join("\n");
 }
 
-function estimateMessageChars(msg: AgentMessage): number {
+export function estimateMessageChars(msg: AgentMessage, contentOverride?: unknown[]): number {
   if (
     !msg ||
     typeof msg !== "object" ||
@@ -115,7 +96,7 @@ function estimateMessageChars(msg: AgentMessage): number {
   }
 
   if (msg.role === "user") {
-    const content = msg.content;
+    const content = contentOverride ?? msg.content;
     if (typeof content === "string") {
       return content.length;
     }
@@ -127,7 +108,7 @@ function estimateMessageChars(msg: AgentMessage): number {
 
   if (msg.role === "assistant") {
     let chars = 0;
-    const content = (msg as { content?: unknown }).content;
+    const content = contentOverride ?? (msg as { content?: unknown }).content;
     if (Array.isArray(content)) {
       for (const block of content) {
         if (!block || typeof block !== "object") {
@@ -159,8 +140,8 @@ function estimateMessageChars(msg: AgentMessage): number {
 
   if (isToolResultMessage(msg)) {
     // `details` is stripped before provider conversion; estimate only visible content.
-    const content = getToolResultContent(msg);
-    return estimateToolResultContentChars(content);
+    const content = contentOverride ?? getToolResultContent(msg);
+    return estimateContentBlockChars(content, true);
   }
 
   const role: unknown = Reflect.get(msg, "role");
@@ -182,7 +163,7 @@ function estimateMessageChars(msg: AgentMessage): number {
   }
 
   if (role === "custom") {
-    const content = Reflect.get(msg, "content");
+    const content = contentOverride ?? Reflect.get(msg, "content");
     if (typeof content === "string") {
       return content.length;
     }

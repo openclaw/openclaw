@@ -1,7 +1,9 @@
-import { createHash } from "node:crypto";
 import fsp from "node:fs/promises";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import type { NodeWorkerWorkspaceExecResult } from "../../worker/node-workspace-protocol.js";
+import {
+  NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES,
+  type NodeWorkerWorkspaceExecResult,
+} from "../../worker/node-workspace-protocol.js";
 import {
   NODE_WORKSPACE_EMPTY_MANIFEST_REF,
   type NodeWorkerWorkspaceTransferInput,
@@ -27,13 +29,16 @@ import { workerProjectSeedKey } from "./workspace-git-base.js";
 import type { WorkspaceHashMemo, WorkspaceReconcileMetrics } from "./workspace-hash-memo.js";
 import { prepareLocalWorkspaceReconciliation } from "./workspace-local-reconciliation.js";
 import {
-  parseWorkerWorkspaceManifest,
-  serializeWorkerWorkspaceManifest,
-} from "./workspace-manifest.js";
+  decodeWorkspaceManifest,
+  serializeWorkspaceManifest,
+} from "./workspace-manifest-worker.js";
 import { createWorkerWorkspaceQuiescence } from "./workspace-quiescence.js";
 import { workerWorkspaceTransferPaths } from "./workspace-result-staging.js";
+import { captureRemoteWorkspaceManifest } from "./workspace-sync-helpers.js";
 
 const workspaceLog = createSubsystemLogger("gateway/worker-workspace");
+// Leave room for the manifest reference and bounded numeric metrics in the result envelope.
+const NODE_WORKSPACE_HASH_MEMO_BYTES = NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES - 4 * 1024;
 
 export type NodeWorkerWorkspaceBinding = {
   source:
@@ -144,19 +149,23 @@ export function createNodeWorkerWorkspaceActions(params: {
   const reconcileWorkspace = (request: WorkerWorkspaceReconcileRequest) =>
     runInstrumentedWorkspaceReconcile((metrics) =>
       request.source.kind === "repository"
-        ? reconcileRepository(request)
+        ? reconcileRepository(request, metrics)
         : reconcileWorkspaceRun(
             {
               remoteWorkspaceDir: request.remoteWorkspaceDir,
               baseManifestRef: request.baseManifestRef,
               localPath: request.source.path,
               journal: request.source.journal,
+              assertCurrent: request.source.assertCurrent,
               stagedResult: request.source.stagedResult,
             },
             metrics,
           ),
     );
-  const reconcileRepository = async (request: WorkerWorkspaceReconcileRequest) => {
+  const reconcileRepository = async (
+    request: WorkerWorkspaceReconcileRequest,
+    metrics: WorkspaceReconcileMetrics,
+  ) => {
     if (request.source.kind !== "repository") {
       throw new Error("Repository checkpoint source is required");
     }
@@ -181,11 +190,18 @@ export function createNodeWorkerWorkspaceActions(params: {
       );
       try {
         const verifyStable = async () => {
-          const observed = await workspace.captureManifest(
-            request.remoteWorkspaceDir,
-            uploaded.base.baseCommit,
-            uploaded.currentManifestRef,
-          );
+          const observed = await captureRemoteWorkspaceManifest({
+            runWorkspaceCommand: exec,
+            remoteWorkspaceDir: request.remoteWorkspaceDir,
+            baseCommit: uploaded.base.baseCommit,
+            priorManifestDigests: [
+              uploaded.currentManifestRef.slice(7),
+              uploaded.baseManifestRef.slice(7),
+            ],
+            hashMemo: placementHashMemo,
+            metrics,
+            maxHashMemoBytes: NODE_WORKSPACE_HASH_MEMO_BYTES,
+          });
           if (observed !== uploaded.currentManifestRef) {
             throw new Error("Repository workspace changed during checkpoint capture");
           }
@@ -318,11 +334,15 @@ export function createNodeWorkerWorkspaceActions(params: {
     try {
       let expectedRemoteRef = uploaded.currentManifestRef;
       const verifyStable = async () => {
-        const observed = await workspace.captureManifest(
-          request.remoteWorkspaceDir,
-          uploaded.base.baseCommit,
-          expectedRemoteRef,
-        );
+        const observed = await captureRemoteWorkspaceManifest({
+          runWorkspaceCommand: exec,
+          remoteWorkspaceDir: request.remoteWorkspaceDir,
+          baseCommit: uploaded.base.baseCommit,
+          priorManifestDigests: [expectedRemoteRef.slice(7), uploaded.baseManifestRef.slice(7)],
+          hashMemo: placementHashMemo,
+          metrics,
+          maxHashMemoBytes: NODE_WORKSPACE_HASH_MEMO_BYTES,
+        });
         if (observed !== expectedRemoteRef) {
           throw new Error("Cloud workspace changed during final reconciliation");
         }
@@ -338,7 +358,8 @@ export function createNodeWorkerWorkspaceActions(params: {
         const token = params.workspaceTransfer.publishSnapshot(params.environmentId, {
           manifest: accepted.manifest,
           manifestRef: accepted.manifestRef,
-          rawManifest: serializeWorkerWorkspaceManifest(accepted.manifest),
+          rawManifest: (await serializeWorkspaceManifest(accepted.manifest, params.ownerSignal))
+            .raw,
           root: await fsp.realpath(request.localPath),
         });
         try {
@@ -384,6 +405,7 @@ export function createNodeWorkerWorkspaceActions(params: {
       baseline = await repository.bindPreparedRepository(
         { ...identity, commit: source.baseCommit },
         source.prepared,
+        request.gitAuthor,
       );
     } else {
       const prepared = await repository.prepareRepository(identity);
@@ -398,7 +420,7 @@ export function createNodeWorkerWorkspaceActions(params: {
       baseline.mode === "repository" ? baseline.baseManifestRef : baseline.manifestRef;
     const baseCommit = baseline.baseCommit;
     const remoteWorkspaceDir = baseline.remoteWorkspaceDir;
-    if (request.gitAuthor) {
+    if (request.gitAuthor && !source.prepared) {
       await repository.configureAuthor(remoteWorkspaceDir, request.gitAuthor);
     }
     await params.workspaceTransfer.prepareRepository({
@@ -414,19 +436,28 @@ export function createNodeWorkerWorkspaceActions(params: {
     let manifestRef = baseline.manifestRef;
     if (source.checkpoint) {
       const checkpoint = source.checkpoint;
-      const digest = (raw: string) => `sha256:${createHash("sha256").update(raw).digest("hex")}`;
-      if (digest(checkpoint.baseManifestRaw) !== baseManifestRef) {
+      const decodedBase = await decodeWorkspaceManifest(
+        checkpoint.baseManifestRaw,
+        undefined,
+        params.ownerSignal,
+      );
+      if (decodedBase.manifestRef !== baseManifestRef) {
         throw new Error("Repository checkpoint baseline differs from its cloned commit");
       }
-      manifestRef = digest(checkpoint.currentManifestRaw);
-      const manifest = parseWorkerWorkspaceManifest(checkpoint.currentManifestRaw, manifestRef);
-      const base = parseWorkerWorkspaceManifest(checkpoint.baseManifestRaw, baseManifestRef);
+      const decoded = await decodeWorkspaceManifest(
+        checkpoint.currentManifestRaw,
+        undefined,
+        params.ownerSignal,
+      );
+      manifestRef = decoded.manifestRef;
+      const manifest = decoded.manifest;
+      const base = decodedBase.manifest;
       const token = params.workspaceTransfer.publishSnapshot(params.environmentId, {
         manifest,
         manifestRef,
         rawManifest: checkpoint.currentManifestRaw,
         root: checkpoint.stagingRoot,
-        blobPaths: new Set(workerWorkspaceTransferPaths(manifest, base)),
+        blobPaths: new Set(workerWorkspaceTransferPaths(manifest, base, params.ownerSignal)),
       });
       try {
         await transfer(

@@ -5,13 +5,18 @@ import {
   formatTaskBlockedFollowupMessage,
   formatTaskStateChangeMessage,
   formatTaskTerminalMessage,
-  isTerminalTaskStatus,
+  shouldUseParentReviewTaskTerminalMessage,
+} from "./task-executor-policy.js";
+import {
   shouldAutoDeliverTaskStateChange,
   shouldAutoDeliverTaskTerminalUpdate,
   shouldSuppressDuplicateTerminalDelivery,
-  shouldUseParentReviewTaskTerminalMessage,
-} from "./task-executor-policy.js";
-import type { TaskEventRecord, TaskRecord } from "./task-registry.types.js";
+} from "./task-notification-policy.js";
+import {
+  isTerminalTaskStatus,
+  type TaskEventRecord,
+  type TaskRecord,
+} from "./task-registry.types.js";
 
 function createTask(partial: Partial<TaskRecord>): TaskRecord {
   return {

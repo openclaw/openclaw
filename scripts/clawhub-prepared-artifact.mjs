@@ -306,6 +306,15 @@ export async function downloadPreparedClawHubRelease(options) {
   }
   return manifest;
 }
+export function isPreparedClawHubTrustedPublisher(publisher) {
+  return (
+    publisher?.provider === "github-actions" &&
+    publisher?.repository === REPOSITORY &&
+    publisher?.workflowFilename === "plugin-clawhub-release.yml" &&
+    publisher?.environment == null
+  );
+}
+
 async function preparedPackageIsPublished(entry, fetchImpl) {
   const packageUrl = `https://clawhub.ai/api/v1/packages/${encodeURIComponent(entry.packageName)}`;
   const publisherRepair =
@@ -326,12 +335,7 @@ async function preparedPackageIsPublished(entry, fetchImpl) {
       { signal },
     ),
   ).trustedPublisher;
-  if (
-    publisher?.provider !== "github-actions" ||
-    publisher?.repository !== REPOSITORY ||
-    publisher?.workflowFilename !== "plugin-clawhub-release.yml" ||
-    publisher?.environment != null
-  ) {
+  if (!isPreparedClawHubTrustedPublisher(publisher)) {
     throw new Error(
       `Prepared ClawHub trusted publisher is missing or mismatched for ${entry.packageName}. ${publisherRepair}`,
     );

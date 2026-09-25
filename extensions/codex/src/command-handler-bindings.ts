@@ -10,8 +10,8 @@ import { normalizeCodexAppServerBindingModelProvider } from "./app-server/auth-p
 import {
   consumeCodexAppServerLiveThread,
   hasCodexAppServerLiveThread,
-  type CodexAppServerLiveThreadOwnership,
 } from "./app-server/client-runtime.js";
+import type { CodexAppServerLiveThreadOwnership } from "./app-server/client-thread-owner.js";
 import type { CodexAppServerClient } from "./app-server/client.js";
 import { isCodexFastServiceTier } from "./app-server/config.js";
 import {
@@ -34,6 +34,7 @@ import {
   withCodexConversationThreadActivity,
   withExclusiveCodexAppServerThread,
 } from "./app-server/thread-ownership.js";
+import { assertCodexHostOwnerCurrent } from "./command-authorization.js";
 import { formatCodexDisplayText, formatThreads } from "./command-formatters.js";
 import {
   parseBindArgs,
@@ -145,6 +146,7 @@ export async function bindConversation(
     },
   });
   const threadLabel = parsed.threadId ?? "a new thread";
+  assertCodexHostOwnerCurrent(ctx);
   const request = await ctx.requestConversationBinding({
     summary: `Codex app-server thread ${formatCodexDisplayText(threadLabel)} in ${formatCodexDisplayText(workspaceDir)}`,
     detachHint: "/codex detach",
@@ -202,6 +204,7 @@ export async function detachConversation(
         bindingStore: deps.bindingStore,
         identity,
         expectedThreadId,
+        assertCurrent: () => assertCodexHostOwnerCurrent(ctx),
         ...(expectedStartId ? { expectedStartId } : {}),
         // The source session owns ephemeral tracking; destination channel
         // session keys do not describe how this subscription was created.
@@ -218,6 +221,7 @@ export async function detachConversation(
       return detachedPublicConversation!;
     });
   }
+  assertCodexHostOwnerCurrent(ctx);
   return await detachPublicConversation();
 }
 
@@ -487,6 +491,7 @@ export async function resumeThread(
             sessionId: ctx.sessionId,
             storePath: ctx.sessionTarget?.storePath,
             assertCurrent: assertHostGeneration,
+            assertOwnerCurrent: () => assertCodexHostOwnerCurrent(ctx),
             beforeRequest: async (request) => {
               const { thread } = await request<{ thread: CodexThread }>({
                 method: "thread/read",
@@ -546,6 +551,7 @@ async function bindCodexCliNodeSession(
     cwd: resolved.session?.cwd,
   });
   const summary = `Codex CLI session ${formatCodexDisplayText(parsed.threadId)} on ${formatCodexDisplayText(nodeId)}`;
+  assertCodexHostOwnerCurrent(ctx);
   const request = await ctx.requestConversationBinding({
     summary,
     detachHint: "/codex detach",

@@ -16,9 +16,15 @@ import { signalProcessTree } from "../process/kill-tree.js";
 import { extractTailscaleServeGatewayUrls } from "../shared/tailscale-status.js";
 import { isVitestRuntimeEnv } from "./env.js";
 import { toErrorObject } from "./errors.js";
+import { resolveExecutableFromPathEnv } from "./executable-path.js";
 import { retryAsync } from "./retry.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import {
+  isTransientTailscaleStatusError,
+  parsePossiblyNoisyJsonObject,
+  waitForTailscaleBackendReady,
+} from "./tailscale-backend-ready.js";
 import {
   TAILSCALE_ROUTE_OWNER_ARG,
   type TailscaleRouteOwnerMessage,
@@ -33,16 +39,6 @@ const TAILSCALE_ROUTE_STOP_TIMEOUT_MS = 4_000;
 // so an authorized Tailscale retry keeps ownership of every operational error.
 const SUDO_NONINTERACTIVE_AUTH_ERROR =
   /^sudo: (?:a password is required|no password was provided|a terminal is required|no tty present|no askpass program specified)/im;
-
-function parsePossiblyNoisyJsonObject(stdout: string): Record<string, unknown> {
-  const trimmed = stdout.trim();
-  const start = trimmed.indexOf("{");
-  const end = trimmed.lastIndexOf("}");
-  if (start >= 0 && end > start) {
-    return JSON.parse(trimmed.slice(start, end + 1)) as Record<string, unknown>;
-  }
-  return JSON.parse(trimmed) as Record<string, unknown>;
-}
 
 function tailnetHostnameFromStatus(parsed: Record<string, unknown>): string {
   const self =
@@ -63,29 +59,9 @@ function tailnetHostnameFromStatus(parsed: Record<string, unknown>): string {
   throw new Error("Could not determine Tailscale DNS or IP");
 }
 
-function isTransientTailscaleStatusError(error: unknown): boolean {
-  const record = readRecord(error);
-  const detail = [
-    error instanceof Error ? error.message : undefined,
-    typeof record?.stderr === "string" ? record.stderr : undefined,
-    typeof record?.stdout === "string" ? record.stdout : undefined,
-  ]
-    .filter((value): value is string => Boolean(value))
-    .join("\n")
-    .toLowerCase();
-
-  return (
-    record?.timedOut === true ||
-    detail.includes("failed to connect to local tailscale daemon") ||
-    detail.includes("failed to connect to local tailscale service") ||
-    detail.includes("connection refused") ||
-    detail.includes("503 service unavailable")
-  );
-}
-
 /**
  * Locate Tailscale binary using multiple strategies:
- * 1. PATH lookup (via which command)
+ * 1. Filesystem PATH lookup
  * 2. Known macOS app path
  * 3. locate database (if available)
  *
@@ -105,15 +81,22 @@ export async function findTailscaleBinary(): Promise<string | null> {
     }
   };
 
-  // Strategy 1: which command
+  // Strategy 1: PATH lookup
   try {
-    const { stdout } = await runExec("which", ["tailscale"]);
-    const fromPath = stdout.trim();
+    const fromPath = resolveExecutableFromPathEnv(
+      "tailscale",
+      process.env.PATH ?? "",
+      process.env,
+      {
+        cwd: process.cwd(),
+        useCache: false,
+      },
+    );
     if (fromPath && (await checkBinary(fromPath))) {
       return fromPath;
     }
   } catch {
-    // which failed, continue
+    // PATH lookup failed, continue
   }
 
   // Strategy 2: Known macOS app path
@@ -196,11 +179,24 @@ async function getTailscaleBinary(): Promise<string> {
   return cachedTailscaleBinary ?? "tailscale";
 }
 
-type TailscaleRouteClaim = {
+export type TailscaleRouteClaim = {
   exited: Promise<void>;
   isActive: () => boolean;
   stop: () => Promise<void>;
 };
+
+// Foreground startups replace the daemon's shared Serve config using an ETag.
+// Serialize our starts and owned stops, not the lifetime of each claim.
+let tailscaleRouteOperation: Promise<void> = Promise.resolve();
+
+function serializeTailscaleRouteOperation<T>(operation: () => Promise<T>): Promise<T> {
+  const result = tailscaleRouteOperation.then(operation);
+  tailscaleRouteOperation = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
+}
 
 type TailscaleRouteOwnerFailure = Pick<
   Extract<TailscaleRouteOwnerMessage, { type: "failed" }>,
@@ -363,27 +359,93 @@ async function startTailscaleRouteOwner(
   }
 }
 
+/** Claim the Gateway route, adopting only its recognized legacy root handler. */
 export async function claimTailscaleRoute(
   mode: "serve" | "funnel",
   target: number,
   gatewayPort: number,
   info: (message: string) => void,
 ): Promise<TailscaleRouteClaim> {
+  return serializeTailscaleRouteOperation(() =>
+    claimTailscaleRouteOwned({ mode, target, gatewayPort, info }),
+  );
+}
+
+/** Claim a private HTTPS Serve port without adopting or clearing existing routes. */
+export async function claimTailscaleServePort(
+  target: number,
+  httpsPort: number,
+  assertCurrent: () => void,
+): Promise<TailscaleRouteClaim> {
+  for (const [name, port] of [
+    ["target", target],
+    ["httpsPort", httpsPort],
+  ] as const) {
+    if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+      throw new RangeError(`Tailscale ${name} must be an integer port between 1 and 65535`);
+    }
+  }
+  return serializeTailscaleRouteOperation(() =>
+    claimTailscaleRouteOwned({
+      mode: "serve",
+      target,
+      httpsPort,
+      assertCurrent,
+      info: () => undefined,
+    }),
+  );
+}
+
+// Startup failure cleanup stays inside the queued operation. Only a returned
+// claim's stop reenters the queue, so cleanup cannot deadlock its own startup.
+async function claimTailscaleRouteOwned(
+  params: { target: number; info: (message: string) => void; assertCurrent?: () => void } & (
+    | { mode: "serve" | "funnel"; gatewayPort: number; httpsPort?: never }
+    | { mode: "serve"; httpsPort: number; gatewayPort?: never }
+  ),
+): Promise<TailscaleRouteClaim> {
+  const { mode, target, info } = params;
+  let authorityDenied = false;
+  const assertCurrent = () => {
+    try {
+      params.assertCurrent?.();
+    } catch (error) {
+      // An owner denial must never be retried as a local CLI permission failure.
+      authorityDenied = true;
+      throw error;
+    }
+  };
+  assertCurrent();
   const tailscaleBin = await getTailscaleBinary();
   let adopted = false;
   const start = async (bin: string, prefix: string[] = []) => {
+    assertCurrent();
     const exec = (args: string[]) =>
       runExec(bin, [...prefix, ...args], { timeoutMs: 5000, maxBuffer: 400_000 });
+    await waitForTailscaleBackendReady({ bin, prefix, info });
+    assertCurrent();
     const { stdout } = await exec(["serve", "status", "--json"]);
-    const routes = extractTailscaleServeGatewayUrls(stdout, gatewayPort, true);
+    const routes =
+      params.gatewayPort === undefined
+        ? undefined
+        : extractTailscaleServeGatewayUrls(stdout, params.gatewayPort, true);
     // Foreground claims require a free port. Never clear sibling handlers or
     // infer ownership from the new ephemeral backend instead of the Gateway port.
     if (routes?.some((url) => !new URL(url).port)) {
       await exec(["serve", "--yes", "--https=443", "--set-path=/", "off"]);
       adopted = true;
     }
+    assertCurrent();
     return startTailscaleRouteOwner(
-      [bin, ...prefix, mode, "--yes", "--bg=false", `${target}`],
+      [
+        bin,
+        ...prefix,
+        mode,
+        "--yes",
+        "--bg=false",
+        ...(params.httpsPort === undefined ? [] : [`--https=${params.httpsPort}`]),
+        `${target}`,
+      ],
       stdout,
     );
   };
@@ -391,12 +453,15 @@ export async function claimTailscaleRoute(
   try {
     claim = await start(tailscaleBin);
   } catch (error) {
-    if (!isPermissionDeniedError(error)) {
+    if (authorityDenied || !isPermissionDeniedError(error)) {
       throw error;
     }
     try {
       claim = await start("sudo", ["-n", tailscaleBin]);
     } catch (sudoError) {
+      if (authorityDenied) {
+        throw sudoError;
+      }
       const { stderr, message } = extractExecErrorText(sudoError);
       const detail = stderr.trim() || message.trim();
       if (!SUDO_NONINTERACTIVE_AUTH_ERROR.test(detail)) {
@@ -412,7 +477,10 @@ export async function claimTailscaleRoute(
   if (adopted) {
     info("Tailscale route adopted from a previous OpenClaw release");
   }
-  return claim;
+  return {
+    ...claim,
+    stop: () => serializeTailscaleRouteOperation(claim.stop),
+  };
 }
 
 /** Resolve the hostname after Serve startup, while the local daemon may still be settling. */

@@ -134,8 +134,9 @@ The `sessions.observer.ask` method was removed; use `sessions.companion.ask`.
 The snapshot's optional `appliedConfigHash` is the resolved source-config revision
 accepted by the active Gateway runtime. Clients can compare it with
 `config.get.configRevisionHash` to determine whether a newer saved config still
-needs a restart. `config.get.hash` remains the raw root-file revision used by
-config write conflict guards.
+needs a restart. `config.get.hash` is the opaque authored revision used by config
+write conflict guards. It covers root-file bytes and the captured identities and
+content of included files.
 
 The snapshot's optional `controlUiIdentityUrl` advertises the active Gateway's
 HTTPS dashboard URL when it uses trusted-proxy or Tailscale Serve identity.

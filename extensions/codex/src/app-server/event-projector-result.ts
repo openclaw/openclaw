@@ -1,10 +1,9 @@
 import {
   classifyAgentHarnessTerminalOutcome,
+  type AgentMessage,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
-  type HeartbeatToolResponse,
-  type MessagingToolSend,
-  type MessagingToolSourceReplyPayload,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessToolResultTelemetry } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { resolveCodexTtsProvenanceTransfer } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { CodexAssistantProjection } from "./event-projector-assistant.js";
@@ -24,21 +23,22 @@ import { CodexUsageProjection } from "./event-projector-usage.js";
 import type { CodexTurn } from "./protocol.js";
 import { CodexTranscriptCheckpoint } from "./transcript-checkpoint.js";
 
-export type CodexAppServerToolTelemetry = {
-  didSendViaMessagingTool: boolean;
-  didDeliverSourceReplyViaMessageTool?: boolean;
-  sourceReplyDelivered?: true;
-  messagingToolSentTexts: string[];
-  messagingToolSentMediaUrls: string[];
-  messagingToolSentTargets: MessagingToolSend[];
-  messagingToolSourceReplyPayloads?: MessagingToolSourceReplyPayload[];
-  heartbeatToolResponse?: HeartbeatToolResponse;
-  toolMediaUrls?: string[];
-  toolAutoDeliveryMediaUrls?: string[];
-  coreTtsToolResults?: object[];
-  toolAudioAsVoice?: boolean;
-  successfulCronAdds?: number;
-} & Pick<EmbeddedRunAttemptResult, "acceptedSessionSpawns">;
+export type CodexAppServerToolTelemetry = Partial<
+  Omit<AgentHarnessToolResultTelemetry, "confirmedMediaDeliveries">
+> &
+  Pick<
+    AgentHarnessToolResultTelemetry,
+    | "didSendViaMessagingTool"
+    | "messagingToolSentTexts"
+    | "messagingToolSentMediaUrls"
+    | "messagingToolSentTargets"
+  > & {
+    didDeliverSourceReplyViaMessageTool?: boolean;
+    sourceReplyDelivered?: true;
+    confirmedMediaDeliveries?: Readonly<
+      AgentHarnessToolResultTelemetry["confirmedMediaDeliveries"]
+    >;
+  } & Pick<EmbeddedRunAttemptResult, "acceptedSessionSpawns">;
 
 /** Owns per-turn projection state and builds results from the same state. */
 export abstract class CodexTurnProjection {
@@ -47,6 +47,7 @@ export abstract class CodexTurnProjection {
   protected readonly assistantProjection: CodexAssistantProjection;
   protected readonly reasoningProjection: CodexReasoningProjection;
   readonly settlement: CodexProjectionSettlement;
+  protected readonly observedItemIds = new Set<string>();
   protected readonly activeItemIds = new Set<string>();
   protected readonly completedItemIds = new Set<string>();
   protected readonly activeCompactionItemIds = new Set<string>();
@@ -145,7 +146,11 @@ export abstract class CodexTurnProjection {
 
   buildResult(
     toolTelemetry: CodexAppServerToolTelemetry,
-    options?: { yieldDetected?: boolean },
+    options?: {
+      yieldDetected?: boolean;
+      steeringMessages?: readonly AgentMessage[];
+      readRetainedNativeCommands?: () => ReadonlyMap<string, string>;
+    },
   ): EmbeddedRunAttemptResult & { terminalTurnId: string } {
     this.eventProjection.flushPendingGuardianWarning();
     // Finalizing native tools may invoke callbacks; retain this result's terminal snapshot.
@@ -166,13 +171,29 @@ export abstract class CodexTurnProjection {
     } = this.terminalFailure;
     const upstreamUserText = this.options.upstreamUserText;
     const turnTainted = this.settlement.turnTainted;
+    const observedItemCount = new Set([...this.observedItemIds, ...this.completedItemIds]).size;
     const activeItemCount = this.activeItemIds.size;
     const completedItemCount = this.completedItemIds.size;
     const guardianReviewCount = this.eventProjection.guardianReviewCount;
     const yieldDetected = options?.yieldDetected;
-    // Result construction runs after the notification queue drains. Close any
-    // tool lacking a terminal item so audit consumers never retain an open action.
-    this.nativeToolLifecycleProjector.finalizeActive();
+    const retainedCommands = new Map<string, string>();
+    if (
+      !aborted &&
+      !this.options.runAbortSignal?.aborted &&
+      completedTurn?.status === "completed" &&
+      !initialPromptError
+    ) {
+      const pending = this.nativeToolLifecycleProjector.pendingCommands();
+      for (const [id, processId] of options?.readRetainedNativeCommands?.() ?? []) {
+        // A queued native completion wins over the earlier inventory snapshot.
+        if (pending.has(id) && (pending.get(id) === null || pending.get(id) === processId)) {
+          retainedCommands.set(id, processId);
+        }
+      }
+    }
+    // Close this turn's audit scope without inventing process completion. The
+    // existing unknown-outcome diagnostic remains distinct from execution failure.
+    this.nativeToolLifecycleProjector.finalizeActive(undefined, retainedCommands);
     const assistantTexts = this.assistantProjection.collectAssistantTexts();
     const asyncMessages = this.assistantProjection.collectAsyncMessages();
     const commentaryMessages = this.assistantProjection.collectCommentaryMessages();
@@ -192,6 +213,7 @@ export abstract class CodexTurnProjection {
     const synthesizedMissingToolResultError =
       this.toolTranscriptProjection.synthesizeMissingToolResults({
         synthesize: legacyFailClosed,
+        retainedCommands,
         // Preserve audit synthesis on every path, but completed answers must not
         // promote bookkeeping gaps into user-visible terminal failure evidence.
         terminalDisposition: aborted
@@ -244,6 +266,7 @@ export abstract class CodexTurnProjection {
       asyncMessages,
       commentaryMessages,
       toolMessages: this.toolTranscriptProjection.transcriptMessages,
+      steeringMessages: options?.steeringMessages,
       lastAssistant,
       turnTainted,
     });
@@ -268,8 +291,9 @@ export abstract class CodexTurnProjection {
       Boolean(toolTelemetry.successfulCronAdds || toolTelemetry.acceptedSessionSpawns?.length) ||
       this.generatedMediaProjection.hasGeneratedMedia() ||
       this.toolProgressProjection.hasPotentialSideEffects;
+    const mediaDelivery = this.generatedMediaProjection.projectDelivery(toolTelemetry);
     const sentMediaUrls = new Set(
-      toolTelemetry.messagingToolSentMediaUrls.map((url) => url.trim()),
+      mediaDelivery.messagingToolSentMediaUrls.map((url) => url.trim()),
     );
     const toolAutoDeliveryMediaUrls = toolTelemetry.toolAutoDeliveryMediaUrls?.filter(
       (url) => !sentMediaUrls.has(url.trim()),
@@ -301,12 +325,9 @@ export abstract class CodexTurnProjection {
         toolTelemetry.didDeliverSourceReplyViaMessageTool === true,
       sourceReplyDelivered: toolTelemetry.sourceReplyDelivered,
       messagingToolSentTexts: toolTelemetry.messagingToolSentTexts,
-      messagingToolSentMediaUrls: toolTelemetry.messagingToolSentMediaUrls,
-      messagingToolSentTargets: toolTelemetry.messagingToolSentTargets,
+      ...mediaDelivery,
       messagingToolSourceReplyPayloads: toolTelemetry.messagingToolSourceReplyPayloads ?? [],
       heartbeatToolResponse: toolTelemetry.heartbeatToolResponse,
-      toolMediaUrls: this.generatedMediaProjection.buildToolMediaUrls(toolTelemetry),
-      hostOwnedToolMediaUrls: this.generatedMediaProjection.buildHostOwnedMediaUrls(toolTelemetry),
       toolAudioAsVoice: toolTelemetry.toolAudioAsVoice,
       successfulCronAdds: toolTelemetry.successfulCronAdds,
       acceptedSessionSpawns: toolTelemetry.acceptedSessionSpawns,
@@ -320,7 +341,7 @@ export abstract class CodexTurnProjection {
         replaySafe: !hadPotentialSideEffects,
       },
       itemLifecycle: {
-        startedCount: activeItemCount + completedItemCount,
+        startedCount: observedItemCount,
         completedCount: completedItemCount,
         activeCount: activeItemCount,
       },

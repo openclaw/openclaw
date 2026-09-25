@@ -71,12 +71,19 @@ describe("session tab cleanup timer", () => {
     const disabled = { browser: { tabCleanup: { enabled: false } } };
     setRuntimeConfigSnapshot(disabled, disabled);
     await vi.advanceTimersByTimeAsync(300_000);
-    expect(registryMocks.sweepTrackedBrowserTabs).toHaveBeenCalledTimes(1);
+    expect(registryMocks.sweepTrackedBrowserTabs).toHaveBeenCalledTimes(2);
+    expect(registryMocks.sweepTrackedBrowserTabs).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        ordinaryCleanup: false,
+        idleMs: undefined,
+        maxTabsPerSession: undefined,
+      }),
+    );
 
     const enabled = { browser: { tabCleanup: { enabled: true } } };
     setRuntimeConfigSnapshot(enabled, enabled);
     await vi.advanceTimersByTimeAsync(300_000);
-    expect(registryMocks.sweepTrackedBrowserTabs).toHaveBeenCalledTimes(2);
+    expect(registryMocks.sweepTrackedBrowserTabs).toHaveBeenCalledTimes(3);
     await stop();
   });
 

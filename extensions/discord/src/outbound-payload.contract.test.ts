@@ -90,10 +90,7 @@ describe("Discord forum outbound payload ownership", () => {
         mediaCount += 1;
         response = { id: `media${mediaCount}`, channel_id: route.split("/")[2] };
       }
-      return new Response(JSON.stringify(response), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
+      return Response.json(response);
     });
     const rest = new RequestClient("discord-fixture-token", { fetch, queueRequests: false });
     const readFile = vi.fn(async () => Buffer.from("forum attachment"));

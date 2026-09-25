@@ -28,10 +28,12 @@ import {
   compactToolSearchCatalogEntry,
 } from "./tool-search-catalog.js";
 import {
-  formatToolSearchControlError,
-  formatToolSearchControlResult,
   prepareToolSearchDispatcherArguments,
   readToolSearchCallArgs,
+} from "./tool-search-request.js";
+import {
+  formatToolSearchControlError,
+  formatToolSearchControlResult,
   ToolSearchRuntime,
 } from "./tool-search-runtime.js";
 import type { ToolSearchCatalogEntry } from "./tool-search-types.js";
@@ -757,6 +759,7 @@ describe("Tool Search input schemas", () => {
         name: target.name,
         description: target.description,
         parameters: hostileSchema,
+        outputSchema: hostileSchema as never,
         tool: target,
       };
       const catalogRef = createToolSearchCatalogRef();
@@ -956,7 +959,7 @@ describe("Tool Search network error boundaries", () => {
       const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 
       expect(text.length).toBeLessThan(21_000);
-      expect(text).toContain("SECURITY NOTICE:");
+      expect(text).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
       expect(text).toContain("[truncated]");
       expect(text).not.toContain("<|im_start|>");
       expect(text.indexOf("[truncated]")).toBeLessThan(
@@ -987,7 +990,7 @@ describe("Tool Search network error boundaries", () => {
     const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 
     expect(text.length).toBeLessThan(21_000);
-    expect(text).toContain("SECURITY NOTICE:");
+    expect(text).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
     expect(text).toContain("[truncated]");
     expect(text).not.toContain("<s>");
     expect(result.details).toBe(payload);

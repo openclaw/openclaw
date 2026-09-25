@@ -1,6 +1,7 @@
-import { unlinkSync } from "node:fs";
+import fsSync, { unlinkSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { root as fsSafeRoot, type Root } from "@openclaw/fs-safe/root";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
@@ -320,7 +321,7 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
         }
         if (shimFailure) {
           const activeRoot = path.join(globalRoot, "new", "node_modules", "openclaw");
-          expect(result.failedStep).toMatchObject({ name: "global install swap", exitCode: 1 });
+          expect(result.failedStep).toMatchObject({ name: "package-swap", exitCode: 1 });
           expect(result.activePackageRoot).toBe(activeRoot);
           expect(result.afterVersion).toBe("2.0.0");
           await expect(fs.stat(packageRoot)).rejects.toMatchObject({ code: "ENOENT" });
@@ -331,9 +332,18 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
                 throw new Error("native executor lost");
               }
             };
-            const copyFile = fs.copyFile.bind(fs);
-            const copySpy = vi.spyOn(fs, "copyFile").mockImplementation(async (...args) => {
-              await copyFile(...args);
+            const prototype = Object.getPrototypeOf(await fsSafeRoot(base)) as Root;
+            // oxlint-disable-next-line typescript/unbound-method -- Called below with the intercepted Root receiver to preserve its path and mutation authority.
+            const copy = prototype.copyIn;
+            let injections = 0;
+            const copySpy = vi.spyOn(prototype, "copyIn").mockImplementation(async function (
+              this: Root,
+              destination,
+              source,
+              options,
+            ) {
+              await copy.call(this, destination, source, options);
+              injections += 1;
               current = false;
             });
             try {
@@ -343,6 +353,7 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
               await expect(
                 retained!.complete({ activationVerified: true }, () => {}),
               ).rejects.toThrow("native executor lost");
+              expect(injections).toBe(1);
             } finally {
               copySpy.mockRestore();
             }
@@ -373,7 +384,7 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
             "concurrent sibling package\n",
           );
           await expect(fs.readFile(siblingManifest, "utf8")).resolves.toBe(concurrentManifest);
-          expect(result.failedStep).toMatchObject({ name: "global install swap", exitCode: 1 });
+          expect(result.failedStep).toMatchObject({ name: "package-swap", exitCode: 1 });
           expect(result.failedStep?.stderrTail).toContain("native global installation changed");
           expect(result.afterVersion).toBe("1.0.0");
           expect(result.recovery).toEqual({ serviceRestartSafe: true, version: "1.0.0" });
@@ -478,9 +489,9 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
               }
             }
           });
-          const lstat = fs.lstat.bind(fs);
-          const observation = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
-            const copyResult = await lstat(...args);
+          const lstat = fsSync.lstatSync.bind(fsSync);
+          const observation = vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
+            const copyResult = lstat(...args);
             if (rollbackFailure === "copy-cleanup" && published && String(args[0]) === backupRoot) {
               current = false;
             }
@@ -497,11 +508,45 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
               await expect(retained.rollback(assertCurrent)).rejects.toThrow(
                 "native executor lost",
               );
+              expect(current).toBe(false);
               await expect(
                 retained.complete({ activationVerified: true }, () => {}),
               ).rejects.toThrow("native executor lost");
-              expect(unlink).not.toHaveBeenCalled();
-              expect(rmdir).not.toHaveBeenCalled();
+              const protectedRemovals = [...unlink.mock.calls, ...rmdir.mock.calls].filter(
+                ([entry]) =>
+                  String(entry) === backupRoot ||
+                  String(entry).startsWith(`${backupRoot}${path.sep}`),
+              );
+              expect(protectedRemovals).toEqual([]);
+              const publicationOrder =
+                renameSpy.mock.invocationCallOrder[
+                  renameSpy.mock.calls.findIndex(
+                    ([, destination]) => String(destination) === project,
+                  )
+                ];
+              const cleanupBeforePublication = rmdir.mock.calls
+                .filter((_, index) => {
+                  const cleanupOrder = rmdir.mock.invocationCallOrder[index];
+                  return (
+                    cleanupOrder !== undefined &&
+                    publicationOrder !== undefined &&
+                    cleanupOrder < publicationOrder
+                  );
+                })
+                .map(([entry]) => String(entry));
+              // Launcher staging and the candidate are removed before restoration;
+              // neither gives a revoked executor authority to retire its backup.
+              expect(
+                cleanupBeforePublication.filter(
+                  (entry) =>
+                    entry === project ||
+                    (path.dirname(entry) === binDir &&
+                      path.basename(entry).startsWith(".openclaw-shim-stage-")),
+                ),
+              ).toEqual([
+                expect.stringContaining(path.join(binDir, ".openclaw-shim-stage-")),
+                project,
+              ]);
               expect((await fs.readdir(backupRoot, { recursive: true })).toSorted()).toEqual(
                 backupEntries,
               );
@@ -523,21 +568,33 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
           return;
         }
         const publishedLauncher = await fs.readlink(launcher);
-        const copyFile = fs.copyFile.bind(fs);
+        const prototype = Object.getPrototypeOf(await fsSafeRoot(base)) as Root;
+        // oxlint-disable-next-line typescript/unbound-method -- Called below with the intercepted Root receiver to preserve its path and mutation authority.
+        const copy = prototype.copyIn;
+        const canonicalBin = await fs.realpath(binDir);
         const rename = fs.rename.bind(fs);
         const backupRoot = retained.backupRoot;
-        const copySpy = vi.spyOn(fs, "copyFile").mockImplementation(async (...args) => {
+        let copyRefusals = 0;
+        let renameRefusals = 0;
+        const copySpy = vi.spyOn(prototype, "copyIn").mockImplementation(async function (
+          this: Root,
+          destination,
+          source,
+          options,
+        ) {
           if (
             rollbackFailure === "shim" &&
-            path.dirname(path.dirname(String(args[1]))) === binDir &&
-            path.basename(path.dirname(String(args[1]))).startsWith(".openclaw-shim-stage-")
+            path.dirname(this.rootReal) === canonicalBin &&
+            path.basename(this.rootReal).startsWith(".openclaw-shim-stage-")
           ) {
+            copyRefusals += 1;
             throw Object.assign(new Error("launcher restoration failed"), { code: "EACCES" });
           }
-          return copyFile(...args);
+          await copy.call(this, destination, source, options);
         });
         const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
           if (rollbackFailure === "package" && String(args[0]) === backupRoot) {
+            renameRefusals += 1;
             throw Object.assign(new Error("package restoration failed"), { code: "EACCES" });
           }
           return rename(...args);
@@ -547,6 +604,8 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
             exitCode: rollbackFailure === "none" ? 0 : 1,
             activePackageRoot: rollbackFailure === "package" ? null : packageRoot,
           });
+          expect(copyRefusals).toBe(rollbackFailure === "shim" ? 1 : 0);
+          expect(renameRefusals).toBe(rollbackFailure === "package" ? 1 : 0);
         } finally {
           copySpy.mockRestore();
           renameSpy.mockRestore();
@@ -624,7 +683,7 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
           beforeActivate,
           timeoutMs: 1000,
         });
-        expect(result.failedStep).toMatchObject({ name: "pnpm staging preflight", exitCode: 1 });
+        expect(result.failedStep).toMatchObject({ name: "pnpm-staging-preflight", exitCode: 1 });
         expect(result.failedStep?.stderrTail).toContain(
           failure === "probe-error" ? "configuration rejected" : `pnpm ${failure} selected`,
         );
@@ -667,7 +726,7 @@ it("gives actionable Windows Bun recovery before stopping or installing", async 
         beforeActivate,
         timeoutMs: 1000,
       });
-      expect(result.failedStep).toMatchObject({ name: "global install stage", exitCode: 1 });
+      expect(result.failedStep).toMatchObject({ name: "package-stage", exitCode: 1 });
       expect(result.failedStep?.stderrTail).toContain("bun add -g --trust openclaw@2.0.0");
       expect(result.failedStep?.stderrTail).toContain("openclaw gateway restart");
       expect(result.failedStep?.stderrTail).toContain("openclaw update status");

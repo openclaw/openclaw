@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as execRunner from "../../process/exec-runner.js";
 import * as processExec from "../../process/exec.js";
 import type { SpawnResult } from "../../process/exec.js";
 import { resolveWorktreeBase } from "./base-ref.js";
@@ -15,6 +16,8 @@ import {
   listGitWorktrees,
   requireGit,
   runGit,
+  runGitBuffered,
+  runGitBytes,
 } from "./git.js";
 
 afterEach(() => {
@@ -26,6 +29,11 @@ describe("Git ref mutation ownership", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   const snapshotRef = "refs/openclaw/snapshots/held";
   const queuedRef = "refs/openclaw/snapshots/queued";
+  const transports = [
+    ["text", runGit],
+    ["bytes", runGitBytes],
+    ["buffered", runGitBuffered],
+  ] as const;
 
   async function repository() {
     const root = tempDirs.make("openclaw-git-ref-");
@@ -61,9 +69,25 @@ describe("Git ref mutation ownership", () => {
   function holdSnapshotDeletion(failure?: Error, discoverySignal?: AbortSignal) {
     const started = createDeferred();
     const release = createDeferred();
-    const discovered = createDeferred<SpawnResult>();
+    const discovered = createDeferred<{ code: number | null; termination: string }>();
     const mutations: Array<{ cwd: string; args: string[] }> = [];
     const run = processExec.runCommandWithTimeout;
+    const recordDiscovery = (
+      argv: string[],
+      options: number | { signal?: AbortSignal },
+      result: { code: number | null; termination: string },
+    ) => {
+      const commandIndex = argv.indexOf("-C") + 2;
+      if (
+        discoverySignal &&
+        typeof options !== "number" &&
+        options.signal === discoverySignal &&
+        argv[commandIndex] === "rev-parse" &&
+        argv[commandIndex + 1] === "--git-common-dir"
+      ) {
+        discovered.resolve(result);
+      }
+    };
     let held = false;
     vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
       const args = argv.slice(3);
@@ -79,17 +103,25 @@ describe("Git ref mutation ownership", () => {
         }
       }
       const result = await run(argv, options);
-      if (
-        discoverySignal &&
-        typeof options !== "number" &&
-        options.signal === discoverySignal &&
-        args[0] === "rev-parse" &&
-        args[1] === "--git-common-dir"
-      ) {
-        discovered.resolve(result);
-      }
+      recordDiscovery(argv, options, result);
       return result;
     });
+    if (discoverySignal) {
+      const runBytes = execRunner.runCommandBuffersWithTimeout;
+      vi.spyOn(execRunner, "runCommandBuffersWithTimeout").mockImplementation(
+        async (argv, options) => {
+          const result = await runBytes(argv, options);
+          recordDiscovery(argv, options, result);
+          return result;
+        },
+      );
+      const runBuffered = processExec.runCommandBuffered;
+      vi.spyOn(processExec, "runCommandBuffered").mockImplementation(async (argv, options = {}) => {
+        const result = await runBuffered(argv, options);
+        recordDiscovery(argv, options, result);
+        return result;
+      });
+    }
     return { started, release, discovered, mutations };
   }
 
@@ -270,48 +302,69 @@ describe("Git ref mutation ownership", () => {
     });
   });
 
-  it("releases a rejected mutation and leaves a cancelled waiting branch deletion unexecuted", async () => {
-    const root = await repository();
-    await requireGit(root, ["branch", "kept", "HEAD"]);
-    const failure = new Error("Git executor unavailable");
-    const controller = new AbortController();
-    const held = holdSnapshotDeletion(failure, controller.signal);
-    const rejected = expect(requireGit(root, ["update-ref", "-d", snapshotRef])).rejects.toBe(
-      failure,
-    );
-    const pending: Promise<unknown>[] = [rejected];
-    let cancelled: Promise<Awaited<ReturnType<typeof runGit>>> | undefined;
-    try {
-      await held.started.promise;
-      cancelled = runGit(root, ["branch", "-D", "kept"], { signal: controller.signal });
-      pending.push(cancelled, requireGit(root, ["update-ref", "-d", queuedRef]));
-      // Abort only after this candidate's real discovery settles; a separate read
-      // can finish first and accidentally cancel discovery instead of the writer.
+  it.each(transports)(
+    "%s releases a rejected mutation and leaves a cancelled waiting branch deletion unexecuted",
+    async (_transport, run) => {
+      const root = await repository();
+      await requireGit(root, ["branch", "kept", "HEAD"]);
+      const failure = new Error("Git executor unavailable");
+      const controller = new AbortController();
+      const held = holdSnapshotDeletion(failure, controller.signal);
+      const rejected = expect(requireGit(root, ["update-ref", "-d", snapshotRef])).rejects.toBe(
+        failure,
+      );
+      const pending: Promise<unknown>[] = [rejected];
+      let cancelled: ReturnType<typeof run> | undefined;
+      try {
+        await held.started.promise;
+        cancelled = run(root, ["branch", "-D", "kept"], { signal: controller.signal });
+        pending.push(cancelled, requireGit(root, ["update-ref", "-d", queuedRef]));
+        // Abort only after this candidate's real discovery settles; a separate read
+        // can finish first and accidentally cancel discovery instead of the writer.
+        await expect(
+          Promise.race([
+            held.discovered.promise,
+            cancelled.then(() => {
+              throw new Error("branch mutation completed before its queued discovery barrier");
+            }),
+          ]),
+        ).resolves.toMatchObject({ code: 0, termination: "exit" });
+        expect(held.mutations).toEqual([{ cwd: root, args: ["update-ref", "-d", snapshotRef] }]);
+        controller.abort();
+        await expect(cancelled).resolves.toMatchObject({
+          code: null,
+          termination: "signal",
+          killed: false,
+        });
+      } finally {
+        held.release.resolve();
+        await Promise.allSettled(pending);
+      }
+      await Promise.all(pending);
+      expect(await requireGit(root, ["show-ref", "--verify", "refs/heads/kept"])).toContain(
+        "refs/heads/kept",
+      );
+      expect((await runGit(root, ["show-ref", "--verify", "--quiet", queuedRef])).code).toBe(1);
+    },
+  );
+
+  it.each(transports)(
+    "%s preserves authority errors when the admitted callback also aborts",
+    async (_transport, run) => {
+      const root = await repository();
+      const controller = new AbortController();
+      const revoked = new Error("Git mutation authority revoked");
+      const beforeRun = vi.fn(() => {
+        controller.abort(revoked);
+        throw revoked;
+      });
       await expect(
-        Promise.race([
-          held.discovered.promise,
-          cancelled.then(() => {
-            throw new Error("branch mutation completed before its queued discovery barrier");
-          }),
-        ]),
-      ).resolves.toMatchObject({ code: 0, termination: "exit" });
-      expect(held.mutations).toEqual([{ cwd: root, args: ["update-ref", "-d", snapshotRef] }]);
-      controller.abort();
-    } finally {
-      held.release.resolve();
-      await Promise.allSettled(pending);
-    }
-    await Promise.all(pending);
-    await expect(cancelled).resolves.toMatchObject({
-      code: null,
-      termination: "signal",
-      killed: false,
-    });
-    expect(await requireGit(root, ["show-ref", "--verify", "refs/heads/kept"])).toContain(
-      "refs/heads/kept",
-    );
-    expect((await runGit(root, ["show-ref", "--verify", "--quiet", queuedRef])).code).toBe(1);
-  });
+        run(root, ["update-ref", "-d", queuedRef], { signal: controller.signal, beforeRun }),
+      ).rejects.toBe(revoked);
+      expect(beforeRun).toHaveBeenCalledOnce();
+      expect(await requireGit(root, ["show-ref", "--verify", queuedRef])).toContain(queuedRef);
+    },
+  );
 
   it("keeps discovery and queued mutation in the captured Git environment", async () => {
     vi.stubEnv("GIT_COMMON_DIR", undefined);

@@ -18,6 +18,12 @@ type NativeWebChromeWindow = Window & {
   __OPENCLAW_NATIVE_HISTORY__?: NativeHistoryState;
 };
 
+// Hosts listen from document start so they can enable the shared chrome before
+// application state reads their flag or the first shell renders.
+if (typeof window !== "undefined") {
+  window.dispatchEvent(new Event("openclaw:native-window-chrome-available"));
+}
+
 export function isNativeWebChromeHost(): boolean {
   return (window as NativeWebChromeWindow)["__OPENCLAW_NATIVE_WEB_CHROME__"] === true;
 }

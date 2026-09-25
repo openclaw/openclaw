@@ -104,7 +104,7 @@ describe("renderSkills ClawHub", () => {
     expect(detailButton).toBeInstanceOf(HTMLButtonElement);
     expect(detailButton?.getAttribute("aria-label")).toBe("Open GitHub details");
     expect(detailButton?.contains(installButton!)).toBe(false);
-    expect(resultItem?.querySelector("h3")?.textContent?.trim()).toBe("GitHub");
+    expect(resultItem?.querySelector("h2")?.textContent?.trim()).toBe("GitHub");
     expect(resultItem?.querySelector(".plugin-card-author")?.textContent?.trim()).toBe("github");
     expect(resultItem?.textContent).toContain("GitHub integration for OpenClaw");
     expect(resultItem?.querySelector<HTMLImageElement>("img")?.src).toBe(
@@ -308,7 +308,7 @@ describe("renderSkills ClawHub", () => {
         renderSkills(
           createProps({
             surface: "discovery",
-            personalImport,
+            showInventory: !personalImport,
             clawhubQuery: "pdf",
             clawhubResults: [
               {

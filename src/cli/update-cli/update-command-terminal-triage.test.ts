@@ -1,23 +1,31 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
+import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { hasErrnoCode } from "../../infra/errno.js";
+import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
+import {
+  captureManagedUpdateLeaseDatabaseIdentity,
+  createManagedHandoffLeaseDatabase,
+} from "../../infra/update-managed-service-handoff-database.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { MANAGED_HANDOFF_RUNTIME_ENTRY } from "../../infra/update-managed-service-handoff-runtime-assets.js";
 import { stageManagedHandoffRuntime } from "../../infra/update-managed-service-handoff-runtime.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import { renderUpdateRunReport } from "../../infra/update-run-report.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
   UpdateCommandFailure,
   UpdateCommandPendingRecoveryFailure,
@@ -39,9 +47,23 @@ afterEach(() => {
 });
 
 it.each([
-  { name: "revoked-absent", revoked: true, existing: false },
-  { name: "revoked-existing", revoked: true, existing: true },
-  { name: "authorized-failure", revoked: false, existing: true },
+  { name: "revoked-absent", revoked: true, existing: false, releaseDenied: false, json: true },
+  { name: "revoked-existing", revoked: true, existing: true, releaseDenied: false, json: true },
+  { name: "authorized-failure", revoked: false, existing: true, releaseDenied: false, json: true },
+  {
+    name: "release-denied-absent",
+    revoked: false,
+    existing: false,
+    releaseDenied: true,
+    json: true,
+  },
+  {
+    name: "release-denied-existing",
+    revoked: false,
+    existing: true,
+    releaseDenied: true,
+    json: false,
+  },
 ])("preserves settled managed failure disposition: $name", async (trial) => {
   const root = await fs.realpath(dirs.make("update-terminal-triage-"));
   const temporary = path.join(root, "private-tmp");
@@ -75,19 +97,25 @@ it.each([
       meta: { runId: run.runId, handoffId: owner, root, triageContextPath: artifact },
     }),
   );
+  const databasePath = path.join(temporary, "managed-update-handoffs.sqlite");
+  const existingIdentity = createManagedHandoffLeaseDatabase(databasePath)(true, () =>
+    captureManagedUpdateLeaseDatabaseIdentity(databasePath),
+  );
   stageManagedHandoffRuntime(root);
   const runtimeEntry = path.join(root, "runtime", MANAGED_HANDOFF_RUNTIME_ENTRY);
-  const databasePath = path.join(temporary, "managed-update-handoffs.sqlite");
   const leaseOptions = {
     databasePath,
     serviceManagerEnv: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot },
+    existingIdentity,
   };
   // The helper really acquires and assigns the lease; no borrowed-owner method is mocked.
-  const helper = spawn(
-    process.execPath,
-    [
-      "-e",
-      `
+  const helper = trial.releaseDenied
+    ? undefined
+    : spawn(
+        process.execPath,
+        [
+          "-e",
+          `
       const {createManagedHandoffLeaseStore}=require(${JSON.stringify(runtimeEntry)});
       const store=createManagedHandoffLeaseStore(${JSON.stringify(leaseOptions)});
       const acquired=store.acquire(${JSON.stringify(root)},${JSON.stringify(owner)},{kind:"update"});
@@ -101,30 +129,39 @@ it.each([
       });
       process.send("assigned");
       `,
-    ],
-    { stdio: ["ignore", "ignore", "pipe", "ipc"] },
-  );
-  const exited = once(helper, "exit");
+        ],
+        { stdio: ["ignore", "ignore", "pipe", "ipc"] },
+      );
+  const exited = helper ? once(helper, "exit") : undefined;
   let stderr = "";
-  helper.stderr?.on("data", (data) => {
+  helper?.stderr?.on("data", (data) => {
     stderr += String(data);
   });
   try {
-    const ready = await Promise.race([
-      once(helper, "message").then(([message]) => message),
-      exited.then(() => {
-        throw new Error(`helper exited before assignment: ${stderr}`);
-      }),
-    ]);
-    expect(ready).toBe("assigned");
+    if (helper && exited) {
+      const ready = await Promise.race([
+        once(helper, "message").then(([message]) => message),
+        exited.then(() => {
+          throw new Error(`helper exited before assignment: ${stderr}`);
+        }),
+      ]);
+      expect(ready).toBe("assigned");
+    }
     const store = createManagedHandoffLeaseStore();
     const assigned = store.read(root);
-    expect(assigned).toMatchObject({
-      kind: "current",
-      lease: { owner, helper: { pid: helper.pid }, executor: { pid: process.pid } },
-    });
-    const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
-    vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
+    if (helper) {
+      expect(assigned).toMatchObject({
+        kind: "current",
+        lease: { owner, helper: { pid: helper.pid }, executor: { pid: process.pid } },
+      });
+    }
+    const reportPath = path.join(root, "state", "update-reports", `${run.runId}.md`);
+    let savedAtPublication: string | undefined;
+    const captureReport = () => {
+      savedAtPublication ??= readFileSync(reportPath, "utf8");
+    };
+    const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(captureReport);
+    const human = vi.spyOn(defaultRuntime, "log").mockImplementation(captureReport);
     vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
     // These spies call through to the real filesystem, including atomic temp creation.
     const opened = vi.spyOn(fs, "open");
@@ -137,20 +174,27 @@ it.each([
       steps: [],
       durationMs: 1,
     };
-    const opts = { json: true, yes: true, run };
+    const opts = { json: trial.json, yes: true, run };
     const target = { root, env };
     let statusAtPublication: string | undefined;
     let pendingAtPublication = false;
+    let releasePendingAtPublication = false;
+    let failureCauses: string[] = [];
     let exit: unknown;
     await withUpdateFailureTriage(opts, target, () =>
-      withUpdateCommandTerminalResult(run, () =>
-        withUpdateCommandExecutor(run.runId, async (executor) => {
+      withUpdateCommandTerminalResult((registerRun) => {
+        registerRun(run);
+        return withUpdateCommandExecutor(run.runId, async (executor) => {
           run.executorFence = await executor.enter(root);
           await withUpdateCommandRecoveryUnwind(opts, { triageTarget: target }, async () => {
             expect(
               deferUpdateCommandTerminalResult(run, async (failure) => {
                 statusAtPublication = getUpdateRun(run.runId, { env })?.status;
                 pendingAtPublication = failure instanceof UpdateCommandPendingRecoveryFailure;
+                releasePendingAtPublication = failure instanceof UpdateCommandRecoveryPendingError;
+                failureCauses = collectNestedErrorCandidates(failure)
+                  .filter((candidate): candidate is Error => candidate instanceof Error)
+                  .map((candidate) => candidate.message);
                 const settled = await resolveSettledUpdateCommandResult(
                   { opts, root },
                   result,
@@ -172,10 +216,21 @@ it.each([
                 db.close();
               }
             }
+            if (trial.releaseDenied) {
+              // Only final lease deletion is denied; admission and inner unwind stay real.
+              const db = new DatabaseSync(databasePath);
+              try {
+                db.exec(
+                  "CREATE TRIGGER deny_terminal_release BEFORE DELETE ON managed_update_handoffs BEGIN SELECT RAISE(FAIL, 'fixture final lease delete denied'); END",
+                );
+              } finally {
+                db.close();
+              }
+            }
             throw new UpdateCommandFailure(result, 7, "fixture package failure");
           });
-        }),
-      ),
+        });
+      }),
     ).catch((error: unknown) => {
       exit = error;
     });
@@ -197,6 +252,9 @@ it.each([
       name: trial.name,
       statusAtPublication,
       pendingAtPublication,
+      releasePendingAtPublication,
+      failureCauses,
+      humanOutput: human.mock.calls.map(([value]) => String(value)),
       exitCode: exit instanceof ExitError ? exit.code : null,
       reports: output.mock.calls.map(([value]) => value),
       artifactBefore: trial.existing ? previous : null,
@@ -219,21 +277,40 @@ it.each([
       );
     }
     expect(exit).toBeInstanceOf(ExitError);
-    expect(observation.exitCode).toBe(trial.revoked ? 1 : 7);
+    expect(savedAtPublication).toContain("OpenClaw update failed");
+    const unsettled = trial.revoked || trial.releaseDenied;
+    expect(observation.exitCode).toBe(unsettled ? 1 : 7);
     expect(statusAtPublication).toBe("running");
     expect(pendingAtPublication).toBe(trial.revoked);
-    expect(output).toHaveBeenCalledOnce();
-    expect(output.mock.calls[0]?.[0]).toMatchObject({
-      status: "error",
-      reason: trial.revoked ? "update-executor-settlement-failed" : "global-install-failed",
-    });
+    expect(releasePendingAtPublication).toBe(trial.releaseDenied);
+    if (trial.releaseDenied) {
+      expect(failureCauses).toContain("fixture package failure");
+      expect(failureCauses.join("\n")).toContain("fixture final lease delete denied");
+    }
+    if (trial.json) {
+      expect(output).toHaveBeenCalledOnce();
+      expect(output.mock.calls[0]?.[0]).toMatchObject({
+        status: "error",
+        reportPath,
+        reason: unsettled ? "update-executor-settlement-failed" : "global-install-failed",
+      });
+    } else {
+      expect(output).not.toHaveBeenCalled();
+      expect(recorded).toBeDefined();
+      const report = renderUpdateRunReport(recorded!);
+      expect(observation.humanOutput.filter((line) => line.includes(report.headline))).toHaveLength(
+        1,
+      );
+    }
     expect(recorded?.status).toBe("failed");
-    // The borrowed invocation never releases the helper's lease, including after revocation.
+    // Direct release denial retains the local lease; borrowing retains the helper's lease.
     expect(observation.leaseAfter).toMatchObject({
       kind: "current",
-      lease: { owner: trial.revoked ? "replacement-owner" : owner },
+      lease: trial.releaseDenied
+        ? { helper: { pid: process.pid }, executor: { pid: process.pid } }
+        : { owner: trial.revoked ? "replacement-owner" : owner },
     });
-    if (trial.revoked) {
+    if (unsettled) {
       expect(artifactOpens).toBe(0);
       expect(artifactRenames).toBe(0);
       expect(after).toBe(trial.existing ? previous : null);
@@ -248,10 +325,25 @@ it.each([
       });
     }
   } finally {
-    if (helper.connected) {
+    if (helper?.connected) {
       helper.send("release");
     }
-    const [code] = await exited;
-    expect(code, stderr).toBe(0);
+    if (exited) {
+      const [code] = await exited;
+      expect(code, stderr).toBe(0);
+    }
+    if (trial.releaseDenied) {
+      const db = new DatabaseSync(databasePath);
+      try {
+        db.exec("DROP TRIGGER IF EXISTS deny_terminal_release");
+      } finally {
+        db.close();
+      }
+      const store = createManagedHandoffLeaseStore();
+      const retained = store.read(root);
+      if (retained.kind === "current") {
+        expect(store.release(retained.lease)).toBe(true);
+      }
+    }
   }
 });

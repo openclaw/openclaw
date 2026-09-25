@@ -346,6 +346,17 @@ private func makeRuntimeTestConfigSnapshot(
         issues: nil)
 }
 
+private func makeRuntimeTestCatalogData() throws -> Data {
+    try JSONEncoder().encode(TalkCatalogResult(
+        modes: [], transports: [], brains: [], speech: [:], transcription: [:],
+        realtime: [
+            "activeProvider": AnyCodable("openai"),
+            "providers": AnyCodable([
+                ["id": AnyCodable("openai"), "supportsBargeIn": AnyCodable(true)],
+            ]),
+        ]))
+}
+
 private func makeRuntimeTestBootstrap(
     requests: RuntimeTestRelayRequestLog = RuntimeTestRelayRequestLog(),
     createBarrier: RuntimeContinuationBarrier? = nil,
@@ -383,6 +394,9 @@ private func makeRuntimeTestBootstrap(
             }
             if method == "talk.session.close" {
                 events.continuation.finish()
+            }
+            if method == "talk.catalog" {
+                return try makeRuntimeTestCatalogData()
             }
             return Data("{\"ok\":true}".utf8)
         },
@@ -423,6 +437,28 @@ private actor RuntimeTestBootstrapSequence {
     func requestCount() -> Int {
         self.count
     }
+}
+
+private func runtimeRecoveryState(
+    _ runtime: isolated TalkModeRuntime,
+    _ oldSession: RealtimeTalkRelaySession,
+    _ requests: RuntimeTestRelayRequestLog,
+    _ recoveryRequests: RuntimeTestRelayRequestLog) async -> String
+{
+    let oldRequests = await requests.snapshot()
+    let newRequests = await recoveryRequests.snapshot()
+    let sharedOptIn = await MainActor.run { AppStateStore.shared.talkRealtimeRelayEnabled }
+    return """
+    Post-failure RPC observations before cleanup: old=\(oldRequests), new=\(newRequests)
+    Post-failure runtime: sharedOptIn=\(sharedOptIn), enabled=\(runtime.isEnabled), paused=\(runtime.isPaused), \
+    phase=\(runtime.phase.rawValue), \
+    localOptIn=\(runtime.macOSRealtimeRelayOptIn), gatewayTuple=\(runtime.hasGatewayRealtimeRelayTuple), \
+    lifecycle=\(runtime.lifecycleGeneration), relay=\(runtime.realtimeRelayGeneration), \
+    startingRelay=\(String(describing: runtime.realtimeRelayStartGeneration)), \
+    restart=\(runtime.realtimeRestartGeneration), restartCount=\(runtime.rapidRealtimeRestartCount), \
+    restartPending=\(runtime.realtimeRestartTask != nil), hasSession=\(runtime.realtimeSession != nil), \
+    ownsOldSession=\(runtime.realtimeSession === oldSession)
+    """
 }
 
 @Suite(.serialized)
@@ -524,12 +560,26 @@ struct TalkModeRuntimeSpeechTests {
 
             let requests = RuntimeTestRelayRequestLog()
             let recoveryRequests = RuntimeTestRelayRequestLog()
+            let recoveryMilestones = RuntimeCommitProbe()
+            let recoveryStartedAt = ContinuousClock.now
+            let recordRecovery: @Sendable (String) -> Void = { event in
+                recoveryMilestones.record("\(recoveryStartedAt.duration(to: ContinuousClock.now)): \(event)")
+            }
             let bootstrap = try makeRuntimeTestBootstrap(requests: recoveryRequests)
-            let runtime = TalkModeRuntime(realtimeTalkBootstrapProvider: { bootstrap })
+            let runtime = TalkModeRuntime(realtimeTalkBootstrapProvider: {
+                recordRecovery("bootstrap")
+                return bootstrap
+            })
             let recoveryStarted = RuntimeTestSignal<Void>()
             let recoveryCapture = RuntimeTestAudioCapture()
-            recoveryCapture.onStart = { recoveryStarted.send(()) }
-            await runtime._test_setRealtimeAudioCaptureProvider { recoveryCapture }
+            recoveryCapture.onStart = {
+                recordRecovery("microphone-started")
+                recoveryStarted.send(())
+            }
+            await runtime._test_setRealtimeAudioCaptureProvider {
+                recordRecovery("capture-created")
+                return recoveryCapture
+            }
             await runtime._test_setVoiceWakeReadiness(supported: true, permissionGranted: true)
             let audioCapture = RuntimeTestAudioCapture()
             let session = makeRecordingRelaySession(requests: requests, audioCapture: audioCapture)
@@ -559,19 +609,25 @@ struct TalkModeRuntimeSpeechTests {
                 let recorded = try await waitForRelayClose(requests)
                 #expect(recorded == ["talk.session.close"])
                 #expect(await requests.snapshot().sessionIds == ["relay-1"])
+                recordRecovery("awaiting microphone signal")
                 _ = try await recoveryStarted.next("replacement realtime microphone")
                 #expect(recoveryCapture.startCount == 1)
                 #expect(await runtime.rapidRealtimeRestartCount == 1)
-                #expect(await recoveryRequests.snapshot().methods == ["talk.session.create"])
+                #expect(await recoveryRequests.snapshot().methods == ["talk.session.create", "talk.catalog"])
                 let replacement = try #require(await runtime.realtimeSession)
                 #expect(replacement !== session)
             } catch {
+                recordRecovery("catch; old/new capture starts=\(audioCapture.startCount)/\(recoveryCapture.startCount)")
+                await print(runtimeRecoveryState(runtime, session, requests, recoveryRequests))
+                print("Talk recovery failure (\(source)): \(error); milestones=\(recoveryMilestones.values())")
                 await runtime.setEnabled(false)
                 throw error
             }
             await runtime.setEnabled(false)
-            try await recoveryRequests.waitForCount(2)
-            #expect(await recoveryRequests.snapshot().methods == ["talk.session.create", "talk.session.close"])
+            try await recoveryRequests.waitForCount(3)
+            #expect(await recoveryRequests.snapshot().methods == [
+                "talk.session.create", "talk.catalog", "talk.session.close",
+            ])
         }
     }
 
@@ -791,6 +847,9 @@ struct TalkModeRuntimeSpeechTests {
                             seq: nil,
                             stateversion: nil))
                         return resultData
+                    }
+                    if method == "talk.catalog" {
+                        return try makeRuntimeTestCatalogData()
                     }
                     return Data("{\"ok\":true}".utf8)
                 }),
@@ -1012,7 +1071,7 @@ struct TalkModeRuntimeSpeechTests {
 
             _ = await attempt.value
             #expect(await sequence.requestCount() == 2)
-            #expect(await requests.snapshot().methods == ["talk.session.create"])
+            #expect(await requests.snapshot().methods == ["talk.session.create", "talk.catalog"])
             #expect(await runtime.realtimeSession != nil)
             #expect(await runtime.realtimeModelId == "fresh-model")
             await runtime.setEnabled(false)

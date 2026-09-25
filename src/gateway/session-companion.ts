@@ -1,7 +1,4 @@
-import type {
-  SessionsCompanionAskResult,
-  SessionsCompanionStateResult,
-} from "../../packages/gateway-protocol/src/schema/sessions.js";
+import type { SessionsCompanionStateResult } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import {
@@ -15,13 +12,7 @@ import { onGatewaySessionReset } from "./session-reset-notifications.js";
 type SessionCompanionTarget = { sessionKey: string; agentId: string };
 
 export type SessionCompanionService = {
-  ask: (params: {
-    agentId: string;
-    sessionKey: string;
-    question: string;
-    connId: string;
-    signal?: AbortSignal;
-  }) => Promise<SessionsCompanionAskResult>;
+  ask: ReturnType<typeof createSessionCompanionAskRuntime>["ask"];
   state: (target: SessionCompanionTarget) => SessionsCompanionStateResult;
   reset: (target: SessionCompanionTarget) => void;
   dispose: () => void;

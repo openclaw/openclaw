@@ -19,7 +19,11 @@ import {
   setBrowserControlServerSsrFPolicy,
   setBrowserControlServerTabUrl,
 } from "./server.control-server.test-harness.js";
-import { getBrowserTestFetch, type BrowserTestFetch } from "./test-support/fetch.js";
+import {
+  createBrowserTestClient,
+  getBrowserTestFetch,
+  type BrowserTestFetch,
+} from "./test-support/fetch.js";
 
 const state = getBrowserControlServerTestState();
 const pwMocks = getPwMocks();
@@ -868,6 +872,7 @@ describe("browser control server", () => {
     expect(typeof waitCall.cdpUrl).toBe("string");
     expectRecordFields(waitCall, "wait download call", {
       targetId: "abcd1234",
+      ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
     });
     expect(waitCall.signal).toBeInstanceOf(AbortSignal);
     expect(String(waitCall.path)).toContain("safe-wait.pdf");
@@ -888,35 +893,44 @@ describe("browser control server", () => {
   ] as const)(
     "cancels $route when its HTTP caller disconnects",
     async ({ route, mockName, body }) => {
-      const base = await startServerAndBase();
-      let operationSignal: AbortSignal | undefined;
-      requirePwMock(mockName).mockImplementationOnce(async (value) => {
-        const options = value as { signal?: AbortSignal };
-        operationSignal = options.signal;
-        await new Promise<void>((_resolve, reject) => {
-          options.signal?.addEventListener(
-            "abort",
-            () => {
-              const reason = options.signal?.reason;
-              reject(reason instanceof Error ? reason : new Error("request aborted"));
-            },
-            { once: true },
-          );
-        });
-        throw new Error("unreachable");
-      });
+      const client = createBrowserTestClient();
       const controller = new AbortController();
-      const response = realFetch(`${base}${route}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
+      let response: ReturnType<typeof client.fetch> | undefined;
+      try {
+        const base = await startServerAndBase(client.fetch);
+        let operationSignal: AbortSignal | undefined;
+        requirePwMock(mockName).mockImplementationOnce(async (value) => {
+          const options = value as { signal?: AbortSignal };
+          operationSignal = options.signal;
+          await new Promise<void>((_resolve, reject) => {
+            options.signal?.addEventListener(
+              "abort",
+              () => {
+                const reason = options.signal?.reason;
+                reject(reason instanceof Error ? reason : new Error("request aborted"));
+              },
+              { once: true },
+            );
+          });
+          throw new Error("unreachable");
+        });
+        response = client.fetch(`${base}${route}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
 
-      await vi.waitFor(() => expect(operationSignal).toBeInstanceOf(AbortSignal));
-      controller.abort(new Error("caller disconnected"));
-      await expect(response).rejects.toThrow();
-      await vi.waitFor(() => expect(operationSignal?.aborted).toBe(true));
+        await vi.waitFor(() => expect(operationSignal).toBeInstanceOf(AbortSignal));
+        controller.abort(new Error("caller disconnected"));
+        await expect(response).rejects.toThrow();
+        await vi.waitFor(() => expect(operationSignal?.aborted).toBe(true));
+      } finally {
+        controller.abort();
+        await response?.catch(() => {});
+        // Aborting a request can leave an unused replacement connection in the pool.
+        await client.close();
+      }
     },
   );
 
@@ -932,6 +946,7 @@ describe("browser control server", () => {
     expectRecordFields(downloadCall, "download call", {
       targetId: "abcd1234",
       ref: "e12",
+      ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
     });
     expect(downloadCall.signal).toBeInstanceOf(AbortSignal);
     expect(String(downloadCall.path)).toContain("safe-download.pdf");

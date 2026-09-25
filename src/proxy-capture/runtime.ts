@@ -79,12 +79,14 @@ function readCapturedResponseBodyBounded(
   maxBytes: number,
   owner: CaptureOwner,
   record: (result: CapturedResponseBodyResult) => void,
+  signal?: AbortSignal,
 ): void {
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   let chunks: Buffer[] = [];
   let total = 0;
   let finished = false;
   let canceled = false;
+  let detachAbort = () => {};
   const cancel = (reason?: unknown) => {
     if (!reader || canceled) {
       return;
@@ -109,6 +111,7 @@ function readCapturedResponseBodyBounded(
       return;
     }
     finished = true;
+    detachAbort();
     owner.pending.delete(finalize);
     try {
       if (owner.store.isClosed) {
@@ -126,6 +129,34 @@ function readCapturedResponseBodyBounded(
   };
   const finalize = () => finish({ status: "finalized", buffer: Buffer.concat(chunks, total) });
   owner.pending.add(finalize);
+  if (signal) {
+    const onAbort = () => {
+      // Bun can deliver the caller's abort in the same turn as a clean body
+      // EOF. Give the pending stream read one poll turn to record that EOF.
+      setTimeout(() => {
+        if (finished) {
+          return;
+        }
+        finish({
+          status: "failed",
+          buffer: Buffer.concat(chunks, total),
+          error:
+            signal.reason instanceof Error
+              ? signal.reason
+              : new Error("Response capture aborted", { cause: signal.reason }),
+        });
+      }, 0);
+    };
+    if (signal.aborted) {
+      onAbort();
+    } else {
+      signal.addEventListener("abort", onAbort, { once: true });
+      detachAbort = () => signal.removeEventListener("abort", onAbort);
+    }
+  }
+  if (finished) {
+    return;
+  }
   void (async () => {
     try {
       const clone = response.clone();
@@ -462,6 +493,7 @@ type HttpCaptureParams = {
   requestHeaders?: HeadersLike | Record<string, string> | undefined;
   requestBody?: BodyInit | Buffer | string | null;
   response: Response;
+  signal?: AbortSignal;
   transport?: "http" | "sse";
   flowId?: string;
   meta?: Record<string, unknown>;
@@ -658,6 +690,7 @@ function captureOwnedHttpExchange(params: HttpCaptureParams, owner: CaptureOwner
     MAX_CAPTURED_RESPONSE_BODY_BYTES,
     owner,
     recordTerminal,
+    params.signal,
   );
 }
 

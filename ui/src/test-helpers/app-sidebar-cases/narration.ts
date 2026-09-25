@@ -127,16 +127,14 @@ describe("AppSidebar live narration", () => {
     const row = sidebar.querySelector(`[data-session-key="${key}"]`);
     const questionAttention = row?.querySelector("[data-session-attention=question]");
     expect(questionAttention).not.toBeNull();
-    expect(questionAttention?.getAttribute("aria-label")).toBe("Waiting for your answer");
+    expect(questionAttention?.getAttribute("aria-label")).toBe(
+      "Waiting for your answer\nContinue?",
+    );
     expect(
-      (
-        questionAttention?.closest("openclaw-tooltip") as
-          | (HTMLElement & {
-              content?: string;
-            })
-          | null
-      )?.content,
-    ).toBe("Waiting for your answer");
+      questionAttention
+        ?.closest("openclaw-tooltip")
+        ?.querySelector(".sidebar-session-attention-tooltip__preview")?.textContent,
+    ).toBe("Continue?");
     expect(row?.querySelector(".sidebar-recent-session__subtitle")).toBeNull();
     expect(row?.textContent).not.toContain("Checking the remaining files.");
     expect(

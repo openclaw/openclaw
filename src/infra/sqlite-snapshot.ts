@@ -5,13 +5,15 @@ import fs from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/engine-storage.js";
+import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
+import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/host/sqlite-vec.js";
 import {
   getPublishFileExclusiveFailureDetails,
   isHardlinkFallbackError,
   pinDirectory,
   publishFileExclusive,
   requireDirectorySync,
+  sha256File,
   syncDirectory,
 } from "./directory-durability.js";
 import { formatErrorMessage } from "./errors.js";
@@ -21,14 +23,12 @@ import {
   sameFileMutationFingerprint,
   type FileMutationFingerprint,
 } from "./file-descriptor.js";
-import { sameFileIdentity } from "./fs-safe-advanced.js";
-import {
-  openNodeSqliteDatabase,
-  requireNodeSqlite,
-  resolveSqliteFilesystemPath,
-} from "./node-sqlite.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { backupNodeSqliteDatabase } from "./sqlite-backup.js";
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";
 import { createPrivateSqliteTempDirectory } from "./sqlite-private-directory.js";
+import { withPreparedSqliteSnapshot } from "./sqlite-readonly-location-cleanup.js";
+import { prepareSqliteReadOnlyLocationInProcess } from "./sqlite-readonly-location.js";
 import { withSqliteSnapshotSource } from "./sqlite-snapshot-source.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
 
@@ -37,6 +37,8 @@ export type SqliteSnapshotValidator = (database: DatabaseSync, databaseLabel: st
 type CreateVerifiedSqliteSnapshotOptions = {
   sourcePath: string;
   targetPath: string;
+  /** Only in an isolated child: acquire and consume a fresh private image, including crash recovery. */
+  sourceAcquisition?: { mode: "isolated-process"; stagingRoot: string };
   /** Final caller checks around publication; failures remove only this helper's target. */
   afterPublish?: (guard: PublishedSqliteFileGuard) => void;
   beforePublish?: () => void | Promise<void>;
@@ -103,7 +105,7 @@ async function copyFileExclusive(
   source: FileHandle,
   targetPath: string,
 ): Promise<{ content: SqliteFileContent; identity: Stats }> {
-  const sourceFingerprint = await readMutationFingerprint(source);
+  const sourceFingerprint = await source.stat({ bigint: true });
   let target: Awaited<ReturnType<typeof fs.open>> | undefined;
   let targetIdentity: Stats | undefined;
   try {
@@ -111,7 +113,6 @@ async function copyFileExclusive(
     targetIdentity = await target.stat();
     const hash = createHash("sha256");
     const offset = await copyFileHandle(source, target, {
-      noProgressMessage: `SQLite snapshot copy made no progress: ${targetPath}`,
       onChunk: (chunk) => {
         hash.update(chunk);
       },
@@ -138,24 +139,12 @@ async function copyFileExclusive(
   }
 }
 
-async function readMutationFingerprint(handle: FileHandle): Promise<FileMutationFingerprint> {
-  const stat = await handle.stat({ bigint: true });
-  return {
-    birthtimeNs: stat.birthtimeNs,
-    ctimeNs: stat.ctimeNs,
-    dev: stat.dev,
-    ino: stat.ino,
-    mtimeNs: stat.mtimeNs,
-    size: stat.size,
-  };
-}
-
 async function assertMutationFingerprintUnchanged(
   handle: FileHandle,
   expected: FileMutationFingerprint,
   filePath: string,
 ): Promise<void> {
-  const current = await readMutationFingerprint(handle);
+  const current = await handle.stat({ bigint: true });
   if (!sameFileMutationFingerprint(current, expected)) {
     throw new Error(`SQLite snapshot file changed while reading: ${filePath}`);
   }
@@ -205,21 +194,11 @@ async function hashOpenPublishedFile(
   expectedIdentity: Stats,
 ): Promise<SqliteFileContent> {
   await assertOpenFileIdentity(handle, filePath, expectedIdentity);
-  const fingerprint = await readMutationFingerprint(handle);
-  const buffer = Buffer.allocUnsafe(1024 * 1024);
-  const hash = createHash("sha256");
-  let offset = 0;
-  while (true) {
-    const { bytesRead } = await handle.read(buffer, 0, buffer.length, offset);
-    if (bytesRead === 0) {
-      break;
-    }
-    hash.update(buffer.subarray(0, bytesRead));
-    offset += bytesRead;
-  }
+  const fingerprint = await handle.stat({ bigint: true });
+  const { digest, bytes } = await sha256File(handle);
   await assertMutationFingerprintUnchanged(handle, fingerprint, filePath);
   await assertOpenFileIdentity(handle, filePath, expectedIdentity);
-  return { sha256: hash.digest("hex"), sizeBytes: offset };
+  return { sha256: digest, sizeBytes: bytes };
 }
 
 function assertPublishedFileIdentitySync(filePath: string, expectedIdentity: Stats): void {
@@ -258,25 +237,9 @@ function hashPublishedFileSync(filePath: string, expectedIdentity: Stats): Sqlit
   try {
     assertOpenFileIdentitySync(fileDescriptor, filePath, expectedIdentity);
     const initialStat = fsSync.fstatSync(fileDescriptor, { bigint: true });
-    const initialFingerprint: FileMutationFingerprint = {
-      birthtimeNs: initialStat.birthtimeNs,
-      ctimeNs: initialStat.ctimeNs,
-      dev: initialStat.dev,
-      ino: initialStat.ino,
-      mtimeNs: initialStat.mtimeNs,
-      size: initialStat.size,
-    };
     const content = hashFileDescriptorSync(fileDescriptor);
     const finalStat = fsSync.fstatSync(fileDescriptor, { bigint: true });
-    const finalFingerprint: FileMutationFingerprint = {
-      birthtimeNs: finalStat.birthtimeNs,
-      ctimeNs: finalStat.ctimeNs,
-      dev: finalStat.dev,
-      ino: finalStat.ino,
-      mtimeNs: finalStat.mtimeNs,
-      size: finalStat.size,
-    };
-    if (!sameFileMutationFingerprint(initialFingerprint, finalFingerprint)) {
+    if (!sameFileMutationFingerprint(initialStat, finalStat)) {
       throw new Error(`SQLite snapshot file changed while reading: ${filePath}`);
     }
     assertOpenFileIdentitySync(fileDescriptor, filePath, expectedIdentity);
@@ -573,42 +536,66 @@ async function removePublicationStagingDirectory(
 export async function createVerifiedSqliteSnapshot(
   options: CreateVerifiedSqliteSnapshotOptions,
 ): Promise<VerifiedSqliteSnapshot> {
-  await assertRegularSourceFile(options.sourcePath, options.requireNonEmptySource === true);
+  const sourcePath = options.sourceAcquisition
+    ? await fs.realpath(options.sourcePath)
+    : options.sourcePath;
+  await assertRegularSourceFile(sourcePath, options.requireNonEmptySource === true);
   await assertTargetAbsent(options.targetPath);
 
-  const stagingDir = await createPrivateSqliteTempDirectory(
-    path.dirname(options.targetPath),
-    ".sqlite-snapshot-",
-  );
+  if (options.sourceAcquisition) {
+    const prepared = await prepareSqliteReadOnlyLocationInProcess(
+      sourcePath,
+      options.sourceAcquisition.stagingRoot,
+    );
+    return withPreparedSqliteSnapshot(prepared, (privateSourcePath) =>
+      verifyAndPublishSqliteSnapshot(options, privateSourcePath),
+    );
+  }
+  return verifyAndPublishSqliteSnapshot(options);
+}
+
+async function verifyAndPublishSqliteSnapshot(
+  options: CreateVerifiedSqliteSnapshotOptions,
+  privateSourcePath?: string,
+): Promise<VerifiedSqliteSnapshot> {
+  const stagingDir = privateSourcePath
+    ? path.dirname(privateSourcePath)
+    : await createPrivateSqliteTempDirectory(path.dirname(options.targetPath), ".sqlite-snapshot-");
   await fs.chmod(stagingDir, 0o700);
-  const stagedPath = path.join(stagingDir, "database.sqlite");
-  const sqlite = requireNodeSqlite();
+  const stagedPath = privateSourcePath ?? path.join(stagingDir, "database.sqlite");
   let stagedIdentity: Stats | undefined;
   try {
-    await withSqliteSnapshotSource(options.sourcePath, async (snapshotSourcePath) => {
-      await fs.rm(stagedPath, { force: true });
-      const source = openNodeSqliteDatabase(snapshotSourcePath, {
-        allowExtension: true,
-        readOnly: true,
-      });
-      try {
-        source.exec("PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF; BEGIN;");
+    await withSqliteSnapshotSource(
+      privateSourcePath ?? options.sourcePath,
+      async (snapshotSourcePath) => {
+        if (!privateSourcePath) {
+          await fs.rm(stagedPath, { force: true });
+        }
+        const source = openNodeSqliteDatabase(snapshotSourcePath, {
+          allowExtension: true,
+          readOnly: true,
+        });
         try {
-          // Pin validation and backup together; Node restarts stepped backups on concurrent writes.
-          source.prepare("PRAGMA schema_version;").get();
-          await loadSqliteVecExtension({ db: source });
-          assertSqliteIntegrity(source, options.sourcePath);
-          options.validate?.(source, options.sourcePath);
-          await sqlite.backup(source, resolveSqliteFilesystemPath(stagedPath));
+          source.exec("PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF; BEGIN;");
+          try {
+            // Pin validation and backup together; Node restarts stepped backups on concurrent writes.
+            source.prepare("PRAGMA schema_version;").get();
+            await loadSqliteVecExtension({ db: source });
+            assertSqliteIntegrity(source, options.sourcePath);
+            options.validate?.(source, options.sourcePath);
+            if (!privateSourcePath) {
+              await backupNodeSqliteDatabase(source, stagedPath);
+            }
+          } finally {
+            source.exec("ROLLBACK;");
+          }
         } finally {
-          source.exec("ROLLBACK;");
+          if (source.isOpen) {
+            source.close();
+          }
         }
-      } finally {
-        if (source.isOpen) {
-          source.close();
-        }
-      }
-    });
+      },
+    );
 
     await fs.chmod(stagedPath, 0o600);
     const snapshot = openNodeSqliteDatabase(stagedPath, {
@@ -676,6 +663,8 @@ export async function createVerifiedSqliteSnapshot(
       { cause: error },
     );
   } finally {
-    await fs.rm(stagingDir, { force: true, recursive: true }).catch(() => undefined);
+    if (!privateSourcePath) {
+      await fs.rm(stagingDir, { force: true, recursive: true }).catch(() => undefined);
+    }
   }
 }

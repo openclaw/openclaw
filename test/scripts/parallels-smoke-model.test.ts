@@ -69,8 +69,13 @@ import {
   runParallelsPrerequisiteEval,
 } from "../../scripts/e2e/parallels/provider-auth-prerequisite.mjs";
 import { parseArgs as parseWindowsSmokeArgs } from "../../scripts/e2e/parallels/windows-smoke.ts";
+import { scriptProcessEntrypoints } from "../../scripts/script-process-runtime.test-support.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
 import { withEnv } from "../../src/test-utils/env.js";
-import { spawnNodeEvalSync } from "../../src/test-utils/node-process.js";
+import { resolveTestNodeExecPath, spawnNodeEvalSync } from "../../src/test-utils/node-process.js";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
 const WRAPPERS = {
@@ -89,7 +94,6 @@ const TS_PATHS = {
   guestTransports: "scripts/e2e/parallels/guest-transports.ts",
   hostCommand: "scripts/e2e/parallels/host-command.ts",
   hostServer: "scripts/e2e/parallels/host-server.ts",
-  laneRunner: "scripts/e2e/parallels/lane-runner.ts",
   linux: "scripts/e2e/parallels/linux-smoke.ts",
   macosDiscord: "scripts/e2e/parallels/macos-discord.ts",
   macos: "scripts/e2e/parallels/macos-smoke.ts",
@@ -112,6 +116,7 @@ const TS_SOURCE = Object.fromEntries(
 
 const OS_TS_PATHS = [TS_PATHS.linux, TS_PATHS.macos, TS_PATHS.windows];
 const tempDirs: string[] = [];
+const testNodeExecPath = resolveTestNodeExecPath();
 
 afterEach(() => {
   cleanupTempDirs(tempDirs);
@@ -155,7 +160,7 @@ function writeFakePrlctl(tempDir: string, posixScript: string, windowsBootstrap:
   writeFileSync(prlctlPath, posixScript);
   chmodSync(prlctlPath, 0o755);
   if (process.platform === "win32") {
-    copyFileSync(process.execPath, join(tempDir, "prlctl.exe"));
+    copyFileSync(testNodeExecPath, join(tempDir, "prlctl.exe"));
   }
   writeFileSync(join(tempDir, "prlctl-bootstrap.mjs"), windowsBootstrap);
 }
@@ -326,7 +331,7 @@ async function waitForProcessClose(
 }
 
 function runNode(source: string, options: NonNullable<Parameters<typeof run>[2]> = {}) {
-  return run(process.execPath, ["-e", source], { quiet: true, ...options });
+  return run(testNodeExecPath, ["-e", source], { quiet: true, ...options });
 }
 
 type FakeCommandResult = { status: number; stderr: string; stdout: string };
@@ -413,8 +418,58 @@ async function runFailingHostServer(fakePythonSource: string) {
 }
 
 function drainableProcessTreeScript(delayMs: number): string {
-  const descendantScript = `const { writeFileSync } = require('node:fs'); writeFileSync(process.env.READY_FILE, 'ready'); process.on('SIGTERM', () => setTimeout(() => { writeFileSync(process.env.DRAIN_FILE, 'drained'); process.exit(0); }, ${delayMs})); setInterval(() => {}, 1000);`;
-  return `const { spawn } = require('node:child_process'); spawn(process.execPath, ['-e', ${JSON.stringify(descendantScript)}], { env: process.env, stdio: 'ignore' }); process.on('SIGTERM', () => process.exit(0)); setInterval(() => {}, 1000);`;
+  const descendantScript = `const { writeFileSync } = require('node:fs'); process.on('SIGTERM', () => setTimeout(() => { writeFileSync(process.env.DRAIN_FILE, 'drained'); process.exit(0); }, ${delayMs})); writeFileSync(process.env.READY_FILE, 'ready'); setInterval(() => {}, 1000);`;
+  return `
+const { spawn } = require('node:child_process');
+const { existsSync } = require('node:fs');
+process.on('SIGTERM', () => process.exit(0));
+let started = false;
+const start = () => {
+  if (started || !existsSync(process.env.DEADLINE_FILE)) return;
+  started = true;
+  clearInterval(probe);
+  spawn(process.execPath, ['-e', ${JSON.stringify(descendantScript)}], { env: process.env, stdio: 'ignore' });
+};
+const probe = setInterval(start, 5);
+start();
+setInterval(() => {}, 1000);
+`;
+}
+
+function writeDrainDeadlinePreload(tempDir: string, timeoutMs = 100): string {
+  const preload = join(tempDir, "deadline.cjs");
+  writeFileSync(
+    preload,
+    `
+const fs = require('node:fs');
+const path = require('node:path');
+const owner = path.join(${JSON.stringify(tempDir)}, 'wrapper.pid');
+try { fs.writeFileSync(owner, String(process.pid), { flag: 'wx' }); }
+catch (error) { if (error.code !== 'EEXIST') throw error; }
+// NODE_OPTIONS is inherited: only the first process (the wrapper) owns this gate.
+if (fs.readFileSync(owner, 'utf8') === String(process.pid)) {
+  const schedule = globalThis.setTimeout;
+  globalThis.setTimeout = (callback, ms, ...args) => {
+    if (ms !== ${timeoutMs}) return schedule(callback, ms, ...args);
+    globalThis.setTimeout = schedule;
+    return schedule(() => {
+      let released = false;
+      let probe;
+      const release = () => {
+        if (released || !fs.existsSync(process.env.READY_FILE)) return;
+        released = true;
+        clearInterval(probe);
+        callback(...args);
+      };
+      probe = setInterval(release, 5);
+      fs.writeFileSync(process.env.DEADLINE_FILE, 'elapsed');
+      release();
+    }, ms);
+  };
+}
+`,
+  );
+  return preload;
 }
 
 const SIGNAL_GRANDCHILD_SCRIPT = `const { writeFileSync } = require('node:fs'); writeFileSync(process.env.OPENCLAW_TEST_GRANDCHILD_PID, String(process.pid)); process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);`;
@@ -425,10 +480,10 @@ function createSignaledHostCommandFixture() {
   const runnerPath = join(tempDir, "runner.mjs");
   const readyPath = join(tempDir, "ready");
   const grandchildPidPath = join(tempDir, "grandchild.pid");
-  const hostCommandUrl = pathToFileURL(join(process.cwd(), TS_PATHS.hostCommand)).href;
+  const hostCommandUrl = resolveRuntimeWorkerUrl(scriptProcessEntrypoints.parallelsHostCommand);
   writeFileSync(
     runnerPath,
-    `import { run } from ${JSON.stringify(hostCommandUrl)};
+    `import { run } from ${JSON.stringify(hostCommandUrl.href)};
 run(process.execPath, ['-e', ${JSON.stringify(SIGNAL_PARENT_SCRIPT)}], {
   check: false,
   env: { ...process.env, OPENCLAW_TEST_GRANDCHILD_PID: ${JSON.stringify(grandchildPidPath)}, OPENCLAW_TEST_READY_FILE: ${JSON.stringify(readyPath)} },
@@ -439,11 +494,15 @@ run(process.execPath, ['-e', ${JSON.stringify(SIGNAL_PARENT_SCRIPT)}], {
   return {
     grandchildPidPath,
     readyPath,
-    runner: spawn(process.execPath, ["--import", "tsx", runnerPath], {
-      cwd: process.cwd(),
-      detached: true,
-      stdio: "ignore",
-    }),
+    runner: spawn(
+      testNodeExecPath,
+      [...resolveRuntimeWorkerArgv(hostCommandUrl, testNodeExecPath).slice(0, -1), runnerPath],
+      {
+        cwd: process.cwd(),
+        detached: true,
+        stdio: "ignore",
+      },
+    ),
   };
 }
 
@@ -464,9 +523,7 @@ describe("Parallels smoke model selection", () => {
   const {
     agentWorkspace: workspace,
     guestTransports: transports,
-    hostCommand,
     hostServer,
-    laneRunner,
     linux,
     macos,
     macosDiscord: discord,
@@ -769,7 +826,7 @@ ensure_vm_running`,
     chmodSync(fakePnpm, 0o755);
 
     const result = spawnSync(
-      process.execPath,
+      testNodeExecPath,
       [
         "--import",
         "tsx",
@@ -889,8 +946,6 @@ ensure_vm_running`,
   it("keeps snapshot, host, package, and quote helpers shared", () => {
     const common = TS_SOURCE.common;
 
-    expect(common).toContain('export * from "./host-command.ts"');
-    expect(common).toContain('export * from "./lane-runner.ts"');
     const packageArtifactExports = new Set(
       (common.match(/export \{([^}]*)\} from "\.\/package-artifact\.ts";/)?.[1] ?? "")
         .split(",")
@@ -901,29 +956,16 @@ ensure_vm_running`,
     expect(packageArtifactExports).toContain("packageVersionFromTgz");
     expect(packageArtifactExports).toContain("resolveOpenClawRegistryVersion");
     expect(common).not.toContain('export * from "./package-artifact.ts"');
-    expect(common).toContain('export * from "./parallels-vm.ts"');
-    expect(common).toContain('export * from "./snapshots.ts"');
-    expect(hostCommand).toContain("export function shellQuote");
-    expect(laneRunner).toContain("export async function runSmokeLane");
     expect(packageArtifact).toContain("withPackageLock");
     expect(packageArtifact).toContain("Wait for Parallels package lock");
-    expect(packageArtifact).toContain("export async function packageVersionFromTgz");
-    expect(packageArtifact).toContain("export async function packOpenClaw");
     expect(packageArtifact).toContain('"--allow-unreleased-changelog"');
-    expect(packageArtifact).toContain("function resolveNpmPackTarballFilename");
     expect(packageArtifact).toContain("filename !== path.basename(filename)");
     expect(packageArtifact).toContain("filename !== path.win32.basename(filename)");
     expect(packageArtifact).toContain("npm pack did not report a safe tarball filename");
     expect(packageArtifact).not.toContain("path.basename(packed)");
-    expect(parallelsVm).toContain("export function resolveUbuntuVmName");
-    expect(parallelsVm).toContain("export function resolveMacosVmName");
-    expect(parallelsVm).toContain("export function waitForVmStatus");
-    expect(hostServer).toContain("export async function startHostServer");
-    expect(hostServer).toContain("export async function startNpmRegistryServer");
     expect(hostServer).toContain("hostUrl: `http://127.0.0.1:${port}`");
     expect(hostServer).toContain('OPENCLAW_NPM_REGISTRY_UPSTREAM: "https://registry.npmjs.org"');
     expect(hostServer).toContain("http.server");
-    expect(snapshots).toContain("export function resolveSnapshot");
     expect(smokeCommon).toContain("runSmokeLane");
     expect(smokeCommon).toContain("abstract class SmokeRunController");
 
@@ -1271,11 +1313,15 @@ if (commandArgs[0] === "list") {
       );
 
       const result = spawnSync(
-        process.execPath,
+        testNodeExecPath,
         [
-          "--import",
-          "tsx",
-          TS_PATHS.macos,
+          // Darwin exercises the source-relative Python transport beside the script.
+          ...(process.platform === "darwin"
+            ? ["--import", "tsx", TS_PATHS.macos]
+            : resolveRuntimeWorkerArgv(
+                resolveRuntimeWorkerUrl(scriptProcessEntrypoints.macosSmoke),
+                testNodeExecPath,
+              )),
           "--mode",
           "upgrade",
           "--latest-version",
@@ -1615,8 +1661,13 @@ if (commandArgs[0] === "list") {
       }
       expect(script, scriptPath).toContain("--thinking");
       expect(script, scriptPath).toContain("off");
-      expect(script, scriptPath).toContain("finalAssistant(Raw|Visible)Text");
+      expect(script, scriptPath).toContain(
+        scriptPath === TS_PATHS.windows
+          ? "finalAssistant(Raw|Visible)Text"
+          : "posixAgentTurnScript({",
+      );
     }
+    expect(smokeCommon).toContain("finalAssistant(Raw|Visible)Text");
     expect(macos).toContain("modelProviderConfigBatchJson");
     expect(macos).toContain("config set --batch-file");
     expect(linux).toContain("modelProviderConfigBatchJson");
@@ -1632,6 +1683,7 @@ if (commandArgs[0] === "list") {
     expect(npmUpdateScripts).toContain("--thinking off");
     expect(npmUpdateScripts).toContain("finalAssistant(Raw|Visible)Text");
     expect(npmUpdateScripts).toContain("posixAssertAgentOkScript");
+    expect(npmUpdateScripts).toContain("posixAgentTurnScript({");
     expect(npmUpdateScripts).toContain("windowsAgentTurnConfigPatchScript");
     expect(npmUpdateScripts).toContain("modelProviderConfigBatchJson");
     expect(npmUpdateScripts).toContain("config set --batch-file");
@@ -2157,18 +2209,25 @@ if (commandArgs[0] === "list") {
       const tempDir = makeTempDir(tempDirs, "openclaw-parallels-host-command-drain-");
       const readyFile = join(tempDir, "ready");
       const drainFile = join(tempDir, "drained");
+      const deadlineFile = join(tempDir, "deadline");
+      const preload = writeDrainDeadlinePreload(tempDir);
 
+      // Force descendant startup past the deadline, then release the real timeout
+      // callback only after signal handlers are installed. Cleanup timers stay real.
       const result = runNode(drainableProcessTreeScript(25), {
         check: false,
         env: {
           ...process.env,
           DRAIN_FILE: drainFile,
           READY_FILE: readyFile,
+          DEADLINE_FILE: deadlineFile,
+          NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --require ${JSON.stringify(preload)}`,
         },
-        timeoutMs: 250,
+        timeoutMs: 100,
       });
 
       expect(result.status).toBe(124);
+      expect(readFileSync(deadlineFile, "utf8")).toBe("elapsed");
       expect(existsSync(readyFile)).toBe(true);
       expect(readFileSync(drainFile, "utf8")).toBe("drained");
     },
@@ -2194,6 +2253,8 @@ if (commandArgs[0] === "list") {
     async () => {
       const tempDir = makeTempDir(tempDirs, "openclaw-parallels-host-command-");
       const grandchildPidPath = join(tempDir, "grandchild.pid");
+      const deadlineFile = join(tempDir, "deadline");
+      const preload = writeDrainDeadlinePreload(tempDir, 200);
       let grandchildPid = 0;
 
       try {
@@ -2203,11 +2264,15 @@ if (commandArgs[0] === "list") {
             ...process.env,
             OPENCLAW_TEST_GRANDCHILD_PID: grandchildPidPath,
             OPENCLAW_TEST_READY_FILE: join(tempDir, "ready"),
+            READY_FILE: grandchildPidPath,
+            DEADLINE_FILE: deadlineFile,
+            NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --require ${JSON.stringify(preload)}`,
           },
-          timeoutMs: 500,
+          timeoutMs: 200,
         });
 
         expect(result.status).toBe(124);
+        expect(readFileSync(deadlineFile, "utf8")).toBe("elapsed");
         grandchildPid = Number.parseInt(readFileSync(grandchildPidPath, "utf8"), 10);
         expect(Number.isInteger(grandchildPid)).toBe(true);
         await waitFor(() => !isProcessAlive(grandchildPid));
@@ -2224,36 +2289,40 @@ if (commandArgs[0] === "list") {
     async () => {
       const tempDir = makeTempDir(tempDirs, "openclaw-parallels-host-command-pipes-");
       const grandchildPidPath = join(tempDir, "grandchild.pid");
+      const deadlineFile = join(tempDir, "deadline");
+      const preload = writeDrainDeadlinePreload(tempDir, 200);
       let grandchildPid = 0;
-      const grandchildScript = [
-        "const { renameSync, writeFileSync } = require('node:fs');",
-        // Outlive the assertion bound, but self-clean if PID setup fails.
-        "setTimeout(() => process.exit(0), 3_000);",
-        "const pidPath = process.env.GRANDCHILD_PID_PATH;",
-        "writeFileSync(pidPath + '.tmp', String(process.pid));",
-        "renameSync(pidPath + '.tmp', pidPath);",
-      ].join("\n");
+      // Outlive the assertion bound, but self-clean if PID setup fails.
+      const grandchildScript = "setTimeout(() => process.exit(0), 3_000);";
       const parentScript = [
         "const { spawn } = require('node:child_process');",
+        "const { renameSync, writeFileSync } = require('node:fs');",
         `const child = spawn(process.execPath, ['-e', ${JSON.stringify(grandchildScript)}], {`,
         "  detached: true,",
         "  env: process.env,",
         "  stdio: ['ignore', 'inherit', 'inherit'],",
         "});",
+        "const pidPath = process.env.GRANDCHILD_PID_PATH;",
+        "writeFileSync(pidPath + '.tmp', String(child.pid));",
+        "renameSync(pidPath + '.tmp', pidPath);",
         "child.unref();",
         "setInterval(() => {}, 1000);",
       ].join("\n");
       const startedAt = Date.now();
 
       try {
-        const result = run(process.execPath, ["-e", parentScript], {
+        const result = run(testNodeExecPath, ["-e", parentScript], {
           check: false,
           env: {
             ...process.env,
             GRANDCHILD_PID_PATH: grandchildPidPath,
+            READY_FILE: grandchildPidPath,
+            DEADLINE_FILE: deadlineFile,
+            NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --require ${JSON.stringify(preload)}`,
           },
           quiet: true,
-          timeoutMs: 100,
+          // Let the command spawn its pipe holder before exercising timeout settlement.
+          timeoutMs: 200,
         });
 
         const durationMs = Date.now() - startedAt;
@@ -2264,6 +2333,7 @@ if (commandArgs[0] === "list") {
         expect(Number.isInteger(grandchildPid)).toBe(true);
         expect(grandchildPid).toBeGreaterThan(1);
         expect(result.status).toBe(124);
+        expect(readFileSync(deadlineFile, "utf8")).toBe("elapsed");
         expect(durationMs).toBeLessThan(2_000);
       } finally {
         if (Number.isInteger(grandchildPid) && grandchildPid > 1 && isProcessAlive(grandchildPid)) {

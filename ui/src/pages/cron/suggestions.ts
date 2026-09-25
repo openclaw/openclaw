@@ -6,7 +6,7 @@
  */
 
 import { t } from "../../i18n/index.ts";
-import type { CronFormState } from "../../lib/cron/index.ts";
+import type { CronFormState } from "../../lib/cron/types.ts";
 
 type CronSuggestion = {
   id: string;

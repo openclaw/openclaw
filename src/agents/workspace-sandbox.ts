@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { resolveUserPath } from "../utils.js";
+import { resolveAdmittedRunActiveAssertion } from "./admitted-run-context.js";
 import { resolveSessionAgentIds } from "./agent-scope.js";
 import type { EmbeddedRunAttemptParams } from "./embedded-agent-runner/run/types.js";
 import { resolveSandboxContext } from "./sandbox.js";
@@ -21,10 +22,51 @@ export type WorkspaceSandboxParams = Pick<
   | "requireWritableSandbox"
   | "requireWorkspaceOnly"
   | "workspaceDir"
->;
+> & {
+  admittedRunContext?: EmbeddedRunAttemptParams["admittedRunContext"];
+  /** Placement execution policy never supplies Gateway-side filesystem or media roots. */
+  placementSandbox?: Awaited<ReturnType<typeof resolveSandboxContext>>;
+};
+
+function assertSandboxCwd(requestedCwd: string | undefined, workspaceDir: string) {
+  if (requestedCwd && requestedCwd !== workspaceDir) {
+    throw new Error(
+      "cwd override is not supported for sandboxed embedded agent runs; omit cwd or use the agent workspace as cwd",
+    );
+  }
+}
+
+/** Preserve prepared local projection roots without overriding a remote placement owner. */
+export function resolveHarnessWorkspace(
+  workspaceDir: string,
+  params: Pick<WorkspaceSandboxParams, "cwd" | "sessionRoot">,
+  prepared: Awaited<ReturnType<typeof resolveAttemptWorkspaceSandbox>> | undefined,
+  sandbox: Awaited<ReturnType<typeof resolveSandboxContext>> | undefined,
+) {
+  const projected =
+    prepared?.sandbox?.workspaceSource === "managed-worktree" && prepared.sandbox === sandbox;
+  if (projected) {
+    assertSandboxCwd(
+      params.cwd ? resolveUserPath(params.cwd) : undefined,
+      prepared.resolvedWorkspace,
+    );
+  }
+  return {
+    workspaceDir: projected ? prepared.effectiveWorkspace : workspaceDir,
+    cwd: projected ? prepared.effectiveCwd : params.cwd,
+    sessionRoot: projected ? prepared.sessionPermissionRoot : params.sessionRoot,
+  };
+}
 
 /** Resolves the shared workspace and sandbox policy used by native and plugin harnesses. */
 export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxParams) {
+  const assertCurrent = params.admittedRunContext
+    ? resolveAdmittedRunActiveAssertion(params.admittedRunContext)
+    : undefined;
+  if (params.admittedRunContext && !assertCurrent) {
+    throw new Error("Sandbox preparation requires an active admitted run");
+  }
+  assertCurrent?.();
   const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
     config: params.config,
@@ -34,37 +76,52 @@ export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxPar
   await fs.mkdir(resolvedWorkspace, { recursive: true });
   const sessionKey = params.sessionKey?.trim() || params.sessionId;
   const sandboxSessionKey = params.sandboxSessionKey?.trim() || sessionKey;
-  const sandbox = await resolveSandboxContext({
-    config: params.config,
-    // Independent policy sessions keep their own owner; unscoped execution retains its prepared one.
-    agentId:
-      params.sandboxAgentId ?? (sandboxSessionKey === sessionKey ? sessionAgentId : undefined),
-    execOverrides: params.execOverrides,
-    sessionKey: sandboxSessionKey,
-    skillsSnapshot: params.skillsSnapshot,
-    workspaceDir: resolvedWorkspace,
-  });
+  const sandbox = params.placementSandbox
+    ? null
+    : await resolveSandboxContext({
+        config: params.config,
+        // Independent policy sessions keep their own owner; unscoped execution retains its prepared one.
+        agentId:
+          params.sandboxAgentId ?? (sandboxSessionKey === sessionKey ? sessionAgentId : undefined),
+        execOverrides: params.execOverrides,
+        sessionKey: sandboxSessionKey,
+        skillsSnapshot: params.skillsSnapshot,
+        workspaceDir: resolvedWorkspace,
+        assertCurrent,
+        admittedRunContext: params.admittedRunContext,
+      });
+  assertCurrent?.();
+  const projectedWorkspace = sandbox?.enabled && sandbox.workspaceSource === "managed-worktree";
   const effectiveWorkspace =
-    sandbox?.enabled && sandbox.workspaceAccess !== "rw" ? sandbox.workspaceDir : resolvedWorkspace;
-  if (params.requireWritableSandbox && sandbox?.enabled && sandbox.workspaceAccess !== "rw") {
+    sandbox?.enabled && (sandbox.workspaceAccess !== "rw" || projectedWorkspace)
+      ? (sandbox.workspaceCwd ?? sandbox.workspaceDir)
+      : resolvedWorkspace;
+  const executionSandbox = params.placementSandbox ?? sandbox;
+  if (
+    params.requireWritableSandbox &&
+    executionSandbox?.enabled &&
+    executionSandbox.workspaceAccess !== "rw"
+  ) {
     throw new Error("sandbox workspace is not read-write; collection review skipped");
   }
   const requestedCwd = params.cwd ? resolveUserPath(params.cwd) : undefined;
   // Recorded roots pin worktree/explicit-cwd boundaries; rootless sessions use
   // the agent's canonical workspace as their permission boundary.
-  const sessionPermissionRoot = params.sessionRoot ?? (await fs.realpath(resolvedWorkspace));
+  const sessionPermissionRoot = projectedWorkspace
+    ? sandbox.workspaceDir
+    : (params.sessionRoot ?? (await fs.realpath(resolvedWorkspace)));
   const sessionPermissionPolicy = params.permissionMode
     ? {
         root: sessionPermissionRoot,
         mode: params.permissionMode,
       }
     : undefined;
-  if (sandbox?.enabled && requestedCwd && requestedCwd !== resolvedWorkspace) {
-    throw new Error(
-      "cwd override is not supported for sandboxed embedded agent runs; omit cwd or use the agent workspace as cwd",
-    );
+  if (sandbox?.enabled) {
+    assertSandboxCwd(requestedCwd, resolvedWorkspace);
   }
+  assertCurrent?.();
   await fs.mkdir(effectiveWorkspace, { recursive: true });
+  assertCurrent?.();
   return {
     effectiveCwd: sandbox?.enabled ? effectiveWorkspace : (requestedCwd ?? effectiveWorkspace),
     effectiveFsWorkspaceOnly:

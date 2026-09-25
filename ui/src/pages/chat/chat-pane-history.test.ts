@@ -5,7 +5,6 @@ import { nothing, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { nativeHistoryMessageIdentity } from "../../lib/chat/history-message-identity.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import "./chat-pane.ts";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
@@ -41,6 +40,25 @@ describe("chat pane native history pagination", () => {
     pane.render();
     expect(pane.chatProps?.userId).toBe("collision");
     expect(pane.chatProps?.userAvatar).toBe(user.avatarUrl);
+  });
+
+  it("reuses the last resolved viewer identity while reconnecting drops selfUser", () => {
+    const { pane, context } = createRefreshChatPane();
+    const user = {
+      id: "profile-viewer",
+      name: "Viewer",
+      identity: { type: "profile" as const, id: "profile-viewer" },
+    };
+    context.gateway.snapshot.selfUser = user;
+    pane.render();
+    expect(pane.chatProps?.userId).toBe("profile-viewer");
+
+    // A reconnect briefly clears selfUser; peer alignment must not flash by
+    // falling back to null. The last resolved identity is presentation-only
+    // (alignment + sender label), never authorization.
+    context.gateway.snapshot.selfUser = null;
+    pane.render();
+    expect(pane.chatProps?.userId).toBe("profile-viewer");
   });
 
   it.each(["pending", "resolved"] as const)(
@@ -781,61 +799,6 @@ describe("chat pane native history pagination", () => {
     }
   });
 
-  it("keeps multiple projected messages from the same transcript sequence", () => {
-    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const { pane } = createTestChatPane({ client });
-    const projected = [
-      {
-        ...nativeHistoryMessage(1, "Same routed send"),
-        openclawMessageToolMirror: { toolName: "message", toolCallId: "call-a" },
-      },
-      {
-        ...nativeHistoryMessage(1, "Same routed send"),
-        openclawMessageToolMirror: { toolName: "message", toolCallId: "call-b" },
-      },
-    ];
-
-    expect(pane.prependUniqueNativeMessages(projected, [nativeHistoryMessage(2)])).toEqual([
-      ...projected,
-      nativeHistoryMessage(2),
-    ]);
-    expect(pane.prependUniqueNativeMessages(projected, projected)).toEqual(projected);
-    expect(
-      pane.prependUniqueNativeMessages(projected, [projected[1], nativeHistoryMessage(2)]),
-    ).toEqual([projected[0], projected[1], nativeHistoryMessage(2)]);
-  });
-
-  it("deduplicates byte-different live-event and history projections of one transcript row", () => {
-    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const { pane } = createTestChatPane({ client });
-    const liveEventProjection = {
-      role: "assistant",
-      content: [{ type: "text", text: "One stored reply" }],
-      __openclaw: {
-        id: "assistant-message-42",
-        idempotencyKey: "run-42",
-        seq: 42,
-      },
-    };
-    const historyProjection = {
-      role: "assistant",
-      content: [{ type: "text", text: "One stored reply" }],
-      __openclaw: {
-        id: "assistant-message-42",
-        idempotencyKey: "run-42",
-        recordTimestampMs: 1_786_000_000_000,
-        seq: 42,
-      },
-    };
-
-    expect(nativeHistoryMessageIdentity(liveEventProjection)).toBe(
-      nativeHistoryMessageIdentity(historyProjection),
-    );
-    expect(pane.prependUniqueNativeMessages([historyProjection], [liveEventProjection])).toEqual([
-      liveEventProjection,
-    ]);
-  });
-
   it("deduplicates projected catalog transcript records by catalog message id", () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
     const { pane } = createTestChatPane({ client });
@@ -938,6 +901,7 @@ describe("chat pane native history pagination", () => {
       2,
       "chat.history",
       expect.objectContaining({ sessionKey: state.sessionKey, limit: 80, maxBytes: 256 * 1024 }),
+      { signal: expect.any(AbortSignal) },
     );
     expect(state.currentSessionId).toBe("session-new");
     expect(state.chatMessages.map(nativeHistorySeq)).toEqual([7, 8]);

@@ -1,9 +1,14 @@
 // Runs oxlint with local resource policy, sparse-checkout filtering, and
 // plugin package-boundary artifact preparation when needed.
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import JSON5 from "json5";
+import type { DummyRuleMap, OxlintConfig } from "oxlint";
+import { limitsAreAdvisory, reportLimitViolations } from "./lib/check-limits.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import {
   distArtifactEntryArgs,
@@ -51,6 +56,202 @@ const OXLINT_BOUNDARY_FREE_TS_CONFIGS = new Set([
   "test/tsconfig/tsconfig.test.root.json",
 ]);
 const OPENCLAW_FOCUSED_CONFIG_FLAG = "--openclaw-focused-config";
+const LIMIT_RULES = new Set([
+  "max-lines",
+  "max-lines-per-function",
+  "max-statements",
+  "max-depth",
+  "complexity",
+]);
+
+type OxlintDiagnostic = {
+  filename: string;
+  message: string;
+  severity: string;
+  code?: string;
+  help?: string;
+  labels?: { span: { line?: number; column?: number } }[];
+};
+
+function oxlintOption(args: string[], name: string, short: string) {
+  const end = args.indexOf("--");
+  const index = args.findIndex(
+    (arg, position) =>
+      (end === -1 || position < end) &&
+      (arg === name || arg === short || arg.startsWith(`${name}=`)),
+  );
+  const option = args[index];
+  const inline = option?.startsWith(`${name}=`) ?? false;
+  return {
+    value: index === -1 ? undefined : inline ? option?.slice(name.length + 1) : args[index + 1],
+    replace(value: string) {
+      const updated = args.slice();
+      if (index === -1) {
+        updated.splice(end === -1 ? args.length : end, 0, name, value);
+      } else {
+        updated.splice(index, inline ? 1 : 2, name, value);
+      }
+      return updated;
+    },
+  };
+}
+
+function advisoryLimitRules(rules: DummyRuleMap | undefined) {
+  const overrides: DummyRuleMap = {};
+  let enabled = false;
+  for (const [name, rule] of Object.entries(rules ?? {})) {
+    const id = name.startsWith("eslint/") ? name.slice("eslint/".length) : name;
+    if (!LIMIT_RULES.has(id)) {
+      continue;
+    }
+    overrides[name] = rule;
+    const severity = Array.isArray(rule) ? rule[0] : rule;
+    // Replay disabled scopes too: a later exclusion must still override an earlier limit.
+    if (
+      !(
+        severity === "warn" ||
+        severity === "error" ||
+        severity === "deny" ||
+        severity === 1 ||
+        severity === 2
+      )
+    ) {
+      continue;
+    }
+    overrides[name] = Array.isArray(rule) ? ["warn", ...rule.slice(1)] : "warn";
+    enabled = true;
+  }
+  return { rules: overrides, enabled };
+}
+
+async function runWithAdvisoryLimits(
+  bin: string,
+  args: string[],
+  env: NodeJS.ProcessEnv,
+): Promise<number> {
+  const configOption = oxlintOption(args, "--config", "-c");
+  const configPath = path.resolve(configOption.value ?? ".oxlintrc.json");
+  const command = {
+    bin,
+    args,
+    env,
+    requireProcessTreeExit: process.platform !== "win32",
+  };
+  if (
+    !limitsAreAdvisory(env) ||
+    args.some((arg) => OXLINT_PREPARE_SKIP_FLAGS.has(arg)) ||
+    !fs.existsSync(configPath)
+  ) {
+    return await runManagedCommand(command);
+  }
+  const config = JSON5.parse<OxlintConfig>(fs.readFileSync(configPath, "utf8"));
+  const rootRules = advisoryLimitRules(config.rules);
+  let enabled = rootRules.enabled;
+  const overrides = (config.overrides ?? []).flatMap((scope) => {
+    const scopedRules = advisoryLimitRules(scope.rules);
+    enabled ||= scopedRules.enabled;
+    return Object.keys(scopedRules.rules).length > 0
+      ? [{ files: scope.files, excludeFiles: scope.excludeFiles, rules: scopedRules.rules }]
+      : [];
+  });
+  if (!enabled) {
+    return await runManagedCommand(command);
+  }
+
+  // CLI --warn cannot replace scoped severities and enables rules outside their file scopes.
+  // Keep the transient config beside its owner so relative globs and plugin paths do not move.
+  const advisoryConfig = path.join(path.dirname(configPath), `.oxlint-limits-${randomUUID()}.json`);
+  // Extending the original preserves native syntax/schema validation before the override.
+  fs.writeFileSync(
+    advisoryConfig,
+    JSON.stringify({
+      extends: [configPath],
+      rules: rootRules.rules,
+      overrides,
+      plugins: config.plugins,
+      categories: config.categories,
+      // Oxlint 1.82 keeps these fields from the child rather than inheriting them.
+      env: config.env,
+      globals: config.globals,
+      settings: config.settings,
+      ignorePatterns: config.ignorePatterns,
+    }),
+    { flag: "wx" },
+  );
+  try {
+    const configuredArgs = configOption.replace(advisoryConfig);
+    const format = oxlintOption(configuredArgs, "--format", "-f");
+    let output = "";
+    const status = await runManagedCommand({
+      ...command,
+      args: format.replace("json"),
+      stdio: ["inherit", "pipe", "inherit"],
+      onReady(child) {
+        if (!child.stdout) {
+          throw new Error("Oxlint JSON report pipe is unavailable");
+        }
+        child.stdout.setEncoding("utf8");
+        child.stdout.on("data", (chunk: string) => {
+          output += chunk;
+        });
+      },
+    });
+    if (status !== 0 && status !== 1) {
+      process.stdout.write(output);
+      return status;
+    }
+    let report: { diagnostics: OxlintDiagnostic[] };
+    try {
+      report = JSON5.parse(output);
+    } catch (error) {
+      // Configuration failures can be plain text even when JSON output was requested.
+      process.stdout.write(output);
+      if (status !== 0) {
+        return status;
+      }
+      throw error;
+    }
+    const limits = report.diagnostics.filter((diagnostic) =>
+      LIMIT_RULES.has(/^eslint\(([^)]+)\)$/u.exec(diagnostic.code ?? "")?.[1] ?? ""),
+    );
+    reportLimitViolations(
+      limits.map((diagnostic) => ({
+        file: diagnostic.filename.startsWith("file://")
+          ? path.relative(process.cwd(), fileURLToPath(diagnostic.filename))
+          : diagnostic.filename,
+        title: `Oxlint ${diagnostic.code}`,
+        message: [diagnostic.message, diagnostic.help].filter(Boolean).join(" "),
+        line: diagnostic.labels?.[0]?.span.line,
+      })),
+      env,
+    );
+    if (format.value === "json") {
+      process.stdout.write(output);
+    } else {
+      for (const diagnostic of report.diagnostics) {
+        const position = diagnostic.labels?.[0]?.span;
+        console.log(
+          `${diagnostic.filename}:${position?.line ?? 1}:${position?.column ?? 0}: ${diagnostic.severity}: ${diagnostic.message} (${diagnostic.code ?? "oxlint"})`,
+        );
+        if (diagnostic.help) {
+          console.log(`  ${diagnostic.help}`);
+        }
+      }
+      const warnings = report.diagnostics.filter(
+        (diagnostic) => diagnostic.severity === "warning",
+      ).length;
+      const errors = report.diagnostics.filter(
+        (diagnostic) => diagnostic.severity === "error",
+      ).length;
+      console.log(
+        `Found ${warnings} warning${warnings === 1 ? "" : "s"} and ${errors} error${errors === 1 ? "" : "s"}.`,
+      );
+    }
+    return status;
+  } finally {
+    fs.unlinkSync(advisoryConfig);
+  }
+}
 
 /**
  * Returns whether oxlint args need package-boundary declaration artifacts first.
@@ -232,6 +433,7 @@ function resolveOxlintToolchainEnv(
 async function prepareExtensionPackageBoundaryArtifacts(env: NodeJS.ProcessEnv) {
   const status = await runManagedCommand({
     bin: process.execPath,
+    shell: false,
     args: PREPARE_EXTENSION_BOUNDARY_ARGS,
     env,
     requireProcessTreeExit: process.platform !== "win32",
@@ -287,12 +489,11 @@ async function runOxlint(
     // Declaration compilation owns its Go policy; lint limits belong to the oxlint child.
     await prepareExtensionPackageBoundaryArtifacts(localEnv);
   }
-  return await runManagedCommand({
-    bin: oxlintPath,
-    args: finalArgs,
-    env: resolveOxlintToolchainEnv(oxlintPath, env),
-    requireProcessTreeExit: process.platform !== "win32",
-  });
+  return await runWithAdvisoryLimits(
+    oxlintPath,
+    finalArgs,
+    resolveOxlintToolchainEnv(oxlintPath, env),
+  );
 }
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {

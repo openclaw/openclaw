@@ -31,4 +31,3 @@ export {
   BUNDLED_RUNTIME_SIDECAR_BASENAMES,
   getPublicArtifactBasename,
 } from "./test-helpers/public-artifacts.js";
-export { loadBundledPluginPublicSurface } from "./test-helpers/public-surface-loader.js";

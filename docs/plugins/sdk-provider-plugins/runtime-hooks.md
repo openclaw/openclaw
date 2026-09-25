@@ -13,6 +13,53 @@ behavior. Part of the [Building provider plugins](/plugins/sdk-provider-plugins)
 guide; start with [Provider hook
 families](/plugins/sdk-provider-plugins/hook-families) for the shared builders.
 
+## Model route policy
+
+The lightweight `provider-policy-api` artifact resolves model routes through
+`resolveModelRoutes`. Its context and result types are exported by
+`openclaw/plugin-sdk/provider-model-types`.
+
+`ProviderResolveModelRoutesContext.routeIntent` carries prepared, secret-free
+consumer intent: an optional `runtimeId`, an optional `authRequirement`
+(`"subscription"` or `"api-key"`), and `source` (`"explicit"` or `"inherited"`).
+The host projects existing model/provider policy and inherited agent defaults;
+plugins must not reload config or credentials to reconstruct it. This fact does
+not grant credential access or change which runtimes can execute a route.
+
+A `ProviderModelRouteResolution` with `kind: "routes"` can set
+`preferredAuthRequirement`. Core applies that preference only when both
+authentication classes have eligible profiles and selection is automatic.
+Preparation and availability apply the same precedence: required consumer or
+provider profile bindings select the account; configured provider authentication
+constrains automatic selection to that billing route; explicit auth order ranks
+the remaining eligible profiles. Inherited `routeIntent` and
+`preferredAuthRequirement` only break ties after those choices. An environment
+credential supplies fallback material without clearing configured authentication;
+its mode is inferred only when no mode is configured. A preference does not create
+a credential or make an unavailable or cooldown-blocked profile eligible.
+Single-class selection keeps its existing behavior.
+
+Candidate order remains separate from credential precedence, and
+`runtimePolicy.compatibleIds` continues to describe execution compatibility.
+For example, OpenAI keeps both routes available for supported models using a
+legacy official Completions adapter, prefers subscription authentication when
+both kinds are eligible, and honors explicit API route intent. These are
+additive fields on the existing contract; they add no hook or user setting.
+
+## Credential lookup cancellation
+
+Credential consumers using `resolveApiKeyForProvider` from
+`openclaw/plugin-sdk/provider-auth-runtime` should pass their request's optional
+`signal`. It ends the caller's wait for queued admission, a profile lock, or
+OAuth settlement, not an already-claimed refresh's credential write. Started lock
+acquisition remains owned through cleanup. Preserve non-missing authentication
+errors rather than converting every failure into an absent API key.
+
+`buildTimeoutAbortSignal` from `openclaw/plugin-sdk/extension-shared` combines a
+caller signal with an operation timeout. Start it before credential preparation
+when authentication shares the request budget, and call its `cleanup` in
+`finally` to release the timer.
+
 ## Hook examples
 
 <Tabs>
@@ -98,9 +145,19 @@ families](/plugins/sdk-provider-plugins/hook-families) for the shared builders.
     },
     fetchUsageSnapshot: async (ctx) => {
       // fetchAcmeUsage is your plugin's own vendor API call, not an SDK export.
-      return await fetchAcmeUsage(ctx.token, ctx.timeoutMs);
+      return await fetchAcmeUsage(ctx.token, ctx.timeoutMs, {
+        fetch: ctx.fetchFn,
+        signal: ctx.signal,
+      });
     },
     ```
+
+    Both usage hooks receive an optional `ctx.signal` for collection cancellation.
+    `ctx.fetchFn` already combines it with request cancellation; custom transports
+    must forward `ctx.signal` to their I/O. Check cancellation before starting
+    additional auth work after an await. An exhausted budget invokes neither hook
+    and produces a visible `Timeout` snapshot. Core retains completed siblings and
+    tracks unfinished work through cleanup, including auth-owned credential refresh.
 
     `resolveUsageAuth` has three outcomes. Return
     `{ token, accountId?, subscriptionType?, rateLimitTier? }` when the
@@ -223,12 +280,20 @@ provider request and releases the request lease.
 
 Runtime fallback notes:
 
+- `isCacheTtlEligible(ctx)` receives `provider`, `modelId`, optional `modelApi`, and the resolved route facts `baseUrl` and `supportsPromptCacheKey`. The same bounded context is used when installing cache-TTL pruning and recording cache touches; it does not include the full model, headers, or extra request parameters. OpenAI defaults to eligible on official Platform and Codex endpoints, honors an explicit `supportsPromptCacheKey: false`, and requires explicit opt-in for custom proxy routes. This controls client-side idle pruning, not a guarantee of a provider cache hit.
 - Error classification uses the prepared provider owner or already loaded provider hooks. `matchesContextOverflowError` and `classifyFailoverReason` never trigger plugin discovery while handling an error; provider preparation owns loading those hooks.
 - `normalizeConfig` resolves one owning plugin per provider id (bundled providers first, then the matched runtime plugin) and calls only that hook - there is no scan across other providers. Google's own `normalizeConfig` hook is what normalizes `google` / `google-vertex` / `google-antigravity` config entries; it is not a separate core fallback.
 - `resolveConfigApiKey` uses the provider hook when exposed. Amazon Bedrock keeps AWS env-marker resolution in its provider plugin; runtime auth itself still uses the AWS SDK default chain when configured with `auth: "aws-sdk"`.
 - `resolveThinkingProfile(ctx)` receives the selected `provider`, `modelId`, optional merged `reasoning` catalog hint, and optional merged model `compat` facts. Use `compat` only to select the provider's thinking UI/profile.
 - `normalizeResolvedModel(ctx)` can set `compactionThinkingDefault` on the returned `ProviderRuntimeModel` when the provider has a preferred embedded-summary effort. This is prepared runtime metadata, not an operator setting or catalog field. Explicit `agents.defaults.compaction.thinkingLevel` takes precedence; otherwise the host uses this preference and then `low`. The chosen effort is still clamped to the actual compaction candidate.
 - `resolveSystemPromptContribution` lets a provider inject cache-aware system-prompt guidance for a model family. Prefer it over the legacy plugin-wide `before_prompt_build` hook when the behavior belongs to one provider/model family and should preserve the stable/dynamic cache split.
+
+Bundled HTTP adapters can preserve numeric response status with
+`createProviderHttpError` from the private-local `openclaw/plugin-sdk/provider-http`
+entrypoint. Adapters that already bound and redact their diagnostics can construct
+`ProviderHttpError(message, { status })`. Keep that error instance when adjusting
+its message so status and retry metadata survive; search tools use those fields
+for safe authentication and quota guidance without exposing response bodies.
 
 Bundled and trusted official provider policies can use
 `resolveEffortThinkingProfile(compat?.supportedReasoningEfforts)` from the
@@ -250,6 +315,16 @@ or `undefined` to leave that decision to the host. The host records the
 result on the resolved runtime model rather than writing configuration.
 Explicit `tools.toolSearch` settings take precedence. This hook changes
 schema exposure, not tool permissions or availability.
+
+`resolveNativeWebSearch(ctx)` can be exported from the same policy artifact
+when a provider supplies hosted search. Its `ProviderNativeWebSearchPolicyContext`
+(from `openclaw/plugin-sdk/provider-model-types`) contains `config`, `provider`,
+optional `modelId`, `api`, and `baseUrl`. Return `true` only when that route
+will inject hosted search; share this policy with payload construction. Keep
+the hook synchronous and free of runtime activation or credential probes.
+The host applies tool permissions independently and removes managed
+`web_search` before building Tool Search and Code Mode catalogs. Explicit
+managed-provider selection must remain authoritative.
 
 `resolveFastModeSupport(ctx)` can be exported from the same policy artifact
 and registered on the provider. Return `false` only for a confirmed no-op

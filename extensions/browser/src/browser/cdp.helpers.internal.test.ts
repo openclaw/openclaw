@@ -1,10 +1,10 @@
 // Browser tests cover cdp.helpers.internal plugin behavior.
 import http, { createServer } from "node:http";
 import type { Socket } from "node:net";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
+import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { WebSocketServer } from "ws";
-import { toErrorObject } from "../infra/errors.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 const sleepWithAbortMock = vi.hoisted(() =>
@@ -40,7 +40,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime-internal", () => ({
   registerManagedProxyBrowserCdpBypass: registerManagedProxyBrowserCdpBypassMock,
 }));
 
-import { SsrFBlockedError } from "../infra/net/ssrf.js";
+import { SsrFBlockedError } from "openclaw/plugin-sdk/security-runtime";
 import {
   assertCdpEndpointAllowed,
   fetchCdpChecked,
@@ -695,6 +695,43 @@ describe("cdp.helpers internal", () => {
         ),
       ).rejects.toThrow(/429/);
       expect(rejectedHandshakes).toBe(1);
+    });
+
+    it("keeps an admitted write socket available for compensation after caller abort", async () => {
+      const server = await startWsServer();
+      wss = server.wss;
+      const controller = new AbortController();
+      const cancellation = new Error("browser request cancelled after target creation");
+      const commands: string[] = [];
+      server.wss.on("connection", (socket) => {
+        socket.on("message", (raw) => {
+          const message = JSON.parse(rawDataToString(raw)) as { id: number; method: string };
+          commands.push(message.method);
+          if (message.method === "Target.createTarget") {
+            controller.abort(cancellation);
+          }
+          socket.send(JSON.stringify({ id: message.id, result: { targetId: "created-target" } }));
+        });
+      });
+
+      await expect(
+        withCdpSocket(
+          server.url,
+          async (send) => {
+            const created = (await send("Target.createTarget", { url: "about:blank" })) as {
+              targetId: string;
+            };
+            try {
+              controller.signal.throwIfAborted();
+            } catch (error) {
+              await send("Target.closeTarget", { targetId: created.targetId });
+              throw error;
+            }
+          },
+          { signal: controller.signal, commandTimeoutMs: 1000 },
+        ),
+      ).rejects.toBe(cancellation);
+      expect(commands).toEqual(["Target.createTarget", "Target.closeTarget"]);
     });
 
     it("rejects and closes the socket when a CDP command exceeds its timeout", async () => {

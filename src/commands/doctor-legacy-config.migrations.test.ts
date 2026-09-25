@@ -12,7 +12,6 @@ import { validateConfigObject } from "../config/validation.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { maybeRepairCodexRoutes } from "./doctor/shared/codex-route-warnings.js";
-import { applyLegacyDoctorMigrations } from "./doctor/shared/legacy-config-compat.js";
 import { normalizeCompatibilityConfigValues } from "./doctor/shared/legacy-config-core-migrate.js";
 import { LEGACY_CONFIG_MIGRATIONS } from "./doctor/shared/legacy-config-migrations.js";
 import { collectBlockedLegacyOpenAICodexProviderPlan } from "./doctor/shared/legacy-config-migrations.runtime.models.js";
@@ -924,7 +923,7 @@ describe("normalizeCompatibilityConfigValues", () => {
           defaults: {
             model: {
               primary: "deleted/default-primary",
-              fallbacks: ["custom/kept", "openai/gpt-5.6-sol", "deleted/default-fallback"],
+              fallbacks: ["custom/kept", "openai/gpt-6-astra", "deleted/default-fallback"],
             },
             models: {
               "custom/kept": { alias: "kept" },
@@ -950,27 +949,27 @@ describe("normalizeCompatibilityConfigValues", () => {
     );
 
     expect(result.config.agents?.defaults?.model).toEqual({
-      primary: "openai/gpt-5.6-sol",
+      primary: "openai/gpt-6-astra",
       fallbacks: ["custom/kept"],
     });
     expect(result.config.agents?.defaults?.models).toEqual({
       "custom/kept": { alias: "kept" },
-      "openai/gpt-5.6-sol": {},
+      "openai/gpt-6-astra": {},
     });
     expect(result.config.agents?.list?.[0]).toMatchObject({
       id: "main",
-      models: { "plugin-provider/kept": {}, "openai/gpt-5.6-sol": {} },
+      models: { "plugin-provider/kept": {}, "openai/gpt-6-astra": {} },
     });
     expect(result.config.agents?.list?.[0]?.model).toBeUndefined();
     expect(result.changes).toEqual([
-      'Replaced stale agents.defaults.model primary "deleted/default-primary" with default "openai/gpt-5.6-sol" (provider "deleted" is unavailable).',
+      'Replaced stale agents.defaults.model primary "deleted/default-primary" with default "openai/gpt-6-astra" (provider "deleted" is unavailable).',
       'Removed stale agents.defaults.model fallback "deleted/default-fallback" (provider "deleted" is unavailable).',
-      'Removed duplicate agents.defaults.model fallback "openai/gpt-5.6-sol" after selecting it as the default primary.',
+      'Removed duplicate agents.defaults.model fallback "openai/gpt-6-astra" after selecting it as the default primary.',
       'Removed stale agents.defaults.models entry "deleted/models-add-row" (provider "deleted" is unavailable).',
-      'Added agents.defaults.models entry "openai/gpt-5.6-sol" to keep the repaired allowlist restrictive.',
+      'Added agents.defaults.models entry "openai/gpt-6-astra" to keep the repaired allowlist restrictive.',
       'Removed stale agents.list.main.model "deleted/agent-primary" so agent "main" inherits the default model (provider "deleted" is unavailable).',
       'Removed stale agents.list.main.models entry "deleted/agent-models-add-row" (provider "deleted" is unavailable).',
-      'Added agents.list.main.models entry "openai/gpt-5.6-sol" to keep the repaired allowlist restrictive.',
+      'Added agents.list.main.models entry "openai/gpt-6-astra" to keep the repaired allowlist restrictive.',
     ]);
   });
 
@@ -1076,9 +1075,9 @@ describe("normalizeCompatibilityConfigValues", () => {
       },
     );
 
-    expect(result.config.agents?.defaults?.model).toBe("openai/gpt-5.6-sol");
+    expect(result.config.agents?.defaults?.model).toBe("openai/gpt-6-astra");
     expect(result.changes).toEqual([
-      'Replaced stale agents.defaults.model "agent-local/model" with default "openai/gpt-5.6-sol" (provider "agent-local" is unavailable).',
+      'Replaced stale agents.defaults.model "agent-local/model" with default "openai/gpt-6-astra" (provider "agent-local" is unavailable).',
     ]);
   });
 
@@ -1102,7 +1101,7 @@ describe("normalizeCompatibilityConfigValues", () => {
       },
     );
 
-    expect(result.config.agents?.defaults?.model).toBe("openai/gpt-5.6-sol");
+    expect(result.config.agents?.defaults?.model).toBe("openai/gpt-6-astra");
     expect(result.config.agents?.entries?.worker?.model).toBeUndefined();
     expect(result.changes).toContain(
       'Removed stale agents.entries.worker.model "deleted/worker" so agent "worker" inherits the default model (provider "deleted" is unavailable).',
@@ -1122,9 +1121,9 @@ describe("normalizeCompatibilityConfigValues", () => {
       { pluginProviderIds: new Set(), persistedProviderIdsByAgentId: new Map() },
     );
 
-    expect(result.config.agents?.defaults?.models).toEqual({ "openai/gpt-5.6-sol": {} });
+    expect(result.config.agents?.defaults?.models).toEqual({ "openai/gpt-6-astra": {} });
     expect(result.changes).toContain(
-      'Added agents.defaults.models entry "openai/gpt-5.6-sol" to keep the repaired allowlist restrictive.',
+      'Added agents.defaults.models entry "openai/gpt-6-astra" to keep the repaired allowlist restrictive.',
     );
   });
 
@@ -1639,38 +1638,6 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.config.agents?.defaults?.modelPolicy).toEqual({
       allow: ["anthropic/claude-sonnet-4-6", "google/gemini-3.1-pro-preview"],
     });
-  });
-
-  it("canonicalizes a seeded legacy Claude CLI allowlist in one doctor pass", () => {
-    // Reporter path (#124952): the doctor spec migration copies an unmarked legacy
-    // model map into modelPolicy.allow first, so the normalizer must rewrite the
-    // allowlist and the model map in the same pass, not on a later run.
-    const seeded = applyLegacyDoctorMigrations({
-      agents: {
-        defaults: {
-          model: { primary: "anthropic/claude-opus-4-7" },
-          models: {
-            "claude-cli/claude-opus-4-7": {},
-            "claude-cli/claude-sonnet-4-6": {},
-          },
-        },
-      },
-    });
-    expect(seeded.next?.agents).toMatchObject({
-      defaults: {
-        modelPolicy: { allow: ["claude-cli/claude-opus-4-7", "claude-cli/claude-sonnet-4-6"] },
-      },
-    });
-
-    const res = normalizeCompatibilityConfigValues(legacyConfig(seeded.next));
-    expect(res.config.agents?.defaults?.models).toEqual({
-      "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
-      "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
-    });
-    expect(res.config.agents?.defaults?.modelPolicy).toEqual({
-      allow: ["anthropic/claude-opus-4-7", "anthropic/claude-sonnet-4-6"],
-    });
-    expect(normalizeCompatibilityConfigValues(res.config).changes).toEqual([]);
   });
 
   it("preserves legacy whole-agent Claude CLI intent for canonical Anthropic defaults", () => {

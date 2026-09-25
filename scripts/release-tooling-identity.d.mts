@@ -29,6 +29,19 @@ export function validateReleaseToolingIdentity(
 
 export function runReleaseToolingGh(args: string[]): string;
 
+export function verifyReleaseWorkflowRun(input: {
+  repository: string;
+  workflowFullRef: string;
+  workflowRef: string;
+  workflowSha: string;
+  runId: string;
+  runAttempt: string;
+  workflowPath: string;
+  workflowEvent: string;
+  runStatePolicy: "active" | "success";
+  runGh?: (args: string[]) => string;
+}): Record<string, unknown>;
+
 export function verifyReleaseToolingIdentity(
   input: ReleaseToolingIdentityInput & {
     repository: string;

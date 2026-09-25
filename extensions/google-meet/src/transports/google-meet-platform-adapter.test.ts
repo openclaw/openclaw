@@ -6,6 +6,28 @@ import { GOOGLE_MEET_PLATFORM_ADAPTER } from "./google-meet-platform-adapter.js"
 
 const MEETING_URL = "https://meet.google.com/abc-defg-hij";
 
+it.each([true, false])(
+  "starts browser capture only for the current Meet session (owner=%s)",
+  async (owns) => {
+    const source = GOOGLE_MEET_PLATFORM_ADAPTER.browser.buildAudioCaptureScript?.({
+      action: "start",
+      captureId: "capture-1",
+      meetingSessionId: "session-1",
+      meetingUrl: MEETING_URL,
+    });
+    const result = runInNewContext(`(${source})()`, {
+      URL,
+      location: { href: MEETING_URL },
+      window: { __openclawMeetAudioSession: owns ? "session-1" : "session-2" },
+      document: { querySelectorAll: () => [pageNode("Leave call")] },
+      AudioContext: function AudioContext() {
+        throw new Error("capture admitted");
+      },
+    });
+    await expect(result).rejects.toThrow(owns ? "capture admitted" : "no longer owns");
+  },
+);
+
 function pageNode(label: string) {
   return {
     disabled: false,

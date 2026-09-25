@@ -66,9 +66,7 @@ function accountTitleFixture(preview?: Promise<ModelCatalogResult>) {
   place.modelControl.load(context, "main", true, { agent: place.selectedAgent() });
   const draw = () => renderControl(place.modelControl, context, "main", place.selectedAgent());
   const select = (value: string) =>
-    draw()
-      .querySelector(".chat-model-account__picker")!
-      .dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value } } }));
+    draw().querySelector<HTMLButtonElement>(`[data-chat-account-option="${value}"]`)!.click();
   return {
     ...fixture,
     accounts,
@@ -76,7 +74,7 @@ function accountTitleFixture(preview?: Promise<ModelCatalogResult>) {
     titleRequest,
     select,
     chooseAccount: async (account: UserModelAccount) => {
-      draw().querySelector(".chat-model-account__picker")!.dispatchEvent(new Event("wa-show"));
+      draw().querySelector<HTMLButtonElement>("[data-chat-account-group-toggle]")!.click();
       await vi.advanceTimersByTimeAsync(0);
       expect(draw().textContent).toContain(account.label);
       select(`account:${account.authProfileId}`);

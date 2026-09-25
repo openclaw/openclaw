@@ -6,6 +6,8 @@
     <string name="controls" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kontrol"</string>
     <string name="talk" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bicara"</string>
     <string name="real_time_audio_failed" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Audio jam tangan gagal"</string>
+    <string name="microphone_permission_required" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Izin mikrofon diperlukan"</string>
+    <string name="open_settings" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Buka Pengaturan"</string>
     <string name="dictate" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Diktekan"</string>
     <string name="live" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Langsung"</string>
     <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Utas"</string>
@@ -26,6 +28,7 @@
     <string name="speak_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bacakan balasan terbaru"</string>
     <string name="speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Berbicara"</string>
     <string name="listening" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Mendengarkan"</string>
+    <string name="stopping" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Mengakhiri panggilan…"</string>
     <string name="connecting" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Menghubungkan"</string>
     <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Berpikir"</string>
     <string name="typing" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Mengetik"</string>
@@ -123,4 +126,14 @@
     <string name="pulse_phase_counts" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Dalam antrean %1$d, Berjalan %2$d, Selesai %3$d, Gagal %4$d, Tersembunyi %5$d"</string>
     <string name="pulse_more_phases" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Fase lainnya tidak ditampilkan"</string>
     <string name="pulse_unknown" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Tidak diketahui"</string>
+    <string name="read_full_reply" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Baca balasan lengkap"</string>
+    <string name="reply_stream_preview" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Pratinjau langsung. Baca balasan lengkap setelah selesai."</string>
+    <string name="reply_previous_page" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Bagian sebelumnya"</string>
+    <string name="reply_next_page" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Bagian berikutnya"</string>
+    <string name="reply_loading" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Memuat balasan lengkap…"</string>
+    <string name="reply_unsupported" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Perbarui aplikasi ponsel dan Gateway untuk membaca balasan lengkap."</string>
+    <string name="reply_too_large" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Balasan ini terlalu panjang untuk dibaca di sini. Buka di ponsel Anda."</string>
+    <string name="reply_changed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Balasan atau koneksi telah berubah. Coba lagi dari awal."</string>
+    <string name="reply_unavailable" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Teks lengkap tidak lagi tersedia."</string>
+    <string name="reply_failed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Tidak dapat memuat balasan lengkap. Coba lagi."</string>
 </resources>

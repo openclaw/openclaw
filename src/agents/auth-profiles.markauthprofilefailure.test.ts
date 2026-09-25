@@ -7,7 +7,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db.js";
+import {
+  createApiKeyCredential,
+  createAuthProfileStoreFixture,
+} from "./auth-profiles/credential-fixtures.test-support.js";
 
 vi.mock("./cli-credentials.js", () => ({
   readCodexCliCredentialsCached: () => null,
@@ -37,8 +44,9 @@ beforeAll(() => {
   tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-"));
 });
 
-afterAll(() => {
+afterAll(async () => {
   clearRuntimeAuthProfileStoreSnapshots();
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   fs.rmSync(tempRoot, { recursive: true, force: true });
 });
@@ -55,21 +63,10 @@ async function withAuthProfileStore(
 ): Promise<void> {
   const agentDir = makeAgentDir("store");
   saveAuthProfileStore(
-    {
-      version: 1,
-      profiles: {
-        "anthropic:default": {
-          type: "api_key",
-          provider: "anthropic",
-          key: "sk-default",
-        },
-        "openrouter:default": {
-          type: "api_key",
-          provider: "openrouter",
-          key: "sk-or-default",
-        },
-      },
-    },
+    createAuthProfileStoreFixture({
+      "anthropic:default": createApiKeyCredential("anthropic", "sk-default"),
+      "openrouter:default": createApiKeyCredential("openrouter", "sk-or-default"),
+    }),
     agentDir,
     { filterExternalAuthProfiles: false, syncExternalCli: false },
   );
@@ -87,42 +84,21 @@ describe("markAuthProfileFailure", () => {
   it("does not overwrite fresher on-disk credentials with a stale runtime snapshot", async () => {
     const agentDir = makeAgentDir("stale-snapshot");
     saveAuthProfileStore(
-      {
-        version: 1,
-        profiles: {
-          "openai:default": {
-            type: "api_key",
-            provider: "openai",
-            key: "sk-expired-old",
-          },
-        },
-      },
+      createAuthProfileStoreFixture({
+        "openai:default": createApiKeyCredential("openai", "sk-expired-old"),
+      }),
       agentDir,
       { filterExternalAuthProfiles: false, syncExternalCli: false },
     );
 
-    const staleRuntimeStore: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "openai:default": {
-          type: "api_key",
-          provider: "openai",
-          key: "sk-expired-old",
-        },
-      },
-    };
+    const staleRuntimeStore: AuthProfileStore = createAuthProfileStoreFixture({
+      "openai:default": createApiKeyCredential("openai", "sk-expired-old"),
+    });
 
     saveAuthProfileStore(
-      {
-        version: 1,
-        profiles: {
-          "openai:default": {
-            type: "api_key",
-            provider: "openai",
-            key: "sk-fresh-new",
-          },
-        },
-      },
+      createAuthProfileStoreFixture({
+        "openai:default": createApiKeyCredential("openai", "sk-fresh-new"),
+      }),
       agentDir,
       { filterExternalAuthProfiles: false, syncExternalCli: false },
     );
@@ -303,11 +279,7 @@ describe("markAuthProfileFailure", () => {
       {
         version: 1,
         profiles: {
-          "anthropic:default": {
-            type: "api_key",
-            provider: "anthropic",
-            key: "sk-default",
-          },
+          "anthropic:default": createApiKeyCredential("anthropic", "sk-default"),
         },
         usageStats: {
           "anthropic:default": {
@@ -343,11 +315,7 @@ describe("markAuthProfileFailure", () => {
       {
         version: 1,
         profiles: {
-          "anthropic:default": {
-            type: "api_key",
-            provider: "anthropic",
-            key: "sk-default",
-          },
+          "anthropic:default": createApiKeyCredential("anthropic", "sk-default"),
         },
         usageStats: {
           "anthropic:default": {

@@ -263,6 +263,11 @@ export async function startRaftGatewayAccount(
   const sockets = new Set<Socket>();
   let stopped = false;
   let bridgeExited: Error | undefined;
+  const assertWakeActive = () => {
+    if (stopped || bridgeExited || ctx.abortSignal?.aborted) {
+      throw new WakeRequestError(503, "Raft Gateway is stopping.");
+    }
+  };
   const server = createServer((request, response) => {
     void (async () => {
       if (request.method === "GET" && request.url === HEALTH_PATH) {
@@ -297,6 +302,7 @@ export async function startRaftGatewayAccount(
       }
 
       const payload = await readWakePayload(request);
+      assertWakeActive();
       if (containsMessageContent(payload)) {
         throw new WakeRequestError(400, "Wake payload must not include message content.");
       }
@@ -313,12 +319,11 @@ export async function startRaftGatewayAccount(
         throw new WakeRequestError(400, "Wake payload must include a stable event identity.");
       }
       const dispatched = await wakeQueue.enqueue(ctx.accountId, async () => {
-        if (ctx.abortSignal?.aborted) {
-          throw new WakeRequestError(503, "Raft Gateway is stopping.");
-        }
+        assertWakeActive();
         const result = await wakeDedupe.processGuarded(
           { accountId: ctx.accountId, key: dedupeKey },
           async () => {
+            assertWakeActive();
             await dispatchRaftWake({ ctx });
           },
         );
@@ -427,6 +432,8 @@ export async function startRaftGatewayAccount(
     stopped = true;
     requestBridgeStop();
     closeServer(server, sockets);
+    // Admission is closed; join dispatch and its replay settlement before retiring the account.
+    await wakeQueue.enqueue(ctx.accountId, async () => {});
     ctx.setStatus({
       accountId: ctx.accountId,
       running: false,

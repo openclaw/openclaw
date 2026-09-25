@@ -40,6 +40,7 @@ export const SessionSchema = z
       .enum(["main", "per-peer", "per-channel-peer", "per-account-channel-peer"])
       .optional(),
     groupScope: z.enum(["main", "per-group"]).optional(),
+    notifyOnCreate: z.boolean().optional(),
     identityLinks: z.record(z.string(), z.array(z.string())).optional(),
     resetTriggers: z.array(z.string()).optional(),
     reset: SessionResetConfigSchema.optional(),
@@ -76,6 +77,13 @@ export const SessionSchema = z
     maintenance: z
       .object({
         mode: z.enum(["enforce", "warn"]).optional(),
+        coldStorage: z
+          .object({
+            enabled: z.boolean().optional(),
+            afterDays: z.number().int().positive().optional(),
+          })
+          .strict()
+          .optional(),
         pruneAfter: PositiveDurationSchema.optional(),
         archiveDashboardAfter: z
           .union([PositiveDurationSchema, z.literal(false), z.literal(0)])

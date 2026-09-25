@@ -6,8 +6,8 @@
  */
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { z } from "zod";
-import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ToolsConfig } from "../config/types.tools.js";
 import {
   buildExecAutoReviewFailureDecision,
   defaultExecAutoReviewer,
@@ -31,7 +31,7 @@ import {
 import { coerceToolModelConfig } from "./tools/model-config.helpers.js";
 
 const DEFAULT_EXEC_REVIEWER_TIMEOUT_MS = 30_000;
-const EXEC_REVIEWER_MAX_TOKENS = 360;
+const EXEC_REVIEWER_MAX_TOKENS = 1_024;
 const MAX_EXEC_REVIEWER_INPUT_CHARS = 16_000;
 const EXEC_REVIEWER_TIMEOUT = Symbol("exec-reviewer-timeout");
 
@@ -45,10 +45,7 @@ const execAutoReviewResponseSchema = z
   .strict();
 
 /** Config for the optional model-backed exec reviewer. */
-export type ExecReviewerConfig = {
-  model?: AgentModelConfig;
-  timeoutMs?: number;
-};
+export type ExecReviewerConfig = NonNullable<NonNullable<ToolsConfig["exec"]>["reviewer"]>;
 
 type ExecReviewerDeps = {
   acquireSimpleCompletionModelForAgent?: typeof acquireSimpleCompletionModelForAgent;
@@ -344,6 +341,18 @@ function resolveExecReviewerTimeoutMs(config?: ExecReviewerConfig): number {
   return resolveTimerTimeoutMs(config?.timeoutMs, DEFAULT_EXEC_REVIEWER_TIMEOUT_MS, 1_000);
 }
 
+/**
+ * Resolves a bounded completion budget for the exec auto-reviewer.
+ * Uses the default 1,024 tokens while clamping downward to the provider model's
+ * advertised maximum output token limit (floored to integer).
+ */
+function resolveExecReviewerMaxTokens(modelMaxTokens?: number): number {
+  if (typeof modelMaxTokens === "number" && Number.isFinite(modelMaxTokens) && modelMaxTokens > 0) {
+    return Math.max(1, Math.floor(Math.min(EXEC_REVIEWER_MAX_TOKENS, modelMaxTokens)));
+  }
+  return EXEC_REVIEWER_MAX_TOKENS;
+}
+
 function buildReviewerTimeoutDecision(timeoutMs: number): ExecAutoReviewDecision {
   return {
     decision: "ask",
@@ -432,6 +441,10 @@ export function createModelExecAutoReviewer(params: {
                 "exec reviewer denied the command because it contains reviewer-directed text",
             };
       }
+      completionController = new AbortController();
+      const signal = params.signal
+        ? AbortSignal.any([completionController.signal, params.signal])
+        : completionController.signal;
       const preparedResult = createDeferredCore<Awaited<ReturnType<typeof prepareModel>>>();
       const finished = createDeferredCore();
       callerFinished = finished;
@@ -447,6 +460,7 @@ export function createModelExecAutoReviewer(params: {
               agentId,
               modelRef,
               allowMissingApiKeyModes: ["aws-sdk"],
+              signal,
             }),
           );
           preparedResult.resolve(acquired);
@@ -456,13 +470,14 @@ export function createModelExecAutoReviewer(params: {
         } finally {
           await work.drain();
           if (acquired && !("error" in acquired)) {
-            acquired.release();
+            await acquired[Symbol.asyncDispose]();
           }
         }
       }).catch((error: unknown) => preparedResult.reject(error));
       const prepared = await raceWithReviewerTimeout(preparedResult.promise, {
         timeoutMs,
         signal: params.signal,
+        onTimeout: () => completionController?.abort(),
       });
       if (prepared === EXEC_REVIEWER_TIMEOUT) {
         return buildReviewerTimeoutDecision(timeoutMs);
@@ -474,8 +489,6 @@ export function createModelExecAutoReviewer(params: {
         );
       }
 
-      const controller = new AbortController();
-      completionController = controller;
       const result = await raceWithReviewerTimeout(
         work.track(() =>
           complete({
@@ -496,11 +509,13 @@ export function createModelExecAutoReviewer(params: {
               ],
             },
             options: {
-              maxTokens: EXEC_REVIEWER_MAX_TOKENS,
+              maxTokens: resolveExecReviewerMaxTokens(prepared.model.maxTokens),
               temperature: 0,
-              signal: params.signal
-                ? AbortSignal.any([controller.signal, params.signal])
-                : controller.signal,
+              ...(params.reviewer?.thinking ? { reasoning: params.reviewer.thinking } : {}),
+              ...(params.reviewer?.fastMode !== undefined
+                ? { serviceTier: params.reviewer.fastMode ? "priority" : "default" }
+                : {}),
+              signal,
             },
           }),
         ),

@@ -17,6 +17,7 @@ import {
   formatProviderLoginFailure,
   isProviderLoginPatchPersisted,
   prepareProviderChannelLogin,
+  refreshProviderLoginAuthState,
   releaseProviderLoginFlow,
   reserveProviderLoginFlow,
   runProviderChannelLoginFlow,
@@ -43,11 +44,6 @@ function hasPrivateTarget(value: unknown): boolean {
   return /^(?:direct|dm|im|private|user):/u.test(normalized);
 }
 
-function hasPublicTarget(value: unknown): boolean {
-  const normalized = normalizeSurface(value);
-  return /^(?:channel|forum|group|guild|public|room|topic):/u.test(normalized);
-}
-
 function isPrivateLoginContext(params: HandleCommandsParams): boolean {
   const surface = normalizeSurface(
     params.command.channel || params.command.surface || params.ctx.Surface,
@@ -72,13 +68,7 @@ function isPrivateLoginContext(params: HandleCommandsParams): boolean {
     params.command.from,
     params.ctx.From,
   ];
-  if (targets.some(hasPrivateTarget)) {
-    return true;
-  }
-  if (targets.some(hasPublicTarget)) {
-    return false;
-  }
-  return false;
+  return targets.some(hasPrivateTarget);
 }
 
 function keyPart(value: unknown, fallback: string): string {
@@ -247,18 +237,19 @@ async function runChannelProviderLogin(params: {
   const sendReply = params.commandParams.opts?.onBlockReply;
   if (!sendReply) {
     return {
-      text: `${params.choice.providerLabel} login needs a live private response path so the code can be shown before it expires. Use the Control UI or a private chat and send \`${formatProviderLoginCommand(params.choice)}\` again.`,
+      text: `${params.choice.providerLabel} login needs a live private response path so the code can be shown before it expires. Use the Control UI or a private chat and send \`${formatProviderLoginCommand(params.choice.command)}\` again.`,
     };
   }
 
   const reservation = reserveProviderLoginFlow({
     flows: activeProviderLoginFlows,
     flowKey,
+    providerLabel: params.choice.providerLabel,
     signal: params.commandParams.opts?.abortSignal,
   });
   if (reservation.status === "active") {
     return {
-      text: "A provider login is already active for this chat. Complete it, or send `/login cancel` before requesting a new one.",
+      text: `${reservation.providerLabel} sign-in is already in progress. Finish it, or send /login cancel to cancel.`,
     };
   }
 
@@ -305,10 +296,12 @@ async function runChannelProviderLogin(params: {
       params.choice,
       loginResult.authRefresh,
       switchResult === "failed",
+      nextProfileId ? { model: params.commandParams.model, profileId: nextProfileId } : undefined,
     );
     return modelAccess
       ? offerProviderLoginModelAccess({
-          record: reservation.record,
+          flows: activeProviderLoginFlows,
+          flowKey,
           prepared: modelAccess,
           terminalMessage,
         })
@@ -318,13 +311,11 @@ async function runChannelProviderLogin(params: {
       text: formatProviderLoginFailure(params.choice, error),
     };
   } finally {
-    if (!reservation.record.pendingModelAccess) {
-      releaseProviderLoginFlow({
-        flows: activeProviderLoginFlows,
-        flowKey,
-        record: reservation.record,
-      });
-    }
+    releaseProviderLoginFlow({
+      flows: activeProviderLoginFlows,
+      flowKey,
+      record: reservation.record,
+    });
   }
 }
 
@@ -342,6 +333,13 @@ export const handleLoginCommand: CommandHandler = async (params, allowTextComman
     agentId: params.agentId,
     workspaceDir: params.workspaceDir,
     signal: params.opts?.abortSignal,
+    refreshAuth: () =>
+      refreshProviderLoginAuthState({
+        agentId: params.agentId,
+        readConfig:
+          params.opts?.getProviderLoginConfig ?? (() => getRuntimeConfigSnapshot() ?? params.cfg),
+        assertCurrent: (config) => assertProviderLoginAuthority(params, config),
+      }),
     cancelLogin: () =>
       cancelProviderLoginFlow({
         flows: activeProviderLoginFlows,
@@ -352,6 +350,9 @@ export const handleLoginCommand: CommandHandler = async (params, allowTextComman
         flows: activeProviderLoginFlows,
         flowKey: buildProviderLoginFlowKey(params),
         command,
+        agentId: params.agentId,
+        readConfig:
+          params.opts?.getProviderLoginConfig ?? (() => getRuntimeConfigSnapshot() ?? params.cfg),
         runtime: defaultRuntime,
         signal: params.opts?.abortSignal,
         assertCurrent: (config) =>
@@ -380,7 +381,8 @@ export const handleLoginCommand: CommandHandler = async (params, allowTextComman
 
 const commandsLoginTestApi = {
   clearActiveFlows() {
-    activeProviderLoginFlows.clear();
+    activeProviderLoginFlows.logins.clear();
+    activeProviderLoginFlows.modelAccess.clear();
   },
 };
 

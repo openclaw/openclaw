@@ -3,7 +3,6 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { buildMediaUnderstandingRegistry } from "./provider-registry.js";
 import { resolveAutoImageModel, runCapability } from "./runner.js";
-import { clearMediaUnderstandingBinaryCacheForTests } from "./runner.test-support.js";
 import { withAudioFixture, withVideoFixture } from "./runner.test-utils.js";
 import type { MediaUnderstandingProvider } from "./types.js";
 
@@ -11,6 +10,7 @@ const selection = vi.hoisted(() => {
   const providers: MediaUnderstandingProvider[] = [];
   return {
     providers,
+    discover: vi.fn<() => MediaUnderstandingProvider[]>(),
     auth: vi.fn<(params: { provider: string }) => Promise<boolean>>(),
   };
 });
@@ -24,7 +24,7 @@ vi.mock("../agents/model-auth.js", async () => {
 });
 
 vi.mock("../plugins/capability-provider-runtime.js", () => ({
-  resolvePluginCapabilityProviders: () => selection.providers,
+  resolvePluginCapabilityProviders: selection.discover,
 }));
 
 vi.mock("../agents/prepared-model-catalog.js", () => ({
@@ -34,17 +34,33 @@ vi.mock("../agents/prepared-model-catalog.js", () => ({
 
 beforeEach(() => {
   selection.providers.length = 0;
+  selection.discover.mockReset().mockImplementation(() => selection.providers);
   selection.auth.mockReset().mockResolvedValue(true);
-  clearMediaUnderstandingBinaryCacheForTests();
 });
 
 afterEach(() => {
   selection.providers.length = 0;
+  selection.discover.mockReset();
   selection.auth.mockReset();
-  clearMediaUnderstandingBinaryCacheForTests();
 });
 
 describe("automatic media selection", () => {
+  it("resolves explicit image defaults when fallback discovery is unavailable", async () => {
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { imageModel: { primary: "openrouter/google/gemini-2.5-flash" } } },
+    };
+    await selection.discover.withImplementation(
+      () => {
+        throw new Error("fallback provider discovery unavailable");
+      },
+      async () => {
+        await expect(
+          resolveAutoImageModel({ cfg, activeModel: { provider: "openai", model: "gpt-4.1" } }),
+        ).resolves.toEqual({ provider: "openrouter", model: "google/gemini-2.5-flash" });
+      },
+    );
+  });
+
   it.each(["manifest", "config"] as const)(
     "auto-selects hookless image providers from %s",
     async (source) => {

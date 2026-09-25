@@ -124,7 +124,13 @@ export type ProfileUsageStats = {
   errorCount?: number;
   failureCounts?: Partial<Record<AuthProfileFailureReason, number>>;
   lastFailureAt?: number;
+  /** Most recent quota probe or successful provider use. */
   lastProbeAt?: number;
+};
+
+export type UserModelAuthProfile = {
+  credential: AuthProfileCredential;
+  usageStats?: ProfileUsageStats;
 };
 
 /** Durable, non-secret auth profile selection state. */
@@ -138,6 +144,17 @@ export type AuthProfileState = {
   lastGood?: Record<string, string>;
   /** Usage statistics per profile for round-robin rotation */
   usageStats?: Record<string, ProfileUsageStats>;
+};
+
+export type PersistedAuthProfileStoreInspection =
+  | { status: "missing"; reason: "database" | "table" | "row" }
+  | { status: "readable"; raw: unknown }
+  | { status: "unreadable" };
+
+export type AuthProfileRowRead = {
+  store: PersistedAuthProfileStoreInspection;
+  state: PersistedAuthProfileStoreInspection;
+  cacheable: boolean;
 };
 
 /** Persisted credential payload without runtime-only selection state. */

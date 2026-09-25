@@ -15,8 +15,6 @@ import {
   resolveIMessageApprovalReactionTargetWithPersistence,
 } from "./approval-reactions.js";
 import type { IMessagePayload } from "./monitor/types.js";
-import { getOptionalIMessageRuntime } from "./runtime.js";
-import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
 
 const resolverMocks = vi.hoisted(() => ({
   resolveApprovalOverGateway: vi.fn(),
@@ -182,7 +180,7 @@ describe("iMessage approval reactions", () => {
     }
 
     expect(
-      registerIMessageApprovalReactionTargetForDeliveredPayload({
+      await registerIMessageApprovalReactionTargetForDeliveredPayload({
         accountId: "default",
         target: { channel: "imessage", to: "+15551230000" },
         payload,
@@ -248,7 +246,7 @@ describe("iMessage approval reactions", () => {
     }
 
     expect(
-      registerIMessageApprovalReactionTargetForDeliveredPayload({
+      await registerIMessageApprovalReactionTargetForDeliveredPayload({
         accountId: "default",
         target: { channel: "imessage", to: "+15551230000" },
         payload,
@@ -337,7 +335,7 @@ describe("iMessage approval reactions", () => {
     ).toBeNull();
   });
 
-  it("rejects delivered shared prompts without the exact private GUID and visible binding", () => {
+  it("rejects delivered shared prompts without the exact private GUID and visible binding", async () => {
     const payload: ReplyPayload = {
       text: [
         "🔒 Exec approval required",
@@ -389,7 +387,7 @@ describe("iMessage approval reactions", () => {
     }
 
     expect(
-      registerIMessageApprovalReactionTargetForDeliveredPayload({
+      await registerIMessageApprovalReactionTargetForDeliveredPayload({
         accountId: "default",
         target: { channel: "imessage", to: "+15551230000" },
         payload: prepared,
@@ -427,7 +425,7 @@ describe("iMessage approval reactions", () => {
 
   it("registers and resolves allow-always through the shared infinity reaction", async () => {
     expect(
-      registerIMessageApprovalReactionTarget({
+      await registerIMessageApprovalReactionTarget({
         accountId: "default",
         conversation: { handle: "+15551230000" },
         messageId: "msg-allow-always",
@@ -454,9 +452,9 @@ describe("iMessage approval reactions", () => {
     });
   });
 
-  it("rejects reaction targets without an explicit approval kind", () => {
+  it("rejects reaction targets without an explicit approval kind", async () => {
     expect(
-      registerIMessageApprovalReactionTargetRaw({
+      await registerIMessageApprovalReactionTargetRaw({
         accountId: "default",
         conversation: { handle: "+15551230000" },
         messageId: "msg-missing-kind",
@@ -468,7 +466,7 @@ describe("iMessage approval reactions", () => {
   });
 
   it("resolves a registered reaction target keyed by handle", async () => {
-    registerIMessageApprovalReactionTarget({
+    await registerIMessageApprovalReactionTarget({
       accountId: "default",
       conversation: { handle: "+15551230000" },
       messageId: "msg-1",
@@ -491,14 +489,14 @@ describe("iMessage approval reactions", () => {
   });
 
   it("merges learned chat ids into pending poll targets", async () => {
-    registerIMessageApprovalReactionTarget({
+    await registerIMessageApprovalReactionTarget({
       accountId: "default",
       conversation: { handle: "+15551230000" },
       messageId: "p:0/msg-1",
       approvalId: "exec-1",
       allowedDecisions: ["allow-once", "deny"],
     });
-    registerIMessageApprovalReactionTarget({
+    await registerIMessageApprovalReactionTarget({
       accountId: "default",
       conversation: {
         chatGuid: "SMS;-;+15551230000",
@@ -528,7 +526,7 @@ describe("iMessage approval reactions", () => {
     const dateNow = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
     try {
       expect(
-        registerIMessageApprovalReactionTarget({
+        await registerIMessageApprovalReactionTarget({
           accountId: "default",
           conversation: { handle: "+15551230000" },
           messageId: "msg-invalid-clock",
@@ -549,7 +547,7 @@ describe("iMessage approval reactions", () => {
     const nowMs = 1_800_000_000_000;
     const dateNow = vi.spyOn(Date, "now").mockReturnValue(nowMs);
     try {
-      registerIMessageApprovalReactionTarget({
+      await registerIMessageApprovalReactionTarget({
         accountId: "default",
         conversation: { handle: "+15551230000" },
         messageId: "msg-invalid-ttl",
@@ -569,71 +567,8 @@ describe("iMessage approval reactions", () => {
     ]);
   });
 
-  it("restores pending poll targets from plugin state after a process-local reset", async () => {
-    installIMessageStateRuntimeForTest();
-    clearIMessageApprovalReactionTargetsForTest();
-    registerIMessageApprovalReactionTarget({
-      accountId: "restart-account",
-      conversation: { chatId: 42, chatGuid: "iMessage;+;restart" },
-      messageId: "restart-message",
-      approvalId: "exec-restart",
-      allowedDecisions: ["allow-once", "deny"],
-    });
-    await vi.waitFor(async () => {
-      expect(
-        await listPendingIMessageApprovalReactionPollTargets({ accountId: "restart-account" }),
-      ).toHaveLength(1);
-    });
-
-    clearIMessageApprovalReactionTargetsForTest();
-
-    expect(
-      await listPendingIMessageApprovalReactionPollTargets({ accountId: "restart-account" }),
-    ).toEqual([
-      expect.objectContaining({
-        approvalId: "exec-restart",
-        messageId: "restart-message",
-        conversation: expect.objectContaining({ chatId: 42, chatGuid: "iMessage;+;restart" }),
-      }),
-    ]);
-  });
-
-  it("rejects persisted targets containing an invalid approval decision", async () => {
-    installIMessageStateRuntimeForTest();
-    clearIMessageApprovalReactionTargetsForTest();
-    const store = getOptionalIMessageRuntime()?.state.openKeyedStore({
-      namespace: "imessage.approval-reactions",
-      maxEntries: 1000,
-      defaultTtlMs: 24 * 60 * 60 * 1000,
-    });
-    if (!store) {
-      throw new Error("Expected iMessage approval reaction state store");
-    }
-    await store.register(
-      "default:handle:+15551230000:corrupt-message",
-      {
-        version: 1,
-        target: {
-          approvalId: "exec-corrupt",
-          approvalKind: "exec",
-          allowedDecisions: ["allow-once", "invalid"],
-        },
-      },
-      { ttlMs: 60_000 },
-    );
-
-    await expect(
-      resolveIMessageApprovalReactionTargetWithPersistence({
-        accountId: "default",
-        conversation: { handle: "+15551230000" },
-        messageId: "corrupt-message",
-        reactionKey: "👍",
-      }),
-    ).resolves.toBeNull();
-  });
-
   it("resolves a registered group reaction target keyed by chat_guid", async () => {
-    registerIMessageApprovalReactionTarget({
+    await registerIMessageApprovalReactionTarget({
       accountId: "default",
       conversation: { chatGuid: "iMessage;+;chat42" },
       messageId: "msg-group-1",
@@ -657,7 +592,7 @@ describe("iMessage approval reactions", () => {
   });
 
   it("resolves is_from_me tapbacks when the actor is an explicit approver", async () => {
-    registerIMessageApprovalReactionTarget({
+    await registerIMessageApprovalReactionTarget({
       accountId: "default",
       conversation: { handle: "+15551230000" },
       messageId: "approval-message",
@@ -693,7 +628,7 @@ describe("iMessage approval reactions", () => {
   });
 
   it("clears the in-memory binding on successful approval resolve so toggle 👍→👎 does not refire", async () => {
-    registerIMessageApprovalReactionTarget({
+    await registerIMessageApprovalReactionTarget({
       accountId: "default",
       conversation: { handle: "+15551230000" },
       messageId: "approval-message",
@@ -789,7 +724,7 @@ describe("iMessage approval reactions", () => {
       message: { chat_guid: "iMessage;+;chat42", chat_id: 42, is_group: true },
     },
   ])("$name", async (testCase) => {
-    registerIMessageApprovalReactionTarget({
+    await registerIMessageApprovalReactionTarget({
       accountId: "default",
       conversation: testCase.conversation,
       messageId: "approval-message",
@@ -830,7 +765,7 @@ describe("iMessage approval reactions", () => {
     // normalized (unprefixed) form, but `targetGuids` contains BOTH the
     // normalized and raw forms. The resolver must probe every candidate or
     // the lookup misses for valid tapbacks.
-    registerIMessageApprovalReactionTarget({
+    await registerIMessageApprovalReactionTarget({
       accountId: "default",
       conversation: { handle: "+15551230000" },
       messageId: "p:0/abc-123",
@@ -888,7 +823,7 @@ describe("iMessage approval reactions", () => {
   });
 
   it("ignores removed tapbacks for approval reactions", async () => {
-    registerIMessageApprovalReactionTarget({
+    await registerIMessageApprovalReactionTarget({
       accountId: "default",
       conversation: { handle: "+15551230000" },
       messageId: "approval-message",
@@ -918,7 +853,7 @@ describe("iMessage approval reactions", () => {
   });
 
   it("denies reactions from senders not on the approvers list", async () => {
-    registerIMessageApprovalReactionTarget({
+    await registerIMessageApprovalReactionTarget({
       accountId: "default",
       conversation: { handle: "+15551239999" },
       messageId: "approval-message",
@@ -946,7 +881,7 @@ describe("iMessage approval reactions", () => {
   });
 
   it("requires explicit approvers for direct approval reactions", async () => {
-    registerIMessageApprovalReactionTarget({
+    await registerIMessageApprovalReactionTarget({
       accountId: "default",
       conversation: { handle: "+15551230000" },
       messageId: "approval-message",
@@ -970,7 +905,7 @@ describe("iMessage approval reactions", () => {
   });
 
   it("forgets stale bindings when the gateway reports an unknown approval", async () => {
-    registerIMessageApprovalReactionTarget({
+    await registerIMessageApprovalReactionTarget({
       accountId: "default",
       conversation: { handle: "+15551230000" },
       messageId: "expired-message",
@@ -1006,7 +941,7 @@ describe("iMessage approval reactions", () => {
   });
 
   it("clears a losing surface and reports the canonical first-answer outcome", async () => {
-    registerIMessageApprovalReactionTarget({
+    await registerIMessageApprovalReactionTarget({
       accountId: "default",
       conversation: { handle: "+15551230000" },
       messageId: "already-resolved-message",
@@ -1048,7 +983,7 @@ describe("iMessage approval reactions", () => {
   });
 
   it("resolves approvals when the legacy tapback text path is used", async () => {
-    registerIMessageApprovalReactionTarget({
+    await registerIMessageApprovalReactionTarget({
       accountId: "default",
       conversation: { handle: "+15551230000" },
       messageId: "approval-message",

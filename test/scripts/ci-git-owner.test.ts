@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { beforeAll, expect, it, vi } from "vitest";
 import { parse } from "yaml";
+import { readCiCheckoutStep, renderGitTestClock } from "./ci-checkout.test-support.js";
 import { runCiGitStep, type FetchResult } from "./ci-git-owner.test-support.js";
 
 // Each case owns its checkout and process trees. Overlap their real timeout and
@@ -465,6 +466,46 @@ releasePolicyIt("rejects fully hydrated disconnected release histories", () => {
   }
 });
 
+releasePolicyIt(
+  "continues hydration when changed shallow boundaries reduce visible history",
+  () => {
+    const fixture = createAncestryFixture({
+      sourceDistance: 8,
+      targetDistance: 1000,
+      related: true,
+    });
+    const marker = join(fixture.root, "count-observed");
+    // Git can replace shallow cuts when it reaches merged history, making fewer
+    // commits visible even though the frontier changed. Replay that observed
+    // count transition while keeping fetches and the final ancestry proof real.
+    const proxy = writeGitProxy(
+      fixture,
+      "non-monotonic-count-git",
+      `if [[ " $* " == *" rev-list --count "* && ! -e "$COUNT_MARKER" ]]; then
+  count=$("$REAL_GIT" "$@") || exit $?
+  : > "$COUNT_MARKER"
+  echo "$((count + 10000))"
+  exit 0
+fi
+exec "$REAL_GIT" "$@"`,
+    );
+    try {
+      const checkout = cloneAncestrySource(fixture, "checkout");
+      expectPolicySuccess(
+        runReleaseAncestry(checkout, "merge-base", {
+          COUNT_MARKER: marker,
+          PATH: `${proxy.binDir}:${process.env.PATH ?? ""}`,
+          REAL_GIT: proxy.realGit,
+        }),
+        "merge-base",
+      );
+      expect(fixtureGit(checkout, ["rev-parse", "refs/remotes/origin/main"])).toBe(fixture.target);
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  },
+);
+
 releasePolicyIt("rejects a successful release history deepen that makes no progress", () => {
   const fixture = createAncestryFixture({
     sourceDistance: 8,
@@ -569,6 +610,55 @@ it("keeps exactly one byte-identical generated CI owner", () => {
     });
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toBe(source);
+  }
+});
+
+it("launches the Windows checkout owner below the native command-line limit", () => {
+  const root = mkdtempSync(join(tmpdir(), "ci-owner-windows-argv "));
+  const bin = join(root, "bin");
+  const runnerTemp = join(root, "runner temp");
+  mkdirSync(bin);
+  mkdirSync(runnerTemp);
+  const python = join(bin, "python");
+  writeFileSync(python, "#!/usr/bin/env bash\nprintf '%s\\0' \"$@\"\n");
+  chmodSync(python, 0o755);
+  try {
+    const checkout = readCiCheckoutStep("checks-windows").run;
+    const owner =
+      renderGitTestClock(readFileSync(".github/actions/git-owner/owner.py", "utf8")) +
+      `\n#${"x".repeat(32_768)}\n`;
+    const source = checkout.replace(
+      /^run_owner '[\s\S]*?'\n# End generated CI Git owner\.$/mu,
+      () => `run_owner '${owner.replaceAll("'", "'\\''")}'\n# End generated CI Git owner.`,
+    );
+    expect(source).not.toBe(checkout);
+    const result = spawnSync("bash", ["--noprofile", "--norc", "-e"], {
+      // Git for Windows prepends its tools; restore the Python probe boundary inside Bash.
+      input:
+        (process.platform === "win32"
+          ? 'export PATH="$(cygpath -u "$OWNER_PROBE_BIN"):$PATH"\n'
+          : "") + source,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: `${bin}${process.platform === "win32" ? ";" : ":"}${process.env.PATH ?? ""}`,
+        OWNER_PROBE_BIN: bin,
+        RUNNER_OS: "Windows",
+        RUNNER_TEMP: runnerTemp.replaceAll("\\", "/"),
+      },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    const args = result.stdout.split("\0").slice(0, -1);
+    expect(args).toEqual(["-I", "-S", `${runnerTemp.replaceAll("\\", "/")}/ci-git-owner.py`]);
+    expect(args.join(" ").length).toBeLessThan(1_024);
+    const materialized = readFileSync(join(runnerTemp, "ci-git-owner.py"), "utf8");
+    expect(materialized).toBe(owner);
+    // Fixed padding keeps the oversized-source regression meaningful if the owner shrinks.
+    expect(materialized.length + (materialized.match(/"/gu)?.length ?? 0) + 2).toBeGreaterThan(
+      32_767,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 
@@ -780,17 +870,22 @@ linuxIt.each([
 );
 
 linuxIt(
-  "keeps the base action's real 30-second timeout and drains before recovery",
+  "keeps the base action's 30-second fetch deadline and drains before recovery",
   async () => {
     const report = await runCiGitStep({
       action: "ensure-base-commit",
       baseAvailableAfter: 1,
       fetchResults: ["hang"],
       realClock: true,
+      readyFetchClockAdvanceSeconds: 30,
     });
     expect(report.code, report.output).toBe(0);
     expect(report.output).toContain("exact fetch failed");
     expect(report.readyAttempts).toEqual([1]);
+    expect(report.output.match(/fixture fetch timeout: \d+/gu)).toEqual([
+      "fixture fetch timeout: 30",
+    ]);
+    expect(report.fetchClockAdvancedSeconds).toBe(30);
   },
   55_000,
 );
@@ -1040,23 +1135,33 @@ posixIt.each(sanityFetchCases)(
 );
 
 posixIt.each([
-  { label: "real 30-second fetch timeout", fetchResults: ["hang", 0], warnings: 1 },
-  { label: "real five-second backoff", fetchResults: [137, 0], warnings: 1 },
+  { label: "30-second fetch deadline", fetchResults: ["hang", 0], warnings: 1 },
+  { label: "five-second backoff", fetchResults: [137, 0], warnings: 1 },
 ] as const)(
   "workflow sanity retains $label",
   async ({ fetchResults, warnings }) => {
-    const started = performance.now();
+    const readyFetchClockAdvanceSeconds = fetchResults[0] === "hang" ? 30 : undefined;
     const report = await sanity({
       fetchResults: [...fetchResults],
       realClock: true,
+      virtualBackoff: true,
       cooperativeTrees: true,
+      readyFetchClockAdvanceSeconds,
     });
     expect(report.code, report.output).toBe(0);
     expect(report.fetches).toHaveLength(2);
     expect(report.output.match(/; retrying/gu) ?? []).toHaveLength(warnings);
-    expect(performance.now() - started).toBeGreaterThanOrEqual(
-      fetchResults[0] === "hang" ? 35_000 : 5_000,
-    );
+    expect(report.fetchClockAdvancedSeconds).toBe(readyFetchClockAdvanceSeconds);
+    if (readyFetchClockAdvanceSeconds !== undefined) {
+      expect(report.output.match(/fixture fetch timeout: \d+/gu)).toEqual([
+        "fixture fetch timeout: 30",
+        "fixture fetch timeout: 30",
+      ]);
+    }
+    expect(report.output.match(/fixture backoff: \d+/gu)).toEqual(["fixture backoff: 5"]);
+    const elapsed =
+      (report.backoffClockAdvancedSeconds + (report.fetchClockAdvancedSeconds ?? 0)) * 1000;
+    expect(elapsed).toBeGreaterThanOrEqual(fetchResults[0] === "hang" ? 35_000 : 5_000);
   },
   55_000,
 );
@@ -1302,25 +1407,38 @@ posixIt.each([124, 125, 143])(
     const report = await publisherRun({
       gitFault: { match: "^push ", code, output: "GH013 repository rule violations\n" },
     });
-    expect(report.code, report.output).toBe(code);
-    expect(report.pushes).toHaveLength(1);
-    expect(report.commands.filter(({ args }) => args[0] === "ls-remote")).toHaveLength(2);
-    expect(report.output).toContain("refusing a doomed retry");
-    expect(report.pushLog).toBe("GH013 repository rule violations\n");
+    expect(report.code, report.output).toBe(code === 124 ? 0 : code);
+    expect(report.pushes).toHaveLength(code === 124 ? 2 : 1);
+    expect(report.commands.filter(({ args }) => args[0] === "ls-remote")).toHaveLength(
+      code === 124 ? 3 : 2,
+    );
+    if (code === 124) {
+      expect(report.output).toContain("retrying once under the same lease");
+      expect(report.githubSummary).toContain("Generated pull request:");
+    } else {
+      expect(report.output).toContain("refusing a doomed retry");
+      expect(report.pushLog).toBe("GH013 repository rule violations\n");
+    }
     expect(report.authHeaderPresent).toBe(false);
-    expect(report.githubSummary).toBe("");
+    if (code !== 124) {
+      expect(report.githubSummary).toBe("");
+    }
   },
   55_000,
 );
 
 posixIt.each(["fetch", "ls-remote", "push"])(
-  "generated publisher %s timeout has one attempt and no general retry",
+  "generated publisher %s timeout has bounded recovery",
   async (operation) => {
     const report = await publisherRun({ gitFault: { match: `^${operation} `, code: "hang" } });
-    expect(report.code, report.output).toBe(124);
+    expect(report.code, report.output).toBe(operation === "push" ? 0 : 124);
     expect(report.fetches).toHaveLength(1);
-    expect(report.pushes).toHaveLength(operation === "push" ? 1 : 0);
-    expect(report.githubSummary).toBe("");
+    expect(report.pushes).toHaveLength(operation === "push" ? 2 : 0);
+    expect(report.githubSummary).toBe(
+      operation === "push"
+        ? "Generated pull request: https://github.com/openclaw/openclaw/pull/1\n"
+        : "",
+    );
     expect(report.authHeaderPresent).toBe(false);
   },
   55_000,
@@ -1395,6 +1513,22 @@ posixIt.each([0, 2, 23, 125, 143, "hang", "cleanup-failure", "cancel"] as const)
         expect(report.output).not.toContain("Unable to determine");
       }
     }
+  },
+  55_000,
+);
+
+posixIt(
+  "generated publisher retries one timed-out push under the unchanged lease",
+  async () => {
+    const report = await publisherRun({
+      gitFault: { match: "^push ", occurrence: 1, code: "hang" },
+    });
+    expect(report.code, report.output).toBe(0);
+    expect(report.pushes).toHaveLength(2);
+    expect(report.pushes[0]?.args).toEqual(report.pushes[1]?.args);
+    expect(report.publication?.generatedA).toBe("desired-a");
+    expect(report.githubSummary).toContain("Generated pull request:");
+    expect(report.output).toContain("retrying once under the same lease");
   },
   55_000,
 );

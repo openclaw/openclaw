@@ -2,6 +2,9 @@
 import { html, nothing } from "lit";
 import { t } from "../../../i18n/index.ts";
 import "../../../components/modal-dialog.ts";
+import { registerDreamingEnglish } from "../../../i18n/locales/en-dreaming.ts";
+
+registerDreamingEnglish();
 
 type DreamingToggleConfirmationProps = {
   open: boolean;

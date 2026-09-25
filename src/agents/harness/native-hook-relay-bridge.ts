@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { hasErrnoCode } from "../../infra/errno.js";
+import { createHttpRequestAbortSignal } from "../../infra/http-request-lifecycle.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
@@ -40,10 +41,11 @@ export {
   NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR,
 } from "./native-hook-relay-client.js";
 
-const { relays, relayBridges, pendingBridgeOperations } = nativeHookRelayState;
+const { relays, relayBridges, pendingOperations } = nativeHookRelayState;
 
 type InvokeNativeHookRelay = (
   params: InvokeNativeHookRelayParams,
+  signal?: AbortSignal,
 ) => Promise<NativeHookRelayProcessResponse>;
 
 type NativeHookRelayBridgeRenewalResult = "renewed" | "unavailable" | "ownership-changed";
@@ -106,22 +108,19 @@ export function registerNativeHookRelayBridge(
     });
   });
   bridge.pending = bridge.ready;
-  retainNativeHookRelayBridgeOperation(bridge, bridge.ready);
+  retainNativeHookRelayOperation(bridge.relayId, bridge.ready);
   server.listen(0, "127.0.0.1");
   server.unref();
   return bridge;
 }
 
-function retainNativeHookRelayBridgeOperation(
-  bridge: NativeHookRelayBridgeRegistration,
-  operation: Promise<void>,
-): void {
-  pendingBridgeOperations.add(operation);
+export function retainNativeHookRelayOperation(relayId: string, operation: Promise<void>): void {
+  pendingOperations.add(operation);
   void operation.then(
-    () => pendingBridgeOperations.delete(operation),
+    () => pendingOperations.delete(operation),
     (error: unknown) => {
-      pendingBridgeOperations.delete(operation);
-      log.debug("native hook relay bridge operation failed", { error, relayId: bridge.relayId });
+      pendingOperations.delete(operation);
+      log.debug("native hook relay operation failed", { error, relayId });
     },
   );
 }
@@ -222,7 +221,7 @@ export async function renewNativeHookRelayBridgeRecord(
         : "ownership-changed";
     });
   bridge.pending = renewal.then(() => undefined);
-  retainNativeHookRelayBridgeOperation(bridge, bridge.pending);
+  retainNativeHookRelayOperation(bridge.relayId, bridge.pending);
   return await renewal;
 }
 
@@ -273,7 +272,7 @@ export function unregisterNativeHookRelayBridge(
       }
     });
   bridge.pending = bridge.closing;
-  retainNativeHookRelayBridgeOperation(bridge, bridge.closing);
+  retainNativeHookRelayOperation(bridge.relayId, bridge.closing);
   return bridge.closing;
 }
 
@@ -282,6 +281,7 @@ async function handleNativeHookRelayBridgeRequest(
   res: ServerResponse,
   auth: NativeHookRelayBridgeRequestAuth,
 ): Promise<void> {
+  const requestAbort = createHttpRequestAbortSignal(req, res);
   try {
     if (req.method !== "POST" || req.url !== "/invoke") {
       writeNativeHookRelayBridgeJson(res, 404, { ok: false, error: "not found" });
@@ -314,14 +314,22 @@ async function handleNativeHookRelayBridgeRequest(
       });
       return;
     }
-    const result = await auth.invokeRelay({ ...payload, requireGeneration: true });
+    const result = await auth.invokeRelay(
+      { ...payload, requireGeneration: true },
+      requestAbort.signal,
+    );
     writeNativeHookRelayBridgeJson(res, 200, { ok: true, result });
   } catch (error) {
+    if (requestAbort.signal.aborted) {
+      return;
+    }
     writeNativeHookRelayBridgeJson(
       res,
       isNativeHookRelayBridgeStaleRegistrationError(error) ? 410 : 500,
       { ok: false, error: error instanceof Error ? error.message : String(error) },
     );
+  } finally {
+    requestAbort.cleanup();
   }
 }
 
@@ -387,8 +395,8 @@ export async function clearNativeHookRelayBridgesForTests(): Promise<void> {
   for (const relayId of relayBridges.keys()) {
     void unregisterNativeHookRelayBridge(relayId);
   }
-  while (pendingBridgeOperations.size > 0) {
-    await Promise.allSettled(pendingBridgeOperations);
+  while (pendingOperations.size > 0) {
+    await Promise.allSettled(pendingOperations);
   }
   await clearNativeHookRelayBridgeRecordsForTests();
 }

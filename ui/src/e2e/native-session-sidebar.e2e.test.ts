@@ -22,6 +22,97 @@ beforeEach(() => {
 });
 
 suite.define(() => {
+  it("hides empty failing catalogs while keeping sessions from available hosts", async () => {
+    const context = await suite.newBrowserContext({
+      deviceScaleFactor: 2,
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 1100, width: 1440 },
+    });
+    const page = await context.newPage();
+    await page.addInitScript(
+      (key) => localStorage.removeItem(key),
+      collapsedSessionSectionsStorageKey,
+    );
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
+      methodResponses: {
+        "sessions.catalog.list": {
+          catalogs: [
+            {
+              id: "codex",
+              label: "Codex",
+              capabilities: { continueSession: true, archive: true, startTerminal: true },
+              hosts: [
+                {
+                  hostId: "gateway:local",
+                  label: "Gateway",
+                  kind: "gateway",
+                  connected: true,
+                  sessions: [],
+                  error: {
+                    code: "APP_SERVER_UNAVAILABLE",
+                    message: "Codex app-server is unavailable",
+                  },
+                },
+              ],
+            },
+            {
+              id: "claude",
+              label: "Claude Code",
+              capabilities: { continueSession: true, archive: false },
+              hosts: [
+                {
+                  hostId: "gateway:local",
+                  label: "Gateway",
+                  kind: "gateway",
+                  connected: true,
+                  sessions: [
+                    {
+                      threadId: "native-sidebar-proof",
+                      name: "Review release notes",
+                      cwd: "/workspace/release-notes",
+                      status: "idle",
+                      archived: false,
+                      canContinue: true,
+                      canArchive: false,
+                    },
+                  ],
+                },
+                {
+                  hostId: "node:offline",
+                  label: "Remote workstation",
+                  kind: "node",
+                  connected: false,
+                  sessions: [],
+                  error: { code: "NODE_INVOKE_FAILED", message: "Remote catalog is unavailable" },
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("sessions.catalog.list");
+      const sessionGroups = page.locator(".sidebar-recent-sessions");
+      const populated = sessionGroups.locator('[data-session-section="catalog:claude"]');
+      await populated.getByText("Review release notes", { exact: true }).waitFor();
+      if (captureUiProofEnabled) {
+        await sessionGroups.screenshot({
+          animations: "disabled",
+          path: path.join(uiProofArtifactDir, "empty-failing-catalog.png"),
+        });
+      }
+      expect(await sessionGroups.locator('[data-session-section="catalog:codex"]').count()).toBe(0);
+      expect(await populated.locator('[data-session-catalog-error="claude"]').count()).toBe(1);
+      expect(await populated.locator('[data-session-catalog-host="node:offline"]').count()).toBe(0);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("hides empty native hosts and the empty Coding section", async () => {
     const context = await suite.newBrowserContext({
       deviceScaleFactor: 2,
@@ -121,7 +212,7 @@ suite.define(() => {
     }
   });
 
-  it("preserves native actions across adopted session menu entry points", async () => {
+  it.each([false, true])("preserves adopted session menus (touch: %s)", async (hasTouch) => {
     const adoptedKey = "agent:main:adopted-native-menu";
     const proofRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const proofDir = proofRoot
@@ -129,6 +220,7 @@ suite.define(() => {
       : undefined;
     const context = await suite.newBrowserContext({
       deviceScaleFactor: 2,
+      hasTouch,
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 1100, width: 1440 },
@@ -179,7 +271,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       const row = page.locator(`[data-session-key="${adoptedKey}"]`);
       await row.waitFor({ state: "visible" });
-      const menuButton = row.locator('[data-session-menu="true"]');
+      const menuTrigger = row.locator(".sidebar-recent-session__link");
       const catalogMenu = () => page.locator("openclaw-catalog-session-menu");
       const menuValues = async () =>
         catalogMenu()
@@ -207,20 +299,20 @@ suite.define(() => {
         }
       };
 
-      await row.hover();
-      await menuButton.hover();
-      await menuButton.click();
-      await assertCatalogMenu("01-button");
-      await page.keyboard.press("Escape");
-      await expect.poll(() => catalogMenu().count()).toBe(0);
-
-      await row.click({ button: "right" });
-      await assertCatalogMenu("02-context");
+      const touchMenu = row.locator("[data-sidebar-session-menu]");
+      if (hasTouch) {
+        await touchMenu.tap();
+        await assertCatalogMenu("touch");
+      } else {
+        expect(await touchMenu.isVisible()).toBe(false);
+        await row.click({ button: "right" });
+        await assertCatalogMenu("context");
+      }
       await page.keyboard.press("Escape");
       await expect.poll(() => catalogMenu().count()).toBe(0);
 
       for (const key of ["ContextMenu", "Shift+F10"]) {
-        await menuButton.focus();
+        await menuTrigger.focus();
         await page.keyboard.press(key);
         await assertCatalogMenu(key);
         await page.keyboard.press("Escape");

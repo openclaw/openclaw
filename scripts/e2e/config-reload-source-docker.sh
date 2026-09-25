@@ -33,8 +33,9 @@ last_status=1
 while [ \"\$SECONDS\" -lt \"\$deadline\" ]; do
   if node \"\$entry\" gateway status --url ws://127.0.0.1:$PORT --token '$TOKEN' --require-rpc --timeout 30000 >'$out_file' 2>'$out_file.err'; then
     exit 0
+  else
+    last_status=\$?
   fi
-  last_status=\$?
   sleep 1
 done
 cat '$out_file.err' >&2 || true

@@ -3,12 +3,15 @@ import crypto from "node:crypto";
 import { EventEmitter, once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_UPLOAD_DIR } from "./paths.js";
 import {
   getPwToolsCoreSessionMocks,
   installPwToolsCoreTestHooks,
   setPwToolsCoreCurrentPage,
+  setPwToolsCoreCurrentRefLocator,
+  setPwToolsCoreDownloadCapture,
 } from "./pw-tools-core.test-harness.js";
 
 installPwToolsCoreTestHooks();
@@ -16,6 +19,119 @@ const mod = await import("./pw-tools-core.downloads.js");
 const interactions = await import("./pw-tools-core.interactions.js");
 
 describe("pw-tools-core", () => {
+  it("preserves an accepted download waiter when a stale successor finishes page preparation", async () => {
+    const session = getPwToolsCoreSessionMocks();
+    const page = {};
+    setPwToolsCoreCurrentPage(page);
+    const click = vi.fn(async () => {});
+    setPwToolsCoreCurrentRefLocator({ click });
+    const result = {
+      url: "https://example.com/accepted.txt",
+      suggestedFilename: "accepted.txt",
+      path: "/tmp/accepted.txt",
+    };
+    const captured = createDeferred<typeof result>();
+    setPwToolsCoreDownloadCapture({ armed: true, promise: captured.promise, cancel: vi.fn() });
+    const accepted = mod.waitForDownloadViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+    });
+    const acceptedResult = Promise.allSettled([accepted]);
+    await Promise.resolve();
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    session.getPageForTargetId.mockImplementationOnce(async () => {
+      entered.resolve();
+      await release.promise;
+      return page;
+    });
+    const successor = mod.downloadViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+      ref: "e1",
+      path: "/tmp/rejected.txt",
+      assertCurrent: async () => {
+        throw new Error("Dashboard successor revoked");
+      },
+    });
+    const successorResult = Promise.allSettled([successor]);
+    try {
+      await Promise.race([
+        entered.promise,
+        successor.then(() => {
+          throw new Error("Successor skipped held page lookup");
+        }),
+      ]);
+      release.resolve();
+      expect(await successorResult).toMatchObject([
+        { status: "rejected", reason: { message: "Dashboard successor revoked" } },
+      ]);
+      captured.resolve(result);
+      expect(await acceptedResult).toEqual([{ status: "fulfilled", value: result }]);
+      expect(click).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      captured.resolve(result);
+      await Promise.all([acceptedResult, successorResult]);
+    }
+  });
+
+  it.each(["page preparation", "pending-dialog lookup"] as const)(
+    "checks dialog authority after %s",
+    async (boundary) => {
+      const session = getPwToolsCoreSessionMocks();
+      const page = {};
+      setPwToolsCoreCurrentPage(page);
+      const entered = createDeferred<void>();
+      const release = createDeferred<void>();
+      const prepare = async () => {
+        entered.resolve();
+        await release.promise;
+      };
+      if (boundary === "page preparation") {
+        session.getPageForTargetId.mockImplementationOnce(async () => {
+          await prepare();
+          return page;
+        });
+      } else {
+        session.respondToObservedDialogOnPage.mockImplementationOnce(async () => {
+          await prepare();
+          throw new Error("No dialog is pending.");
+        });
+      }
+      let current = true;
+      const operation = mod.armDialogViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        accept: true,
+        assertCurrent: async () => {
+          if (!current) {
+            throw new Error("Dashboard dialog revoked");
+          }
+        },
+      });
+      const settled = Promise.allSettled([operation]);
+      try {
+        await Promise.race([
+          entered.promise,
+          operation.then(() => {
+            throw new Error("Dialog skipped preparation");
+          }),
+        ]);
+        current = false;
+        release.resolve();
+        expect(await settled).toMatchObject([
+          { status: "rejected", reason: { message: "Dashboard dialog revoked" } },
+        ]);
+        expect(session.armObservedDialogResponseOnPage).not.toHaveBeenCalled();
+        if (boundary === "page preparation") {
+          expect(session.respondToObservedDialogOnPage).not.toHaveBeenCalled();
+        }
+      } finally {
+        release.resolve();
+        await settled;
+      }
+    },
+  );
   it("last file-chooser arm wins", async () => {
     const firstPath = path.join(DEFAULT_UPLOAD_DIR, `vitest-arm-1-${crypto.randomUUID()}.txt`);
     const secondPath = path.join(DEFAULT_UPLOAD_DIR, `vitest-arm-2-${crypto.randomUUID()}.txt`);

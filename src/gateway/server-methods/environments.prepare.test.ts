@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
-import { createCoreGatewayMethodDescriptors } from "../methods/core-descriptors.js";
-import { environmentsHandlers, summarizeWorkerEnvironment } from "./environments.js";
+import { createCoreGatewayMethodDescriptors } from "../methods/core-method-policy.js";
+import { summarizeWorkerEnvironment } from "../worker-environments/environment-summary.js";
+import { environmentsHandlers } from "./environments.js";
 import {
   callEnvironmentMethod,
   FakeWorkerServiceError,
@@ -86,7 +87,7 @@ describe("environments.prepare", () => {
     ]);
   });
 
-  it("projects preparation identity without the durable demand or expiry fields", () => {
+  it("omits administrator preparation details by default", () => {
     const preparation = {
       purpose: "build" as const,
       key: "project-key",

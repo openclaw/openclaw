@@ -1,5 +1,6 @@
 // Host Command script supports OpenClaw repository automation.
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -107,6 +108,8 @@ const { spawn } = require("node:child_process");
 const { readFileSync, writeSync } = require("node:fs");
 
 const payload = JSON.parse(readFileSync(0, "utf8"));
+const writeControl = (prefix, value) =>
+  writeSync(payload.controlFd, payload.controlPrefix + prefix + value + "\n");
 const child = spawn(payload.command, payload.args, {
   cwd: payload.cwd,
   detached: true,
@@ -114,11 +117,11 @@ const child = spawn(payload.command, payload.args, {
   shell: payload.shell,
   stdio: ["pipe", "pipe", "pipe"],
 });
-writeSync(
-  3,
-  ${JSON.stringify(HOST_COMMAND_CHILD_PID_PREFIX)} + JSON.stringify({
+writeControl(
+  ${JSON.stringify(HOST_COMMAND_CHILD_PID_PREFIX)},
+  JSON.stringify({
     pid: child.pid || null,
-  }) + "\n",
+  }),
 );
 
 let timedOut = false;
@@ -183,7 +186,7 @@ function groupAlive() {
 }
 
 function finishTimedOut() {
-  writeSync(3, ${JSON.stringify(HOST_COMMAND_TIMEOUT_PREFIX)} + "{}\n");
+  writeControl(${JSON.stringify(HOST_COMMAND_TIMEOUT_PREFIX)}, "{}");
   process.exit(124);
 }
 
@@ -313,12 +316,12 @@ child.stdin.on("error", (error) => {
 });
 child.on("error", (error) => {
   clearTimeout(timeout);
-  writeSync(
-    3,
-    ${JSON.stringify(HOST_COMMAND_SPAWN_ERROR_PREFIX)} + JSON.stringify({
+  writeControl(
+    ${JSON.stringify(HOST_COMMAND_SPAWN_ERROR_PREFIX)},
+    JSON.stringify({
       code: error.code || null,
       message: error.message,
-    }) + "\n",
+    }),
   );
   process.stderr.write(error.message + "\n");
   process.exit(127);
@@ -421,24 +424,41 @@ export function run(command: string, args: string[], options: RunOptions = {}): 
   const invocation = resolveHostCommandInvocation(command, args, { env });
   const timeoutMs = resolveOptionalHostCommandTimeoutMs(options.timeoutMs);
   const usesPosixTimedWrapper = process.platform !== "win32" && timeoutMs !== undefined;
-  const result = usesPosixTimedWrapper
+  const timedResult = usesPosixTimedWrapper
     ? runPosixTimedCommandSync(invocation, env, options, timeoutMs)
-    : spawnSync(invocation.command, invocation.args, {
-        cwd: options.cwd ?? repoRoot,
-        encoding: "utf8",
-        env: invocation.env ?? env,
-        input: options.input,
-        killSignal: "SIGKILL",
-        maxBuffer: HOST_COMMAND_MAX_BUFFER_BYTES,
-        stdio: options.quiet ? ["pipe", "pipe", "pipe"] : ["pipe", "pipe", "pipe"],
-        shell: invocation.shell,
-        timeout: timeoutMs,
-        windowsVerbatimArguments: invocation.windowsVerbatimArguments,
-      });
+    : undefined;
+  const result =
+    timedResult?.result ??
+    spawnSync(invocation.command, invocation.args, {
+      cwd: options.cwd ?? repoRoot,
+      encoding: "utf8",
+      env: invocation.env ?? env,
+      input: options.input,
+      killSignal: "SIGKILL",
+      maxBuffer: HOST_COMMAND_MAX_BUFFER_BYTES,
+      stdio: options.quiet ? ["pipe", "pipe", "pipe"] : ["pipe", "pipe", "pipe"],
+      shell: invocation.shell,
+      timeout: timeoutMs,
+      windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+    });
 
   let wrapperTimedOut = false;
+  let commandStderr = result.stderr ?? "";
   if (usesPosixTimedWrapper) {
-    const wrapperControl = typeof result.output[3] === "string" ? result.output[3] : "";
+    let wrapperControl = typeof result.output[3] === "string" ? result.output[3] : "";
+    if (timedResult?.controlPrefix) {
+      const controlLines: string[] = [];
+      const stderrLines: string[] = [];
+      for (const line of commandStderr.split("\n")) {
+        if (line.startsWith(timedResult.controlPrefix)) {
+          controlLines.push(line.slice(timedResult.controlPrefix.length));
+        } else {
+          stderrLines.push(line);
+        }
+      }
+      wrapperControl = controlLines.join("\n");
+      commandStderr = stderrLines.join("\n");
+    }
     const outerWrapperTimedOut =
       (result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT";
     if (outerWrapperTimedOut) {
@@ -465,7 +485,7 @@ export function run(command: string, args: string[], options: RunOptions = {}): 
 
   const status = timedOut ? 124 : (result.status ?? (result.signal ? 128 : 1));
   const commandResult = {
-    stderr: result.stderr ?? "",
+    stderr: commandStderr,
     stdout: result.stdout ?? "",
     status,
   };
@@ -529,11 +549,19 @@ function runPosixTimedCommandSync(
   env: NodeJS.ProcessEnv,
   options: RunOptions,
   timeoutMs: number,
-): SpawnSyncReturns<string> {
+): { controlPrefix: string; result: SpawnSyncReturns<string> } {
   const wrapperTimeoutMs = addTimerTimeoutGraceMs(timeoutMs, HOST_COMMAND_WRAPPER_BACKSTOP_MS) ?? 1;
+  // oxlint-disable-next-line no-warning-comments -- remove after the upstream Bun stdio fix ships.
+  // TODO(bun): Bun omits extra stdio pipe output from spawnSync results. Use a
+  // nonce-prefixed stderr control channel until it exposes fd 3 like Node.
+  const controlPrefix = process.versions.bun
+    ? `__OPENCLAW_HOST_COMMAND_CONTROL_${randomUUID()}__`
+    : "";
   const payload = JSON.stringify({
     args: invocation.args,
     command: invocation.command,
+    controlFd: controlPrefix ? 2 : 3,
+    controlPrefix,
     cwd: options.cwd ?? repoRoot,
     env: invocation.env ?? env,
     input: options.input,
@@ -542,16 +570,18 @@ function runPosixTimedCommandSync(
     timeoutKillGraceMs: HOST_COMMAND_TIMEOUT_KILL_GRACE_MS,
     timeoutMs,
   });
-  return spawnSync(process.execPath, ["-e", POSIX_TIMEOUT_WRAPPER], {
+  const wrapperExecPath = process.versions.bun ? "node" : process.execPath;
+  const result = spawnSync(wrapperExecPath, ["-e", POSIX_TIMEOUT_WRAPPER], {
     cwd: options.cwd ?? repoRoot,
     encoding: "utf8",
     env,
     input: payload,
     killSignal: "SIGKILL",
     maxBuffer: HOST_COMMAND_MAX_BUFFER_BYTES * 2 + HOST_COMMAND_WRAPPER_EXTRA_BUFFER_BYTES,
-    stdio: ["pipe", "pipe", "pipe", "pipe"],
+    stdio: controlPrefix ? ["pipe", "pipe", "pipe"] : ["pipe", "pipe", "pipe", "pipe"],
     timeout: wrapperTimeoutMs,
   });
+  return { controlPrefix, result };
 }
 
 export function sh(script: string, options: RunOptions = {}): CommandResult {

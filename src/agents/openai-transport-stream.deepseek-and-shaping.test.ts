@@ -58,19 +58,16 @@ describe("openai transport stream", () => {
 
   it("omits Responses reasoning params when model compat disables reasoning effort", () => {
     const params = buildOpenAIResponsesParams(
-      {
+      makeResponsesModel({
         id: "grok-4.20-0309-reasoning",
         name: "Grok 4.20 0309 (Reasoning)",
-        api: "openai-responses",
         provider: "xai",
         baseUrl: "https://api.x.ai/v1",
-        reasoning: true,
         input: ["text", "image"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 1_000_000,
         maxTokens: 30_000,
         compat: { supportsReasoningEffort: false },
-      } as unknown as Model<"openai-responses">,
+      }),
       {
         systemPrompt: "system",
         messages: [],
@@ -87,22 +84,19 @@ describe("openai transport stream", () => {
 
   it("preserves xAI Grok 4.3 default reasoning by omitting default none", () => {
     const params = buildOpenAIResponsesParams(
-      {
+      makeResponsesModel({
         id: "grok-4.3",
         name: "Grok 4.3",
-        api: "openai-responses",
         provider: "xai",
         baseUrl: "https://api.x.ai/v1",
-        reasoning: true,
         input: ["text", "image"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 1_000_000,
         maxTokens: 128_000,
         compat: {
           supportsReasoningEffort: true,
           supportedReasoningEfforts: ["none", "low", "medium", "high"],
         },
-      } as unknown as Model<"openai-responses">,
+      }),
       {
         systemPrompt: "system",
         messages: [],
@@ -117,22 +111,19 @@ describe("openai transport stream", () => {
 
   it("passes explicit xAI Grok 4.3 reasoning effort through", () => {
     const params = buildOpenAIResponsesParams(
-      {
+      makeResponsesModel({
         id: "grok-4.3",
         name: "Grok 4.3",
-        api: "openai-responses",
         provider: "xai",
         baseUrl: "https://api.x.ai/v1",
-        reasoning: true,
         input: ["text", "image"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 1_000_000,
         maxTokens: 128_000,
         compat: {
           supportsReasoningEffort: true,
           supportedReasoningEfforts: ["none", "low", "medium", "high"],
         },
-      } as unknown as Model<"openai-responses">,
+      }),
       {
         systemPrompt: "system",
         messages: [],
@@ -146,6 +137,63 @@ describe("openai transport stream", () => {
     expect(params.reasoning).toEqual({ effort: "high", summary: "auto" });
     expect(params.include).toEqual(["reasoning.encrypted_content"]);
   });
+
+  it.each([
+    { intent: "omitted", options: undefined, reasoning: undefined, include: undefined },
+    {
+      intent: "logical off",
+      options: { reasoning: "off" },
+      reasoning: { effort: "low", summary: "auto" },
+      include: ["reasoning.encrypted_content"],
+    },
+    {
+      intent: "native none",
+      options: { reasoningEffort: "none" },
+      reasoning: { effort: "none" },
+      include: undefined,
+    },
+  ] as const)("preserves custom Responses $intent intent", ({ options, reasoning, include }) => {
+    const params = buildOpenAIResponsesParams(
+      makeResponsesModel({
+        id: "synthetic-reasoner",
+        provider: "custom-provider",
+        baseUrl: "https://reasoning.example/v1",
+        compat: { supportedReasoningEfforts: ["none", "low", "high"] },
+        thinkingLevelMap: { off: "low" },
+      }),
+      { systemPrompt: "system", messages: [], tools: [] },
+      options,
+    );
+
+    if (reasoning === undefined) {
+      expect(params).not.toHaveProperty("reasoning");
+    } else {
+      expect(params.reasoning).toEqual(reasoning);
+    }
+    if (include === undefined) {
+      expect(params).not.toHaveProperty("include");
+    } else {
+      expect(params.include).toEqual(include);
+    }
+  });
+
+  it.each(["openai", "github-copilot"])(
+    "preserves the %s managed Responses default on a native endpoint",
+    (provider) => {
+      const params = buildOpenAIResponsesParams(
+        makeResponsesModel({ id: "gpt-5.4", provider }),
+        { systemPrompt: "system", messages: [], tools: [] },
+        undefined,
+      );
+
+      if (provider === "openai") {
+        expect(params.reasoning).toEqual({ effort: "none" });
+      } else {
+        expect(params).not.toHaveProperty("reasoning");
+      }
+      expect(params).not.toHaveProperty("include");
+    },
+  );
 
   it("carries the system prompt via top-level instructions for native OpenAI reasoning responses models", () => {
     const params = buildOpenAIResponsesParams(

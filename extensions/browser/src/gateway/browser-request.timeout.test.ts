@@ -1,7 +1,11 @@
 // Browser tests cover browser request.timeout plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { GatewayRequestHandlers } from "openclaw/plugin-sdk/gateway-runtime";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createBrowserRouteContext, type BrowserRouteContext } from "../browser/server-context.js";
+import { makeBrowserServerState } from "../browser/server-context.test-harness.js";
 
 const {
   createBrowserControlContextMock,
@@ -10,29 +14,39 @@ const {
   startBrowserControlServiceFromConfigMock,
   withTimeoutMock,
 } = vi.hoisted(() => ({
-  createBrowserControlContextMock: vi.fn(() => ({ ok: true })),
+  createBrowserControlContextMock: vi.fn<() => BrowserRouteContext>(),
   createBrowserRouteDispatcherMock: vi.fn(),
   loadConfigMock: vi.fn(),
   startBrowserControlServiceFromConfigMock: vi.fn(),
   withTimeoutMock: vi.fn(),
 }));
 
-vi.mock("../core-api.js", async () => {
-  const actual = await vi.importActual<typeof import("../core-api.js")>("../core-api.js");
-  return {
-    ...actual,
-    createBrowserControlContext: createBrowserControlContextMock,
-    createBrowserRouteDispatcher: createBrowserRouteDispatcherMock,
-    loadConfig: loadConfigMock,
-    startBrowserControlServiceFromConfig: startBrowserControlServiceFromConfigMock,
-    withTimeout: withTimeoutMock,
-  };
-});
+vi.mock("../browser-control-state.js", () => ({
+  createBrowserControlContext: createBrowserControlContextMock,
+}));
+vi.mock("../browser/routes/dispatcher.js", () => ({
+  createBrowserRouteDispatcher: createBrowserRouteDispatcherMock,
+}));
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
+  getRuntimeConfig: loadConfigMock,
+}));
+vi.mock("../control-service.js", () => ({
+  startBrowserControlServiceFromConfig: startBrowserControlServiceFromConfigMock,
+}));
+vi.mock("../sdk-node-runtime.js", () => ({ withTimeout: withTimeoutMock }));
+
+const { createBrowserRouteDispatcher } = await vi.importActual<
+  typeof import("../browser/routes/dispatcher.js")
+>("../browser/routes/dispatcher.js");
+const { withTimeout } =
+  await vi.importActual<typeof import("../sdk-node-runtime.js")>("../sdk-node-runtime.js");
 
 import { browserHandlers } from "./browser-request.js";
 
 describe("browser.request local timeout", () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     loadConfigMock.mockReturnValue({
       gateway: { nodes: { browser: { mode: "off" } } },
     });
@@ -44,6 +58,82 @@ describe("browser.request local timeout", () => {
       throw new Error("browser request timed out");
     });
   });
+
+  it.each([
+    { timeoutMs: undefined, revocation: "authority" },
+    { timeoutMs: 1000, revocation: "authority" },
+    { timeoutMs: undefined, revocation: "client" },
+    { timeoutMs: 1000, revocation: "client" },
+  ])(
+    "rechecks $revocation after local profile admission with timeout=$timeoutMs",
+    async ({ timeoutMs, revocation }) => {
+      const state = makeBrowserServerState();
+      const context = createBrowserRouteContext({ getState: () => state });
+      const profile = context.forProfile("openclaw");
+      vi.spyOn(context, "forProfile").mockReturnValue(profile);
+      const admission = createDeferred<void>();
+      const releaseAdmission = createDeferred<void>();
+      vi.spyOn(profile, "ensureBrowserAvailable").mockImplementation(async () => {
+        admission.resolve();
+        await releaseAdmission.promise;
+      });
+      const openTab = vi.spyOn(profile, "openTab").mockResolvedValue({
+        targetId: "unwanted-tab",
+        title: "",
+        url: "about:blank",
+      });
+      createBrowserControlContextMock.mockReturnValue(context);
+      createBrowserRouteDispatcherMock.mockImplementation(createBrowserRouteDispatcher);
+      withTimeoutMock.mockImplementation(withTimeout);
+      const connection = new AbortController();
+      const client: NonNullable<Parameters<GatewayRequestHandlers[string]>[0]["client"]> = {
+        connId: "browser-requester",
+        connectionSignal: connection.signal,
+        connect: {
+          minProtocol: 3,
+          maxProtocol: 3,
+          client: { id: "test", version: "1", platform: "test", mode: "test" },
+        },
+      };
+      let current = true;
+      const respond = vi.fn();
+      const pending = expectDefined(
+        browserHandlers["browser.request"],
+        "browser request handler",
+      )({
+        params: {
+          target: "host",
+          method: "POST",
+          path: "/tabs/open",
+          body: { url: "about:blank" },
+          timeoutMs,
+        },
+        respond,
+        context: {} as never,
+        client,
+        hasCurrentClientAuthority: () => current,
+        req: { type: "req", id: "local-authority", method: "browser.request" },
+        isWebchatConnect: () => false,
+      });
+      await admission.promise;
+      if (revocation === "client") {
+        client.invalidated = true;
+      } else {
+        current = false;
+      }
+      releaseAdmission.resolve();
+      await pending;
+      expect(connection.signal.aborted).toBe(false);
+      expect(openTab).not.toHaveBeenCalled();
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          message: expect.stringContaining("requester is no longer active"),
+        }),
+      );
+    },
+  );
 
   it("applies timeoutMs to local browser dispatches", async () => {
     const respond = vi.fn();

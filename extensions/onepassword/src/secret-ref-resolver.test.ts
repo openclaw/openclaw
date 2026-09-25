@@ -29,8 +29,6 @@ const rootTsconfigPath = path.resolve("tsconfig.json");
 // The manifest test reads the production source; the timeout-only staged executable needs a
 // shorter deadline to prove cleanup without sleeping for the production seven seconds.
 const TEST_OP_READ_TIMEOUT_MS = process.platform === "win32" ? 5_000 : 1_500;
-const TEST_DESCENDANT_MARKER_DELAY_MS = TEST_OP_READ_TIMEOUT_MS + 500;
-const TEST_DESCENDANT_SETTLE_MARGIN_MS = 2_000;
 const resolverStateWorkspaces: TempWorkspaceSync[] = [];
 let fixtureWorkspace: TempWorkspaceSync;
 let resolverPath = sourceResolverPath;
@@ -845,19 +843,17 @@ setInterval(() => {}, 1000);
     "kills the op process tree when a read times out",
     async () => {
       const tempDir = fixtureWorkspace.dir;
-      const descendantReady = path.join(tempDir, "timed-out-descendant-ready");
-      const descendantMarker = path.join(tempDir, "timed-out-descendant-survived");
+      const descendantPidPath = path.join(tempDir, "timed-out-descendant.pid");
       const descendantBody = `const fs = require("node:fs");
 process.on("SIGTERM", () => {});
-setTimeout(() => fs.writeFileSync(${JSON.stringify(descendantMarker)}, "survived"), ${TEST_DESCENDANT_MARKER_DELAY_MS});
+fs.writeFileSync(${JSON.stringify(`${descendantPidPath}.tmp`)}, String(process.pid));
+fs.renameSync(${JSON.stringify(`${descendantPidPath}.tmp`)}, ${JSON.stringify(descendantPidPath)});
 setInterval(() => {}, 1000);
 `;
       let opPath = process.execPath;
       if (process.platform === "win32") {
-        const opBody = `const fs = require("node:fs");
-const { spawn } = require("node:child_process");
-const descendant = spawn(process.execPath, ["-e", ${JSON.stringify(descendantBody)}], { stdio: "ignore" });
-descendant.once("spawn", () => fs.writeFileSync(${JSON.stringify(descendantReady)}, "ready"));
+        const opBody = `const { spawn } = require("node:child_process");
+spawn(process.execPath, ["-e", ${JSON.stringify(descendantBody)}], { stdio: "ignore" });
 setInterval(() => {}, 1000);
 `;
         fs.writeFileSync(path.join(tempDir, "read"), opBody);
@@ -871,7 +867,6 @@ setInterval(() => {}, 1000);
           opPath,
           `#!${shellPath}
 ${JSON.stringify(getTrustedNodePath())} ${JSON.stringify(descendantPath)} &
-printf ready > ${JSON.stringify(descendantReady)}
 while true; do sleep 1; done
 `,
           { mode: 0o755 },
@@ -888,33 +883,38 @@ while true; do sleep 1; done
         env: { CLAW_1PASSWORD_OP: opPath },
         resolverExecutablePath: getTimeoutResolverPath(),
       });
-      // Windows verifies the executable owner and ACL chain through OS tooling before op starts.
-      // Keep the synchronization bound above that preflight without weakening the kill deadline.
-      await Promise.race([
-        waitForPath(descendantReady, process.platform === "win32" ? 15_000 : 10_000),
-        resultPromise.then((result) => {
-          throw new Error(
-            `Resolver exited before the descendant was ready: ${JSON.stringify(result)}`,
-          );
-        }),
-      ]);
-      const descendantReadyAt = Date.now();
-      const result = await resultPromise;
-      expect(JSON.parse(result.stdout).errors).toEqual({
-        "op://Engineering/OpenRouter/apiKey": {
-          message: `op read timed out after ${TEST_OP_READ_TIMEOUT_MS}ms.`,
-        },
-      });
-      const remainingMarkerDelayMs =
-        TEST_DESCENDANT_MARKER_DELAY_MS +
-        TEST_DESCENDANT_SETTLE_MARGIN_MS -
-        (Date.now() - descendantReadyAt);
-      if (remainingMarkerDelayMs > 0) {
-        await new Promise((resolve) => {
-          setTimeout(resolve, remainingMarkerDelayMs);
+      let descendantPid: number | undefined;
+      try {
+        // The child publishes its PID after installing SIGTERM immunity. Windows also
+        // needs time for executable-owner and ACL preflight before that child can start.
+        await Promise.race([
+          waitForPath(descendantPidPath, process.platform === "win32" ? 15_000 : 10_000),
+          resultPromise.then((result) => {
+            throw new Error(
+              `Resolver exited before the descendant was ready: ${JSON.stringify(result)}`,
+            );
+          }),
+        ]);
+        const pid = Number(fs.readFileSync(descendantPidPath, "utf8"));
+        descendantPid = pid;
+        expect(Number.isInteger(pid) && pid > 0).toBe(true);
+        const result = await resultPromise;
+        expect(JSON.parse(result.stdout).errors).toEqual({
+          "op://Engineering/OpenRouter/apiKey": {
+            message: `op read timed out after ${TEST_OP_READ_TIMEOUT_MS}ms.`,
+          },
         });
+        await expect
+          .poll(
+            () => (isProcessAlive(pid) ? `descendant ${String(pid)} is still alive` : "exited"),
+            { timeout: 2_000, interval: 10 },
+          )
+          .toBe("exited");
+      } finally {
+        if (descendantPid && isProcessAlive(descendantPid)) {
+          process.kill(descendantPid, "SIGKILL");
+        }
       }
-      expect(fs.existsSync(descendantMarker)).toBe(false);
     },
     process.platform === "win32" ? 30_000 : 15_000,
   );

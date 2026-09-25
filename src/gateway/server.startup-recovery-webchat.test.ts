@@ -247,10 +247,10 @@ it(
       await vi.waitFor(() => expect(targetRequests).toHaveLength(2), { timeout: 30_000 });
       expect(targetRequests[1]).toContain(survivorMessage);
       expect(targetRequests[1]).not.toContain(canceledMessage);
+      await vi.waitFor(() => expect(getExistingFollowupQueue(sessionKey)).toBeUndefined());
       await expect(
         client.request("agent.wait", { runId: survivorRunId, timeoutMs: 30_000 }),
       ).resolves.toMatchObject({ status: "ok" });
-      await vi.waitFor(() => expect(getExistingFollowupQueue(sessionKey)).toBeUndefined());
       expect(targetRequests).toHaveLength(2);
     } finally {
       recoveryGate.resolve();

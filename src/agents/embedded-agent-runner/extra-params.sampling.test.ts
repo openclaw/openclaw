@@ -13,6 +13,7 @@ vi.mock("./logger.js", () => ({
   // Sampling tests assert call options only; silence warning/debug output from
   // invalid or provider-specific extra params.
   log: {
+    isEnabled: () => false,
     debug: vi.fn(),
     warn: vi.fn(),
   },

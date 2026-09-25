@@ -1,5 +1,6 @@
 import { mock } from "node:test";
 
+const extension = import.meta.url.endsWith(".ts") ? "ts" : "js";
 const count = 150_000;
 const storePath = "/mock/agents/main/agent/openclaw-agent.sqlite";
 const unexpected = () => {
@@ -8,20 +9,20 @@ const unexpected = () => {
 const beforeStore = Object.fromEntries(
   Array.from({ length: count }, (_, i) => [
     `agent:main:label-${i}`,
-    { sessionId: `session-${i}`, updatedAt: 1, model: "gpt-5.6-sol", label: `label-${i}` },
+    { sessionId: `session-${i}`, updatedAt: 1, model: "gpt-5.6-luna", label: `label-${i}` },
   ]),
 );
 let serviceCalls = 0;
 
 // Keep the actual command, grid, and label-summary owners. Only fixture the
 // service and unrelated metadata boundaries; no large database is needed.
-mock.module(new URL("../config/config.ts", import.meta.url), {
+mock.module(new URL(`../config/config.${extension}`, import.meta.url), {
   namedExports: { getRuntimeConfig: () => ({}) },
 });
-mock.module(new URL("./session-store-targets.ts", import.meta.url), {
+mock.module(new URL(`./session-store-targets.${extension}`, import.meta.url), {
   namedExports: { resolveCommandSessionStoreTargets: () => [{ agentId: "main", storePath }] },
 });
-mock.module(new URL("../config/sessions.ts", import.meta.url), {
+mock.module(new URL(`../config/sessions.${extension}`, import.meta.url), {
   namedExports: {
     resolveSessionCleanupAction: () => "keep",
     isSessionsCleanupPartialResult: unexpected,
@@ -61,13 +62,13 @@ mock.module(new URL("../config/sessions.ts", import.meta.url), {
     },
   },
 });
-mock.module(new URL("../gateway/call.ts", import.meta.url), {
+mock.module(new URL(`../gateway/call.${extension}`, import.meta.url), {
   namedExports: { callGateway: unexpected, isGatewayTransportError: () => false },
 });
-mock.module(new URL("../config/sessions/session-sqlite-target.ts", import.meta.url), {
+mock.module(new URL(`../config/sessions/session-sqlite-target.${extension}`, import.meta.url), {
   namedExports: { resolveSqliteTargetFromSessionStorePath: () => ({ path: storePath }) },
 });
-mock.module(new URL("./sessions-display-model.ts", import.meta.url), {
+mock.module(new URL(`./sessions-display-model.${extension}`, import.meta.url), {
   namedExports: {
     resolveSessionDisplayModel: (_cfg: unknown, row: { model: string }) => row.model,
   },

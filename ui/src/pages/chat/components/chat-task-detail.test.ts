@@ -1,6 +1,8 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { html, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
+import { GatewayRequestError } from "../../../api/gateway.ts";
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
 import { createGatewayBrowserClientFixture } from "../chat-pane.test-support.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
@@ -28,7 +30,6 @@ function backgroundTasks(task: TaskSummary): BackgroundTasksProps {
     subagentActivity: deriveSubagentActivity({
       tasks: [],
       sessionKey: "agent:main:main",
-      terminalObservedAtByTask: new Map(),
       canonicalizeSessionKey: (sessionKey) => sessionKey ?? "",
     }),
     taskDetails: new Map([[task.id, { ...task, prompt: "Inspect the current task." }]]),
@@ -48,6 +49,74 @@ beforeEach(installTranscriptDomMocks);
 afterEach(resetTranscriptTestDom);
 
 describe("task detail panel", () => {
+  it.each(["initial", "older"] as const)(
+    "shows permanent preview guidance without retry on an %s page failure",
+    async (page) => {
+      const task: TaskSummary = {
+        id: "capacity-task",
+        taskId: "capacity-task",
+        status: "completed",
+        runtime: "subagent",
+        agentId: "main",
+        childSessionKey: "agent:main:subagent:capacity",
+        title: "Synthetic report preview",
+      };
+      const failure = new GatewayRequestError({
+        code: "UNAVAILABLE",
+        message: "This record exceeds the preview limit. Retained history is unchanged.",
+        details: { code: "TASK_HISTORY_PREVIEW_CAPACITY" },
+        retryable: false,
+      });
+      const request = vi.fn().mockRejectedValue(failure);
+      if (page === "older") {
+        request.mockResolvedValueOnce({
+          messages: [{ role: "assistant", content: "Current retained answer" }],
+          nextCursor: "older-page",
+        });
+      }
+      let updated = createDeferred();
+      const host: TaskDetailHost = {
+        sessionKey: "agent:main:main",
+        client: createGatewayBrowserClientFixture({ request }),
+        connected: true,
+        hello: null,
+        requestUpdate: () => updated.resolve(),
+      };
+      const container = document.body.appendChild(document.createElement("div"));
+      const rerender = () =>
+        render(
+          renderTaskDetailPanel({
+            backgroundTasks: backgroundTasks(task),
+            host,
+            task,
+          }),
+          container,
+        );
+      rerender();
+      // Loading schedules a synchronous update before the response settles.
+      updated = createDeferred();
+      await updated.promise;
+      rerender();
+      if (page === "older") {
+        const earlier = Array.from(container.querySelectorAll("button")).find((button) =>
+          button.textContent?.includes("Show earlier"),
+        );
+        expect(earlier).toBeDefined();
+        expectDefined(earlier, "earlier task history control").click();
+        updated = createDeferred();
+        await updated.promise;
+        rerender();
+        expect(container.textContent).toContain("Current retained answer");
+      }
+      expect(container.textContent).toContain(failure.message);
+      expect(
+        Array.from(container.querySelectorAll("button")).some((button) =>
+          button.textContent?.includes("Retry"),
+        ),
+      ).toBe(false);
+    },
+  );
+
   it.each(["task", "connection"])(
     "ignores a pending full reply after the %s changes",
     async (change) => {
@@ -580,7 +649,7 @@ describe("task activity monitor", () => {
   });
 
   it.each([1, 3])(
-    "shows active status, elapsed time, %s tool calls and latest tool without repeating Subagent",
+    "shows active status, elapsed time, %s tool calls and labels the last tool separately",
     async (toolUseCount) => {
       const current = { ...task, title: "Inspect renderer", toolUseCount, lastToolName: "read" };
       const props = backgroundTasks(current);
@@ -593,7 +662,13 @@ describe("task activity monitor", () => {
       expect(meta?.textContent).toContain(
         `${toolUseCount} tool call${toolUseCount === 1 ? "" : "s"}`,
       );
-      expect(meta?.textContent).toContain("read");
+      expect(meta?.textContent).not.toContain("read");
+      expect(container.querySelector(".chat-task-detail__observation")?.textContent).toContain(
+        "Last tool",
+      );
+      expect(container.querySelector(".chat-task-detail__observation")?.textContent).toContain(
+        "read",
+      );
       expect(meta?.textContent).not.toContain("Subagent");
       expect(meta?.querySelector(".chat-tasks-rail__task-pulse")).not.toBeNull();
       expect(meta?.querySelector("openclaw-elapsed-time")).not.toBeNull();
@@ -620,4 +695,74 @@ describe("task activity monitor", () => {
     expect(meta?.textContent).not.toContain("stale-tool");
     expect(meta?.querySelector("openclaw-elapsed-time")).toBeNull();
   });
+
+  it("separates the current operation from the last tool and the activity age", async () => {
+    const { container } = await mount({
+      ...task,
+      lastToolName: "read",
+      execution: {
+        state: "running",
+        currentTool: { name: "exec", startedAt: 4_000 },
+        lastActivityAt: 5_000,
+      },
+    });
+    const observation = container.querySelector(".chat-task-detail__observation");
+    expect(observation?.textContent).toContain("Current tool");
+    expect(observation?.textContent).toContain("exec");
+    expect(observation?.textContent).toContain("Last activity");
+    expect(observation?.textContent).not.toContain("read");
+    expect(observation?.querySelectorAll("openclaw-elapsed-time")).toHaveLength(2);
+  });
+
+  it("shows explicit child dependencies without treating the historical tool as current", async () => {
+    const { container } = await mount({
+      ...task,
+      lastToolName: "read",
+      execution: {
+        state: "waiting",
+        lastActivityAt: 5_000,
+        wait: {
+          kind: "children",
+          pendingCount: 2,
+          dependencies: [
+            { runId: "install-proof", label: "Check installation" },
+            { runId: "update-proof", label: "Check updates" },
+          ],
+        },
+      },
+    });
+    expect(container.textContent).toContain("Waiting for children");
+    expect(container.textContent).toContain("2 children pending");
+    expect(container.textContent).toContain("Check installation");
+    expect(container.textContent).toContain("Check updates");
+    expect(container.textContent).toContain("Last tool");
+    expect(container.textContent).not.toContain("Current tool");
+    expect(container.querySelector(".chat-tasks-rail__task-pulse")).toBeNull();
+  });
+
+  it.each([
+    { deliveryStatus: "pending", expected: "Waiting to send to parent" },
+    { deliveryStatus: "session_queued", expected: "Queued for parent" },
+    { deliveryStatus: "delivered", expected: "Delivered to parent" },
+    { deliveryStatus: "failed", expected: "Delivery failed · result retained" },
+    { deliveryStatus: "dismissed", expected: "Delivery dismissed · result retained" },
+    { deliveryStatus: "parent_missing", expected: "Parent unavailable · result retained" },
+  ] as const)(
+    "keeps completed execution separate from $deliveryStatus delivery",
+    async ({ deliveryStatus, expected }) => {
+      const current: TaskSummary = {
+        ...task,
+        status: "completed",
+        terminalSummary: "The review result is ready.",
+        deliveryStatus,
+        execution: { state: "finished" },
+      };
+      const props = backgroundTasks(current);
+      props.canCancel = true;
+      const { container } = await mount(current, props);
+      expect(container.textContent).toContain(expected);
+      expect(container.textContent).toContain("The review result is ready.");
+      expect(container.querySelector('button[aria-label^="Stop "]')).toBeNull();
+    },
+  );
 });

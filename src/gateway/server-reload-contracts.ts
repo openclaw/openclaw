@@ -14,7 +14,7 @@ import type {
   SharedGatewayAuthClient,
   SharedGatewaySessionGenerationState,
 } from "./server-shared-auth-generation.js";
-import type { ActivateRuntimeSecrets } from "./server-startup-config.js";
+import type { ActivateRuntimeSecrets } from "./server-startup-config.types.js";
 import type { HookClientIpConfig } from "./server/hooks-request-handler.js";
 
 export type RuntimeSecretsPreflightParams = Omit<
@@ -48,6 +48,8 @@ export type GatewayGmailRestartAbortController = {
 export type GatewayHotReloadPublication = {
   publish: (commit: () => Promise<void>, isCommitted: () => boolean) => Promise<void>;
   isCurrent: () => boolean;
+  checkpoint?: () => Promise<void>;
+  assertInvokerOwned?: () => void;
   sourceConfig: OpenClawConfig;
   prepareRestartRuntimeConfig?: () => Promise<OpenClawConfig>;
   runtimeEnv?: NodeJS.ProcessEnv;
@@ -127,9 +129,15 @@ export function assertReloadPublicationCurrent(
 }
 
 export type GatewayPluginReloadResult = {
+  runtime: import("../plugins/lifecycle.js").PluginRuntimeApplication;
   activeChannels: ReadonlySet<ChannelKind>;
-  /** Set when the reload was cancelled mid-flight (e.g. by an in-process restart). */
-  cancelled?: boolean;
+};
+
+export type GatewayRuntimePublication = {
+  /** Synchronous selection; a throw must leave the previous runtime authoritative. */
+  publish: () => void;
+  /** Runs after config and plugin selection have committed; failures cannot restore old state. */
+  afterCommit?: () => void;
 };
 
 export type GatewayReloadHandlerParams = {
@@ -153,11 +161,19 @@ export type GatewayReloadHandlerParams = {
   reloadPlugins: (params: {
     nextConfig: OpenClawConfig;
     sourceConfig: OpenClawConfig;
-    beforeReplace: (channels: ReadonlySet<ChannelKind>) => Promise<void>;
-    commitRuntime: (onCommit?: () => void) => Promise<void>;
-    onReplacementTeardownFailure: (error: unknown) => void;
+    changedPaths: readonly string[];
+    reloadPluginIds?: ReadonlySet<string>;
+    pluginLifecycle?: GatewayReloadPlan["pluginLifecycle"];
+    /** Fence config consumers before drain; return their publication after successful rollback. */
+    prepareConfigEffects: (replacement: {
+      pluginIds: ReadonlySet<string>;
+      channels: ReadonlySet<ChannelKind>;
+    }) => () => Promise<void>;
+    commitRuntime: (publication?: GatewayRuntimePublication) => Promise<void>;
     env: NodeJS.ProcessEnv;
     isAborted?: () => boolean;
+    checkpoint?: () => Promise<void>;
+    assertInvokerOwned?: () => void;
   }) => Promise<GatewayPluginReloadResult>;
   logHooks: {
     info: (msg: string) => void;
@@ -174,7 +190,7 @@ export type GatewayReloadHandlerParams = {
   requestRecoveryRestart?: GatewayRestartEmitter;
   restartRecoveryAvailable?: boolean;
   /** Revalidate successor-owned startup state before the current listener is closed. */
-  assertRestartReady?: () => Promise<void> | void;
+  assertRestartReady?: (config: OpenClawConfig) => Promise<void> | void;
 };
 
 export type ManagedGatewayConfigReloaderParams = Omit<
@@ -186,6 +202,7 @@ export type ManagedGatewayConfigReloaderParams = Omit<
 > & {
   configRevisionProjector: import("./config-revision-token.js").GatewayConfigRevisionProjector;
   minimalTestGateway: boolean;
+  onReloadEnabledChange?: (enabled: boolean) => void;
   initialConfig: OpenClawConfig;
   initialPluginInstallRecords?: Record<string, PluginInstallRecord>;
   initialCompareConfig?: OpenClawConfig;
@@ -194,7 +211,6 @@ export type ManagedGatewayConfigReloaderParams = Omit<
   initialIncludedPaths?: readonly string[];
   initialSnapshotValid: boolean;
   initialSnapshotIssues: ConfigFileSnapshot["issues"];
-  initialInternalWriteHash: string | null;
   watchPath: string;
   readSnapshot: typeof import("../config/io.js").readConfigFileSnapshotForRuntimeTransaction;
   promoteSnapshot: typeof import("../config/config.js").promoteConfigSnapshotToLastKnownGood;

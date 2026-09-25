@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { invokePluginArtifactInstallMock } from "../../plugins/test-helpers/install-fixtures.js";
 import { expectObjectFields, mockFirstObjectArg } from "../../test-utils/mock-call-assertions.js";
 import { createCommandWorkspaceHarness } from "./commands-filesystem.test-support.js";
+import { committedPluginMetadata } from "./commands-plugins.install.test-support.js";
 import { handlePluginsCommand } from "./commands-plugins.js";
 import { buildPluginsCommandParams } from "./commands.test-harness.js";
 
@@ -74,6 +75,19 @@ vi.mock("../../plugins/git-install.js", async (importOriginal) => ({
 vi.mock("../../plugins/install-persistence.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../plugins/install-persistence.js")>()),
   persistPluginInstall: persistPluginInstallMock,
+}));
+
+vi.mock("../../plugins/official-external-plugin-catalog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/official-external-plugin-catalog.js")>()),
+  loadConfiguredHostedOfficialExternalPluginCatalogEntries: async () => ({
+    source: "hosted",
+    entries: [],
+  }),
+}));
+vi.mock("../../plugins/management-service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/management-service.js")>()),
+  refreshManagedPluginMetadata: () =>
+    committedPluginMetadata(persistPluginInstallMock.mock.lastCall?.[0]),
 }));
 
 const workspaceHarness = createCommandWorkspaceHarness("openclaw-command-plugins-install-");
@@ -811,7 +825,7 @@ describe("handleCommands /plugins install", () => {
     });
     persistPluginInstallMock.mockImplementation(
       async (params: { persistenceLogger?: { warn?: (message: string) => void } }) => {
-        params.persistenceLogger?.warn?.(setupWarning);
+        params.persistenceLogger?.warn?.(`\u001b[33m${setupWarning}\u001b[39m`);
         return { plugins: { entries: { "clawhub-demo": { enabled: false } } } };
       },
     );
@@ -827,8 +841,8 @@ describe("handleCommands /plugins install", () => {
         throw new Error("expected plugin install result");
       }
       expect(result.reply?.text).toContain('Installed plugin "clawhub-demo"');
-      expect(result.reply?.text).toContain(warning);
-      expect(result.reply?.text).toContain(setupWarning);
+      const warningLines = result.reply?.text?.split("\n").filter((line) => line.startsWith("⚠️ "));
+      expect(warningLines).toEqual([`⚠️ ${warning}`, `⚠️ ${setupWarning}`]);
       expect(result.reply?.text).not.toContain("\u001b");
       expect(mockFirstObjectArg(installPluginFromClawHubMock).logger).toEqual(
         expect.objectContaining({ terminalLinks: false }),

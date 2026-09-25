@@ -22,6 +22,7 @@ import {
   resetSystemEventsForTest,
 } from "openclaw/plugin-sdk/system-event-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { installSlackTestRuntime } from "../test-runtime.test-support.js";
 import { createSlackMonitorContext } from "./context.js";
 import { registerSlackMemberEvents } from "./events/members.js";
 import { createSlackDurableIngress, resolveSlackIngressTurnLifecycle } from "./ingress.js";
@@ -124,6 +125,7 @@ function attachBoltMemberIngress(params: {
   usersInfoFetch?: NonNullable<WebClientOptions["fetch"]>;
   pollIntervalMs?: number;
 }) {
+  installSlackTestRuntime();
   const ingress = createSlackDurableIngress({
     accountId: "default",
     queue: params.queue,
@@ -204,6 +206,8 @@ function attachBoltMemberIngress(params: {
     threadHistoryScope: "thread",
     threadInheritParent: false,
   });
+  // This Bolt retry fixture starts after policy resolution, with the explicit policy above.
+  ctx.readRuntimeContext = async () => ctx;
   registerSlackMemberEvents({ ctx, trackEvent: params.trackEvent });
   return { ingress, receive: receiverHarness.receive };
 }
@@ -927,13 +931,10 @@ describe("Slack durable ingress", () => {
       const usersInfoFetch = vi.fn<NonNullable<WebClientOptions["fetch"]>>(async (input) => {
         const pathname = new URL(String(input)).pathname;
         if (pathname.endsWith("/conversations.info")) {
-          return new Response(
-            JSON.stringify({
-              ok: true,
-              channel: { id: "C_TEST", name: "general", is_channel: true },
-            }),
-            { headers: { "content-type": "application/json" }, status: 200 },
-          );
+          return Response.json({
+            ok: true,
+            channel: { id: "C_TEST", name: "general", is_channel: true },
+          });
         }
         if (!pathname.endsWith("/users.info")) {
           throw new Error(`unexpected Slack API request: ${pathname}`);
@@ -945,10 +946,7 @@ describe("Slack durable ingress", () => {
             status: 429,
           });
         }
-        return new Response(JSON.stringify({ ok: true, user: { id: "U_TEST", name: "alice" } }), {
-          headers: { "content-type": "application/json" },
-          status: 200,
-        });
+        return Response.json({ ok: true, user: { id: "U_TEST", name: "alice" } });
       });
       const first = attachBoltMemberIngress({ queue, trackEvent, usersInfoFetch });
       first.ingress.start();
@@ -987,85 +985,6 @@ describe("Slack durable ingress", () => {
         await first.ingress.stop();
         await restarted?.ingress.stop();
       }
-    });
-  });
-});
-
-describe("Slack relay durable ingress", () => {
-  afterEach(() => {
-    closeOpenClawStateDatabaseForTest();
-  });
-
-  const relayMessage = {
-    type: "message",
-    channel: "C_RELAY",
-    team: "T_TEST",
-    user: "U_TEST",
-    ts: "1700000001.000200",
-    text: "relayed",
-  };
-
-  it("dedupes a router redelivery by logical message identity, not delivery id", async () => {
-    await withQueue(async (queue) => {
-      const dispatched: unknown[] = [];
-      const ingress = createSlackDurableIngress({
-        accountId: "default",
-        queue,
-        pollIntervalMs: 60_000,
-        adoptionStallTimeoutMs: 5_000,
-      });
-      ingress.attachRelayDispatch(async (message) => {
-        dispatched.push(message);
-      });
-      ingress.start();
-
-      await ingress.acceptRelayEvent({ deliveryId: "delivery-1", message: relayMessage });
-      await ingress.waitForIdle();
-      // Redelivery after a lost ack carries a fresh delivery id but the same message.
-      await ingress.acceptRelayEvent({ deliveryId: "delivery-2", message: relayMessage });
-      await ingress.waitForIdle();
-
-      expect(dispatched).toHaveLength(1);
-      expect(dispatched[0]).toMatchObject({ channel: "C_RELAY", text: "relayed" });
-      await ingress.stop();
-    });
-  });
-
-  it("retries a claimed relay event until a dispatcher attaches", async () => {
-    await withQueue(async (queue) => {
-      const detached = createSlackDurableIngress({
-        accountId: "default",
-        queue,
-        pollIntervalMs: 60_000,
-        adoptionStallTimeoutMs: 5_000,
-      });
-      // Accept durably, then stop before any dispatcher exists (crash window).
-      await detached.acceptRelayEvent({ deliveryId: "delivery-3", message: relayMessage });
-      await detached.stop();
-
-      const dispatched: unknown[] = [];
-      const recovered = createSlackDurableIngress({
-        accountId: "default",
-        queue,
-        pollIntervalMs: 25,
-        adoptionStallTimeoutMs: 5_000,
-      });
-      recovered.start();
-      await recovered.waitForIdle();
-      expect(dispatched).toHaveLength(0);
-
-      recovered.attachRelayDispatch(async (message) => {
-        dispatched.push(message);
-      });
-      // First retry obeys the drain's backoff; give it room without flake.
-      await vi.waitFor(
-        async () => {
-          await recovered.waitForIdle();
-          expect(dispatched).toHaveLength(1);
-        },
-        { timeout: 15_000, interval: 250 },
-      );
-      await recovered.stop();
     });
   });
 });

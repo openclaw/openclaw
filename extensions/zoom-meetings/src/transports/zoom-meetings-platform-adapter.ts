@@ -6,6 +6,7 @@ import {
 import type { ZoomMeetingsMode } from "../config.js";
 import type { ZoomMeetingsChromeHealth, ZoomMeetingsTranscriptSnapshot } from "./types.js";
 import {
+  zoomMeetingAudioCaptureScript,
   zoomMeetingLeaveScript,
   zoomMeetingStatusScript,
   zoomMeetingTranscriptScript,
@@ -87,6 +88,7 @@ export const ZOOM_MEETINGS_PLATFORM_ADAPTER = MeetingPlatformAdapter.create<
     localeAction: () => undefined,
   },
   browser: {
+    buildAudioCaptureScript: zoomMeetingAudioCaptureScript,
     allowsMicrophone: MeetingPlatformAdapter.isTalkBackMode,
     buildStatusJoinScript: (params) =>
       zoomMeetingStatusScript({

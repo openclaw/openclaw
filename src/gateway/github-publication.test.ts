@@ -1,10 +1,13 @@
 import os from "node:os";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
@@ -210,7 +213,7 @@ describe("Gateway GitHub publication", () => {
       fingerprint: "fingerprint-1",
     });
     const fallback = mocks.runCommand.getMockImplementation()!;
-    let remoteLookups = 0;
+    let remotePublished = false;
     mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
       const command = argv.join(" ");
       if (command.startsWith("gh api --hostname github.com repos/roboclaw-bot/openclaw --jq")) {
@@ -219,8 +222,10 @@ describe("Gateway GitHub publication", () => {
         );
       }
       if (command.includes("ls-remote") && command.includes("roboclaw-bot/openclaw.git")) {
-        remoteLookups += 1;
-        return commandResult(remoteLookups === 1 ? "" : `${NEW_HEAD}\trefs/heads/${BRANCH}\n`);
+        return commandResult(remotePublished ? `${NEW_HEAD}\trefs/heads/${BRANCH}\n` : "");
+      }
+      if (argv.includes("push")) {
+        remotePublished = true;
       }
       if (command.includes("repos/openclaw/openclaw/pulls") && command.includes("state=all")) {
         return commandResult("[]\n");
@@ -535,10 +540,7 @@ describe("Gateway GitHub publication", () => {
   });
 
   it("singleflights concurrent coordinators before any Git or GitHub mutation", async () => {
-    let releaseRepository: (() => void) | undefined;
-    const repositoryReady = new Promise<void>((resolve) => {
-      releaseRepository = resolve;
-    });
+    const { promise: repositoryReady, resolve: releaseRepository } = createDeferred();
     mocks.resolveRepository.mockImplementationOnce(async () => {
       await repositoryReady;
       return {
@@ -781,9 +783,11 @@ describe("Gateway GitHub publication", () => {
     { phase: "commit", remoteInitiallyPublished: false, pullRequestExists: false },
     { phase: "push", remoteInitiallyPublished: true, pullRequestExists: false },
     { phase: "pull request", remoteInitiallyPublished: true, pullRequestExists: true },
+    { phase: "body-only credit", remoteInitiallyPublished: false, pullRequestExists: false },
   ])(
-    "resumes after $phase without duplicating completed publication steps",
+    "validates prepared credit when resuming after $phase",
     async ({ phase, remoteInitiallyPublished, pullRequestExists }) => {
+      const bodyOnlyCredit = phase === "body-only credit";
       const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
       const first = createGitHubPublicationCoordinator({
         placements: createWorkerSessionPlacementStore({ database }),
@@ -793,7 +797,7 @@ describe("Gateway GitHub publication", () => {
       seedLocalPublication(database, { requestId, status: "publishing" });
       closeOpenClawStateDatabaseForTest();
 
-      let remoteLookups = 0;
+      let remotePublished = remoteInitiallyPublished;
       mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
         commands.push(argv);
         commandCalls.push({ argv, input: options?.input });
@@ -822,7 +826,11 @@ describe("Gateway GitHub publication", () => {
           return commandResult(JSON.stringify({ ref: "refs/heads/main", sha: BASE_HEAD }));
         }
         if (command === "git show -s --format=%B HEAD") {
-          return commandResult(`Resume the publication\n\nOpenClaw-Publication: ${requestId}\n`);
+          return commandResult(
+            bodyOnlyCredit
+              ? `Resume the publication\n\nCo-authored-by: alice <7+alice@users.noreply.github.com>\n\nThe line above is quoted attribution.\n\nOpenClaw-Publication: ${requestId}\n`
+              : `Resume the publication\n\nCo-authored-by: alice <7+alice@users.noreply.github.com>\nOpenClaw-Publication: ${requestId}\n`,
+          );
         }
         if (command === "git rev-parse HEAD^{tree}") {
           return commandResult(`${WORKSPACE_TREE}\n`);
@@ -832,9 +840,6 @@ describe("Gateway GitHub publication", () => {
         }
         if (command === "git rev-parse HEAD^") {
           return commandResult(`${OLD_HEAD}\n`);
-        }
-        if (command === `git reflog show --format=%H --end-of-options refs/heads/${BRANCH}`) {
-          return commandResult(`${NEW_HEAD}\n${OLD_HEAD}\n`);
         }
         if (command === "git config --local --includes --bool --get extensions.worktreeConfig") {
           return commandResult("", 1);
@@ -850,12 +855,11 @@ describe("Gateway GitHub publication", () => {
             "git -c credential.helper= -c credential.helper=!gh auth git-credential ls-remote",
           )
         ) {
-          remoteLookups += 1;
-          return commandResult(
-            remoteInitiallyPublished || remoteLookups > 1
-              ? `${NEW_HEAD}\trefs/heads/${BRANCH}\n`
-              : "",
-          );
+          return commandResult(remotePublished ? `${NEW_HEAD}\trefs/heads/${BRANCH}\n` : "");
+        }
+        if (argv.includes("push")) {
+          remotePublished = true;
+          return commandResult();
         }
         if (command.includes(" repos/openclaw/openclaw/pulls ") && command.includes("state=all")) {
           return commandResult(
@@ -888,6 +892,21 @@ describe("Gateway GitHub publication", () => {
       });
 
       await resumed.resumeSessionRequests();
+
+      if (bodyOnlyCredit) {
+        expect(resumed.read(requestId)).toMatchObject({
+          status: "failed",
+          code: "identity_changed",
+          nextAction: expect.stringMatching(/credit/i),
+        });
+        expect(
+          commands.some(
+            (argv) =>
+              argv.includes("commit-tree") || argv.includes("push") || argv.includes("POST"),
+          ),
+        ).toBe(false);
+        return;
+      }
 
       expect(resumed.read(requestId)).toEqual({
         publisher: { source: "system-configured", accountId: 42, login: "roboclaw-bot" },
@@ -991,6 +1010,9 @@ describe("Gateway GitHub publication", () => {
     });
     expect(publicationTranscriptMessages(events, requested.requestId)).toHaveLength(1);
 
+    // A process restart also retires the report writer's retained state admission.
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     const reopened = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     const restarted = createGitHubPublicationRuntime({

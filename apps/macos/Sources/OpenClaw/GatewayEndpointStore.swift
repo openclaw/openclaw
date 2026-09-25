@@ -1,5 +1,6 @@
 import ConcurrencyExtras
 import Foundation
+import OpenClawKit
 import OSLog
 
 enum GatewayEndpointState: Equatable {
@@ -394,17 +395,12 @@ actor GatewayEndpointStore {
         let port = deps.localPort()
         self.localUnavailableReason = deps.localUnavailableReason()
         let root = OpenClawConfigFile.loadDict()
-        let bind = GatewayEndpointStore.resolveGatewayBindMode(
+        let localConfig = Self.localConfig(
             root: root,
-            env: ProcessInfo.processInfo.environment)
-        let customBindHost = GatewayEndpointStore.resolveGatewayCustomBindHost(root: root)
-        let scheme = GatewayEndpointStore.resolveGatewayScheme(
-            root: root,
-            env: ProcessInfo.processInfo.environment)
-        let host = GatewayEndpointStore.resolveLocalGatewayHost(
-            bindMode: bind,
-            customBindHost: customBindHost,
-            tailscaleIP: nil)
+            env: ProcessInfo.processInfo.environment,
+            launchdSnapshot: nil,
+            tailscaleIP: nil,
+            port: port)
         let token = deps.token()
         let password = deps.password()
         let deviceAuthGatewayID = GatewayDiscoveryPreferences.deviceAuthGatewayID(
@@ -418,20 +414,15 @@ actor GatewayEndpointStore {
                 self.state = .unavailable(mode: .local, reason: reason, routeRevision: self.endpointRevision.value)
                 return
             }
-            let url = URL(string: "\(scheme)://\(host):\(port)")!
+            let url = localConfig.url
             self.state = .ready(
                 mode: .local,
                 url: url,
                 token: token,
                 password: password,
                 routeRevision: self.endpointRevision.value)
-            self.resolvedEndpoint = GatewayConnection.EndpointSnapshot(
+            self.resolvedEndpoint = Self.localEndpoint(
                 config: (url, token, password),
-                tls: GatewayTLSRoute.resolve(
-                    url: url,
-                    connectionMode: .local,
-                    configuredFingerprint: nil),
-                routeAuthority: nil,
                 deviceAuthGatewayID: deviceAuthGatewayID,
                 revision: self.endpointRevision.value)
         case .remote:
@@ -820,15 +811,18 @@ actor GatewayEndpointStore {
         // SourceSnapshot owns route credentials and identity. Publish every ready
         // path through one derivation so local, direct, and tunnel routes cannot drift.
         let mode: AppState.ConnectionMode = source.mode == .local ? .local : .remote
+        let tls = mode == .local ? Self.localEndpoint(
+            config: (url, source.token, source.password),
+            deviceAuthGatewayID: source.deviceAuthGatewayID).tls : GatewayTLSRoute.resolve(
+            url: url,
+            connectionMode: mode,
+            configuredFingerprint: source.remoteTLSFingerprint)
         return self.setReady(
             mode: mode,
             url: url,
             token: source.token,
             password: source.password,
-            tls: GatewayTLSRoute.resolve(
-                url: url,
-                connectionMode: mode,
-                configuredFingerprint: mode == .remote ? source.remoteTLSFingerprint : nil),
+            tls: tls,
             deviceAuthGatewayID: source.deviceAuthGatewayID,
             routeAuthority: routeAuthority)
     }
@@ -1009,6 +1003,13 @@ extension GatewayEndpointStore {
         let tailscaleIP = bindMode == "tailnet"
             ? app.tailscaleIP ?? TailscaleService.fallbackTailnetIPv4()
             : nil
+        let localPort = self.resolveGatewayPort(root: root, env: env, profile: profile)
+        let localConfig = mode == .local ? self.localConfig(
+            root: root,
+            env: env,
+            launchdSnapshot: launchdSnapshot,
+            tailscaleIP: tailscaleIP,
+            port: localPort) : nil
         let remoteResolution = GatewayRemoteConfig.resolveTransportResolution(root: root)
         let sshRouteIdentity: SSHRouteIdentity?
         if mode == .remote, remoteResolution.transport == .ssh {
@@ -1027,14 +1028,14 @@ extension GatewayEndpointStore {
         let source = SourceSnapshot(
             routingGeneration: app.generation,
             mode: SourceMode(mode),
-            token: mode == .unconfigured
+            token: mode == .local ? localConfig?.token : mode == .unconfigured
                 ? nil
                 : self.resolveGatewayToken(
                     isRemote: isRemote,
                     root: root,
                     env: env,
                     launchdSnapshot: launchdSnapshot),
-            password: mode == .unconfigured
+            password: mode == .local ? localConfig?.password : mode == .unconfigured
                 ? nil
                 : self.resolveGatewayPassword(
                     isRemote: isRemote,
@@ -1042,12 +1043,12 @@ extension GatewayEndpointStore {
                     env: env,
                     launchdSnapshot: launchdSnapshot),
             deviceAuthGatewayID: deviceAuthGatewayID,
-            localPort: self.resolveGatewayPort(root: root, env: env, profile: profile),
-            localHost: self.resolveLocalGatewayHost(
+            localPort: localPort,
+            localHost: localConfig?.url.host ?? self.resolveLocalGatewayHost(
                 bindMode: bindMode,
                 customBindHost: customBindHost,
                 tailscaleIP: tailscaleIP),
-            scheme: self.resolveGatewayScheme(root: root, env: env),
+            scheme: localConfig?.url.scheme ?? self.resolveGatewayScheme(root: root, env: env),
             bindMode: bindMode,
             remoteTransport: SourceTransport(remoteResolution.transport),
             directRemoteURL: remoteResolution.directURL,
@@ -1166,21 +1167,57 @@ extension GatewayEndpointStore {
 }
 
 extension GatewayEndpointStore {
-    static func localConfig() -> GatewayConnection.Config {
-        self.localConfig(
-            root: OpenClawConfigFile.loadDict(),
-            env: ProcessInfo.processInfo.environment,
-            launchdSnapshot: GatewayLaunchAgentManager.launchdConfigSnapshot(),
-            tailscaleIP: TailscaleService.fallbackTailnetIPv4())
+    static func localEndpoint(
+        hostingBesideRemotePrimary: Bool,
+        root: [String: Any] = OpenClawConfigFile.loadDict()) throws -> GatewayConnection.EndpointSnapshot
+    {
+        let port = GatewayEnvironment.gatewayPort(root: root)
+        var conflict = GatewayEnvironment.profileGatewayPortConflict()
+        let remoteURL = GatewayRemoteConfig.resolveGatewayUrl(root: root)
+        let primaryUsesLoopback = GatewayRemoteConfig.resolveTransport(root: root) == .ssh ||
+            remoteURL?.host.map(LoopbackHost.isLoopbackHost) == true
+        if conflict == nil, hostingBesideRemotePrimary,
+           primaryUsesLoopback, port == RemotePortTunnel.localPort(root: root)
+        {
+            conflict = "Local Gateway port \(port) is also used by the remote primary connection. " +
+                "Use distinct ports for gateway.port and gateway.remote.url, then retry."
+        }
+        if let conflict {
+            throw NSError(domain: "Gateway", code: 1, userInfo: [NSLocalizedDescriptionKey: conflict])
+        }
+        return self.localEndpoint(
+            config: self.localConfig(
+                root: root,
+                env: ProcessInfo.processInfo.environment,
+                launchdSnapshot: GatewayLaunchAgentManager.launchdConfigSnapshot(),
+                tailscaleIP: TailscaleService.fallbackTailnetIPv4(),
+                port: port),
+            deviceAuthGatewayID: GatewayDiscoveryPreferences.deviceAuthGatewayID(root: root, connectionMode: .local))
     }
 
-    static func localConfig(
+    private static func localEndpoint(
+        config: GatewayConnection.Config,
+        deviceAuthGatewayID: String?,
+        revision: UInt64? = nil) -> GatewayConnection.EndpointSnapshot
+    {
+        GatewayConnection.EndpointSnapshot(
+            config: config,
+            tls: GatewayTLSRoute.resolve(
+                url: config.url,
+                connectionMode: .local,
+                configuredFingerprint: nil),
+            routeAuthority: nil,
+            deviceAuthGatewayID: deviceAuthGatewayID,
+            revision: revision)
+    }
+
+    private static func localConfig(
         root: [String: Any],
         env: [String: String],
         launchdSnapshot: LaunchAgentPlistSnapshot?,
-        tailscaleIP: String?) -> GatewayConnection.Config
+        tailscaleIP: String?,
+        port: Int) -> GatewayConnection.Config
     {
-        let port = GatewayEnvironment.gatewayPort()
         let bind = self.resolveGatewayBindMode(root: root, env: env)
         let customBindHost = self.resolveGatewayCustomBindHost(root: root)
         let scheme = self.resolveGatewayScheme(root: root, env: env)
@@ -1372,7 +1409,8 @@ extension GatewayEndpointStore {
             root: root,
             env: env,
             launchdSnapshot: launchdSnapshot,
-            tailscaleIP: tailscaleIP)
+            tailscaleIP: tailscaleIP,
+            port: GatewayEnvironment.gatewayPort())
     }
 }
 #endif

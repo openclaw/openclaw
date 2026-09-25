@@ -1,6 +1,6 @@
 /**
  * Executes compaction while owning the transcript lock, session lifecycle,
- * hooks, checkpoint, and optional successor transcript rotation.
+ * hooks and optional successor transcript rotation.
  */
 import {
   preserveCompactionReplayWindow,
@@ -9,7 +9,6 @@ import {
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import type { ContextEngineSessionTarget } from "../../context-engine/types.js";
-import type { CapturedCompactionCheckpointSnapshot } from "../../gateway/session-compaction-checkpoints.js";
 import { resolveDiagnosticModelContentCapturePolicy } from "../../infra/diagnostic-llm-content.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
@@ -46,7 +45,6 @@ import { createAgentSessionForEmbeddedRunner } from "../sessions/sdk.js";
 import { setSessionModelUsageSink } from "../sessions/session-model-usage.js";
 import { normalizeUsage, type UsageLike } from "../usage.js";
 import { resolveCompactionFailure } from "./compact-reasons.js";
-import { compactionCheckpointStore, persistCompactionCheckpoint } from "./compaction-checkpoint.js";
 import {
   containsRealConversationMessages,
   normalizeObservedTokenCount,
@@ -55,7 +53,6 @@ import {
 } from "./compaction-diagnostics.js";
 import { dedupeDuplicateUserMessagesForCompaction } from "./compaction-duplicate-user-messages.js";
 import {
-  asCompactionHookRunner,
   buildBeforeCompactionHookMetrics,
   estimateTokensAfterCompaction,
   runAfterCompactionHooks,
@@ -80,7 +77,7 @@ import { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js
 import { applySystemPromptToSession } from "./system-prompt.js";
 import { collectRegisteredToolNames, toSessionToolAllowlist } from "./tool-name-allowlist.js";
 import { splitSdkTools } from "./tool-split.js";
-import { mapThinkingLevel } from "./utils.js";
+import { mapThinkingLevel, mapThinkingLevelForProvider } from "./utils.js";
 import { flushPendingToolResultsAfterIdle } from "./wait-for-idle-before-flush.js";
 
 export async function executePreparedCompactionSession(runtime: PreparedCompactionRuntime) {
@@ -120,12 +117,11 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
   } = runtime;
   let thinkLevel = runtime.thinkLevel;
   let compactionSessionManager: unknown = null;
-  let checkpointSnapshot: CapturedCompactionCheckpointSnapshot | null = null;
-  let checkpointSnapshotRetained = false;
 
   try {
     const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
     const accountingRecorder = readCompactionAccountingRecorder(params.contextEngineRuntimeContext);
+    const recordCompaction = accountingRecorder?.recordCompaction;
     const memoryTranscript = accountingRecorder?.memoryTranscript;
     const sessionTarget =
       memoryTranscript?.sessionTarget ??
@@ -161,13 +157,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         withCompactionPersistence: params.transcriptByteCompactionPersistence,
       },
     );
-    checkpointSnapshot = memoryTranscript
-      ? null
-      : await compactionCheckpointStore.captureSnapshot({
-          sessionManager,
-          sessionFile: params.sessionFile,
-          sessionTarget,
-        });
     compactionSessionManager = sessionManager;
     const recordUsage = accountingRecorder?.recordUsage
       ? (usage: UsageLike) => {
@@ -272,7 +261,9 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             authStorage,
             modelRegistry,
             model: effectiveModel,
-            thinkingLevel: mapThinkingLevel(thinkLevel),
+            thinkingLevel: mapThinkingLevel(
+              mapThinkingLevelForProvider(thinkLevel, effectiveModel),
+            ),
             tools: sessionToolAllowlist,
             customTools,
             sessionManager,
@@ -283,7 +274,14 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         );
         session = createdSession.session;
         session[agentSessionSetContextReplacementHook](
-          accountingRecorder?.recordCompaction,
+          recordCompaction
+            ? (tokensAfter, tokensBefore) =>
+                recordCompaction({
+                  tokensBefore,
+                  tokensAfter,
+                  compactionKind: "context-engine",
+                })
+            : undefined,
           assertActive,
         );
         session.setActiveToolsByName(sessionToolAllowlist);
@@ -338,6 +336,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           owner: diagnosticOwner,
         });
         session.agent.streamFn = wrapStreamFnWithDiagnosticModelCallEvents(session.agent.streamFn, {
+          config: params.config,
           runId: diagnosticCompactionRunId,
           ...(params.sessionKey && { sessionKey: params.sessionKey }),
           sessionId: params.sessionId,
@@ -424,7 +423,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         if (limited.length > 0) {
           session.agent.state.messages = limited;
         }
-        const hookRunner = asCompactionHookRunner(getGlobalHookRunner());
+        const hookRunner = getGlobalHookRunner();
         const observedTokenCount = normalizeObservedTokenCount(params.currentTokenCount);
         const beforeHookMetrics = buildBeforeCompactionHookMetrics({
           originalMessages,
@@ -475,7 +474,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         // Setup completed: give the first provider request a full safety window.
         params.compactionTimeoutReset?.();
         let serverTokensAfter: number | undefined;
-        const recordServerCompaction = () => {
+        const recordServerCompaction = (tokensBefore: number) => {
           // Endpoint output_tokens omits retained inputs; observe the actual
           // replacement window synchronously with its accepted rewrite.
           serverTokensAfter = estimateLlmBoundaryTokenPressure({
@@ -489,7 +488,11 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
               enabled: compactionReplayEnabled,
             },
           });
-          accountingRecorder?.recordCompaction?.(serverTokensAfter);
+          recordCompaction?.({
+            tokensBefore,
+            tokensAfter: serverTokensAfter,
+            compactionKind: "server-endpoint",
+          });
         };
         const serverResult = params.transcriptBytePreflightAuthority
           ? undefined
@@ -523,7 +526,9 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
               async (_signal, resetTimeout) => {
                 resetCompactionTimeout = resetTimeout;
                 setCompactionSafeguardCancellation(compactionSessionManager, undefined);
-                const requestState = trigger === "overflow" ? ("unresolved" as const) : undefined;
+                const requestState =
+                  accountingRecorder?.pendingRequestState ??
+                  (trigger === "overflow" ? ("unresolved" as const) : undefined);
                 if (trigger === "manual") {
                   return {
                     status: "completed" as const,
@@ -584,22 +589,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             agentId: sessionAgentId,
             sessionFile: activeSessionFile,
             assertActive,
-          });
-        }
-        if (clientResult) {
-          checkpointSnapshotRetained = await persistCompactionCheckpoint({
-            config: params.config,
-            sessionKey: params.sessionKey,
-            sessionId: params.sessionId,
-            trigger: params.trigger,
-            snapshot: checkpointSnapshot,
-            summary: clientResult.summary,
-            firstKeptEntryId: effectiveFirstKeptEntryId,
-            tokensBefore: observedTokenCount ?? clientResult.tokensBefore,
-            tokensAfter,
-            sessionFile: activeSessionFile,
-            leafId: sessionManager.getLeafId?.() ?? undefined,
-            createdAt: compactStartedAt,
           });
         }
         const postMetrics = diagEnabled ? summarizeCompactionMessages(session.messages) : undefined;
@@ -669,12 +658,12 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           },
         };
       } catch (err) {
-        assertActive();
         const failure = resolveCompactionFailure({
           error: err,
           safeguardCancellation: getCompactionSafeguardRuntime(sessionManager)?.cancellation,
           abortSignal: params.abortSignal,
         });
+        assertActive();
         const fallbackThinking = pickFallbackThinkingLevel({
           message: formatErrorMessage(failure.error),
           attempted: attemptedThinking,
@@ -699,6 +688,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           await flushPendingToolResultsAfterIdle({
             agent: session?.agent,
             sessionManager,
+            abortSignal: params.abortSignal,
           });
         } catch {
           /* best-effort */
@@ -719,8 +709,5 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
     return fail(failure.reason, failure.error);
   } finally {
     setSessionModelUsageSink(compactionSessionManager, null);
-    if (!checkpointSnapshotRetained) {
-      await compactionCheckpointStore.cleanupSnapshot(checkpointSnapshot);
-    }
   }
 }

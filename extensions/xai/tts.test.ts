@@ -132,25 +132,21 @@ describe("xai tts", () => {
   describe("listXaiTtsVoices", () => {
     it("maps the authenticated catalog and sends the expected request", async () => {
       vi.stubEnv("OPENCLAW_VERSION", "2026.7.9");
-      const fetchMock = vi.fn(
-        async (_input: RequestInfo | URL, _init?: RequestInit) =>
-          new Response(
-            JSON.stringify({
-              voices: [
-                {
-                  voice_id: "altair",
-                  name: "Altair",
-                  language: "en",
-                  gender: "male",
-                },
-                { voice_id: "  celeste  ", name: " Celeste " },
-                { voice_id: " " },
-                { name: "missing id" },
-                null,
-              ],
-            }),
-            { status: 200, headers: { "Content-Type": "application/json" } },
-          ),
+      const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        Response.json({
+          voices: [
+            {
+              voice_id: "altair",
+              name: "Altair",
+              language: "en",
+              gender: "male",
+            },
+            { voice_id: "  celeste  ", name: " Celeste " },
+            { voice_id: " " },
+            { name: "missing id" },
+            null,
+          ],
+        }),
       );
       globalThis.fetch = fetchMock as unknown as typeof fetch;
 
@@ -205,13 +201,7 @@ describe("xai tts", () => {
     });
 
     it("rejects malformed catalog payloads", async () => {
-      globalThis.fetch = vi.fn(
-        async () =>
-          new Response(JSON.stringify({ items: [] }), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          }),
-      ) as unknown as typeof fetch;
+      globalThis.fetch = vi.fn(async () => Response.json({ items: [] })) as unknown as typeof fetch;
 
       await expect(listXaiTtsVoices({ apiKey: "xai-key" })).rejects.toThrow(
         "xAI TTS voices: malformed JSON response",
@@ -219,12 +209,8 @@ describe("xai tts", () => {
     });
 
     it("caps catalog responses before parsing JSON", async () => {
-      globalThis.fetch = vi.fn(
-        async () =>
-          new Response(JSON.stringify({ voices: [], padding: "x".repeat(1024 * 1024) }), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          }),
+      globalThis.fetch = vi.fn(async () =>
+        Response.json({ voices: [], padding: "x".repeat(1024 * 1024) }),
       ) as unknown as typeof fetch;
 
       await expect(listXaiTtsVoices({ apiKey: "xai-key" })).rejects.toThrow(

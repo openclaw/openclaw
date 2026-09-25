@@ -1,32 +1,20 @@
-// Browser tests cover browser cli actions observe plugin behavior.
 import { Command } from "commander";
+import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import * as browserCliSharedModule from "./browser-cli-shared.js";
 import {
   createBrowserProgram,
+  mockBrowserGateway,
   getBrowserCliRuntime,
   getBrowserCliRuntimeCapture,
 } from "./browser-cli.test-support.js";
-import * as cliCoreApiModule from "./core-api.js";
 
-const mocks = vi.hoisted(() => ({
-  callBrowserRequest: vi.fn<
-    (
-      opts?: unknown,
-      req?: unknown,
-      extra?: { timeoutMs?: number },
-    ) => Promise<Record<string, unknown>>
-  >(async () => ({ response: { body: "ok" } })),
-}));
-
-vi.spyOn(browserCliSharedModule, "callBrowserRequest").mockImplementation(mocks.callBrowserRequest);
+const gatewayMock = mockBrowserGateway();
+gatewayMock.mockResolvedValue({ response: { body: "ok" } });
 const browserCliRuntime = getBrowserCliRuntime();
-vi.spyOn(cliCoreApiModule.defaultRuntime, "log").mockImplementation(browserCliRuntime.log);
-vi.spyOn(cliCoreApiModule.defaultRuntime, "writeJson").mockImplementation(
-  browserCliRuntime.writeJson,
-);
-vi.spyOn(cliCoreApiModule.defaultRuntime, "error").mockImplementation(browserCliRuntime.error);
-vi.spyOn(cliCoreApiModule.defaultRuntime, "exit").mockImplementation(browserCliRuntime.exit);
+vi.spyOn(defaultRuntime, "log").mockImplementation(browserCliRuntime.log);
+vi.spyOn(defaultRuntime, "writeJson").mockImplementation(browserCliRuntime.writeJson);
+vi.spyOn(defaultRuntime, "error").mockImplementation(browserCliRuntime.error);
+vi.spyOn(defaultRuntime, "exit").mockImplementation(browserCliRuntime.exit);
 
 const { registerBrowserActionObserveCommands } = await import("./browser-cli-actions-observe.js");
 
@@ -39,7 +27,7 @@ function createActionObserveProgram(): Command {
 
 describe("browser action observe commands", () => {
   beforeEach(() => {
-    mocks.callBrowserRequest.mockClear();
+    gatewayMock.mockClear();
     getBrowserCliRuntimeCapture().resetRuntimeCapture();
   });
 
@@ -54,9 +42,11 @@ describe("browser action observe commands", () => {
 
     await program.parseAsync(["browser", ...parentArgs, command], { from: "user" });
 
-    expect(mocks.callBrowserRequest).toHaveBeenLastCalledWith(
-      expect.objectContaining({ timeout }),
-      expect.objectContaining({ path }),
+    expect(gatewayMock).toHaveBeenLastCalledWith(
+      "browser.request",
+      expect.objectContaining({ timeout: String(Number(timeout) + 10_000) }),
+      expect.objectContaining({ path, timeoutMs: Number(timeout) }),
+      expect.objectContaining({ scopes: ["operator.admin"] }),
     );
   });
 
@@ -73,7 +63,7 @@ describe("browser action observe commands", () => {
         from: "user",
       }),
     ).rejects.toThrow("--max-chars must be a positive integer.");
-    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
+    expect(gatewayMock).not.toHaveBeenCalled();
   });
 
   it("rejects unknown console levels before dispatch", async () => {
@@ -82,7 +72,51 @@ describe("browser action observe commands", () => {
     await expect(
       program.parseAsync(["browser", "console", "--level", "bogus"], { from: "user" }),
     ).rejects.toThrow(/error.*warn.*info/u);
-    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
+    expect(gatewayMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { label: "truncated prefix", body: "ABC", truncated: true, json: false },
+    { label: "empty truncated prefix", body: "", truncated: true, json: false },
+    { label: "complete at the limit", body: "ABC", truncated: undefined, json: false },
+    { label: "explicitly complete", body: "ABC", truncated: false, json: false },
+    { label: "empty complete body", body: "", truncated: undefined, json: false },
+    { label: "JSON truncated prefix", body: "ABC", truncated: true, json: true },
+  ])("reports completeness for $label without changing body output", async (testCase) => {
+    const program = createActionObserveProgram();
+    const result = {
+      ok: true,
+      response: {
+        url: "https://example.com/api",
+        status: 200,
+        body: testCase.body,
+        ...(testCase.truncated === undefined ? {} : { truncated: testCase.truncated }),
+      },
+    };
+    gatewayMock.mockResolvedValueOnce(result);
+
+    await program.parseAsync(
+      [
+        "browser",
+        ...(testCase.json ? ["--json"] : []),
+        "responsebody",
+        "**/api",
+        "--max-chars",
+        "3",
+      ],
+      { from: "user" },
+    );
+
+    const { runtimeLogs, runtimeErrors } = getBrowserCliRuntimeCapture();
+    expect(runtimeLogs).toHaveLength(1);
+    if (testCase.json) {
+      expect(JSON.parse(runtimeLogs[0]!)).toEqual(result);
+    } else {
+      expect(runtimeLogs).toEqual([testCase.body]);
+    }
+    expect(runtimeErrors).toEqual(
+      testCase.truncated && !testCase.json ? [expect.stringMatching(/truncat/i)] : [],
+    );
   });
 
   it.each([
@@ -110,15 +144,10 @@ describe("browser action observe commands", () => {
 
       await program.parseAsync(args, { from: "user" });
 
-      const request = mocks.callBrowserRequest.mock.calls.at(-1)?.[1] as
-        | { body?: { timeoutMs?: number; maxChars?: number } }
-        | undefined;
-      const options = mocks.callBrowserRequest.mock.calls.at(-1)?.[2] as
-        | { timeoutMs?: number }
-        | undefined;
+      const request = gatewayMock.mock.calls.at(-1)?.[2];
       expect(request?.body?.timeoutMs).toBe(operationTimeoutMs);
       expect(request?.body?.maxChars).toBe(100);
-      expect(options?.timeoutMs).toBe(requestTimeoutMs);
+      expect(request?.timeoutMs).toBe(requestTimeoutMs);
     },
   );
 });

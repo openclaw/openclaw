@@ -1,6 +1,13 @@
 // Discord tests cover approval handler plugin behavior.
-import { describe, expect, it } from "vitest";
+import assert from "node:assert/strict";
+import {
+  createChannelApprovalHandlerFromCapability,
+  createLazyChannelApprovalNativeRuntimeAdapter,
+} from "openclaw/plugin-sdk/approval-handler-runtime";
+import { describe, expect, it, vi } from "vitest";
+import { parseExecApprovalData } from "./approval-custom-id.js";
 import { discordApprovalNativeRuntime } from "./approval-handler.runtime.js";
+import { parseCustomId } from "./internal/discord.js";
 import { DiscordUiContainer } from "./ui.js";
 
 async function buildExecApprovalPayloadText(commandText: string): Promise<string> {
@@ -142,6 +149,65 @@ describe("discordApprovalNativeRuntime", () => {
     );
   });
 
+  it("round-trips system-agent buttons emitted by the native approval handler", async () => {
+    const buildPendingPayload = vi.fn(
+      discordApprovalNativeRuntime.presentation.buildPendingPayload,
+    );
+    const handler = await createChannelApprovalHandlerFromCapability({
+      label: "discord/approval-test",
+      clientDisplayName: "Discord approval test",
+      channel: "discord",
+      channelLabel: "Discord",
+      cfg: {},
+      accountId: "main",
+      context: { token: "discord-token", config: {} },
+      nowMs: () => 0,
+      capability: {
+        nativeRuntime: createLazyChannelApprovalNativeRuntimeAdapter({
+          capabilityBoundary: true,
+          eventKinds: discordApprovalNativeRuntime.eventKinds,
+          isConfigured: () => true,
+          shouldHandle: () => true,
+          load: async () => ({
+            ...discordApprovalNativeRuntime,
+            presentation: { ...discordApprovalNativeRuntime.presentation, buildPendingPayload },
+          }),
+        }),
+      },
+    });
+    assert(handler);
+    try {
+      await handler.handleRequested({
+        id: "change-1",
+        request: {
+          title: "Apply proposed change",
+          description: "Rewrite the scheduler.",
+          command: "rewrite scheduler",
+          proposalHash: "hash-1",
+          sessionId: "session-1",
+          allowedDecisions: ["allow-once", "deny"],
+        },
+        createdAtMs: 0,
+        expiresAtMs: 1_000,
+      });
+      expect(buildPendingPayload).toHaveBeenCalledOnce();
+      const pending = await buildPendingPayload.mock.results[0]?.value;
+      const customIds: string[] = [];
+      JSON.stringify(pending, (key, value: unknown) => {
+        if (key === "custom_id" && typeof value === "string") {
+          customIds.push(value);
+        }
+        return value;
+      });
+      expect(customIds.map((id) => parseExecApprovalData(parseCustomId(id).data))).toEqual([
+        { approvalId: "change-1", approvalKind: "system-agent", action: "allow-once" },
+        { approvalId: "change-1", approvalKind: "system-agent", action: "deny" },
+      ]);
+    } finally {
+      await handler.stop();
+    }
+  });
+
   it.each([
     { severity: "info" as const, accentColor: 0x5865f2 },
     { severity: "warning" as const, accentColor: 0xfaa61a },
@@ -205,7 +271,7 @@ describe("discordApprovalNativeRuntime", () => {
       decision: "deny",
       applicationStatus: "not-applied",
       terminalStatus: undefined,
-      label: "Not applied",
+      label: "Denied",
       accentColor: 0xed4245,
     },
     {

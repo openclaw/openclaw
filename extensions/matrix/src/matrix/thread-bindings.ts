@@ -1,15 +1,15 @@
-// Matrix plugin module implements thread bindings behavior.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { tryReadJson } from "@openclaw/fs-safe/json";
 import { resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { readJsonFileWithFallback } from "openclaw/plugin-sdk/json-store";
 import { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   registerSessionBindingAdapter,
   resolveThreadBindingFarewellText,
+  resolveThreadBindingLifecycle,
   type SessionBindingAdapter,
   unregisterSessionBindingAdapter,
 } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
@@ -26,7 +26,6 @@ import {
   listBindingsForAccount,
   removeBindingRecord,
   resolveBindingKey,
-  resolveEffectiveBindingExpiry,
   setBindingRecord,
   setMatrixThreadBindingManagerEntry,
   toMatrixBindingTargetKind,
@@ -51,12 +50,12 @@ type MatrixThreadBindingMigrationMarker = {
   importedAt: number;
 };
 
-function resolveBindingsPath(params: {
+async function resolveBindingsPath(params: {
   auth: MatrixAuth;
   accountId: string;
   env?: NodeJS.ProcessEnv;
   stateDir?: string;
-}): string {
+}): Promise<string> {
   return resolveMatrixStateFilePath({
     auth: params.auth,
     accountId: params.accountId,
@@ -157,10 +156,7 @@ function normalizeBindingRecord(
 }
 
 async function loadBindingsFromLegacyDisk(filePath: string, accountId: string) {
-  const { value } = await readJsonFileWithFallback<StoredMatrixThreadBindingState | null>(
-    filePath,
-    null,
-  );
+  const value = await tryReadJson<StoredMatrixThreadBindingState>(filePath);
   if (value?.version !== STORE_VERSION || !Array.isArray(value.bindings)) {
     return [];
   }
@@ -303,7 +299,7 @@ export async function createMatrixThreadBindingManager(params: {
       `Matrix thread binding account mismatch: requested ${params.accountId}, auth resolved ${params.auth.accountId}`,
     );
   }
-  const legacyFilePath = resolveBindingsPath({
+  const legacyFilePath = await resolveBindingsPath({
     auth: params.auth,
     accountId: params.accountId,
     env: params.env,
@@ -360,7 +356,7 @@ export async function createMatrixThreadBindingManager(params: {
           env: params.env,
           stateDir: sqliteStateDir,
         });
-        claimCurrentTokenStorageState({ rootDir: sqliteStateDir });
+        await claimCurrentTokenStorageState({ rootDir: sqliteStateDir });
       });
     persistQueue = next;
     return next;
@@ -512,9 +508,6 @@ export async function createMatrixThreadBindingManager(params: {
 
   let sweepTimer: NodeJS.Timeout | null = null;
   const removeRecords = (records: MatrixThreadBindingRecord[]) => {
-    if (records.length === 0) {
-      return [];
-    }
     return records
       .map((record) => removeBindingRecord(record))
       .filter((record): record is MatrixThreadBindingRecord => Boolean(record));
@@ -659,7 +652,7 @@ export async function createMatrixThreadBindingManager(params: {
       const expired = listBindingsForAccount(params.accountId)
         .map((record) => ({
           record,
-          lifecycle: resolveEffectiveBindingExpiry({
+          lifecycle: resolveThreadBindingLifecycle({
             record,
             defaultIdleTimeoutMs: defaults.idleTimeoutMs,
             defaultMaxAgeMs: defaults.maxAgeMs,

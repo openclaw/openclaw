@@ -88,8 +88,9 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       const place = page.locator("wa-popover.new-session-page__where-popover");
       await page.locator("#new-session-where-trigger").click();
-      const connect = place.getByRole("button", { name: "Connect a machine" });
+      const connect = place.getByRole("button", { name: "Connect a device" });
       await connect.waitFor();
+      expect(await place.getByText("Your devices", { exact: true }).isVisible()).toBe(true);
       await captureProof(page, "01-picker-foot.png", {
         surface: place.locator('wa-popup [part="popup"]'),
         content: [connect],
@@ -138,8 +139,8 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       const place = page.locator("wa-popover.new-session-page__where-popover");
       await page.locator("#new-session-where-trigger").click();
-      await place.getByRole("button", { name: "Local" }).waitFor();
-      expect(await place.getByRole("button", { name: "Connect a machine" }).count()).toBe(0);
+      await place.locator('[data-value="gateway"]').waitFor();
+      expect(await place.getByRole("button", { name: "Connect a device" }).count()).toBe(0);
       expect(await gateway.getRequests("device.pair.setupCode")).toEqual([]);
     } finally {
       await context.close();
@@ -169,7 +170,7 @@ suite.define(() => {
       await page.clock.install();
       await gateway.deferNext("device.pair.setupCode");
       await page.locator("#new-session-where-trigger").click();
-      await page.getByRole("button", { name: "Connect a machine" }).click();
+      await page.getByRole("button", { name: "Connect a device" }).click();
       await gateway.waitForRequest("device.pair.setupCode");
       const dialog = page.locator('openclaw-modal-dialog[label="Connect a machine"]');
       await dialog.getByText("Creating a secure connection link…", { exact: true }).waitFor();
@@ -206,7 +207,7 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}new`);
       await page.locator("#new-session-where-trigger").click();
-      await page.getByRole("button", { name: "Connect a machine" }).click();
+      await page.getByRole("button", { name: "Connect a device" }).click();
       await gateway.waitForRequest("device.pair.setupCode");
       await gateway.rejectDeferred("device.pair.setupCode", {
         message: `pairing failed: Authorization: Bearer ${secret}`,
@@ -233,7 +234,7 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}new`);
       await page.locator("#new-session-where-trigger").click();
-      await page.getByRole("button", { name: "Connect a machine" }).click();
+      await page.getByRole("button", { name: "Connect a device" }).click();
       await gateway.waitForRequest("device.pair.setupCode");
       const dialog = page.locator('openclaw-modal-dialog[label="Connect a machine"]');
       await dialog.getByText("Creating a secure connection link…", { exact: true }).waitFor();

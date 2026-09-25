@@ -46,7 +46,7 @@ Auto-join example:
     discord: {
       voice: {
         enabled: true,
-        model: "openai/gpt-5.6-sol",
+        model: "openai/gpt-6-astra",
         autoJoin: [
           {
             guildId: "123456789012345678",
@@ -75,41 +75,104 @@ Auto-join example:
 }
 ```
 
+### GPT-Live in Discord
+
+Discord can use the same GPT-Live model and voice as Talk,
+[Google Meet](/plugins/google-meet), and [Voice Call](/plugins/voice-call).
+These surfaces share provider resolution, native delegation, and interruption
+policy while retaining their own audio transports. Unpinned Discord
+configurations keep the provider's existing default; select GPT-Live explicitly.
+For the Codex
+GPT-Live route with `cove`, sign in with
+`openclaw models auth login --provider openai`, then configure:
+
+```json5
+{
+  channels: {
+    discord: {
+      voice: {
+        enabled: true,
+        realtime: {
+          provider: "openai",
+          model: "gpt-live-1-codex",
+          speakerVoice: "cove",
+        },
+      },
+    },
+  },
+}
+```
+
+This route reuses Talk's Gateway-owned WebRTC bridge, with ChatGPT OAuth first
+and Platform API-key fallback. For the public API, select `gpt-live-1` and a
+supported public voice such as `marin`; Discord uses the Gateway's direct
+Platform-key WebSocket bridge. The model and voice must belong to the same
+route: `cove` is a Codex GPT-Live voice, and selecting it with `gpt-live-1`
+falls back to `marin`. See [OpenAI voice and speech](/providers/openai/voice-and-speech).
+
+GPT-Live owns response timing and interruption. Discord plays its continuous
+audio without waiting for a completed-response event, and does not add local
+speaker-start interruption. Microphone audio remains admitted during playback
+so GPT-Live can hear and handle interruptions itself. Delegated tasks use the routed OpenClaw agent with
+the originating speaker's Discord identity and tool permissions. Room controls
+clear buffered local playback before requesting their spoken result; they keep
+the continuous provider stream open so it can deliver that result.
+The Gateway paces microphone input continuously, including silence between
+speaker captures. Playback preserves quiet PCM within an active stream, including
+pauses delivered after earlier speech has already played. When no unheard speech
+remains for the player's two-second idle grace, accepted audio drains before the
+room player is released. Speech arriving during that retirement queues under a
+fresh resource so it is not discarded with the old stream.
+Continuous playback builds a 120 ms startup buffer to absorb brief delivery
+gaps. A 120 ms startup deadline keeps short replies from waiting for a completed
+response event.
+
+GPT-Live does not support host-enforced wake-name gating or a forced consult
+before every reply. Its defaults leave those policies off. Explicit
+`requireWakeName: true` or `consultPolicy: "always"` fails at startup with a
+configuration error; remove those settings or choose `gpt-realtime-2.1` when
+you need host-controlled turns in a shared meeting. Each speaker still has a
+separate voice-model connection; the OpenClaw agent conversation provides
+shared room context.
+
 Notes:
 
-- The OpenAI `agent-proxy` response and wake-name policies below require a GA realtime model, such as `gpt-realtime-2.1`. GPT-Live responds to audio autonomously and does not enforce those policies; do not rely on wake-name gating with GPT-Live in a shared voice channel.
+- The OpenAI `agent-proxy` response and wake-name policies below require a GA realtime model, such as `gpt-realtime-2.1`. GPT-Live follows its provider-owned response and delegation flow described above.
 - Discord voice is opt-in for text-only configs; set `channels.discord.voice.enabled=true` (or keep an existing `channels.discord.voice` block) to enable `/vc` commands, the voice runtime, and the `GuildVoiceStates` gateway intent. `channels.discord.intents.voiceStates` can explicitly override the intent subscription; leave it unset to follow effective voice enablement.
 - `voice.mode` controls the conversation path. The default is `agent-proxy`: a realtime voice front end handles turn timing, interruption, and playback, delegates substantive work to the routed OpenClaw agent through `openclaw_agent_consult`, and treats the result like a typed Discord prompt from that speaker. `stt-tts` keeps the older batch STT plus TTS flow. `bidi` lets the realtime model converse directly while exposing `openclaw_agent_consult` for the OpenClaw brain.
 - Realtime voice keeps each speaker's audio in a separate provider connection, so delayed transcripts and tool calls retain that speaker's Discord identity. Everyone still uses the same routed OpenClaw agent conversation and one room playback queue. Direct `bidi` conversation history belongs to each speaker's realtime connection; use the OpenClaw agent consult for shared room history. Multiple speakers can consume more provider connections, and provider account limits still apply. The room retains at most eight speaker connections and reclaims idle connections once their captures, requests, and playback have finished.
 - `voice.agentSession` controls which OpenClaw conversation receives voice turns. Leave it unset for the voice channel's own session, or set `{ mode: "target", target: "channel:<text-channel-id>" }` to make the voice channel act as the microphone/speaker extension of an existing Discord text channel session such as `#maintainers`.
+- Steering a running agent from Discord voice requires a backend that can recheck the speaker's permissions at dispatch. Copilot currently lacks this [guarded input capability](/plugins/sdk-agent-harness/attempt-runtime#guarded-active-run-injection); status and cancellation remain available, and you can start a new request.
 - `voice.model` overrides the OpenClaw agent brain for Discord voice responses and realtime consults. Leave it unset to inherit the routed agent model. It is separate from `voice.realtime.model`.
 - `voice.followUsers` lets the bot join, move, and leave Discord voice with selected users. See [Follow users in voice](/channels/discord/voice-follow#follow-users-in-voice).
-- `agent-proxy` routes speech through `discord-voice`, which preserves normal owner/tool authorization for the speaker and target session but hides the agent `tts` tool because Discord voice owns playback. By default, `agent-proxy` gives the consult full owner-equivalent tool access for owner speakers (`voice.realtime.toolPolicy: "owner"`) and strongly prefers consulting the OpenClaw agent before substantive answers (`voice.realtime.consultPolicy: "always"`). In that default `always` mode, the realtime layer does not auto-speak filler before the consult answer; it captures and transcribes speech, then speaks the routed OpenClaw answer. If multiple forced consult answers finish while Discord is still playing the first answer, later exact-speech answers are queued until playback idles instead of replacing speech mid-sentence.
+- `agent-proxy` routes speech through `discord-voice`, which preserves normal owner/tool authorization for the speaker and target session but hides the agent `tts` tool because Discord voice owns playback. By default, `agent-proxy` gives the consult full owner-equivalent tool access for owner speakers (`voice.realtime.toolPolicy: "owner"`). Models with host-controlled turns strongly prefer consulting the OpenClaw agent before substantive answers (`voice.realtime.consultPolicy: "always"`); GPT-Live uses provider-owned delegation with `consultPolicy: "auto"`. In `always` mode, the realtime layer does not auto-speak filler before the consult answer; it captures and transcribes speech, then speaks the routed OpenClaw answer. If multiple forced consult answers finish while Discord is still playing the first answer, later exact-speech answers are queued until playback idles instead of replacing speech mid-sentence.
 - Realtime voice buffers generated audio when Discord playback temporarily falls behind and tolerates brief provider or network gaps. Each provider response keeps its own buffered audio, including native tool continuations. Normal backpressure does not cancel the response, and queued answers wait until Discord finishes playing the previous answer, even if its provider response or audio encoder has already finished.
-- OpenAI and xAI interruptions truncate each retained native audio item at the amount Discord consumed. Queued items are discarded at zero, and completed replies that have finished playing are left intact. Playback progress survives temporary gaps in the same response; OpenAI's echo guard uses the combined consumed duration of retained items.
+- GA OpenAI Realtime and xAI interruptions truncate each retained native audio item at the amount Discord consumed. Queued items are discarded at zero, and completed replies that have finished playing are left intact. Playback progress survives temporary gaps in the same response; GA OpenAI Realtime's echo guard uses the combined consumed duration of retained items. GPT-Live handles interruption natively and does not use item truncation.
 - If a speaker's realtime connection fails, other speakers stay connected. Check the `realtime speaker failed` log and try speaking again to open a new connection. If the initial provider connection fails during `/vc join`, joining fails while an already-connected recorder keeps recording; check the `realtime session failed terminally` log and retry `/vc join`. Temporary provider reconnects do not end the Discord voice session.
 - In `stt-tts` mode, STT uses `tools.media.audio`; `voice.model` does not affect transcription.
 - `stt-tts` replies remain active until Discord finishes playing them; long responses are not cut off by a fixed one-minute playback deadline.
-- In realtime modes, `voice.realtime.provider`, `voice.realtime.model`, and `voice.realtime.speakerVoice` configure the realtime audio session. For OpenAI Realtime 2.1 plus the Codex brain, use `voice.realtime.model: "gpt-realtime-2.1"` and `voice.model: "openai/gpt-5.6-sol"`.
+- In realtime modes, `voice.realtime.provider`, `voice.realtime.model`, and `voice.realtime.speakerVoice` configure the realtime audio session. For OpenAI Realtime 2.1 plus the Codex brain, use `voice.realtime.model: "gpt-realtime-2.1"` and `voice.model: "openai/gpt-6-astra"`.
 - Realtime voice modes include small `IDENTITY.md`, `USER.md`, and `SOUL.md` profile files in the realtime provider instructions by default so fast direct turns keep the same identity, user grounding, and persona as the routed OpenClaw agent. Set `voice.realtime.bootstrapContextFiles` to a subset to customize this, or `[]` to disable it. Only those profile files are supported; `AGENTS.md` stays in the normal agent context. The injected profile context does not replace `openclaw_agent_consult` for workspace work, current facts, memory lookup, or tool-backed actions.
 - In OpenAI `agent-proxy` realtime mode, wake-name gating adapts to the room by default: one human can talk naturally without a wake name, while two or more humans must start or end a turn with one. Other bots do not count as people. Set `voice.realtime.requireWakeName: true` to always require a wake name or `false` to never require one. Configured wake names must be one or two words. If `voice.realtime.wakeNames` is unset, OpenClaw uses the routed agent `name` plus `OpenClaw`, falling back to the agent id plus `OpenClaw`. An active wake-name gate disables realtime provider auto-response, routes accepted turns through the OpenClaw agent consult path, and gives a short spoken acknowledgement when an exact leading wake name is recognized from partial transcription before the final transcript arrives. Fuzzy name matching waits for the final transcript, so an unfinished ordinary word does not trigger an acknowledgement. The policy follows live joins and leaves without reconnecting voice.
 - The OpenAI realtime provider accepts current Realtime 2 event names and legacy Codex-compatible aliases for output audio and transcript events, so compatible provider snapshots can drift without dropping assistant audio.
-- `voice.realtime.bargeIn` controls whether Discord speaker-start events interrupt active realtime playback. If unset, it follows the realtime provider's input-audio interruption setting.
-- `voice.realtime.minBargeInAudioEndMs` controls the minimum assistant playback duration before an OpenAI realtime barge-in truncates audio. Default: `250`. Set `0` for immediate interruption in low-echo rooms, or raise it for echo-heavy speaker setups.
+- For response-based models, `voice.realtime.bargeIn` controls whether audible microphone input interrupts active realtime playback. Silent packets and speaker-start notifications alone do not interrupt it. If unset, it follows the realtime provider's input-audio interruption setting. GPT-Live ignores this setting because it owns interruption.
+- `voice.realtime.minBargeInAudioEndMs` controls the minimum assistant playback duration before a GA OpenAI Realtime barge-in truncates audio. Default: `250`. Set `0` for immediate interruption in low-echo rooms, or raise it for echo-heavy speaker setups. It does not apply to GPT-Live.
 - `voice.tts` overrides `tts` for `stt-tts` voice playback only; realtime modes use `voice.realtime.speakerVoice` instead. For an OpenAI voice on Discord playback, set `voice.tts.provider: "openai"` and choose a Text-to-speech voice under `voice.tts.providers.openai.speakerVoice`. `cedar` is a good masculine-sounding choice on the current OpenAI TTS model.
 - Per-channel Discord `systemPrompt` overrides apply to voice transcript turns for that voice channel.
 - When OpenClaw joins a voice channel, the routed agent session receives a silent system event with the current participant roster. Later participant joins and leaves update that session without triggering an unsolicited spoken reply; Discord display names are treated as untrusted labels. Authorized voice turns also receive a fresh roster snapshot.
 - Voice transcript turns and `/vc` commands use Discord entries in `commands.ownerAllowFrom` for owner status. When no Discord command owner is configured, the selected Discord account's `allowFrom` (or legacy `dm.allowFrom`) can still authorize voice access without granting owner status. Agent tool visibility follows the configured tool policy for the routed session.
+- Authorized speakers can ask the agent to list or change the current realtime call's voice with `talk_voice`, without command-owner configuration. The change applies to the shared room and keeps saved voice defaults unchanged. Voice control remains bound to the admitted turn and stops when the call ends, the turn finishes or is canceled, or its access policy changes; other owner-only tools retain their usual permissions.
+- Canceled or revoked voice turns are not retried as new agent requests. Leaving prevents pending batch turns from starting agent work or speech synthesis. Work already running can finish; transcript recording is managed separately.
 - If `voice.autoJoin` has multiple entries for the same guild, OpenClaw joins the last configured channel for that guild.
 - `voice.autoJoin[].whenOccupied` defaults to `false`. Set it to `true` for an auto-managed room that should contain the bot only while at least one human is present. OpenClaw joins on the first human arrival and leaves after the last human departs; the OpenClaw bot and other bots do not count. Startup, fresh gateway sessions, and resumed gateway sessions reconcile from Discord's voice-state roster.
 - Occupancy management owns only sessions that it joined. A manual `/vc join`, standalone transcript-only session, follow-user session, active session in another channel, or other ad-hoc join is not moved or disconnected when the configured room empties. Attaching transcript capture to an occupancy-managed session preserves that ownership.
 - `voice.allowedChannels` is an optional residency allowlist. Leave it unset to allow `/vc join` into any authorized Discord voice channel. When set, `/vc join`, startup auto-join, and bot voice-state moves are restricted to the listed `{ guildId, channelId }` entries. Set it to an empty array to deny all Discord voice joins. If Discord moves the bot outside the allowlist, OpenClaw leaves that channel and rejoins the configured auto-join target when one is available.
 - `voice.daveEncryption` and `voice.decryptionFailureTolerance` pass through to `@discordjs/voice` join options; the upstream defaults are `daveEncryption=true` and `decryptionFailureTolerance=24`.
-- OpenClaw uses the bundled `libopus-wasm` codec for Discord voice receive and realtime raw PCM playback. It ships a pinned libopus WebAssembly build and does not require native opus addons.
+- OpenClaw uses the bundled `libopus-wasm` codec for Discord voice receive and realtime raw PCM playback. It ships a pinned libopus WebAssembly build and does not require native opus addons. Discord voice sockets, codecs, playback conversion, and packet pacing run in a worker thread. GPT-Live continuous output travels directly from its media worker to the Discord playback worker rather than relaying every audio chunk through the Gateway event loop. Speaker admission, agent work, and transcripts remain on the Gateway; a busy Gateway can still delay those control operations.
 - `voice.connectTimeoutMs` controls the initial `@discordjs/voice` Ready wait for `/vc join` and auto-join attempts. Default: `30000`.
 - `voice.reconnectGraceMs` controls how long OpenClaw waits for a disconnected voice session to begin reconnecting before destroying it. Default: `15000`.
-- In `stt-tts` mode, voice playback does not stop just because another user starts speaking. To avoid feedback loops, OpenClaw does not admit new conversational turns while TTS is playing; an explicitly started capture still records that speech. Speak after playback finishes for the next conversational turn. Realtime modes forward authorized speaker starts as barge-in signals when interruption is enabled.
-- In realtime modes, echo from speakers into an open mic can look like barge-in and interrupt playback. For echo-heavy Discord rooms, set `voice.realtime.providers.openai.interruptResponseOnInputAudio: false` to keep OpenAI from auto-interrupting on input audio. Add `voice.realtime.bargeIn: true` if you still want Discord speaker-start events to interrupt active playback. The OpenAI realtime bridge ignores playback truncations shorter than `voice.realtime.minBargeInAudioEndMs` as likely echo/noise and logs them as skipped instead of clearing Discord playback.
+- In `stt-tts` mode, voice playback does not stop just because another user starts speaking. To avoid feedback loops, OpenClaw does not admit new conversational turns while TTS is playing; an explicitly started capture still records that speech. Speak after playback finishes for the next conversational turn. Response-based realtime models receive audible authorized microphone input as barge-in signals when interruption is enabled; GPT-Live handles incoming audio itself.
+- In GA OpenAI Realtime, echo from speakers into an open mic can look like barge-in and interrupt playback. For echo-heavy Discord rooms, set `voice.realtime.providers.openai.interruptResponseOnInputAudio: false` to keep the provider from auto-interrupting on input audio. Add `voice.realtime.bargeIn: true` if you still want audible Discord microphone input to interrupt active playback. The GA OpenAI realtime bridge ignores playback truncations shorter than `voice.realtime.minBargeInAudioEndMs` as likely echo/noise and logs them as skipped instead of clearing Discord playback. These controls do not override GPT-Live's native interruption.
 - `voice.captureSilenceGraceMs` controls how long OpenClaw waits after Discord reports a speaker has stopped before finalizing that audio segment for STT. Default: `2000`; raise it if Discord splits normal pauses into choppy partial transcripts.
 - When ElevenLabs is the selected TTS provider, Discord voice playback uses streaming TTS and starts from the provider response stream. Providers without streaming support fall back to the synthesized temp-file path.
 - OpenClaw watches receive decrypt failures and auto-recovers by leaving/rejoining the voice channel after repeated failures in a short window.

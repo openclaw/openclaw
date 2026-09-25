@@ -47,6 +47,9 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.Insets
@@ -109,6 +112,7 @@ class FoldAwareDropdownMenuTest {
   private var y by mutableStateOf(80.dp)
   private var direction by mutableStateOf(LayoutDirection.Ltr)
   private var fontScale by mutableStateOf(1f)
+  private var densityOverride by mutableStateOf<Float?>(null)
   private var labels by mutableStateOf(listOf("Refresh", "Last action"))
   private lateinit var activity: Activity
   private lateinit var host: View
@@ -139,6 +143,58 @@ class FoldAwareDropdownMenuTest {
     WindowInfoTracker.reset()
     WindowMetricsCalculator.reset()
     Settings.Global.putString(RuntimeEnvironment.getApplication().contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, animatorScale)
+  }
+
+  @Test
+  fun popupSizeCompatibleAllowsOnePixelMeasureNoise() {
+    val admitted = IntSize(560, 720)
+    assertTrue(foldAwarePopupSizeCompatible(admitted, IntSize(560, 720)))
+    assertTrue(foldAwarePopupSizeCompatible(admitted, IntSize(560, 721)))
+    assertTrue(foldAwarePopupSizeCompatible(admitted, IntSize(559, 720)))
+    assertFalse(foldAwarePopupSizeCompatible(admitted, IntSize(560, 722)))
+    assertFalse(foldAwarePopupSizeCompatible(admitted, IntSize(558, 720)))
+  }
+
+  @Test
+  fun verticalMenuPaddingRoundsEachEdgeAtFractionalDensity() {
+    val density = Density(2.8125f)
+    with(density) {
+      assertEquals("PaddingNode sums round(8)+round(8)", 46, 2 * 8.dp.roundToPx())
+      assertEquals("Single 16.dp round disagrees at this density", 45, 16.dp.roundToPx())
+    }
+  }
+
+  @Test
+  fun menuTopLeftFlipsAboveWhenOnePixelTallerWouldOverflowBottom() {
+    val available = IntRect(0, 0, 1000, 800)
+    val anchor = IntRect(372, 372, 485, 485)
+    assertEquals(
+      IntOffset(372, 485),
+      foldAwareMenuTopLeft(available, anchor, IntSize(200, 315), LayoutDirection.Ltr),
+    )
+    assertEquals(
+      IntOffset(372, 56),
+      foldAwareMenuTopLeft(available, anchor, IntSize(200, 316), LayoutDirection.Ltr),
+    )
+  }
+
+  @Test
+  fun nonIntegerDensityBottomEdgeMenuStaysOpenAndSelects() {
+    // Window fixtures stay mdpi pixels (~800 tall); dp positions must scale with the override.
+    densityOverride = 2.8125f
+    labels = listOf("Refresh", "Last action", "Third action")
+    x = 40.dp
+    y = 200.dp
+    showMenu()
+    open()
+    val popup = nativePopup()
+    val bounds = screenBounds(popup)
+    assertTrue(popup.isAttachedToWindow)
+    assertTrue("Correct padding admission must keep the menu inside the window", bounds.bottom <= 800)
+    composeRule.onNodeWithText("Refresh").performClick()
+    composeRule.waitForIdle()
+    assertEquals(listOf("0"), actions)
+    assertFalse(popup.isAttachedToWindow)
   }
 
   @Test
@@ -526,7 +582,7 @@ class FoldAwareDropdownMenuTest {
       }
       CompositionLocalProvider(
         LocalLayoutDirection provides direction,
-        LocalDensity provides Density(currentDensity.density, fontScale),
+        LocalDensity provides Density(densityOverride ?: currentDensity.density, fontScale),
       ) {
         ClawDesignTheme {
           Box(Modifier.fillMaxSize(), contentAlignment = AbsoluteAlignment.TopLeft) {

@@ -13,7 +13,7 @@ Talk mode covers these runtime shapes:
 - **iOS Talk (realtime)**: client-owned WebRTC for OpenAI realtime configs that select `webrtc` transport or omit transport. This path includes framed and frameless transcript/audio events. Explicit `gateway-relay`, `provider-websocket`, and non-OpenAI realtime configs stay on the Gateway-owned relay. Non-realtime configs use the native speech loop.
 - **Apple Watch standalone Talk**: native WebRTC/Opus over UDP with Gateway-owned call control (`gateway-control-v1`). The Watch uses the Gateway's configured realtime provider. It keeps tools and transcript ownership on the Gateway. Unsupported configurations fail visibly without a relay fallback.
 - **Browser Talk**: `talk.client.create` for client-owned `webrtc`/`provider-websocket` sessions, or `talk.session.create` for Gateway-owned `gateway-relay` sessions. `managed-room` is reserved for Gateway handoff and walkie-talkie rooms.
-- **Android Talk (realtime)**: Android uses Gateway-owned relay realtime when `talk.catalog` reports the realtime group ready. The configured model must also pass the Android client gate. Android never opens a client-owned WebRTC session. The Gateway now supports `gpt-live-*` relay sessions. Android intentionally keeps those models on native speech recognition, Gateway chat, and `talk.speak`. That stays true until the relay path is proven live from an Android device.
+- **Android Talk (realtime)**: Android uses Gateway-owned relay realtime when `talk.catalog` reports the realtime group ready. For supported GPT-Live models, the Gateway advertises relay capability through `talk.config`, so Android starts `talk.session.create` instead of native speech recognition and `talk.speak`. Android never opens a client-owned WebRTC session. Older Gateways without the capability hint and unlisted GPT-Live routes retain native Talk with a visible explanation. Explicit `stt-tts` mode also stays native. Relay capability is not authentication readiness: catalog and session creation still validate the selected account. Subscription-authenticated Android live audio verification remains pending.
 - **Transcription-only clients**: `talk.session.create({ mode: "transcription", transport: "gateway-relay", brain: "none" })`, then `talk.session.appendAudio` and `talk.session.close` for captions/dictation without an assistant voice response. One-shot uploaded voice notes still use the [media understanding](/nodes/media-understanding) audio path.
 
 Native Talk is a continuous loop. It listens for speech. It sends the transcript to the model through the active session. It waits for the response. It then speaks the response through the configured Talk provider (`talk.speak`).
@@ -113,42 +113,53 @@ with your own values.
 }
 ```
 
-OpenAI browser WebRTC and Gateway-relay Talk support native GPT-Live. The
-released route remains available in **Settings → Talk**. Account-issued,
-unlisted routes can be set in `talk.realtime.model`, but are not published
-through catalogs or diagnostics. Browser Talk uses client WebRTC with
-Gateway-owned control. Gateway relay uses Gateway-owned WebRTC for the released
-route with either OAuth or Platform fallback. Unlisted routes and other backend
-consumers use the direct Platform-only transport.
+OpenAI browser WebRTC and Gateway-relay Talk support native GPT-Live. Select
+`gpt-live-1` for the public API or `gpt-live-1-codex` for the Codex route in
+**Settings → Talk**. The public API requires a Platform key; the Codex route
+prefers an OpenClaw ChatGPT OAuth profile and falls back to Platform API-key
+authentication. Browser Talk uses client WebRTC with Gateway-owned control.
+Gateway relay uses direct Platform-key WebSockets for `gpt-live-1` and
+Gateway-owned WebRTC for `gpt-live-1-codex`. Discord uses these same Gateway
+bridges when configured with the corresponding Live model.
 
-For browser and Gateway-relay Talk, the released route prefers an OpenClaw
-ChatGPT OAuth profile and falls back to Platform API-key authentication.
-Unlisted routes never use OAuth and require a Platform key. GPT-Live browser
-Talk also requires the bundled `openai` plugin registered in full mode. A
-restrictive `plugins.allow` list fails session creation with "OpenAI GPT-Live
+Account-issued, unlisted routes can be set in `talk.realtime.model`, but are
+not published through catalogs or diagnostics. They never use OAuth and require
+a Platform key. GPT-Live browser Talk also requires the bundled `openai` plugin
+registered in full mode. A restrictive `plugins.allow` list fails session
+creation with "OpenAI GPT-Live
 browser session broker is unavailable".
 Runtime bounds: 8 concurrent sessions per Gateway and a 30-minute session TTL.
 Browser sessions also use 60-second single-use offer tokens.
 
-The released route uses `arbor`, `breeze`, `cove`, `ember`, `juniper`, `maple`,
-`sol`, `spruce`, and `vale`, with `cove` as the default. Unlisted routes use
-their account-issued voice contract. The current Platform profile accepts
-`marin` and `cedar`, with `marin` as the default. A rejected session does not
+The Codex route uses `arbor`, `breeze`, `cove`, `ember`, `juniper`, `maple`,
+`sol`, `spruce`, and `vale`, with `cove` as the default. The public API defaults
+to `marin` and has its own [voice list](/providers/openai/voice-and-speech).
+Choose the same model and supported voice in Talk and Discord to use the same
+voice; `cove` with the public `gpt-live-1` model falls back to `marin`.
+Unlisted routes use their account-issued voice contract; the current unlisted
+Platform profile accepts `marin` and `cedar`. A rejected session does not
 identify the cause by itself. Check the selected account, model, and voice.
 
-| Consumer                    | GPT-Live status                                                             |
-| --------------------------- | --------------------------------------------------------------------------- |
-| Browser Talk                | Released route: OAuth-first; unlisted routes: Platform-key client WebRTC    |
-| Gateway-relay Talk          | Released route: OAuth-first; unlisted routes: direct Platform-key transport |
-| Discord bidirectional voice | Platform-key backend WebSocket                                              |
-| Voice Call and telephony    | Platform-key backend WebSocket                                              |
-| iOS client-owned Talk       | Implemented; GPT-Live device live verification pending                      |
-| Apple Watch standalone Talk | Gateway-controlled WebRTC implemented; physical Watch verification pending  |
-| Android realtime Talk       | Pending an Android device live-proof flip; Android stays on native Talk     |
+GPT-Live handles interruption natively and produces continuous audio without
+requiring completed-response events. Discord preserves each speaker's identity
+through delegated OpenClaw work. Its voice-model connections remain separate
+per speaker; shared room context belongs to the OpenClaw agent conversation.
+See [GPT-Live in Discord](/channels/discord/voice-channels#gpt-live-in-discord)
+for configuration and the limits on host-enforced meeting participation.
+
+| Consumer                    | GPT-Live status                                                                                |
+| --------------------------- | ---------------------------------------------------------------------------------------------- |
+| Browser Talk                | Codex route: OAuth-first; public API and unlisted routes: Platform-key client WebRTC           |
+| Gateway-relay Talk          | Codex route: OAuth-first WebRTC; public API and unlisted routes: direct Platform-key transport |
+| Discord realtime voice      | Same Gateway bridges as Talk: Codex OAuth-first WebRTC or public Platform-key WebSocket        |
+| Voice Call and telephony    | Platform-key backend WebSocket                                                                 |
+| iOS client-owned Talk       | Implemented; GPT-Live device live verification pending                                         |
+| Apple Watch standalone Talk | Gateway-controlled WebRTC implemented; physical Watch verification pending                     |
+| Android realtime Talk       | Gateway-advertised released routes use relay; Android live audio verification pending          |
 
 These rows describe implemented transport paths, not account entitlement or a
 successful live call on every device. iOS implements frameless transcripts and
-the Gateway offer exchange. Android retains an explicit GPT-Live model gate.
+the Gateway offer exchange. Android follows the Gateway relay capability hint and retains its legacy GPT-Live model gate only when that hint is absent.
 For model capability limits, see [Discord voice policies](/channels/discord/voice-channels#voice-channels)
 and [Voice Call tools](/plugins/voice-call#realtime-voice-conversations).
 
@@ -166,12 +177,13 @@ broker, so the OAuth token never reaches the browser. A configured Platform
 credential that cannot be resolved fails closed instead of silently falling
 through to OAuth.
 
-iOS client-owned WebRTC, GA Gateway relay, and Android realtime remain
-Platform-key-only. GA browser Talk keeps the existing client-owned data channel
+iOS client-owned WebRTC and GA Gateway relay, including Android GA realtime,
+remain Platform-key-only. GA browser Talk keeps the existing client-owned data channel
 and `talk.client.toolCall` loop. Only the credential owner and SDP exchange path
-change under OAuth. The released GPT-Live route remains OAuth-first with
-Platform fallback for browser and Gateway-owned WebRTC. Direct backend sockets
-and unlisted GPT-Live routes remain Platform-key-only.
+change under OAuth. The Codex GPT-Live route remains OAuth-first with
+Platform fallback for browser and Gateway-owned WebRTC, including Android Talk
+and Discord. Public GPT-Live, direct backend sockets, and unlisted GPT-Live routes remain
+Platform-key-only.
 
 | Key                                      | Default                                     | Notes                                                                                                                                                                                                                                                          |
 | ---------------------------------------- | ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

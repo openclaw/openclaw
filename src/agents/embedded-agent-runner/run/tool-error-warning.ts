@@ -24,6 +24,16 @@ function formatToolErrorWarningText(params: {
 }): string {
   const failureVerb = params.lastToolError.executionStarted === false ? "blocked" : "failed";
   const terminalDiagnostic = params.lastToolError.terminalDiagnostic;
+  if (terminalDiagnostic?.kind === "timeout") {
+    const toolLabel = resolveToolDisplay({ name: params.lastToolError.toolName }).label;
+    const count = terminalDiagnostic.partialResults;
+    const partialSuffix = count
+      ? `; ${count} partial ${count === 1 ? "result is" : "results are"} available`
+      : "";
+    const errorSuffix =
+      params.includeDetails && params.lastToolError.error ? `: ${params.lastToolError.error}` : ".";
+    return `⚠️ ${toolLabel} timed out after ${terminalDiagnostic.timeoutMs / 1000}s${partialSuffix}${errorSuffix}`;
+  }
   if (terminalDiagnostic?.kind === "process") {
     const toolLabel = formatWarningToolLabel(
       "process",
@@ -40,8 +50,7 @@ function formatToolErrorWarningText(params: {
             : "timed out";
     const errorSuffix =
       params.includeDetails && params.lastToolError.error ? `: ${params.lastToolError.error}` : "";
-    const recoveryHint = params.includeDetails ? "" : ". Use /verbose full for complete output";
-    return `⚠️ ${toolLabel} failed (${reason})${errorSuffix}${recoveryHint}.`;
+    return `⚠️ ${toolLabel} failed (${reason})${errorSuffix}.`;
   }
 
   const includeError =

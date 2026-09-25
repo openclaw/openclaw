@@ -11,7 +11,7 @@ import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
 import {
   writeSkillProposalRollback,
   readSkillProposalRollback,
-} from "../skills/workshop/store-sqlite-rollback.js";
+} from "../skills/workshop/store-rollback.js";
 import { hashSkillProposalContent, importLegacySkillProposal } from "../skills/workshop/store.js";
 import * as workshopStore from "../skills/workshop/store.js";
 import {
@@ -20,7 +20,7 @@ import {
   type SkillProposalRecord,
   type SkillProposalRollback,
 } from "../skills/workshop/types.js";
-import { repairOpenClawStateDatabaseSchemaIfNeeded } from "../state/openclaw-state-db.js";
+import { prepareOpenClawStateDatabaseSchema } from "../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -103,12 +103,7 @@ describe("doctor Skill Workshop SQLite relocation conflicts and recovery", () =>
           (record) => record.id === missing.record.id,
         ),
       ).toMatchObject({ status: "pending", degradedState: "draft-missing" });
-      await migrateLegacySkillWorkshopProposals(options);
-      expect((await readSkillProposalRecord(missing.record.id, options))?.status).toBe("pending");
-      const repaired = await migrateLegacySkillWorkshopProposals({
-        ...options,
-        retireMissingDrafts: true,
-      });
+      const repaired = await migrateLegacySkillWorkshopProposals(options);
       expect(repaired.warnings).toEqual([]);
       expect(repaired.changes.join("\n")).toContain("marked 1 stale");
       expect(await readSkillProposalRecord(missing.record.id, options)).toMatchObject({
@@ -132,9 +127,12 @@ describe("doctor Skill Workshop SQLite relocation conflicts and recovery", () =>
       } else {
         await expect(fs.access(targetDir)).rejects.toThrow();
       }
-      await expect(
-        migrateLegacySkillWorkshopProposals({ ...options, retireMissingDrafts: true }),
-      ).resolves.toEqual({ changes: [], warnings: [], detected: 2, migrated: 0 });
+      await expect(migrateLegacySkillWorkshopProposals(options)).resolves.toEqual({
+        changes: [],
+        warnings: [],
+        detected: 2,
+        migrated: 0,
+      });
     },
   );
 
@@ -169,10 +167,7 @@ describe("doctor Skill Workshop SQLite relocation conflicts and recovery", () =>
       ),
     );
 
-    const result = await migrateLegacySkillWorkshopProposals({
-      ...options,
-      retireMissingDrafts: true,
-    });
+    const result = await migrateLegacySkillWorkshopProposals(options);
     expect(result.changes).toEqual([]);
     expect(result.warnings.join("\n")).toContain("unfinished apply recovery");
     expect((await readSkillProposalRecord(proposal.record.id, options))?.status).toBe("pending");
@@ -595,7 +590,7 @@ describe("doctor Skill Workshop SQLite relocation conflicts and recovery", () =>
     );
 
     const workshopRoot = resolveWorkshopSkillsDir({}, "main", testState.env);
-    repairOpenClawStateDatabaseSchemaIfNeeded({ env: testState.env });
+    await prepareOpenClawStateDatabaseSchema({ env: testState.env });
     await expectRelocationWriteFailure({
       env: testState.env,
       proposalId: records[0]!.record.id,
@@ -774,7 +769,7 @@ describe("doctor Skill Workshop SQLite relocation conflicts and recovery", () =>
       fs.access(path.join(recoveryRoot, recoveryDir, "proposal.json")),
     ).resolves.toBeUndefined();
 
-    importLegacySkillProposal({ record, ownerAgentId: "main" });
+    await importLegacySkillProposal({ record, ownerAgentId: "main" });
     await fs.mkdir(path.join(proposalDir, "references"), { recursive: true });
     await fs.writeFile(path.join(proposalDir, "references", "leftover.md"), "leftover\n", "utf8");
     await expect(
@@ -790,12 +785,17 @@ describe("doctor Skill Workshop SQLite relocation conflicts and recovery", () =>
     ).resolves.toMatchObject({
       changes: [
         expect.stringContaining(
-          "Relocated 0 Skill Workshop skills, retargeted 1 proposal, marked 0 stale",
+          "Relocated 0 Skill Workshop skills, retargeted 0 proposals, marked 1 stale",
         ),
       ],
       warnings: [],
       detected: 1,
       migrated: 0,
+    });
+    await expect(readSkillProposalRecord(proposalId)).resolves.toMatchObject({
+      status: "stale",
+      statusReason: expect.stringContaining("draft is missing"),
+      target: record.target,
     });
     await expect(
       fs.access(path.join(proposalDir, "references", "leftover.md")),

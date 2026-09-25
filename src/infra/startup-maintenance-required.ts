@@ -3,14 +3,20 @@ import { collectNestedErrorCandidates } from "./error-graph-internal.js";
 export const GATEWAY_STARTUP_MAINTENANCE_REQUIRED_REASON = "gateway.maintenance_required";
 
 const maintenanceReasons = {
+  "state-migrations": "state migration",
   "newer-schema": "a newer OpenClaw build",
   "agent-media": "offline media migration",
   "agent-databases-composite-primary-key": "state database schema migration",
   "audit-events-v2": "state database schema migration",
   "legacy-workshop-review-index": "state database schema migration",
+  "legacy-cron-run-logs": "cron run history migration",
   "legacy-workspace": "workspace setup state migration",
   "legacy-session-store": "session store migration",
 } as const;
+
+export function isStartupMaintenanceKind(value: unknown): value is keyof typeof maintenanceReasons {
+  return typeof value === "string" && Object.hasOwn(maintenanceReasons, value);
+}
 
 export class StartupMaintenanceRequiredError extends Error {
   readonly code = GATEWAY_STARTUP_MAINTENANCE_REQUIRED_REASON;
@@ -18,8 +24,9 @@ export class StartupMaintenanceRequiredError extends Error {
   constructor(
     readonly kind: keyof typeof maintenanceReasons,
     message: string,
+    options?: ErrorOptions,
   ) {
-    super(message);
+    super(message, options);
     this.name = "StartupMaintenanceRequiredError";
   }
 

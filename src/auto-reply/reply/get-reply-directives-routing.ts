@@ -5,7 +5,7 @@ import type { FinalizedRuntimeMsgContext } from "../templating.js";
 import { isDirectiveOnly } from "./directive-handling.directive-only.js";
 import { type InlineDirectives, parseInlineSessionDirectives } from "./directive-handling.parse.js";
 import { clearExecInlineDirectives, clearInlineDirectives } from "./get-reply-directives-utils.js";
-import { HISTORY_CONTEXT_MARKER } from "./history.js";
+import { HISTORY_CONTEXT_MARKER, RECENT_HISTORY_CONTEXT_MARKER } from "./history.js";
 import { stripMentions } from "./mentions.js";
 import { extractInlineSimpleCommand, stripInlineStatus } from "./reply-inline.js";
 
@@ -190,7 +190,11 @@ export function resolveReplyDirectiveRouting(params: {
       }
       // Only the whole body or demonstrated leading sender block can be projected.
       // Non-leading, encoded, and flat-history bodies stay opaque; never search quoted context.
-      if (leadingSender && !params.agentText.trimStart().startsWith(HISTORY_CONTEXT_MARKER)) {
+      if (
+        leadingSender &&
+        !params.agentText.trimStart().startsWith(HISTORY_CONTEXT_MARKER) &&
+        !params.agentText.trimStart().startsWith(RECENT_HISTORY_CONTEXT_MARKER)
+      ) {
         cleanedBody = cleanedSender + params.agentText.slice(source.length);
       }
     }

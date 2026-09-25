@@ -2,10 +2,10 @@ import type { Model } from "../../../llm/types.js";
 import { OPENCLAW_AGENT_RUNTIME_ID } from "../../agent-runtime-id.js";
 import { resolveAuthoredModelContextTokens } from "../../context-resolution.js";
 import { AgentHarnessPreflightError } from "../../harness/errors.js";
+import type { AgentHarnessPreparedModelProvider } from "../../harness/selection-decision.js";
 import {
   selectAgentHarness,
   selectAgentHarnessForPreparedModelProviders,
-  type AgentHarnessPreparedModelProvider,
 } from "../../harness/selection.js";
 import {
   resolveAgentHarnessPreparedAuthSupport,

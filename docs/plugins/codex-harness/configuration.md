@@ -109,6 +109,10 @@ threads; Codex's materialized 32 KiB default does not. Lightweight, ring-zero,
 message-only, and tool-disabled internal turns set the native project-document
 budget to zero instead.
 
+An inherited agent-workspace `AGENTS.md` snapshot stays fixed for its native
+thread, including when the file is edited, emptied, or removed. Start a new
+session to load the current workspace instructions.
+
 This byte budget is separate from the character-based workspace bootstrap
 limits configured through `agents.defaults.bootstrapMaxChars` and
 `agents.defaults.bootstrapTotalMaxChars`.
@@ -148,6 +152,12 @@ until termination is confirmed. It never falls back to a context engine or
 public OpenAI summarizer. If the native Codex thread binding is missing or
 stale, the command fails closed instead of silently switching compaction
 backends.
+
+Cancellation prevents native requests that have not been submitted, including
+overload retries. After submission, OpenClaw keeps the thread occupied until
+native completion, interruption, or safe retirement is confirmed. Stopped turns
+close visible compaction progress without marking unfinished compaction successful
+or making previously observed native work eligible for replay.
 
 ### Direct API long context
 

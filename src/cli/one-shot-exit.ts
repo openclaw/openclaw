@@ -1,7 +1,8 @@
+import { drainProcessOutput } from "../process/output-drain.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime, ExitError } from "../runtime.js";
-import { drainOneShotOutput } from "./one-shot-output.js";
 import { waitForPendingCliDisposers } from "./runtime-cleanup.js";
+import { exitAfterSignalExitBarriers, waitForCliSignalExit } from "./signal-exit-barrier.js";
 
 type VitestWorkerMarkers = {
   tinypoolState?: unknown;
@@ -90,6 +91,8 @@ function requestExitAfterSystemCaCliCompletion(
 export async function runCliWithExitFinalization(params: {
   run: () => Promise<void>;
   onError: (error: unknown) => void | Promise<void>;
+  /** Join caller-owned state after command cleanup and before scheduling process exit. */
+  finalize?: () => Promise<void>;
   runtime?: RuntimeEnv;
   env?: NodeJS.ProcessEnv;
   execArgv?: readonly string[];
@@ -97,6 +100,7 @@ export async function runCliWithExitFinalization(params: {
   markers?: VitestWorkerMarkers;
 }): Promise<void> {
   const runtime = params.runtime ?? defaultRuntime;
+  let finalizationFailure: { error: unknown } | undefined;
   try {
     await params.run();
   } catch (error) {
@@ -109,15 +113,37 @@ export async function runCliWithExitFinalization(params: {
       requestExitAfterOneShotOutput(runtime, resolveProcessExitCode(1));
     }
   } finally {
+    await waitForCliSignalExit();
     const automaticExit = requestExitAfterSystemCaCliCompletion(runtime, {
       env: params.env,
       execArgv: params.execArgv,
       platform: params.platform,
     });
-    if (automaticExit && !isVitestWorker(params.env ?? process.env, params.markers)) {
+    if (
+      params.finalize ||
+      (automaticExit && !isVitestWorker(params.env ?? process.env, params.markers))
+    ) {
       await waitForPendingCliDisposers();
     }
+    if (params.finalize) {
+      try {
+        await params.finalize();
+      } catch (error) {
+        try {
+          await params.onError(error);
+        } catch (reportError) {
+          finalizationFailure = { error: reportError };
+        }
+        if (!requestExitAfterOneShotOutput(runtime, 1)) {
+          finalizationFailure ??= { error };
+        }
+      }
+    }
     flushExitAfterOneShotOutput(runtime, params.env, params.markers);
+  }
+  // A cleanup failure must not replace an embedded runtime's original exit.
+  if (finalizationFailure) {
+    throw finalizationFailure.error;
   }
 }
 
@@ -149,7 +175,7 @@ export function watchCliExitAfterOutput(exitCode: number, onStall: () => void): 
     try {
       onStall();
     } finally {
-      defaultRuntime.exit(exitCode);
+      exitAfterSignalExitBarriers(exitCode);
     }
   }, 10_000).unref();
 }
@@ -167,5 +193,5 @@ function flushExitAfterOneShotOutput(
 
   const exit = () =>
     runtime.exit(requestedCode === "process" ? resolveProcessExitCode() : requestedCode);
-  drainOneShotOutput(exit);
+  drainProcessOutput(exit);
 }

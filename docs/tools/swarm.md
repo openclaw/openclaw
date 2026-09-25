@@ -9,9 +9,9 @@ read_when:
   - You want to observe collector children in chat
 ---
 
-Swarm is an experimental way to orchestrate many sub-agents from a
+Swarm orchestrates many sub-agents from a
 [Code Mode](/tools/code-mode) script. It is enabled by default, with an explicit
-opt-out. Use normal JavaScript or TypeScript control flow such as `Promise.all`,
+opt-out. Use normal JavaScript control flow such as `Promise.all`,
 `while`, and `if` to fan out work, collect results, and make decisions.
 
 There is no graph DSL and no separate workflow format. The program is the
@@ -35,10 +35,8 @@ separately opt-in, and normal tool policy still applies. Existing Codex sessions
 can retain an older tool catalog. See the
 [fresh-session guidance](/tools/swarm#use-swarm-from-other-harnesses) below.
 
-To opt out, turn off **Settings → Agents & Tools → Labs → Swarm** in the
-Control UI. The switch saves `tools.swarm.enabled: false` immediately and
-applies to future runs without restarting the Gateway. Or set the boolean
-shorthand in `openclaw.json`:
+To opt out, disable Swarm in **Settings → Agent Defaults → Tools**, or set
+`tools.swarm: false` in `openclaw.json`:
 
 ```json5
 {
@@ -50,7 +48,7 @@ shorthand in `openclaw.json`:
 
 `swarm: { enabled: false }` has the same effect while preserving configured
 limits. To re-enable Swarm, remove the explicit opt-out, set `swarm: true` or
-`swarm: { enabled: true }`, or turn the Labs switch back on.
+`swarm: { enabled: true }`, or enable it in **Settings → Agent Defaults → Tools**.
 
 To tune the limits, use object form. These are the defaults. You only need to
 include values you want to change:
@@ -153,7 +151,7 @@ Spawn or bridge failures can reject with other errors. Read the exact generated
 declarations and short orchestration idioms from `API.read("agents.d.ts")`
 inside Code Mode.
 
-Use `label` for a recognizable child name in the dashboard and sidebar. Use
+Use `label` for a recognizable child name in transcript activity and Tasks views. Use
 `phase` in the options to publish a phase immediately before that child
 starts, or call `phase()` when several children belong to the same stage.
 `log()` publishes a short progress note. Progress calls are fire-and-forget.
@@ -301,6 +299,12 @@ The accepted spawn receipt describes this path: collect the result with
 `agents_wait`, or await `agents.run()` in OpenClaw Code Mode. Do not use
 `sessions_yield` to wait for collector children. They do not send completion notifications.
 
+Embedded and CLI-backed collector turns are not offered `sessions_yield`. If an
+override reaches the tool, it returns an error explaining that collector results
+are collected explicitly. A collector that nevertheless yields through another
+path is settled at its own terminal instead of pausing, so the turn finishes and
+its collected result is recorded for the waiter.
+
 The target agent resolves in this order:
 
 1. `agentId` on the spawn or `agents.run()` call.
@@ -378,9 +382,10 @@ Keep the parent session open in Chat while a swarm is active. The Control UI and
 native Android, iOS, and macOS chat surfaces show a compact Swarm progress widget
 between the transcript and composer.
 
-In the Control UI, cards show queued, running, completed, and failed counts with
-visible status markers. Click or tap **Child details**, or activate it with the
-keyboard, to expand available child names, status icons, and run durations. The
+In the Control UI, cards show queued, running, completed, and **failed or stopped**
+counts with visible status markers. The combined count includes failures, timeouts,
+and cancelled children; the summary does not report these outcomes separately.
+Click or tap **Child details**, or activate it with the keyboard, to expand available child names, status icons, and run durations. The
 view shows up to four active groups plus the latest completed group, with an
 explicit count when more groups are active. Each card displays at most 64 markers
 and 64 child details. Its counts include every accepted group member.
@@ -388,26 +393,36 @@ and 64 child details. Its counts include every accepted group member.
 The latest completed group's counts remain visible after the children finish,
 including when the parent fails before writing its final response. Groups whose
 children all succeed use a compact completion row. Activate the row to expand
-child details and the final-response reminder. Running, queued, and failed groups
-keep their visible status markers and counts. These are
-child outcomes, not confirmation that the parent produced a synthesis. Counts
+child details and the final-response reminder. Groups with running, queued,
+failed, or stopped children keep their visible status markers and counts. These
+are child outcomes, not confirmation that the parent produced a synthesis. Counts
 come from retained collector records, so reloading the page or cleaning up a
 child session does not reduce the reported total. They expire with the existing
 collector retention policy. This is not a permanent execution archive.
 
 Native Android, iOS, and macOS chat surfaces still show active-only phase-grouped
 grids, capped at 256 markers per phase with an overflow count. Accessible labels
-identify each child's status. All clients present killed and timed-out children
+identify each child's status. Native clients present killed and timed-out children
 as failed. Native groups leave the widget when none of their children are queued
 or running. The native widget disappears when no active groups remain.
 
-The session sidebar keeps the normal parent/child tree. Expand the parent row to
-inspect a collector child or open its transcript without losing the swarm hierarchy.
+Collector children appear in inline transcript activity rows, the chat **Tasks**
+tab, and the [Tasks page](/automation/tasks#control-ui). They have no session-sidebar
+rows. Their activity and unread failures still contribute to the parent’s sidebar
+ring and attention signals. Persistent spawned sessions and forks keep their
+normal sidebar nesting.
 
 Delete-mode collector children can clean up their child sessions immediately after
 completion while retaining their waitable results. Those collector records remain
 available until the group is archived after every member reaches its retention
 deadline. Retained child sessions are archived as a batch at that point.
+
+Resetting a child session durably revokes completed runs' cleanup before changing
+that session, so a delayed cleanup retry cannot delete its replacement. Reset fails
+if completion is still settling or revocation cannot be saved. If reset fails or
+the Gateway stops after revocation is saved, the original session may remain with
+that cleanup disabled. Collector results and task outcomes keep their normal
+retention, and active reset continuations keep running.
 
 ## Stop a Swarm
 
@@ -436,7 +451,7 @@ calls. Both tools must be allowed by the effective tool policy. Default-on
 Swarm does not add them to a restrictive tool profile or allowlist.
 
 Codex Code Mode automatically exposes eligible dynamic OpenClaw tools under
-`tools.*`. It does not use OpenClaw's QuickJS guest API or require
+`tools.*`. It does not use OpenClaw's guest API or require
 `tools.codeMode`, but `tools.swarm` must still be enabled. Codex harness
 `agents_wait` calls support the full 600-second timeout.
 
@@ -580,7 +595,7 @@ of Swarm's current direction.
 
 ## Related
 
-- [Code Mode](/tools/code-mode) for the QuickJS guest runtime and activation rules
+- [Code Mode](/tools/code-mode) for JavaScript executors and activation rules
 - [Sub-agents](/tools/subagents) for child policy, isolation, and session behavior
 - [Multi-agent sandbox tools](/tools/multi-agent-sandbox-tools) for per-agent restrictions
 - [Tools overview](/tools) for tool profiles and policy routing

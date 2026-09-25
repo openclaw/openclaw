@@ -1,13 +1,9 @@
 // Lobster helper module supports taskflow test helpers behavior.
 import { vi } from "vitest";
-import type { OpenClawPluginApi } from "../runtime-api.js";
-
-type BoundTaskFlow = ReturnType<
-  NonNullable<OpenClawPluginApi["runtime"]>["tasks"]["managedFlows"]["bindSession"]
->;
+import type { BoundTaskFlow } from "./lobster-taskflow.js";
 
 export function createFakeTaskFlow(overrides?: Partial<BoundTaskFlow>): BoundTaskFlow {
-  const baseFlow = {
+  const baseFlow: NonNullable<Awaited<ReturnType<BoundTaskFlow["tryCreateManaged"]>>> = {
     flowId: "flow-1",
     revision: 1,
     syncMode: "managed" as const,
@@ -15,37 +11,36 @@ export function createFakeTaskFlow(overrides?: Partial<BoundTaskFlow>): BoundTas
     ownerKey: "agent:main:main",
     status: "running" as const,
     goal: "Run Lobster workflow",
+    notifyPolicy: "silent",
+    createdAt: 1,
+    updatedAt: 1,
   };
-  const createManaged = vi.fn().mockReturnValue(baseFlow);
 
   return {
-    sessionKey: "agent:main:main",
-    createManaged,
-    tryCreateManaged: vi.fn((params) => createManaged(params)),
-    get: vi.fn(),
-    list: vi.fn().mockReturnValue([]),
-    findLatest: vi.fn(),
-    resolve: vi.fn(),
-    getTaskSummary: vi.fn(),
-    setWaiting: vi.fn().mockImplementation((input) => ({
+    get: vi.fn<BoundTaskFlow["get"]>().mockResolvedValue({
+      ...baseFlow,
+      revision: 4,
+      status: "waiting",
+      waitJson: { kind: "lobster_approval", resumeToken: "resume-1", approvalId: "approval-1" },
+    }),
+    tryCreateManaged: vi.fn<BoundTaskFlow["tryCreateManaged"]>().mockResolvedValue(baseFlow),
+    setWaiting: vi.fn<BoundTaskFlow["setWaiting"]>(async (input) => ({
       applied: true,
       flow: { ...baseFlow, revision: input.expectedRevision + 1, status: "waiting" as const },
     })),
-    resume: vi.fn().mockImplementation((input) => ({
+    resume: vi.fn<BoundTaskFlow["resume"]>(async (input) => ({
       applied: true,
       flow: { ...baseFlow, revision: input.expectedRevision + 1, status: "running" as const },
     })),
-    finish: vi.fn().mockImplementation((input) => ({
+    finish: vi.fn<BoundTaskFlow["finish"]>(async (input) => ({
       applied: true,
-      flow: { ...baseFlow, revision: input.expectedRevision + 1, status: "completed" as const },
+      flow: { ...baseFlow, revision: input.expectedRevision + 1, status: "succeeded" as const },
     })),
-    fail: vi.fn().mockImplementation((input) => ({
+    fail: vi.fn<BoundTaskFlow["fail"]>(async (input) => ({
       applied: true,
       flow: { ...baseFlow, revision: input.expectedRevision + 1, status: "failed" as const },
     })),
-    requestCancel: vi.fn(),
-    cancel: vi.fn(),
-    runTask: vi.fn(),
+    cancel: vi.fn<BoundTaskFlow["cancel"]>(),
     ...overrides,
   };
 }

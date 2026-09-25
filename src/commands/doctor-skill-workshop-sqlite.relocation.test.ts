@@ -67,7 +67,7 @@ describe("doctor Skill Workshop SQLite relocation and legacy migration", () => {
     });
     await fs.mkdir(legacySkillDir, { recursive: true });
     await fs.writeFile(legacySkillFile, skillContent, "utf8");
-    importLegacySkillProposal({
+    await importLegacySkillProposal({
       record,
       ownerAgentId: "main",
       store: { env: testState.env },
@@ -142,6 +142,10 @@ describe("doctor Skill Workshop SQLite relocation and legacy migration", () => {
     };
     await fs.mkdir(skillDir, { recursive: true });
     await fs.writeFile(skillFile, skillContent, "utf8");
+    await testState.writeText(
+      `skill-workshop/proposals/${update.id}/${update.draftFile}`,
+      updatedContent,
+    );
     seedLegacyV15ProposalRows(testState.env, [
       { record: create, workspaceDir, claimReleasedTime: null },
       { record: update, workspaceDir, claimReleasedTime: null },

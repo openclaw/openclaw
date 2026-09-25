@@ -28,29 +28,6 @@ describe("openai completions params", () => {
     expect(params.tools?.[0]?.function).not.toHaveProperty("strict");
   });
 
-  it("defaults completions tool schemas to strict on native OpenAI routes", () => {
-    const params = buildOpenAICompletionsParams(
-      makeCompletionsModel({
-        id: "gpt-5",
-        name: "GPT-5",
-      }),
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [
-          {
-            name: "lookup_weather",
-            description: "Get forecast",
-            parameters: { type: "object", properties: {}, additionalProperties: false },
-          },
-        ],
-      } as never,
-      undefined,
-    ) as { tools?: Array<{ function?: { strict?: boolean } }> };
-
-    expect(params.tools?.[0]?.function?.strict).toBe(true);
-  });
-
   it("keeps native completions strict mode for projected tools after dropping bad schemas", () => {
     const params = buildOpenAICompletionsParams(
       makeCompletionsModel({

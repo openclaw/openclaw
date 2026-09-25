@@ -1,11 +1,11 @@
-// Slack plugin module implements media behavior.
 import fs from "node:fs/promises";
 import type { WebClient as SlackWebClient } from "@slack/web-api";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeHostname } from "openclaw/plugin-sdk/host-runtime";
 import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -16,12 +16,13 @@ import type { SlackAttachment, SlackFile } from "../types.js";
 import { MAX_SLACK_MEDIA_FILES, type SlackMediaResult } from "./media-types.js";
 import {
   type FetchLike,
+  captureChannelReadAuthority,
   fetchWithRuntimeDispatcher,
   saveRemoteMedia,
   slackMediaLog,
+  unlinkIfExists,
 } from "./media.runtime.js";
 import { isGovSlackClient } from "./slack-client-kind.js";
-import { logVerbose } from "./thread.runtime.js";
 export type { SlackMediaResult } from "./media-types.js";
 
 function isSlackHostname(hostname: string, govSlack: boolean): boolean {
@@ -61,28 +62,26 @@ function assertSlackFileUrl(rawUrl: string, govSlack: boolean): URL {
   return parsed;
 }
 
-function createSlackAuthHeaders(token: string): HeadersInit {
-  return { Authorization: `Bearer ${token}` };
-}
-
-function createSlackMediaRequest(
-  url: string,
-  token: string,
-  govSlack: boolean,
-): {
-  url: string;
-  requestInit: RequestInit;
-} {
-  const parsed = assertSlackFileUrl(url, govSlack);
-  return {
-    url: parsed.href,
-    // Let the shared guarded-fetch redirect logic preserve auth on same-origin
-    // Slack hops and strip it once the redirect crosses origins.
-    requestInit: { headers: createSlackAuthHeaders(token) },
+function captureSlackMediaReadGuard(params: {
+  assertCurrent?: () => void;
+  abortSignal?: AbortSignal;
+}): (() => void) | undefined {
+  const inherited = captureChannelReadAuthority();
+  const { assertCurrent, abortSignal } = params;
+  if (!assertCurrent && !abortSignal) {
+    return inherited;
+  }
+  return () => {
+    inherited?.();
+    abortSignal?.throwIfAborted();
+    assertCurrent?.();
   };
 }
 
-function createSlackMediaFetch(govSlack: boolean): FetchLike {
+function createSlackMediaFetch(
+  govSlack: boolean,
+  assertReadAuthority = captureChannelReadAuthority(),
+): FetchLike {
   return async (input, init) => {
     const url = resolveRequestUrl(input);
     if (!url) {
@@ -90,6 +89,7 @@ function createSlackMediaFetch(govSlack: boolean): FetchLike {
     }
     const parsed = assertSlackFileUrl(url, govSlack);
     const fetchImpl = "dispatcher" in (init ?? {}) ? fetchWithRuntimeDispatcher : globalThis.fetch;
+    assertReadAuthority?.();
     return fetchImpl(parsed.href, { ...init, redirect: "manual" });
   };
 }
@@ -105,35 +105,53 @@ const SLACK_GOV_MEDIA_SSRF_POLICY = {
 };
 export const SLACK_MEDIA_READ_IDLE_TIMEOUT_MS = 60_000;
 const SLACK_MEDIA_TOTAL_TIMEOUT_MS = 120_000;
-type SlackSaveRemoteMediaOptions = Parameters<typeof saveRemoteMedia>[0];
-
-async function saveSlackMedia(params: {
-  options: SlackSaveRemoteMediaOptions;
+type SlackMediaDownloadParams = {
+  url: string;
+  token: string;
+  maxBytes: number;
+  govSlack: boolean;
   readIdleTimeoutMs?: number;
   totalTimeoutMs?: number;
   abortSignal?: AbortSignal;
-}): ReturnType<typeof saveRemoteMedia> {
-  const timeoutAbortController = params.totalTimeoutMs ? new AbortController() : undefined;
-  const abortSignals = [
-    params.abortSignal,
-    params.options.requestInit?.signal ?? undefined,
-    timeoutAbortController?.signal,
-  ].filter((signal): signal is AbortSignal => Boolean(signal));
+  assertCurrent?: () => void;
+};
+
+async function saveSlackMedia(
+  params: SlackMediaDownloadParams & {
+    assertReadAuthority?: () => void;
+    file?: SlackFile;
+  },
+): ReturnType<typeof saveRemoteMedia> {
+  const url = assertSlackFileUrl(params.url, params.govSlack).href;
+  const totalTimeoutMs = params.totalTimeoutMs ?? SLACK_MEDIA_TOTAL_TIMEOUT_MS;
+  const timeoutAbortController = totalTimeoutMs ? new AbortController() : undefined;
+  const abortSignals = [params.abortSignal, timeoutAbortController?.signal].filter(
+    (signal): signal is AbortSignal => Boolean(signal),
+  );
   const signal = abortSignals.length > 1 ? AbortSignal.any(abortSignals) : abortSignals[0];
   let timedOut = false;
   let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
 
   const savePromise = saveRemoteMedia({
-    ...params.options,
-    readIdleTimeoutMs: params.readIdleTimeoutMs ?? SLACK_MEDIA_READ_IDLE_TIMEOUT_MS,
-    ...(signal
+    url,
+    fetchImpl: createSlackMediaFetch(params.govSlack, params.assertReadAuthority),
+    beforeRequest: params.assertReadAuthority,
+    // The store inherits its parent scope; this is only the additional recovery guard.
+    assertCurrent: params.assertCurrent,
+    // The shared guarded fetch preserves auth on same-origin hops and strips it across origins.
+    requestInit: {
+      headers: { Authorization: `Bearer ${params.token}` },
+      ...(signal ? { signal } : {}),
+    },
+    ...(params.file
       ? {
-          requestInit: {
-            ...params.options.requestInit,
-            signal,
-          },
+          filePathHint: params.file.name,
+          fallbackContentType: resolveSlackMediaMimetype(params.file),
         }
       : {}),
+    maxBytes: params.maxBytes,
+    ssrfPolicy: params.govSlack ? SLACK_GOV_MEDIA_SSRF_POLICY : SLACK_MEDIA_SSRF_POLICY,
+    readIdleTimeoutMs: params.readIdleTimeoutMs ?? SLACK_MEDIA_READ_IDLE_TIMEOUT_MS,
   }).catch((error: unknown) => {
     if (timedOut) {
       return new Promise<never>(() => {});
@@ -142,15 +160,15 @@ async function saveSlackMedia(params: {
   });
 
   try {
-    if (!params.totalTimeoutMs) {
+    if (!totalTimeoutMs) {
       return await savePromise;
     }
     const timeoutPromise = new Promise<never>((_, reject) => {
       timeoutHandle = setTimeout(() => {
         timedOut = true;
         timeoutAbortController?.abort();
-        reject(new Error(`slack media download timed out after ${params.totalTimeoutMs}ms`));
-      }, params.totalTimeoutMs);
+        reject(new Error(`slack media download timed out after ${totalTimeoutMs}ms`));
+      }, totalTimeoutMs);
       timeoutHandle.unref?.();
     });
     return await Promise.race([savePromise, timeoutPromise]);
@@ -213,12 +231,17 @@ async function fetchFreshSlackFileUrl(params: {
   file: SlackFile;
   client?: SlackWebClient;
   isRefreshedFileAllowed?: (file: SlackFile) => boolean;
+  assertCurrent?: () => void;
+  abortSignal?: AbortSignal;
 }): Promise<string | null> {
   if (!params.file.id || !params.client) {
     return null;
   }
+  const assertCurrent = captureSlackMediaReadGuard(params);
   try {
+    assertCurrent?.();
     const info = await params.client.files.info({ file: params.file.id });
+    assertCurrent?.();
     const freshFile = info.file as SlackFile | undefined;
     if (freshFile && params.isRefreshedFileAllowed?.(freshFile) === false) {
       logVerbose(`slack: refreshed file metadata rejected for file id=${params.file.id}`);
@@ -232,6 +255,7 @@ async function fetchFreshSlackFileUrl(params: {
     logVerbose(`slack: files.info returned no private URL for file id=${params.file.id}`);
     return null;
   } catch (error) {
+    assertCurrent?.();
     logVerbose(
       `slack: files.info failed for file id=${params.file.id}: ${formatErrorMessage(error)}`,
     );
@@ -239,36 +263,14 @@ async function fetchFreshSlackFileUrl(params: {
   }
 }
 
-async function downloadSlackMediaFile(params: {
-  file: SlackFile;
-  url: string;
-  token: string;
-  maxBytes: number;
-  readIdleTimeoutMs?: number;
-  totalTimeoutMs?: number;
-  abortSignal?: AbortSignal;
-  govSlack: boolean;
-}): Promise<SlackMediaResult> {
-  const { url: slackUrl, requestInit } = createSlackMediaRequest(
-    params.url,
-    params.token,
-    params.govSlack,
-  );
-  const fetchImpl = createSlackMediaFetch(params.govSlack);
-  const saved = await saveSlackMedia({
-    options: {
-      url: slackUrl,
-      fetchImpl,
-      requestInit,
-      filePathHint: params.file.name,
-      fallbackContentType: resolveSlackMediaMimetype(params.file, params.file.mimetype),
-      maxBytes: params.maxBytes,
-      ssrfPolicy: params.govSlack ? SLACK_GOV_MEDIA_SSRF_POLICY : SLACK_MEDIA_SSRF_POLICY,
-    },
-    readIdleTimeoutMs: params.readIdleTimeoutMs,
-    totalTimeoutMs: params.totalTimeoutMs ?? SLACK_MEDIA_TOTAL_TIMEOUT_MS,
-    abortSignal: params.abortSignal,
-  });
+async function downloadSlackMediaFile(
+  params: SlackMediaDownloadParams & {
+    file: SlackFile;
+  },
+): Promise<SlackMediaResult> {
+  const assertReadAuthority = captureSlackMediaReadGuard(params);
+  assertReadAuthority?.();
+  const saved = await saveSlackMedia({ ...params, assertReadAuthority });
 
   // Guard against auth/login HTML pages returned instead of binary media.
   // Allow user-provided HTML files through.
@@ -279,7 +281,7 @@ async function downloadSlackMediaFile(params: {
   if (!isExpectedHtml) {
     const detectedMime = normalizeOptionalLowercaseString(saved.contentType?.split(";")[0]);
     if (detectedMime === "text/html" || (await looksLikeHtmlFile(saved.path))) {
-      await fs.rm(saved.path, { force: true }).catch(() => undefined);
+      await unlinkIfExists(saved.path);
       throw new Error("blocked: unexpected HTML content");
     }
   }
@@ -293,11 +295,6 @@ async function downloadSlackMediaFile(params: {
     ...(label ? { fileName: label } : {}),
     placeholder: `[Slack file: ${formatSlackFileReference({ ...params.file, name: label })}]`,
   };
-}
-
-function isForwardedSlackAttachment(attachment: SlackAttachment): boolean {
-  // Narrow this parser to Slack's explicit "shared/forwarded" attachment payloads.
-  return attachment.is_share === true;
 }
 
 function resolveForwardedAttachmentImageUrl(
@@ -332,9 +329,11 @@ export async function resolveSlackMedia(params: {
   readIdleTimeoutMs?: number;
   totalTimeoutMs?: number;
   abortSignal?: AbortSignal;
+  assertCurrent?: () => void;
   preloadedMedia?: ReadonlyMap<SlackFile, SlackMediaResult>;
   unavailableFiles?: Map<SlackFile, string>;
 }): Promise<SlackMediaResult[] | null> {
+  const assertCurrent = captureSlackMediaReadGuard(params);
   const govSlack = isGovSlackClient(params.client);
   const files = params.files ?? [];
   const limitedFiles =
@@ -347,10 +346,13 @@ export async function resolveSlackMedia(params: {
       file,
       client: params.client,
       isRefreshedFileAllowed: params.isRefreshedFileAllowed,
+      assertCurrent: params.assertCurrent,
+      abortSignal: params.abortSignal,
     });
 
-  const { results } = await runTasksWithConcurrency({
+  const { results, hasError, firstError } = await runTasksWithConcurrency({
     tasks: limitedFiles.map((file) => async (): Promise<SlackMediaResult | null> => {
+      assertCurrent?.();
       // Audio preflight keys the original event file object so admission can
       // reuse that exact download without turning this into a persistent cache.
       const preloaded = params.preloadedMedia?.get(file);
@@ -366,6 +368,7 @@ export async function resolveSlackMedia(params: {
         } catch (error) {
           reason = formatSlackMediaFailure(error);
         }
+        assertCurrent?.();
         // Only a failed event URL gets the existing files.info retry. Record
         // the final outcome once so a recovered download is not called unavailable.
         url = attempt === 0 && eventUrl ? await refreshFileUrl(file) : null;
@@ -376,8 +379,10 @@ export async function resolveSlackMedia(params: {
     }),
     limit: MAX_SLACK_MEDIA_CONCURRENCY,
     errorMode: "stop",
-    throwOnError: true,
   });
+  if (hasError) {
+    throw toErrorObject(firstError, "Slack media read failed");
+  }
   const resolved = results.filter((result): result is SlackMediaResult => result !== null);
 
   return resolved.length > 0 ? resolved : null;
@@ -393,6 +398,7 @@ export async function resolveSlackAttachmentContent(params: {
   readIdleTimeoutMs?: number;
   totalTimeoutMs?: number;
   abortSignal?: AbortSignal;
+  assertCurrent?: () => void;
   preloadedMedia?: ReadonlyMap<SlackFile, SlackMediaResult>;
 }): Promise<{
   text: string;
@@ -401,7 +407,7 @@ export async function resolveSlackAttachmentContent(params: {
   unavailableMediaCount: number;
 } | null> {
   const forwardedAttachments = (params.attachments ?? [])
-    .filter((attachment) => isForwardedSlackAttachment(attachment))
+    .filter((attachment) => attachment.is_share === true)
     .slice(0, MAX_SLACK_FORWARDED_ATTACHMENTS);
   const candidates = [
     ...(params.files ?? []),
@@ -466,59 +472,61 @@ export async function resolveSlackAttachmentContent(params: {
         return selected ? [selected] : [];
       }),
     });
-  const directMediaPromise = resolveFiles(params.files);
   const textBlocks: string[] = [];
-  const attachmentMedia: SlackMediaResult[] = [];
   let unavailableMediaCount = 0;
   const govSlack = isGovSlackClient(params.client);
 
-  for (const att of forwardedAttachments) {
-    const text = att.text?.trim() || att.fallback?.trim();
-    if (text) {
-      const author = att.author_name;
-      const heading = author ? `[Forwarded message from ${author}]` : "[Forwarded message]";
-      textBlocks.push(`${heading}\n${text}`);
-    }
+  // Observe both branches immediately and join all media work before propagating failure.
+  const { results, hasError, firstError } = await runTasksWithConcurrency({
+    tasks: [
+      () => resolveFiles(params.files),
+      async () => {
+        const attachmentMedia: SlackMediaResult[] = [];
+        for (const att of forwardedAttachments) {
+          const text = att.text?.trim() || att.fallback?.trim();
+          if (text) {
+            const author = att.author_name;
+            const heading = author ? `[Forwarded message from ${author}]` : "[Forwarded message]";
+            textBlocks.push(`${heading}\n${text}`);
+          }
 
-    const imageUrl = resolveForwardedAttachmentImageUrl(att, govSlack);
-    if (imageUrl) {
-      try {
-        const { url: slackUrl, requestInit } = createSlackMediaRequest(
-          imageUrl,
-          params.token,
-          govSlack,
-        );
-        const fetchImpl = createSlackMediaFetch(govSlack);
-        const saved = await saveSlackMedia({
-          options: {
-            url: slackUrl,
-            fetchImpl,
-            requestInit,
-            maxBytes: params.maxBytes,
-            ssrfPolicy: govSlack ? SLACK_GOV_MEDIA_SSRF_POLICY : SLACK_MEDIA_SSRF_POLICY,
-          },
-          readIdleTimeoutMs: params.readIdleTimeoutMs,
-          totalTimeoutMs: params.totalTimeoutMs ?? SLACK_MEDIA_TOTAL_TIMEOUT_MS,
-          abortSignal: params.abortSignal,
-        });
-        const label = saved.fileName ?? "forwarded image";
-        attachmentMedia.push({
-          path: saved.path,
-          contentType: saved.contentType,
-          ...(saved.fileName ? { fileName: saved.fileName } : {}),
-          placeholder: `[Forwarded image: ${label}]`,
-        });
-      } catch (error) {
-        unavailableMediaCount += 1;
-        slackMediaLog.warn(
-          `slack: forwarded image unavailable (${formatSlackMediaFailure(error)})`,
-        );
-      }
-    }
-    attachmentMedia.push(...((await resolveFiles(att.files)) ?? []));
+          const imageUrl = resolveForwardedAttachmentImageUrl(att, govSlack);
+          if (imageUrl) {
+            try {
+              const assertReadAuthority = captureSlackMediaReadGuard(params);
+              const saved = await saveSlackMedia({
+                ...params,
+                url: imageUrl,
+                govSlack,
+                assertReadAuthority,
+              });
+              const label = saved.fileName ?? "forwarded image";
+              attachmentMedia.push({
+                path: saved.path,
+                contentType: saved.contentType,
+                ...(saved.fileName ? { fileName: saved.fileName } : {}),
+                placeholder: `[Forwarded image: ${label}]`,
+              });
+            } catch (error) {
+              unavailableMediaCount += 1;
+              slackMediaLog.warn(
+                `slack: forwarded image unavailable (${formatSlackMediaFailure(error)})`,
+              );
+            }
+          }
+          attachmentMedia.push(...((await resolveFiles(att.files)) ?? []));
+        }
+        return attachmentMedia;
+      },
+    ],
+    limit: 2,
+    errorMode: "stop",
+  });
+  if (hasError) {
+    throw toErrorObject(firstError, "Slack attachment read failed");
   }
 
-  const allMedia = [...((await directMediaPromise) ?? []), ...attachmentMedia];
+  const allMedia = results.flatMap((media) => media ?? []);
   const unavailableFiles = allFiles.flatMap((file, index) => {
     const reason =
       index >= MAX_SLACK_MEDIA_FILES ? SLACK_MEDIA_LIMIT_REASON : unavailableFileReasons.get(file);

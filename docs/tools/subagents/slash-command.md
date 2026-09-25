@@ -24,9 +24,25 @@ by default). Use `sessions_history` for a bounded, safety-filtered recall
 view from within an agent turn, or inspect the transcript path on disk for
 the raw full transcript.
 
-In the Control UI, parent sessions with recent child runs have an expandable
-sidebar row. The nested rows show child status and runtime, and selecting one
-opens that child's chat while preserving the parent hierarchy. Failed or timed-out
+`/status` keeps full sub-agent counts but shows at most three current detail rows.
+Each row distinguishes running (with a safe tool name when available), queued,
+waiting for approval, input, children, agent messages, or external work,
+and finished execution with settlement still pending. Pending children may have
+finished but still owe completion delivery; they are not necessarily executing.
+“Current activity unavailable” means no current execution is observable, not that
+the task failed. These observations do not change retained active/done counts.
+
+In the Control UI, subagent runs appear in inline transcript activity rows, the
+chat **Tasks** tab, and the [Tasks page](/automation/tasks#control-ui). They do not
+appear as sidebar rows or add an expand control to their parent. The parent's
+activity ring, counts, unread attention, and child-failure warnings still include
+their work. Persistent spawned sessions and forks keep their sidebar nesting.
+Chat activity rows identify each subagent by its task name beside its status and
+latest activity; selecting a task opens its details and transcript in **Review**.
+Parent-sent follow-up turns also appear in these activity rows while they run,
+including after the original child task completed. They preserve the original
+result and any pending child wait; replies still follow `sessions_send` delivery.
+Failed or timed-out
 children retain a bounded failure reason, including failures during worktree
 preparation before any model reply. The child's transcript includes a durable
 failure notice when no assistant reply was recorded for that run. A later
@@ -90,6 +106,7 @@ explicitly unsupported even though the ACP spawn and child are observable.
     - Missing or empty external delivery receipts remain unconfirmed and follow that bounded retry policy. An adapter-reported unconfirmed send remains ambiguous, never intentional suppression. Empty requester output still uses the existing completion fallback; it is not an outbound-hook cancellation. A confirmed message-tool send to the requester still counts as delivery.
     - If an outbound hook intentionally suppresses a completion, the child can remain completed while its task delivery is marked `failed` with the suppression reason. OpenClaw does not retry or start another requester turn to bypass that decision. Inspect the task error and hook policy before manually retrying.
     - Blocked canonical results are retained for 7 days. Operators can retry or intentionally dismiss them from the Tasks page or with `openclaw tasks retry` / `openclaw tasks dismiss`; retry can duplicate a visible result after an ambiguous provider acknowledgement.
+    - If a pending completion's task record is gone, OpenClaw records `task-missing` and stops retrying across restarts. The retained sub-agent record keeps its result; `/subagents info <runId>` shows the delivery disposition and retirement time. Its normal cleanup window starts at retirement, so an old execution deadline does not immediately erase that history.
     - Delivery keeps the resolved requester route: thread-bound or conversation-bound completion routes win when available. If the completion origin only provides a channel, OpenClaw fills the missing target/account from the requester session's recorded delivery context so direct delivery still works.
 
   </Accordion>

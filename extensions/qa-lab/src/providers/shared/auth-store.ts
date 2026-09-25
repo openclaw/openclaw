@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements auth store behavior.
 import path from "node:path";
 import {
   loadAuthProfileStoreWithoutExternalProfiles,
@@ -6,15 +5,13 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime";
 import { updateAuthProfileStoreWithLock } from "openclaw/plugin-sdk/provider-auth";
 
-type QaAuthProfileCredential = AuthProfileCredential;
-
 function resolveQaAgentAuthDir(params: { stateDir: string; agentId: string }): string {
   return path.join(params.stateDir, "agents", params.agentId, "agent");
 }
 
 export async function writeQaAuthProfiles(params: {
   agentId: string;
-  profiles: Record<string, QaAuthProfileCredential>;
+  profiles: Record<string, AuthProfileCredential>;
   replace?: boolean;
   stateDir: string;
 }): Promise<void> {
@@ -49,13 +46,13 @@ export async function writeQaAuthProfiles(params: {
 
 export function readQaAuthProfiles(agentDir: string): {
   version: number;
-  profiles: Record<string, QaAuthProfileCredential>;
+  profiles: Record<string, AuthProfileCredential>;
 } {
   const store = loadAuthProfileStoreWithoutExternalProfiles(agentDir, {
     inheritedAuthDir: agentDir,
   });
   return {
     version: store.version,
-    profiles: store.profiles as Record<string, QaAuthProfileCredential>,
+    profiles: store.profiles,
   };
 }

@@ -3,6 +3,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { QaSuiteScenarioSkipError } from "../../../errors.js";
 import type { MatrixQaObservedEvent } from "../substrate/events.js";
+import { createCurrentScenarioEventPredicate } from "./scenario-runtime-event-scope.js";
 import {
   advanceMatrixQaActorCursor,
   buildMatrixQaToken,
@@ -30,13 +31,6 @@ import {
 import { prepareMatrixMentionProgressGate } from "./scenario-runtime-tool-progress-gate.js";
 import type { MatrixQaScenarioExecution } from "./scenario-types.js";
 
-function allowsMatrixQaTopLevelFinalAfterProgress(params: {
-  allowFinalBeforeProgress?: boolean;
-  allowTopLevelFinalWithProgress?: boolean;
-}) {
-  return params.allowTopLevelFinalWithProgress === true || params.allowFinalBeforeProgress === true;
-}
-
 async function runMatrixToolProgressScenario(
   context: MatrixQaScenarioContext,
   params: {
@@ -55,9 +49,28 @@ async function runMatrixToolProgressScenario(
     triggerBodyBuilder: (sutUserId: string, finalText: string) => string;
   },
 ) {
-  const allowTopLevelFinalWithProgress = allowsMatrixQaTopLevelFinalAfterProgress(params);
+  const allowTopLevelFinalWithProgress =
+    params.allowTopLevelFinalWithProgress === true || params.allowFinalBeforeProgress === true;
   const { client, startSince } = await primeMatrixQaDriverScenarioClient(context);
   const startObservedIndex = context.observedEvents.length;
+  const isCurrentScenarioEvent = createCurrentScenarioEventPredicate(
+    context.observedEvents,
+    startObservedIndex,
+  );
+  const assertProgressStaysInPreview = (finalEventId: string, previewEventId?: string) => {
+    const unexpected = findMatrixQaUnexpectedWorkingEvents({
+      events: context.observedEvents,
+      finalEventId,
+      ...(previewEventId === undefined ? {} : { previewEventId }),
+      startIndex: startObservedIndex,
+      sutUserId: context.sutUserId,
+    });
+    if (unexpected.length > 0) {
+      throw new Error(
+        `Matrix tool progress leaked outside preview event: ${unexpected.map((event) => `${event.eventId}:${event.body ?? ""}`).join("; ")}`,
+      );
+    }
+  };
   await writeMatrixToolProgressTaskFile(context, params.finalText);
   await using mentionProgressGate = params.mentionSafety
     ? await prepareMatrixMentionProgressGate(context)
@@ -74,6 +87,7 @@ async function runMatrixToolProgressScenario(
   const getPreviewRootEventId = (event: MatrixQaObservedEvent) =>
     event.replacesEventId ?? event.eventId;
   const isFinalReply = (event: MatrixQaObservedEvent) =>
+    isCurrentScenarioEvent(event) &&
     event.roomId === context.roomId &&
     event.sender === context.sutUserId &&
     event.type === "m.room.message" &&
@@ -87,12 +101,14 @@ async function runMatrixToolProgressScenario(
       isMatrixQaMessageLikeKind(event.kind) &&
       matchesExpectedProgress(event.body));
   const isProgressEvent = (event: MatrixQaObservedEvent) =>
+    isCurrentScenarioEvent(event) &&
     event.roomId === context.roomId &&
     event.sender === context.sutUserId &&
     isExpectedProgressKind(event) &&
     (matchesExpectedProgress(event.body) ||
       (event.replacesEventId === undefined && event.relatesTo === undefined));
   const isProgressProofEvent = (event: MatrixQaObservedEvent) =>
+    isCurrentScenarioEvent(event) &&
     event.roomId === context.roomId &&
     event.sender === context.sutUserId &&
     isExpectedProgressKind(event) &&
@@ -153,18 +169,7 @@ async function runMatrixToolProgressScenario(
         .catch((err: unknown) => throwProgressTimeout(err, "<not observed>"));
       const progressPreviewEventId = getPreviewRootEventId(progressAfterFinal.event);
       await mentionProgressGate?.release();
-      const unexpectedWorkingEvents = findMatrixQaUnexpectedWorkingEvents({
-        events: context.observedEvents,
-        finalEventId: preview.event.eventId,
-        previewEventId: progressPreviewEventId,
-        startIndex: startObservedIndex,
-        sutUserId: context.sutUserId,
-      });
-      if (unexpectedWorkingEvents.length > 0) {
-        throw new Error(
-          `Matrix tool progress leaked outside preview event: ${unexpectedWorkingEvents.map((event) => `${event.eventId}:${event.body ?? ""}`).join("; ")}`,
-        );
-      }
+      assertProgressStaysInPreview(preview.event.eventId, progressPreviewEventId);
       if (params.mentionSafety) {
         assertMatrixQaToolProgressMentionsInert(progressAfterFinal.event);
       }
@@ -201,17 +206,7 @@ async function runMatrixToolProgressScenario(
     }
 
     if (params.allowFinalOnly === true) {
-      const unexpectedWorkingEvents = findMatrixQaUnexpectedWorkingEvents({
-        events: context.observedEvents,
-        finalEventId: preview.event.eventId,
-        startIndex: startObservedIndex,
-        sutUserId: context.sutUserId,
-      });
-      if (unexpectedWorkingEvents.length > 0) {
-        throw new Error(
-          `Matrix tool progress leaked outside preview event: ${unexpectedWorkingEvents.map((event) => `${event.eventId}:${event.body ?? ""}`).join("; ")}`,
-        );
-      }
+      assertProgressStaysInPreview(preview.event.eventId);
       advanceMatrixQaActorCursor({
         actorId: "driver",
         syncState: context.syncState,
@@ -324,18 +319,7 @@ async function runMatrixToolProgressScenario(
           }),
         );
       }));
-  const unexpectedWorkingEvents = findMatrixQaUnexpectedWorkingEvents({
-    events: context.observedEvents,
-    finalEventId: finalized.event.eventId,
-    previewEventId: previewRootEventId,
-    startIndex: startObservedIndex,
-    sutUserId: context.sutUserId,
-  });
-  if (unexpectedWorkingEvents.length > 0) {
-    throw new Error(
-      `Matrix tool progress leaked outside preview event: ${unexpectedWorkingEvents.map((event) => `${event.eventId}:${event.body ?? ""}`).join("; ")}`,
-    );
-  }
+  assertProgressStaysInPreview(finalized.event.eventId, previewRootEventId);
   advanceMatrixQaActorCursor({
     actorId: "driver",
     syncState: context.syncState,
@@ -431,6 +415,7 @@ export async function runToolProgressMentionSafetyScenario(context: MatrixQaScen
     expectedPreviewKind: "message",
     finalText: buildMatrixQaToken("MATRIX_QA_TOOL_PROGRESS_MENTION_SAFE"),
     label: "tool progress mention safety",
+    allowGenericProgressLine: true,
     allowFinalBeforeProgress: true,
     mentionSafety: true,
     progressPattern: /@room|@alice:matrix-qa\.test|!room:matrix-qa\.test/i,

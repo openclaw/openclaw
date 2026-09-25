@@ -1,13 +1,19 @@
 // Mattermost tests cover draft-preview delivery settlement.
+import { setImmediate } from "node:timers/promises";
 import {
   createChannelPartialDeliveryError,
   isChannelPartialDeliveryError,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  createLivePreviewLifecycle,
+  createMessageReceiptFromOutboundResults,
+} from "openclaw/plugin-sdk/channel-outbound";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as clientModule from "./client.js";
 import type { MattermostClient } from "./client.js";
 import { deliverMattermostReplyWithDraftPreview } from "./monitor-draft-delivery.js";
+import type { ReplyPayload } from "./runtime-api.js";
 
 const updateMattermostPostSpy = vi.spyOn(clientModule, "updateMattermostPost");
 
@@ -40,6 +46,14 @@ function createConfirmedPreviewDelivery(messageId: string, content: string) {
   };
 }
 
+type DraftStreamMock = {
+  flush: () => Promise<void>;
+  postId: () => string | undefined;
+  clear: () => Promise<void>;
+  discardPending: () => Promise<void>;
+  seal: () => Promise<void>;
+};
+
 function createDraftStreamMock(postId: string | null | undefined = "preview-post-1") {
   return {
     flush: vi.fn(async () => {}),
@@ -65,18 +79,25 @@ function resolvePreviewFinalText(text?: string) {
   return editText ? { editText, alreadyDelivered: false } : undefined;
 }
 
+function createPreviewLifecycle(draftStream: DraftStreamMock) {
+  return createLivePreviewLifecycle<ReplyPayload, string>({
+    draft: { ...draftStream, id: draftStream.postId },
+  });
+}
+
 type DraftDeliveryParams = Parameters<typeof deliverMattermostReplyWithDraftPreview>[0];
 
 function deliverDraftPreview(
-  params: Pick<DraftDeliveryParams, "payload" | "draftStream" | "deliverPayload"> &
-    Partial<Omit<DraftDeliveryParams, "payload" | "draftStream" | "deliverPayload">>,
+  params: Pick<DraftDeliveryParams, "payload" | "deliverPayload"> & {
+    draftStream: DraftStreamMock;
+  } & Partial<Omit<DraftDeliveryParams, "payload" | "deliverPayload">>,
 ) {
   return deliverMattermostReplyWithDraftPreview({
     info: { kind: "final" },
     kind: "channel",
     client: createMattermostClientMock(),
     resolvePreviewFinalText,
-    previewState: { finalizedViaPreviewPost: false },
+    previewLifecycle: createPreviewLifecycle(params.draftStream),
     logVerboseMessage: vi.fn(),
     ...params,
   });
@@ -122,15 +143,32 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
   it("records thread participation when a same-thread final finalizes the preview in place", async () => {
     const draftStream = createDraftStreamMock();
     const deliverFinal = createDeliverFinalMock();
-    const recordThreadParticipation = vi.fn();
+    const recording = createDeferred<void>();
+    const registered = createDeferred<void>();
+    const recordThreadParticipation = vi.fn(() => {
+      recording.resolve();
+      return registered.promise;
+    });
+    let settled = false;
 
-    const result = await deliverDraftPreview({
+    const delivery = deliverDraftPreview({
       payload: { text: "All good" } as never,
       draftStream,
       effectiveReplyToId: "thread-root-1",
       recordThreadParticipation,
       deliverPayload: deliverFinal,
+    }).finally(() => {
+      settled = true;
     });
+    try {
+      await recording.promise;
+      await setImmediate();
+      expect(settled).toBe(false);
+    } finally {
+      registered.resolve();
+      await delivery;
+    }
+    const result = await delivery;
 
     // Default streaming finalizes by editing the preview post, bypassing deliverPayload —
     // participation must still be recorded (regression: PR #95552 review P1).
@@ -188,7 +226,7 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
     const confirmedDelivery = createConfirmedPreviewDelivery("sealed-post-1", "Already visible");
 
     const result = await deliverDraftPreview({
-      payload: { text: "Already visible" } as never,
+      payload: { text: "Already visible" },
       draftStream,
       effectiveReplyToId: "thread-root-1",
       resolvePreviewFinalText: () => ({
@@ -199,8 +237,6 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
     });
 
     expect(deliverFinal).not.toHaveBeenCalled();
-    expect(draftStream.discardPending).toHaveBeenCalledTimes(1);
-    expect(draftStream.clear).toHaveBeenCalledTimes(1);
     expect(result).toMatchObject({
       outcome: "text",
       messageIds: ["sealed-post-1"],
@@ -320,39 +356,57 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
     });
   });
 
-  it("keeps a finalized preview when a later tool warning is delivered", async () => {
-    const draftStream = createDraftStreamMock();
-    const deliverFinal = createDeliverFinalMock();
-    const previewState = { finalizedViaPreviewPost: false };
-    const params = {
-      kind: "direct" as const,
-      client: createMattermostClientMock(),
-      draftStream,
-      resolvePreviewFinalText,
-      previewState,
-      logVerboseMessage: vi.fn(),
-      deliverPayload: deliverFinal,
-    };
+  it.each([false, true])(
+    "keeps a finalized preview after a later warning (participation failed: %s)",
+    async (participationFailed) => {
+      const draftStream = createDraftStreamMock();
+      const deliverFinal = createDeliverFinalMock();
+      const previewLifecycle = createPreviewLifecycle(draftStream);
+      const recordThreadParticipation = vi.fn(async () => {});
+      if (participationFailed) {
+        recordThreadParticipation.mockRejectedValueOnce(new Error("participation failed"));
+      }
+      const params = {
+        kind: "direct" as const,
+        client: createMattermostClientMock(),
+        resolvePreviewFinalText,
+        previewLifecycle,
+        logVerboseMessage: vi.fn(),
+        deliverPayload: deliverFinal,
+        recordThreadParticipation,
+      };
 
-    await deliverMattermostReplyWithDraftPreview({
-      ...params,
-      payload: { text: "Successful assistant final" } as never,
-      info: { kind: "final" },
-    });
-    await deliverMattermostReplyWithDraftPreview({
-      ...params,
-      payload: { text: "Tool error warning", isError: true } as never,
-      info: { kind: "final" },
-    });
+      const firstDelivery = deliverMattermostReplyWithDraftPreview({
+        ...params,
+        payload: { text: "Successful assistant final" } as never,
+        info: { kind: "final" },
+      });
+      if (participationFailed) {
+        await expect(firstDelivery).rejects.toMatchObject({
+          code: "CHANNEL_PARTIAL_DELIVERY",
+          deliveryResult: {
+            messageIds: ["patched"],
+            visibleReplySent: true,
+            content: "Successful assistant final",
+          },
+        });
+      } else {
+        await firstDelivery;
+      }
+      await deliverMattermostReplyWithDraftPreview({
+        ...params,
+        payload: { text: "Tool error warning", isError: true } as never,
+        info: { kind: "final" },
+      });
 
-    expect(previewState.finalizedViaPreviewPost).toBe(true);
-    expect(deliverFinal).toHaveBeenCalledExactlyOnceWith({
-      text: "Tool error warning",
-      isError: true,
-    });
-    expect(draftStream.discardPending).not.toHaveBeenCalled();
-    expect(draftStream.clear).not.toHaveBeenCalled();
-  });
+      await previewLifecycle.cleanup();
+      expect(deliverFinal).toHaveBeenCalledExactlyOnceWith({
+        text: "Tool error warning",
+        isError: true,
+      });
+      expect(draftStream.clear).not.toHaveBeenCalled();
+    },
+  );
 
   it("deletes the preview after a successful normal final send", async () => {
     const draftStream = createDraftStreamMock();

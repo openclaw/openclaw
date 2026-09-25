@@ -149,12 +149,13 @@ suite.define(() => {
       await expect.poll(archivedRequests).toHaveLength(initialRequests + 1);
 
       await archivedRow.hover();
-      await archivedRow.getByRole("button", { name: "Open session menu" }).click();
-      await activateSelfRemovingControl(page.getByRole("menuitem", { name: "Restore session" }));
+      const routeBeforeRestore = page.url();
+      await activateSelfRemovingControl(archivedRow.locator("[data-sidebar-session-archive]"));
       await waitForPatch(
         gateway,
         (params) => params.key === archived.key && params.archived === false,
       );
+      expect(page.url()).toBe(routeBeforeRestore);
 
       await gateway.resolveDeferred("sessions.list", sessionsListResponse([archived]));
 
@@ -327,7 +328,7 @@ suite.define(() => {
     }
   });
 
-  it("removes an archived current thread from the sidebar before the patch resolves", async () => {
+  it("hides an archiving thread immediately and restores it only when the request fails", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
       recordVideo: captureUiProofEnabled
@@ -357,21 +358,53 @@ suite.define(() => {
 
     try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-      const row = page.locator(`[data-session-key="${sessionKey}"]`);
+      const sidebar = page.locator("openclaw-app-sidebar");
+      const row = sidebar.locator(`[data-session-key="${sessionKey}"]`);
+      const archiveAction = sidebar
+        .locator("openclaw-session-menu")
+        .getByRole("menuitem", { name: "Archive session", exact: true });
       await row.waitFor({ state: "visible", timeout: 10_000 });
       await page.getByText("Research thread content").waitFor({ state: "visible" });
       await captureUiProof(suite, page, "archive-current-thread-before.png");
       await row.hover();
-      await row.getByRole("button", { name: "Open session menu" }).click();
-      await activateSelfRemovingControl(page.getByRole("menuitem", { name: "Archive session" }));
+      await activateSelfRemovingControl(row.locator("[data-sidebar-session-archive]"));
       await gateway.waitForRequest("sessions.patch");
 
-      await expect.poll(() => row.count()).toBe(0);
+      await row.waitFor({ state: "detached" });
       expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionKey));
       await page.getByText("Research thread content").waitFor({ state: "visible" });
+      expect(await page.locator(".app-toast").count()).toBe(0);
       await captureUiProof(suite, page, "archive-current-thread-pending.png");
 
+      await page.locator(".chat-header-session-menu__trigger").click();
+      const pendingAction = page
+        .locator("openclaw-chat-header-session-menu")
+        .getByRole("menuitem", { name: "Archiving…", exact: true });
+      await pendingAction.waitFor();
+      expect(await pendingAction.isDisabled()).toBe(true);
+      expect(await gateway.getRequests("sessions.patch")).toHaveLength(1);
+      await page.keyboard.press("Escape");
+
+      await gateway.rejectDeferred("sessions.patch", {
+        code: "UNAVAILABLE",
+        message: "Session work did not finish stopping. Retry archive after the run stops.",
+      });
+      await expect
+        .poll(() => page.locator("[data-sidebar-session-error]").textContent())
+        .toContain("Session work did not finish stopping");
+      await row.waitFor({ state: "visible" });
+      await captureUiProof(suite, page, "archive-current-thread-failed.png");
+
+      await gateway.deferNext("sessions.patch");
+      await row.click({ button: "right" });
+      await activateSelfRemovingControl(archiveAction);
+      await expect.poll(async () => (await gateway.getRequests("sessions.patch")).length).toBe(2);
+      await row.waitFor({ state: "detached" });
+
       await gateway.resolveDeferred("sessions.patch");
+      await expect
+        .poll(() => page.locator(".app-toast").textContent())
+        .toContain("Session archived");
       await expect.poll(() => row.count()).toBe(0);
       expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionKey));
       await page.getByText("Research thread content").waitFor({ state: "visible" });
@@ -381,93 +414,6 @@ suite.define(() => {
       if (proofVideo) {
         await proofVideo.saveAs(path.join(suite.artifactDir, "archive-current-thread.webm"));
       }
-    }
-  });
-
-  // Batch archiving used to serialize one sessions.patch transaction per row.
-  // The whole selection now crosses the Gateway once and settles from one list.
-
-  it("archives a mixed active and idle sidebar multi-select in one RPC", async () => {
-    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
-    const batchKeys = ["agent:main:batch-a", "agent:main:batch-b", "agent:main:batch-c"] as const;
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "sessions.list": sessionsListResponse([
-          sessionRow("agent:main:main", "Main", baseTime),
-          sessionRow(batchKeys[0], "Batch A", baseTime - 1_000),
-          sessionRow(batchKeys[1], "Batch B", baseTime - 2_000, {
-            hasActiveRun: true,
-            status: "running",
-          }),
-          sessionRow(batchKeys[2], "Batch C", baseTime - 3_000),
-        ]),
-        "sessions.patchMany": {
-          outcomes: batchKeys.map((key) => ({ ok: true, key, agentId: "main" })),
-        },
-      },
-      sessionArchiveFiltering: true,
-      sessionKey: "agent:main:main",
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const sidebar = page.locator("openclaw-app-sidebar");
-      const rowFor = (key: string) =>
-        sidebar.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
-      await rowFor(batchKeys[0]).waitFor({ state: "visible", timeout: 10_000 });
-      for (const key of batchKeys.slice(1)) {
-        await rowFor(key).waitFor({ state: "visible" });
-      }
-      const listCountBeforeBatch = (await gateway.getRequests("sessions.list", rosterMatch)).length;
-
-      for (const key of batchKeys) {
-        await rowFor(key).click({ modifiers: ["Alt"] });
-      }
-      await rowFor(batchKeys[0]).click({ button: "right" });
-      const batchMenu = page.locator("openclaw-session-menu");
-      const archiveItem = batchMenu.getByRole("menuitem", { name: `Archive ${batchKeys.length}` });
-      await archiveItem.waitFor({ state: "visible", timeout: 10_000 });
-      expect(await archiveItem.isDisabled()).toBe(false);
-      expect(
-        await batchMenu.getByRole("menuitem", { name: `Delete ${batchKeys.length}…` }).isDisabled(),
-      ).toBe(true);
-      await captureUiProof(suite, page, "sidebar-multi-select-archive-menu.png");
-      await page.keyboard.press("A");
-
-      const patchMany = await gateway.waitForRequest("sessions.patchMany");
-      const patchManyParams = requireRecord(patchMany.params);
-      expect(patchManyParams.patch).toEqual({ archived: true });
-      expect(patchManyParams.targets).toEqual(
-        batchKeys.map((key) => ({
-          key,
-          agentId: "main",
-          expectedSessionId: `session:${key}`,
-        })),
-      );
-      expect(await gateway.getRequests("sessions.patch")).toEqual([]);
-      expect(await gateway.getRequests("sessions.abort")).toEqual([]);
-      expect(await gateway.getRequests("agent.wait")).toEqual([]);
-      await expect
-        .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length, {
-          timeout: 10_000,
-        })
-        .toBe(listCountBeforeBatch + 1);
-      for (const key of batchKeys) {
-        await rowFor(key).waitFor({ state: "detached" });
-      }
-      await expect.poll(() => page.locator("[data-sidebar-session-error]").count()).toBe(0);
-      await expect
-        .poll(() => page.locator(".app-toast").textContent())
-        .toContain("Archived 3 sessions");
-      await captureUiProof(suite, page, "sidebar-multi-select-archive-settled.png");
-      await page.waitForTimeout(500);
-      expect((await gateway.getRequests("sessions.list", rosterMatch)).length).toBe(
-        listCountBeforeBatch + 1,
-      );
-    } finally {
-      await context.close();
     }
   });
 
@@ -676,7 +622,7 @@ suite.define(() => {
         session: { ...selectedWithoutDerivedTitle, archived: true, archivedAt, archivedBy },
       });
       await selectedRow.hover();
-      await selectedRow.getByRole("button", { name: "Open session menu" }).click();
+      await selectedRow.click({ button: "right" });
       await activateSelfRemovingControl(
         page.locator("openclaw-session-menu").getByRole("menuitem", {
           name: "Archive session",
@@ -688,8 +634,10 @@ suite.define(() => {
       );
       const archiveToast = page.locator("openclaw-toast-host .app-toast");
       await expect.poll(() => archiveToast.textContent()).toContain("Session archived");
+      const archivedSession = await gateway.getSessionRow(selected.key);
       await gateway.emitGatewayEvent("sessions.changed", {
         ...selected,
+        updatedAt: archivedSession.updatedAt,
         archived: true,
         archivedAt,
         archivedBy,
@@ -762,8 +710,10 @@ suite.define(() => {
         gateway,
         (params) => params.key === selected.key && params.archived === false,
       );
+      const restoredSession = await gateway.getSessionRow(selected.key);
       await gateway.emitGatewayEvent("sessions.changed", {
         ...selected,
+        updatedAt: restoredSession.updatedAt,
         archived: false,
         archivedAt: null,
         archivedBy: null,
@@ -828,7 +778,7 @@ suite.define(() => {
       const archivedRow = rowFor(archived.key);
       await archivedRow.waitFor({ state: "visible", timeout: 10_000 });
       await archivedRow.hover();
-      await archivedRow.getByRole("button", { name: "Open session menu" }).click();
+      await archivedRow.click({ button: "right" });
       await activateSelfRemovingControl(
         page.locator("openclaw-session-menu").getByRole("menuitem", {
           name: "Archive session",

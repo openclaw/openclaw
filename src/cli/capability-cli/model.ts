@@ -25,24 +25,29 @@ import {
   acquireSimpleCompletionModelForAgent,
   completeWithPreparedSimpleCompletionModel,
 } from "../../agents/simple-completion-runtime.js";
-import { normalizeThinkLevel, type ThinkLevel } from "../../auto-reply/thinking.js";
+import {
+  normalizeThinkLevel,
+  THINKING_LEVELS_HELP,
+  type ThinkLevel,
+} from "../../auto-reply/thinking.shared.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway, randomIdempotencyKey } from "../../gateway/call.js";
 import { ADMIN_SCOPE } from "../../gateway/operator-scopes.js";
 import { convertHeicToJpeg } from "../../media/media-services.js";
 import { defaultRuntime } from "../../runtime.js";
-import { getProviderEnvVars } from "../../secrets/provider-env-vars.js";
+import { getProviderEnvVarsCore } from "../../secrets/provider-env-vars.js";
 import { AsyncWorkScope, captureAsyncWorkTracker } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { getModelsCommandSecretTargetIds } from "../command-secret-targets.js";
 import { collectOption } from "../program/helpers.js";
+import { prepareLocalCapabilityAccountSecrets } from "./local-account-secrets.js";
 import type { CapabilityEnvelope, CapabilityTransport } from "./metadata.js";
-import { prepareLocalModelRunAccountSecrets } from "./model-local-secrets.js";
 import { emitJsonOrText, formatEnvelopeForText, providerSummaryText } from "./output.js";
 import {
   providerHasGenericConfig,
+  registerLocalProvidersCommand,
   requireProviderModelOverride,
   resolveCapabilityAgentOption,
   resolveCapabilityProviderAgentId,
@@ -66,22 +71,6 @@ async function loadModelCatalogForInspection(cfg: OpenClawConfig, rawAgentId?: s
   return prepared.toSorted(
     (a, b) => a.provider.localeCompare(b.provider) || a.id.localeCompare(b.id),
   );
-}
-
-async function canonicalizeModelRunRef(params: {
-  raw: string | undefined;
-  cfg: OpenClawConfig;
-  agentId: string;
-  preserveAuthProfile: boolean;
-}): Promise<string | undefined> {
-  return await canonicalizeCaseOnlyCatalogModelRef({
-    cfg: params.cfg,
-    raw: params.raw,
-    defaultProvider: DEFAULT_PROVIDER,
-    loadCatalog: () =>
-      readPreparedModelCatalog({ config: params.cfg, agentId: params.agentId, readOnly: true }),
-    preserveAuthProfile: params.preserveAuthProfile,
-  });
 }
 
 function collectModelRunText(content: Array<{ type: string; text?: string }>): string {
@@ -124,20 +113,13 @@ async function readModelRunImageFiles(files: string[] | undefined): Promise<Mode
           `Unsupported --file for model run: ${resolvedPath}. Only image files are supported; use infer audio transcribe for audio files.`,
         );
       }
-      if (HEIC_MODEL_RUN_MIMES.has(mimeType)) {
-        const converted = await convertHeicToJpeg(buffer);
-        return {
-          path: resolvedPath,
-          fileName: path.basename(resolvedPath),
-          mimeType: "image/jpeg",
-          data: converted.toString("base64"),
-        };
-      }
+      const isHeic = HEIC_MODEL_RUN_MIMES.has(mimeType);
+      const imageBuffer = isHeic ? await convertHeicToJpeg(buffer) : buffer;
       return {
         path: resolvedPath,
         fileName: path.basename(resolvedPath),
-        mimeType,
-        data: buffer.toString("base64"),
+        mimeType: isHeic ? "image/jpeg" : mimeType,
+        data: imageBuffer.toString("base64"),
       };
     }),
   );
@@ -152,9 +134,7 @@ function normalizeModelRunThinking(value: unknown): ThinkLevel | undefined {
   }
   const normalized = normalizeThinkLevel(value);
   if (!normalized) {
-    throw new Error(
-      "Invalid thinking level. Use one of: off, minimal, low, medium, high, adaptive, xhigh, max.",
-    );
+    throw new Error(`Invalid thinking level. Use one of: ${THINKING_LEVELS_HELP}.`);
   }
   return normalized;
 }
@@ -176,10 +156,11 @@ async function runModelRun(params: {
         })
       : getRuntimeConfig();
   const agentId = resolveCapabilityProviderAgentId(cfg, params.agent, "infer model run");
-  const modelRef = await canonicalizeModelRunRef({
+  const modelRef = await canonicalizeCaseOnlyCatalogModelRef({
     raw: params.model,
     cfg,
-    agentId,
+    defaultProvider: DEFAULT_PROVIDER,
+    loadCatalog: () => readPreparedModelCatalog({ config: cfg, agentId, readOnly: true }),
     preserveAuthProfile: params.transport === "local",
   });
   const hasExplicitProviderModelOverride = Boolean(explicitModelOverride);
@@ -200,7 +181,7 @@ async function runModelRun(params: {
     const trackOwner = captureAsyncWorkTracker();
     // Command completion can precede response callbacks and cancellation drainage.
     void trackOwner(async () => {
-      await prepareLocalModelRunAccountSecrets({ cfg, agentId });
+      await prepareLocalCapabilityAccountSecrets({ cfg, agentId });
       const prepared = await acquireSimpleCompletionModelForAgent({
         cfg,
         agentId,
@@ -287,7 +268,7 @@ async function runModelRun(params: {
         callerResult.reject(error);
       } finally {
         await work.drain();
-        prepared.release();
+        await prepared[Symbol.asyncDispose]();
       }
     }).catch((error: unknown) => callerResult.reject(error));
     return await callerResult.promise;
@@ -363,9 +344,7 @@ async function runModelRun(params: {
   } satisfies CapabilityEnvelope;
 }
 
-async function buildModelProviders(rawAgentId?: string) {
-  const cfg = getRuntimeConfig();
-  const agentId = resolveCapabilityProviderAgentId(cfg, rawAgentId);
+async function buildModelProviders(cfg: OpenClawConfig, agentId: string) {
   const catalog = await loadModelCatalogForInspection(cfg, agentId);
   const selectedProvider = resolveSelectedProviderFromModelRef(
     resolveAgentEffectiveModelPrimary(cfg, agentId),
@@ -391,7 +370,7 @@ async function buildModelProviders(rawAgentId?: string) {
         cfg,
         providerId: entry.provider,
         agentId,
-        envVars: getProviderEnvVars(entry.provider),
+        envVars: getProviderEnvVarsCore(entry.provider),
       }),
       selected: selectedProvider === entry.provider,
     };
@@ -542,17 +521,12 @@ export function registerModelCapabilityCommands(capability: Command): void {
       });
     });
 
-  model
-    .command("providers")
-    .description("List model providers from the catalog")
-    .option("--agent <id>", "Agent whose provider state should be inspected")
-    .option("--json", "Output JSON", false)
-    .action(async (opts, command) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const result = await buildModelProviders(resolveCapabilityAgentOption(command, opts.agent));
-        emitJsonOrText(defaultRuntime, Boolean(opts.json), result, providerSummaryText);
-      });
-    });
+  registerLocalProvidersCommand(
+    model,
+    "List model providers from the catalog",
+    buildModelProviders,
+    providerSummaryText,
+  );
 
   const modelAuth = model
     .command("auth")

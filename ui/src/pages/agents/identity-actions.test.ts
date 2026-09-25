@@ -52,7 +52,7 @@ describe("agent identity actions", () => {
   });
 
   it("drops an avatar decode that completes after the selected agent resets", async () => {
-    let resolveAvatar!: (value: string | null) => void;
+    let resolveAvatar!: (value: avatarImage.AvatarDataUrlResult) => void;
     fileToAvatarDataUrlMock.mockReturnValueOnce(
       new Promise((resolve) => {
         resolveAvatar = resolve;
@@ -62,13 +62,28 @@ describe("agent identity actions", () => {
 
     selectIdentityAvatar(state, {} as File);
     resetIdentityDraft(state);
-    resolveAvatar("data:image/png;base64,stale");
+    resolveAvatar({ ok: true, dataUrl: "data:image/png;base64,stale" });
     await Promise.resolve();
 
     expect(state.identityDraft.avatar).toBeNull();
   });
 
-  it("flushes a pending config draft before agents.update and refreshes afterward", async () => {
+  it.each([
+    ["unusable", "That image can't be used. Pick an image file up to 2 MB."],
+    ["too-detailed", "That image is too detailed to store as an avatar"],
+  ] as const)("explains a %s avatar rejection", async (reason, message) => {
+    fileToAvatarDataUrlMock.mockResolvedValueOnce({ ok: false, reason });
+    const state = host();
+
+    selectIdentityAvatar(state, {} as File);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(state.identityError).toContain(message);
+    expect(state.identityDraft.avatar).toBeNull();
+  });
+
+  it("config.set flushes a pending config draft before agents.update and refreshes afterward", async () => {
     vi.useFakeTimers();
     const order: string[] = [];
     let config: Record<string, unknown> = { pending: false };
@@ -89,7 +104,7 @@ describe("agent identity actions", () => {
         order.push(method);
         config = JSON.parse((params as { raw: string }).raw) as Record<string, unknown>;
         hash = "hash-2";
-        return { hash };
+        return { config, hash };
       }
       if (method === "agents.update") {
         order.push(method);

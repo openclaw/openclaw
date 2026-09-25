@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  resolveControlUiAuthCandidates,
-  resolveControlUiAuthHeader,
-  resolveControlUiAuthToken,
-} from "./control-ui-auth.ts";
+import { resolveControlUiAuthCandidates, resolveControlUiAuthToken } from "./control-ui-auth.ts";
 
 describe("Control UI credentials", () => {
   it.each([
@@ -60,6 +56,5 @@ describe("Control UI credentials", () => {
   ])("$name", ({ source, expected }) => {
     expect(resolveControlUiAuthCandidates(source)).toEqual(expected);
     expect(resolveControlUiAuthToken(source)).toBe(expected[0] ?? null);
-    expect(resolveControlUiAuthHeader(source)).toBe(expected[0] ? `Bearer ${expected[0]}` : null);
   });
 });

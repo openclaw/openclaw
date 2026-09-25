@@ -85,6 +85,21 @@ const STRUCTURAL_STYLES = new Set<MarkdownStyle>([
 
 type TextRange = { start: number; end: number };
 
+function addSpanStart<T extends TextRange>(
+  starts: Map<number, T[]>,
+  boundaries: Set<number>,
+  span: T,
+): void {
+  boundaries.add(span.start);
+  boundaries.add(span.end);
+  const bucket = starts.get(span.start);
+  if (bucket) {
+    bucket.push(span);
+  } else {
+    starts.set(span.start, [span]);
+  }
+}
+
 function mergeRanges(ranges: readonly TextRange[]): TextRange[] {
   const merged: TextRange[] = [];
   for (const range of [...ranges].toSorted((a, b) => a.start - b.start || a.end - b.end)) {
@@ -213,23 +228,17 @@ export function renderMarkdownWithMarkers(
     if (!styleMarkers[span.style]) {
       continue;
     }
-    const pieces = STRUCTURAL_STYLES.has(span.style)
-      ? [span]
-      : subtractRanges(span, dominantAnnotationRanges).flatMap((piece) =>
-          splitAtBoundaries(piece, annotationBoundaries),
-        );
+    const pieces =
+      annotated.length === 0 || STRUCTURAL_STYLES.has(span.style)
+        ? [span]
+        : subtractRanges(span, dominantAnnotationRanges).flatMap((piece) =>
+            splitAtBoundaries(piece, annotationBoundaries),
+          );
     for (const piece of pieces) {
       if (piece.start === piece.end) {
         continue;
       }
-      boundaries.add(piece.start);
-      boundaries.add(piece.end);
-      const bucket = startsAt.get(piece.start);
-      if (bucket) {
-        bucket.push(piece);
-      } else {
-        startsAt.set(piece.start, [piece]);
-      }
+      addSpanStart(startsAt, boundaries, piece);
     }
   }
   for (const spans of startsAt.values()) {
@@ -246,29 +255,27 @@ export function renderMarkdownWithMarkers(
     if (span.start === span.end) {
       continue;
     }
-    boundaries.add(span.start);
-    boundaries.add(span.end);
-    const bucket = annotationStarts.get(span.start);
-    if (bucket) {
-      bucket.push(span);
-    } else {
-      annotationStarts.set(span.start, [span]);
-    }
+    addSpanStart(annotationStarts, boundaries, span);
   }
 
   const linkStarts = new Map<number, RenderLink[]>();
   if (options.buildLink) {
-    const links = projected.links.flatMap((span) =>
-      subtractRanges(span, dominantAnnotationRanges)
-        .flatMap((piece) => splitAtBoundaries(piece, annotationBoundaries))
-        .map((piece) =>
-          copyMarkdownLinkSpan(span, {
-            start: piece.start,
-            end: piece.end,
-            href: piece.href,
-          }),
-        ),
-    );
+    const links =
+      annotated.length === 0
+        ? projected.links.map((span) =>
+            copyMarkdownLinkSpan(span, { start: span.start, end: span.end, href: span.href }),
+          )
+        : projected.links.flatMap((span) =>
+            subtractRanges(span, dominantAnnotationRanges)
+              .flatMap((piece) => splitAtBoundaries(piece, annotationBoundaries))
+              .map((piece) =>
+                copyMarkdownLinkSpan(span, {
+                  start: piece.start,
+                  end: piece.end,
+                  href: piece.href,
+                }),
+              ),
+          );
     for (const link of links) {
       if (link.start === link.end) {
         continue;
@@ -277,14 +284,7 @@ export function renderMarkdownWithMarkers(
       if (!rendered) {
         continue;
       }
-      boundaries.add(rendered.start);
-      boundaries.add(rendered.end);
-      const openBucket = linkStarts.get(rendered.start);
-      if (openBucket) {
-        openBucket.push(rendered);
-      } else {
-        linkStarts.set(rendered.start, [rendered]);
-      }
+      addSpanStart(linkStarts, boundaries, rendered);
     }
   }
 

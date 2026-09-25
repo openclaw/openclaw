@@ -12,11 +12,13 @@ import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.j
 import { formatDurationCompact } from "../infra/format-time/format-duration.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import type { Tone } from "../memory-host-sdk/status.js";
-import type { SessionStatus, StatusSummary } from "../status/types.js";
+import type { MemoryPluginStatus } from "../status/memory-plugin.js";
+import type { StatusSummary } from "../status/summary.js";
 import { formatDeliveryQueueHealthLine } from "./health-format.js";
 import type { HealthSummary } from "./health.js";
+import { formatSqliteWalHealthWarning } from "./sqlite-wal-health.js";
 import type { AgentLocalStatus } from "./status.agent-local.js";
-import type { MemoryStatusSnapshot, MemoryPluginStatus } from "./status.scan.shared.js";
+import type { MemoryStatusSnapshot } from "./status.scan.shared.js";
 
 type AgentStatusLike = {
   defaultId?: string | null;
@@ -27,7 +29,7 @@ type AgentStatusLike = {
 
 type SummaryLike = Pick<StatusSummary, "tasks" | "taskAudit" | "heartbeat" | "sessions">;
 type MemoryLike = MemoryStatusSnapshot | null;
-type SessionsRecentLike = SessionStatus;
+type SessionsRecentLike = StatusSummary["sessions"]["recent"][number];
 type EventLoopHealthLike = NonNullable<HealthSummary["eventLoop"]>;
 
 export type StatusMemoryStateResolvers = {
@@ -114,7 +116,7 @@ export function buildStatusHeartbeatValue(params: { summary: Pick<SummaryLike, "
         return `disabled (${agent.agentId})`;
       }
       if (agent.waitingForRoute) {
-        return `${agent.every} (${agent.agentId}; waiting for delivery route — set commands.ownerAllowFrom or channel allowFrom, or heartbeat.target)`;
+        return `${agent.every} (${agent.agentId}; waiting for delivery route — set commands.ownerAllowFrom=["telegram:123456789"] or channel allowFrom; explicit delivery: heartbeat.target="telegram" with heartbeat.to="123456789")`;
       }
       return `${agent.every} (${agent.agentId})`;
     })
@@ -126,6 +128,7 @@ export function buildStatusHeartbeatValue(params: { summary: Pick<SummaryLike, "
 export function buildStatusLastHeartbeatValue(params: {
   deep?: boolean;
   gatewayReachable: boolean;
+  gatewayStartupPhase?: string;
   lastHeartbeat: HeartbeatEventPayload | null;
   warn: (value: string) => string;
   muted: (value: string) => string;
@@ -134,6 +137,11 @@ export function buildStatusLastHeartbeatValue(params: {
   if (!params.deep) {
     // Fast status omits the row entirely instead of implying heartbeat is missing.
     return null;
+  }
+  if (params.gatewayStartupPhase) {
+    return params.muted(
+      `not checked (gateway still starting; phase ${params.gatewayStartupPhase})`,
+    );
   }
   if (!params.gatewayReachable) {
     return params.warn("unavailable");
@@ -271,6 +279,7 @@ export function buildStatusSecurityAuditLines(params: {
 /** Builds gateway, channel, and delivery queue health table rows. */
 export function buildStatusHealthRows(params: {
   health: HealthSummary;
+  sqliteWal?: StatusSummary["sqliteWal"];
   formatHealthChannelLines: (summary: HealthSummary, opts: { accountMode: "all" }) => string[];
   ok: (value: string) => string;
   warn: (value: string) => string;
@@ -283,6 +292,10 @@ export function buildStatusHealthRows(params: {
       Detail: `${params.health.durationMs}ms`,
     },
   ];
+  const sqliteWalWarning = formatSqliteWalHealthWarning(params.sqliteWal);
+  if (sqliteWalWarning) {
+    rows.push({ Item: "SQLite WAL", Status: params.warn("WARN"), Detail: sqliteWalWarning });
+  }
   if (params.health.eventLoop) {
     rows.push({
       Item: "Event loop",
@@ -418,6 +431,7 @@ export function buildStatusFooterLines(params: {
   formatCliCommand: (value: string) => string;
   nodeOnlyGateway: unknown;
   gatewayReachable: boolean;
+  gatewayStartupPhase?: string;
 }) {
   return [
     "FAQ: https://docs.openclaw.ai/faq",
@@ -428,9 +442,11 @@ export function buildStatusFooterLines(params: {
     `  Need to debug live? ${params.formatCliCommand("openclaw logs --follow")}`,
     params.nodeOnlyGateway
       ? `  Need node service?  ${params.formatCliCommand("openclaw node status")}`
-      : params.gatewayReachable
-        ? `  Need to test channels? ${params.formatCliCommand("openclaw status --deep")}`
-        : `  Fix reachability first: ${params.formatCliCommand("openclaw gateway probe")}`,
+      : params.gatewayStartupPhase
+        ? `  Retry after startup: ${params.formatCliCommand("openclaw status --deep")}`
+        : params.gatewayReachable
+          ? `  Need to test channels? ${params.formatCliCommand("openclaw status --deep")}`
+          : `  Fix reachability first: ${params.formatCliCommand("openclaw gateway probe")}`,
   ];
 }
 

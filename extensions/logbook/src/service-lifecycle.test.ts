@@ -3,19 +3,25 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawPluginApi, OpenClawPluginService } from "openclaw/plugin-sdk/plugin-entry";
 import {
   createCapturedPluginRegistration,
   createPluginRuntimeMock,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import plugin from "../index.js";
 import { resolveLogbookConfig } from "./config.js";
+import { dayKeyFor } from "./day.js";
 import { LogbookService } from "./service.js";
-import { dayKeyFor, LogbookStore } from "./store.js";
+import { logbookSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
+import { LogbookStore } from "./store.js";
 
+const workerModuleUrl = resolveRuntimeWorkerUrl(logbookSqliteBackendEntrypoint);
+const runtimeSource = fileURLToPath(new URL("../index.ts", import.meta.url));
 const quietLogger = { info() {}, warn() {}, error() {}, debug() {} };
 const snapshot = { payload: { base64: Buffer.from("synthetic image").toString("base64") } };
 
@@ -37,9 +43,143 @@ function completion(
 }
 
 describe("Logbook service disposal", () => {
+  it.each([
+    { prune: false, pending: false },
+    { prune: true, pending: false },
+    { prune: false, pending: true },
+  ])(
+    "publishes synthesized cards with queued retention (prune=$prune, pending=$pending)",
+    async ({ prune, pending }) => {
+      const dataDir = tempDirs.make("logbook-publication-retention-");
+      const day = dayKeyFor(Date.now());
+      const startMs = new Date(`${day}T10:00:00`).getTime();
+      const endMs = startMs + 10 * 60_000;
+      const runtime = createPluginRuntimeMock();
+      runtime.mediaUnderstanding.extractStructuredWithModel = vi.fn(async () => ({
+        text: JSON.stringify([
+          { start: "10:00:00", end: "10:10:00", description: "Synthetic activity" },
+        ]),
+      }));
+      const synthesized = createDeferred<void>();
+      let pruning: Promise<PromiseSettledResult<number>> = Promise.resolve({
+        status: "fulfilled",
+        value: 0,
+      });
+      runtime.llm.complete = vi.fn(async () => {
+        if (prune) {
+          // Let synthesis enqueue its next worker command, then queue retention before its reply.
+          queueMicrotask(() =>
+            queueMicrotask(() => {
+              pruning = peer.pruneFrames(endMs).then(
+                (value) => ({ status: "fulfilled", value }),
+                (reason: unknown) => ({ status: "rejected", reason }),
+              );
+            }),
+          );
+        }
+        synthesized.resolve();
+        return completion(
+          JSON.stringify([
+            {
+              startTime: "10:00:00",
+              endTime: "10:10:00",
+              title: "Retained synthesis",
+              summary: "Published through retention",
+              category: "coding",
+            },
+          ]),
+        );
+      });
+      const logger = { ...quietLogger, warn: vi.fn(), error: vi.fn() };
+      const service = new LogbookService(
+        resolveLogbookConfig({
+          captureEnabled: false,
+          visionModel: "codex/gpt-5.6-sol",
+          analysisIntervalMinutes: 10,
+        }),
+        { dataDir, workerModuleUrl, runtime, fullConfig: {}, logger },
+      );
+      const peer = await LogbookStore.open(dataDir, workerModuleUrl);
+      try {
+        const frameTimes = pending
+          ? [...Array.from({ length: 10 }, (_, index) => startMs + index * 60_000), endMs - 1]
+          : [startMs + 5 * 60_000];
+        const frameIds: number[] = [];
+        for (const capturedAtMs of frameTimes) {
+          frameIds.push(
+            await peer.captureFrame({
+              day,
+              capturedAtMs,
+              screenIndex: 0,
+              buffer: Buffer.from(`synthetic keyframe ${capturedAtMs}`),
+            }),
+          );
+        }
+        const frameId = frameIds[pending ? 5 : 0];
+        if (pending) {
+          expect(await peer.latestBatch()).toBeNull();
+          expect(await peer.countUnbatchedActiveFrames()).toBe(11);
+        } else {
+          await peer.createBatch({ day, startMs, endMs, frameIds });
+        }
+        await service.start();
+        expect(await service.analyzeNow()).toEqual({ started: true });
+        await synthesized.promise;
+        await setImmediate();
+        expect(await pruning).toEqual({ status: "fulfilled", value: prune ? 1 : 0 });
+        await service.stop();
+        const batch = await peer.latestBatch();
+        if (!batch) {
+          throw new Error("Expected the analyzed batch to persist");
+        }
+        expect(batch).toMatchObject({
+          day,
+          startMs,
+          endMs,
+          frameCount: frameIds.length,
+          status: "done",
+          error: undefined,
+        });
+        const frames = await peer.batchFrames(batch.id);
+        expect(frames).toEqual(
+          prune
+            ? []
+            : frameIds.map((id, index) =>
+                expect.objectContaining({ id, capturedAtMs: frameTimes[index], idle: false }),
+              ),
+        );
+        expect(await peer.countUnbatchedActiveFrames()).toBe(0);
+        expect(logger.warn).not.toHaveBeenCalled();
+        const cards = await peer.cardsForDay(day);
+        expect(cards).toHaveLength(1);
+        expect(cards[0]).toMatchObject({
+          title: "Retained synthesis",
+          day,
+          startMs,
+          endMs,
+          keyframeId: prune ? undefined : frameId,
+        });
+        await peer.close();
+        const reopened = await LogbookStore.open(dataDir, workerModuleUrl);
+        try {
+          expect(await reopened.cardsForDay(day)).toEqual(cards);
+          expect(await reopened.latestBatch()).toEqual(batch);
+          expect(await reopened.batchFrames(batch.id)).toEqual(frames);
+          expect(await reopened.countUnbatchedActiveFrames()).toBe(0);
+        } finally {
+          await reopened.close();
+        }
+      } finally {
+        await pruning;
+        await service.stop();
+        await peer.close();
+      }
+    },
+  );
+
   it("joins a pending database open and asynchronous close when the runtime retires", async () => {
     const stateDir = tempDirs.make("logbook-opening-");
-    const store = await LogbookStore.open(path.join(stateDir, "logbook"));
+    const store = await LogbookStore.open(path.join(stateDir, "logbook"), workerModuleUrl);
     const opened = createDeferred<void>();
     const releaseOpen = createDeferred<void>();
     const closing = createDeferred<void>();
@@ -59,7 +199,7 @@ describe("Logbook service disposal", () => {
     captured.api.pluginConfig = { captureEnabled: false };
     const services: OpenClawPluginService[] = [];
     captured.api.registerService = (service) => services.push(service);
-    plugin.register(captured.api);
+    plugin.register({ ...captured.api, runtimeSource });
     const service = services[0]!;
     const context = { config: {}, stateDir, logger: quietLogger };
     const starting = service.start(context);
@@ -91,6 +231,7 @@ describe("Logbook service disposal", () => {
     );
     const service = new LogbookService(resolveLogbookConfig({ captureEnabled: false }), {
       dataDir,
+      workerModuleUrl,
       runtime: createPluginRuntimeMock(),
       fullConfig: {},
       logger: quietLogger,
@@ -110,6 +251,7 @@ describe("Logbook service disposal", () => {
       resolveLogbookConfig({ captureEnabled: false, visionModel: "synthetic/vision" }),
       {
         dataDir,
+        workerModuleUrl,
         runtime: createPluginRuntimeMock(),
         fullConfig: {},
         logger: quietLogger,
@@ -153,6 +295,7 @@ describe("Logbook service disposal", () => {
     "standup-write",
     "status-read",
     "ask-read",
+    "frame-read",
   ])("drains %s before closing SQLite", async (kind) => {
     const dataDir = realpathSync(mkdtempSync(path.join(tmpdir(), "logbook-service-drain-")));
     const entered = createDeferred<void>();
@@ -209,7 +352,7 @@ describe("Logbook service disposal", () => {
       );
     });
     if (kind.startsWith("vision")) {
-      const seed = await LogbookStore.open(dataDir);
+      const seed = await LogbookStore.open(dataDir, workerModuleUrl);
       try {
         for (let index = 0; index < 2; index++) {
           const time = startMs + index * 120_000;
@@ -236,14 +379,28 @@ describe("Logbook service disposal", () => {
         await seed.close();
       }
     }
-    const activeStore = await LogbookStore.open(dataDir);
+    const activeStore = await LogbookStore.open(dataDir, workerModuleUrl);
     vi.spyOn(LogbookStore, "open").mockResolvedValueOnce(activeStore);
-    if (kind === "capture-write") {
-      const insertFrame = activeStore.insertFrame.bind(activeStore);
-      vi.spyOn(activeStore, "insertFrame").mockImplementation(async (frame) => {
+    if (kind === "frame-read") {
+      await activeStore.captureFrame({
+        capturedAtMs: Date.now(),
+        day,
+        screenIndex: 0,
+        buffer: Buffer.from("synthetic frame payload"),
+      });
+      const framePayload = activeStore.framePayload.bind(activeStore);
+      vi.spyOn(activeStore, "framePayload").mockImplementation(async (id) => {
         entered.resolve();
         await release.promise;
-        return await insertFrame(frame);
+        return await framePayload(id);
+      });
+    }
+    if (kind === "capture-write") {
+      const captureFrame = activeStore.captureFrame.bind(activeStore);
+      vi.spyOn(activeStore, "captureFrame").mockImplementation(async (frame) => {
+        entered.resolve();
+        await release.promise;
+        return await captureFrame(frame);
       });
     }
     if (kind === "standup-write") {
@@ -276,7 +433,7 @@ describe("Logbook service disposal", () => {
         captureIntervalSeconds: 600,
         visionModel: "synthetic/vision",
       }),
-      { runtime, fullConfig: {}, logger, dataDir },
+      { runtime, fullConfig: {}, logger, dataDir, workerModuleUrl },
     );
     await service.start();
     const ticks = service as unknown as {
@@ -291,7 +448,9 @@ describe("Logbook service disposal", () => {
           ? service.status()
           : kind === "ask-read"
             ? service.ask(day, "What happened?")
-            : service.standup(day, true);
+            : kind === "frame-read"
+              ? service.framePayload(1)
+              : service.standup(day, true);
     void active.catch(() => {});
     await entered.promise;
     const stopped = vi.fn();
@@ -304,10 +463,16 @@ describe("Logbook service disposal", () => {
       await expect(service.standup(day, true)).rejects.toThrow("not running");
       await expect(service.analyzeNow()).rejects.toThrow("not running");
       release.resolve();
-      await active;
+      const result = await active;
+      if (kind === "frame-read") {
+        expect(result).toMatchObject({
+          frameId: 1,
+          base64: Buffer.from("synthetic frame payload").toString("base64"),
+        });
+      }
       await settled;
       expect(logger.error).not.toHaveBeenCalled();
-      const reopened = await LogbookStore.open(dataDir);
+      const reopened = await LogbookStore.open(dataDir, workerModuleUrl);
       try {
         if (kind.startsWith("capture")) {
           expect(await reopened.countUnbatchedActiveFrames()).toBe(1);
@@ -360,7 +525,7 @@ describe("Logbook service disposal", () => {
         await release.promise;
         return completion("Accepted standup");
       };
-      plugin.register(captured.api);
+      plugin.register({ ...captured.api, runtimeSource });
       const service = services[0]!;
       const context = { config: {}, stateDir, logger: quietLogger };
       await service.start(context);
@@ -399,7 +564,7 @@ describe("Logbook service disposal", () => {
         release.resolve();
         expect((await standup)?.[0]).toBe(true);
         await Promise.all([retiring, stopping, cleanup({ reason })]);
-        const reopened = await LogbookStore.open(path.join(stateDir, "logbook"));
+        const reopened = await LogbookStore.open(path.join(stateDir, "logbook"), workerModuleUrl);
         try {
           expect((await reopened.getStandup(dayKeyFor(Date.now())))?.text).toBe("Accepted standup");
         } finally {
@@ -419,7 +584,7 @@ describe("Logbook service disposal", () => {
     captured.api.pluginConfig = { captureEnabled: false };
     const services: OpenClawPluginService[] = [];
     captured.api.registerService = (service) => services.push(service);
-    plugin.register(captured.api);
+    plugin.register({ ...captured.api, runtimeSource });
     const context = { config: {}, stateDir, logger: quietLogger };
     try {
       for (const lifecycle of captured.runtimeLifecycles) {

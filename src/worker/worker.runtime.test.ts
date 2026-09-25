@@ -51,14 +51,12 @@ import {
 import { createNoisyPngBuffer, createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
-import {
-  deleteSession,
-  listRunningSessions,
-  markBackgrounded,
-  waitForExecScope,
-} from "../agents/bash-process-registry.js";
+import { listRunningSessions, waitForExecScope } from "../agents/bash-process-registry.js";
 import { runExecProcess } from "../agents/bash-tools.exec-runtime.js";
+import { hasModelFallbackStop } from "../agents/failover-error.js";
+import * as agentSessionSdk from "../agents/sessions/sdk.js";
 import * as boundaryFileRead from "../infra/boundary-file-read.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { saveExecApprovals, type ExecApprovalsFile } from "../infra/exec-approvals.js";
 import { runExec } from "../process/exec.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
@@ -80,6 +78,11 @@ import {
   WorkerLiveEventClient,
   WorkerTranscriptCommitClient,
 } from "./worker-rpc-clients.js";
+import {
+  registerWorkerBackgroundExecLifecycleTests,
+  registerWorkerExecEnvironmentFinalizationTests,
+} from "./worker-runtime-background-exec.suite.js";
+import { registerWorkerPermissionTests } from "./worker-runtime-permissions.suite.js";
 import { createWorkerRuntimeEnvironment, runWorkerDescriptor } from "./worker.runtime.js";
 
 const browserRuntimeMocks = vi.hoisted(() => ({
@@ -147,7 +150,8 @@ type InferencePlan =
   | "burst-text"
   | "oversized-text"
   | "oversized-error"
-  | "empty-terminal";
+  | "empty-terminal"
+  | { args: Record<string, unknown>; toolCallId: string; toolName: string };
 type WorkerDoneMessage = Extract<WorkerInferenceTerminalOutcome, { type: "done" }>["message"];
 
 type FakeGatewayOptions = {
@@ -595,6 +599,10 @@ class FakeWorkerGateway {
     });
     const plan = this.options.inferencePlans?.[this.inferencePlanIndex] ?? "text";
     this.inferencePlanIndex += 1;
+    if (typeof plan === "object") {
+      this.sendToolCallTurn(socket, frame.params, plan);
+      return;
+    }
     if (plan === "read-image") {
       this.sendToolCallTurn(socket, frame.params, {
         args: { path: "attachment.png" },
@@ -906,6 +914,7 @@ function descriptor(socketPath: string, workspaceDir: string): WorkerLaunchDescr
       liveEvents: { ackedSeq: 0, nextSeq: 1 },
       toolAuthority: {
         allowedToolNames: ["read", "write", "edit", "apply_patch", "exec", "process"],
+        exec: { host: "gateway", security: "full", ask: "off" },
       },
     },
   };
@@ -939,6 +948,14 @@ afterEach(async () => {
 });
 
 describe("worker runtime", () => {
+  registerWorkerBackgroundExecLifecycleTests({
+    setup,
+    waitForFast,
+    bundleHash: BUNDLE_HASH,
+    sessionId: SESSION_ID,
+    inferenceStartTimeoutMs: WORKER_INFERENCE_START_TIMEOUT_MS,
+  });
+
   it("sends current image and scanned PDF page content through remote inference exactly once", async () => {
     const { gateway, launch } = await setup();
     const images = [
@@ -1071,6 +1088,7 @@ describe("worker runtime", () => {
 
   it.each([false, true])("uses only prepared prompt inputs (Gateway extra: %s)", async (extra) => {
     const { gateway, workspaceDir, launch } = await setup();
+    const canonicalWorkspaceDir = await realpath(workspaceDir);
     const promptDir = path.join(workspaceDir, ".openclaw");
     const literalPrompt = path.join(workspaceDir, "not-a-prompt-file.md");
     await mkdir(promptDir);
@@ -1085,14 +1103,14 @@ describe("worker runtime", () => {
       launch.assignment.systemPrompt = literalPrompt;
     }
 
-    const openedFiles = vi.spyOn(boundaryFileRead, "openRootFileFollowingParents");
+    const openedFiles = vi.spyOn(boundaryFileRead, "openRootFile");
     try {
       await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
       expect(
         openedFiles.mock.calls
           .map(([params]) => params.absolutePath)
-          .filter((filePath) => path.dirname(filePath) === workspaceDir),
-      ).toEqual([path.join(workspaceDir, "AGENTS.md")]);
+          .filter((filePath) => path.dirname(filePath) === canonicalWorkspaceDir),
+      ).toEqual([path.join(canonicalWorkspaceDir, "AGENTS.md")]);
     } finally {
       openedFiles.mockRestore();
     }
@@ -1152,8 +1170,11 @@ describe("worker runtime", () => {
     expect(gateway.inferenceRequests[0]?.context.tools ?? []).toEqual([]);
   });
 
-  it("materializes exactly the Browser tool for a browser-only assignment", async () => {
+  it("materializes exactly the Browser tool and disposes it before finishing", async () => {
     const { gateway, launch } = await setup();
+    browserRuntimeMocks.dispose.mockImplementationOnce(async () => {
+      gateway.applicationOrder.push("browser:dispose");
+    });
     launch.assignment.toolAuthority.allowedToolNames = ["browser"];
     launch.assignment.browser = {
       cdpUrl: "http://127.0.0.1:9222",
@@ -1172,15 +1193,73 @@ describe("worker runtime", () => {
       workspaceDir: await realpath(launch.assignment.workspaceDir),
     });
     expect(browserRuntimeMocks.dispose).toHaveBeenCalledOnce();
+    expect(gateway.applicationOrder.indexOf("browser:dispose")).toBeLessThan(
+      gateway.applicationOrder.indexOf("live:lifecycle:finishing"),
+    );
   });
 
-  it.each([false, true])(
-    "keeps desktop images through RPC, transcript, and inference before closing (cleanup failure: %s)",
-    async (computerCleanupFailure) => {
+  it.each(["text", "error", "setup"] as const)(
+    "retains browser disposal failure together with the %s outcome",
+    async (outcome) => {
+      const { gateway, launch } = await setup({
+        inferencePlans: [outcome === "error" ? "error" : "text"],
+      });
+      launch.assignment.toolAuthority.allowedToolNames = ["browser"];
+      launch.assignment.browser = {
+        cdpUrl: "http://127.0.0.1:9222",
+        launcherPath: "/usr/local/bin/openclaw-worker-browser",
+      };
+      const createSession =
+        outcome === "setup"
+          ? vi
+              .spyOn(agentSessionSdk, "createAgentSession")
+              .mockRejectedValueOnce(new Error("fixture setup failed"))
+          : undefined;
+      browserRuntimeMocks.dispose.mockRejectedValueOnce(
+        new Error("fixture browser cleanup failed"),
+      );
+      try {
+        if (outcome === "setup") {
+          const error = await runWorkerDescriptor(launch).catch((cause: unknown) => cause);
+          expect(formatErrorMessage(error)).toContain("fixture setup failed");
+          expect(formatErrorMessage(error)).toContain("fixture browser cleanup failed");
+          expect(hasModelFallbackStop(error)).toBe(true);
+          expect(gateway.liveEventRequests).toHaveLength(0);
+        } else {
+          await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "failed" });
+          expect(gateway.liveEventRequests.at(-1)?.event.payload).toMatchObject({
+            phase: "finishing",
+            stopReason: "error",
+            error: expect.stringContaining("fixture browser cleanup failed"),
+            replayInvalid: true,
+          });
+          if (outcome === "error") {
+            expect(gateway.liveEventRequests.at(-1)?.event.payload).toMatchObject({
+              error: expect.stringContaining("fixture provider failed"),
+            });
+          }
+        }
+        expect(browserRuntimeMocks.dispose).toHaveBeenCalledOnce();
+      } finally {
+        createSession?.mockRestore();
+      }
+    },
+  );
+
+  it.each([
+    { computerCleanupFailure: false, terminal: "text" },
+    { computerCleanupFailure: false, terminal: "error" },
+    { computerCleanupFailure: false, terminal: "cancelled" },
+    { computerCleanupFailure: true, terminal: "text" },
+    { computerCleanupFailure: true, terminal: "error" },
+    { computerCleanupFailure: true, terminal: "cancelled" },
+  ] as const)(
+    "keeps desktop images through RPC, transcript, and inference before closing (cleanup failure: $computerCleanupFailure, terminal: $terminal)",
+    async ({ computerCleanupFailure, terminal }) => {
       const computerSnapshot = createNoisyPngBuffer(512, 512).toString("base64");
       expect(computerSnapshot.length).toBeGreaterThan(64 * 1024);
       const { gateway, launch } = await setup({
-        inferencePlans: ["computer", "text"],
+        inferencePlans: ["computer", terminal],
         computerSnapshot,
         computerCleanupFailure,
       });
@@ -1199,7 +1278,7 @@ describe("worker runtime", () => {
       };
 
       await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({
-        status: computerCleanupFailure ? "failed" : "completed",
+        status: computerCleanupFailure || terminal !== "text" ? "failed" : "completed",
       });
 
       expect(gateway.computerRequests.map((request) => request.command)).toEqual([
@@ -1228,14 +1307,35 @@ describe("worker runtime", () => {
         gateway.applicationOrder.indexOf("live:lifecycle:finishing"),
       );
       if (computerCleanupFailure) {
+        expect(gateway.liveEventRequests.at(-1)?.event.payload).toHaveProperty(
+          "replayInvalid",
+          true,
+        );
+      } else {
+        expect(gateway.liveEventRequests.at(-1)?.event.payload).not.toHaveProperty("replayInvalid");
+      }
+      if (terminal === "cancelled") {
+        expect(gateway.liveEventRequests.at(-1)?.event).toMatchObject({
+          kind: "lifecycle",
+          payload: { phase: "finishing", stopReason: "aborted" },
+        });
+        expect(gateway.liveEventRequests.at(-1)?.event.payload).not.toHaveProperty("error");
+      } else if (computerCleanupFailure) {
         expect(gateway.liveEventRequests.at(-1)?.event).toMatchObject({
           kind: "lifecycle",
           payload: {
             phase: "finishing",
             stopReason: "error",
-            error: "computer: session desktop cleanup failed",
+            error: expect.stringContaining(
+              "computer: session desktop cleanup failed | fixture desktop cleanup failed",
+            ),
           },
         });
+        if (terminal === "error") {
+          expect(gateway.liveEventRequests.at(-1)?.event.payload).toMatchObject({
+            error: expect.stringContaining("fixture provider failed"),
+          });
+        }
       }
     },
   );
@@ -1592,6 +1692,7 @@ describe("worker runtime", () => {
       expect(lifecycle).toMatchObject({
         payload: { phase: lifecyclePhase, stopReason },
       });
+      expect(lifecycle?.payload).not.toHaveProperty("replayInvalid");
     },
   );
 
@@ -1800,108 +1901,10 @@ describe("worker runtime", () => {
     },
   );
 
-  it("joins retained background processes before closing the managed owner on EOF", async () => {
-    const { launch } = await setup({ inferencePlans: ["background-tool", "text"] });
-    const input = new PassThrough();
-    const output = new PassThrough();
-    const result = createDeferred<WorkerProcessResult>();
-    output.on("data", (chunk: Buffer) => {
-      const parsed = parseWorkerProcessResult(JSON.parse(chunk.toString("utf8")));
-      if (parsed) {
-        result.resolve(parsed);
-      }
-    });
-    const command = runWorkerCommand({ managed: true, input, output });
-    const scopeKey = `worker:${SESSION_ID}`;
-    const supervisor = getProcessSupervisor();
-    try {
-      input.write(
-        `${JSON.stringify({ type: "turn", turnId: launch.assignment.turnId, descriptor: launch })}\n`,
-      );
-      await expect(result.promise).resolves.toMatchObject({ retainWorker: true });
-      const running = listRunningSessions().filter((session) => session.scopeKey === scopeKey);
-      expect(running).toHaveLength(1);
-      const pid = running[0]!.pid!;
-      expect(pid).toBeGreaterThan(0);
-      input.end();
-      await command;
-      expect(() => process.kill(pid, 0)).toThrow();
-      expect(listRunningSessions().filter((session) => session.scopeKey === scopeKey)).toHaveLength(
-        0,
-      );
-    } finally {
-      input.end();
-      try {
-        await command;
-      } finally {
-        supervisor.cancelScope(scopeKey, "manual-cancel");
-        await waitForExecScope(scopeKey);
-      }
-    }
+  registerWorkerExecEnvironmentFinalizationTests({
+    runExecProcess,
+    createWorkerRuntimeEnvironment,
   });
-
-  it.each(["foreground", "hidden-background"] as const)(
-    "keeps environment state until %s exec finalization settles",
-    async (visibility) => {
-      const sessionId = `worker-finalizer-${visibility}`;
-      const scopeKey = `worker:${sessionId}`;
-      const environment = await createWorkerRuntimeEnvironment(sessionId);
-      const finalizing = createDeferred();
-      const releaseFinalizer = createDeferred();
-      const settledStateDirs: Array<string | undefined> = [];
-      let run: Awaited<ReturnType<typeof runExecProcess>> | undefined;
-      try {
-        run = await runExecProcess({
-          command: "worker-finalizer-fixture",
-          workdir: environment.stateDir,
-          env: {},
-          sandbox: {
-            containerName: "worker-finalizer-fixture",
-            workspaceDir: environment.stateDir,
-            containerWorkdir: environment.stateDir,
-            buildExecSpec: async () => ({
-              argv: [process.execPath, "-e", "process.stdout.write('worker-finalizer-output')"],
-              env: {},
-              stdinMode: "pipe-closed",
-            }),
-            finalizeExec: async () => {
-              finalizing.resolve();
-              await releaseFinalizer.promise;
-            },
-          },
-          usePty: false,
-          warnings: [],
-          maxOutput: 1000,
-          pendingMaxOutput: 1000,
-          notifyOnExit: false,
-          scopeKey,
-          timeoutSec: null,
-          onSettledBeforeNotify: () => {
-            settledStateDirs.push(process.env.OPENCLAW_STATE_DIR);
-          },
-        });
-        if (visibility === "hidden-background") {
-          markBackgrounded(run.session);
-          deleteSession(run.session.id);
-        }
-        await finalizing.promise;
-        const closing = environment.close();
-        await Promise.resolve();
-
-        expect(process.env.OPENCLAW_STATE_DIR).toBe(environment.stateDir);
-        await expect(stat(environment.stateDir)).resolves.toBeDefined();
-        releaseFinalizer.resolve();
-        await run.promise;
-        await closing;
-        expect(settledStateDirs).toEqual([environment.stateDir]);
-        await expect(stat(environment.stateDir)).rejects.toMatchObject({ code: "ENOENT" });
-      } finally {
-        releaseFinalizer.resolve();
-        await run?.promise;
-        await environment.close();
-      }
-    },
-  );
 
   it("revokes local tool handles when their worker turn closes", async () => {
     const { launch } = await setup();
@@ -2255,86 +2258,7 @@ describe("worker runtime", () => {
     }
   });
 
-  it.each([
-    {
-      mode: "read-only" as const,
-      omittedTools: ["write", "edit", "apply_patch"],
-      denial: /host=gateway security=deny/u,
-    },
-    {
-      mode: "guarded" as const,
-      omittedTools: [],
-      denial:
-        /approval_required.*worker guarded permission mode.*run this command locally.*interactive approval.*administrator.*clear the session permission mode/isu,
-    },
-    {
-      mode: "workspace" as const,
-      omittedTools: [],
-      denial:
-        /approval_required.*worker workspace permission mode.*run this command locally.*interactive approval.*administrator.*clear the session permission mode/isu,
-    },
-    { mode: "full" as const, omittedTools: [], denial: null },
-  ])("applies the $mode worker permission clamp", async ({ mode, omittedTools, denial }) => {
-    const { gateway, workspaceDir, launch } = await setup({
-      inferencePlans: ["tool", "text"],
-      ...(mode === "full"
-        ? {
-            execApprovals: {
-              version: 1,
-              defaults: { security: "full", ask: "always" },
-              agents: {},
-            },
-          }
-        : {}),
-    });
-    launch.assignment.permissionMode = mode;
-    launch.assignment.workerContainmentRoot = workspaceDir;
-
-    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
-
-    const toolNames = gateway.inferenceRequests[0]?.context.tools?.map((tool) => tool.name) ?? [];
-    for (const toolName of omittedTools) {
-      expect(toolNames).not.toContain(toolName);
-    }
-    const toolResult = JSON.stringify(
-      gateway.inferenceRequests[1]?.context.messages.find(
-        (message) => message.role === "toolResult",
-      ),
-    );
-    if (denial) {
-      expect(toolResult).toMatch(denial);
-      await expect(
-        readFile(path.join(workspaceDir, "local-proof.txt"), "utf8"),
-      ).rejects.toMatchObject({ code: "ENOENT" });
-    } else {
-      await expect(readFile(path.join(workspaceDir, "local-proof.txt"), "utf8")).resolves.toBe(
-        "worker-local",
-      );
-      expect(toolResult).not.toMatch(/approval_required|approval-pending/iu);
-      expect(gateway.methods.some((method) => method.includes("approval"))).toBe(false);
-    }
-  });
-
-  it.each(["guarded", "workspace"] as const)(
-    "keeps the %s worker allowlist fast path",
-    async (mode) => {
-      const { gateway, workspaceDir, launch } = await setup({
-        inferencePlans: ["safe-tool", "text"],
-      });
-      launch.assignment.permissionMode = mode;
-      launch.assignment.workerContainmentRoot = workspaceDir;
-
-      await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
-
-      const toolResult = JSON.stringify(
-        gateway.inferenceRequests[1]?.context.messages.find(
-          (message) => message.role === "toolResult",
-        ),
-      );
-      expect(toolResult).not.toContain("approval_required");
-      expect(toolResult).toMatch(/\b0\b/u);
-    },
-  );
+  registerWorkerPermissionTests({ setup });
 
   it("canonicalizes an in-root worker workspace before enforcing containment", async () => {
     const { workspaceDir, launch } = await setup();

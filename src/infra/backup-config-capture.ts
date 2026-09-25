@@ -6,6 +6,8 @@ import { hashConfigIncludeRaw } from "../config/includes.js";
 import { createConfigIO } from "../config/io.factory.js";
 import { containsConfigIncludeDirective } from "../config/io.read-helpers.js";
 import type { ReadConfigFileSnapshotForWriteResult } from "../config/io.types.js";
+import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
+import { openLocalFileSafely } from "./fs-safe.js";
 
 type CapturedConfigFile = {
   sourcePath: string;
@@ -117,10 +119,12 @@ export async function resolveBackupConfigCapture({
     assertRootAlias,
     revalidate: async () => {
       await assertRootAlias?.();
-      const current = await createConfigIO({
-        configPath: snapshot.path,
-        observe: false,
-      }).readConfigFileSnapshotForWrite();
+      const current = await withOpenClawStateDatabaseReadSnapshot(() =>
+        createConfigIO({
+          configPath: snapshot.path,
+          observe: false,
+        }).readConfigFileSnapshotForWrite(),
+      );
       // A file can be reached repeatedly during discovery. Comparing the resolved
       // source as well as the last hashes prevents accepting mixed observations.
       if (
@@ -141,15 +145,13 @@ export async function resolveBackupConfigCapture({
 
 async function readCapturedConfig(file: CapturedConfigFile): Promise<Buffer> {
   try {
-    const handle = await fs.open(file.sourcePath, "r");
+    const opened = await openLocalFileSafely({ filePath: file.sourcePath });
+    const { handle, stat } = opened;
     try {
-      const stat = await handle.stat();
       if (
-        !stat.isFile() ||
         stat.dev !== file.dev ||
         stat.ino !== file.ino ||
-        (await fs.realpath(file.sourcePath)) !== file.canonicalPath ||
-        !(await fs.lstat(file.sourcePath)).isFile()
+        opened.realPath !== file.canonicalPath
       ) {
         throw new Error("file identity changed");
       }

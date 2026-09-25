@@ -4,6 +4,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { isRedactedSecretValue } from "../config/redact-sentinel.js";
 import type { GatewayAuthConfig, GatewayTrustedProxyConfig } from "../config/types.gateway.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import {
@@ -18,7 +19,10 @@ import {
   type GatewayIngressAttribution,
   type VerifiedTailscaleIngressIdentity,
 } from "./ingress-attribution.js";
-import { isInvalidGatewaySecret } from "./known-weak-gateway-secrets.js";
+import {
+  assertGatewayAuthNotKnownWeak,
+  isInvalidGatewaySecret,
+} from "./known-weak-gateway-secrets.js";
 import {
   isLocalDirectRequest,
   isLoopbackAddress,
@@ -118,9 +122,7 @@ function resolveGatewayAuthRequestContext(
     attributed?.clientIp ??
     resolveRequestClientIpFromHeaders(req, trustedProxies, params.allowRealIpFallback === true) ??
     req?.socket?.remoteAddress;
-  const localDirect = attributed
-    ? attributed.kind === "direct-local"
-    : isLocalDirectRequest(req, trustedProxies, params.allowRealIpFallback === true);
+  const localDirect = attributed ? attributed.kind === "direct-local" : isLocalDirectRequest(req);
 
   return {
     authSurface,
@@ -159,6 +161,12 @@ export function assertGatewayAuthConfigured(
   auth: ResolvedGatewayAuth,
   rawAuthConfig?: GatewayAuthConfig | null,
 ): void {
+  if (
+    (auth.mode === "token" || auth.mode === "password") &&
+    isRedactedSecretValue(auth[auth.mode])
+  ) {
+    assertGatewayAuthNotKnownWeak(auth);
+  }
   if (auth.mode === "token" && isInvalidGatewaySecret(auth.token)) {
     throw new Error(
       "Gateway token must not be blank or the literal string undefined/null. Run `openclaw doctor --fix --generate-gateway-token` for an inline token, or rotate its external secret source.",
@@ -354,6 +362,9 @@ async function authorizePasswordAuth(params: {
   deferRateLimitFailure?: boolean;
   resetOnSuccess?: boolean;
 }): Promise<GatewayAuthResult> {
+  if (isRedactedSecretValue(params.authPassword)) {
+    return { ok: false, reason: "password_redacted_config" };
+  }
   if (!params.authPassword) {
     return { ok: false, reason: "password_missing_config" };
   }
@@ -398,6 +409,12 @@ async function authorizeGatewayConnect(
   params: AuthorizeGatewayConnectParams,
 ): Promise<GatewayAuthResult> {
   const { auth } = params;
+  if (
+    (auth.mode === "token" || auth.mode === "password") &&
+    isRedactedSecretValue(auth[auth.mode])
+  ) {
+    return { ok: false, reason: `${auth.mode}_redacted_config` };
+  }
   if (auth.mode === "trusted-proxy") {
     if (!auth.trustedProxy) {
       return { ok: false, reason: "trusted_proxy_config_missing" };

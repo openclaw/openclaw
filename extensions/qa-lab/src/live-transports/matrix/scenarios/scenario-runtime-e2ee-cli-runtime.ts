@@ -3,11 +3,12 @@ import { randomUUID } from "node:crypto";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { runMatrixQaOpenClawCli, startMatrixQaOpenClawCli } from "./scenario-runtime-cli.js";
 import {
   assertMatrixQaPrivatePathMode,
-  buildMatrixQaEmptyMatrixCliConfig,
-} from "./scenario-runtime-e2ee-cli-shared.js";
+  runMatrixQaOpenClawCli,
+  startMatrixQaOpenClawCli,
+} from "./scenario-runtime-cli.js";
+import { buildMatrixQaEmptyMatrixCliConfig } from "./scenario-runtime-e2ee-cli-shared.js";
 import {
   requireMatrixQaCliRuntimeEnv,
   requireMatrixQaE2eeOutputDir,

@@ -15,6 +15,7 @@ import {
   registerMemoryCapability,
   registerTestMemoryPromptBuilder,
 } from "../plugins/memory-state.test-fixtures.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import {
   buildActiveMemoryPromptSection,
   listMemoryHostPublicArtifacts,
@@ -27,8 +28,9 @@ async function createFixtureRoot(prefix: string): Promise<string> {
 }
 
 describe("memory-host-core helpers", () => {
-  afterEach(() => {
+  afterEach(async () => {
     clearMemoryPluginState();
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
@@ -209,6 +211,7 @@ describe("memory-host-core helpers", () => {
         await fs.mkdir(path.dirname(externalExport), { recursive: true });
         await fs.writeFile(externalExport, '{"type":"external"}\n', "utf8");
         await fs.writeFile(externalOwner, '{"kind":"external"}\n', "utf8");
+        await fs.writeFile(path.join(externalMemoryDir, "public.md"), "# Public memory\n");
         await fs.symlink(externalMemoryDir, path.join(workspaceDir, "memory"));
 
         await expect(
@@ -219,7 +222,16 @@ describe("memory-host-core helpers", () => {
               },
             },
           }),
-        ).resolves.toEqual([]);
+        ).resolves.toEqual([
+          {
+            kind: "daily-note",
+            workspaceDir,
+            relativePath: "memory/public.md",
+            absolutePath: path.join(workspaceDir, "memory", "public.md"),
+            agentIds: ["main"],
+            contentType: "markdown",
+          },
+        ]);
         await expect(fs.readFile(externalExport, "utf8")).resolves.toBe('{"type":"external"}\n');
         await expect(fs.readFile(externalOwner, "utf8")).resolves.toBe('{"kind":"external"}\n');
       } finally {
@@ -501,18 +513,51 @@ describe("memory-host-core helpers", () => {
     try {
       vi.stubEnv("OPENCLAW_STATE_DIR", fixtureRoot);
       const workspaceDir = path.join(fixtureRoot, "workspace");
-      await fs.mkdir(path.join(workspaceDir, "memory", "dreaming"), { recursive: true });
+      const cfg = { agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] } };
+      await fs.mkdir(workspaceDir);
       await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "# Durable Memory\n", "utf8");
-      await fs.writeFile(
-        path.join(workspaceDir, "memory", "2026-05-18.md"),
-        "# Daily Note\n",
-        "utf8",
+      expect(
+        (await listMemoryHostPublicArtifacts({ cfg })).map((artifact) => artifact.relativePath),
+      ).toEqual(["MEMORY.md"]);
+
+      const memoryDir = path.join(workspaceDir, "memory");
+      for (const relativePath of [
+        "nested/inner.md",
+        "dreaming/2026-05-18.md",
+        "2026-05-18.md",
+        ".notes/retained.md",
+        ".hidden.md",
+        "UPPER.MD",
+        "notes.txt",
+        "unreadable/omitted.md",
+      ]) {
+        const file = path.join(memoryDir, relativePath);
+        await fs.mkdir(path.dirname(file), { recursive: true });
+        await fs.writeFile(file, `# ${relativePath}\n`);
+      }
+      const outsideDir = path.join(fixtureRoot, "outside");
+      await fs.mkdir(outsideDir);
+      await fs.writeFile(path.join(outsideDir, "linked.md"), "# Outside memory\n");
+      await fs.symlink(
+        outsideDir,
+        path.join(memoryDir, "linked-directory"),
+        process.platform === "win32" ? "junction" : "dir",
       );
-      await fs.writeFile(
-        path.join(workspaceDir, "memory", "dreaming", "2026-05-18.md"),
-        "# Dream Report\n",
-        "utf8",
-      );
+      if (process.platform !== "win32") {
+        await fs.symlink(path.join(outsideDir, "linked.md"), path.join(memoryDir, "linked.md"));
+      }
+      let unreadableDirectory = path.join(memoryDir, "unreadable");
+      const readdir = fs.readdir;
+      vi.spyOn(fs, "readdir").mockImplementation(async (...args) => {
+        const directory = String(args[0]);
+        if (
+          directory === unreadableDirectory ||
+          directory === path.toNamespacedPath(unreadableDirectory)
+        ) {
+          throw Object.assign(new Error("fixture directory is unreadable"), { code: "EACCES" });
+        }
+        return readdir(...args);
+      });
       const eventStoredAt = Date.parse("2026-05-19T09:30:00.000Z");
       vi.spyOn(Date, "now").mockReturnValue(eventStoredAt);
       await appendMemoryHostEvent(workspaceDir, {
@@ -523,43 +568,28 @@ describe("memory-host-core helpers", () => {
         results: [],
       });
 
-      const artifacts = await listMemoryHostPublicArtifacts({
-        cfg: {
-          agents: {
-            list: [{ id: "main", default: true, workspace: workspaceDir }],
-          },
-        },
-      });
+      const artifacts = await listMemoryHostPublicArtifacts({ cfg });
       const eventArtifact = artifacts.find((artifact) => artifact.kind === "event-log");
       if (!eventArtifact) {
         throw new Error("expected memory event export");
       }
-      expect(artifacts.filter((artifact) => artifact.kind !== "event-log")).toEqual([
-        {
-          kind: "memory-root",
+      expect(artifacts.filter((artifact) => artifact.kind !== "event-log")).toEqual(
+        [
+          { kind: "memory-root", relativePath: "MEMORY.md" },
+          { kind: "daily-note", relativePath: "memory/.hidden.md" },
+          { kind: "daily-note", relativePath: "memory/.notes/retained.md" },
+          { kind: "daily-note", relativePath: "memory/2026-05-18.md" },
+          { kind: "dream-report", relativePath: "memory/dreaming/2026-05-18.md" },
+          { kind: "daily-note", relativePath: "memory/nested/inner.md" },
+        ].map(({ kind, relativePath }) => ({
+          kind,
+          relativePath,
           workspaceDir,
-          relativePath: "MEMORY.md",
-          absolutePath: path.join(workspaceDir, "MEMORY.md"),
+          absolutePath: path.join(workspaceDir, ...relativePath.split("/")),
           agentIds: ["main"],
           contentType: "markdown",
-        },
-        {
-          kind: "daily-note",
-          workspaceDir,
-          relativePath: "memory/2026-05-18.md",
-          absolutePath: path.join(workspaceDir, "memory", "2026-05-18.md"),
-          agentIds: ["main"],
-          contentType: "markdown",
-        },
-        {
-          kind: "dream-report",
-          workspaceDir,
-          relativePath: "memory/dreaming/2026-05-18.md",
-          absolutePath: path.join(workspaceDir, "memory", "dreaming", "2026-05-18.md"),
-          agentIds: ["main"],
-          contentType: "markdown",
-        },
-      ]);
+        })),
+      );
       expect(eventArtifact).toMatchObject({
         kind: "event-log",
         workspaceDir,
@@ -605,15 +635,13 @@ describe("memory-host-core helpers", () => {
         maxEntries: 10_000,
         env: { ...process.env, OPENCLAW_STATE_DIR: fixtureRoot },
       }).clear();
-      const afterRetention = await listMemoryHostPublicArtifacts({
-        cfg: {
-          agents: {
-            list: [{ id: "main", default: true, workspace: workspaceDir }],
-          },
-        },
-      });
+      const afterRetention = await listMemoryHostPublicArtifacts({ cfg });
       expect(afterRetention.some((artifact) => artifact.kind === "event-log")).toBe(false);
       await expect(fs.readFile(eventExportPath, "utf8")).resolves.toBe("");
+      unreadableDirectory = memoryDir;
+      expect(
+        (await listMemoryHostPublicArtifacts({ cfg })).map((artifact) => artifact.relativePath),
+      ).toEqual(["MEMORY.md"]);
     } finally {
       await fs.rm(fixtureRoot, { recursive: true, force: true });
     }

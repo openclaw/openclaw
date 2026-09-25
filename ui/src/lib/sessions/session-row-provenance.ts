@@ -13,11 +13,88 @@ export type SessionRowFieldSelector = (
   fieldNames: readonly string[],
 ) => string[];
 
-type FieldObservation = Readonly<{
+type FieldSource = Readonly<{
   revision: number;
   updatedAt: number | null;
+  snapshotAt?: number;
   event?: true;
+  readCutoff?: number;
 }>;
+
+export type FieldObservation = Readonly<{
+  source: FieldSource;
+  writer?: FieldSource;
+}>;
+
+export function createSessionWriteObservation(
+  revision: number,
+  updatedAt: number | null,
+  readCutoff?: number,
+  snapshotAt?: number,
+): FieldObservation {
+  return {
+    source: {
+      revision,
+      updatedAt,
+      event: true,
+      ...(readCutoff !== undefined ? { readCutoff } : {}),
+      ...(snapshotAt !== undefined ? { snapshotAt } : {}),
+    },
+  };
+}
+
+function isNewerSource(candidate: FieldSource, current: FieldSource) {
+  // Event snapshots and cached list pages share the Gateway's sampling clock.
+  // Request/delivery order and persisted updatedAt cannot order runtime-only changes.
+  if (
+    candidate.snapshotAt !== undefined &&
+    current.snapshotAt !== undefined &&
+    candidate.snapshotAt !== current.snapshotAt
+  ) {
+    return candidate.snapshotAt > current.snapshotAt;
+  }
+  if (
+    (candidate.event || current.event) &&
+    candidate.updatedAt !== null &&
+    current.updatedAt !== null &&
+    candidate.updatedAt !== current.updatedAt
+  ) {
+    return candidate.updatedAt > current.updatedAt;
+  }
+  if (!candidate.event && current.readCutoff !== undefined) {
+    return candidate.revision > current.readCutoff;
+  }
+  if (!current.event && candidate.readCutoff !== undefined) {
+    return current.revision <= candidate.readCutoff;
+  }
+  return candidate.revision > current.revision;
+}
+
+export function mergeSessionFieldObservations(
+  current: FieldObservation | undefined,
+  offered: FieldObservation,
+): { useOffered: boolean; observation: FieldObservation } {
+  let writer = current?.writer;
+  if (offered.writer && (!writer || isNewerSource(offered.writer, writer))) {
+    writer = offered.writer;
+  }
+  const supersededWriter = (source: FieldSource) =>
+    Boolean(source.event && writer && source !== writer && isNewerSource(writer, source));
+  const useOffered =
+    !current ||
+    (offered.source !== current.source &&
+      (supersededWriter(current.source) ||
+        (!supersededWriter(offered.source) && isNewerSource(offered.source, current.source))));
+  const selected = current && !useOffered ? current : offered;
+  // Only an admitted value source can add a writer; rejected late events cannot raise the fence.
+  if (selected.source.event && (!writer || isNewerSource(selected.source, writer))) {
+    writer = selected.source;
+  }
+  return {
+    useOffered,
+    observation: selected.writer === writer ? selected : { source: selected.source, writer },
+  };
+}
 
 type RowObservation = {
   read: FieldObservation;
@@ -31,6 +108,7 @@ const identityFields = new Set(["key", "sessionId", "agentId"]);
 /** Field receipts follow row copies without retaining another store of row values. */
 export function createSessionRowProvenance() {
   let observationsByRow = new WeakMap<GatewaySessionRow, RowObservation>();
+  const completedSelfMerges = new WeakSet<RowObservation>();
   const owner = (row: GatewaySessionRow, agentId?: string | null) => {
     const resolved =
       parseAgentSessionKey(row.key)?.agentId ??
@@ -52,7 +130,7 @@ export function createSessionRowProvenance() {
   };
   const metadata = (row: GatewaySessionRow, agentId?: string | null): RowObservation =>
     observationsByRow.get(row) ?? {
-      read: { revision: 0, updatedAt: row.updatedAt ?? null },
+      read: { source: { revision: 0, updatedAt: row.updatedAt ?? null } },
       agentId: owner(row, agentId),
       fields: new Map(),
     };
@@ -76,7 +154,8 @@ export function createSessionRowProvenance() {
       }
       return fieldNames.filter(
         (name) =>
-          !identityFields.has(name) && (projected.fields.get(name) ?? projected.read) === source,
+          !identityFields.has(name) &&
+          (projected.fields.get(name) ?? projected.read).source === source.source,
       );
     };
   };
@@ -84,21 +163,40 @@ export function createSessionRowProvenance() {
     row: GatewaySessionRow,
     revision: number,
     agentId?: string | null,
+    predecessors: readonly GatewaySessionRow[] = [],
   ): SessionRowFieldSelector => {
-    if ((observationsByRow.get(row)?.read.revision ?? 0) >= revision) {
+    if ((observationsByRow.get(row)?.read.source.revision ?? 0) >= revision) {
       // A merge may have attached another read's token to this same row object.
       return () => [];
+    }
+    const writers = new Map<string, FieldSource>();
+    for (const predecessor of predecessors) {
+      for (const [name, observed] of metadata(predecessor, agentId).fields) {
+        const writer = observed.writer;
+        const previous = writers.get(name);
+        if (writer && (!previous || isNewerSource(writer, previous))) {
+          writers.set(name, writer);
+        }
+      }
     }
     const fields = new Map<string, FieldObservation>();
     // Only these optional fields are deliberately omitted by non-enriched reads.
     for (const field of ["derivedTitle", "lastMessagePreview"] as const) {
       if (row[field] === undefined) {
-        fields.set(field, { revision: 0, updatedAt: null });
+        fields.set(field, { source: { revision: 0, updatedAt: null } });
       }
     }
     const readAgentId =
       parseAgentSessionKey(row.key)?.agentId ?? row.agentId?.trim() ?? agentId?.trim();
-    const read: FieldObservation = { revision, updatedAt: row.updatedAt ?? null };
+    const read: FieldObservation = {
+      source: { revision, updatedAt: row.updatedAt ?? null, snapshotAt: row.snapshotAt },
+    };
+    for (const [name, writer] of writers) {
+      const source = (fields.get(name) ?? read).source;
+      if (isNewerSource(source, writer)) {
+        fields.set(name, { source, writer });
+      }
+    }
     observationsByRow.set(row, {
       read,
       agentId: readAgentId ? normalizeAgentId(readAgentId) : null,
@@ -131,29 +229,43 @@ export function createSessionRowProvenance() {
     observationsByRow.set(row, { ...sourceMetadata, fields });
     return row;
   };
-  const fieldIsNewer = (candidate: FieldObservation, current: FieldObservation) => {
-    if (
-      (candidate.event || current.event) &&
-      candidate.updatedAt !== null &&
-      current.updatedAt !== null &&
-      candidate.updatedAt !== current.updatedAt
-    ) {
-      return candidate.updatedAt > current.updatedAt;
-    }
-    return candidate.revision > current.revision;
-  };
   const mergeRow = (
     current: GatewaySessionRow,
     offered: GatewaySessionRow,
     agentId?: string | null,
   ): GatewaySessionRow => {
+    const observed = current === offered ? observationsByRow.get(current) : undefined;
+    if (observed && completedSelfMerges.has(observed)) {
+      return current;
+    }
     const key = identity(current, agentId);
     if (!key || key !== identity(offered, agentId)) {
       return current;
     }
-    const currentMetadata = metadata(current, agentId);
+    const currentMetadata = observed ?? metadata(current, agentId);
+    if (observed) {
+      // Self-projection can admit event writers without changing any row values.
+      let fields: Map<string, FieldObservation> | undefined;
+      for (const [field, observation] of currentMetadata.fields) {
+        const merged = mergeSessionFieldObservations(observation, observation).observation;
+        if (merged !== observation) {
+          fields ??= new Map(currentMetadata.fields);
+          fields.set(field, merged);
+        }
+      }
+      const settled = fields ? { ...currentMetadata, fields } : currentMetadata;
+      if (fields) {
+        observationsByRow.set(current, settled);
+      }
+      // Only completed, valid self-merges are reusable; every receipt writer replaces this record.
+      completedSelfMerges.add(settled);
+      return current;
+    }
     const offeredMetadata = metadata(offered, agentId);
-    const offeredReadIsNewer = offeredMetadata.read.revision > currentMetadata.read.revision;
+    // Keep the request high-water mark for late-descriptor admission even when
+    // individual fields retain facts from a newer-sampled, earlier-issued read.
+    const offeredReadIsNewer =
+      offeredMetadata.read.source.revision > currentMetadata.read.source.revision;
     const base = offeredReadIsNewer ? offered : current;
     const baseMetadata = offeredReadIsNewer ? offeredMetadata : currentMetadata;
     const currentValues: Record<string, unknown> = current;
@@ -174,9 +286,9 @@ export function createSessionRowProvenance() {
       }
       const currentField = currentMetadata.fields.get(field) ?? currentMetadata.read;
       const offeredField = offeredMetadata.fields.get(field) ?? offeredMetadata.read;
-      const useOffered = fieldIsNewer(offeredField, currentField);
-      const source = useOffered ? offeredValues : currentValues;
-      const provenance = useOffered ? offeredField : currentField;
+      const merged = mergeSessionFieldObservations(currentField, offeredField);
+      const source = merged.useOffered ? offeredValues : currentValues;
+      const provenance = merged.observation;
       if (provenance !== baseMetadata.read) {
         fields.set(field, provenance);
       }
@@ -205,23 +317,21 @@ export function createSessionRowProvenance() {
     observationsByRow.set(next, nextMetadata);
     return next;
   };
-  const observeEvent = (
+  const observeFields = (
     row: GatewaySessionRow,
     names: readonly string[],
-    revision: number,
-    updatedAt: number | null,
+    observation: FieldObservation,
     agentId?: string | null,
   ): SessionRowFieldSelector => {
     const current = metadata(row, agentId);
     const fields = new Map(current.fields);
-    const event: FieldObservation = { revision, event: true, updatedAt };
     for (const name of names) {
       if (!identityFields.has(name)) {
-        fields.set(name, event);
+        fields.set(name, observation);
       }
     }
     observationsByRow.set(row, { ...current, fields });
-    return selectSourceFields(row, event, agentId);
+    return selectSourceFields(row, observation, agentId);
   };
   return {
     reset() {
@@ -232,25 +342,50 @@ export function createSessionRowProvenance() {
     inheritRow,
     mergeRow,
     observeReadRow,
-    observeEvent,
+    observeFields,
+    fieldObservation: (row: GatewaySessionRow, field: string): FieldObservation => {
+      const observed = metadata(row);
+      return observed.fields.get(field) ?? observed.read;
+    },
     bindOwner(row: GatewaySessionRow, agentId?: string | null) {
       if (!observationsByRow.has(row)) {
         observationsByRow.set(row, metadata(row, agentId));
       }
     },
-    rowRevision: (row: GatewaySessionRow) => metadata(row).read.revision,
+    rowRevision: (row: GatewaySessionRow) => observationsByRow.get(row)?.read.source.revision ?? 0,
     hasObservation: (row: GatewaySessionRow) => {
-      const observed = metadata(row);
-      return (
-        observed.read.revision > 0 ||
-        [...observed.fields.values()].some((field) => field.event === true)
-      );
+      const observed = observationsByRow.get(row);
+      if (!observed) {
+        return false;
+      }
+      if (observed.read.source.revision > 0) {
+        return true;
+      }
+      for (const field of observed.fields.values()) {
+        if (field.source.event === true) {
+          return true;
+        }
+      }
+      return false;
     },
     hasNewerFacts: (row: GatewaySessionRow, revision: number) => {
-      const observed = metadata(row);
-      return [observed.read, ...observed.fields.values()].some(
-        (field) => field.revision > revision,
-      );
+      const observed = observationsByRow.get(row);
+      if (!observed) {
+        return revision < 0;
+      }
+      if (observed.read.source.revision > revision) {
+        return true;
+      }
+      for (const field of observed.fields.values()) {
+        if (
+          field.source.revision > revision ||
+          (field.writer !== undefined && field.writer.revision > revision) ||
+          (field.writer?.readCutoff !== undefined && field.writer.readCutoff >= revision)
+        ) {
+          return true;
+        }
+      }
+      return false;
     },
   };
 }

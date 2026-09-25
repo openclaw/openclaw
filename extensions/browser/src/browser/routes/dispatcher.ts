@@ -4,7 +4,7 @@
  * Provides an in-process request/response adapter so Gateway nodes can invoke
  * the same route handlers without opening an HTTP socket.
  */
-import { escapeRegExp } from "../../utils.js";
+import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeBrowserRequestPath } from "../request-policy.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import { registerBrowserRoutes } from "./index.js";
@@ -17,6 +17,8 @@ type BrowserDispatchRequest = {
   body?: unknown;
   signal?: AbortSignal;
   requester?: BrowserRequest["requester"];
+  assertCurrent?: BrowserRequest["assertCurrent"];
+  screencastAuthority?: BrowserRequest["screencastAuthority"];
 };
 
 type BrowserDispatchResponse = {
@@ -121,6 +123,8 @@ export function createBrowserRouteDispatcher(ctx: BrowserRouteContext) {
             body,
             signal,
             requester: req.requester,
+            assertCurrent: req.assertCurrent,
+            screencastAuthority: req.screencastAuthority,
           },
           res,
         );

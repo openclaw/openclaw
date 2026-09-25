@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements bus state behavior.
 import { randomUUID } from "node:crypto";
 import {
   buildQaBusSnapshot,
@@ -45,39 +44,9 @@ function normalizeInboundConversation(conversation: QaBusConversation): QaBusCon
   return kind === conversation.kind ? conversation : { ...conversation, kind };
 }
 
-type QaBusEventSeed =
-  | {
-      kind: "inbound-message";
-      accountId: string;
-      message: QaBusMessage;
-    }
-  | {
-      kind: "outbound-message";
-      accountId: string;
-      message: QaBusMessage;
-    }
-  | {
-      kind: "thread-created";
-      accountId: string;
-      thread: QaBusThread;
-    }
-  | {
-      kind: "message-edited";
-      accountId: string;
-      message: QaBusMessage;
-    }
-  | {
-      kind: "message-deleted";
-      accountId: string;
-      message: QaBusMessage;
-    }
-  | {
-      kind: "reaction-added";
-      accountId: string;
-      message: QaBusMessage;
-      emoji: string;
-      senderId: string;
-    };
+type QaBusEventSeed = {
+  [Kind in QaBusEvent["kind"]]: Omit<Extract<QaBusEvent, { kind: Kind }>, "cursor">;
+}[QaBusEvent["kind"]];
 
 export function createQaBusState() {
   const conversations = new Map<string, QaBusSnapshotConversation>();
@@ -97,10 +66,9 @@ export function createQaBusState() {
     }),
   );
 
-  const pushEvent = (event: QaBusEventSeed | ((cursor: number) => QaBusEventSeed)): QaBusEvent => {
+  const pushEvent = (event: QaBusEventSeed): QaBusEvent => {
     cursor += 1;
-    const next = typeof event === "function" ? event(cursor) : event;
-    const finalized = { cursor, ...next } as QaBusEvent;
+    const finalized = { cursor, ...event };
     events.push(finalized);
     waiters.settle();
     return finalized;

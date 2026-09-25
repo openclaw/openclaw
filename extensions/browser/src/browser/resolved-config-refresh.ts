@@ -28,6 +28,9 @@ function changedProfileInvariants(
   if (current.driver !== next.driver) {
     changed.push("driver");
   }
+  if ((current.engine ?? "chromium") !== (next.engine ?? "chromium")) {
+    changed.push("engine");
+  }
   if (currentUsesLocalManagedLaunch && nextUsesLocalManagedLaunch) {
     if (current.headless !== next.headless) {
       changed.push("headless");

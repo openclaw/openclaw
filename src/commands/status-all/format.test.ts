@@ -140,19 +140,16 @@ describe("status-all format", () => {
         tailscaleMode: "funnel",
         tailscaleDns: null,
         tailscaleHttpsUrl: null,
-        tailscaleBackendState: "Running",
         includeBackendStateWhenOn: true,
       }),
-    ).toBe("funnel · Running · magicdns unknown");
+    ).toBe("funnel · unknown · magicdns unknown");
     expect(
       getStatusOverviewRowValue("Tailscale exposure", {
         tailscaleMode: "off",
-        tailscaleBackendState: "Stopped",
         tailscaleDns: "box.tail.ts.net",
-        includeBackendStateWhenOff: true,
         includeDnsNameWhenOff: true,
       }),
-    ).toBe("off · daemon Stopped · box.tail.ts.net");
+    ).toBe("off · box.tail.ts.net");
   });
 
   it("formats service values across short and detailed runtime surfaces", () => {
@@ -284,6 +281,27 @@ describe("status-all format", () => {
     expect(output).not.toContain("secret");
     expect(output).not.toContain("api-key");
     expect(output).not.toContain("signed");
+  });
+
+  it("reports startup phase without an unreachable error in text and JSON", () => {
+    const params = {
+      gatewayMode: "local" as const,
+      gatewayConnection: { url: "ws://127.0.0.1:18789" },
+      remoteUrlMissing: false,
+      gatewayReachable: false,
+      gatewayProbe: { startupPhase: "plugins", error: null },
+      gatewayProbeAuth: null,
+      gatewaySelf: null,
+    };
+    expect(getStatusOverviewRowValue("Gateway", params)).toContain(
+      "still starting (phase plugins)",
+    );
+    expect(getStatusOverviewRowValue("Gateway", params)).not.toContain("unreachable");
+    expect(buildGatewayStatusJsonPayload(params)).toMatchObject({
+      readiness: "still-starting",
+      startupPhase: "plugins",
+      error: null,
+    });
   });
 
   it("builds shared gateway surface values for node and gateway views", () => {

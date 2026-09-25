@@ -6,6 +6,8 @@ import { installedPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { hashConfigIncludeRaw } from "../config/includes.js";
+import { resolveStateDir } from "../config/paths.js";
+import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import type { InstallSafetyOverrides } from "../plugins/install-security-scan.types.js";
 import { loadInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
 import { recordPluginManifestInstallOwner } from "../plugins/manifest-install-owner.js";
@@ -14,6 +16,7 @@ import {
   listOfficialExternalPluginCatalogEntries,
   resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstall,
+  resolveOfficialExternalPluginInstallSources,
 } from "../plugins/official-external-plugin-catalog.js";
 import * as slotSelection from "../plugins/slot-selection.js";
 import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
@@ -36,7 +39,6 @@ import {
   loadPluginManifestRegistryMock,
   readConfigFileSnapshotMock,
   readConfigFileSnapshotForWriteMock,
-  parseClawHubPluginSpecMock,
   promptYesNoMock,
   reportClawHubPluginInstallTelemetryMock,
   recordHookInstallMock,
@@ -50,6 +52,7 @@ import {
   writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock,
 } from "./plugins-cli-test-helpers.js";
 import { runPluginInstallCommand } from "./plugins-install-command.js";
+import { createCliTtyMock } from "./test-runtime-capture.js";
 
 // Default-selector assertions describe a stable build; beta cases set their own identity.
 const coreVersion = vi.hoisted(() => ({ value: "2026.8.1" }));
@@ -60,6 +63,14 @@ vi.mock("../infra/install-source-utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/install-source-utils.js")>()),
   resolveNpmSpecMetadata: resolveNpmSpecMetadataMock,
 }));
+vi.mock("../plugins/official-external-plugin-catalog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/official-external-plugin-catalog.js")>()),
+  loadConfiguredHostedOfficialExternalPluginCatalogEntries: async () => ({
+    source: "hosted",
+    entries: [],
+  }),
+}));
+
 vi.mock("../version.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../version.js")>()),
   get VERSION() {
@@ -67,12 +78,11 @@ vi.mock("../version.js", async (importOriginal) => ({
   },
 }));
 
-const CLI_STATE_ROOT = "/tmp/openclaw-state";
+const CLI_STATE_ROOT = resolveStateDir();
 const ORIGINAL_OPENCLAW_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
 const ORIGINAL_OPENCLAW_NIX_MODE = process.env.OPENCLAW_NIX_MODE;
-const ORIGINAL_STDIN_TTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
-const ORIGINAL_STDOUT_TTY = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
-const PROFILE_STATE_ROOT = "/tmp/openclaw-ledger-profile";
+const { set: setTty, restore: restoreTty } = createCliTtyMock();
+const PROFILE_STATE_ROOT = path.join(CLI_STATE_ROOT, "ledger-profile");
 
 function mockNpmChannelMetadata(name: string, beta?: string, latest?: string): void {
   resolveNpmSpecMetadataMock.mockImplementation(async ({ spec }) => {
@@ -94,9 +104,9 @@ const OFFICIAL_EXTERNAL_NPM_INSTALLS_WITHOUT_INTEGRITY = listOfficialExternalPlu
     if (!pluginId || !npmSpec || install?.expectedIntegrity) {
       return null;
     }
-    return { pluginId, npmSpec };
+    return { pluginId, npmSpec, source: resolveOfficialExternalPluginInstallSources(entry)[0]! };
   })
-  .filter((entry): entry is { pluginId: string; npmSpec: string } => Boolean(entry))
+  .filter((entry) => entry !== null)
   .toSorted((left, right) => left.pluginId.localeCompare(right.pluginId));
 
 function cliInstallPath(pluginId: string): string {
@@ -185,16 +195,17 @@ function createClawHubInstallResult(params: {
 
 function createNpmPluginInstallResult(
   pluginId = "demo",
+  version = "1.2.3",
 ): Awaited<ReturnType<typeof installPluginFromNpmSpecMock>> {
   return {
     ok: true,
     pluginId,
     targetDir: cliInstallPath(pluginId),
-    version: "1.2.3",
+    version,
     npmResolution: {
       packageName: pluginId,
-      resolvedVersion: "1.2.3",
-      tarballUrl: `https://registry.npmjs.org/${pluginId}/-/${pluginId}-1.2.3.tgz`,
+      resolvedVersion: version,
+      tarballUrl: `https://registry.npmjs.org/${pluginId}/-/${pluginId}-${version}.tgz`,
     },
   };
 }
@@ -286,10 +297,7 @@ function primeSuccessfulClawHubPluginInstall(
   } = {},
 ) {
   const result = primeSuccessfulPluginPersistence("demo");
-  parseClawHubPluginSpecMock.mockReturnValue({
-    name: "demo",
-    ...(params.explicitVersion ? { version: "1.2.3" } : {}),
-  });
+
   installPluginFromClawHubMock.mockResolvedValue(
     createClawHubInstallResult({
       pluginId: "demo",
@@ -466,30 +474,6 @@ function recordHookInstallCall(callIndex = 0): PersistedInstallRecord {
 
 function runtimeLogsContain(fragment: string): boolean {
   return pluginsCliRuntimeLogs.some((line) => line.includes(fragment));
-}
-
-function setTty(value: boolean): void {
-  Object.defineProperty(process.stdin, "isTTY", {
-    value,
-    configurable: true,
-  });
-  Object.defineProperty(process.stdout, "isTTY", {
-    value,
-    configurable: true,
-  });
-}
-
-function restoreTty(): void {
-  if (ORIGINAL_STDIN_TTY) {
-    Object.defineProperty(process.stdin, "isTTY", ORIGINAL_STDIN_TTY);
-  } else {
-    Reflect.deleteProperty(process.stdin, "isTTY");
-  }
-  if (ORIGINAL_STDOUT_TTY) {
-    Object.defineProperty(process.stdout, "isTTY", ORIGINAL_STDOUT_TTY);
-  } else {
-    Reflect.deleteProperty(process.stdout, "isTTY");
-  }
 }
 
 const NON_CLAWHUB_INSTALL_FORCE_FLAG = "--force";
@@ -707,7 +691,6 @@ describe("plugins cli install", () => {
         source === "official secondary ClawHub" ? "@openclaw/matrix" : pluginId;
       const clawHubSpec = `clawhub:${clawHubPackage}`;
       if (usesClawHub) {
-        parseClawHubPluginSpecMock.mockReturnValue({ name: clawHubPackage });
         installPluginFromClawHubMock.mockResolvedValue(
           createClawHubInstallResult({
             pluginId,
@@ -727,13 +710,6 @@ describe("plugins cli install", () => {
         const snapshot = await readSnapshot(...args);
         active = false;
         return snapshot;
-      });
-      replaceConfigFileMock.mockImplementation(async (input) => {
-        const params = input as Parameters<
-          typeof import("../config/config.js").replaceConfigFile
-        >[0];
-        params.writeOptions?.assertConfigPathForWrite?.();
-        await configWriteMock(params.nextConfig);
       });
       const officialPlanSpy =
         source === "official primary ClawHub"
@@ -763,13 +739,9 @@ describe("plugins cli install", () => {
         officialPlanSpy?.mockRestore();
       }
 
-      if (usesClawHub) {
-        expect(clawHubInstallCall().spec).toBe(clawHubSpec);
-        expect(installPluginFromNpmSpecMock).toHaveBeenCalledTimes(
-          source === "official secondary ClawHub" ? 1 : 0,
-        );
-        expect(installHooksFromNpmSpecMock).not.toHaveBeenCalled();
-      }
+      expect(installPluginFromClawHubMock).not.toHaveBeenCalled();
+      expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+      expect(installHooksFromNpmSpecMock).not.toHaveBeenCalled();
       expect(configWriteMock).not.toHaveBeenCalled();
       expect(recordHookInstallMock).not.toHaveBeenCalled();
       expect(await loadInstalledPluginIndexInstallRecords()).toEqual({});
@@ -935,7 +907,7 @@ describe("plugins cli install", () => {
       const installedCfg = createEnabledHookConfig();
       fs.mkdirSync(localPath);
       primeBlockedPluginConfigMutation();
-      parseClawHubPluginSpecMock.mockReturnValue({ name: "demo-hooks" });
+
       installPluginFromPathMock.mockResolvedValue({
         ok: false,
         error: "package.json missing openclaw.extensions",
@@ -1169,7 +1141,6 @@ describe("plugins cli install", () => {
       args: ["plugins", "install", "clawhub:demo"],
       installer: installPluginFromClawHubMock,
       setup: () => {
-        parseClawHubPluginSpecMock.mockReturnValue({ name: "demo" });
         installPluginFromClawHubMock.mockResolvedValue(
           createClawHubInstallResult({
             pluginId: "demo",
@@ -1701,11 +1672,16 @@ describe("plugins cli install", () => {
   it.each(["clawhub:@openclaw/brave-plugin", "clawhub:@openclaw/brave-plugin@latest"])(
     "installs the beta artifact for official ClawHub intent %s",
     async (spec) => {
-      primeSuccessfulClawHubPluginInstall();
-      parseClawHubPluginSpecMock.mockReturnValue({
-        name: "@openclaw/brave-plugin",
-        ...(spec.endsWith("@latest") ? { version: "latest" } : {}),
-      });
+      primeSuccessfulPluginPersistence("brave");
+      installPluginFromClawHubMock.mockResolvedValue(
+        createClawHubInstallResult({
+          pluginId: "brave",
+          packageName: "@openclaw/brave-plugin",
+          version: "2026.8.2-beta.1",
+          channel: "beta",
+        }),
+      );
+
       pluginCliConfigMock.mockReturnValue({
         ...createEmptyPluginConfig(),
         update: { channel: "beta" },
@@ -1714,14 +1690,15 @@ describe("plugins cli install", () => {
       await runCapabilityAcceptedPluginsInstallCommand(["plugins", "install", spec]);
 
       expect(clawHubInstallCall().spec).toBe("clawhub:@openclaw/brave-plugin@beta");
+      expect(clawHubInstallCall().expectedPluginId).toBe("brave");
       expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
-      expect(persistedInstallRecord("demo").spec).toBe(spec);
+      expect(persistedInstallRecord("brave").spec).toBe(spec);
     },
   );
 
   it("does not install a stable ClawHub release when no beta release exists", async () => {
     primeSuccessfulClawHubPluginInstall();
-    parseClawHubPluginSpecMock.mockReturnValue({ name: "@openclaw/brave-plugin" });
+
     pluginCliConfigMock.mockReturnValue({
       ...createEmptyPluginConfig(),
       update: { channel: "beta" },
@@ -1867,7 +1844,7 @@ describe("plugins cli install", () => {
 
   it("prints blocked ClawHub download failures when no trust warning was emitted", async () => {
     pluginCliConfigMock.mockReturnValue(createEmptyPluginConfig());
-    parseClawHubPluginSpecMock.mockReturnValue({ name: "demo" });
+
     installPluginFromClawHubMock.mockResolvedValue({
       ok: false,
       code: "clawhub_download_blocked",
@@ -2163,7 +2140,7 @@ describe("plugins cli install", () => {
     },
   );
 
-  it("does not retry a selected beta release when its artifact is unavailable", async () => {
+  it("does not change source or retry latest when the selected explicit npm beta is unavailable", async () => {
     primeSuccessfulPluginPersistence("brave");
     pluginCliConfigMock.mockReturnValue({
       ...createEmptyPluginConfig(),
@@ -2178,10 +2155,13 @@ describe("plugins cli install", () => {
       code: "npm_package_not_found",
     });
 
-    await expect(runPluginsCommand(["plugins", "install", "brave"])).rejects.toThrow("__exit__:1");
+    await expect(
+      runPluginsCommand(["plugins", "install", "npm:@openclaw/brave-plugin"]),
+    ).rejects.toThrow("__exit__:1");
 
     expect(npmInstallCall(0).spec).toBe("@openclaw/brave-plugin@2026.8.2-beta.1");
     expect(installPluginFromNpmSpecMock).toHaveBeenCalledTimes(1);
+    expect(installPluginFromClawHubMock).not.toHaveBeenCalled();
     expect(installHooksFromNpmSpecMock).not.toHaveBeenCalled();
     expect(configWriteMock).not.toHaveBeenCalled();
     expect(runtimeErrors.at(-1)).toContain(
@@ -2208,39 +2188,61 @@ describe("plugins cli install", () => {
   });
 
   it.each(
-    [false, true].flatMap((npmAbsent) =>
-      ["matrix", "@openclaw/matrix@latest"].map((arg) => ({ npmAbsent, arg })),
-    ),
+    [
+      { pluginId: "matrix", packageName: "@openclaw/matrix", arg: "matrix", channel: "stable" },
+      {
+        pluginId: "matrix",
+        packageName: "@openclaw/matrix",
+        arg: "@openclaw/matrix@latest",
+        channel: "stable",
+      },
+      { pluginId: "brave", packageName: "@openclaw/brave-plugin", arg: "brave", channel: "beta" },
+    ].flatMap((entry) => [false, true].map((npmAbsent) => Object.assign({ npmAbsent }, entry))),
   )(
-    "uses the declared ClawHub secondary for $arg only when npm is absent ($npmAbsent)",
-    async ({ npmAbsent, arg }) => {
-      primeSuccessfulPluginPersistence("matrix");
-      parseClawHubPluginSpecMock.mockReturnValue({ name: "@openclaw/matrix" });
+    "uses the declared ClawHub secondary for $arg on $channel only when npm is absent ($npmAbsent)",
+    async ({ npmAbsent, arg, pluginId, packageName, channel }) => {
+      primeSuccessfulPluginPersistence(pluginId);
+      const version = channel === "beta" ? "2026.8.2-beta.1" : "1.2.3";
+      if (channel === "beta") {
+        pluginCliConfigMock.mockReturnValue({
+          ...createEmptyPluginConfig(),
+          update: { channel },
+        } as OpenClawConfig);
+        mockNpmChannelMetadata(packageName, version, "2026.8.1");
+      }
+
       findBundledPluginSourceMock.mockReturnValue(undefined);
       installPluginFromNpmSpecMock.mockResolvedValue(
         npmAbsent
           ? { ok: false, error: "npm error E404 package not found", code: "npm_package_not_found" }
-          : createNpmPluginInstallResult("matrix"),
+          : createNpmPluginInstallResult(pluginId, version),
       );
       installPluginFromClawHubMock.mockResolvedValue(
         createClawHubInstallResult({
-          pluginId: "matrix",
-          packageName: "@openclaw/matrix",
-          version: "1.2.3",
-          channel: "latest",
+          pluginId,
+          packageName,
+          version,
+          channel: channel === "beta" ? "beta" : "latest",
         }),
       );
 
       await runCapabilityAcceptedPluginsInstallCommand(["plugins", "install", arg]);
 
-      const spec = arg.endsWith("@latest") ? "@openclaw/matrix@latest" : "@openclaw/matrix";
-      expect(npmInstallCall().spec).toBe(spec);
+      const spec = arg.endsWith("@latest") ? `${packageName}@latest` : packageName;
+      expect(npmInstallCall().spec).toBe(channel === "beta" ? `${packageName}@${version}` : spec);
+      expect(installPluginFromNpmSpecMock).toHaveBeenCalledTimes(1);
       if (npmAbsent) {
-        expect(clawHubInstallCall().spec).toBe(`clawhub:${spec}`);
+        expect(clawHubInstallCall().spec).toBe(
+          `clawhub:${channel === "beta" ? `${packageName}@beta` : spec}`,
+        );
+        expect(runtimeLogsContain(`${spec} unavailable; using clawhub:${spec} instead.`)).toBe(
+          true,
+        );
       }
-      expect(persistedInstallRecord("matrix").spec).toBe(npmAbsent ? `clawhub:${spec}` : spec);
+      expect(persistedInstallRecord(pluginId).spec).toBe(npmAbsent ? `clawhub:${spec}` : spec);
       expect(installPluginFromClawHubMock).toHaveBeenCalledTimes(npmAbsent ? 1 : 0);
-      expect(persistedInstallRecord("matrix").source).toBe(npmAbsent ? "clawhub" : "npm");
+      expect(persistedInstallRecord(pluginId).source).toBe(npmAbsent ? "clawhub" : "npm");
+      expect(persistedInstallRecord(pluginId).version).toBe(version);
       expect(installHooksFromNpmSpecMock).not.toHaveBeenCalled();
     },
   );
@@ -2279,8 +2281,8 @@ describe("plugins cli install", () => {
       installVersion: "2026.8.2-beta.1",
     },
   ])(
-    "keeps official external npm installs trusted without integrity for $pluginId on $version",
-    async ({ pluginId, npmSpec, version, installVersion }) => {
+    "keeps the declared official source and trust for $pluginId on $version",
+    async ({ pluginId, npmSpec, source, version, installVersion }) => {
       coreVersion.value = version;
       if (installVersion) {
         mockNpmChannelMetadata(npmSpec.replace(/@latest$/, ""), "2026.8.2-beta.1", "2026.8.1");
@@ -2291,19 +2293,35 @@ describe("plugins cli install", () => {
           primeSuccessfulPluginPersistence(pluginId);
           findBundledPluginSourceMock.mockReturnValue(undefined);
           installPluginFromNpmSpecMock.mockResolvedValue(createNpmPluginInstallResult(pluginId));
+          if (source.source === "clawhub") {
+            installPluginFromClawHubMock.mockResolvedValue(
+              createClawHubInstallResult({
+                pluginId,
+                packageName: parseClawHubPluginSpec(source.spec)!.name,
+                version: "1.2.3",
+                channel: "latest",
+              }),
+            );
+          }
 
           await runCapabilityAcceptedPluginsInstallCommand(["plugins", "install", pluginId]);
 
           expect(findBundledPluginSourceMock).toHaveBeenCalledWith({
             lookup: { kind: "pluginId", value: pluginId },
           });
-          expect(installPluginFromClawHubMock).not.toHaveBeenCalled();
-          expect(npmInstallCall().spec).toBe(
-            installVersion ? `${npmSpec.replace(/@latest$/, "")}@${installVersion}` : npmSpec,
-          );
-          expect(npmInstallCall().expectedPluginId).toBe(pluginId);
-          expect(npmInstallCall().trustedSourceLinkedOfficialInstall).toBe(true);
-          expect(npmInstallCall().expectedIntegrity).toBeUndefined();
+          if (source.source === "clawhub") {
+            expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+            expect(clawHubInstallCall().spec).toBe(source.spec);
+            expect(clawHubInstallCall().expectedPluginId).toBe(pluginId);
+          } else {
+            expect(installPluginFromClawHubMock).not.toHaveBeenCalled();
+            expect(npmInstallCall().spec).toBe(
+              installVersion ? `${npmSpec.replace(/@latest$/, "")}@${installVersion}` : npmSpec,
+            );
+            expect(npmInstallCall().expectedPluginId).toBe(pluginId);
+            expect(npmInstallCall().trustedSourceLinkedOfficialInstall).toBe(true);
+            expect(npmInstallCall().expectedIntegrity).toBeUndefined();
+          }
         } finally {
           cwdSpy.mockRestore();
         }
@@ -2477,7 +2495,8 @@ describe("plugins cli install", () => {
       const { lookup } = params as {
         lookup: { kind: "pluginId" | "npmSpec"; value: string };
       };
-      return lookup.kind === "npmSpec" && lookup.value === "@openclaw/discord"
+      return (lookup.kind === "npmSpec" && lookup.value === "@openclaw/discord") ||
+        (lookup.kind === "pluginId" && lookup.value === "discord")
         ? {
             pluginId: "discord",
             localPath: bundledPath,
@@ -3181,7 +3200,6 @@ describe("plugins cli install", () => {
   });
 
   it("does not fall back to npm when explicit ClawHub rejects a real package", async () => {
-    parseClawHubPluginSpecMock.mockReturnValue({ name: "demo" });
     installPluginFromClawHubMock.mockResolvedValue({
       ok: false,
       error: 'Use "openclaw skills install demo" instead.',

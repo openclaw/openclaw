@@ -496,40 +496,52 @@ describe("Codex plugin inventory", () => {
     ).rejects.toBe(failure);
   });
 
-  it("fails closed when plugin detail apps are absent from app inventory", async () => {
-    const appCache = await cachedApps();
-    const inventory = await readCodexPluginInventory({
-      pluginConfig: pluginConfig({
-        "google-calendar": curatedPlugin("google-calendar"),
-      }),
-      appCache,
-      appCacheKey: "runtime",
-      nowMs: 1,
-      request: async (method) => {
-        if (method === "plugin/installed") {
-          return pluginInstalled([activePlugin("google-calendar")]);
-        }
-        if (method === "plugin/read") {
-          return pluginDetail("google-calendar", [appSummary("google-calendar-app")]);
-        }
-        throw new Error(`unexpected request ${method}`);
-      },
-    });
+  it.each([false, true])(
+    "requires authorized metadata for a plugin app (installed: %s)",
+    async (installed) => {
+      const appCache = new CodexAppInventoryCache();
+      await appCache.refreshNow({
+        key: "runtime",
+        nowMs: 0,
+        request: async (method) =>
+          codexAppInventoryResponse(
+            method,
+            method === "app/installed" && installed ? [appInfo("google-calendar-app", true)] : [],
+          ),
+      });
+      const inventory = await readCodexPluginInventory({
+        pluginConfig: pluginConfig({
+          "google-calendar": curatedPlugin("google-calendar"),
+        }),
+        appCache,
+        appCacheKey: "runtime",
+        nowMs: 1,
+        request: async (method) => {
+          if (method === "plugin/installed") {
+            return pluginInstalled([activePlugin("google-calendar")]);
+          }
+          if (method === "plugin/read") {
+            return pluginDetail("google-calendar", [appSummary("google-calendar-app")]);
+          }
+          throw new Error(`unexpected request ${method}`);
+        },
+      });
 
-    const record = inventory.records[0];
-    expect(record?.appOwnership).toBe("proven");
-    expect(record?.authRequired).toBe(true);
-    expect(record?.ownedAppIds).toStrictEqual(["google-calendar-app"]);
-    expect(record?.apps).toStrictEqual([
-      {
-        id: "google-calendar-app",
-        name: "google-calendar-app",
-        accessible: false,
-        enabled: false,
-        needsAuth: true,
-      },
-    ]);
-  });
+      const record = inventory.records[0];
+      expect(record?.appOwnership).toBe("proven");
+      expect(record?.authRequired).toBe(true);
+      expect(record?.ownedAppIds).toStrictEqual(["google-calendar-app"]);
+      expect(record?.apps).toStrictEqual([
+        {
+          id: "google-calendar-app",
+          name: "google-calendar-app",
+          accessible: false,
+          enabled: false,
+          needsAuth: true,
+        },
+      ]);
+    },
+  );
 
   it("keeps an authorized disabled plugin app distinct from an authentication failure", async () => {
     const disabledApp = { ...appInfo("google-calendar-app", true), isEnabled: false };

@@ -11,14 +11,13 @@ import {
   buildImageGenerationTaskStatusListText,
   buildImageGenerationTaskStatusDetails,
   buildImageGenerationTaskStatusText,
-  findActiveImageGenerationTaskForSession,
   findDuplicateGuardImageGenerationTaskForSession,
   listActiveImageGenerationTasksForSession,
 } from "../media-generation-task-status.js";
 import {
   createMediaGenerateDuplicateGuardResult,
   createMediaGenerateProviderListActionResult,
-  createMediaGenerateTaskStatusActions,
+  createMediaGenerateTaskStatusResult,
   type MediaGenerateActionResult,
 } from "./media-generate-tool-actions-shared.js";
 
@@ -101,20 +100,12 @@ export function createImageGenerateListActionResult(params: {
   });
 }
 
-const imageGenerateTaskStatusActions = createMediaGenerateTaskStatusActions({
-  inactiveText: "No active image generation task is currently running for this session.",
-  findActiveTask: (sessionKey, agentId) =>
-    findActiveImageGenerationTaskForSession(sessionKey, { agentId }) ?? undefined,
-  buildStatusText: buildImageGenerationTaskStatusText,
-  buildStatusDetails: buildImageGenerationTaskStatusDetails,
-});
-
 /** Builds status output for active image-generation tasks in the current session. */
-export function createImageGenerateStatusActionResult(
+export async function createImageGenerateStatusActionResult(
   sessionKey?: string,
   agentId?: string,
-): ImageGenerateActionResult {
-  const activeTasks = listActiveImageGenerationTasksForSession(sessionKey, agentId);
+): Promise<ImageGenerateActionResult> {
+  const activeTasks = await listActiveImageGenerationTasksForSession(sessionKey, agentId);
   if (activeTasks.length > 1) {
     return {
       content: [{ type: "text", text: buildImageGenerationTaskStatusListText(activeTasks) }],
@@ -124,14 +115,19 @@ export function createImageGenerateStatusActionResult(
       },
     };
   }
-  return imageGenerateTaskStatusActions.createStatusActionResult(sessionKey, agentId);
+  return createMediaGenerateTaskStatusResult({
+    activeTask: activeTasks[0],
+    inactiveText: "No active image generation task is currently running for this session.",
+    buildStatusText: buildImageGenerationTaskStatusText,
+    buildStatusDetails: buildImageGenerationTaskStatusDetails,
+  });
 }
 
 /** Returns duplicate-guard status output when a matching image task is already active. */
 export function createImageGenerateDuplicateGuardResult(
   sessionKey?: string,
   params?: { prompt?: string; requestKey?: string; agentId?: string },
-): ImageGenerateActionResult | undefined {
+): Promise<ImageGenerateActionResult | undefined> {
   return createMediaGenerateDuplicateGuardResult({
     sessionKey,
     prompt: params?.prompt,

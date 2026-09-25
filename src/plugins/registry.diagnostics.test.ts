@@ -1,27 +1,40 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildMediaUnderstandingRegistry } from "../media-understanding/provider-registry.js";
 import type { MediaUnderstandingProvider } from "../media-understanding/types.js";
 import { runPluginRegisterSyncInRegistry } from "./loader-module-runtime.js";
 import { createPluginRecord } from "./loader-records.js";
-import { createPluginRegistry } from "./registry.js";
-import type { PluginRuntime } from "./runtime/types.js";
+import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
+import {
+  clearActivePluginRegistry,
+  disposePluginRegistryInstances,
+  setActivePluginRegistry,
+} from "./runtime.js";
 import type { OpenClawPluginApi } from "./types.js";
 
+const registries: ReturnType<typeof createTestPluginRegistry>["registry"][] = [];
+
+afterEach(async () => {
+  await clearActivePluginRegistry();
+  for (const registry of registries.splice(0)) {
+    await disposePluginRegistryInstances(registry);
+  }
+});
+
 function createDiagnosticFixture() {
-  const builder = createPluginRegistry({
-    logger: { info() {}, warn() {}, error() {}, debug() {} },
-    runtime: {} as PluginRuntime,
-    activateGlobalSideEffects: false,
-  });
-  const createRecord = (id: string) =>
-    createPluginRecord({
+  const builder = createTestPluginRegistry();
+  registries.push(builder.registry);
+  const createRecord = (id: string) => {
+    const record = createPluginRecord({
       id,
       source: `/plugins/${id}/index.ts`,
       origin: "global",
       enabled: true,
       configSchema: false,
     });
+    builder.registry.plugins.push(record);
+    return record;
+  };
   return { builder, createRecord };
 }
 
@@ -94,7 +107,7 @@ describe("plugin registration diagnostics", () => {
     expect(builder.registry.diagnostics).toEqual(expected);
   });
 
-  it("keeps provider and catalog ownership unchanged after blank and duplicate registration", () => {
+  it("keeps provider and catalog ownership unchanged after blank and duplicate registration", async () => {
     const { builder, createRecord } = createDiagnosticFixture();
     const alpha = createRecord("alpha");
     const beta = createRecord("beta");
@@ -105,16 +118,23 @@ describe("plugin registration diagnostics", () => {
       label: "Shared speech",
       models: ["speech-model"],
       isConfigured: () => true,
-      synthesize: async () => {
-        throw new Error("registration must not synthesize audio");
-      },
+      synthesize: vi.fn(async () => ({
+        audioBuffer: Buffer.from("alpha audio"),
+        outputFormat: "wav",
+        fileExtension: ".wav",
+        voiceCompatible: false,
+      })),
     } satisfies Parameters<OpenClawPluginApi["registerSpeechProvider"]>[0];
     const media = { id: "shared-media" };
     alphaApi.registerSpeechProvider(speech);
     alphaApi.registerMediaUnderstandingProvider(media);
 
     betaApi.registerSpeechProvider({ ...speech, id: " " });
-    betaApi.registerSpeechProvider({ ...speech, label: "Rejected replacement" });
+    betaApi.registerSpeechProvider({
+      ...speech,
+      label: "Rejected replacement",
+      isConfigured: () => false,
+    });
     betaApi.registerMediaUnderstandingProvider({ id: " " });
     betaApi.registerMediaUnderstandingProvider({ ...media });
 
@@ -133,7 +153,35 @@ describe("plugin registration diagnostics", () => {
     );
     expect(
       builder.registry.speechProviders.map(({ pluginId, provider }) => ({ pluginId, provider })),
-    ).toEqual([{ pluginId: "alpha", provider: speech }]);
+    ).toEqual([
+      {
+        pluginId: "alpha",
+        provider: expect.objectContaining({
+          id: "shared-speech",
+          label: "Shared speech",
+          models: ["speech-model"],
+        }),
+      },
+    ]);
+    expect(speech.synthesize).not.toHaveBeenCalled();
+    setActivePluginRegistry(builder.registry);
+    const registeredSpeech = builder.registry.speechProviders[0]!.provider;
+    expect(registeredSpeech.isConfigured({ providerConfig: {}, timeoutMs: 1_000 })).toBe(true);
+    await expect(
+      registeredSpeech.synthesize({
+        text: "test",
+        cfg: {},
+        providerConfig: {},
+        target: "audio-file",
+        timeoutMs: 1_000,
+      }),
+    ).resolves.toEqual({
+      audioBuffer: Buffer.from("alpha audio"),
+      outputFormat: "wav",
+      fileExtension: ".wav",
+      voiceCompatible: false,
+    });
+    expect(speech.synthesize).toHaveBeenCalledOnce();
     expect(
       builder.registry.mediaUnderstandingProviders.map(({ pluginId, provider }) => ({
         pluginId,
@@ -166,7 +214,7 @@ describe("plugin registration diagnostics", () => {
     ),
   )(
     "preserves $id/$alias hook ownership (single=$single, multiple=$multiple)",
-    ({ id, alias, single, multiple }) => {
+    async ({ id, alias, single, multiple }) => {
       const { builder, createRecord } = createDiagnosticFixture();
       const inheritedImage = async () => ({ text: "inherited image" });
       const inheritedImages = async () => ({ text: "inherited images" });
@@ -201,12 +249,31 @@ describe("plugin registration diagnostics", () => {
         buildMediaUnderstandingRegistry(undefined, undefined, providers).get(id),
         "merged media provider",
       );
-      expect(provider.describeImage).toBe(
-        single === "absent" ? inheritedImage : single === "custom" ? customImage : undefined,
-      );
-      expect(provider.describeImages).toBe(
-        multiple === "absent" ? inheritedImages : multiple === "custom" ? customImages : undefined,
-      );
+      setActivePluginRegistry(builder.registry);
+      const image = { buffer: Buffer.from("image"), fileName: "image.png" };
+      const request = {
+        model: "test-model",
+        provider: id,
+        timeoutMs: 1_000,
+        agentDir: "/virtual/agent",
+        cfg: {},
+      };
+      if (single === "undefined") {
+        expect(provider.describeImage).toBeUndefined();
+      } else {
+        const describeImage = expectDefined(provider.describeImage, "registered image hook");
+        await expect(describeImage({ ...request, ...image })).resolves.toEqual({
+          text: single === "absent" ? "inherited image" : "custom image",
+        });
+      }
+      if (multiple === "undefined") {
+        expect(provider.describeImages).toBeUndefined();
+      } else {
+        const describeImages = expectDefined(provider.describeImages, "registered images hook");
+        await expect(describeImages({ ...request, images: [image] })).resolves.toEqual({
+          text: multiple === "absent" ? "inherited images" : "custom images",
+        });
+      }
     },
   );
 

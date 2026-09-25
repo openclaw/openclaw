@@ -25,6 +25,6 @@ export function pathForSession(
     displayName: details.displayName ?? undefined,
     exactKey: details.exactKey,
     mainKey: details.mainKey ?? undefined,
-    shortIdLength: details.shortIdLength,
+    shortIdLength: details.shortIdLength ?? 32,
   });
 }

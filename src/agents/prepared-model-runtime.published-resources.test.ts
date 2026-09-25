@@ -223,7 +223,7 @@ module.exports = {
             const original = expectDefined(connections[0], "original provider registration");
             if (mode === "published borrow") {
               const pending = acquirePublishedPreparedModelRuntime(input);
-              first.release();
+              await first[Symbol.asyncDispose]();
               borrower = await pending;
               expect(borrower.snapshot).toBe(first.snapshot);
             } else {
@@ -277,7 +277,7 @@ module.exports = {
                 expect(bridge.requestSignal.current?.aborted).toBe(true);
                 expect(bridge.requestSignal.current?.reason).toBe(cancellationReason);
               }
-              first.release();
+              await first[Symbol.asyncDispose]();
             }
             expect(original.database.isOpen).toBe(true);
             replacement = await acquireReadOnlyPreparedModelRuntime(input, {
@@ -296,7 +296,7 @@ module.exports = {
               expect(bridge.abortRegistry.current === first.snapshot.pluginRegistry).toBe(true);
               await owner.drain();
             } else {
-              borrower?.release();
+              await borrower?.[Symbol.asyncDispose]();
             }
             await expect.poll(() => original.disposals).toBe(1);
             expect(original.database.isOpen).toBe(false);
@@ -307,7 +307,7 @@ module.exports = {
             } finally {
               reopened.close();
             }
-            replacement.release();
+            await replacement[Symbol.asyncDispose]();
             await expect.poll(() => successor.disposals).toBe(1);
           } finally {
             acquisitionFinish.resolve();
@@ -316,9 +316,11 @@ module.exports = {
             await Promise.allSettled([sideQuestion, owner.drain()]);
             selectedSource.input = undefined;
             selectedSource.acquisition = undefined;
-            first?.release();
-            borrower?.release();
-            replacement?.release();
+            await Promise.allSettled([
+              first?.[Symbol.asyncDispose](),
+              borrower?.[Symbol.asyncDispose](),
+              replacement?.[Symbol.asyncDispose](),
+            ]);
             await resetPreparedModelRuntimeSnapshotsForTest();
             clearPluginMetadataLifecycleCaches();
             resetPluginLoaderTestStateForTest();

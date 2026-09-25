@@ -64,10 +64,7 @@ describe("Discord outbound channel activity", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => {
-        return new Response(JSON.stringify({ id: "msg-1", channel_id: "thread-1" }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
+        return Response.json({ id: "msg-1", channel_id: "thread-1" });
       }),
     );
   });

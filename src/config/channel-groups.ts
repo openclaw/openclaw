@@ -31,6 +31,7 @@ export function resolveChannelGroups(
   // Single-account empty maps inherit; in multi-account setups they opt out.
   return resolveMergedAccountConfig({
     channelConfig,
+    channelId: channel,
     accounts: channelConfig.accounts,
     accountId: normalizedAccountId,
     inheritEmptyKeys:

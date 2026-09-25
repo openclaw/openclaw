@@ -69,7 +69,6 @@ function harness(
   options: {
     cached?: Promise<SessionRosterRecord | null>;
     withBootRecord?: boolean;
-    bundledBootstrap?: boolean;
   } = {},
 ) {
   let connectionRevision = 0;
@@ -85,9 +84,7 @@ function harness(
   const live = createDeferred<SessionsListResult>();
   const request = vi.fn(async (method: string) => {
     if (method === "sessions.subscribe") {
-      return options.bundledBootstrap
-        ? { subscribed: true, list: await live.promise }
-        : { subscribed: true };
+      return { subscribed: true };
     }
     if (method === "sessions.list") {
       return live.promise;
@@ -301,7 +298,7 @@ describe("session capability warm roster", () => {
   ] as const)(
     "keeps omitted $source rows only for the selected session during bootstrap: $selected",
     async ({ source, selected }) => {
-      const h = harness({ bundledBootstrap: true });
+      const h = harness();
       const canonical = {
         key: "agent:main:live",
         sessionId: "live",
@@ -312,11 +309,7 @@ describe("session capability warm roster", () => {
         await h.sessions.whenCachedRosterSettled();
         h.connect();
         await vi.waitFor(() =>
-          expect(h.request).toHaveBeenCalledWith(
-            "sessions.subscribe",
-            expect.anything(),
-            expect.anything(),
-          ),
+          expect(h.request).toHaveBeenCalledWith("sessions.list", expect.anything()),
         );
         const observed = {
           key: selected ? "agent:main:deleted" : "agent:main:kept",
@@ -363,17 +356,14 @@ describe("session capability warm roster", () => {
     async ({ source, observeAfterReconnect }) => {
       const h = harness();
       const replacement = createDeferred<SessionsListResult>();
-      let subscriptions = 0;
+      let lists = 0;
       h.request.mockImplementation(async (method) => {
         if (method === "sessions.subscribe") {
-          subscriptions += 1;
-          return {
-            subscribed: true,
-            list: await (subscriptions === 1 ? h.live.promise : replacement.promise),
-          };
+          return { subscribed: true };
         }
         if (method === "sessions.list") {
-          return replacement.promise;
+          lists += 1;
+          return lists === 1 ? h.live.promise : replacement.promise;
         }
         throw new Error(`Unexpected request: ${method}`);
       });
@@ -393,7 +383,7 @@ describe("session capability warm roster", () => {
       try {
         await h.sessions.whenCachedRosterSettled();
         h.connect();
-        await vi.waitFor(() => expect(subscriptions).toBe(1));
+        await vi.waitFor(() => expect(lists).toBe(1));
         const retiredReconcile = h.sessions.captureReconcile();
         if (source === "read") {
           expect(retiredReconcile(previous, undefined, { archivedFilter: "all" })).toBe(true);
@@ -407,7 +397,7 @@ describe("session capability warm roster", () => {
 
         h.publish({ phase: "reconnecting" });
         h.connect();
-        await vi.waitFor(() => expect(subscriptions).toBe(2));
+        await vi.waitFor(() => expect(lists).toBe(2));
         expect(retiredReconcile(previous, undefined, { archivedFilter: "all" })).toBe(false);
         const current = { ...previous, label: "Current connection", status: "failed" as const };
         if (observeAfterReconnect) {
@@ -418,10 +408,6 @@ describe("session capability warm roster", () => {
           } else {
             h.emitChanged(current);
           }
-        }
-        if (source === "event") {
-          // A second consumer must not recapture the old payload in this connection.
-          expect(h.sessions.reconcileChanged(previous).applied).toBe(false);
         }
         const accepted = h.sessions.state.result?.sessions.find((row) => row.key === key);
         expect(accepted?.label).toBe(observeAfterReconnect ? current.label : previous.label);

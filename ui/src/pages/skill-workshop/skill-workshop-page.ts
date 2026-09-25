@@ -1,9 +1,9 @@
 import { consume } from "@lit/context";
 import { nothing } from "lit";
-import { property } from "lit/decorators.js";
 import { applicationContext, type ApplicationGatewaySnapshot } from "../../app/context.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSkillWorkshopEnglish } from "../../i18n/locales/en-skill-workshop.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import type { SkillWorkshopProposalDecision } from "../../lib/skill-workshop/index.ts";
@@ -25,7 +25,6 @@ import {
   createSkillWorkshopState,
   loadSkillWorkshopProposals,
   resolveSkillWorkshopAgentId,
-  type SkillWorkshopRouteData,
   type SkillWorkshopState,
 } from "./proposals.ts";
 import {
@@ -41,10 +40,11 @@ import {
 } from "./source-scope.ts";
 import { loadSkillWorkshopMode } from "./storage.ts";
 
+registerSkillWorkshopEnglish();
+
 class SkillWorkshopPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context?: SkillWorkshopPageContext;
-  @property({ attribute: false }) data?: SkillWorkshopRouteData;
 
   private state?: SkillWorkshopState;
   private operationEpoch = 0;
@@ -266,15 +266,12 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
 
   override willUpdate() {
     if (!this.state && this.context) {
-      this.state = createSkillWorkshopState(this.data);
+      this.state = createSkillWorkshopState();
       this.state.skillWorkshopMode = loadSkillWorkshopMode();
     }
   }
 
   override updated() {
-    if (this.state && this.context) {
-      this.revisionRecovery.sync(this.context, this.state);
-    }
     // Only kick a load when none is in flight and the last attempt did not
     // fail: loadProposals early-returns resolve immediately and their finally
     // schedules another update, so re-kicking here would spin forever when a
@@ -287,6 +284,11 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
       !state.skillWorkshopError;
     if (this.gatewayConnected && canLoad) {
       this.loadProposals(false);
+    }
+    // Establish the proposal scope before restoring a revision notice: recovery
+    // must neither block the first list load nor lose its draft to the scope reset.
+    if (this.state && this.context) {
+      this.revisionRecovery.sync(this.context, this.state);
     }
     this.ensureWorkshopAgentIdentity();
     const runtimeConfig = this.context?.runtimeConfig;

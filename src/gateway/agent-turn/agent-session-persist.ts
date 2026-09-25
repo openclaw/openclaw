@@ -13,7 +13,6 @@ import {
   resolveSessionWorkStartError,
   type SessionEntry,
   type InternalSessionEntry,
-  type SessionFreshness,
 } from "../../config/sessions.js";
 import {
   patchSessionEntryTarget,
@@ -30,10 +29,10 @@ import {
 } from "../../cron/scheduled-tool-policy.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
-import { recordSessionCreated } from "../../sessions/session-state-events.js";
+import { recordSessionCreated } from "../../sessions/session-created.js";
 import { assertPreparedSkillLibrarySelection } from "../../skills/library/selection.js";
 import { getGeneratedMediaTaskIdsForSessionKey } from "../../tasks/task-status-access.js";
-import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
+import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { errorShapeFromError } from "../error-shape.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import {
@@ -48,7 +47,6 @@ import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
 import {
   cronContinuationHasReusableRuntime,
   emitAgentSendSessionLifecycleTransition,
-  withSqliteSessionFileMarker,
   type RestoredCronContinuation,
 } from "./agent-handler-helpers.js";
 
@@ -68,11 +66,7 @@ type AgentSessionPersistResult = {
   supersededSessionId?: string;
   admittedSessionId: string;
   skipAgentInitialSessionTouch: boolean;
-  patchBuild: AgentSessionPatchBuild;
   isNewSession: boolean;
-  rotatedSessionId: boolean;
-  usableRequestedSessionId?: string;
-  freshness: SessionFreshness | undefined;
   spawnedBy?: string;
   groupId?: string;
   groupChannel?: string;
@@ -84,6 +78,7 @@ type AgentSessionPersistResult = {
 
 export async function persistAgentSessionPhase(params: {
   assertAdmissionCurrent?: () => void;
+  onSessionCommitted?: (entry: SessionEntry) => void;
   request: AgentRunRequest;
   cfg: OpenClawConfig;
   storePath: string;
@@ -359,12 +354,7 @@ export async function persistAgentSessionPhase(params: {
                   ),
                 };
             createdNewEntry = freshEntry === undefined;
-            const merged = withSqliteSessionFileMarker({
-              agentId: params.sessionAgentId,
-              entry: mergeSessionEntry(entryForPatch, effectivePatch),
-              sessionKey: params.canonicalSessionKey,
-              storePath: params.storePath,
-            });
+            const merged = mergeSessionEntry(entryForPatch, effectivePatch);
             const recoveryTransition = params.isRestartRecoveryResumeRun
               ? transitionMainSessionRecovery(merged as InternalSessionEntry, {
                   kind: "validate_recovery",
@@ -415,6 +405,7 @@ export async function persistAgentSessionPhase(params: {
           },
           {
             fallbackEntry: params.entry ?? mergeSessionEntry(undefined, patchBuild.patch),
+            onCommitted: params.onSessionCommitted,
             replaceEntry: true,
             takeCacheOwnership: true,
             maintenanceConfig: params.maintenanceConfig,
@@ -534,7 +525,7 @@ export async function persistAgentSessionPhase(params: {
   const usableRequestedSessionId = patchBuild.usableRequestedSessionId;
   const freshness = patchBuild.freshness;
   if (createdNewEntry && sessionEntry) {
-    recordSessionCreated({
+    recordSessionCreated(params.cfg, {
       sessionKey: params.canonicalSessionKey,
       agentId: params.sessionAgentId,
       entry: sessionEntry,
@@ -596,11 +587,7 @@ export async function persistAgentSessionPhase(params: {
     // Admission revalidation can observe a newer session id after persistence.
     admittedSessionId: params.getAdmittedSessionId(),
     skipAgentInitialSessionTouch,
-    patchBuild,
     isNewSession,
-    rotatedSessionId,
-    usableRequestedSessionId,
-    freshness,
     spawnedBy: patchBuild.spawnedBy,
     groupId: patchBuild.groupId,
     groupChannel: patchBuild.groupChannel,

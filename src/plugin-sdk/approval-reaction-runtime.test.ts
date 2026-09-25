@@ -31,13 +31,38 @@ import {
 vi.mock("./approval-gateway-runtime.js", () => ({ resolveApprovalOverGateway: vi.fn() }));
 
 describe("plugin-sdk/approval-reaction-runtime", () => {
+  const result: ApprovalResolveResult = {
+    applied: false,
+    approval: {
+      id: "race",
+      urlPath: "/approvals/race",
+      createdAtMs: 1,
+      expiresAtMs: 100,
+      resolvedAtMs: 2,
+      status: "denied",
+      decision: "deny",
+      reason: "user",
+      presentation: {
+        kind: "exec",
+        commandText: "echo example",
+        allowedDecisions: ["allow-once", "deny"],
+      },
+    },
+  };
   it.each(["imessage", "signal", "whatsapp"])(
     "leaves concurrent %s decisions to the Gateway and retires both terminal surfaces",
     async (channel) => {
       const winner = createDeferred<ApprovalResolveResult>();
+      const cleanup = createDeferred();
+      const cleanupStarted = createDeferred();
       const resolver = vi.mocked(resolveApprovalOverGateway).mockReset();
       resolver.mockReturnValue(winner.promise);
-      const clearTarget = vi.fn();
+      const clearTarget = vi.fn(() => {
+        if (clearTarget.mock.calls.length === 2) {
+          cleanupStarted.resolve();
+        }
+        return cleanup.promise;
+      });
       const onResolved = vi.fn();
       const settle = (decision: "allow-once" | "deny") =>
         settleApprovalReaction({
@@ -60,30 +85,46 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
       await Promise.resolve();
       expect(resolver).toHaveBeenCalledTimes(2);
       expect(clearTarget).not.toHaveBeenCalled();
-      const result: ApprovalResolveResult = {
-        applied: false,
-        approval: {
-          id: "race",
-          urlPath: "/approvals/race",
-          createdAtMs: 1,
-          expiresAtMs: 100,
-          resolvedAtMs: 2,
-          status: "denied",
-          decision: "deny",
-          reason: "user",
-          presentation: {
-            kind: "exec",
-            commandText: "echo example",
-            allowedDecisions: ["allow-once", "deny"],
-          },
-        },
-      };
       winner.resolve(result);
+      await cleanupStarted.promise;
+      expect(onResolved).not.toHaveBeenCalled();
+      cleanup.resolve();
       await expect(Promise.all(attempts)).resolves.toEqual(["resolved", "resolved"]);
       expect(clearTarget).toHaveBeenCalledTimes(2);
       expect(onResolved.mock.calls).toEqual([[result], [result]]);
     },
   );
+
+  it("does not report cleanup rejection as a Gateway resolution failure", async () => {
+    const failure = new Error("cleanup failed");
+    const resolver = vi.mocked(resolveApprovalOverGateway).mockReset().mockResolvedValue(result);
+    const onError = vi.fn();
+    const onResolved = vi.fn();
+    await expect(
+      settleApprovalReaction({
+        request: {
+          cfg: {},
+          channel: "imessage",
+          accountId: "default",
+          senderId: "operator",
+          approvalId: "race",
+          approvalKind: "exec",
+          decision: "deny",
+        },
+        approvers: ["operator"],
+        authorizeActorAction: () => ({ authorized: true }),
+        loadResolver: async () => resolveApprovalOverGateway,
+        clearTarget: async () => {
+          throw failure;
+        },
+        onError,
+        onResolved,
+      }),
+    ).rejects.toBe(failure);
+    expect(resolver).toHaveBeenCalledTimes(1);
+    expect(onError).not.toHaveBeenCalled();
+    expect(onResolved).not.toHaveBeenCalled();
+  });
 
   const execRequest: ExecApprovalRequest = {
     id: "exec-approval-123",
@@ -502,6 +543,72 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
     expect(content.manualFallbackPayload.text).not.toContain("React with:");
   });
 
+  it("publishes memory immediately and joins persistent registration and deletion", async () => {
+    const write = createDeferred();
+    const remove = createDeferred<boolean>();
+    const persistence = {
+      register: vi.fn(() => write.promise),
+      lookup: vi.fn(async () => undefined),
+      delete: vi.fn(() => remove.promise),
+    };
+    const store = createApprovalReactionTargetStore<{ approvalId: string }>({
+      namespace: "test.completion",
+      maxEntries: 10,
+      defaultTtlMs: 60_000,
+      openStore: () => persistence,
+    });
+    const target = { approvalId: "approval-1" };
+    let registered = false;
+    const registration = Promise.resolve(store.register("message-1", target)).then(() => {
+      registered = true;
+    });
+    expect(await store.lookup("message-1")).toEqual(target);
+    expect(registered).toBe(false);
+    write.resolve();
+    await registration;
+    expect(registered).toBe(true);
+
+    let deleted = false;
+    const deletion = Promise.resolve(store.delete("message-1")).then(() => {
+      deleted = true;
+    });
+    expect(await store.lookup("message-1")).toBeNull();
+    expect(deleted).toBe(false);
+    remove.resolve(true);
+    await deletion;
+    expect(deleted).toBe(true);
+  });
+
+  it.each(["register", "delete"] as const)(
+    "retains its memory fallback and disables persistence after %s fails",
+    async (operation) => {
+      const failure = new Error("storage unavailable");
+      const persistence = {
+        register: vi.fn(async () => {}),
+        lookup: vi.fn(async () => undefined),
+        delete: vi.fn(async () => true),
+      };
+      const report = vi.fn();
+      const store = createApprovalReactionTargetStore<{ approvalId: string }>({
+        namespace: "test.failure",
+        maxEntries: 10,
+        defaultTtlMs: 60_000,
+        openStore: () => persistence,
+        logPersistentError: report,
+      });
+      const target = { approvalId: "approval-1" };
+      await store.register("message-1", target);
+      persistence[operation].mockRejectedValueOnce(failure);
+      await expect(
+        operation === "register" ? store.register("message-1", target) : store.delete("message-1"),
+      ).resolves.toBeUndefined();
+      expect(report).toHaveBeenCalledWith(failure);
+      expect(await store.lookup("message-1")).toEqual(operation === "register" ? target : null);
+      expect(await store.lookup("missing")).toBeNull();
+      expect(persistence.lookup).not.toHaveBeenCalled();
+    },
+  );
+
   it("expires in-memory reaction targets by ttl", async () => {
     let now = 1_000;
     const store = createApprovalReactionTargetStore<{ approvalId: string }>({
@@ -511,7 +618,7 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
       nowMs: () => now,
     });
     const target = { approvalId: "approval-1" };
-    store.register("message-1", target);
+    await store.register("message-1", target);
     expect(await store.lookup("message-1")).toEqual(target);
     now = 1_101;
     expect(await store.lookup("message-1")).toBeNull();
@@ -525,7 +632,7 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
         maxEntries: 10,
         defaultTtlMs: 100,
       });
-      store.register("message-1", { approvalId: "approval-1" }, { ttlMs: 1 });
+      await store.register("message-1", { approvalId: "approval-1" }, { ttlMs: 1 });
       vi.setSystemTime(1_002);
       expect(await store.lookup("message-1")).toBeNull();
     } finally {

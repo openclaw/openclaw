@@ -162,8 +162,7 @@ async function runIsolatedAnnounceJobAndWait(params: {
   status: "ok" | "error";
 }) {
   const { job, runAt } = await addDefaultIsolatedAnnounceJob(params.cron, params.name);
-  vi.setSystemTime(runAt);
-  await vi.runOnlyPendingTimersAsync();
+  await vi.advanceTimersByTimeAsync(runAt.getTime() - Date.now());
   await params.events.waitFor(
     (evt) => evt.jobId === job.id && evt.action === "finished" && evt.status === params.status,
   );
@@ -301,8 +300,7 @@ describe("CronService", () => {
 
     expect(job.state.nextRunAtMs).toBe(atMs);
 
-    vi.setSystemTime(new Date("2025-12-13T00:00:02.000Z"));
-    await vi.runOnlyPendingTimersAsync();
+    await vi.advanceTimersByTimeAsync(Date.parse("2025-12-13T00:00:02.000Z") - Date.now());
     await events.waitFor((evt) => evt.jobId === job.id && evt.action === "finished");
 
     const jobs = await cron.list({ includeDisabled: true });
@@ -311,6 +309,10 @@ describe("CronService", () => {
     expectMainSystemEventPosted(enqueueSystemEvent, { text: "hello", jobId: job.id });
     expect(requestHeartbeat).toHaveBeenCalled();
 
+    const reenabled = await cron.update(job.id, { enabled: true });
+    expect(reenabled.state.nextRunAtMs).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(enqueueSystemEvent).toHaveBeenCalledOnce();
     await cron.list({ includeDisabled: true });
     await stopCronAndCleanup(cron, store);
   });
@@ -321,8 +323,7 @@ describe("CronService", () => {
         name: "one-shot delete",
       });
 
-    vi.setSystemTime(new Date("2025-12-13T00:00:02.000Z"));
-    await vi.runOnlyPendingTimersAsync();
+    await vi.advanceTimersByTimeAsync(Date.parse("2025-12-13T00:00:02.000Z") - Date.now());
     await events.waitFor((evt) => evt.jobId === job.id && evt.action === "removed");
 
     const jobs = await cron.list({ includeDisabled: true });
@@ -384,8 +385,7 @@ describe("CronService", () => {
       delivery: { mode: "announce", bestEffort: testCase.bestEffort },
     });
 
-    vi.setSystemTime(runAt);
-    await vi.runOnlyPendingTimersAsync();
+    await vi.advanceTimersByTimeAsync(runAt.getTime() - Date.now());
     const event = await events.waitFor(
       (candidate) => candidate.jobId === job.id && candidate.action === "finished",
     );
@@ -451,8 +451,7 @@ describe("CronService", () => {
     });
 
     const firstAt = job.state.nextRunAtMs!;
-    vi.setSystemTime(firstAt);
-    await vi.runOnlyPendingTimersAsync();
+    await vi.advanceTimersByTimeAsync(firstAt - Date.now());
     await events.waitFor(
       (candidate) => candidate.jobId === job.id && candidate.action === "finished",
     );
@@ -460,9 +459,11 @@ describe("CronService", () => {
     expect(secondAt).toBeTypeOf("number");
     expect(cron.getJob(job.id)?.state.consecutiveErrors).toBe(0);
 
-    vi.setSystemTime(secondAt!);
-    await vi.runOnlyPendingTimersAsync();
+    await vi.advanceTimersByTimeAsync(secondAt! - Date.now());
     await vi.waitFor(() => expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2));
+    await events.waitFor(
+      (evt) => evt.jobId === job.id && evt.action === "finished" && evt.status === "error",
+    );
     const updated = cron.getJob(job.id);
     expect(updated).toMatchObject({
       enabled: true,
@@ -494,8 +495,7 @@ describe("CronService", () => {
     });
     expect(updated.deleteAfterRun).toBe(true);
 
-    vi.setSystemTime(atMs);
-    await vi.runOnlyPendingTimersAsync();
+    await vi.advanceTimersByTimeAsync(atMs - Date.now());
     await events.waitFor((evt) => evt.jobId === job.id && evt.action === "removed");
 
     const jobs = await cron.list({ includeDisabled: true });
@@ -521,8 +521,7 @@ describe("CronService", () => {
     });
     expect(updated.deleteAfterRun).toBe(false);
 
-    vi.setSystemTime(atMs);
-    await vi.runOnlyPendingTimersAsync();
+    await vi.advanceTimersByTimeAsync(atMs - Date.now());
     await events.waitFor((evt) => evt.jobId === job.id && evt.action === "finished");
 
     const jobs = await cron.list({ includeDisabled: true });

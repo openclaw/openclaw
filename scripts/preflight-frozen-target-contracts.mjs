@@ -15,9 +15,14 @@ const toolingClosure = [
   "scripts/lib/docker-e2e-plan.mts",
   "scripts/lib/docker-e2e-scenarios.mts",
   "scripts/lib/official-external-channel-catalog.json",
+  "scripts/lib/update-compat-inventory.json",
+  "scripts/lib/update-first-hop-lanes.mjs",
   "scripts/lib/upgrade-survivor-policy.mjs",
+  "scripts/lib/upgrade-survivor-scenarios.json",
   "scripts/lib/release-version.mjs",
   "scripts/lib/frozen-target-compat.sh",
+  "scripts/lib/trusted-native-typescript.mjs",
+  "scripts/lib/native-typescript.mts",
   "scripts/resolve-frozen-codex-live-suite.mjs",
   "scripts/resolve-fs-safe-native-contract.mjs",
   "scripts/e2e/lib/upgrade-survivor/config-recipe.mts",
@@ -42,13 +47,19 @@ const shellOwners = {
       `${prefix}ONBOARD_SESSION_MEMORY_HOOK_MODE`,
       `${prefix}TYPED_ONBOARDING_SCENARIO_PATH`,
       `${prefix}TYPED_ONBOARDING_ASSERTIONS_PATH`,
+      `${prefix}TYPED_ONBOARDING_ASSERTION_FILES_PATH`,
       `${prefix}TYPED_ONBOARDING_MOCK_CONFIG_PATH`,
     ],
   ],
   "session-runtime-context": [
-    "runtime_context_contract",
-    [`${prefix}RUNTIME_CONTEXT_INPUT_MODE`, `${prefix}SESSION_REPAIR_MODE`],
+    ["runtime_context_contract", "session_cold_storage_contract"],
+    [
+      `${prefix}RUNTIME_CONTEXT_INPUT_MODE`,
+      `${prefix}SESSION_REPAIR_MODE`,
+      `${prefix}SESSION_COLD_STORAGE_MODE`,
+    ],
   ],
+  "openai-chat-tools": ["session_cold_storage_contract", [`${prefix}SESSION_COLD_STORAGE_MODE`]],
   "mcp-code-mode-gateway": [
     "mcp_code_mode_contract",
     [`${prefix}MCP_MEMORY_CONFIG_MODE`, `${prefix}MCP_CODE_MODE_CATALOG_MODE`],
@@ -142,12 +153,19 @@ const selectedMetadata = {
     "src/commands/onboard-hooks.ts",
     "scripts/e2e/lib/release-typed-onboarding/scenario.sh",
     "scripts/e2e/lib/release-scenarios/assertions.mjs",
+    "scripts/e2e/lib/release-assertion-files.mjs",
     "scripts/e2e/lib/fixtures/mock-openai-config.mjs",
   ],
   "session-runtime-context": [
     "src/state/openclaw-agent-db-session-migrations.ts",
     "src/commands/doctor-session-transcripts.ts",
     "src/agents/embedded-agent-runner/run/runtime-context-prompt.ts",
+    "src/config/zod-schema.session.ts",
+    "src/config/zod-schema.session-config.ts",
+  ],
+  "openai-chat-tools": [
+    "src/config/zod-schema.session.ts",
+    "src/config/zod-schema.session-config.ts",
   ],
   "mcp-code-mode-gateway": ["src/agents/memory-search.ts", "src/agents/code-mode-namespaces.ts"],
   "agent-bundle-mcp-tools": [
@@ -435,6 +453,7 @@ async function planWorkflowAdmission(input) {
     RELEASE_PACKAGE_ACCEPTANCE_LANES,
   } = await import("./plan-release-workflow-matrix.mjs");
   const { releasePathChunkLanes } = await import("./lib/docker-e2e-scenarios.mts");
+  const { isUpdateFirstHopCompatLane } = await import("./lib/update-first-hop-lanes.mjs");
   const { createPluginPrereleaseTestPlan } = await import("./lib/plugin-prerelease-test-plan.mts");
   const { parseUpgradeSurvivorScenarios } = await import("./lib/upgrade-survivor-policy.mjs");
   const baselineOptions = options.baselinesResolved
@@ -565,8 +584,11 @@ async function planWorkflowAdmission(input) {
         requested: requestedBaselines,
       });
     } else {
-      const { normalizeUpgradeSurvivorBaselineSpec, parseUpgradeSurvivorBaselineSpecs } =
-        await import("./lib/upgrade-survivor-policy.mjs");
+      const {
+        assertSupportedUpgradeSurvivorBaselineSpec,
+        normalizeUpgradeSurvivorBaselineSpec,
+        parseUpgradeSurvivorBaselineSpecs,
+      } = await import("./lib/upgrade-survivor-policy.mjs");
       const specs = [
         normalizeUpgradeSurvivorBaselineSpec(options.upgradeSurvivorBaseline),
         ...parseUpgradeSurvivorBaselineSpecs(options.upgradeSurvivorBaselines),
@@ -574,6 +596,7 @@ async function planWorkflowAdmission(input) {
       if (!specs[0] || specs.some((spec) => !/^openclaw@[0-9]/u.test(spec))) {
         throw new Error("unresolved upgrade baselines at the execution boundary");
       }
+      specs.forEach(assertSupportedUpgradeSurvivorBaselineSpec);
     }
   }
   const sourcePaths = new Set();
@@ -599,15 +622,15 @@ async function planWorkflowAdmission(input) {
   const fsSafeNative = selections.some((selection) => selection.fsSafeNative);
   if (fsSafeNative && allow) {
     sourcePaths.add("package.json");
+    // Older frozen contracts still inspect this retired shim; absent paths need no hydration.
     sourcePaths.add("src/infra/fs-safe-defaults.ts");
   }
-  for (const [lane, path] of [
-    ["update-first-hop-compat", "scripts/runtime-postbuild.mts"],
-    ["update-corrupt-plugin", "src/cli/update-cli/update-command-plugin-preflight.ts"],
-  ]) {
-    if (possibleLanes.includes(lane)) {
-      sourcePaths.add(path);
-    }
+  // The recorded inventory stays optional: targets predating it keep the postbuild check.
+  if (possibleLanes.some(isUpdateFirstHopCompatLane)) {
+    sourcePaths.add("scripts/runtime-postbuild.mts");
+  }
+  if (possibleLanes.includes("update-corrupt-plugin")) {
+    sourcePaths.add("src/cli/update-cli/update-command-plugin-preflight.ts");
   }
   if (mobilePairingSelected) {
     sourcePaths.add("src/gateway/node-command-policy.ts");
@@ -615,6 +638,7 @@ async function planWorkflowAdmission(input) {
   if (
     possibleLanes.some((lane) => /^(published-upgrade-survivor|update-migration)(-|$)/u.test(lane))
   ) {
+    sourcePaths.add("scripts/lib/upgrade-survivor-scenarios.json");
     sourcePaths.add("scripts/e2e/lib/upgrade-survivor/assertions.mjs");
   }
   if (docker.length > 256) {
@@ -970,13 +994,8 @@ async function preflightFrozenTargetContracts(input, workflow = false, verifiedT
     tooling: source,
     selected: createFrozenTargetSource(roots.selected, input.selected.sha),
   };
-  const {
-    DEFAULT_LIVE_RETRIES,
-    parseLaneSelection,
-    parseLiveMode,
-    parseProfile,
-    resolveDockerE2ePlan,
-  } = await import("./lib/docker-e2e-plan.mts");
+  const { parseLaneSelection, parseLiveMode, parseProfile, resolveDockerE2ePlan } =
+    await import("./lib/docker-e2e-plan.mts");
   const { classifyReleaseTrain, parseReleaseVersion } = await import("./lib/release-version.mjs");
   const { resolveFrozenCodexCompatibility } = await import("./resolve-frozen-codex-live-suite.mjs");
   const { resolveFsSafeNativeContract } = await import("./resolve-fs-safe-native-contract.mjs");
@@ -1037,7 +1056,6 @@ async function preflightFrozenTargetContracts(input, workflow = false, verifiedT
       frozenTarget: { mode: "inert", source: sources.selected },
       includeOpenWebUI: normalizedDocker.includeOpenWebUI,
       liveMode: normalizedDocker.liveMode,
-      liveRetries: DEFAULT_LIVE_RETRIES,
       orderLanes: (lanes) => lanes,
       planReleaseAll: normalizedDocker.planReleaseAll,
       profile: normalizedDocker.profile,
@@ -1109,7 +1127,10 @@ async function preflightFrozenTargetContracts(input, workflow = false, verifiedT
     if (owner) {
       const [fn, names] = owner;
       const output = shell(
-        `openclaw_resolve_frozen_${fn} "$1" "$2"; shift 2; for key in "$@"; do printf "%s\\0" "\${!key}"; done`,
+        `${[fn]
+          .flat()
+          .map((name) => `openclaw_resolve_frozen_${name} "$1" "$2";`)
+          .join(" ")} shift 2; for key in "$@"; do printf "%s\\0" "\${!key}"; done`,
         [roots.selected, roots.tooling, ...names],
       ).split("\0");
       if (output.pop() !== "" || output.length !== names.length) {

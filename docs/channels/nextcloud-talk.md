@@ -15,13 +15,15 @@ openclaw plugins install @openclaw/nextcloud-talk
 
 Use the bare package spec to follow the current official release tag. Pin an exact version only when you need a reproducible install.
 
+The attachment-capable plugin requires an OpenClaw host that provides staged-media deletion (`2026.9.7` or newer). Upgrade the host before installing or updating this plugin; a plugin-only update on an older host is rejected.
+
 From a local checkout (dev workflows):
 
 ```bash
 openclaw plugins install ./path/to/local/nextcloud-talk-plugin
 ```
 
-Restart the gateway after installing. Details: [Plugins](/tools/plugin)
+Check the [application result](/plugins/manage-plugins#apply-changes-and-inspect) after installing.
 
 ## Quick setup (beginner)
 
@@ -63,7 +65,7 @@ Restart the gateway after installing. Details: [Plugins](/tools/plugin)
      --secret-file /path/to/nextcloud-talk-secret
    ```
 
-5. Restart the gateway (or finish setup).
+5. Check `openclaw channels status --probe`; start the Gateway if it is offline. Config changes follow [hot reload](/gateway/configuration/hot-reload). If you changed the service environment, restart the Gateway to load it.
 
 Minimal config:
 
@@ -85,6 +87,7 @@ Minimal config:
 - Bots cannot initiate DMs. The user must message the bot first.
 - The webhook URL must be reachable from the Nextcloud server; set `webhookPublicUrl` when the gateway sits behind a proxy. Webhook requests are HMAC-SHA256 signed with the bot secret; invalid signatures are rejected and rate limited.
 - Message webhooks return HTTP 200 only after the raw event is durably stored; storage failures return HTTP 500. The durable `200` carries `x-openclaw-delivery-accepted: durable`, so reverse proxies can require the marker to distinguish OpenClaw acceptance from a generic `200`. Unsupported non-message events return HTTP 200 without the marker and are logged as ignored.
+- The webhook listener admits at most 64 concurrent unauthenticated body reads; overflow requests receive `HTTP/1.1 429` with `Connection: close`. Requests on one keep-alive connection are answered in order, so a queued delivery's `200` acknowledgement always flushes before any overflow rejection closes the socket. The 64-read budget is fixed and not configurable. Deployments that regularly saturate it should reduce or buffer upstream concurrency (for example, cap reverse-proxy fan-in toward the listener) and accept that deliveries refused during saturation may be lost.
 - Media uploads are not supported by the bot API; outbound media is appended as an `Attachment: <url>` line.
 - The webhook payload does not distinguish DMs from rooms; set `apiUser` + `apiPassword` to enable room-type lookups (cached about 5 minutes). Without them, every conversation is treated as a room. Inbound attachment retrieval also requires this API account.
 - Network fetches, including authenticated inbound attachment requests and outbound requests, go through the SSRF guard. For a Nextcloud host on a trusted private/internal network, opt in with `channels.nextcloud-talk.network.dangerouslyAllowPrivateNetwork: true`.
@@ -125,7 +128,7 @@ Minimal config:
 - `channels.nextcloud-talk.mediaAllowFrom` is an account-level allowlist of Nextcloud user IDs whose attachments may be downloaded and processed. It fails closed when omitted or empty; use `["*"]` only when every otherwise-authorized sender may send media.
 - This media gate never expands access. The ordinary DM/group, room, sender, and mention requirements must admit the message first. When only the media gate denies an attachment, the file is not downloaded, but an otherwise-admissible caption continues through the ordinary text path.
 - `channels.nextcloud-talk.mediaMaxMb` limits inbound staging and outbound media size. When unset, it falls back to `agents.defaults.mediaMaxMb` (default: 20 MB).
-- Talk's webhook link must be on the exact configured `baseUrl` origin (same scheme, hostname, and effective port). Because Talk room shares are participant-only, OpenClaw uses the configured `apiUser`/API password to reread the exact room message, verify its file metadata against the signed webhook, resolve the account's canonical Nextcloud user ID, and retrieve that file over same-origin WebDAV. The API account must be able to access the room share; no sender credentials are requested or used.
+- Talk's webhook link must be on the exact configured `baseUrl` origin (same scheme, hostname, and effective port). Because Talk room shares are participant-only, OpenClaw uses the configured `apiUser`/API password to reread the exact room message without changing its read, notification, or online state; verify its file metadata against the signed webhook; resolve the account's canonical Nextcloud user ID; and verify the WebDAV file ID before retrieving the file. The API account must be able to access the room share; no sender credentials are requested or used.
 - Authenticated attachment requests never follow redirects. Talk's `hide-download` restriction, the existing SSRF/private-network policy, and the configured byte limit remain enforced before or during staging.
 - After media authorization, a hidden, malformed, wrong-origin, unavailable, or oversize file is omitted from media context. Its caption continues with a generic attachment-unavailable marker for the agent, while the specific bounded reason is logged for operators.
 

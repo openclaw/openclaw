@@ -71,8 +71,8 @@ spend limits, and backend failover without changing OpenClaw config.
             maxTokens: 64000,
           },
           {
-            id: "gpt-5.6-sol",
-            name: "GPT-5.6 Sol",
+            id: "gpt-6-astra",
+            name: "GPT-6 Astra",
             reasoning: true,
             input: ["text", "image"],
             contextWindow: 1050000,
@@ -91,6 +91,12 @@ spend limits, and backend failover without changing OpenClaw config.
 ```
 
 The default model onboarding writes is `litellm/claude-opus-4-6`.
+
+In merge mode, onboarding with an explicit proxy URL preserves any authored provider models and
+otherwise leaves the provider model list empty for discovery. Run
+`openclaw models list --provider litellm --refresh --json` to list the proxy's models.
+With `models.mode: "replace"`, discovery is disabled, so onboarding keeps the documented default
+in the provider model list while preserving existing model definitions.
 
 ## Image generation
 
@@ -156,9 +162,9 @@ without a global private-network override. For a LAN-hosted proxy, set
           model: claude-opus-4-6
           api_key: os.environ/ANTHROPIC_API_KEY
 
-      - model_name: gpt-5.6-sol
+      - model_name: gpt-6-astra
         litellm_params:
-          model: gpt-5.6-sol
+          model: gpt-6-astra
           api_key: os.environ/OPENAI_API_KEY
     ```
 

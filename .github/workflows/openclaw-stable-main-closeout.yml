@@ -3,10 +3,22 @@ name: OpenClaw Stable Main Closeout
 on:
   push:
     branches: [main]
+    paths:
+      - "package.json"
+      - "CHANGELOG.md"
+      - "CHANGELOG/**"
+      - "appcast*.xml"
+      - ".github/workflows/openclaw-stable-main-closeout.yml"
+      - "scripts/verify-stable-main-closeout.mjs"
+      - "scripts/linux-updater-manifest.mjs"
+      - "scripts/lib/stable-*.mjs"
+      - "scripts/lib/release-*.mjs"
+      - "scripts/lib/release-*.mts"
+      - "scripts/lib/changelog*.mjs"
   workflow_dispatch:
     inputs:
       tag:
-        description: Stable OpenClaw tag to replay or repair, for example v2026.6.8 or v2026.6.8-2
+        description: Stable OpenClaw tag to replay or repair, for example v2026.6.8 or v2026.6.8-2; every other input is optional
         required: false
         type: string
       rollback_drill_id:
@@ -22,6 +34,16 @@ on:
         required: false
         default: false
         type: boolean
+      stable_soak_waiver:
+        description: Operator soak waiver for a stable published without soak; empty reuses the sealed publish evidence
+        required: false
+        default: ""
+        type: string
+      lane_waiver:
+        description: Operator lane waiver acknowledging failed non-proof lanes; empty reuses the sealed publish evidence
+        required: false
+        default: ""
+        type: string
 
 permissions:
   actions: read
@@ -29,7 +51,7 @@ permissions:
 
 concurrency:
   group: openclaw-stable-main-closeout-${{ github.event_name == 'workflow_dispatch' && (inputs.tag || github.run_id) || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+  cancel-in-progress: false
 
 jobs:
   resolve:
@@ -40,6 +62,10 @@ jobs:
       full_release_validation_run_id: ${{ steps.inputs.outputs.full_release_validation_run_id }}
       full_release_validation_run_attempt: ${{ steps.inputs.outputs.full_release_validation_run_attempt }}
       release_publish_run_id: ${{ steps.inputs.outputs.release_publish_run_id }}
+      stable_soak_waiver: ${{ steps.inputs.outputs.stable_soak_waiver }}
+      lane_waiver: ${{ steps.inputs.outputs.lane_waiver }}
+      published_stable_soak_waiver: ${{ steps.inputs.outputs.published_stable_soak_waiver }}
+      published_lane_waiver: ${{ steps.inputs.outputs.published_lane_waiver }}
       rollback_drill_date: ${{ steps.inputs.outputs.rollback_drill_date }}
       rollback_drill_id: ${{ steps.inputs.outputs.rollback_drill_id }}
       evidence_tag: ${{ steps.inputs.outputs.evidence_tag }}
@@ -73,8 +99,7 @@ jobs:
           }
           BASH
 
-      - name: Checkout pushed main
-        if: ${{ github.event_name == 'push' }}
+      - name: Checkout trusted release tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
@@ -89,18 +114,33 @@ jobs:
           MANUAL_TAG: ${{ inputs.tag }}
           ROLLBACK_DRILL_DATE: ${{ inputs.rollback_drill_date || vars.RELEASE_ROLLBACK_DRILL_DATE }}
           ROLLBACK_DRILL_ID: ${{ inputs.rollback_drill_id || vars.RELEASE_ROLLBACK_DRILL_ID }}
+          INPUT_STABLE_SOAK_WAIVER: ${{ github.event_name == 'workflow_dispatch' && inputs.stable_soak_waiver || '' }}
+          INPUT_LANE_WAIVER: ${{ github.event_name == 'workflow_dispatch' && inputs.lane_waiver || '' }}
           TRIGGER_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          if [[ "$EVENT_NAME" == "push" ]]; then
-            sleep 45
-          fi
           . "$RUNNER_TEMP/github-api-backoff.sh"
           if [[ "$EVENT_NAME" == "push" ]]; then
             main_ref="$TRIGGER_SHA"
-            tag="$(gh_with_retry release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --limit 100 \
-              --json tagName,isPrerelease,publishedAt \
-              --jq '[.[] | select(.isPrerelease | not) | select(.tagName | test("^v[0-9]{4}\\.[0-9]+\\.[0-9]+(-[0-9]+)?$"))] | sort_by(.publishedAt) | last | .tagName // empty')"
+            releases_file="$RUNNER_TEMP/published-releases.json"
+            gh_with_retry release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --limit 100 \
+              --json tagName,isPrerelease,publishedAt > "$releases_file"
+            tag="$(RELEASES_FILE="$releases_file" node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+          import { classifyReleaseTrain, parseReleaseVersion } from "./scripts/lib/release-version.mjs";
+
+          const releases = JSON.parse(readFileSync(process.env.RELEASES_FILE, "utf8"));
+          const candidates = releases
+            .filter((release) => release?.isPrerelease === false)
+            .filter((release) => {
+              const tag = typeof release?.tagName === "string" ? release.tagName : "";
+              const parsed = tag.startsWith("v") ? parseReleaseVersion(tag.slice(1)) : null;
+              return parsed !== null && classifyReleaseTrain(parsed) === "stable";
+            })
+            .toSorted((left, right) => String(left.publishedAt).localeCompare(String(right.publishedAt)));
+          process.stdout.write(candidates.at(-1)?.tagName ?? "");
+          NODE
+            )"
             if [[ -z "$tag" ]]; then
               echo "should_closeout=false" >> "$GITHUB_OUTPUT"
               exit 0
@@ -108,12 +148,21 @@ jobs:
           else
             tag="$MANUAL_TAG"
           fi
-          if [[ ! "$tag" =~ ^v[0-9]{4}\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]]; then
+          if ! RELEASE_TAG="$tag" node --input-type=module <<'NODE'
+          import { classifyReleaseTrain, parseReleaseVersion } from "./scripts/lib/release-version.mjs";
+
+          const tag = process.env.RELEASE_TAG ?? "";
+          const parsed = tag.startsWith("v") ? parseReleaseVersion(tag.slice(1)) : null;
+          if (parsed === null || classifyReleaseTrain(parsed) !== "stable") {
+            process.exitCode = 1;
+          }
+          NODE
+          then
             if [[ "$EVENT_NAME" == "push" ]]; then
               echo "should_closeout=false" >> "$GITHUB_OUTPUT"
               exit 0
             fi
-            echo "Stable main closeout accepts only a stable vYYYY.M.PATCH or vYYYY.M.PATCH-N tag, got $tag." >&2
+            echo "Stable main closeout accepts only a regular stable vYYYY.M.PATCH or vYYYY.M.PATCH-N tag below the extended-stable .33 boundary, got $tag." >&2
             exit 1
           fi
           release_asset_version="${tag#v}"
@@ -314,10 +363,26 @@ jobs:
             echo "Stable closeout requires repository variables RELEASE_ROLLBACK_DRILL_ID and RELEASE_ROLLBACK_DRILL_DATE, or explicit manual overrides." >&2
             exit 1
           fi
+          # Operator inputs win; otherwise the waivers the sealed publish evidence recorded apply,
+          # and closeout accepts them exactly as the publish gate accepted them.
+          published_stable_soak_waiver="$(jq -c '.stableSoakWaiver // "" | if type == "string" then . else error("Invalid stable soak waiver") end' "$evidence_path")"
+          published_lane_waiver="$(jq -c '.laneWaiverAcknowledgement // .laneWaiver // "" | if type == "string" then . else error("Invalid lane waiver") end' "$evidence_path")"
+          stable_soak_waiver="$published_stable_soak_waiver"
+          if [[ -n "${INPUT_STABLE_SOAK_WAIVER// }" ]]; then
+            stable_soak_waiver="$(jq -cn --arg value "$INPUT_STABLE_SOAK_WAIVER" '$value')"
+          fi
+          lane_waiver="$published_lane_waiver"
+          if [[ -n "${INPUT_LANE_WAIVER// }" ]]; then
+            lane_waiver="$(jq -cn --arg value "$INPUT_LANE_WAIVER" '$value')"
+          fi
           {
             echo "full_release_validation_run_id=$full_release_validation_run_id"
             echo "full_release_validation_run_attempt=$full_release_validation_run_attempt"
             echo "release_publish_run_id=$release_publish_run_id"
+            echo "stable_soak_waiver=$stable_soak_waiver"
+            echo "lane_waiver=$lane_waiver"
+            echo "published_stable_soak_waiver=$published_stable_soak_waiver"
+            echo "published_lane_waiver=$published_lane_waiver"
             echo "rollback_drill_date=$ROLLBACK_DRILL_DATE"
             echo "rollback_drill_id=$ROLLBACK_DRILL_ID"
             echo "evidence_tag=$evidence_source_tag"
@@ -331,6 +396,10 @@ jobs:
   verify:
     name: Verify stable main closeout
     needs: resolve
+    # Verification is keyed by the resolved stable tag, never by the main ref.
+    concurrency:
+      group: openclaw-stable-main-closeout-verify-${{ needs.resolve.outputs.tag }}
+      cancel-in-progress: false
     if: ${{ needs.resolve.outputs.should_closeout == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -406,10 +475,21 @@ jobs:
 
       - name: Set up Docker verification for manual recovery
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_failed_publish_recovery }}
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.21.0"
+          package-manager-cache: false
 
       - name: Verify release workflow evidence
         env:
+          STABLE_SOAK_WAIVER: ${{ fromJSON(needs.resolve.outputs.stable_soak_waiver) }}
+          OPENCLAW_RELEASE_STABLE_SOAK_WAIVER: ${{ vars.OPENCLAW_RELEASE_STABLE_SOAK_WAIVER }}
+          LANE_WAIVER: ${{ fromJSON(needs.resolve.outputs.lane_waiver) }}
+          PUBLISHED_STABLE_SOAK_WAIVER: ${{ fromJSON(needs.resolve.outputs.published_stable_soak_waiver) }}
+          PUBLISHED_LANE_WAIVER: ${{ fromJSON(needs.resolve.outputs.published_lane_waiver) }}
           RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
           GH_TOKEN: ${{ github.token }}
           EVIDENCE_TAG: ${{ needs.resolve.outputs.evidence_tag }}
@@ -462,15 +542,13 @@ jobs:
             .workflowName == "Full Release Validation" and
             .runId == $run_id and
             .runAttempt == $run_attempt and
-            .targetSha == $tag_sha and
-            .rerunGroup == "all" and
-            .runReleaseSoak == "true" and
-            .controls.performanceBlocking == true and
-            .childRuns.productPerformance.conclusion == "success"
+            .targetSha == $tag_sha
           ' "$manifest_dir/$manifest_asset" >/dev/null || {
             echo "Full Release Validation manifest does not contain the required stable release controls." >&2
             exit 1
           }
+          node .closeout-tooling/scripts/lib/release-publish-gates.mts \
+            --consumer stable-closeout --manifest "$manifest_dir/$manifest_asset"
 
           recovery_evidence="$manifest_dir/openclaw-${evidence_version}-postpublish-evidence.json"
           if [[ "$ALLOW_FAILED_PUBLISH_RECOVERY" == "true" ]]; then
@@ -556,6 +634,8 @@ jobs:
           ROLLBACK_DRILL_DATE: ${{ needs.resolve.outputs.rollback_drill_date }}
           REPAIR_PARTIAL_CLOSEOUT: ${{ needs.resolve.outputs.repair_partial_closeout }}
           ALLOW_FAILED_PUBLISH_RECOVERY: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_failed_publish_recovery && 'true' || 'false' }}
+          STABLE_SOAK_WAIVER: ${{ fromJSON(needs.resolve.outputs.stable_soak_waiver) }}
+          LANE_WAIVER: ${{ fromJSON(needs.resolve.outputs.lane_waiver) }}
           CLOSEOUT_DIR: ${{ runner.temp }}/openclaw-stable-main-closeout
         run: |
           set -euo pipefail
@@ -575,6 +655,36 @@ jobs:
               --jq '.content' | tr -d '\n' | base64 --decode > "$CLOSEOUT_DIR/published-appcast.xml"
             existing_manifest_args=(--existing-manifest "$CLOSEOUT_DIR/$closeout_asset"
               --published-appcast "$CLOSEOUT_DIR/published-appcast.xml")
+            if node --input-type=module -e '
+              import { requiresThinMacArtifacts } from "./.closeout-tooling/scripts/lib/stable-release-closeout.mjs";
+              process.exit(requiresThinMacArtifacts(process.argv[1]) ? 0 : 1);
+            ' "$RELEASE_TAG"; then
+              for appcast in appcast-arm64.xml appcast-x86_64.xml; do
+                published="$CLOSEOUT_DIR/published-${appcast}"
+                if gh_with_retry api "repos/$GITHUB_REPOSITORY/contents/${appcast}?ref=main" \
+                  --jq '.content' | tr -d '\n' | base64 --decode > "$published"; then
+                  case "$appcast" in
+                    appcast-arm64.xml)
+                      existing_manifest_args+=(--published-appcast-arm64 "$published")
+                      ;;
+                    appcast-x86_64.xml)
+                      existing_manifest_args+=(--published-appcast-x86-64 "$published")
+                      ;;
+                  esac
+                else
+                  rm -f "$published"
+                  echo "Thin appcast is not published yet: $appcast"
+                fi
+              done
+            fi
+          fi
+          # Operator waivers that authorized this stable are recorded in the closeout manifest.
+          waiver_args=()
+          if [[ -n "${STABLE_SOAK_WAIVER// }" ]]; then
+            waiver_args+=(--stable-soak-waiver "$STABLE_SOAK_WAIVER")
+          fi
+          if [[ -n "${LANE_WAIVER// }" ]]; then
+            waiver_args+=(--lane-waiver "$LANE_WAIVER")
           fi
           recovery_args=()
           if [[ -f "$RUNNER_TEMP/stable-publish-recovery.json" ]]; then
@@ -592,6 +702,7 @@ jobs:
             --rollback-drill-date "$ROLLBACK_DRILL_DATE" \
             --allow-stale-rollback-drill "$REPAIR_PARTIAL_CLOSEOUT" \
             --allow-failed-publish-recovery "$ALLOW_FAILED_PUBLISH_RECOVERY" \
+            "${waiver_args[@]}" \
             "${existing_manifest_args[@]}" \
             "${recovery_args[@]}" \
             --output "$CLOSEOUT_DIR/stable-main-closeout.json"

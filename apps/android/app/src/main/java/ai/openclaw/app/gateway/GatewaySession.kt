@@ -4,6 +4,7 @@ import android.os.SystemClock
 import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.DelicateCoroutinesApi
@@ -37,6 +38,8 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import okhttp3.Call
+import okhttp3.EventListener
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
@@ -321,6 +324,8 @@ class GatewaySession(
   private val customHeadersProvider: ((stableId: String) -> Map<String, String>)? = null,
   private val connectTimeoutMs: Long = GATEWAY_CONNECT_TIMEOUT_MS,
   private val webSocketFactory: ((OkHttpClient, Request, WebSocketListener) -> WebSocket)? = null,
+  private val lifecycleDispatcher: CoroutineDispatcher = Dispatchers.IO,
+  private val ingressAuthorizationProvider: ((GatewayEndpoint) -> GatewayIngressAuthorization?)? = null,
 ) {
   private companion object {
     // Keep connect timeout above observed gateway unauthorized close on lower-end devices.
@@ -391,9 +396,12 @@ class GatewaySession(
     val endpointStableId: String,
     private val isCurrentImpl: () -> Boolean = { true },
     private val commitIfCurrentImpl: ((block: () -> Unit) -> Boolean)? = null,
+    private val advertisedMethods: Set<String> = emptySet(),
     private val requestImpl: suspend (method: String, paramsJson: String?, timeoutMs: Long, withEnqueue: (() -> Unit) -> Unit) -> String,
   ) {
     fun isCurrent(): Boolean = isCurrentImpl()
+
+    fun supportsMethod(method: String): Boolean = method in advertisedMethods
 
     fun commitIfCurrent(block: () -> Unit): Boolean {
       commitIfCurrentImpl?.let { return it(block) }
@@ -490,7 +498,7 @@ class GatewaySession(
           // A replacement cannot start another resolver until the previous transport drains.
           // Bound its visible wait independently of OkHttp's eventual cancellation callback.
           target.cleanupDeadline =
-            scope.launch(Dispatchers.IO) {
+            scope.launch(lifecycleDispatcher) {
               delay(connectTimeoutMs)
               synchronized(notificationLock) {
                 if (synchronized(lifecycleLock) {
@@ -503,7 +511,7 @@ class GatewaySession(
             }
         }
         if (job?.isActive != true) {
-          job = scope.launch(Dispatchers.IO) { runLoop() }
+          job = scope.launch(lifecycleDispatcher) { runLoop() }
         } else {
           reconnectSignal.trySend(Unit)
         }
@@ -538,7 +546,7 @@ class GatewaySession(
       jobToCancel?.cancel()
       val previousCleanup = disconnectTail
       cleanup =
-        scope.launch(Dispatchers.IO, start = CoroutineStart.LAZY) {
+        scope.launch(lifecycleDispatcher, start = CoroutineStart.LAZY) {
           previousCleanup?.join()
           jobToCancel?.join()
           connectionToClose?.joinOwnedWork()
@@ -805,6 +813,18 @@ class GatewaySession(
     return GatewayLoadedImage(bytes = loaded.bytes, mimeType = loaded.mimeType)
   }
 
+  internal suspend fun loadSourceFavicon(
+    expectedEndpointStableId: String,
+    config: GatewaySourcePreviewConfig,
+    hostname: String,
+    withEnqueue: (() -> Unit) -> Unit,
+  ): GatewayLoadedImage? {
+    if (!config.automaticallyFetchFavicons) return null
+    val conn = readyConnection(expectedEndpointStableId) ?: return null
+    val image = conn.loadSourceFavicon(config, hostname, guardRequestEnqueue(conn, withEnqueue))
+    return synchronized(lifecycleLock) { image.takeIf { currentConnection === conn && conn.isReady() } }
+  }
+
   suspend fun loadMediaArtifact(
     expectedEndpointStableId: String?,
     sessionKey: String,
@@ -875,6 +895,7 @@ class GatewaySession(
       val conn = readyConnection(expectedEndpointStableId) ?: return@synchronized null
       RequestLease(
         endpointStableId = conn.target.endpoint.stableId,
+        advertisedMethods = conn.advertisedMethods,
         isCurrentImpl = { currentConnection === conn && conn.isReady() },
         commitIfCurrentImpl = { block ->
           synchronized(lifecycleLock) {
@@ -1014,6 +1035,9 @@ class GatewaySession(
   private inner class Connection(
     val target: DesiredConnection,
   ) {
+    var advertisedMethods: Set<String> = emptySet()
+      private set
+
     private val connectionJob = SupervisorJob(scope.coroutineContext[Job])
     private val connectionScope = CoroutineScope(scope.coroutineContext + connectionJob)
     private val state = AtomicReference(ConnectionState.CONNECTING)
@@ -1023,6 +1047,11 @@ class GatewaySession(
     private val terminalCallbackClaimed = AtomicBoolean(false)
     private val socketCancellationStarted = AtomicBoolean(false)
     private val connectResponseAccepted = AtomicBoolean(false)
+    private val ingressRetirementStarted = AtomicBoolean(false)
+    private val ingressCalls = ConcurrentHashMap.newKeySet<Call>()
+    private val ingressAuthorization =
+      if (target.tls == null) null else ingressAuthorizationProvider?.invoke(target.endpoint)
+    private var ingressHeaders: Map<String, String> = emptyMap()
 
     @Volatile
     private var connectHandshakeJob: Job? = null
@@ -1040,6 +1069,8 @@ class GatewaySession(
         }
       }
     private val client: OkHttpClient = buildClient()
+    private val sourceFaviconLoader by lazy { GatewaySourceFaviconLoader(client) }
+    private var controlUiReadCredentials: List<String> = emptyList()
     private val listener = Listener()
     private var socket: WebSocket? = null
 
@@ -1072,15 +1103,36 @@ class GatewaySession(
 
     val remoteAddress: String = formatGatewayAuthority(target.endpoint.host, target.endpoint.port)
 
-    suspend fun connect(): ConnectedGateway {
-      val request =
-        buildGatewayWebSocketUpgradeRequest(
-          endpoint = target.endpoint,
-          tls = target.tls,
-          customHeadersProvider = customHeadersProvider,
-        )
-      return try {
+    suspend fun connect(): ConnectedGateway =
+      try {
         withTimeout(connectTimeoutMs) {
+          val original =
+            buildGatewayWebSocketUpgradeRequest(
+              endpoint = target.endpoint,
+              tls = target.tls,
+              customHeadersProvider = customHeadersProvider,
+            )
+          val request =
+            if (ingressAuthorization == null) {
+              original
+            } else {
+              // This probe belongs to the connecting transport, not a shared sign-in. Retirement
+              // cancels and drains it before the reconnect loop can start another attempt.
+              val authorization = async(start = CoroutineStart.LAZY) { ingressAuthorization.authorizeUpgrade(original) }
+              try {
+                select {
+                  closedDeferred.onAwait { error("Gateway closed") }
+                  authorization.onAwait { it }
+                }
+              } finally {
+                authorization.cancelAndJoin()
+              }
+            }
+          check(request.url == original.url) { "Ingress authorization cannot change the Gateway route" }
+          ingressAuthorization?.requireCurrent(request)
+          if (ingressAuthorization != null) {
+            ingressHeaders = request.headers.names().associateWith { request.header(it).orEmpty() }
+          }
           // OkHttp can invoke onOpen before newWebSocket returns. Keep publication under the
           // send lock, and reject a retirement that won while this coroutine waited for it.
           var socketToCancel: WebSocket? = null
@@ -1126,7 +1178,6 @@ class GatewaySession(
       } catch (_: GatewayRequestOutcomeUnknown) {
         throw GatewayConnectFailure(gatewayNetworkConnectError())
       }
-    }
 
     suspend fun request(
       method: String,
@@ -1165,6 +1216,20 @@ class GatewaySession(
         retryPreparingPlayback = playbackRendition,
       )
     }
+
+    suspend fun loadSourceFavicon(
+      config: GatewaySourcePreviewConfig,
+      hostname: String,
+      withEnqueue: (() -> Unit) -> Unit,
+    ): GatewayLoadedImage? =
+      sourceFaviconLoader.load(
+        gatewayUrl = "${if (tlsConfig != null) "https" else "http"}://${formatGatewayAuthority(target.endpoint.host, target.endpoint.port)}",
+        basePath = config.basePath,
+        hostname = hostname,
+        headers = mediaTransportHeaders(),
+        credentials = controlUiReadCredentials,
+        withEnqueue = withEnqueue,
+      )
 
     fun bufferedMedia(
       bytes: ByteArray,
@@ -1248,12 +1313,27 @@ class GatewaySession(
       return TicketedMediaRequest(url = url, headers = headers)
     }
 
-    private fun mediaTransportHeaders(): Map<String, String> =
-      if (tlsConfig == null) {
+    private fun mediaTransportHeaders(): Map<String, String> {
+      ingressAuthorization?.let { authorization ->
+        if (state.get() == ConnectionState.CLOSED) throw GatewayExternalAuthorizationException()
+        authorization.requireCurrent(
+          Request
+            .Builder()
+            .url(
+              buildGatewayWebSocketUrl(target.endpoint.host, target.endpoint.port, true, target.endpoint.contextPath),
+            ).build(),
+        )
+      }
+      return if (tlsConfig == null) {
         emptyMap()
+      } else if (ingressAuthorization != null) {
+        // Media stays bound to the grant admitted for this physical socket. A
+        // later account must never supply credentials to an older capability.
+        ingressHeaders
       } else {
         GatewayCustomHeaders.sanitized(customHeadersProvider?.invoke(target.endpoint.stableId).orEmpty())
       }
+    }
 
     @OptIn(DelicateCoroutinesApi::class)
     suspend fun sendRequestFrame(
@@ -1351,11 +1431,16 @@ class GatewaySession(
 
     fun isReady(): Boolean = state.get() == ConnectionState.READY
 
-    fun markReady(): Boolean = state.compareAndSet(ConnectionState.CONNECTING, ConnectionState.READY)
+    fun markReady(methods: Set<String>?): Boolean {
+      if (!state.compareAndSet(ConnectionState.CONNECTING, ConnectionState.READY)) return false
+      advertisedMethods = methods.orEmpty().toSet()
+      return true
+    }
 
     fun retire(): WebSocket? =
       synchronized(lifecycleLock) {
         if (state.getAndSet(ConnectionState.CLOSED) != ConnectionState.CLOSED) {
+          retireIngressRequests()
           incomingMessages.close()
           if (!connectDeferred.isCompleted) {
             connectDeferred.completeExceptionally(IllegalStateException("Gateway closed"))
@@ -1367,6 +1452,19 @@ class GatewaySession(
 
     fun closeQuietly() {
       cancelSocket(retire())
+    }
+
+    @OptIn(DelicateCoroutinesApi::class)
+    private fun retireIngressRequests() {
+      if (ingressAuthorization == null || !ingressRetirementStarted.compareAndSet(false, true)) return
+      connectionScope.launch(Dispatchers.IO, start = CoroutineStart.ATOMIC) {
+        withContext(NonCancellable) {
+          // Dispatcher ownership ends when headers are delivered. Keep calls
+          // through body consumption so an already playing stream is retired too.
+          ingressCalls.forEach { it.cancel() }
+          client.connectionPool.evictAll()
+        }
+      }
     }
 
     @OptIn(DelicateCoroutinesApi::class)
@@ -1386,6 +1484,7 @@ class GatewaySession(
     ) {
       if (!terminalCallbackClaimed.compareAndSet(false, true)) return
       val shouldNotify = state.getAndSet(ConnectionState.CLOSED) != ConnectionState.CLOSED
+      retireIngressRequests()
       incomingMessages.close()
       // Completion handlers run synchronously and cannot own app-level disconnect cleanup.
       connectionScope.launch(Dispatchers.IO, start = CoroutineStart.ATOMIC) {
@@ -1428,6 +1527,56 @@ class GatewaySession(
         builder.sslSocketFactory(tlsConfig.sslSocketFactory, tlsConfig.trustManager)
         builder.hostnameVerifier(tlsConfig.hostnameVerifier)
       }
+      ingressAuthorization?.let { authorization ->
+        builder.followRedirects(false).followSslRedirects(false)
+        builder.retryOnConnectionFailure(false)
+        builder.eventListener(
+          object : EventListener() {
+            override fun callStart(call: Call) {
+              ingressCalls.add(call)
+              // Late registration meets the closed-state interceptor before I/O;
+              // existing calls remain owned until the response body terminates.
+            }
+
+            override fun callEnd(call: Call) {
+              ingressCalls.remove(call)
+            }
+
+            override fun callFailed(
+              call: Call,
+              ioe: IOException,
+            ) {
+              ingressCalls.remove(call)
+            }
+          },
+        )
+        builder.addNetworkInterceptor { chain ->
+          // Media's preparation retry interceptor can call proceed repeatedly.
+          // Network interceptors guard each exchange; WebSockets use the guard below.
+          if (state.get() == ConnectionState.CLOSED) throw GatewayExternalAuthorizationException()
+          authorization.requireCurrent(chain.request())
+          chain.proceed(chain.request())
+        }
+        builder.addInterceptor { chain ->
+          val request = chain.request()
+          if (state.get() == ConnectionState.CLOSED) throw GatewayExternalAuthorizationException()
+          authorization.requireCurrent(request)
+          val response = chain.proceed(request)
+          try {
+            if (state.get() == ConnectionState.CLOSED) throw GatewayExternalAuthorizationException()
+            authorization.requireCurrent(request)
+            authorization.rejection(response)?.let { throw it }
+          } catch (error: Throwable) {
+            // A 101 response owns the socket until RealWebSocket adopts it.
+            // Rejecting here must close both streams even if another close fails.
+            runCatching { response.close() }
+            runCatching { response.socket?.sink?.close() }
+            runCatching { response.socket?.source?.close() }
+            throw error
+          }
+          response
+        }
+      }
       return builder.build()
     }
 
@@ -1436,6 +1585,15 @@ class GatewaySession(
         webSocket: WebSocket,
         response: Response,
       ) {
+        try {
+          // A queued upgrade can outlive its grant. Pairing starts only after
+          // both ingress validity and the physical connection owner admit it.
+          ingressAuthorization?.requireCurrent(response.request)
+        } catch (error: Exception) {
+          finishTransport("Gateway error: ${error.message}", error)
+          cancelSocket(webSocket)
+          return
+        }
         val accepted =
           synchronized(lifecycleLock) {
             if (currentConnection !== this@Connection || desired !== target || state.get() != ConnectionState.CONNECTING) {
@@ -1471,9 +1629,10 @@ class GatewaySession(
         t: Throwable,
         response: Response?,
       ) {
+        val error = response?.let { ingressAuthorization?.rejection(it) } ?: t
         finishTransport(
-          message = "Gateway error: ${t.message ?: t::class.java.simpleName}",
-          connectError = t,
+          message = "Gateway error: ${error.message ?: error::class.java.simpleName}",
+          connectError = error,
         )
       }
 
@@ -1643,6 +1802,11 @@ class GatewaySession(
       val authObj = obj["auth"].asObjectOrNull()
       val deviceToken = authObj?.get("deviceToken").asStringOrNull()
       val authRole = authObj?.get("role").asStringOrNull() ?: target.options.role
+      controlUiReadCredentials =
+        listOfNotNull(deviceToken, selectedAuth.authDeviceToken, selectedAuth.authToken, selectedAuth.authPassword)
+          .map(String::trim)
+          .filter(String::isNotEmpty)
+          .distinct()
       val authScopes =
         authObj
           ?.get("scopes")
@@ -2126,7 +2290,7 @@ class GatewaySession(
       val connected = conn.connect()
       synchronized(notificationLock) {
         synchronized(lifecycleLock) {
-          if (currentConnection !== conn || desired !== target || job?.isActive != true || !conn.markReady()) return@withContext
+          if (currentConnection !== conn || desired !== target || job?.isActive != true || !conn.markReady(connected.hello.methods)) return@withContext
           // Ready metadata precedes callbacks; retries requested by a callback remain queued.
           pluginSurfaceUrls = connected.pluginSurfaceUrls
           sessionRouting = connected.sessionRouting
@@ -2149,6 +2313,8 @@ class GatewaySession(
         val error =
           when (err) {
             is GatewayConnectFailure -> err.gatewayError
+
+            is GatewayExternalAuthorizationException -> ErrorShape("EXTERNAL_AUTH_REQUIRED", err.message.orEmpty())
 
             is ConnectException,
             is NoRouteToHostException,
@@ -2346,13 +2512,16 @@ class GatewaySession(
     target: DesiredConnection,
     error: ErrorShape,
   ): Boolean =
-    !(target.recoveringStoredBootstrap && error.details?.code == "AUTH_BOOTSTRAP_TOKEN_INVALID") &&
-      shouldPauseGatewayReconnectAfterAuthFailure(
-        error = error,
-        hasBootstrapToken = target.bootstrapToken?.trim()?.isNotEmpty() == true,
-        role = target.options.role,
-        scopes = target.options.scopes,
-        pendingDeviceTokenRetry = target.pendingDeviceTokenRetry,
+    error.code == "EXTERNAL_AUTH_REQUIRED" ||
+      (
+        !(target.recoveringStoredBootstrap && error.details?.code == "AUTH_BOOTSTRAP_TOKEN_INVALID") &&
+          shouldPauseGatewayReconnectAfterAuthFailure(
+            error = error,
+            hasBootstrapToken = target.bootstrapToken?.trim()?.isNotEmpty() == true,
+            role = target.options.role,
+            scopes = target.options.scopes,
+            pendingDeviceTokenRetry = target.pendingDeviceTokenRetry,
+          )
       )
 
   private fun shouldClearStoredDeviceTokenAfterRetry(error: ErrorShape): Boolean = error.details?.code == "AUTH_DEVICE_TOKEN_MISMATCH"

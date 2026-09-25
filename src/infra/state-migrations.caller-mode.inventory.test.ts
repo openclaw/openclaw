@@ -141,6 +141,8 @@ module.exports = { stateMigrations: [{
 
         await expect(repair()).resolves.toEqual({
           changes: ["migrated kept-owner", "migrated omitted-owner"],
+          completedPluginIds: ["kept-owner", "omitted-owner"],
+          requiredPluginIds: ["kept-owner", "omitted-owner"],
           warnings: [],
         });
         for (const pluginId of pluginIds) {
@@ -148,7 +150,12 @@ module.exports = { stateMigrations: [{
             "migrated",
           );
         }
-        await expect(repair()).resolves.toEqual({ changes: [], warnings: [] });
+        await expect(repair()).resolves.toEqual({
+          changes: [],
+          completedPluginIds: ["kept-owner", "omitted-owner"],
+          requiredPluginIds: ["kept-owner", "omitted-owner"],
+          warnings: [],
+        });
       },
       { config, env },
     );
@@ -263,11 +270,16 @@ module.exports = { stateMigrations: [{
   const refused = await runRepair(baseConfig, frozenActions.toReversed());
   expect(refused).toEqual({
     changes: [],
+    completedPluginIds: undefined,
+    requiredPluginIds: ["acpx", "codex"],
     warnings: [expect.stringContaining("immutable action order")],
+    warningDisposition: undefined,
   });
 
   await expect(runRepair(baseConfig, frozenActions)).resolves.toEqual({
     changes: ["migrated acpx", "migrated codex"],
+    completedPluginIds: ["acpx", "codex"],
+    requiredPluginIds: ["acpx", "codex"],
     warnings: [],
   });
   expect(fs.readFileSync(markerPaths.acpx, "utf8")).toBe("migrated");
@@ -385,14 +397,12 @@ module.exports = { stateMigrations: [{
     if (inventory !== "readable") {
       expect(result.stepReceipts).toContainEqual(expect.objectContaining({ outcome: "refused" }));
       const blocker = result.stepReceipts.findIndex((receipt) => receipt.outcome === "refused");
+      // Agent history now needs the artifact-preserving snapshot before plugin inventory does.
       expect(result.stepReceipts[blocker]).toMatchObject({
-        id:
-          inventory === "staging-unavailable"
-            ? "plugin-migration-preparation"
-            : "plugin-doctor-state",
+        id: inventory === "staging-unavailable" ? "agent-migration-targets" : "plugin-doctor-state",
         refusal: {
           code:
-            inventory === "staging-unavailable" ? "plugin-inventory-unavailable" : "step-refused",
+            inventory === "staging-unavailable" ? "agent-target-discovery-failed" : "step-refused",
         },
       });
       expect(result.stepReceipts.slice(blocker + 1)).toEqual(
@@ -440,7 +450,12 @@ module.exports = { stateMigrations: [{
         maintenanceAuthority: { assertCurrent() {} },
         plannedActions: prepared?.plannedActions,
       }),
-    ).resolves.toEqual({ changes: ["migrated session action"], warnings: [] });
+    ).resolves.toEqual({
+      changes: ["migrated session action"],
+      completedPluginIds: ["inventory-owner"],
+      requiredPluginIds: ["inventory-owner"],
+      warnings: [],
+    });
     expect(fs.readFileSync(mutationPath, "utf8")).toBe("migrated");
   },
 );

@@ -143,35 +143,65 @@ describe("imessage actions runtime", () => {
     expect(runIMessageCliJsonCommandMock).not.toHaveBeenCalled();
   });
 
-  it("stages remote action files and passes only the remote pathname to RPC", async () => {
-    const request = vi.fn().mockResolvedValue({ guid: "attachment-guid" });
-    createIMessageRpcClientMock.mockResolvedValue({
-      request,
-      stop: vi.fn().mockResolvedValue(undefined),
-    });
-    withIMessageRemoteFileMock.mockImplementation(
-      async ({ use }: { use: (remotePath: string) => Promise<unknown> }) =>
-        await use("/tmp/openclaw-imessage-safe/photo.png"),
-    );
+  type ActionOptions = Parameters<typeof imessageActionsRuntime.sendAttachment>[0]["options"];
+  const file = { filename: "photo.png", buffer: Uint8Array.from([1, 2, 3]) };
+  it.each([
+    {
+      method: "send.attachment",
+      send: (options: ActionOptions) =>
+        imessageActionsRuntime.sendAttachment({ chatGuid: "chat-guid", ...file, options }),
+      fields: {},
+    },
+    {
+      method: "send",
+      send: (options: ActionOptions) =>
+        imessageActionsRuntime.sendRichMessage({
+          chatGuid: "chat-guid",
+          text: "**caption**",
+          replyToMessageId: "message-guid",
+          attachment: { kind: "buffer", ...file },
+          options,
+        }),
+      fields: {
+        text: "caption",
+        transport: "bridge",
+        reply_to: "message-guid",
+        formatting: [{ start: 0, length: 7, styles: ["bold"] }],
+      },
+    },
+    {
+      method: "group.setIcon",
+      send: (options: ActionOptions) =>
+        imessageActionsRuntime.setGroupIcon({ chatGuid: "chat-guid", ...file, options }),
+      fields: {},
+    },
+  ])(
+    "stages $method files and passes only the remote pathname to RPC",
+    async ({ method, send, fields }) => {
+      const request = vi.fn().mockResolvedValue({ guid: "attachment-guid" });
+      createIMessageRpcClientMock.mockResolvedValue({
+        request,
+        stop: vi.fn().mockResolvedValue(undefined),
+      });
+      withIMessageRemoteFileMock.mockImplementation(
+        async ({ use }: { use: (remotePath: string) => Promise<unknown> }) =>
+          await use("/tmp/openclaw-imessage-safe/photo.png"),
+      );
 
-    await imessageActionsRuntime.sendAttachment({
-      chatGuid: "chat-guid",
-      filename: "photo.png",
-      buffer: Uint8Array.from([1, 2, 3]),
-      options: {
+      await send({
         cliPath: "/gateway/imsg-ssh",
         remoteHost: "messages-mac",
         chatGuid: "chat-guid",
-      },
-    });
+      });
 
-    expect(request).toHaveBeenCalledWith(
-      "send.attachment",
-      { chat_guid: "chat-guid", file: "/tmp/openclaw-imessage-safe/photo.png" },
-      { timeoutMs: undefined },
-    );
-    expect(runIMessageCliJsonCommandMock).not.toHaveBeenCalled();
-  });
+      expect(request).toHaveBeenCalledWith(
+        method,
+        { chat_guid: "chat-guid", file: "/tmp/openclaw-imessage-safe/photo.png", ...fields },
+        { timeoutMs: undefined },
+      );
+      expect(runIMessageCliJsonCommandMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("passes the configured Messages db path to private API bridge commands", async () => {
     runIMessageCliJsonCommandMock.mockResolvedValue({ success: true });

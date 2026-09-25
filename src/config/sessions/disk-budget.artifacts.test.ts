@@ -89,14 +89,18 @@ describe("pruneUnreferencedSessionArtifacts", () => {
         dir,
         "sessions.json.222.1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d.tmp",
       );
+      const readEntry = vi.fn(() => ({ sessionId: "keep", updatedAt: Date.now() }));
       const store: Record<string, SessionEntry> = {
-        "agent:main:main": { sessionId: "keep", updatedAt: Date.now() },
+        get "agent:main:main"() {
+          return readEntry();
+        },
       };
       await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
       await fs.writeFile(staleTemp, "s".repeat(64), "utf-8");
       await fs.writeFile(freshTemp, "f".repeat(64), "utf-8");
       const old = new Date(Date.now() - 30 * 60 * 1000);
       await fs.utimes(staleTemp, old, old);
+      readEntry.mockClear();
 
       const result = await pruneUnreferencedSessionArtifacts({
         store,
@@ -108,6 +112,7 @@ describe("pruneUnreferencedSessionArtifacts", () => {
       await expectPathExists(freshTemp);
       await expectPathExists(storePath);
       expect(result.removedFiles).toBeGreaterThanOrEqual(1);
+      expect(readEntry).not.toHaveBeenCalled();
     });
   });
 

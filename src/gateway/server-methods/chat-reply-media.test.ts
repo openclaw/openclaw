@@ -5,18 +5,38 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest";
 import { consumePendingToolMediaIntoReply } from "../../agents/embedded-agent-subscribe.handlers.messages.replies.js";
+import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createPinnedLookup } from "../../infra/net/ssrf.js";
+import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
-import { setMediaStoreNetworkDepsForTest } from "../../media/store.test-support.js";
+import {
+  disposeStoreRemoteFixtures,
+  withStoreRemoteFixture,
+  wrapStoreSaveRemoteMedia,
+} from "../../media/store-network.test-support.js";
+import { saveMediaBuffer } from "../../media/store.js";
+import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createManagedOutgoingMediaBlocks as createManagedOutgoingImageBlocks } from "../managed-image-attachments.js";
-import { buildAssistantReplyContent } from "./chat-assistant-content.js";
+import {
+  buildAssistantReplyContent,
+  buildAssistantReplyContentFromInputs,
+} from "./chat-assistant-content.js";
 import { normalizeWebchatReplyMediaPathsForDisplay } from "./chat-reply-media.js";
 import { buildWebchatAssistantMessageFromReplyPayloads } from "./chat-webchat-media.js";
 
@@ -25,6 +45,25 @@ const PNG_BYTES = Buffer.from(
   "base64",
 );
 const TEST_SESSION_KEY = "agent:main:webchat:direct:user";
+
+let storeSaveSpy: MockInstance<typeof import("../../media/fetch.js").saveRemoteMedia> | undefined;
+
+beforeAll(async () => {
+  // Spy after graph evaluation: importOriginal(fetch) can pull store into its mock cycle.
+  const mediaFetch = await import("../../media/fetch.js");
+  const saveRemoteMedia = mediaFetch.saveRemoteMedia;
+  storeSaveSpy = vi
+    .spyOn(mediaFetch, "saveRemoteMedia")
+    .mockImplementation(wrapStoreSaveRemoteMedia(saveRemoteMedia));
+});
+
+afterAll(() => {
+  try {
+    disposeStoreRemoteFixtures();
+  } finally {
+    storeSaveSpy?.mockRestore();
+  }
+});
 
 type ReplyMediaPayloads = Parameters<
   typeof normalizeWebchatReplyMediaPathsForDisplay
@@ -49,7 +88,7 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
   });
 
   afterEach(async () => {
-    setMediaStoreNetworkDepsForTest();
+    await drainGlobalSingletonLifecycleState();
     await testState.cleanup();
   });
 
@@ -115,6 +154,7 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
       cfg: params.cfg,
       sessionKey: TEST_SESSION_KEY,
       agentId: "main",
+      sessionEntry: undefined,
       payloads: params.payloads,
     });
     return payload;
@@ -185,6 +225,33 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     );
   });
 
+  it.each(["file://attacker/share/probe.mp3", "file:///outside/secret.png"])(
+    "keeps deferred tool media rejection visible for %s",
+    async (mediaUrl) => {
+      const { cfg, stateDir } = createMediaTestContext({ allowRead: true });
+      const payload = await normalizeReplyMedia({
+        cfg,
+        payloads: [{ text: "NO_REPLY", mediaUrls: [mediaUrl] }],
+      });
+      const { assistantContent } = await buildAssistantReplyContent({
+        sessionKey: TEST_SESSION_KEY,
+        agentId: "main",
+        payloads: payload ? [payload] : [],
+        managedMediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, "main"),
+      });
+      expect(assistantContent).toEqual([
+        expect.objectContaining({
+          type: "attachment_error",
+          attachment: expect.objectContaining({
+            code: "delivery-failed",
+            label: path.basename(new URL(mediaUrl).pathname),
+          }),
+        }),
+      ]);
+      await expectOutboundMediaMissing(stateDir);
+    },
+  );
+
   it("preserves ordered document and image metadata beside one rejected SVG", async () => {
     const { workspaceDir, cfg } = createMediaTestContext({ allowRead: true });
     const documentPath = path.join(workspaceDir, "artifact.json");
@@ -204,13 +271,6 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
       upstream.listen(0, "127.0.0.1", resolve);
     });
     const address = upstream.address() as AddressInfo;
-    setMediaStoreNetworkDepsForTest({
-      resolvePinnedHostname: async (hostname) => ({
-        hostname,
-        addresses: ["127.0.0.1"],
-        lookup: createPinnedLookup({ hostname, addresses: ["127.0.0.1"] }),
-      }),
-    });
 
     try {
       const remoteImageUrl = `http://127.0.0.1:${address.port}/remote.png?sig=secret`;
@@ -233,12 +293,18 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
         ],
       });
       expect(payload?.mediaUrls).toHaveLength(3);
-      const { assistantContent: content } = await buildAssistantReplyContent({
-        sessionKey: TEST_SESSION_KEY,
-        agentId: "main",
-        payloads: payload ? [payload] : [],
-        managedMediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, "main"),
-      });
+      const matchedUrls: string[] = [];
+      const { assistantContent: content } = await withStoreRemoteFixture(
+        { url: remoteImageUrl, onMatch: (url) => matchedUrls.push(url) },
+        () =>
+          buildAssistantReplyContent({
+            sessionKey: TEST_SESSION_KEY,
+            agentId: "main",
+            payloads: payload ? [payload] : [],
+            managedMediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, "main"),
+          }),
+      );
+      expect(matchedUrls).toEqual([remoteImageUrl]);
       expect(content).toEqual([
         { type: "text", text: "Artifacts ready" },
         expect.objectContaining({
@@ -305,6 +371,48 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
         expect.objectContaining({ name: "voice.mp3", mimeType: "audio/mpeg" }),
       ],
     });
+
+    if (!payload) {
+      throw new Error("Expected a prepared mixed-media payload");
+    }
+    const preparedMediaUrls = payload.mediaUrls ?? [];
+    const missingDocument = path.join(workspaceDir, "missing.json");
+    payload.mediaUrls = [...preparedMediaUrls, missingDocument];
+    payload.attachments = [
+      ...(payload.attachments ?? []),
+      { name: "missing.json", mimeType: "application/json" },
+    ];
+    const finalized = await normalizeReplyMedia({ cfg, payloads: [payload] });
+    expect(finalized?.mediaUrls).toEqual(preparedMediaUrls);
+    const { assistantContent } = await buildAssistantReplyContent({
+      sessionKey: TEST_SESSION_KEY,
+      agentId: "main",
+      payloads: finalized ? [finalized] : [],
+      managedMediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, "main"),
+    });
+    expect(assistantContent?.filter((block) => block.type === "text")).toEqual([
+      { type: "text", text: "Artifacts ready" },
+    ]);
+    expect(assistantContent?.filter((block) => block.type === "attachment_error")).toEqual([
+      {
+        type: "attachment_error",
+        attachment: {
+          code: "unsupported-format",
+          kind: "document",
+          label: "script.js",
+          mimeType: "text/javascript",
+        },
+      },
+      {
+        type: "attachment_error",
+        attachment: {
+          code: "file-not-found",
+          kind: "document",
+          label: "missing.json",
+          mimeType: "application/json",
+        },
+      },
+    ]);
   });
 
   it("does not stage sensitive media before display suppression", async () => {
@@ -508,37 +616,109 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     },
   );
 
-  it("keeps attachment metadata aligned while deduplicating generated media", async () => {
-    const { workspaceDir } = createMediaTestContext({ allowRead: true });
-    const firstPath = path.join(workspaceDir, "first.mp3");
-    const secondPath = path.join(workspaceDir, "second.mp3");
-    await fs.mkdir(workspaceDir, { recursive: true });
-    await fs.writeFile(firstPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
-    await fs.writeFile(secondPath, Buffer.from([0xff, 0xfb, 0x90, 0x01]));
+  it.each(["raw", "prepared"] as const)(
+    "keeps attachment metadata aligned while deduplicating generated media (%s)",
+    async (operation) => {
+      const { workspaceDir } = createMediaTestContext({ allowRead: true });
+      const firstPath = path.join(workspaceDir, "first.mp3");
+      const secondPath = path.join(workspaceDir, "second.mp3");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.writeFile(firstPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+      await fs.writeFile(secondPath, Buffer.from([0xff, 0xfb, 0x90, 0x01]));
+      const payload: ReplyMediaPayload = {
+        mediaUrl: secondPath,
+        mediaUrls: [firstPath, firstPath],
+        attachments: [
+          { type: "audio", path: firstPath, name: "first.mp3", durationMs: 1_000 },
+          { type: "audio", path: firstPath, name: "wrong.mp3", durationMs: 9_999 },
+          { type: "audio", name: "second.mp3", durationMs: 2_000 },
+        ],
+        trustedLocalMedia: true,
+      };
+      const originalPayload = structuredClone(payload);
 
-    const { assistantContent: content } = await buildAssistantReplyContent({
-      sessionKey: TEST_SESSION_KEY,
-      agentId: "main",
-      payloads: [
-        {
-          mediaUrl: secondPath,
-          mediaUrls: [firstPath, firstPath],
-          attachments: [
-            { type: "audio", path: firstPath, name: "first.mp3", durationMs: 1_000 },
-            { type: "audio", path: firstPath, name: "wrong.mp3", durationMs: 9_999 },
-            { type: "audio", name: "second.mp3", durationMs: 2_000 },
-          ],
-          trustedLocalMedia: true,
-        },
-      ],
-      managedMediaLocalRoots: [workspaceDir],
-    });
+      const { assistantContent: content } = await buildAssistantReplyContentFromInputs({
+        sessionKey: TEST_SESSION_KEY,
+        agentId: "main",
+        inputs:
+          operation === "prepared"
+            ? createStructuredOutboundPayloadPlan([payload]).map((plan) => ({
+                kind: "prepared" as const,
+                plan,
+              }))
+            : [{ kind: "raw", payload }],
+        managedMediaLocalRoots: [workspaceDir],
+      });
 
-    expect(content).toEqual([
-      expect.objectContaining({ type: "audio", fileName: "first.mp3", durationMs: 1_000 }),
-      expect.objectContaining({ type: "audio", fileName: "second.mp3", durationMs: 2_000 }),
-    ]);
-  });
+      expect(content).toEqual([
+        expect.objectContaining({ type: "audio", fileName: "first.mp3", durationMs: 1_000 }),
+        expect.objectContaining({ type: "audio", fileName: "second.mp3", durationMs: 2_000 }),
+      ]);
+      expect(payload).toEqual(originalPayload);
+    },
+  );
+
+  it.each(["raw", "prepared"] as const)(
+    "keeps explicit image metadata on its referenced URL (%s)",
+    async (operation) => {
+      const baseUrl = "https://example.test";
+      const payload: ReplyMediaPayload = {
+        mediaUrls: [`${baseUrl}/first.png`, `${baseUrl}/second.png`],
+        attachments: [
+          { url: `${baseUrl}/second.png`, name: "Second chart.png", mimeType: "image/png" },
+        ],
+      };
+      const originalPayload = structuredClone(payload);
+      const preparationErrors: string[] = [];
+      const requestedUrls: string[] = [];
+      const saveRemoteMedia = storeSaveSpy;
+      const previousSaveRemoteMedia = saveRemoteMedia?.getMockImplementation();
+      if (!saveRemoteMedia || !previousSaveRemoteMedia) {
+        throw new Error("expected the store remote-media spy to be installed");
+      }
+      saveRemoteMedia.mockImplementation(async (options) => {
+        expect(payload.mediaUrls).toContain(options.url);
+        requestedUrls.push(options.url);
+        return await saveMediaBuffer(
+          PNG_BYTES,
+          "image/png",
+          options.subdir,
+          options.maxBytes,
+          options.originalFilename,
+          options.filePathHint,
+        );
+      });
+
+      try {
+        const { assistantContent: content } = await buildAssistantReplyContentFromInputs({
+          sessionKey: TEST_SESSION_KEY,
+          agentId: "main",
+          inputs:
+            operation === "prepared"
+              ? createStructuredOutboundPayloadPlan([payload]).map((plan) => ({
+                  kind: "prepared" as const,
+                  plan,
+                }))
+              : [{ kind: "raw", payload }],
+          onManagedMediaPrepareError: (message) => preparationErrors.push(message),
+        });
+
+        expect(preparationErrors).toEqual([]);
+        expect(requestedUrls).toEqual(payload.mediaUrls);
+        expect(content).toEqual([
+          expect.objectContaining({ type: "image", alt: "first.png", mimeType: "image/png" }),
+          expect.objectContaining({
+            type: "image",
+            alt: "Second chart.png",
+            mimeType: "image/png",
+          }),
+        ]);
+        expect(payload).toEqual(originalPayload);
+      } finally {
+        saveRemoteMedia.mockImplementation(previousSaveRemoteMedia);
+      }
+    },
+  );
 
   it("keeps normalized MEDIA directive URLs when projecting history", async () => {
     const { workspaceDir } = createMediaTestContext({ allowRead: true });
@@ -658,6 +838,57 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     const blocks = await createManagedImageBlocks({ cfg, mediaUrls: payload?.mediaUrls });
 
     expect(blocks).toHaveLength(2);
+  });
+
+  it("retains earlier and newly observed failures beside an inline image", async () => {
+    const { cfg, workspaceDir } = createMediaTestContext({ allowRead: false });
+    const payload = await normalizeReplyMedia({
+      cfg,
+      payloads: [
+        setReplyPayloadMetadata(
+          {
+            mediaUrls: [dataImageUrl(), path.join(workspaceDir, "missing.png")],
+          },
+          {
+            assistantMediaFailures: [
+              {
+                code: "file-not-found",
+                kind: "document",
+                label: "earlier.pdf",
+                mimeType: "application/pdf",
+              },
+            ],
+          },
+        ),
+      ],
+    });
+    const { assistantContent } = await buildAssistantReplyContent({
+      sessionKey: TEST_SESSION_KEY,
+      agentId: "main",
+      payloads: payload ? [payload] : [],
+      managedMediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, "main"),
+    });
+    expect(assistantContent?.filter((block) => block.type === "attachment_error")).toEqual([
+      {
+        type: "attachment_error",
+        attachment: {
+          code: "file-not-found",
+          kind: "document",
+          label: "earlier.pdf",
+          mimeType: "application/pdf",
+        },
+      },
+      {
+        type: "attachment_error",
+        attachment: {
+          code: "file-not-found",
+          kind: "image",
+          label: "missing.png",
+          mimeType: "image/png",
+        },
+      },
+    ]);
+    expect(assistantContent?.filter((block) => block.type === "image")).toHaveLength(1);
   });
 
   it.each([

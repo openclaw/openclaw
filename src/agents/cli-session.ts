@@ -144,10 +144,19 @@ export function clearCliSession(entry: SessionEntry, provider: string): void {
   }
 }
 
+/** Cancellation invalidates an unfinished replacement, not established continuity. */
+export function shouldClearInterruptedCliSessionBinding(params: {
+  interrupted: boolean;
+  bindingReplacedDuringRun: boolean;
+}): boolean {
+  return params.interrupted && params.bindingReplacedDuringRun;
+}
+
 /** Decide whether a failed CLI turn invalidates the binding it tried to resume. */
 export function shouldClearFailedCliSessionBinding(params: {
   error: unknown;
   binding?: CliSessionBinding;
+  bindingReplacedDuringRun?: boolean;
   hasNewGeneratedMediaTask?: boolean;
 }): boolean {
   if (!normalizeOptionalString(params.binding?.sessionId)) {
@@ -160,8 +169,10 @@ export function shouldClearFailedCliSessionBinding(params: {
   if (isFailoverError(params.error)) {
     return isCliSessionInvalidatingFailoverReason(params.error.reason);
   }
-  // A pre-successor fork abort keeps its one-shot marker for the next turn.
-  return params.binding?.forkNextResume !== true && readErrorName(params.error) === "AbortError";
+  return shouldClearInterruptedCliSessionBinding({
+    interrupted: readErrorName(params.error) === "AbortError",
+    bindingReplacedDuringRun: params.bindingReplacedDuringRun === true,
+  });
 }
 
 /** Stable reason used when recording why a failed reused CLI session was cleared. */

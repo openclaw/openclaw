@@ -12,9 +12,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { bindStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import { streamSimple } from "../../llm/stream.js";
 import type { Model } from "../../llm/types.js";
-import { loadBundledPluginPublicSurface } from "../../plugin-sdk/test-helpers/public-surface-loader.js";
 import { resolveProviderStreamFn } from "../../plugins/provider-runtime.js";
 import { mintSecretSentinel } from "../../secrets/sentinel.js";
+import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { wrapStreamFnWithProviderPromptState } from "./provider-prompt-state.js";
 import {
   resolveEmbeddedAgentApiKey,
@@ -201,7 +201,7 @@ describe("resolveEmbeddedAgentStream", () => {
   it.each(["amazon-bedrock", "amazon-bedrock-mantle"])(
     "preserves the stable system cache boundary through the registered %s transport",
     async (providerId) => {
-      const { default: plugin } = await loadBundledPluginPublicSurface<{
+      const { default: plugin } = await loadBundledPluginFacade<{
         default: OpenClawPluginDefinition;
       }>({
         pluginId: providerId,

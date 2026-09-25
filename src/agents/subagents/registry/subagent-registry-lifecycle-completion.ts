@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { isAgentEventLifecycleGenerationCurrent } from "../../../infra/agent-events.js";
 import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
@@ -5,10 +6,8 @@ import type { DetachedTaskFindResult } from "../../../tasks/detached-task-runtim
 import { isProvisionalSubagentKillTask } from "../../../tasks/task-cancellation-state.js";
 import { mergeAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import { peekSwarmStructuredOutput } from "../../tools/structured-output-tool.js";
-import {
-  type SubagentRunOutcome,
-  withSubagentOutcomeTiming,
-} from "../announce/subagent-announce-output.js";
+import { withSubagentOutcomeTiming } from "../announce/subagent-announce-output.js";
+import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
 import { updateSwarmCollectorCompletion } from "../swarm/swarm-collector.js";
 import { clearDeliveryState, ensureCompletionState } from "./subagent-delivery-state.js";
 import {
@@ -17,7 +16,6 @@ import {
   SUBAGENT_ENDED_REASON_KILLED,
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
-import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import { resolveKilledSubagentTaskEndedAt } from "./subagent-registry-completion.js";
 import { updateSubagentArchiveAtMs } from "./subagent-registry-helpers.js";
 import { completeTerminalEffects } from "./subagent-registry-lifecycle-cleanup.js";
@@ -25,7 +23,7 @@ import type { SubagentLifecycleCompletionContext } from "./subagent-registry-lif
 import {
   freezeRunResultAtCompletion,
   refreshPendingFinalDeliveryPayload,
-  safeFinalizeSubagentTaskRun,
+  finalizeSubagentTaskRun,
 } from "./subagent-registry-lifecycle-delivery.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 import {
@@ -125,12 +123,52 @@ export async function completeSubagentRunAttempt(
     if (!entry) {
       return;
     }
-    if (completeParams.expectedEntry && entry !== completeParams.expectedEntry) {
+    if (
+      (completeParams.expectedEntry && entry !== completeParams.expectedEntry) ||
+      completeParams.isRecoveryCurrent?.() === false
+    ) {
       return;
     }
-    suppressSessionEffects ||= shouldSuppressSubagentRecoverySessionEffects(entry);
+    context.bindTerminalSessionEffects(entry, completeParams.isChildSessionEffectsCurrent);
+    suppressSessionEffects ||= context.shouldSuppressSessionEffects(entry);
     params.clearPendingLifecycleError(completeParams.runId);
     const currentEntry = entry;
+    const resolveCurrentTask = async (candidate: SubagentRunRecord) => {
+      const generation = currentEntry.generation;
+      const execution = currentEntry.execution;
+      const cancellation = currentEntry.killReconciliation;
+      const killIntent = currentEntry.killIntent;
+      const terminalOwner = currentEntry.terminalOwner;
+      const pauseReason = currentEntry.pauseReason;
+      const suppressCompletionDelivery = currentEntry.suppressCompletionDelivery;
+      const suppressAnnounceReason = currentEntry.suppressAnnounceReason;
+      const taskResolution = await params.resolveSubagentTaskAsync(candidate);
+      if (
+        params.runs.get(completeParams.runId) !== currentEntry ||
+        currentEntry.generation !== generation ||
+        currentEntry.execution !== execution ||
+        currentEntry.killReconciliation !== cancellation ||
+        currentEntry.killIntent !== killIntent ||
+        currentEntry.terminalOwner !== terminalOwner ||
+        currentEntry.pauseReason !== pauseReason ||
+        currentEntry.suppressCompletionDelivery !== suppressCompletionDelivery ||
+        currentEntry.suppressAnnounceReason !== suppressAnnounceReason ||
+        completeParams.isRecoveryCurrent?.() === false
+      ) {
+        return undefined;
+      }
+      return taskResolution;
+    };
+    // The first asynchronous arbitration precedes every tentative change to the live row.
+    // An observed abort may normalize to timeout after its explicit deadline.
+    const needsInitialArbitration =
+      entry.endedReason === SUBAGENT_ENDED_REASON_KILLED && entry.killReconciliation !== undefined;
+    const initialTaskResolution = needsInitialArbitration
+      ? await resolveCurrentTask(entry)
+      : undefined;
+    if (needsInitialArbitration && !initialTaskResolution) {
+      return;
+    }
     entrySnapshot = structuredClone(entry);
     const restoreEntrySnapshot = (snapshot?: SubagentRunRecord) => {
       if (!snapshot) {
@@ -232,11 +270,18 @@ export async function completeSubagentRunAttempt(
       completeParams.reason === SUBAGENT_ENDED_REASON_KILLED &&
       entry.killIntent === undefined &&
       entry.endedReason !== undefined &&
-      entry.endedReason !== SUBAGENT_ENDED_REASON_KILLED &&
-      entry.execution.outcome !== undefined
+      entry.execution.outcome !== undefined &&
+      (entry.endedReason !== SUBAGENT_ENDED_REASON_KILLED ||
+        (entry.execution.status === "terminal" &&
+          entry.killReconciliation === undefined &&
+          entry.pauseReason === undefined &&
+          typeof entry.execution.endedAt === "number" &&
+          Number.isFinite(entry.execution.endedAt) &&
+          typeof entry.cleanupCompletedAt === "number" &&
+          Number.isFinite(entry.cleanupCompletedAt) &&
+          entry.cleanupCompletedAt >= entry.execution.endedAt))
     ) {
-      // Any finalized provider outcome is canonical. A delayed abort listener
-      // must not replace success, failure, or timeout with a killed marker.
+      // A delayed abort must not replace a finalized result or reopen a cleaned cancellation.
       return;
     }
     let requestedEndedAt =
@@ -315,7 +360,7 @@ export async function completeSubagentRunAttempt(
         completionReason = SUBAGENT_ENDED_REASON_KILLED;
         completionOutcome = { status: "error", error: killIntent.reason };
         entry.killIntent = undefined;
-        if (killOwnsCurrentLifecycle) {
+        if (killOwnsCurrentLifecycle && entry.execution.suppressSessionEffects !== true) {
           suppressSessionEffects = false;
           entry.execution = {
             ...entry.execution,
@@ -359,7 +404,10 @@ export async function completeSubagentRunAttempt(
       entry.killReconciliation !== undefined
     ) {
       const killReconciliation = entry.killReconciliation;
-      const taskResolution = params.resolveSubagentTask(entry);
+      const taskResolution = initialTaskResolution;
+      if (!taskResolution) {
+        return;
+      }
       const stableTaskCancellation =
         taskResolution.lookup === "available" &&
         taskResolution.task?.status === "cancelled" &&
@@ -427,6 +475,10 @@ export async function completeSubagentRunAttempt(
       completionOutcome.status === "ok" &&
       !terminalReply
     ) {
+      // An unproven success cannot replace the cancellation already owned by this run.
+      if (provisionalKillSnapshot) {
+        return;
+      }
       completionOutcome = { status: "error", error: MISSING_REQUIRED_FINAL_REPLY_ERROR };
       completionReason = SUBAGENT_ENDED_REASON_ERROR;
     }
@@ -437,7 +489,13 @@ export async function completeSubagentRunAttempt(
             startedAt: entry.execution.startedAt,
             endedAt,
           });
-    const executionOutcome = recoveryRequested ? (entry.execution.outcome ?? outcome) : outcome;
+    // Lifecycle events and agent.wait may report the same terminal facts. Keep
+    // their authority stable while a prepared announcement waits for admission.
+    const executionOutcome =
+      (recoveryRequested || isDeepStrictEqual(entry.execution.outcome, outcome)) &&
+      entry.execution.outcome
+        ? entry.execution.outcome
+        : outcome;
     const retainedRestartRecovery = suppressSessionEffects
       ? entry.execution.restartRecovery
       : undefined;
@@ -551,7 +609,10 @@ export async function completeSubagentRunAttempt(
       // Keep the tombstone's superseded generation boundary through task
       // commit. Clearing it on the canonical registry row must not let a
       // late old-run result select a newer task sharing the session key.
-      const taskResolution = params.resolveSubagentTask(provisionalKillSnapshot);
+      const taskResolution = await resolveCurrentTask(provisionalKillSnapshot);
+      if (!taskResolution) {
+        return;
+      }
       postCaptureTaskResolution = taskResolution;
       const stableTaskCancellation =
         taskResolution.lookup === "available" &&
@@ -575,7 +636,7 @@ export async function completeSubagentRunAttempt(
     // A steer abort ends one agent run but continues the same detached task.
     // The successor must remain able to publish its eventual terminal state.
     if (provisionalKillSnapshot) {
-      const finalizedTasks = safeFinalizeSubagentTaskRun(params, {
+      const finalizedTasks = await finalizeSubagentTaskRun(params, {
         entry,
         outcome: executionOutcome,
         taskResolution: postCaptureTaskResolution,
@@ -589,7 +650,10 @@ export async function completeSubagentRunAttempt(
           // runtime's own finalizer decide whether provider completion won.
           return;
         }
-        const latestTaskResolution = params.resolveSubagentTask(provisionalKillSnapshot);
+        const latestTaskResolution = await resolveCurrentTask(provisionalKillSnapshot);
+        if (!latestTaskResolution) {
+          return;
+        }
         const latestTask = latestTaskResolution.task;
         const stableTaskCancellation =
           latestTask?.status === "cancelled" && !isProvisionalSubagentKillTask(latestTask);
@@ -631,7 +695,7 @@ export async function completeSubagentRunAttempt(
         throw error;
       }
       if (!suppressTaskFinalization) {
-        safeFinalizeSubagentTaskRun(params, {
+        await finalizeSubagentTaskRun(params, {
           entry,
           outcome: executionOutcome,
         });

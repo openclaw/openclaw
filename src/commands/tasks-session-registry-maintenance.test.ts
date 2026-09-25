@@ -1,5 +1,5 @@
 // Covers session-registry sweep isolation: unreadable cron facts fail the whole
-// sweep closed, while completed agent deletions are reported as per-store skips.
+// sweep closed, while retained stores are reported as per-store skips.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -7,18 +7,22 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetConfigRuntimeState } from "../config/config.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { reconstructAgentDeletionJournal } from "../state/agent-deletion-journal-recovery.js";
 import {
   beginAgentDeletionJournal,
   completeAgentDeletionJournalInDatabase,
 } from "../state/agent-deletion-journal.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import * as taskRegistryMaintenance from "../tasks/task-registry.maintenance.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runSessionRegistryMaintenance } from "./tasks-session-registry-maintenance.js";
 import { tasksMaintenanceCommand } from "./tasks.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const DAY_MS = 24 * 60 * 60_000;
 const mocks = vi.hoisted(() => ({
@@ -29,11 +33,11 @@ vi.mock("../cron/store.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../cron/store.js")>();
   return {
     ...actual,
-    loadCronJobsStoreSync: (storePath: string) => {
+    loadCronJobsStore: async (storePath: string) => {
       if (mocks.cronStoreLoadError) {
         throw mocks.cronStoreLoadError;
       }
-      return actual.loadCronJobsStoreSync(storePath);
+      return actual.loadCronJobsStore(storePath);
     },
   };
 });
@@ -77,19 +81,11 @@ async function withMaintenanceState(run: (state: OpenClawTestState) => Promise<v
   );
 }
 
-function createRuntime(): RuntimeEnv {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  } as unknown as RuntimeEnv;
-}
-
 describe("runSessionRegistryMaintenance", () => {
-  afterEach(() => {
+  afterEach(async () => {
     mocks.cronStoreLoadError = undefined;
-    taskRegistryMaintenance.stopTaskRegistryMaintenance();
-    taskRegistryMaintenance.resetTaskRegistryMaintenanceRuntimeForTests();
+    await taskRegistryMaintenance.stopTaskRegistryMaintenance();
+    taskRegistryMaintenance.configureTaskRegistryMaintenance({ runtimeAuthoritative: false });
     resetConfigRuntimeState();
     closeOpenClawAgentDatabasesForTest();
   });
@@ -102,7 +98,7 @@ describe("runSessionRegistryMaintenance", () => {
         { sessionKey: staleCronKey, storePath },
         { sessionId: "maybe-running", updatedAt: Date.now() - 8 * DAY_MS },
       );
-      mocks.cronStoreLoadError = new Error("SQLITE_CORRUPT: database disk image is malformed");
+      mocks.cronStoreLoadError = new Error("cron store load unavailable");
 
       const summary = await runSessionRegistryMaintenance({ apply: true });
 
@@ -175,7 +171,7 @@ describe("runSessionRegistryMaintenance", () => {
           loadSessionEntry({ sessionKey: mainKey, storePath: mainStorePath }) !== undefined,
         ).toBe(mainEntrySurvives);
         if (!apply) {
-          const jsonRuntime = createRuntime();
+          const jsonRuntime = createTestRuntime();
           await tasksMaintenanceCommand({ json: true }, jsonRuntime);
           expect(JSON.parse(String(vi.mocked(jsonRuntime.log).mock.calls[0]?.[0]))).toMatchObject({
             maintenance: {
@@ -191,12 +187,59 @@ describe("runSessionRegistryMaintenance", () => {
               },
             },
           });
-          const textRuntime = createRuntime();
+          const textRuntime = createTestRuntime();
           await tasksMaintenanceCommand({}, textRuntime);
           expect(vi.mocked(textRuntime.log).mock.calls.flat().join("\n")).toContain(
             "1 skipped store",
           );
         }
+      });
+    },
+  );
+
+  it.each(["missing", "reconstructed"])(
+    "preserves stores held by %s deletion history while continuing eligible retention",
+    async (history) => {
+      await withMaintenanceState(async (state) => {
+        const mainStorePath = path.join(state.sessionsDir("main"), "sessions.json");
+        const retainedStorePath = path.join(state.sessionsDir("retained"), "sessions.json");
+        const mainKey = await writeStaleCronSession(mainStorePath, "main");
+        const retainedKey = await writeStaleCronSession(retainedStorePath, "retained");
+        const databasePath = resolveSqliteTargetFromSessionStorePath(retainedStorePath).path;
+        closeOpenClawAgentDatabasesForTest();
+        runOpenClawStateWriteTransaction((database) => {
+          database.db.exec("DROP TABLE agent_deletion_journal");
+          if (history === "reconstructed") {
+            reconstructAgentDeletionJournal(database, [
+              { agentId: "retained", path: databasePath },
+            ]);
+          }
+        });
+        const bytes = await fs.readFile(databasePath);
+
+        const summary = await runSessionRegistryMaintenance({ apply: true });
+
+        expect(summary).toMatchObject({
+          pruned: history === "missing" ? 0 : 1,
+          skippedStores: history === "missing" ? 2 : 1,
+          stores: expect.arrayContaining([
+            {
+              agentId: "retained",
+              storePath: retainedStorePath,
+              skippedReason: "agent-store-held",
+              warning: expect.stringContaining(`Held agent retained database ${databasePath}`),
+            },
+          ]),
+        });
+        const held = summary.stores.find((store) => store.agentId === "retained");
+        expect(held).toMatchObject({ warning: expect.stringContaining("openclaw doctor --fix") });
+        expect(await fs.readFile(databasePath)).toEqual(bytes);
+        expect(
+          loadSessionEntry({ sessionKey: retainedKey, storePath: retainedStorePath }),
+        ).toBeDefined();
+        expect(
+          loadSessionEntry({ sessionKey: mainKey, storePath: mainStorePath }) !== undefined,
+        ).toBe(history === "missing");
       });
     },
   );
@@ -216,6 +259,7 @@ describe("runSessionRegistryMaintenance", () => {
 
   it("keeps corrupt discovered stores terminal", async () => {
     await withMaintenanceState(async (state) => {
+      openOpenClawStateDatabase();
       const retiredStorePath = path.join(state.sessionsDir("retired"), "sessions.json");
       const sqlitePath = resolveSqliteTargetFromSessionStorePath(retiredStorePath).path;
       if (!sqlitePath) {

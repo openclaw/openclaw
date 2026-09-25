@@ -1,29 +1,30 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { validateSessionsDescribeParams } from "../../../packages/gateway-protocol/src/index.js";
+import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import { projectOperatorModelRead } from "../operator-model-presentation.js";
 import { hasOperatorBoundary } from "../operator-role-policy.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
-import { createSessionListEntryFilter } from "../session-sharing.js";
+import { withReadySessionRows } from "../session-row-prepared-read.js";
+import { prepareProjectedSessionPresentation } from "../session-row-presentation.js";
+import { getSessionRowProjection } from "../session-row-projection-access.js";
+import {
+  authorizeIncognitoSessionTarget,
+  createSessionListEntryFilter,
+} from "../session-sharing.js";
 import { readRecentSessionMessagesWithStatsAsync } from "../session-transcript-readers.js";
-import { buildSessionListRowMetadataContext } from "../session-utils-projection.js";
-import { createGatewaySessionEntryReader } from "../session-utils-store-lookup.js";
-import { buildGatewaySessionRow } from "../session-utils.js";
-import { readPreparedServerMethodModelCatalog } from "./optional-model-catalog.js";
-import { readSessionPlacementFields } from "./session-placement-read-projection.js";
-import { loadSessionEntriesForTarget, requireSessionKey } from "./sessions-shared.js";
+import { createVisibleActiveSessionRunProjector } from "./session-active-runs.js";
+import { requireSessionKey } from "./sessions-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
-function createRoleVisibilityFilter(
-  client: Parameters<typeof hasOperatorBoundary>[0],
-  cfg: Parameters<typeof hasOperatorBoundary>[1],
-) {
-  return hasOperatorBoundary(client, cfg)
-    ? createSessionListEntryFilter({ client, cfg })
-    : undefined;
-}
-
 export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
-  "sessions.describe": async ({ params, respond, context, client }) => {
+  "sessions.describe": async ({
+    params,
+    respond,
+    context,
+    client,
+    sessionMutationAuthorization,
+  }) => {
     if (!assertValidParams(params, validateSessionsDescribeParams, "sessions.describe", respond)) {
       return;
     }
@@ -31,63 +32,75 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
     if (!key) {
       return;
     }
-    const catalogAgent = resolveRequestedSessionAgentId(
-      context.getRuntimeConfig(),
-      key,
-      params.agentId,
-    );
-    if (!catalogAgent.ok) {
-      respond(false, undefined, catalogAgent.error);
-      return;
+    const projection = getSessionRowProjection(context);
+    if (!projection) {
+      throw new Error("Session projection is unavailable before Gateway startup completes");
     }
-    const modelCatalog = await readPreparedServerMethodModelCatalog(context, {
-      agentId: catalogAgent.agentId,
-    });
-    // Resolve the visible row after the catalog read yields to configuration or session changes.
-    const cfg = context.getRuntimeConfig();
-    const requestedAgent = resolveRequestedSessionAgentId(cfg, key, params.agentId);
-    if (!requestedAgent.ok) {
-      respond(false, undefined, requestedAgent.error);
-      return;
+    while (true) {
+      const prepared = await projection.withPreparedExactRows(
+        (cfg) => {
+          const agent = resolveRequestedSessionAgentId(cfg, key, params.agentId);
+          const denied = authorizeIncognitoSessionTarget({
+            client: client ?? null,
+            sessionKey: key,
+            target: null,
+          });
+          return agent.ok && !denied ? [{ key, agentId: agent.agentId }] : [];
+        },
+        (read) => {
+          sessionMutationAuthorization?.assertCurrent();
+          const requestedAgent = resolveRequestedSessionAgentId(
+            read.state.cfg,
+            key,
+            params.agentId,
+          );
+          if (!requestedAgent.ok) {
+            respond(false, undefined, requestedAgent.error);
+            return;
+          }
+          const query = { key, agentId: requestedAgent.agentId };
+          const presentation = prepareProjectedSessionPresentation(
+            read,
+            client,
+            Date.now(),
+            createVisibleActiveSessionRunProjector(
+              context,
+              read.state.rowContext.projectedAgentRuns,
+            ),
+          );
+          const denied = presentation.authorizeDescription(query);
+          if (denied) {
+            respond(false, undefined, denied);
+            return;
+          }
+          const record = read.describe(query);
+          if (
+            !record ||
+            (hasOperatorBoundary(client, read.state.policyConfig) &&
+              presentation.sharing.entryFilter?.(record.key, record.entry) === false)
+          ) {
+            respond(true, { session: null });
+            return;
+          }
+          respond(true, { session: presentation.present(record, params) });
+        },
+      );
+      if (prepared.kind === "complete") {
+        return;
+      }
+      const { certifySessionCanonicalValidationPending } =
+        await import("../../config/sessions/session-canonical-validation-readiness.js");
+      await certifySessionCanonicalValidationPending(prepared.database);
     }
-    const { target, storePath, store, entry } = loadSessionEntriesForTarget({
-      key,
-      cfg,
-      includeStoreChildEntries: true,
-      ...(requestedAgent.agentId ? { agentId: requestedAgent.agentId } : {}),
-    });
-    const boundaryFilter = createRoleVisibilityFilter(client, cfg);
-    if (!entry || boundaryFilter?.(target.canonicalKey, entry) === false) {
-      respond(true, { session: null }, undefined);
-      return;
-    }
-    const row = buildGatewaySessionRow({
-      cfg,
-      storePath,
-      store,
-      modelSource: {
-        entry,
-        loadSessionEntry: createGatewaySessionEntryReader({
-          cfg,
-          agentId: target.agentId,
-          store,
-          readSource: target.readSource,
-        }),
-      },
-      key: target.canonicalKey,
-      entry,
-      agentId: target.agentId,
-      modelCatalog: new Map([[catalogAgent.agentId, modelCatalog]]),
-      includeDerivedTitles: params.includeDerivedTitles,
-      includeLastMessage: params.includeLastMessage,
-      transcriptUsageMaxBytes: 64 * 1024,
-      rowContext: buildSessionListRowMetadataContext({ now: Date.now() }),
-      includeSwarmChildren: true,
-    });
-    Object.assign(row, readSessionPlacementFields(context, row.sessionId));
-    respond(true, { session: row });
   },
-  "sessions.get": async ({ params, respond, context, client }) => {
+  "sessions.get": async ({
+    params,
+    respond,
+    context,
+    client,
+    signal,
+    sessionMutationAuthorization,
+  }) => {
     // SAFETY: Gateway dispatch supplies object params; each optional field is narrowed before use.
     const p = params as {
       key?: unknown;
@@ -104,66 +117,88 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
         ? Math.max(1, Math.floor(p.limit))
         : 200;
 
-    const cfg = context.getRuntimeConfig();
-    const requestedAgent = resolveRequestedSessionAgentId(
-      cfg,
-      key,
-      normalizeOptionalString(p.agentId),
-    );
-    if (!requestedAgent.ok) {
-      respond(false, undefined, requestedAgent.error);
-      return;
+    const projection = getSessionRowProjection(context);
+    if (!projection) {
+      throw new Error("Session projection is unavailable before Gateway startup completes");
     }
-    const { target, storePath, entry } = loadSessionEntriesForTarget({
-      key,
-      cfg,
-      agentId: requestedAgent.agentId,
+    const requestedAgent = () =>
+      resolveRequestedSessionAgentId(
+        context.getRuntimeConfig(),
+        key,
+        normalizeOptionalString(p.agentId),
+      );
+    const queries = () => {
+      const requested = requestedAgent();
+      return requested.ok ? [{ key, agentId: requested.agentId }] : [];
+    };
+    const selected = await withReadySessionRows(projection, queries, (read) => {
+      sessionMutationAuthorization?.assertCurrent();
+      const requested = requestedAgent();
+      if (!requested.ok) {
+        respond(false, undefined, requested.error);
+        return undefined;
+      }
+      const record = read.describe({ key, agentId: requested.agentId });
+      const policyConfig = read.state.policyConfig;
+      const boundaryFilter = hasOperatorBoundary(client, policyConfig)
+        ? createSessionListEntryFilter({ client, cfg: policyConfig })
+        : undefined;
+      if (!record?.entry.sessionId || boundaryFilter?.(record.key, record.entry) === false) {
+        respond(true, { messages: [] }, undefined);
+        return undefined;
+      }
+      return record;
     });
-    const boundaryFilter = createRoleVisibilityFilter(client, cfg);
-    if (!entry?.sessionId || boundaryFilter?.(target.canonicalKey, entry) === false) {
-      respond(true, { messages: [] }, undefined);
+    if (!selected) {
       return;
     }
-    const sessionId = entry.sessionId;
-    const { messages } = await readRecentSessionMessagesWithStatsAsync(
-      {
-        agentId: target.agentId,
-        sessionEntry: entry,
-        sessionId,
-        sessionKey: target.canonicalKey,
-        storePath,
-      },
-      {
-        maxMessages: limit,
-        maxLines: limit * 20 + 20,
-        allowResetArchiveFallback: true,
-      },
-    );
-    const currentCfg = context.getRuntimeConfig();
-    const currentRequestedAgent = resolveRequestedSessionAgentId(
-      currentCfg,
-      key,
-      normalizeOptionalString(p.agentId),
-    );
-    const current = currentRequestedAgent.ok
-      ? loadSessionEntriesForTarget({
-          key,
-          cfg: currentCfg,
-          agentId: currentRequestedAgent.agentId,
-        })
-      : null;
-    const currentBoundaryFilter = createRoleVisibilityFilter(client, currentCfg);
-    if (
-      !current ||
-      current.target.agentId !== target.agentId ||
-      current.target.canonicalKey !== target.canonicalKey ||
-      current.storePath !== storePath ||
-      current.entry?.sessionId !== sessionId ||
-      currentBoundaryFilter?.(current.target.canonicalKey, current.entry) === false
-    ) {
-      respond(true, { messages: [] }, undefined);
-      return;
-    }
-    respond(true, { messages }, undefined);
+    const target = {
+      agentId: selected.agentId,
+      sessionEntry: { sessionId: selected.entry.sessionId },
+      sessionId: selected.entry.sessionId,
+      sessionKey: selected.key,
+      storePath: selected.storeTarget.storePath,
+    };
+    const limits = {
+      maxMessages: limit,
+      maxLines: limit * 20 + 20,
+      allowResetArchiveFallback: true,
+    };
+    const messages =
+      selected.entry.incognito || isIncognitoSessionKey(selected.key)
+        ? (await readRecentSessionMessagesWithStatsAsync(target, limits)).messages
+        : await (
+            await import("../../config/sessions/session-history-worker-runtime.js")
+          ).readSessionHistoryPageInWorker(
+            { kind: "recent", params: { target, ...limits } },
+            signal,
+          );
+    await withReadySessionRows(projection, queries, (read) => {
+      sessionMutationAuthorization?.assertCurrent();
+      const requested = requestedAgent();
+      const current = requested.ok
+        ? read.describe({ key, agentId: requested.agentId }, selected)
+        : undefined;
+      const policyConfig = read.state.policyConfig;
+      const boundaryFilter = hasOperatorBoundary(client, policyConfig)
+        ? createSessionListEntryFilter({ client, cfg: policyConfig })
+        : undefined;
+      if (
+        !current ||
+        current.agentId !== selected.agentId ||
+        current.key !== selected.key ||
+        current.storeTarget.storePath !== selected.storeTarget.storePath ||
+        current.entry.sessionId !== target.sessionId ||
+        boundaryFilter?.(current.key, current.entry) === false
+      ) {
+        respond(true, { messages: [] }, undefined);
+        return;
+      }
+      respond(
+        true,
+        projectOperatorModelRead({ context, client, agentId: current.agentId }, { messages }),
+        undefined,
+      );
+    });
   },
 };

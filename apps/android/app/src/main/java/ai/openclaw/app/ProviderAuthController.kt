@@ -74,7 +74,21 @@ internal class ProviderAuthController(
 
   fun refresh(refresh: Boolean = false) {
     if (closed || state.value.busy || state.value.cancelling || sessionId != null) return
-    runRequest(null) { readAuthStatus(refresh) }
+    runRequest(null) {
+      if (!refresh) {
+        readAuthStatus()
+        return@runRequest
+      }
+      request(
+        GatewayMethod.ModelsAuthRefresh.rawValue,
+        buildJsonObject {
+          put("agentId", agentId)
+          put("operation", "update")
+        },
+      )
+      publish { it.copy(noticeText = nativeText("Sign-ins refreshed.")) }
+      refreshPublishedAuthStatus()
+    }
   }
 
   fun start(authChoice: String) {
@@ -132,14 +146,10 @@ internal class ProviderAuthController(
           wizard = null,
           apiKeySaveRevision = it.apiKeySaveRevision + 1,
           noticeText =
-            if (result["warning"] != null) nativeText("API key saved. Restart the Gateway to apply it.") else nativeText("API key saved"),
+            if (result["warning"] != null) nativeText("API key saved. Tap Refresh to apply it.") else nativeText("API key saved"),
         )
       }
-      try {
-        readAuthStatus(false)
-      } finally {
-        if (!closed && isCurrent() && lease.isCurrent()) onAuthChanged()
-      }
+      refreshPublishedAuthStatus()
     }
   }
 
@@ -260,20 +270,23 @@ internal class ProviderAuthController(
       )
     }
     // Native login already publishes credential changes, including writes before a terminal error.
+    refreshPublishedAuthStatus()
+  }
+
+  private suspend fun refreshPublishedAuthStatus() {
     try {
-      readAuthStatus(false)
+      readAuthStatus()
     } finally {
       if (!closed && isCurrent() && lease.isCurrent()) onAuthChanged()
     }
   }
 
-  private suspend fun readAuthStatus(refresh: Boolean) {
+  private suspend fun readAuthStatus() {
     val result =
       request(
         GatewayMethod.ModelsAuthStatus.rawValue,
         buildJsonObject {
           put("agentId", agentId)
-          if (refresh) put("refresh", true)
         },
       )
     publish {

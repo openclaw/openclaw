@@ -9,6 +9,8 @@ import type {
   RequiredNodeCommand,
   RuntimeTargetIssue,
   WorkerExecutionMode,
+  WorkerMachineOption,
+  WorkerOperatingSystem,
   WorkerSlotSummary,
 } from "../../../../packages/gateway-protocol/src/schema/environments.ts";
 
@@ -33,27 +35,15 @@ export type DraftRepositoryState =
 export type DraftCloudProfile = {
   id: string;
   providerId: string;
+  providerDisplayId?: string;
   trust?: "persistent" | "disposable";
   executionModes?: readonly WorkerExecutionMode[];
   machines?: DraftMachineOption[];
   operatingSystems?: DraftOperatingSystem[];
 };
 
-export type DraftOperatingSystem = {
-  id: string;
-  label: string;
-  default?: boolean;
-  disabledReason?: string;
-};
-
-export type DraftMachineOption = {
-  id: string;
-  label: string;
-  os?: string;
-  cpu?: number;
-  memoryGb?: number;
-  default?: boolean;
-};
+export type DraftOperatingSystem = WorkerOperatingSystem;
+export type DraftMachineOption = WorkerMachineOption;
 
 export type DraftEnvironment = {
   id: string;
@@ -129,6 +119,7 @@ export function readDraftCloudProfiles(value: unknown): DraftCloudProfile[] {
       const profile = raw as {
         id?: unknown;
         providerId?: unknown;
+        providerDisplayId?: unknown;
         trust?: unknown;
         executionModes?: unknown;
         machines?: unknown;
@@ -149,6 +140,11 @@ export function readDraftCloudProfiles(value: unknown): DraftCloudProfile[] {
         {
           id,
           providerId,
+          ...(typeof profile.providerDisplayId === "string" &&
+          /^[a-z][a-z0-9-]{0,63}$/.test(profile.providerDisplayId) &&
+          profile.providerDisplayId.trim() === profile.providerDisplayId
+            ? { providerDisplayId: profile.providerDisplayId }
+            : {}),
           trust,
           ...(Object.hasOwn(profile, "executionModes")
             ? { executionModes: readDraftCloudProfileExecutionModes(profile.executionModes) }
@@ -228,6 +224,15 @@ export function defaultCloudOs(profile: DraftCloudProfile): string {
 
 export function cloudMachinesForOs(profile: DraftCloudProfile, os: string): DraftMachineOption[] {
   return (profile.machines ?? []).filter((machine) => !machine.os || machine.os === os);
+}
+
+/** Providers that omit a marked default still present their first catalog choice as the default. */
+export function defaultCloudMachine(
+  profile: DraftCloudProfile,
+  os = defaultCloudOs(profile),
+): DraftMachineOption | undefined {
+  const machines = cloudMachinesForOs(profile, os);
+  return machines.find((machine) => machine.default) ?? machines[0];
 }
 
 const ENVIRONMENT_STATUSES = new Set<EnvironmentStatus>([

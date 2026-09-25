@@ -5,7 +5,6 @@ import type {
   SessionsSearchResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { GatewaySessionRow } from "../api/types.ts";
-import { formatRelativeTimestamp } from "../lib/format.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import type { CommandPaletteItem } from "./command-palette-catalog-search.ts";
 
@@ -98,12 +97,13 @@ export function buildCommandPaletteSessionItems(params: {
       id: `session-${row.key}`,
       label,
       icon: "messageSquare",
-      category: "chats",
+      category: transcriptHit && rawMetadataRank === 0 ? "messages" : "chats",
       action: `${SESSION_ACTION_PREFIX}${row.key}`,
+      session: row,
       // The server match floor affects ordering, not whether the local metadata matched.
       description:
         transcriptHit && rawMetadataRank === 0
           ? transcriptSearchSnippet(transcriptHit.snippet)
-          : formatRelativeTimestamp(row.updatedAt, { fallback: "" }),
+          : undefined,
     }));
 }

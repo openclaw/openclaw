@@ -6,6 +6,7 @@ import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-ar
 import {
   captureUiProofEnabled,
   createChatFlowE2eSuite,
+  expectDefined,
   installMockGateway,
 } from "./chat-flow.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
@@ -20,11 +21,12 @@ beforeEach(() => {
 });
 
 suite.define(() => {
-  it("previews, downloads, and opens a ticketed generated image", async () => {
+  it.each([0, 2])("reuses full image bytes after %i failed download attempts", async (failures) => {
     const filenamePrefix = "a".repeat(119);
     const imageTitle = `${filenamePrefix}📊`;
     const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
+    await page.clock.install();
     await page.route(`**${controlUiBasePath}/chat`, async (route) => {
       const response = await route.fetch();
       await route.fulfill({
@@ -40,6 +42,7 @@ suite.define(() => {
       path.join(process.cwd(), "docs/assets/openclaw-banner-dark.png"),
     );
     const requestedVariants: string[] = [];
+    let remainingFailures = failures;
     await page.route(`**${controlUiBasePath}/api/chat/media/outgoing/**`, async (route) => {
       const request = route.request();
       const url = new URL(request.url());
@@ -47,7 +50,13 @@ suite.define(() => {
       expect(url.searchParams.get("mediaTicket")).toBe("ticket-e2e");
       expect(request.headers().authorization).toBeUndefined();
       expect(request.headers()["x-openclaw-requester-session-key"]).toBeUndefined();
-      requestedVariants.push(url.pathname.split("/").at(-1) ?? "");
+      const variant = url.pathname.split("/").at(-1) ?? "";
+      requestedVariants.push(variant);
+      if (variant === "full" && remainingFailures > 0) {
+        remainingFailures -= 1;
+        await route.fulfill({ status: 503, body: "Temporarily unavailable" });
+        return;
+      }
       await route.fulfill({ body: imageBytes, contentType: "image/png" });
     });
     const gateway = await installMockGateway(page, {
@@ -130,16 +139,32 @@ suite.define(() => {
           }),
         )
         .toMatchObject({ hit: true, pointerEvents: "auto" });
+      for (let attempt = 0; attempt < failures; attempt += 1) {
+        await downloadButton.click();
+        const error = page.getByText("Could not download this image. Try again.", { exact: true });
+        await error.waitFor({ state: "visible" });
+        await page.clock.runFor(6_000);
+        await error.waitFor({ state: "hidden" });
+        expect(requestedVariants.filter((variant) => variant === "full")).toHaveLength(attempt + 1);
+      }
       const download = page.waitForEvent("download");
       await downloadButton.click();
       expect((await download).suggestedFilename()).toBe(`${filenamePrefix}.png`);
+
+      const repeatedDownload = page.waitForEvent("download");
+      await downloadButton.click();
+      const downloadedPath = expectDefined(
+        await (await repeatedDownload).path(),
+        "downloaded image path",
+      );
+      expect(await readFile(downloadedPath)).toEqual(imageBytes);
 
       await page.getByRole("button", { name: `Open image ${imageTitle}` }).click();
       await page
         .getByRole("dialog", { name: `Image preview: ${imageTitle}` })
         .waitFor({ state: "visible" });
-      expect(requestedVariants).toEqual(["thumbnail", "full", "full"]);
-      expect(await gateway.getRequests("artifacts.download")).toHaveLength(3);
+      expect(requestedVariants).toEqual(["thumbnail", ...Array(failures + 1).fill("full")]);
+      expect(await gateway.getRequests("artifacts.download")).toHaveLength(failures + 2);
     } finally {
       await suite.closeBrowserContext(context);
     }

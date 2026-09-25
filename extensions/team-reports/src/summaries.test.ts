@@ -121,12 +121,12 @@ describe("team report summaries", () => {
       .mockResolvedValue(completion(fenced ? `\`\`\`json\n${json}\n\`\`\`` : json));
     const result = await generateSummaries({
       report: report(),
-      options: { enabled: true, reasoning: "high", model: "openai/gpt-5.6-sol" },
+      options: { enabled: true, reasoning: "high", model: "openai/gpt-5.6-luna" },
       llm: { complete },
     });
     expect(result.summary).toMatchObject({
       source: "model",
-      model: "openai/gpt-5.6-sol",
+      model: "openai/gpt-5.6-luna",
       generatedAtMs: 20,
     });
     expect(result.report.members.map(({ login, summary }) => ({ login, summary }))).toEqual([

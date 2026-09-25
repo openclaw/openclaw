@@ -9,6 +9,53 @@ import { makeChatHost } from "./chat-host.test-support.ts";
 import { getChatSessionProjection } from "./history-merge.ts";
 import { reconcileChatRunFromSessionRow, reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 
+it.each(["matching", "different-run", "unowned", "different-kind"] as const)(
+  "recovers only the failed run's recorded diagnostic from history (%s)",
+  async (source) => {
+    const diagnostic =
+      'This turn ended before a reply: Failed to prepare skill resources: skill="review" ' +
+      'root="/workspace/skills/review" error=Skill tree file could not be read: ' +
+      'path="/workspace/skills/review/CLAUDE.md" error=ENOENT: missing target.';
+    const summary = "Failed to prepare skill resources";
+    const state = makeChatHost({
+      sessionKey: "main",
+      requestHandlers: {
+        "chat.history": {
+          messages: [
+            {
+              role: "custom",
+              customType: source === "different-kind" ? "other-notice" : "run-failed-before-reply",
+              content: diagnostic,
+              details: { errorKind: "state_contention" },
+              __openclaw: {
+                id: "failure-notice",
+                seq: 1,
+                ...(source === "unowned"
+                  ? {}
+                  : { runId: source === "different-run" ? "older-run" : "failed-run" }),
+              },
+            },
+          ],
+          sessionInfo: {
+            key: "main",
+            kind: "direct",
+            updatedAt: 2,
+            status: "failed",
+            hasActiveRun: false,
+            lastRunId: "failed-run",
+            lastRunError: summary,
+          },
+        },
+      },
+    });
+    await loadChatHistory(state);
+    const expected = source === "matching" ? diagnostic : summary;
+    expect(state.chatRunError).toMatchObject({ runId: "failed-run", summary: expected });
+    expect(state.chatRunError?.kind).toBe(source === "matching" ? "state_contention" : undefined);
+    expect(getChatSessionProjection(state).runs["failed-run"]?.errorMessage).toBe(expected);
+  },
+);
+
 it.each([
   undefined,
   { status: "done" },
@@ -238,6 +285,12 @@ it.each(["failed", "timeout"] as const)(
       });
       reconcileChatRunFromSessionRow(state, row, { publishRunStatus: false });
       expect(state.chatRunId).toBeNull();
+      // Session publication can settle the run before its chat error event arrives.
+      // The composer must explain the failure without requiring a history reload.
+      expect(state.chatRunError).toMatchObject({
+        runId: "current-run",
+        summary: row.lastRunError,
+      });
 
       await loadChatHistory(state);
 
@@ -246,6 +299,67 @@ it.each(["failed", "timeout"] as const)(
         status: status === "timeout" ? "timeout" : "error",
         errorMessage: row.lastRunError,
       });
+    } finally {
+      reconcileChatRunLifecycle(state, { clearRunStatus: true });
+    }
+  },
+);
+
+it.each(
+  (["live", "history"] as const).flatMap((source) =>
+    [false, undefined].map((publishRunStatus) => ({ source, publishRunStatus })),
+  ),
+)(
+  "upgrades a session failure summary from $source (publishRunStatus=$publishRunStatus)",
+  async ({ source, publishRunStatus }) => {
+    const summary = "Failed to prepare the workspace";
+    const diagnostic = `${summary}: missing required file /workspace/project/setup.ts`;
+    const row: GatewaySessionRow = {
+      key: "main",
+      kind: "direct",
+      updatedAt: 2,
+      status: "failed",
+      hasActiveRun: false,
+      lastRunId: "current-run",
+      lastRunError: summary,
+    };
+    const state = makeChatHost({
+      sessionKey: "main",
+      requestHandlers: {
+        "chat.history": {
+          messages: [
+            {
+              role: "custom",
+              customType: "run-failed-before-reply",
+              content: diagnostic,
+              __openclaw: { id: "failure", seq: 1, runId: "current-run" },
+            },
+          ],
+          sessionInfo: row,
+        },
+      },
+    });
+    try {
+      handleChatGatewayEvent(state, {
+        sessionKey: "main",
+        runId: "current-run",
+        state: "delta",
+        deltaText: "Working",
+      });
+      reconcileChatRunFromSessionRow(state, row, { publishRunStatus });
+      expect(state.chatRunError?.summary).toBe(summary);
+      if (source === "history") {
+        await loadChatHistory(state);
+      } else {
+        handleChatGatewayEvent(state, {
+          sessionKey: "main",
+          runId: "current-run",
+          state: "error",
+          errorMessage: diagnostic,
+        });
+      }
+      expect(state.chatRunError?.summary).toContain(diagnostic);
+      expect(getChatSessionProjection(state).runs["current-run"]?.errorMessage).toBe(diagnostic);
     } finally {
       reconcileChatRunLifecycle(state, { clearRunStatus: true });
     }
@@ -361,3 +475,90 @@ it.each(["same-run", "newer-run"])(
     }
   },
 );
+
+it.each(["state_contention", "unknown", undefined])(
+  "restores only certified contention history (%s) and preserves drafts",
+  async (errorKind) => {
+    const diagnostic =
+      "Temporarily busy. Check status before trying again.\nState contention: session store; attempts exhausted.";
+    const state = makeChatHost({
+      sessionKey: "main",
+      requestHandlers: {
+        "chat.history": {
+          messages: [
+            {
+              role: "custom",
+              customType: "run-failed-before-reply",
+              content: diagnostic,
+              details: { errorKind, privateDetail: "must not enter the notice" },
+              __openclaw: { id: "failure", seq: 1, runId: "failed-run" },
+            },
+          ],
+          sessionInfo: {
+            key: "main",
+            kind: "direct",
+            updatedAt: 2,
+            status: "failed",
+            hasActiveRun: false,
+            lastRunId: "failed-run",
+            lastRunError: "Temporarily busy",
+          },
+        },
+      },
+    });
+    state.chatMessage = "My unsent draft";
+    const attachments = state.chatAttachments;
+    await loadChatHistory(state);
+    expect(state.chatRunError).toEqual({
+      summary: diagnostic,
+      runId: "failed-run",
+      ...(errorKind === "state_contention" ? { kind: "state_contention" } : {}),
+    });
+    expect(getChatSessionProjection(state).runs["failed-run"]?.errorKind).toBe(
+      errorKind === "state_contention" ? errorKind : undefined,
+    );
+    expect(state.chatMessage).toBe("My unsent draft");
+    expect(state.chatAttachments).toBe(attachments);
+    expect(state.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
+    await loadChatHistory(state);
+    expect(state.chatRunError?.kind).toBe(errorKind === "state_contention" ? errorKind : undefined);
+    state.sessions.dispose();
+  },
+);
+
+it("restores separately projected contention diagnostics without putting them in the transcript text", async () => {
+  const summary =
+    "The turn was interrupted while the server was busy. Check its status before trying again.";
+  const diagnostic = "State lifecycle acquisition remained busy.";
+  const notice = {
+    role: "custom",
+    customType: "run-failed-before-reply",
+    content: summary,
+    details: { errorKind: "state_contention", diagnostic },
+    __openclaw: { id: "busy-notice", seq: 1, runId: "busy-run" },
+  };
+  const state = makeChatHost({
+    sessionKey: "main",
+    requestHandlers: {
+      "chat.history": {
+        messages: [notice],
+        sessionInfo: {
+          key: "main",
+          kind: "direct",
+          updatedAt: 2,
+          status: "failed",
+          hasActiveRun: false,
+          lastRunId: "busy-run",
+          lastRunError: summary,
+        },
+      },
+    },
+  });
+  await loadChatHistory(state);
+  expect(state.chatRunError).toMatchObject({
+    kind: "state_contention",
+    runId: "busy-run",
+    summary: `${summary}\n\n${diagnostic}`,
+  });
+  expect(state.chatMessages).toContainEqual(expect.objectContaining({ content: summary }));
+});

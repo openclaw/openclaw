@@ -25,6 +25,7 @@ Presence entries are structured objects with fields like:
 
 - `instanceId` (optional but strongly recommended): stable client identity (usually `connect.client.instanceId`)
 - `host`: human-friendly host name
+- `clientId`: client type from the accepted connection, separate from its display name; the people card uses this to distinguish **Terminal** from a native **App**
 - `ip`: best-effort IP address. The [geolocation plugin](/plugins/geolocation) resolves it to a coarse city where one is available
 - `version`: client version string
 - `deviceFamily` / `modelIdentifier`: hardware hints
@@ -90,7 +91,7 @@ stay tracked because test suites use them as stand-ins for real clients.
 ### 3) `system-event` beacons
 
 Clients can send richer periodic beacons via the `system-event` method. The mac
-app uses this to report host name, IP, version, and liveness metadata. Physical
+app uses this to report host name, IP, version, and liveness metadata. Computer
 input activity is not part of this generic beacon. The purpose-specific native
 node event described in [Active computer presence](/nodes/presence) owns it. The
 Mac tags these beacons with `system-presence-clear-last-input`. Current Gateways
@@ -128,6 +129,14 @@ qualification, using the current connection only when that user is unavailable.
 Only a displayed owner with the exact qualified profile identity is deduplicated
 from a session's live viewers. The [people card](/concepts/multi-user#people-cards) keeps online duration
 and observed activity separate from each entry's heartbeat freshness.
+
+Accepted interactions, including typing, update the exact activity timestamp on
+every live connection for that person. Activity-only presence events are coalesced
+to at most one every 30 seconds per identity. The first observed activity and
+activity after that window publish immediately; connection, disconnection,
+profile, and watched-session changes still publish immediately. The people card's
+activity age can therefore lag the latest interaction by less than 30 seconds.
+Fresh snapshots and `system-presence` reads include the latest stored timestamp.
 
 ## TTL and bounded size
 

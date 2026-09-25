@@ -10,21 +10,28 @@ import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metad
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   captureActivePluginRegistrySnapshot,
+  createPluginRegistryOwner,
   listImportedRuntimePluginIds,
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
+import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createTranscriptCaptureAppends } from "./capture-appends.js";
 import { activeSessions } from "./capture.js";
 import { sanitizeTranscriptSourceLocator } from "./source-locator.js";
 import { readTranscriptLibraryStatus } from "./status.js";
 import { TranscriptsStore, transcriptSessionSelector } from "./store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => {
+afterEach(async () => {
   activeSessions.clear();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
 });
 
@@ -45,9 +52,13 @@ describe("transcript library capture health", () => {
     };
     await store.writeSession(session);
     activeSessions.set(session.sessionId, {
+      appends: createTranscriptCaptureAppends(() => {}),
       session,
       providerId: source.providerId,
-      provider: {},
+      stopProvider: async () => {
+        throw new Error("Reading transcript status must not stop capture");
+      },
+      releaseProvider: async () => {},
       phase: "active",
     });
     const configured = [
@@ -78,9 +89,13 @@ describe("transcript library capture health", () => {
     const session = { sessionId: "alias-capture", startedAt: "2026-08-20T10:00:00.000Z", source };
     await store.writeSession(session);
     activeSessions.set(session.sessionId, {
+      appends: createTranscriptCaptureAppends(() => {}),
       session,
       providerId: "canonical-captions",
-      provider: {},
+      stopProvider: async () => {
+        throw new Error("Reading transcript status must not stop capture");
+      },
+      releaseProvider: async () => {},
       phase: "active",
     });
     const result = await readTranscriptLibraryStatus(store, {
@@ -118,10 +133,14 @@ describe("transcript library capture health", () => {
       activeSubscription: false,
     });
     activeSessions.set(session.sessionId, {
+      appends: createTranscriptCaptureAppends(() => {}),
       session,
       providerId: source.providerId,
       phase: "active",
-      provider: {},
+      stopProvider: async () => {
+        throw new Error("Reading transcript status must not stop capture");
+      },
+      releaseProvider: async () => {},
     });
     result = await readTranscriptLibraryStatus(store, cfg);
     expect(result.configuredSources[0]).toMatchObject({
@@ -270,4 +289,83 @@ describe("transcript library capture health", () => {
       expect(result.latestTranscript).toBeNull();
     },
   );
+});
+
+it("keeps transcript provider health bound to its live Gateway registry", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const cfg: OpenClawConfig = {};
+    const manifests = makeRegistry([{ id: "request-plugin", channels: [] }]);
+    manifests.plugins[0]!.contracts = { transcriptSourceProviders: ["request-source"] };
+    const metadata = createPluginMetadataSnapshot({ config: cfg, manifestRegistry: manifests });
+    const previous = captureActivePluginRegistrySnapshot();
+    const requestRegistry = createEmptyPluginRegistry();
+    const unrelatedRegistry = createEmptyPluginRegistry();
+    const start = vi.fn();
+    const unrelatedStart = vi.fn();
+    requestRegistry.plugins.push(createPluginRecord({ id: "request-plugin" }));
+    unrelatedRegistry.plugins.push(createPluginRecord({ id: "unrelated-plugin" }));
+    requestRegistry.transcriptSourceProviders.push({
+      pluginId: "request-plugin",
+      source: "fixture",
+      provider: {
+        id: "request-source",
+        name: "Request source",
+        sourceKinds: ["live-caption"],
+        start,
+      },
+    });
+    unrelatedRegistry.transcriptSourceProviders.push({
+      pluginId: "unrelated-plugin",
+      source: "fixture",
+      provider: {
+        id: "unrelated-source",
+        name: "Unrelated source",
+        sourceKinds: ["live-audio"],
+        start: unrelatedStart,
+      },
+    });
+    setActivePluginRegistry(requestRegistry);
+    const requestOwner = createPluginRegistryOwner(requestRegistry);
+    setActivePluginRegistry(unrelatedRegistry);
+    const unrelatedOwner = createPluginRegistryOwner(unrelatedRegistry);
+    const failures: unknown[] = [];
+    try {
+      const store = new TranscriptsStore(path.join(state.stateDir, "transcripts"));
+      const importedBefore = listImportedRuntimePluginIds();
+      const result = await withPluginMetadataSnapshotScope(
+        metadata,
+        () =>
+          withPluginRuntimeGatewayRequestScope(
+            { pluginRegistry: requestOwner.registry, isWebchatConnect: () => false },
+            () => readTranscriptLibraryStatus(store, cfg),
+          ),
+        { config: cfg },
+      );
+      expect(result.providers.filter((provider) => provider.pluginId)).toMatchObject([
+        {
+          providerId: "request-source",
+          pluginId: "request-plugin",
+          availability: "enabled",
+          sourceKinds: ["live-caption"],
+          canStart: true,
+          canStop: false,
+          canImport: false,
+        },
+      ]);
+      expect(start).not.toHaveBeenCalled();
+      expect(unrelatedStart).not.toHaveBeenCalled();
+      expect(listImportedRuntimePluginIds()).toEqual(importedBefore);
+    } catch (error) {
+      failures.push(error);
+    } finally {
+      const results = await Promise.allSettled([requestOwner.close(), unrelatedOwner.close()]);
+      restoreActivePluginRegistrySnapshot(previous);
+      failures.push(
+        ...results.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
+      );
+    }
+    if (failures.length) {
+      throw new AggregateError(failures, "Transcript status assertion or registry cleanup failed");
+    }
+  });
 });

@@ -1,9 +1,10 @@
 /* @vitest-environment jsdom */
 
 import { html, render, type nothing, type TemplateResult } from "lit";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createApplicationTheme } from "../../app/bootstrap-theme.ts";
+import { createConnectionBootstrapCoordinator } from "../../app/connection-bootstrap.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createGatewayStoreTestStore } from "../../app/gateway-store.test-support.ts";
 import { loadSettings, patchSettings, saveSettings } from "../../app/settings.ts";
@@ -38,18 +39,15 @@ vi.mock("../../components/board/board-view.ts", () => {
   return {};
 });
 
-const swarmModuleImport = vi.hoisted(() => {
-  let markStarted!: () => void;
-  let release!: () => void;
+const swarmModuleImport = await vi.hoisted(async () => {
+  const { createDeferred } = await import("../../../../test/helpers/promise.js");
+  const started = createDeferred();
+  const pending = createDeferred();
   return {
-    started: new Promise<void>((resolve) => {
-      markStarted = resolve;
-    }),
-    pending: new Promise<void>((resolve) => {
-      release = resolve;
-    }),
-    markStarted,
-    release,
+    started: started.promise,
+    pending: pending.promise,
+    markStarted: started.resolve,
+    release: pending.resolve,
   };
 });
 
@@ -82,7 +80,6 @@ type TestChatPane = HTMLElement & {
   updated: () => void;
   handleBoardCommand: (event: BoardCommandEvent) => void;
   showDashboard: (expanded: boolean) => void;
-  persistBoardSessionView: (patch: { face?: "chat" | "dashboard"; activeTabId?: string }) => void;
   resolveBoardProvider: () => BoardProvider;
   resolveBoardView: () => ResolvedBoardView;
   renderBoardPanel: (
@@ -101,9 +98,13 @@ function createTestPane(sessions: SessionCapability = {} as SessionCapability) {
   const client = {
     request: vi.fn(async () => ({ session: { key: "agent:main:current", kind: "direct" } })),
   } as unknown as GatewayBrowserClient;
+  const connectionBootstrap = createConnectionBootstrapCoordinator();
+  connectionBootstrap.synchronize({ client, connected: true });
+  onTestFinished(() => connectionBootstrap.reset());
   Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
   pane.context = {
     theme,
+    connectionBootstrap,
     sessions,
     gateway: { snapshot: { client, phase: "connected", hello: sessionMutationGatewayHello() } },
   } as unknown as ApplicationContext;
@@ -112,6 +113,7 @@ function createTestPane(sessions: SessionCapability = {} as SessionCapability) {
     chatError: null,
     chatLoading: false,
     chatMessages: [],
+    chatToolMessages: [],
     chatQueue: [],
     chatRunId: null,
     chatSending: false,
@@ -178,6 +180,7 @@ function createGatewayBoardPane(params: {
       },
     },
   } as unknown as ApplicationContext;
+  pane.context.connectionBootstrap.synchronize({ client, connected: true });
   return { pane, snapshot, client, request, addEventListener, removeListener };
 }
 
@@ -377,31 +380,6 @@ describe("chat pane board shell", () => {
       expect(pane.onFaceChange).not.toHaveBeenCalled();
     },
   );
-
-  it("opens a dashboard route in split view only once", () => {
-    const pane = createTestPane();
-    pane.boardProvider = createMockBoardProvider("agent:main:dashboard-route");
-    pane.state.sessionKey = "agent:main:dashboard-route";
-    pane.sessionKey = "agent:main:dashboard-route";
-    pane.routeFace = "dashboard";
-    pane.commitSidebarLayout(openSlot(pane.state.sidebarLayout, "terminal"));
-
-    pane.syncRetainedBoardSession(pane.resolveBoardView());
-    expect(
-      pane.state.sidebarLayout.columns.flatMap(
-        (column) => column.panels.find((panel) => panel.id === column.activePanelId)?.slot,
-      ),
-    ).toContain("dashboard");
-    expect(pane.state.sidebarLayout.expanded).toBe(false);
-
-    pane.commitSidebarLayout(openSlot(pane.state.sidebarLayout, "terminal"));
-    pane.syncRetainedBoardSession(pane.resolveBoardView());
-    expect(
-      pane.state.sidebarLayout.columns.flatMap(
-        (column) => column.panels.find((panel) => panel.id === column.activePanelId)?.slot,
-      ),
-    ).toContain("terminal");
-  });
 
   it("does not hydrate the swarm after becoming hidden during module loading", async () => {
     vi.useFakeTimers();
@@ -684,7 +662,10 @@ describe("chat pane board shell", () => {
     pane.state.sessionKey = "agent:main:main";
     pane.boardProvider = createMockBoardProvider("main");
     pane.routeFace = "dashboard";
-    pane.persistBoardSessionView({ activeTabId: "research" });
+    pane.handleBoardCommand({
+      sessionKey: "main",
+      command: { kind: "focus_tab", tabId: "research" },
+    });
 
     pane.boardProvider = createMockBoardProvider("agent:main:main");
 
@@ -700,8 +681,12 @@ describe("chat pane board shell", () => {
     pane.sessionKey = "agent:main:retained";
     const onFaceChange = vi.fn();
     pane.onFaceChange = onFaceChange;
+    pane.boardProvider = createMockBoardProvider(pane.state.sessionKey);
 
-    pane.persistBoardSessionView({ face: "dashboard" });
+    pane.handleBoardCommand({
+      sessionKey: pane.state.sessionKey,
+      command: { kind: "set_chat_dock", dock: "right" },
+    });
 
     expect(onFaceChange).toHaveBeenCalledWith("pane-1", "agent:main:retained", "dashboard");
   });
@@ -724,7 +709,10 @@ describe("chat pane board shell", () => {
       face: "dashboard",
     });
 
-    pane.persistBoardSessionView({ activeTabId: "main" });
+    pane.handleBoardCommand({
+      sessionKey: pane.state.sessionKey,
+      command: { kind: "focus_tab", tabId: "main" },
+    });
     expect(pane.resolveBoardView()).toMatchObject({
       activeTabId: "main",
       face: "dashboard",
@@ -748,7 +736,10 @@ describe("chat pane board shell", () => {
     secondPane.state.settings = initialSettings;
     secondPane.boardProvider = createMockBoardProvider("agent:main:second");
 
-    firstPane.persistBoardSessionView({ activeTabId: "research" });
+    firstPane.handleBoardCommand({
+      sessionKey: firstPane.state.sessionKey,
+      command: { kind: "focus_tab", tabId: "research" },
+    });
 
     secondPane.state.sessionKey = "agent:main:first";
     secondPane.boardProvider = createMockBoardProvider("agent:main:first");
@@ -759,7 +750,10 @@ describe("chat pane board shell", () => {
 
     secondPane.state.sessionKey = "agent:main:second";
     secondPane.boardProvider = createMockBoardProvider("agent:main:second");
-    secondPane.persistBoardSessionView({ activeTabId: "main" });
+    secondPane.handleBoardCommand({
+      sessionKey: secondPane.state.sessionKey,
+      command: { kind: "focus_tab", tabId: "main" },
+    });
 
     expect(loadSettings().boardSessionViews).toMatchObject({
       "agent:main:first": { activeTabId: "research" },
@@ -925,8 +919,7 @@ describe("chat pane board shell", () => {
       expect(request).toHaveBeenCalledOnce();
       expect(addEventListener).toHaveBeenCalledOnce();
     } finally {
-      const release = Reflect.get(pane, "releaseBoardProviderLease") as () => void;
-      release.call(pane);
+      (Reflect.get(pane, "releaseBoardProviderLease") as () => void).call(pane);
     }
 
     expect(removeListener).toHaveBeenCalledOnce();
@@ -1056,13 +1049,11 @@ describe("chat pane board shell", () => {
 
       approvals.release();
       expect(removeListener).not.toHaveBeenCalled();
-      const release = Reflect.get(pane, "releaseBoardProviderLease") as () => void;
-      release.call(pane);
+      (Reflect.get(pane, "releaseBoardProviderLease") as () => void).call(pane);
       expect(removeListener).toHaveBeenCalledOnce();
     } finally {
       approvals.release();
-      const release = Reflect.get(pane, "releaseBoardProviderLease") as () => void;
-      release.call(pane);
+      (Reflect.get(pane, "releaseBoardProviderLease") as () => void).call(pane);
     }
   });
 

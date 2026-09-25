@@ -108,14 +108,35 @@ export function setGatewayDedupeEntries(params: {
   dedupe: GatewayRequestContext["dedupe"];
   keys: readonly string[];
   entry: Parameters<typeof setGatewayDedupeEntry>[0]["entry"];
+  startNewAttempt?: true;
+  session?: Parameters<typeof setGatewayDedupeEntry>[0]["session"];
 }): void {
   for (const key of params.keys) {
     setGatewayDedupeEntry({
       dedupe: params.dedupe,
       key,
       entry: params.entry,
+      startNewAttempt: params.startNewAttempt,
+      session: params.session,
     });
   }
+}
+
+export function buildAbortedAgentPayload(
+  runId: string,
+  stopReason: string,
+  session?: { agentId?: string; sessionKey?: string },
+) {
+  return {
+    runId,
+    ...(session?.agentId ? { agentId: session.agentId } : {}),
+    ...(session?.sessionKey ? { sessionKey: session.sessionKey } : {}),
+    status: "timeout" as const,
+    summary: "aborted",
+    stopReason,
+    timeoutPhase: "queue" as const,
+    providerStarted: false,
+  };
 }
 
 export function setAbortedAgentDedupeEntries(params: {
@@ -125,28 +146,22 @@ export function setAbortedAgentDedupeEntries(params: {
   sessionKey?: string;
   runId: string;
   stopReason: string;
+  session?: Parameters<typeof setGatewayDedupeEntry>[0]["session"];
 }): void {
   setGatewayDedupeEntries({
     dedupe: params.dedupe,
     keys: params.keys,
+    session: params.session,
     entry: {
       ts: Date.now(),
       ok: true,
-      payload: {
-        runId: params.runId,
-        ...(params.agentId ? { agentId: params.agentId } : {}),
-        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-        status: "timeout" as const,
-        summary: "aborted",
-        stopReason: params.stopReason,
-        timeoutPhase: "queue",
-        providerStarted: false,
-      },
+      payload: buildAbortedAgentPayload(params.runId, params.stopReason, params),
     },
   });
 }
 
 export function replayAgentTurnIfCached(params: {
+  acceptedOnly?: boolean;
   preflight: { agentDedupeKeys: readonly string[]; runId: string };
   context: GatewayRequestContext;
   io: AgentTurnIo;
@@ -157,6 +172,18 @@ export function replayAgentTurnIfCached(params: {
     keys: agentDedupeKeys,
   });
   if (!cached) {
+    return false;
+  }
+  if (params.acceptedOnly && !(cached.ok && isAcceptedAgentDedupePayload(cached.payload))) {
+    return false;
+  }
+  if (
+    params.acceptedOnly &&
+    isAcceptedAgentDedupePayload(cached.payload) &&
+    !cached.payload.reservationId &&
+    !params.context.chatAbortControllers.has(runId)
+  ) {
+    // Durable private input owns recovery after the accepted controller is gone.
     return false;
   }
   if (cached.ok && isAcceptedAgentDedupePayload(cached.payload)) {

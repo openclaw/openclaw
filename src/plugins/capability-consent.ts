@@ -1,4 +1,5 @@
 import path from "node:path";
+import { assertConfigWriteAllowedInCurrentMode } from "../config/config-write-guard.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   PluginAcceptedDeclaredSurface,
@@ -107,7 +108,7 @@ function acceptManagedPluginDeclaredSurface<T extends PluginInstallRecord>(
 
 function throwManagedPluginCapabilityConsentRequired(
   review: PluginCapabilityConsentReview,
-  recovery = `Run "openclaw plugins enable ${review.pluginId} --accept-capabilities" to accept its capabilities.`,
+  recovery = "Rerun the openclaw plugins install, enable, update, or reload command with --accept-capabilities after reviewing the plugin.",
 ): never {
   pendingPluginCapabilityReviews.delete(review.pluginId);
   pendingPluginCapabilityReviews.set(review.pluginId, review);
@@ -138,6 +139,7 @@ export async function resolvePluginCapabilityConsent(params: {
   acknowledge?: PluginCapabilityConsentAcknowledgment;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   beforePersistentEffect?: () => void | Promise<void>;
+  beforePersistentApply?: () => void;
   metadata?: PluginMetadataSnapshot;
 }): Promise<void> {
   const env = params.env ?? process.env;
@@ -195,6 +197,8 @@ export async function resolvePluginCapabilityConsent(params: {
       pendingPluginCapabilityReviews.delete(pluginId);
       return;
     }
+    // Pure reload needs no write permission; newly accepted capabilities do.
+    assertConfigWriteAllowedInCurrentMode({ env });
     const acknowledgment = params.acknowledge ?? (await params.onCapabilityConsent?.(review));
     if (!acknowledgment) {
       throwManagedPluginCapabilityConsentRequired(review);
@@ -221,6 +225,7 @@ export async function resolvePluginCapabilityConsent(params: {
     if (acknowledgment.reviewToken !== currentReview.reviewToken) {
       throwManagedPluginCapabilityConsentRequired(currentReview);
     }
+    params.beforePersistentApply?.();
     await writePersistedInstalledPluginIndexInstallRecordsWithLease(
       {
         ...records,
@@ -240,7 +245,6 @@ async function resolvePluginArtifactCapabilityConsent(params: {
   artifactDir: string;
   currentArtifactDir?: string;
   env?: NodeJS.ProcessEnv;
-  reviewOfficialArtifacts?: boolean;
   acknowledgeCapabilities?: PluginCapabilityConsentAcknowledgment;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   beforePersistentEffect?: () => void | Promise<void>;
@@ -263,7 +267,6 @@ async function resolvePluginArtifactCapabilityConsent(params: {
       record: params.sourceRecord,
     });
   const official = isOfficialArtifact(manifest);
-  const officialExempt = official && !params.reviewOfficialArtifacts;
   const review = buildPluginCapabilityConsentReview({
     pluginId: params.pluginId,
     manifest: manifest ?? { name: params.pluginId },
@@ -284,7 +287,7 @@ async function resolvePluginArtifactCapabilityConsent(params: {
     // Only update-only flows defer it in preparePluginUpdateCapabilityConsent.
   }
   const acknowledgment =
-    officialExempt || !params.enabled || acceptanceCurrent
+    official || !params.enabled || acceptanceCurrent
       ? { reviewToken: review.reviewToken }
       : (params.acknowledgeCapabilities ?? (await params.onCapabilityConsent?.(review)));
   // Review and staged-package rollback remain cancellable. Lock only when
@@ -325,7 +328,7 @@ async function resolvePluginArtifactCapabilityConsent(params: {
   }
   pendingPluginCapabilityReviews.delete(params.pluginId);
   // Provenance alone is not operator acceptance; an explicit review is.
-  return !officialExempt && (params.enabled || acceptanceCurrent) ? finalDeclared : undefined;
+  return !official && (params.enabled || acceptanceCurrent) ? finalDeclared : undefined;
 }
 
 /** Bind artifact consent to verified staged bytes and carry acceptance into the record commit. */
@@ -335,8 +338,6 @@ export function createManagedPluginArtifactConsentHandler(params: {
   env?: NodeJS.ProcessEnv;
   spec?: string;
   expectedIntegrity?: string;
-  /** Request operator consent for official artifacts instead of the provenance exemption. */
-  reviewOfficialArtifacts?: boolean;
   acknowledgeCapabilities?: PluginCapabilityConsentAcknowledgment;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   beforePersistentEffect?: () => void | Promise<void>;
@@ -402,7 +403,6 @@ export function createManagedPluginArtifactConsentHandler(params: {
           ...(params.expectedIntegrity ? { integrity: params.expectedIntegrity } : {}),
         },
         sourceRecord: artifact.sourceRecord,
-        reviewOfficialArtifacts: params.reviewOfficialArtifacts,
         acknowledgeCapabilities: params.acknowledgeCapabilities,
         onCapabilityConsent: params.onCapabilityConsent,
         beforePersistentEffect: params.beforePersistentEffect,

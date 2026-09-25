@@ -99,9 +99,15 @@ describe("retired Workshop cron jobs", () => {
     },
   );
 
-  it("allows Doctor to persist config repair while the retired row remains on disk", async () => {
+  it("allows writable-update Doctor to persist config repair while the retired row remains on disk", async () => {
     await withOpenClawTestState(
-      { label: "retired-workshop-doctor", env: { OPENCLAW_UPDATE_IN_PROGRESS: "1" } },
+      {
+        label: "retired-workshop-doctor",
+        env: {
+          OPENCLAW_UPDATE_IN_PROGRESS: "1",
+          OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
+        },
+      },
       async (state) => {
         await state.writeConfig({
           meta: { lastTouchedAt: "2026-09-01T00:00:00.000Z" },

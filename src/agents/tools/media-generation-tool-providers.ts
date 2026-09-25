@@ -5,6 +5,7 @@ import type { CapabilityProviderFor } from "../../plugins/capability-provider-ru
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.types.js";
+import { rethrowAfterMediaCleanup } from "./media-generation-error.js";
 
 type MediaProviderKey =
   | "imageGenerationProviders"
@@ -99,21 +100,10 @@ async function acquireMediaGenerationToolProviders<K extends MediaProviderKey>(
       release,
     };
   } catch (error) {
-    let cleanupFailure: { error: unknown } | undefined;
-    try {
-      await release();
-    } catch (cleanupError) {
-      cleanupFailure = { error: cleanupError };
-    }
-    if (cleanupFailure) {
-      throw new AggregateError(
-        [error, cleanupFailure.error],
-        `${label} provider acquisition and cleanup failed`,
-        {
-          cause: error,
-        },
-      );
-    }
-    throw error;
+    return rethrowAfterMediaCleanup(
+      error,
+      release,
+      `${label} provider acquisition and cleanup failed`,
+    );
   }
 }

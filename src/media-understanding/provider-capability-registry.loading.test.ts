@@ -3,10 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
-import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
+import { waitForPluginCacheRetirement } from "../plugins/plugin-cache.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { pluginLoaderCacheState } from "../plugins/registry-lifecycle.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
@@ -14,10 +13,9 @@ import { buildMediaUnderstandingCapabilityRegistry } from "./provider-capability
 
 let root: string;
 
-function resetFixtureState() {
+async function resetFixtureState() {
   resetPluginRuntimeStateForTest();
-  pluginLoaderCacheState.clear();
-  clearPluginMetadataLifecycleCaches();
+  await waitForPluginCacheRetirement();
 }
 
 function createMediaOwner(pluginId: string, providerId: string) {
@@ -51,13 +49,13 @@ module.exports = {
 }
 
 describe("media capability inference owner loading", () => {
-  beforeEach(() => {
-    resetFixtureState();
+  beforeEach(async () => {
+    await resetFixtureState();
     root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-media-inference-"));
   });
 
-  afterEach(() => {
-    resetFixtureState();
+  afterEach(async () => {
+    await resetFixtureState();
     fs.rmSync(root, { recursive: true, force: true });
   });
 

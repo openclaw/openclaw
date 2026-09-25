@@ -17,6 +17,13 @@ login shell. The Gateway host does not need these remote utilities: a macOS or
 Windows Gateway can use an SSH target that supplies them. This is a remote
 utility contract, not a Linux-only Gateway requirement.
 
+Creating a new remote workspace also requires atomic no-replace directory rename:
+`renameat2` on Linux or `renameatx_np` on macOS, supported by the remote filesystem.
+An older libc or filesystem without that capability cannot publish a new staged
+workspace. Initialization fails without replacing an existing directory; it does
+not fall back to an overwrite or nested move. Existing remote workspaces continue
+to be adopted without reseeding.
+
 ```json5
 {
   agents: {

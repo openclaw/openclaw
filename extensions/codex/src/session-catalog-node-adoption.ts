@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
@@ -11,10 +12,10 @@ import {
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-paths";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexThread } from "./app-server/protocol.js";
-import { CatalogParamsError } from "./session-catalog-parsing.js";
+import { CatalogParamsError, MAX_SESSION_ID_LENGTH } from "./session-catalog-parsing.js";
 import type { CodexSessionCatalogSession } from "./session-catalog-types.js";
 
-const CODEX_NODE_SESSION_KEY_PREFIX = "harness:codex:node-session:";
+export const CODEX_NODE_SESSION_KEY_PREFIX = "harness:codex:node-session:";
 
 type CatalogSessionEntry = ReturnType<
   PluginRuntime["agent"]["session"]["listSessionEntries"]
@@ -23,6 +24,8 @@ type CatalogSessionEntry = ReturnType<
 type CodexNodeSessionMarker = {
   sourceHostId: string;
   sourceThreadId: string;
+  /** Older chats remain readable but need fresh adoption before native execution. */
+  sourceHomeId?: string;
   nodeId: string;
   initializing?: true;
 };
@@ -43,31 +46,7 @@ export type CodexNodeHistory = {
 
 export type CodexSessionDisposition = "existing" | "forked";
 
-export const continueOperations = new Map<
-  string,
-  Promise<{ sessionKey: string; disposition: CodexSessionDisposition }>
->();
-const sessionActionTails = new Map<string, Promise<void>>();
-
-export async function runSessionActionExclusive<T>(
-  threadId: string,
-  run: () => Promise<T>,
-): Promise<T> {
-  const previous = sessionActionTails.get(threadId) ?? Promise.resolve();
-  const operation = previous.then(run);
-  const tail = operation.then(
-    () => undefined,
-    () => undefined,
-  );
-  sessionActionTails.set(threadId, tail);
-  try {
-    return await operation;
-  } finally {
-    if (sessionActionTails.get(threadId) === tail) {
-      sessionActionTails.delete(threadId);
-    }
-  }
-}
+export const catalogSessionActions = new KeyedAsyncQueue();
 
 // Session creation persists this plugin-owned suffix under an agent-qualified key.
 // Restart discovery must compare the parsed suffix, not the returned canonical key.
@@ -76,12 +55,22 @@ export function adoptionSessionKeyRest(sessionKey: string): string {
   return parseAgentSessionKey(trimmed)?.rest ?? trimmed;
 }
 
-function nodeAdoptionSessionKey(hostId: string, threadId: string): string {
-  const source = JSON.stringify([hostId, threadId]);
+export function nodeAdoptedSourceKey(
+  hostId: string,
+  threadId: string,
+  sourceHomeId: string,
+): string {
+  return sessionCatalogAdoptedSourceKey(JSON.stringify([hostId, sourceHomeId]), threadId);
+}
+
+function nodeAdoptionSessionKey(hostId: string, threadId: string, sourceHomeId: string): string {
+  const source = JSON.stringify([hostId, sourceHomeId, threadId]);
   return sessionCatalogAdoptedSessionKey(CODEX_NODE_SESSION_KEY_PREFIX, source);
 }
 
-function readNodeSessionMarker(entry: CatalogSessionEntry): CodexNodeSessionMarker | undefined {
+export function readNodeSessionMarker(
+  entry: CatalogSessionEntry,
+): CodexNodeSessionMarker | undefined {
   const codex = isRecord(entry.pluginExtensions?.codex) ? entry.pluginExtensions.codex : undefined;
   const marker = codex && isRecord(codex.sessionCatalog) ? codex.sessionCatalog : undefined;
   if (
@@ -91,13 +80,18 @@ function readNodeSessionMarker(entry: CatalogSessionEntry): CodexNodeSessionMark
     typeof marker.sourceThreadId !== "string" ||
     !marker.sourceThreadId.trim() ||
     typeof marker.nodeId !== "string" ||
-    !marker.nodeId.trim()
+    !marker.nodeId.trim() ||
+    (marker.sourceHomeId !== undefined &&
+      (typeof marker.sourceHomeId !== "string" ||
+        !marker.sourceHomeId.trim() ||
+        marker.sourceHomeId.length > MAX_SESSION_ID_LENGTH))
   ) {
     return undefined;
   }
   return {
     sourceHostId: marker.sourceHostId,
     sourceThreadId: marker.sourceThreadId,
+    ...(typeof marker.sourceHomeId === "string" ? { sourceHomeId: marker.sourceHomeId } : {}),
     nodeId: marker.nodeId,
     ...(marker.initializing === true ? { initializing: true } : {}),
   };
@@ -121,18 +115,23 @@ export function listNodeAdoptedSessionEntries(params: {
     const sessionId = entry.sessionId?.trim();
     if (
       !marker ||
+      !marker.sourceHomeId ||
       (marker.initializing === true && params.includeInitializing !== true) ||
       entry.initializationPending === true ||
       entry.agentHarnessId !== "codex" ||
       entry.modelSelectionLocked !== true ||
       !sessionId ||
       adoptionSessionKeyRest(sessionKey) !==
-        nodeAdoptionSessionKey(marker.sourceHostId, marker.sourceThreadId) ||
+        nodeAdoptionSessionKey(marker.sourceHostId, marker.sourceThreadId, marker.sourceHomeId) ||
       marker.sourceHostId !== `node:${marker.nodeId}`
     ) {
       continue;
     }
-    const sourceKey = sessionCatalogAdoptedSourceKey(marker.sourceHostId, marker.sourceThreadId);
+    const sourceKey = nodeAdoptedSourceKey(
+      marker.sourceHostId,
+      marker.sourceThreadId,
+      marker.sourceHomeId,
+    );
     if (adopted.has(sourceKey)) {
       throw new Error(
         `multiple OpenClaw sessions adopt Codex thread ${marker.sourceThreadId} on ${marker.sourceHostId}`,
@@ -154,22 +153,25 @@ export function findNodeAdoptedSessionEntry(params: {
   runtime: PluginRuntime;
   hostId: string;
   threadId: string;
+  sourceHomeId: string;
   includeInitializing?: boolean;
 }): AdoptedSessionEntry | undefined {
   return listNodeAdoptedSessionEntries(params).get(
-    sessionCatalogAdoptedSourceKey(params.hostId, params.threadId),
+    nodeAdoptedSourceKey(params.hostId, params.threadId, params.sourceHomeId),
   );
 }
 
 export function nodeSessionMarker(params: {
   hostId: string;
   threadId: string;
+  sourceHomeId: string;
   nodeId: string;
   initializing?: true;
-}): CodexNodeSessionMarker {
+}): CodexNodeSessionMarker & { sourceHomeId: string } {
   return {
     sourceHostId: params.hostId,
     sourceThreadId: params.threadId,
+    sourceHomeId: params.sourceHomeId,
     nodeId: params.nodeId,
     ...(params.initializing === true ? { initializing: true } : {}),
   };
@@ -178,7 +180,7 @@ export function nodeSessionMarker(params: {
 export async function finalizeNodeAdoptedSession(params: {
   api: OpenClawPluginApi;
   adopted: AdoptedSessionEntry;
-  marker: CodexNodeSessionMarker;
+  marker: ReturnType<typeof nodeSessionMarker>;
 }): Promise<void> {
   const changedError = () =>
     new CatalogParamsError("Codex OpenClaw session changed before it could be bound. Retry.");
@@ -198,6 +200,7 @@ export async function finalizeNodeAdoptedSession(params: {
           !current ||
           current.sourceHostId !== params.marker.sourceHostId ||
           current.sourceThreadId !== params.marker.sourceThreadId ||
+          current.sourceHomeId !== params.marker.sourceHomeId ||
           current.nodeId !== params.marker.nodeId
         ) {
           throw changedError();
@@ -228,6 +231,7 @@ export async function finalizeNodeAdoptedSession(params: {
       current?.initializing !== true &&
       current?.sourceHostId === params.marker.sourceHostId &&
       current.sourceThreadId === params.marker.sourceThreadId &&
+      current.sourceHomeId === params.marker.sourceHomeId &&
       current.nodeId === params.marker.nodeId
     ) {
       return;
@@ -245,30 +249,34 @@ export async function createOrReuseNodeAdoptedSession(params: {
   config: OpenClawConfig;
   hostId: string;
   nodeId: string;
+  sourceHomeId: string;
   record: CodexSessionCatalogSession;
   history: CodexNodeHistory;
 }): Promise<AdoptedSessionEntry> {
-  const existing = findNodeAdoptedSessionEntry({
+  const lookup = {
     agentId: params.agentId,
     config: params.config,
     runtime: params.api.runtime,
     hostId: params.hostId,
     threadId: params.record.threadId,
+    sourceHomeId: params.sourceHomeId,
     includeInitializing: true,
-  });
+  };
+  const existing = findNodeAdoptedSessionEntry(lookup);
   if (existing) {
     return existing;
   }
   const marker = nodeSessionMarker({
     hostId: params.hostId,
     threadId: params.record.threadId,
+    sourceHomeId: params.sourceHomeId,
     nodeId: params.nodeId,
   });
   const initializingMarker = { ...marker, initializing: true as const };
   try {
     const created = await params.api.runtime.agent.session.createSessionEntry({
       cfg: params.config,
-      key: nodeAdoptionSessionKey(params.hostId, params.record.threadId),
+      key: nodeAdoptionSessionKey(params.hostId, params.record.threadId, params.sourceHomeId),
       agentId: params.agentId,
       recoverMatchingInitialEntry: true,
       displayName: params.record.name ?? undefined,
@@ -309,14 +317,7 @@ export async function createOrReuseNodeAdoptedSession(params: {
       initializing: true,
     };
   } catch (error) {
-    const raced = findNodeAdoptedSessionEntry({
-      agentId: params.agentId,
-      config: params.config,
-      runtime: params.api.runtime,
-      hostId: params.hostId,
-      threadId: params.record.threadId,
-      includeInitializing: true,
-    });
+    const raced = findNodeAdoptedSessionEntry(lookup);
     if (raced) {
       return raced;
     }

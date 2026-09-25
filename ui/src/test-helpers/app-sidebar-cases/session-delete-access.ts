@@ -16,13 +16,11 @@ import {
 import { waitForFast } from "../wait-for.ts";
 
 async function openSessionMenu(sidebar: SidebarLifecycleState, key: string) {
-  const button = sidebar.querySelector<HTMLButtonElement>(
-    `[data-session-key="${key}"] [data-session-menu="true"]`,
-  );
-  if (!button) {
-    throw new Error(`expected menu button for ${key}`);
+  const row = sidebar.querySelector<HTMLElement>(`[data-session-key="${key}"]`);
+  if (!row) {
+    throw new Error(`expected session row for ${key}`);
   }
-  button.click();
+  row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
   await sidebar.updateComplete;
   const menu = sidebar.querySelector<TestSessionMenu>("openclaw-session-menu");
   if (!menu) {

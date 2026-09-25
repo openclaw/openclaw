@@ -1,5 +1,6 @@
 // Covers heartbeat delivery routes for queued events and isolated completions.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
 import { getReplySystemEventContext } from "../auto-reply/reply/system-event-session-key.js";
@@ -8,6 +9,7 @@ import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadExactSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import { resetCronActiveJobs } from "../cron/active-jobs.js";
+import { racePromiseWithAbortSignal } from "./abort-signal.js";
 import { runHeartbeatOnce, startHeartbeatRunner } from "./heartbeat-runner.js";
 import {
   getFirstReplyContext,
@@ -93,19 +95,7 @@ describe("Heartbeat event routing", () => {
 
   it("routes wake-triggered heartbeat replies using queued system-event delivery context", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            workspace: tmpDir,
-            heartbeat: {
-              every: "5m",
-              target: "last",
-            },
-          },
-        },
-        channels: { telegram: { allowFrom: ["*"] } },
-        session: { store: storePath },
-      };
+      const cfg: OpenClawConfig = createLastTargetConfig({ tmpDir, storePath });
       const sessionKey = resolveMainSessionKey(cfg);
       await writeTelegramSessionStore(storePath, sessionKey, {});
 
@@ -273,7 +263,9 @@ describe("Heartbeat event routing", () => {
     },
   );
 
-  it("retains a legacy queue's explicit base until its mixed cron follow-up completes", async () => {
+  it("retains a legacy queue's explicit base until its mixed cron follow-up completes", async ({
+    signal,
+  }) => {
     await withTempHeartbeatSandbox(async ({ tmpDir, replySpy }) => {
       const baseKey = "agent:ops:alerts:heartbeat";
       const isolatedKey = `${baseKey}:heartbeat`;
@@ -310,15 +302,22 @@ describe("Heartbeat event routing", () => {
       replySpy.mockImplementation(async (ctx) => ({
         text: ctx.InternalTurnSource === "exec" ? "Command completed" : "Reminder handled",
       }));
+      const followup = createDeferred<Awaited<ReturnType<typeof runHeartbeatOnce>>>();
       const runner = startHeartbeatRunner({
         cfg,
-        runOnce: (opts) =>
-          runHeartbeatOnce({
+        runOnce: (opts) => {
+          const run = runHeartbeatOnce({
             ...opts,
             cfg,
             deps: { getReplyFromConfig: replySpy, telegram: sendTelegram },
-          }),
+          });
+          if (opts.source === "cron") {
+            followup.resolve(run);
+          }
+          return run;
+        },
       });
+      onTestFinished(() => runner.stop());
       try {
         await requestHeartbeatAndWait({
           source: "exec-event",
@@ -328,14 +327,18 @@ describe("Heartbeat event routing", () => {
           sessionKey: queueKey,
           coalesceMs: 0,
         });
-        await vi.waitFor(() => expect(replySpy).toHaveBeenCalledTimes(2));
+        // The exec wake settles before its separately scheduled cron follow-up.
+        await expect(racePromiseWithAbortSignal(followup.promise, signal)).resolves.toMatchObject({
+          status: "ran",
+        });
+        expect(replySpy).toHaveBeenCalledTimes(2);
         expect(
           replySpy.mock.calls.map(([ctx]) => [ctx.AgentId, ctx.SessionKey, ctx.InternalTurnSource]),
         ).toEqual([
           ["ops", isolatedKey, "exec"],
           ["ops", isolatedKey, "cron"],
         ]);
-        await vi.waitFor(() => expect(peekSystemEvents(queueKey)).toEqual([]));
+        expect(peekSystemEvents(queueKey)).toEqual([]);
         expect(peekSystemEvents(baseKey)).toEqual(["Unrelated base event"]);
         expect(readEntry(baseKey)?.sessionId).toBe("base-conversation");
         expect(readEntry(queueKey)).toBeUndefined();
@@ -547,19 +550,7 @@ describe("Heartbeat event routing", () => {
   });
   it("keeps output-bearing exec-event delivery pinned to the original Telegram topic when session route drifts", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            workspace: tmpDir,
-            heartbeat: {
-              every: "5m",
-              target: "last",
-            },
-          },
-        },
-        channels: { telegram: { allowFrom: ["*"] } },
-        session: { store: storePath },
-      };
+      const cfg: OpenClawConfig = createLastTargetConfig({ tmpDir, storePath });
       const sessionKey = "agent:main:telegram:group:-1003774691294:topic:47";
       await writeTelegramSessionStore(storePath, sessionKey, {
         lastTo: "telegram:-1003774691294:topic:2175",
@@ -604,19 +595,7 @@ describe("Heartbeat event routing", () => {
 
   it("suppresses metadata-only successful exec completions", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            workspace: tmpDir,
-            heartbeat: {
-              every: "5m",
-              target: "last",
-            },
-          },
-        },
-        channels: { telegram: { allowFrom: ["*"] } },
-        session: { store: storePath },
-      };
+      const cfg: OpenClawConfig = createLastTargetConfig({ tmpDir, storePath });
       const sessionKey = "agent:main:telegram:group:-1003774691294:topic:47";
       await writeTelegramSessionStore(storePath, sessionKey, {
         lastTo: "telegram:-1003774691294:topic:2175",

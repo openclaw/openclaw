@@ -3,10 +3,14 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import {
   appendTranscriptEvent,
   loadTranscriptEventsSync,
@@ -20,6 +24,7 @@ import {
   withRecentSessionTranscriptActiveEvents,
 } from "./session-accessor.sqlite-active-events.js";
 import { reconcileSessionTranscriptIndexes } from "./session-transcript-reconcile.js";
+import { transcriptMessage } from "./transcript-message.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const readSessionTranscriptMessageEventCount = (
@@ -45,8 +50,10 @@ describe("SQLite transcript context accounting", () => {
     };
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
   });
 
@@ -62,15 +69,11 @@ describe("SQLite transcript context accounting", () => {
       });
       await persistSessionTranscriptTurn(scope, {
         messages: [
-          {
-            eventId: "usage",
-            parentId: "bootstrap",
-            message: {
-              role: "assistant",
-              content: "answer",
-              usage: { input: 86_000, output: 2_000 },
-            },
-          },
+          transcriptMessage("usage", "bootstrap", {
+            role: "assistant",
+            content: "answer",
+            usage: { input: 86_000, output: 2_000 },
+          }),
           ...Array.from({ length: 513 }, (_, index) => ({
             eventId: `display-${index}`,
             parentId: index === 0 ? "usage" : `display-${index - 1}`,
@@ -108,7 +111,7 @@ describe("SQLite transcript context accounting", () => {
 
   it("keeps repeated visits on one snapshot and expires their reader on return", async () => {
     await persistSessionTranscriptTurn(scope, {
-      messages: [{ eventId: "seed", parentId: null, message: { role: "user", content: "before" } }],
+      messages: [transcriptMessage("seed", null, { role: "user", content: "before" })],
       touchSessionEntry: false,
     });
     const database = openOpenClawAgentDatabase(scope);
@@ -148,13 +151,9 @@ describe("SQLite transcript context accounting", () => {
     async (failureKind) => {
       await persistSessionTranscriptTurn(scope, {
         messages: [
-          { eventId: "oldest", parentId: null, message: { role: "user", content: "oldest" } },
-          {
-            eventId: "middle",
-            parentId: "oldest",
-            message: { role: "assistant", content: "middle" },
-          },
-          { eventId: "newest", parentId: "middle", message: { role: "user", content: "newest" } },
+          transcriptMessage("oldest", null, { role: "user", content: "oldest" }),
+          transcriptMessage("middle", "oldest", { role: "assistant", content: "middle" }),
+          transcriptMessage("newest", "middle", { role: "user", content: "newest" }),
         ],
         touchSessionEntry: false,
       });
@@ -174,6 +173,7 @@ describe("SQLite transcript context accounting", () => {
         // The connection-local view corrupts reads without changing canonical rows or projections.
         database.db.exec(`CREATE TEMP VIEW transcript_events AS
           SELECT event.session_id, event.seq, event.created_at,
+            event.event_zstd, event.event_utf8_bytes, event.navigation_json,
             CASE identity.event_id
               WHEN 'oldest' THEN ${failureKind === "sql" ? "json_extract('{broken', '$')" : "'{\"old\":}'"}
               WHEN 'middle' THEN '{"newer":}'
@@ -226,13 +226,12 @@ describe("SQLite transcript context accounting", () => {
       };
       await persistSessionTranscriptTurn(scope, {
         messages: [
-          { eventId: "kept-user", parentId: null, message: { role: "user", content: "question" } },
-          { eventId: "display-prefix", parentId: "kept-user", message: activity },
-          {
-            eventId: "kept-assistant",
-            parentId: "display-prefix",
-            message: { role: "assistant", content: "answer" },
-          },
+          transcriptMessage("kept-user", null, { role: "user", content: "question" }),
+          transcriptMessage("display-prefix", "kept-user", activity),
+          transcriptMessage("kept-assistant", "display-prefix", {
+            role: "assistant",
+            content: "answer",
+          }),
         ],
         touchSessionEntry: false,
       });

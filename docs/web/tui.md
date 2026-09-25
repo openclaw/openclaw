@@ -52,6 +52,7 @@ openclaw tui --local
 - Header: connection URL, current agent, current session.
 - Chat log: user messages, assistant replies, system notices, tool cards.
 - On terminals with hyperlink support, Markdown links open their authored destination, including wrapped links and URL-shaped labels.
+- On terminals with image support, image attachments appear as inline previews in messages and tool output.
 - Status line: connection/run state (connecting, running, streaming, idle, error).
 - Footer: agent + session + model + goal state + think/fast/verbose/trace/reasoning + token counts + deliver.
 - Input: text editor with autocomplete.
@@ -70,6 +71,7 @@ openclaw tui --local
 - If the session has a [goal](/tools/goal), the footer shows its compact state:
   `Pursuing goal`, `Goal paused (/goal resume)`, `Goal blocked (/goal resume)`, or `Goal achieved`.
 - When started without `--session`, gateway-mode TUI resumes the last selected session. The gateway, agent, and session scope must match, and that session must still exist. Passing `--session`, `/session`, `/new`, or `/reset` remains explicit.
+- Session details and remembered-session restoration keep the selected agent and exact conversation, even when another agent has the same session name. After reconnecting, metadata from the previous connection is discarded.
 
 ## Sending + delivery
 
@@ -85,6 +87,11 @@ openclaw tui --local
 - Settings (`/settings`): toggle tool output expansion and thinking visibility. This panel does not control delivery.
 
 Esc or Ctrl+C closes a picker. In the session picker, the first press clears a nonempty filter. Press again to close it.
+
+The model picker opens immediately, showing a checking state if no models are known yet.
+In Gateway mode, it reuses the selected agent's last known list while refreshing in the
+background. Catalog changes update an open picker without clearing its search or
+moving its highlighted choice when that model is still present.
 
 ## Questions
 
@@ -119,7 +126,7 @@ prompt, never in the composer.
 - Enter: send message
 - Shift+Enter or Ctrl+J: insert a newline without sending
 - Esc: collapse an open question prompt, or abort the active run from the composer
-- Ctrl+C: clear input (press twice to exit)
+- Ctrl+C: clear input and show an exit hint in the chat log (press twice to exit); the active run status stays visible
 - Ctrl+D: exit
 - Ctrl+L: model picker
 - Ctrl+G: agent picker
@@ -137,7 +144,7 @@ Core:
 
 - `/help`
 - `/status` (Gateway-forwarded, shows session/model summary)
-- `/gateway-status` (alias `/gwstatus`) shows Gateway version, channel configuration summaries, and sessions directly.
+- `/gateway-status` (alias `/gwstatus`) shows Gateway version, channel configuration summaries, and stored session inventory, including archived sessions.
 - `/agent <id>` (or `/agents`)
 - `/session <key>` (or `/sessions`)
 - `/model <provider/model|default>` (or `/models`). `default` clears the session override.
@@ -190,6 +197,22 @@ OpenClaw:
 - `/openclaw [request]` returns from the normal agent TUI to the [OpenClaw](#openclaw-setup-and-repair-helper) setup/repair chat, optionally forwarding one request.
 
 Other Gateway slash commands (for example, `/context`) are forwarded to the Gateway and shown as system output. See [Slash commands](/tools/slash-commands).
+
+## Local Chrome setup
+
+Use `/browser-setup` (or `/browser-setup inspect`) to inspect Chrome extension
+setup on the **TUI process host**, not the connected Gateway.
+`/browser-setup install` explicitly prepares automatic local setup;
+`/browser-setup verify` checks the local authenticated extension relay.
+No pairing code is requested for supported local native bootstrap. Chrome still
+requires its own extension installation and permission approval, and existing
+pairings and automatic-setup opt-outs are preserved.
+
+These commands are deterministic local CLI operations, not messages to the agent.
+Do not paste credentials into them. `/stop`, `/abort`, Escape, or exiting the TUI
+cancels a pending setup command. After interruption, inspect again to reconcile
+any preparation that already completed. When the TUI runs through SSH, setup runs
+on the SSH host; the physical terminal viewer is not assumed to host Chrome.
 
 ## Local shell commands
 
@@ -254,6 +277,30 @@ Tips:
 - Tool calls show as cards with args + results.
 - Ctrl+O toggles between collapsed/expanded views.
 - While tools run, partial updates stream into the same card.
+
+## Image previews
+
+The TUI displays static previews of received and generated image attachments in
+compatible terminals, including Ghostty, iTerm2, and Kitty. Previews also appear
+when reopening a conversation or reconnecting. Tool image results appear in
+their tool cards; restored tool output follows the session's verbose setting.
+
+Gateway mode retrieves managed attachments from the connected Gateway using the
+same media access rules as the Control UI. Local mode reads managed attachments
+through the local media store. Image links in ordinary Markdown do not trigger
+downloads.
+
+Gateway image previews work even when Control UI hosting is disabled.
+
+Previews preserve aspect ratio and fit within 60 columns and 20 rows. The TUI
+keeps up to four previews per message and the 24 most recent previews in the
+visible transcript. PNG, JPEG, GIF, and WebP inputs are displayed as static PNG
+thumbnails; GIF animation is not supported. Large or unavailable images show a
+preview notice. Use the Control UI to inspect the original image or resolve a
+media access failure.
+
+Terminals without a supported graphics protocol keep text output. Images are
+disabled by default inside tmux and GNU Screen. Sixel is not supported.
 
 ## Terminal colors
 

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -11,6 +12,7 @@ import {
 } from "../../infra/state-database-coordinator.js";
 import {
   createUpdateRun,
+  finishInterruptedUpdateBeforeActivation,
   finishInterruptedUpdatePreview,
   getUpdateRun,
   recordUpdateRunPhase,
@@ -37,7 +39,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-function previousVersionState(ledger: boolean) {
+function previousVersionState(ledger: boolean, legacyMetadata = false) {
   const root = dirs.make("update-admission-schema-");
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
   vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(root, "openclaw.json"));
@@ -50,7 +52,12 @@ function previousVersionState(ledger: boolean) {
   const db = new DatabaseSync(filename);
   // Exact stable table subset from fac4b318 (2026.9.2). This models its
   // live SQLite lease, not a running Gateway or physical installation.
-  db.exec(fs.readFileSync(new URL("./fixtures/admission-state-fac4.sql", import.meta.url), "utf8"));
+  const fixture = fs.readFileSync(
+    new URL("./fixtures/admission-state-fac4.sql", import.meta.url),
+    "utf8",
+  );
+  // Schema 1 (2026.6.11) has these metadata columns, but predates STRICT tables.
+  db.exec(legacyMetadata ? fixture.replace(") STRICT;", ");") : fixture);
   db.exec("PRAGMA user_version=16");
   db.prepare("INSERT INTO schema_meta VALUES ('primary','global',16,NULL,'2026.9.2',1,1)").run();
   db.prepare("INSERT INTO config_machine_state VALUES ('fixture','{\"keep\":true}',1)").run();
@@ -68,7 +75,9 @@ function previousVersionState(ledger: boolean) {
   const snapshot = () => ({
     meta: db.prepare("SELECT * FROM schema_meta").all(),
     version: db.prepare("PRAGMA user_version").get(),
-    state: db.prepare("SELECT * FROM config_machine_state").all(),
+    state: db.prepare("SELECT name FROM sqlite_schema WHERE name='config_machine_state'").get()
+      ? db.prepare("SELECT * FROM config_machine_state").all()
+      : null,
     schema: db
       .prepare("SELECT name,sql FROM sqlite_schema WHERE tbl_name != 'update_runs' ORDER BY name")
       .all(),
@@ -131,6 +140,84 @@ it("records only the exact preview interruption without opening the candidate sc
     f.db.close();
   }
 });
+
+it.each(["absent", "empty", "malformed", "view", "pending", "corrupt"] as const)(
+  "settles schema-1 interruption only with safe recovery state: %s",
+  (recovery) => {
+    const f = previousVersionState(true, true);
+    try {
+      f.db.exec("PRAGMA user_version=1");
+      f.db.exec("UPDATE schema_meta SET schema_version=1, app_version='2026.6.11'");
+      f.db.exec("DELETE FROM config_machine_state");
+      if (recovery === "absent") {
+        f.db.exec("DROP TABLE config_machine_state");
+      } else if (recovery === "view") {
+        f.db.exec("DROP TABLE config_machine_state");
+        f.db.exec(
+          "CREATE VIEW config_machine_state AS SELECT 'fixture' AS state_key, '{}' AS value_json, 1 AS updated_at_ms",
+        );
+      } else if (recovery === "malformed") {
+        // Still readable, but a missing canonical constraint must refuse cleanup.
+        f.db.exec("DROP TABLE config_machine_state");
+        f.db.exec(
+          "CREATE TABLE config_machine_state (state_key TEXT NOT NULL PRIMARY KEY, value_json TEXT, updated_at_ms INTEGER NOT NULL) STRICT",
+        );
+      }
+      const options = { env: f.env };
+      const run = createUpdateRun({ trigger: "cli" }, options);
+      const expected = recordUpdateRunPhase(run.runId, "validating", {}, options);
+      if (recovery === "pending" || recovery === "corrupt") {
+        // Another run's pending recovery also excludes this diagnostic write.
+        const runId = randomUUID();
+        const runtime = {
+          root: f.root,
+          nodePath: process.execPath,
+          version: "2026.6.11",
+          buildId: null,
+        };
+        const record = {
+          runId,
+          transactionId: randomUUID(),
+          revision: 0,
+          claimId: randomUUID(),
+          claimKind: "initial",
+          handoff: null,
+          from: runtime,
+          to: runtime,
+          createdAtMs: 1,
+          updatedAtMs: 1,
+          effects: [],
+          restore: null,
+          verification: null,
+          primaryFailure: null,
+        };
+        f.db
+          .prepare("INSERT INTO config_machine_state VALUES (?, ?, 1)")
+          .run("update.recovery." + runId, recovery === "corrupt" ? "{}" : JSON.stringify(record));
+      }
+      const before = f.snapshot();
+      const interrupt = () => finishInterruptedUpdateBeforeActivation(expected, () => {}, options);
+      if (recovery === "malformed") {
+        expect(interrupt).toThrow("column definitions differ for config_machine_state");
+      } else if (recovery === "view") {
+        expect(interrupt).toThrow("missing table config_machine_state");
+      } else if (recovery === "corrupt") {
+        expect(interrupt).toThrow();
+      } else {
+        interrupt();
+      }
+      expect(getUpdateRun(run.runId, options)).toMatchObject(
+        recovery === "absent" || recovery === "empty"
+          ? { status: "failed", phase: "finished", reason: "interrupted" }
+          : expected,
+      );
+      expect(f.snapshot()).toEqual(before);
+    } finally {
+      f.owner.release();
+      f.db.close();
+    }
+  },
+);
 
 it.each([
   ["newer", "PRAGMA user_version=17"],

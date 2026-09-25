@@ -1,7 +1,24 @@
-import { formatPortDiagnostics } from "../../infra/ports.js";
-import type { GatewayPortHealthSnapshot, GatewayRestartSnapshot } from "./restart-health.types.js";
+import { formatPortDiagnostics } from "../../infra/ports-format.js";
+import type {
+  GatewayPortHealthSnapshot,
+  GatewayRestartSnapshot,
+  GatewayRestartWaitOutcome,
+} from "./restart-health.types.js";
 
-function renderPortUsageDiagnostics(snapshot: GatewayPortHealthSnapshot): string[] {
+const restartFailureReasons: Partial<Record<GatewayRestartWaitOutcome, string>> = {
+  "plugin-errors": "activated plugins reported load errors",
+  "channel-errors": "channel health checks failed",
+  "version-mismatch": "the running Gateway version did not match the expected version",
+  "build-id-mismatch": "the running Gateway build did not match the expected build",
+  "stale-pids": "stale Gateway processes remained",
+  "generation-changed": "the Gateway process generation changed before readiness was confirmed",
+};
+
+function formatGatewayStillStarting(snapshot: GatewayRestartSnapshot): string {
+  return `Gateway service is still starting after ${Math.round((snapshot.elapsedMs ?? 0) / 1000)}s. Last observed startup phase: ${snapshot.startupPhase ?? "unknown"}. Run openclaw gateway status --deep.`;
+}
+
+export function renderGatewayPortHealthDiagnostics(snapshot: GatewayPortHealthSnapshot): string[] {
   const lines: string[] = [];
   if (snapshot.portUsage.status === "busy") {
     lines.push(...formatPortDiagnostics(snapshot.portUsage));
@@ -19,10 +36,16 @@ function renderPortUsageDiagnostics(snapshot: GatewayPortHealthSnapshot): string
 
 export function renderRestartDiagnostics(snapshot: GatewayRestartSnapshot): string[] {
   const lines: string[] = [];
+  if (snapshot.waitOutcome === "still-starting") {
+    lines.push(formatGatewayStillStarting(snapshot));
+  }
   if (snapshot.waitOutcome === "timeout" && snapshot.startupPhase) {
     lines.push(
       `Readiness budget exhausted after ${Math.round((snapshot.elapsedMs ?? 0) / 1000)}s. Last observed startup phase: ${snapshot.startupPhase}.`,
     );
+  }
+  if (snapshot.waitOutcome === "generation-changed") {
+    lines.push("Gateway process generation changed before readiness could be confirmed.");
   }
   if (snapshot.versionMismatch) {
     const actual = snapshot.versionMismatch.actual ?? "unavailable";
@@ -59,7 +82,7 @@ export function renderRestartDiagnostics(snapshot: GatewayRestartSnapshot): stri
   if (runtimeSummary) {
     lines.push(`Service runtime: ${runtimeSummary}`);
   }
-  lines.push(...renderPortUsageDiagnostics(snapshot));
+  lines.push(...renderGatewayPortHealthDiagnostics(snapshot));
   return lines;
 }
 
@@ -68,12 +91,21 @@ export function formatGatewayRestartFailure(params: {
   port: number;
   defaultTimeoutSeconds: number;
 }): { statusLine: string; failMessage: string } {
+  if (params.health.waitOutcome === "still-starting") {
+    const message = formatGatewayStillStarting(params.health);
+    return { statusLine: message, failMessage: message };
+  }
   if (params.health.waitOutcome === "stopped-free") {
     const elapsedSeconds = Math.max(1, Math.round((params.health.elapsedMs ?? 0) / 1000));
     return {
       statusLine: `Gateway restart failed after ${elapsedSeconds}s: service stayed stopped and port ${params.port} stayed free.`,
       failMessage: `Gateway restart failed after ${elapsedSeconds}s: service stayed stopped and health checks never came up.`,
     };
+  }
+  const reason = params.health.waitOutcome && restartFailureReasons[params.health.waitOutcome];
+  if (reason) {
+    const message = `Gateway restart failed: ${reason}.`;
+    return { statusLine: message, failMessage: message };
   }
   const timeoutSeconds = Math.max(
     1,
@@ -87,8 +119,4 @@ export function formatGatewayRestartFailure(params: {
     statusLine: `Timed out after ${timeoutSeconds}s waiting for gateway port ${params.port} to become healthy.`,
     failMessage: `Gateway restart timed out after ${timeoutSeconds}s waiting for health checks.`,
   };
-}
-
-export function renderGatewayPortHealthDiagnostics(snapshot: GatewayPortHealthSnapshot): string[] {
-  return renderPortUsageDiagnostics(snapshot);
 }

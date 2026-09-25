@@ -1,4 +1,4 @@
-// Leaf contract for the config hot-reload watcher's terminal status.
+// Leaf contracts for the config hot-reload watcher lifetime and terminal status.
 // Kept separate from config-reload.ts so callers that only need the status
 // shape (health summaries, request context, runtime handles) do not pull in
 // the full config-reload implementation.
@@ -8,11 +8,28 @@
 // can detect silent degradation instead of assuming reloads still fire.
 export type GatewayHotReloadStatus = "active" | "disabled";
 
-export type GatewayHotReloadApplicationStatus = "applied" | "applied-restart-required";
+type GatewayHotReloadApplicationStatus = "applied" | "applied-restart-required";
+
+export type GatewayHotReloadApplication =
+  | GatewayHotReloadApplicationStatus
+  | {
+      status: GatewayHotReloadApplicationStatus;
+      runtime: import("../plugins/lifecycle.js").PluginRuntimeApplication;
+    };
 
 /** Channel reload work currently waiting for active Gateway work to drain. */
 export type GatewayDeferredChannelReload = {
   channel: string;
   /** False when plugin publication committed before newly activated channels wait to start. */
   publicationPending: boolean;
+};
+
+export type GatewayConfigReloader = {
+  /** Candidate validation and watcher creation; stop owns this work immediately. */
+  ready: Promise<void>;
+  isReady: () => boolean;
+  stop: () => Promise<void>;
+  hotReloadStatus: () => GatewayHotReloadStatus | undefined;
+  applyPluginLifecycleChange: import("../plugins/lifecycle.js").PluginLifecycleRuntimeApply;
+  isReloading: () => boolean;
 };

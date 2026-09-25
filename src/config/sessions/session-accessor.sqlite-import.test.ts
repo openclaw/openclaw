@@ -2,23 +2,29 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
-import { createTranscriptEventReader } from "../../commands/doctor-session-sqlite-readers.js";
+import { createTranscriptEventReader } from "../../infra/session-sqlite-migration-readers.js";
 import * as sqliteDirectories from "../../infra/sqlite-private-directory.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import {
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+} from "../../state/openclaw-agent-db.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { listSessionBranches } from "./session-accessor.js";
+import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { loadExactSessionEntry } from "./session-accessor.sqlite-entry.js";
+import { importSqliteSessionRowsBatch } from "./session-accessor.sqlite-import.js";
 import {
   importSqliteSessionRows,
-  importSqliteSessionRowsBatch,
-} from "./session-accessor.sqlite-import.js";
+  seedUnindexedTranscriptForTest,
+} from "./session-accessor.sqlite-import.test-support.js";
 import {
   hasSessionTranscriptMessage,
   loadTranscriptEventsSync,
 } from "./session-accessor.sqlite-read.js";
+import { runSessionColdStorageMaintenance } from "./session-cold-storage.js";
 
 function target(state: OpenClawTestState, id: string) {
   return {
@@ -36,6 +42,33 @@ const message = {
   message: { role: "user", content: "preserved" },
 };
 afterEach(() => vi.restoreAllMocks());
+
+it("rechecks a required empty destination after staging before writing any batch rows", async () => {
+  await withOpenClawTestState({ label: "import-empty-admission" }, async (state) => {
+    const first = target(state, "first");
+    const second = target(state, "second");
+    const occupied = target(state, "occupied");
+    expect(loadExactSessionEntry(occupied)).toBeUndefined();
+    await expect(
+      importSqliteSessionRowsBatch([
+        {
+          ...first,
+          requireEmptyStore: true,
+          beforePersistentApply: () => {
+            runOpenClawAgentWriteTransaction(
+              (database) => writeSessionEntry(database, occupied.sessionKey, occupied.entry),
+              { agentId: "main", env: state.env },
+            );
+          },
+        },
+        { ...second, requireEmptyStore: true },
+      ]),
+    ).rejects.toThrow("SQLite destination is not empty");
+    expect(loadExactSessionEntry(first)).toBeUndefined();
+    expect(loadExactSessionEntry(second)).toBeUndefined();
+    expect(loadExactSessionEntry(occupied)?.entry.sessionId).toBe("occupied");
+  });
+});
 
 // Observe the real allocator on both POSIX and Windows without replacing its permission checks.
 function observeStages() {
@@ -137,6 +170,49 @@ it("revalidates an earlier source after later batch readers finish", async () =>
     ).rejects.toThrow("Legacy transcript changed during import");
     expect(loadExactSessionEntry(first)).toBeUndefined();
     expect(stages().every((dir) => !fs.existsSync(dir))).toBe(true);
+  });
+});
+
+it("refuses imports into archived history without replacing its owner or saved bytes", async () => {
+  await withOpenClawTestState({ label: "import-cold-history" }, async (state) => {
+    const params = target(state, "old");
+    await importSqliteSessionRows({
+      ...params,
+      readTranscriptEvents: (append) => append({ ...message, timestamp: 1 }),
+    });
+    await importSqliteSessionRows({ ...params, entry: { sessionId: "current", updatedAt: 100 } });
+    const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+    database.db
+      .prepare(
+        "UPDATE session_windows SET updated_at = 1, transcript_updated_at = 1 WHERE session_id = ?",
+      )
+      .run(params.entry.sessionId);
+    await expect(
+      runSessionColdStorageMaintenance({
+        config: {
+          agents: { list: [{ id: "main" }] },
+          session: {
+            store: database.path,
+            maintenance: { coldStorage: { enabled: true, afterDays: 30 } },
+          },
+        },
+      }),
+    ).resolves.toMatchObject({ archivedTranscripts: 1 });
+    const owners = database.db.prepare("SELECT * FROM session_nodes").all();
+    const archives = database.db.prepare("SELECT * FROM session_transcript_cold_archives").all();
+    await expect(
+      importSqliteSessionRows({
+        ...params,
+        readTranscriptEvents: (append) => append({ replacement: true }),
+      }),
+    ).rejects.toMatchObject({ code: "TRANSCRIPT_COLD" });
+    expect(database.db.prepare("SELECT * FROM session_nodes").all()).toEqual(owners);
+    expect(database.db.prepare("SELECT * FROM session_transcript_cold_archives").all()).toEqual(
+      archives,
+    );
+    expect(
+      database.db.prepare("SELECT * FROM transcript_events WHERE session_id = 'old'").all(),
+    ).toEqual([]);
   });
 });
 
@@ -262,7 +338,7 @@ it("keeps legacy Codex assistant rows that precede later transcript rows during 
   });
 });
 
-it("hands off exact SQLite bytes, duplicate IDs, timestamps and owner without append normalization", async () => {
+it("reads legacy handoff bytes, duplicate IDs, timestamps and owner without normalization", async () => {
   await withOpenClawTestState({ label: "import-exact" }, async (state) => {
     const params = target(state, "exact");
     const owner = { actor: { type: "human" as const, id: "owner" }, assignedAt: 40 };
@@ -273,21 +349,26 @@ it("hands off exact SQLite bytes, duplicate IDs, timestamps and owner without ap
       message: { role: "user", content: "canonical duplicate" },
     };
     const rows = [
-      { createdAt: 41, eventJson: '{ "type": "session", "id": "exact", "version": 3 }' },
-      { createdAt: 43, eventJson: JSON.stringify(firstMessage, null, 2) },
-      { createdAt: 45, eventJson: JSON.stringify(canonicalMessage) },
+      { seq: 2, createdAt: 41, eventJson: '{ "type": "session", "id": "exact", "version": 3 }' },
+      { seq: 11, createdAt: 43, eventJson: JSON.stringify(firstMessage, null, 2) },
+      { seq: 17, createdAt: 45, eventJson: JSON.stringify(canonicalMessage) },
     ];
-    await importSqliteSessionRows({
+    await seedUnindexedTranscriptForTest({
       ...params,
       entry: { ...params.entry, owner },
-      readExactTranscriptRows: (append) => rows.forEach(append),
+      events: rows.map((row) => ({
+        session_id: params.entry.sessionId,
+        seq: row.seq,
+        created_at: row.createdAt,
+        event_json: row.eventJson,
+      })),
       transcriptMtimeMs: 50,
     });
     const db = openOpenClawAgentDatabase({ agentId: "main", env: state.env }).db;
     expect(
       db
         .prepare(
-          "SELECT created_at AS createdAt, event_json AS eventJson FROM transcript_events ORDER BY seq",
+          "SELECT seq, created_at AS createdAt, event_json AS eventJson FROM transcript_events ORDER BY seq",
         )
         .all(),
     ).toEqual(rows);
@@ -298,13 +379,6 @@ it("hands off exact SQLite bytes, duplicate IDs, timestamps and owner without ap
     expect(db.prepare("SELECT transcript_updated_at FROM session_windows").get()).toEqual({
       transcript_updated_at: 50,
     });
-    expect(
-      await importSqliteSessionRows({
-        ...params,
-        skipIfExists: true,
-        readExactTranscriptRows: (append) => append({ createdAt: 99, eventJson: "{}" }),
-      }),
-    ).toMatchObject({ skippedExisting: true, transcriptEvents: 0 });
     expect(loadTranscriptEventsSync({ ...params, sessionId: "exact" })).toHaveLength(3);
     await expect(hasSessionTranscriptMessage({ ...params, sessionId: "exact" })).resolves.toBe(
       true,

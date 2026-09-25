@@ -58,6 +58,57 @@ function createBoundaryFixture(fixture: BoundaryFixture) {
   return createExtensionPluginSdkBoundaryChecker({ repoRoot });
 }
 
+describe("aggregate extension plugin SDK boundaries", () => {
+  const modes = ["src-outside-plugin-sdk", "normalization-core-bypass", "relative-outside-package"];
+
+  it.each([
+    { name: "clean", source: 'import "./local.js";', expectedCode: 0 },
+    { name: "core escape", source: 'import "../../../src/private.js";', expectedCode: 1 },
+    { name: "normalization", source: 'import "@openclaw/normalization-core";', expectedCode: 1 },
+    { name: "relative escape", source: 'import "../../other/api.js";', expectedCode: 1 },
+    {
+      name: "overlapping modes",
+      source: 'import "../../../src/utils/boolean.js";',
+      expectedCode: 1,
+    },
+  ])("preserves all mode reports for $name", async ({ source, expectedCode }) => {
+    const fixture = { source };
+    const expected = createCapturedIo();
+    for (const mode of modes) {
+      await createBoundaryFixture(fixture).main([`--mode=${mode}`], expected.io);
+    }
+    const actual = createCapturedIo();
+    const code = await createBoundaryFixture(fixture).main(["--all"], actual.io);
+    expect(code).toBe(expectedCode);
+    expect(actual.readStdout()).toBe(expected.readStdout());
+    expect(actual.readStderr()).toBe(expected.readStderr());
+  });
+
+  it("reports inventory failure for every mode and fails the aggregate", async () => {
+    const checker = createBoundaryFixture({ source: " ".repeat(2 * 1024 * 1024 + 1) });
+    const actual = createCapturedIo();
+    expect(await checker.main(["--all"], actual.io)).toBe(1);
+    expect(actual.readStdout()).toBe("");
+    const errors = actual.readStderr();
+    expect(errors.match(/exceeds 2097152 byte limit/gu)).toHaveLength(3);
+    expect(errors).toContain("must not import src/**");
+    expect(errors).toContain("must not import normalization-core directly");
+    expect(errors).toContain("relative imports that escape");
+  });
+
+  it.each([
+    ["--all", "--json"],
+    ["--all", "--mode=src-outside-plugin-sdk"],
+  ])("rejects conflicting aggregate arguments %j", async (...argv) => {
+    const actual = createCapturedIo();
+    await expect(createBoundaryFixture({ source: "" }).main(argv, actual.io)).rejects.toThrow(
+      "--all cannot be combined with --json or --mode",
+    );
+    expect(actual.readStdout()).toBe("");
+    expect(actual.readStderr()).toBe("");
+  });
+});
+
 describe("production plugin normalization ownership boundary", () => {
   it.each([
     {

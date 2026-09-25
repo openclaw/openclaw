@@ -13,13 +13,20 @@ whole release. Run release preparation before freezing the Code SHA; it
 refreshes Control UI locale output when the background bot has not landed it
 yet, then enforces the same strict zero-fallback check used by release CI.
 
-Linux (`ubuntu`) cross-OS fresh-install and upgrade lanes gate publication in
-the beta, stable, and full profiles. Windows and macOS cross-OS lanes run in
-parallel as **advisory** coverage: their pass/fail conclusions remain in the
-manifest and summary, but failures do not block Release Decision, npm publish,
-or `pnpm release:candidate`. Selected lanes still need terminal evidence.
-Normal CI, npm qualification, Docker, Package Acceptance, and the profile's
-performance and soak requirements keep their existing gates.
+Generated-locale drift is a warning before dispatch, not a reason to refuse
+validation. Source PRs and the serialized locale-refresh workflows land
+separately, so generated output can temporarily lag. Record any preflight drift
+against the frozen target SHA and continue dispatch. The normal-CI child still
+runs strict `control-ui-i18n` and `native-i18n` jobs; their failures remain visible
+in the run summary and fail validation. PR-side locale checks, release preparation,
+and publication requirements are unchanged.
+
+Selected Linux, Windows, and macOS fresh-install and upgrade lanes gate
+validation in every release profile. Their actual conclusions remain in the
+manifest and summary. Test failures require a fix or an explicit operator waiver;
+release profiles do not automatically downgrade failed tests to advisory results.
+Normal CI, npm qualification, Docker, Package Acceptance, and selected performance
+and soak checks retain their gates.
 
 Prepare the complete history manifest and substantive version-matched release
 notes before freezing the product-complete commit and its target context as the
@@ -30,16 +37,91 @@ as the **Tooling SHA/ref**, then run:
 
 ```bash
 TOOLING_SHA="<recorded-full-main-ancestor-sha>"
+PUBLICATION_SELECTION='{"route":"normal","npmDistTag":"latest","publishOpenclawNpm":true,"pluginPublishScope":"all-publishable","plugins":[]}'
 pnpm ci:full-release \
   --sha <code-sha> \
   --target-ref release/YYYY.M.PATCH \
-  --workflow-sha "$TOOLING_SHA"
+  --workflow-sha "$TOOLING_SHA" \
+  -f validation_purpose=publish \
+  -f publication_selection_json="$PUBLICATION_SELECTION"
 ```
+
+This example selects normal final-release publication. Select `npmDistTag=beta`
+for a beta, or `route=prepared` when the intended consumer is the prepared release
+button. Core publication requires `all-publishable` plugins. Plugin-only normal
+publication can set `publishOpenclawNpm=false`, `pluginPublishScope=selected`,
+and explicit canonical package names in `plugins`.
+
+Every fresh run requires an explicit `validation_purpose`. `publish` verifies
+complete committed source metadata before projecting the requested publication
+selection and before resolution can release any selected producer. Its retained
+source-admission fact is **source-only**, not registry eligibility, product-test
+success, or publication authority. `diagnostic`, `main-qualification`, and
+`postpublish-confidence` omit `publication_selection_json` and record publication
+source admission as not applicable. Coverage is selected independently.
+
+Fresh publish requests also require tooling with registry admission. After
+source verification, resolution collects bounded public npm and ClawHub
+observations for the selected packages, uploads them, then binds the immutable
+artifact and admission time before producers can start. Required read errors and
+unsupported bootstrap states block admission; latest-dependency drift is advisory.
+Supported first-package or trust-repair routes retain unresolved downstream owner
+authority, not permission to publish. The source fact remains source-only.
+Nonpublish requests do not collect registry observations.
+
+The SHA-pinned helper packs its semantic `-f validation_purpose` and
+`-f publication_selection_json` arguments into the existing
+`trusted_workflow_json` input. Raw workflow dispatch uses this closed envelope:
+`{"trustedWorkflow":{"ref":"main","fullRef":"refs/heads/main","sha":"<tooling-sha>"},"validationPurpose":"diagnostic","publicationSelection":null}`.
+For the existing direct branch route, `trustedWorkflow:null` lets the identity
+owner infer the executing identity; purpose is always explicit. Child workflows
+still receive only the resolved identity tuple. Existing request artifacts reopen
+without converting their inputs or witness digests.
+
+`pnpm release:candidate` defaults to the normal publication route. Choose
+`--publication-route prepared` before its first dispatch for the prepared button;
+merely supplying a protected tooling ref does not select that route. Saved state
+binds the choice and rejects contradictory resumes. Historical state without a
+route retains normal recovery semantics and gains no source-admission claim.
+For registry-admitted parents, the checklist reads authenticated retained planning
+summaries instead of repeating the two local registry sweeps. Preparation and
+publication compare that evidence with their actual selected operands; a normal
+parent cannot authorize the prepared route by changing the command afterward.
 
 Record the candidate SHA/ref and Tooling SHA/ref once for the release and reuse
 them for later Code-SHA, Release-SHA, and focused reruns. Main lineage
 authorizes the initial Tooling SHA selection; it does not authorize refreshing
 the tooling from moving `main`.
+
+## Exact frozen-target test omissions
+
+Declare narrowly justified omissions before dispatch with JSON arrays of exact
+repository-relative test paths. `plugin_prerelease_node_exclude_patterns_json`
+applies to the Plugin Prerelease Node lane, for example
+`["src/plugins/manifest-registry.test.ts"]`.
+`extension_test_exclude_patterns_json` applies to the Plugin Prerelease extension
+shards, for example
+`["extensions/codex/src/app-server/run-attempt.test.ts"]`. Both default to `[]`;
+there is no implicit Codex test omission. Normal CI keeps its own core lanes;
+Plugin Prerelease owns the full extension sweep.
+
+Pass them through the SHA-pinned helper as `-f name='["exact/path.test.ts"]'`.
+The helper packs the extension input into the existing trusted dispatch envelope
+to stay within GitHub's 25-input limit, and refuses tooling without the matching
+lane-input capability before creating remote refs or dispatching.
+
+Preflight rejects malformed, duplicate, nonexistent, and out-of-lane paths using
+the selected target's actual Vitest discovery. Globs and basenames are not
+accepted. Pinned tooling applies each exact omission to the executing config's
+inline projects, preserves the candidate's normal test runner and setup, and
+restores the original config bytes after the command. It does not depend on a
+new exclusion environment variable being supported by the frozen candidate.
+
+The immutable request, coverage identity, evidence reuse comparison, and final
+manifest retain both input values. Changing them requires a new validation
+request; continuation cannot widen an existing omission. Record the reason and
+owning fix for each omitted test in release evidence. An omission is untested
+coverage, not passing evidence.
 
 ## Retain and reconcile the root request
 
@@ -71,7 +153,8 @@ retention expiry or cleanup for the local artifact; remove it only through
 deliberate operator cleanup. Losing or deleting it never proves non-execution.
 Independent requests and copies on other hosts are not globally deduplicated.
 
-New requests require `FULL_RELEASE_DISPATCH_WITNESS_CONTRACT=1` in the pinned
+New requests require `FULL_RELEASE_SOURCE_ADMISSION_CONTRACT=1` and
+`FULL_RELEASE_DISPATCH_WITNESS_CONTRACT=1` in the pinned
 workflow. Older frozen tooling fails before remote creation instead of starting
 work whose inputs cannot be proven. The helper never upgrades the Tooling SHA.
 Use `frv status` for already-running frozen validations; choosing different
@@ -97,7 +180,7 @@ npm and Docker artifacts for `vYYYY.M.PATCH-N`. Tideclaw alpha validation uses
 its exact alpha tag and matching alpha branch. The helper maps beta releases and
 exact alpha tags to the `beta` profile and final versions to `stable`. Pass
 alternate workflow inputs with `-f key=value`; use `-f release_profile=full`
-only for the broad advisory sweep.
+only for the broad provider sweep.
 `fail_fast` defaults to `false`, so dispatched child workflows finish and expose
 independent failures together. In that mode, the parent makes no child
 cancellation calls. Pass `-f fail_fast=true` only when the shorter
@@ -113,6 +196,11 @@ attempts, recheck their source and Tooling SHAs, and reuse the successful builds
 Historical parents that produced their own candidate or publication artifacts
 cannot continue: keep both SHAs frozen and start a fresh all-group validation.
 
+Automatic test retries are disabled. Dispatch rejects `known_flaky_jobs_json`;
+remove that retired input and investigate the original job failure. Explicit
+operator recovery remains available after diagnosis through
+[continuation commands](/reference/full-release-validation/continuation).
+
 After dispatch, the parent writes one immutable
 `full-release-execution-plan-<run-id>` artifact and preserves the same bytes in
 an exact run-ID Actions cache. It records selected and
@@ -120,12 +208,15 @@ required coverage, gate results, reuse identity, the original parent attempt,
 the fresh candidate request plus producer and publisher evidence when preparation ran, and
 every exact child run ID, attempt, title, workflow ref, and Tooling SHA.
 Decision, Drain, manifest generation, evidence verification, and the final
-verifier consume the artifact for their current attempt. Collector retries
-use the exact run-ID cache as an acceleration. If that cache is unavailable,
-they restore the same immutable plan from the parent-run artifact, validate it,
-and upload the artifact again for the retry; they never rebuild the plan or
-redispatch tests. A missing or invalid artifact fails closed, so start a new
-validation instead of retrying that stale parent.
+verifier consume the artifact for their current attempt. After the original
+guarded upload succeeds, the sealer records the plan digest in its job log.
+Collector retries restore the exact run-ID cache before publication admission,
+authenticate its bytes against that original upload and digest, and re-upload
+the unchanged plan and admission for the current attempt. GitHub removes prior
+parent artifacts on a full rerun, so retain the cache and original job logs.
+If the cache is unavailable, an accessible plan artifact can supply the same
+authenticated bytes. Missing or invalid evidence fails closed; retries never
+rebuild the plan, recollect registry observations, or redispatch tests.
 Release Decision also repeats canonical reuse-chain validation before a reused
 run can pass. The sealed target SHA, evidence SHA, policy, changed-path set,
 selected run, root run, source manifest, trusted tooling identity, and child

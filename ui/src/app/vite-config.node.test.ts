@@ -18,6 +18,7 @@ import {
   readControlUiSourceCatalog,
 } from "../../../scripts/lib/control-ui-i18n-catalog.ts";
 import { flattenTranslations } from "../../../scripts/lib/control-ui-i18n-sync-plan.ts";
+import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import { controlUiLocaleModulesPlugin } from "../../config/control-ui-locales.ts";
 import {
   controlUiBrowserOnlySharedModuleAliases,
@@ -31,7 +32,11 @@ import {
 import { configHintTranslationKey } from "../i18n/lib/config-hint-translation.ts";
 import { en } from "../i18n/locales/en.ts";
 
-const childProcessMocks = vi.hoisted(() => ({ execFileSync: vi.fn() }));
+const childProcessMocks = vi.hoisted(() => {
+  // Shared Node browser fixtures can load Vite before this file registers its mocks.
+  vi.resetModules();
+  return { execFileSync: vi.fn() };
+});
 const fsMocks = vi.hoisted(() => ({ existsSync: vi.fn(), readFileSync: vi.fn() }));
 const viteMocks = vi.hoisted(() => ({ runnerImport: vi.fn() }));
 
@@ -114,16 +119,6 @@ async function loadControlUiLocaleModuleSource(
 
 function dataModuleUrl(source: string): string {
   return `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`;
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, reject, resolve };
 }
 
 async function executeControlUiLocaleModule(

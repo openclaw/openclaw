@@ -5,9 +5,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 // Discovers and runs bundled plugin package asset hooks.
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
+import { isRecord } from "./lib/record-shared.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { listGeneratedExtensionAssetSources } from "./lib/static-extension-assets.mts";
 const rootDir = resolveRepoRoot(import.meta.url);

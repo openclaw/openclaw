@@ -33,7 +33,9 @@ export function resolveCompatibleRuntimePluginRegistry(
     return activeRegistry;
   }
   const identity = getPluginRuntimeLoadContextState(activeRegistry)?.loaderCacheIdentity;
-  return identity?.requestKey === activeCacheKey && identity.resolvedKey === requestedKey
+  return identity &&
+    ((identity.requestKey === activeCacheKey && identity.resolvedKey === requestedKey) ||
+      (identity.resolvedKey === activeCacheKey && identity.requestKey === requestedKey))
     ? activeRegistry
     : undefined;
 }

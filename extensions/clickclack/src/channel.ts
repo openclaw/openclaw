@@ -1,7 +1,3 @@
-/**
- * ClickClack channel plugin definition: target parsing, account config, status,
- * gateway startup, and outbound delivery wiring.
- */
 import {
   buildChannelOutboundSessionRoute,
   buildThreadAwareOutboundSessionRoute,
@@ -59,15 +55,8 @@ const clickClackMessageAdapter = defineChannelMessageAdapter({
   send: {
     text: async (ctx) => {
       const messageId = await sendClickClackText({
+        ...ctx,
         cfg: ctx.cfg as CoreConfig,
-        accountId: ctx.accountId,
-        to: ctx.to,
-        text: ctx.text,
-        threadId: ctx.threadId,
-        replyToId: ctx.replyToId,
-        deliveryQueueId: ctx.deliveryQueueId,
-        deliveryPartIndex: ctx.deliveryPartIndex,
-        onPlatformSendDispatch: ctx.onPlatformSendDispatch,
       });
       const threadId = ctx.threadId == null ? undefined : String(ctx.threadId);
       const replyToId = ctx.replyToId ?? undefined;
@@ -83,19 +72,8 @@ const clickClackMessageAdapter = defineChannelMessageAdapter({
     },
     media: async (ctx) => {
       const messageId = await sendClickClackMedia({
+        ...ctx,
         cfg: ctx.cfg as CoreConfig,
-        accountId: ctx.accountId,
-        to: ctx.to,
-        text: ctx.text,
-        mediaUrl: ctx.mediaUrl,
-        mediaAccess: ctx.mediaAccess,
-        mediaLocalRoots: ctx.mediaLocalRoots,
-        mediaReadFile: ctx.mediaReadFile,
-        threadId: ctx.threadId,
-        replyToId: ctx.replyToId,
-        deliveryQueueId: ctx.deliveryQueueId,
-        deliveryPartIndex: ctx.deliveryPartIndex,
-        onPlatformSendDispatch: ctx.onPlatformSendDispatch,
       });
       const threadId = ctx.threadId == null ? undefined : String(ctx.threadId);
       const replyToId = ctx.replyToId ?? undefined;
@@ -112,9 +90,6 @@ const clickClackMessageAdapter = defineChannelMessageAdapter({
   },
 });
 
-/**
- * Channel plugin instance registered by the bundled ClickClack entry.
- */
 export const clickClackPlugin: ChannelPlugin<ResolvedClickClackAccount> = createChatChannelPlugin({
   base: {
     id: CHANNEL_ID,
@@ -218,63 +193,27 @@ export const clickClackPlugin: ChannelPlugin<ResolvedClickClackAccount> = create
     },
     attachedResults: {
       channel: CHANNEL_ID,
-      sendText: async ({
-        cfg,
-        to,
-        text,
-        accountId,
-        threadId,
-        replyToId,
-        deliveryQueueId,
-        deliveryPartIndex,
-        onPlatformSendDispatch,
-      }) => {
+      sendText: async (ctx) => {
         const messageId = await sendClickClackText({
-          cfg: cfg as CoreConfig,
-          accountId,
-          to,
-          text,
-          threadId,
-          replyToId,
-          deliveryQueueId,
-          deliveryPartIndex,
-          onPlatformSendDispatch,
+          ...ctx,
+          cfg: ctx.cfg as CoreConfig,
         });
         // Legacy outbound results use an empty id to report an intentional no-send.
         return { messageId: messageId ?? "" };
       },
-      sendMedia: async ({
-        cfg,
-        to,
-        text,
-        mediaUrl,
-        mediaAccess,
-        mediaLocalRoots,
-        mediaReadFile,
-        accountId,
-        threadId,
-        replyToId,
-        deliveryQueueId,
-        deliveryPartIndex,
-        onPlatformSendDispatch,
-      }) => {
+      sendMedia: async (ctx) => {
+        const { mediaUrl, onDeliveryResult } = ctx;
         if (!mediaUrl) {
           throw new Error("ClickClack media send requires mediaUrl");
         }
         const messageId = await sendClickClackMedia({
-          cfg: cfg as CoreConfig,
-          accountId,
-          to,
-          text,
+          ...ctx,
+          cfg: ctx.cfg as CoreConfig,
           mediaUrl,
-          mediaAccess,
-          mediaLocalRoots,
-          mediaReadFile,
-          threadId,
-          replyToId,
-          deliveryQueueId,
-          deliveryPartIndex,
-          onPlatformSendDispatch,
+          onDeliveryResult: onDeliveryResult
+            ? ({ messageId: acceptedMessageId, receipt }) =>
+                onDeliveryResult({ channel: CHANNEL_ID, messageId: acceptedMessageId, receipt })
+            : undefined,
         });
         return { messageId };
       },

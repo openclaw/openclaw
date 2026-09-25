@@ -87,7 +87,7 @@ it.each([false, true])(
           throw new Error("Synthetic credential has no fingerprint");
         }
         let trustedRecord: PluginInstallRecord | undefined;
-        prepareProvider.mockImplementation(async (params) => {
+        prepareProvider.mockImplementation(async (params, consume) => {
           // Acquisition and auth are synthetic. Discovery, runtime registration,
           // owner fingerprints, activation checks, and final promotion are real.
           await fs.mkdir(pluginRoot, { recursive: true });
@@ -146,14 +146,16 @@ it.each([false, true])(
             acceptedSurfaceAt: "2026-09-06T00:00:00.000Z",
             acceptedSurfaceIntegrity: integrity,
           };
-          return {
-            config,
-            agentModelOverride: "fixture-provider/fixture-model",
-            authProfiles: [],
-            pendingPluginInstalls: { "fixture-provider": trustedRecord },
-            persistAuthProfiles: async () => {},
-            provider: { id: "fixture-provider", label: "Fixture", auth: [] },
-          };
+          return await consume(
+            {
+              config,
+              agentModelOverride: "fixture-provider/fixture-model",
+              authProfiles: [],
+              pendingPluginInstalls: { "fixture-provider": trustedRecord },
+              persistAuthProfiles: async () => {},
+            },
+            { id: "fixture-provider", label: "Fixture", auth: [] },
+          );
         });
         const capture = vi.fn(captureSystemAgentOwnerPluginArtifacts);
         const runEmbeddedAgent = vi.fn<NonNullable<ActivateSetupInferenceDeps["runEmbeddedAgent"]>>(

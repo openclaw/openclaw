@@ -41,7 +41,7 @@ describe("ChatGPT Responses WebSocket failures", () => {
     vi.unstubAllGlobals();
   });
 
-  it("classifies an abrupt Node WebSocket disconnect as transient", async () => {
+  it("classifies an abrupt WebSocket disconnect as transient", async () => {
     const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
     server.once("connection", (socket) => {
       socket.once("message", () => socket.terminate());
@@ -58,7 +58,7 @@ describe("ChatGPT Responses WebSocket failures", () => {
 
       expect(result).toMatchObject({
         stopReason: "error",
-        errorMessage: "WebSocket error",
+        errorMessage: expect.stringMatching(/^WebSocket (?:error|closed 1006(?: .*)?)$/u),
         errorCode: "ERR_WEBSOCKET_TRANSPORT",
       });
       expect(result.diagnostics).toEqual([

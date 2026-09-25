@@ -5,7 +5,9 @@
  * control endpoints.
  */
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isLocalManagedProfile } from "../config.js";
 import { BrowserProfileUnavailableError, type BrowserErrorResponse } from "../errors.js";
+import { isManagedOnlyBrowserRequest, resolveRequestedBrowserProfile } from "../request-policy.js";
 import {
   type BrowserRouteContext,
   type ProfileContext,
@@ -14,32 +16,18 @@ import {
 import { isProfileRestartRequiredError } from "../server-context.lifecycle.js";
 import type { BrowserRequest, BrowserResponse } from "./types.js";
 
-/**
- * Extract profile name from query string or body and get profile context.
- * Query string takes precedence over body for consistency with GET routes.
- */
 /** Resolve the profile context requested by query/profile parameters. */
 export function getProfileContext(
   req: BrowserRequest,
   ctx: BrowserRouteContext,
 ): ProfileContext | { error: string; status: number } {
-  let profileName: string | undefined;
-
-  // Check query string first (works for GET and POST)
-  if (typeof req.query.profile === "string") {
-    profileName = normalizeOptionalString(req.query.profile);
-  }
-
-  // Fall back to body for POST requests
-  if (!profileName && req.body && typeof req.body === "object") {
-    const body = req.body as Record<string, unknown>;
-    if (typeof body.profile === "string") {
-      profileName = normalizeOptionalString(body.profile);
-    }
-  }
-
   try {
-    return ctx.forProfile(profileName);
+    const profile = ctx.forProfile(resolveRequestedBrowserProfile(req));
+    const managedOnly = isManagedOnlyBrowserRequest(req);
+    if (managedOnly && !isLocalManagedProfile(profile.profile)) {
+      return { error: "This dashboard requires a local managed browser profile", status: 400 };
+    }
+    return profile;
   } catch (err) {
     const mapped = ctx.mapTabError(err);
     return mapped
@@ -52,11 +40,18 @@ export function getProfileContext(
 export async function runProfileRouteOperation<T>(params: {
   profileCtx: ProfileContext;
   signal?: AbortSignal;
+  assertCurrent?: BrowserRequest["assertCurrent"];
   run: (signal: AbortSignal) => Promise<T>;
 }): Promise<T> {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      return await withProfileContextOperation(params.profileCtx, params.signal, params.run);
+      return await withProfileContextOperation(params.profileCtx, params.signal, async (signal) => {
+        if (params.assertCurrent) {
+          await params.assertCurrent(params.profileCtx.profile);
+        }
+        signal.throwIfAborted();
+        return await params.run(signal);
+      });
     } catch (err) {
       if (!isProfileRestartRequiredError(err)) {
         throw err;
@@ -90,6 +85,7 @@ export function jsonError(res: BrowserResponse, status: number, message: string)
 export function jsonBrowserError(res: BrowserResponse, error: BrowserErrorResponse) {
   res.status(error.status).json({
     error: error.message,
+    ...(error.code ? { code: error.code } : {}),
     ...("reason" in error ? { reason: error.reason } : {}),
     ...("details" in error ? { details: error.details } : {}),
   });

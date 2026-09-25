@@ -6,7 +6,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { NODE_WORKER_ENVIRONMENT_STOP_COMMAND } from "../../infra/node-commands.js";
-import type { NodeWorkerWorkspaceExecInput } from "../../worker/node-workspace-protocol.js";
+import { runCommandWithTimeout } from "../../process/exec.js";
+import {
+  NODE_WORKER_WORKSPACE_STDIN_MAX_BYTES,
+  NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES,
+  parseNodeWorkerWorkspaceExecInput,
+  type NodeWorkerWorkspaceExecInput,
+} from "../../worker/node-workspace-protocol.js";
 import {
   NODE_WORKSPACE_TRANSFER_ERROR_CODE,
   NodeWorkerWorkspaceTransferError,
@@ -15,6 +21,8 @@ import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js"
 import { createNodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import {
   environment,
+  manifestCaptureOutput,
+  seedNodeWorkspaceRepositories,
   startRequest,
   transport,
   withWorkspaceDrain,
@@ -24,6 +32,7 @@ import {
 import type { NodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
 import { workerProjectSeedKey } from "./workspace-git-base.js";
+import type { WorkspaceReconcileMetrics } from "./workspace-hash-memo.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { readActualWorkspaceManifest } from "./workspace-reconcile.js";
 
@@ -687,7 +696,7 @@ describe("node worker tunnel manager", () => {
   it.each([
     {
       name: "divergence",
-      result: { stdout: `sha256:${"f".repeat(64)}\n` },
+      result: { stdout: manifestCaptureOutput(`sha256:${"f".repeat(64)}`) },
       error: "changed during final reconciliation",
     },
     {
@@ -696,17 +705,17 @@ describe("node worker tunnel manager", () => {
         code: 1,
         stderr: "ENOENT: no such file or directory, open '/worker/manifests/result.json'\n",
       },
-      error: "Node workspace manifest capture failed: ENOENT: no such file or directory",
+      error: "Worker workspace manifest capture failed: ENOENT: no such file or directory",
     },
     {
       name: "timeout without stderr",
       result: { code: null, signal: "SIGTERM", killed: true, termination: "timeout" },
-      error: "Node workspace manifest capture failed: timeout (exit code null, signal SIGTERM)",
+      error: "Worker workspace manifest capture failed: timeout (exit code null, signal SIGTERM)",
     },
     {
       name: "invalid reference",
       result: { stdout: "invalid\n" },
-      error: "Node workspace manifest capture failed: invalid manifest reference",
+      error: "Worker workspace manifest returned an invalid memo response",
     },
   ] as const)("reports $name during final manifest verification", async ({ result, error }) => {
     const record = environment();
@@ -778,76 +787,172 @@ describe("node worker tunnel manager", () => {
     ).rejects.toThrow(error);
   });
 
-  it("reuses the placement hash memo across node reconciliations", async () => {
-    const record = environment();
-    const localPath = tempDirs.make("node-worker-memo-persist-");
-    const remoteWorkspaceDir = tempDirs.make("node-worker-memo-persist-remote-");
-    const stagingRoot = tempDirs.make("node-worker-memo-persist-staging-");
-    await fs.writeFile(path.join(localPath, "artifact.txt"), "cross turn\n");
-    const actual = await readActualWorkspaceManifest({ root: localPath, baseCommit: null });
-    const raw = serializeWorkerWorkspaceManifest(actual.manifest);
-    const manifestRef = actual.manifestRef;
-    const nodeTransport = transport();
-    nodeTransport.invoke = vi.fn(async () => ({
-      ok: true,
-      payloadJSON: workspaceCommandPayload(remoteWorkspaceDir, { stdout: `${manifestRef}\n` }),
-    }));
-    const transfer = {
-      prepareSync: vi.fn(async () => ({
-        snapshot: { manifest: actual.manifest, manifestRef, rawManifest: raw, root: localPath },
-        token: "download-token",
-      })),
-      prepareUpload: vi.fn(() => "upload-token"),
-      takeUpload: vi.fn(() => ({
-        base: actual.manifest,
-        baseManifestRef: manifestRef,
-        baseRaw: raw,
-        current: actual.manifest,
-        currentManifestRef: manifestRef,
-        currentRaw: raw,
-        stagingRoot,
-      })),
-      close: vi.fn(async () => {}),
-      revoke: vi.fn(),
-    } as unknown as NodeWorkspaceTransferService;
-    const manager = createNodeWorkerTunnelManager({
-      gatewayDeviceId: "gateway-device-1",
-      getEnvironment: () => record,
-      listEnvironments: () => [record],
-      getTransport: () => nodeTransport,
-      launchNodeWorker: vi.fn(),
-      validateWorkerTurn: () => true,
-      workspaceTransfer: transfer,
-    });
-    const handle = await manager.start(startRequest());
-    await handle.syncWorkspace({
-      source: { kind: "local", path: localPath },
-      sessionId: "session-1",
-      generation: 1,
-    });
-    const quiescence = { assertActive: async () => {}, resume: async () => {} };
-    const journal = { load: () => undefined, begin: vi.fn(), commit: vi.fn(), abort: vi.fn() };
-    workspaceDebug.mockClear();
-
-    for (let turn = 0; turn < 2; turn += 1) {
-      const reconciliation = await handle.reconcileWorkspace({
-        source: { kind: "local", path: localPath, journal },
-        remoteWorkspaceDir,
-        baseManifestRef: manifestRef,
+  it.each([1, 640])(
+    "reuses the placement hash memo across node reconciliations (%s files)",
+    async (fileCount) => {
+      const record = environment();
+      const localPath = tempDirs.make("node-worker-memo-persist-");
+      const remoteWorkspaceDir = path.join(
+        tempDirs.make("node-worker-memo-persist-remote-"),
+        "資料-😀",
+      );
+      const remoteHome = tempDirs.make("node-worker-memo-persist-home-");
+      const stagingRoot = tempDirs.make("node-worker-memo-persist-staging-");
+      const files = Array.from({ length: fileCount }, (_, index) => `測試-${index}-é.txt`);
+      await Promise.all(
+        files.map((file) => fs.writeFile(path.join(localPath, file), "cross turn\n")),
+      );
+      const baseCommit = seedNodeWorkspaceRepositories(localPath, remoteWorkspaceDir);
+      const actual = await readActualWorkspaceManifest({ root: localPath, baseCommit });
+      const raw = serializeWorkerWorkspaceManifest(actual.manifest);
+      const manifestRef = actual.manifestRef;
+      const remoteManifests = path.join(remoteHome, ".openclaw-worker", "manifests");
+      await fs.mkdir(remoteManifests, { recursive: true });
+      await fs.writeFile(path.join(remoteManifests, `${manifestRef.slice(7)}.json`), raw);
+      const nodeTransport = transport();
+      const memoInputs: Array<Array<[string, string]>> = [];
+      const captureBytes: Array<{ input: number; output: number }> = [];
+      nodeTransport.invoke = withWorkspaceDrain(async ({ command, params }) => {
+        if (command === NODE_WORKER_ENVIRONMENT_STOP_COMMAND) {
+          return { ok: true, payloadJSON: "null" };
+        }
+        const encoded = JSON.stringify(params);
+        const input = parseNodeWorkerWorkspaceExecInput(encoded);
+        if (input.transfer) {
+          return {
+            ok: true,
+            payloadJSON: workspaceCommandPayload(remoteWorkspaceDir, {
+              stdout: `${manifestRef}\n`,
+            }),
+          };
+        }
+        if (input.argv.at(-1) === "memo-v1") {
+          memoInputs.push(JSON.parse(input.input!));
+        }
+        const result = await runCommandWithTimeout([process.execPath, ...input.argv.slice(1)], {
+          input: input.input,
+          cwd: remoteWorkspaceDir,
+          timeoutMs: 10_000,
+          baseEnv: { PATH: process.env.PATH, HOME: remoteHome },
+        });
+        const { stdout, stderr, code, signal, killed, termination } = result;
+        if (input.argv.at(-1) === "memo-v1") {
+          captureBytes.push({
+            input: Buffer.byteLength(input.input!),
+            output: Buffer.byteLength(stdout),
+          });
+        }
+        return {
+          ok: true,
+          payloadJSON: workspaceCommandPayload(remoteWorkspaceDir, {
+            stdout,
+            stderr,
+            code,
+            signal,
+            killed,
+            termination,
+          }),
+        };
       });
-      await verifyReconciledWorkspaceFinal(reconciliation, quiescence);
-    }
+      const transfer = {
+        prepareSync: vi.fn(async () => ({
+          snapshot: { manifest: actual.manifest, manifestRef, rawManifest: raw, root: localPath },
+          token: "download-token",
+        })),
+        prepareUpload: vi.fn(() => "upload-token"),
+        takeUpload: vi.fn(() => ({
+          base: actual.manifest,
+          baseManifestRef: manifestRef,
+          baseRaw: raw,
+          current: actual.manifest,
+          currentManifestRef: manifestRef,
+          currentRaw: raw,
+          stagingRoot,
+        })),
+        close: vi.fn(async () => {}),
+        revoke: vi.fn(),
+      } as unknown as NodeWorkspaceTransferService;
+      const manager = createNodeWorkerTunnelManager({
+        gatewayDeviceId: "gateway-device-1",
+        getEnvironment: () => record,
+        listEnvironments: () => [record],
+        getTransport: () => nodeTransport,
+        launchNodeWorker: vi.fn(),
+        validateWorkerTurn: () => true,
+        workspaceTransfer: transfer,
+      });
+      const handle = await manager.start(startRequest());
+      await handle.syncWorkspace({
+        source: { kind: "local", path: localPath },
+        sessionId: "session-1",
+        generation: 1,
+      });
+      const quiescence = { assertActive: async () => {}, resume: async () => {} };
+      const journal = { load: () => undefined, begin: vi.fn(), commit: vi.fn(), abort: vi.fn() };
+      workspaceDebug.mockClear();
 
-    const reports = workspaceDebug.mock.calls
-      .filter(([message]) => message === "worker workspace reconcile completed")
-      .map(([, data]) => data as { gateway: { contentHashCount: number; memoHitCount: number } });
-    expect(reports).toHaveLength(2);
-    // Turn one hashes the managed worktree; turn two must reuse the
-    // placement-owned memo instead of re-hashing every file.
-    expect(reports[0]!.gateway.contentHashCount).toBeGreaterThan(0);
-    expect(reports[1]!.gateway.contentHashCount).toBe(0);
-    expect(reports[1]!.gateway.memoHitCount).toBeGreaterThan(0);
-  });
+      for (let turn = 0; turn < 2; turn += 1) {
+        const reconciliation = await handle.reconcileWorkspace({
+          source: { kind: "local", path: localPath, journal },
+          remoteWorkspaceDir,
+          baseManifestRef: manifestRef,
+        });
+        await verifyReconciledWorkspaceFinal(reconciliation, quiescence);
+      }
+
+      const reports = workspaceDebug.mock.calls
+        .filter(([message]) => message === "worker workspace reconcile completed")
+        .map(([, data]) => data as WorkspaceReconcileMetrics);
+      expect(reports).toHaveLength(2);
+      // Turn one hashes the managed worktree; turn two must reuse the
+      // placement-owned memo instead of re-hashing every file.
+      expect(reports[0]!.gateway.contentHashCount).toBeGreaterThan(0);
+      expect(reports[1]!.gateway.contentHashCount).toBe(0);
+      expect(reports[1]!.gateway.memoHitCount).toBeGreaterThan(0);
+      const retained = memoInputs[1]!.length;
+      const uncached = fileCount - retained;
+      expect(retained).toBeGreaterThan(0);
+      expect(reports[0]).toMatchObject({
+        remoteManifestCalls: 3,
+        remoteContentHashCount: fileCount + 2 * uncached,
+      });
+      expect(reports[1]).toMatchObject({
+        remoteManifestCalls: 3,
+        remoteContentHashCount: 3 * uncached,
+        remoteMemoHitCount: 3 * retained,
+      });
+      expect(memoInputs).toHaveLength(6);
+      expect(memoInputs[0]).toEqual([]);
+      expect(memoInputs.slice(1).every((entries) => entries.length === retained)).toBe(true);
+      expect(memoInputs.flat().every(([identity]) => identity.startsWith("worker:"))).toBe(true);
+      expect(reports[1]!.remoteManifestWallDurationMs).toBeGreaterThan(0);
+      expect(
+        captureBytes.every((bytes) => bytes.input <= NODE_WORKER_WORKSPACE_STDIN_MAX_BYTES),
+      ).toBe(true);
+      expect(
+        captureBytes.every((bytes) => bytes.output <= NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES),
+      ).toBe(true);
+      if (fileCount > 1) {
+        expect(retained).toBeLessThan(fileCount);
+        expect(reports[1]!.remoteMemoTruncatedCount).toBeGreaterThan(0);
+      }
+
+      await fs.writeFile(path.join(remoteWorkspaceDir, files[0]!), "next  turn\n");
+      await fs.utimes(
+        path.join(remoteWorkspaceDir, files[0]!),
+        new Date(),
+        new Date(Date.now() + 1_000),
+      );
+      await expect(
+        handle.reconcileWorkspace({
+          source: { kind: "local", path: localPath, journal },
+          remoteWorkspaceDir,
+          baseManifestRef: manifestRef,
+        }),
+      ).rejects.toThrow("changed during final reconciliation");
+      await handle.stop();
+    },
+  );
 
   it("does not republish an accepted manifest already current on the node", async () => {
     const record = environment();
@@ -866,7 +971,7 @@ describe("node worker tunnel manager", () => {
       return {
         ok: true,
         payloadJSON: workspaceCommandPayload(remoteWorkspaceDir, {
-          stdout: `${baseManifestRef}\n`,
+          stdout: input.transfer ? `${baseManifestRef}\n` : manifestCaptureOutput(baseManifestRef),
         }),
       };
     });

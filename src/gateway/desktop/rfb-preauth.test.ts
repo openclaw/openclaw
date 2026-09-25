@@ -1,6 +1,8 @@
 import { createDecipheriv, createHash } from "node:crypto";
 import { type Duplex, duplexPair } from "node:stream";
+import { setImmediate } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   preauthenticateRfb,
   type RfbPreauthDescriptor,
@@ -107,6 +109,7 @@ async function completeSyntheticBrowserHandshake(browser: ScriptedPeer): Promise
 async function runPreauth(params: {
   preauth: RfbPreauthDescriptor;
   serverScript: (server: ScriptedPeer) => Promise<void>;
+  browserScript?: (browser: ScriptedPeer) => Promise<void>;
 }): Promise<void> {
   const [gatewayServer, fakeServerStream] = duplexPair();
   const [gatewayBrowserStream, fakeBrowserStream] = duplexPair();
@@ -121,7 +124,7 @@ async function runPreauth(params: {
         preauth: params.preauth,
       }),
       params.serverScript(fakeServer),
-      completeSyntheticBrowserHandshake(fakeBrowser),
+      (params.browserScript ?? completeSyntheticBrowserHandshake)(fakeBrowser),
     ]);
   } finally {
     gatewayServer.destroy();
@@ -153,6 +156,52 @@ async function writeArdOffer(server: ScriptedPeer, keyLength: number): Promise<v
 }
 
 describe("RFB server-side pre-authentication", () => {
+  it("negotiates with the browser while upstream authentication is pending, withholding success", async () => {
+    const browserReady = createDeferred();
+    const events: string[] = [];
+    await runPreauth({
+      preauth: { auth: "vnc-password", credentials: { password: "password" } },
+      serverScript: async (server) => {
+        await server.write(VERSION_3_8);
+        expect(await server.readExactly(12)).toEqual(VERSION_3_8);
+        await server.write(Buffer.from([1, 2]));
+        expect(await server.readExactly(1)).toEqual(Buffer.from([2]));
+        await server.write(Buffer.from("0123456789abcdef"));
+        await server.readExactly(16);
+        await browserReady.promise;
+        await setImmediate();
+        expect(events).toEqual([]);
+        events.push("upstream-authenticated");
+        await server.write(Buffer.alloc(4));
+      },
+      browserScript: async (browser) => {
+        expect(await browser.readExactly(12)).toEqual(VERSION_3_8);
+        await browser.write(VERSION_3_8);
+        expect(await browser.readExactly(2)).toEqual(Buffer.from([1, 1]));
+        await browser.write(Buffer.from([1]));
+        browserReady.resolve();
+        expect(await browser.readExactly(4)).toEqual(Buffer.alloc(4));
+        events.push("browser-authenticated");
+      },
+    });
+    expect(events).toEqual(["upstream-authenticated", "browser-authenticated"]);
+  });
+
+  it("rejects a bad browser handshake without waiting for an upstream banner", async () => {
+    await expect(
+      runPreauth({
+        preauth: { auth: "vnc-password", credentials: { password: "password" } },
+        serverScript: async (server) => {
+          await server.readExactly(12);
+        },
+        browserScript: async (browser) => {
+          expect(await browser.readExactly(12)).toEqual(VERSION_3_8);
+          await browser.write(Buffer.from("RFB 003.003\n"));
+        },
+      }),
+    ).rejects.toThrow("RFB browser did not accept protocol version 3.8");
+  });
+
   it.each([16, 32])(
     "negotiates ARD framing and encrypted credentials at %i bytes",
     async (keyLength) => {

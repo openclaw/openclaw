@@ -1,10 +1,7 @@
 // Normalized status overview surface shared by text and JSON status outputs.
 // It collects gateway/update/service fields into one shape before row or payload builders run.
 
-import {
-  buildGatewayStatusJsonPayload,
-  buildStatusOverviewSurfaceRows,
-} from "./status-all/format.js";
+import type { buildStatusOverviewSurfaceRows } from "./status-all/format.js";
 import type { NodeOnlyGatewayInfo } from "./status.node-mode.js";
 import type { StatusScanOverviewResult } from "./status.scan-overview.ts";
 import type { StatusScanResult } from "./status.scan-result.ts";
@@ -12,8 +9,6 @@ import type { StatusScanResult } from "./status.scan-result.ts";
 type StatusOverviewRowInput = Parameters<typeof buildStatusOverviewSurfaceRows>[0];
 type StatusOverviewFormatOptions = Pick<
   StatusOverviewRowInput,
-  | "tailscaleBackendState"
-  | "includeBackendStateWhenOff"
   | "includeBackendStateWhenOn"
   | "includeDnsNameWhenOff"
   | "decorateTailscaleOff"
@@ -83,19 +78,4 @@ export function buildStatusOverviewSurfaceFromOverview(
     nodeService: params.nodeService,
     nodeOnlyGateway: params.nodeOnlyGateway,
   });
-}
-
-/** Builds overview rows from an already-normalized surface. */
-export function buildStatusOverviewRowsFromSurface(
-  params: { surface: StatusOverviewSurface } & StatusOverviewFormatOptions,
-) {
-  const { surface, ...options } = params;
-  return buildStatusOverviewSurfaceRows({ ...surface, ...options });
-}
-
-/** Builds the gateway JSON payload from the gateway portion of an overview surface. */
-export function buildStatusGatewayJsonPayloadFromSurface(params: {
-  surface: Pick<StatusOverviewSurface, keyof Parameters<typeof buildGatewayStatusJsonPayload>[0]>;
-}) {
-  return buildGatewayStatusJsonPayload(params.surface);
 }

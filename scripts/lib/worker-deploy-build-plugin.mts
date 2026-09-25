@@ -1,5 +1,7 @@
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 const WORKER_DEPLOY_BUILD_PLUGIN_NAME = "openclaw:worker-deploy";
 export const WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID = `${path.resolve("src/worker/worker-deploy-runtime.ts")}?optional-native`;
@@ -23,20 +25,40 @@ export function getPlaywrightUserAgent() { return getUserAgent(); }`;
 const UNDICI_REQUIRE_BOOTSTRAP = [
   'import { createRequire } from "node:module";',
   "const requireUndici = createRequire(import.meta.url);\n",
-  'return requireUndici("undici/index.js") as typeof import("undici");',
+  'let undiciModule: typeof import("undici") | undefined;\n',
+  'return (undiciModule ??= requireUndici("undici/index.js") as typeof import("undici"));',
 ] as const;
 const WORKER_UNDICI_IMPORT = 'import * as bundledUndici from "undici/index.js";';
-const WS_REQUIRE_BOOTSTRAP = `require(
-  path.join(path.dirname(require.resolve("ws/package.json")), "index.js"),
-)`;
+const FACADE_ACTIVATION_LOADER =
+  "function loadFacadeActivationCheckRuntime(): FacadeActivationCheckRuntimeModule {";
+const WS_DIRECT_RUNTIME_FRAGMENTS = [
+  'require.resolve("ws/package.json")',
+  '"lib/websocket.js"',
+  '"lib/websocket-server.js"',
+  '"lib/stream.js"',
+] as const;
 const WS_DYNAMIC_IMPORT =
   'pathToFileURL(path.join(path.dirname(require.resolve("ws/package.json")), "wrapper.mjs")).href';
+const TREE_SITTER_INIT = "TreeSitter.Parser.init()";
+const TREE_SITTER_BASH_WASM = 'require.resolve("tree-sitter-bash/tree-sitter-bash.wasm")';
+const PHOTON_WASM_INIT = `const path = require('path').join(__dirname, 'photon_rs_bg.wasm');
+const bytes = require('fs').readFileSync(path);`;
+
+function resolveOptionalBuildSource(source: string): string {
+  const resolved = path.resolve(source);
+  return fs.existsSync(resolved) ? fs.realpathSync(resolved) : resolved;
+}
 
 export function resolveWorkerDeployGeneratorInputs(rootDir = process.cwd()) {
   const playwrightRoot = fs.realpathSync(path.resolve(rootDir, "node_modules/playwright-core"));
   return [
     path.join(playwrightRoot, "package.json"),
     path.join(playwrightRoot, "browsers.json"),
+    fs.realpathSync(path.resolve(rootDir, "node_modules/web-tree-sitter/web-tree-sitter.wasm")),
+    fs.realpathSync(path.resolve(rootDir, "node_modules/tree-sitter-bash/tree-sitter-bash.wasm")),
+    fs.realpathSync(
+      path.resolve(rootDir, "node_modules/@silvia-odwyer/photon-node/photon_rs_bg.wasm"),
+    ),
   ] as const;
 }
 
@@ -50,26 +72,40 @@ export function isUnstagedWorkerDeployRuntimeArtifact(
 
 /** Composes bundled-plugin runtime and removes dependency package reads from the worker build. */
 export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
+  const require = createRequire(import.meta.url);
+  const resolveWsWrapperUrl = () =>
+    pathToFileURL(
+      fs.realpathSync(path.join(path.dirname(require.resolve("ws/package.json")), "wrapper.mjs")),
+    ).href;
   const playwrightRoot = fs.realpathSync(path.resolve(rootDir, "node_modules/playwright-core"));
   const coreBundlePath = fs.realpathSync(path.join(playwrightRoot, "lib/coreBundle.js"));
+  const photonRuntimePath = fs.realpathSync(
+    path.resolve(rootDir, "node_modules/@silvia-odwyer/photon-node/photon_rs.js"),
+  );
   const browserRuntimeBridgePath = fs.realpathSync(
     path.resolve("src/worker/worker-deploy-browser-runtime.ts"),
   );
+  const facadeRuntimePath = fs.realpathSync(path.resolve("src/plugin-sdk/facade-runtime.ts"));
   const playwrightRuntimePath = fs.realpathSync(
     path.resolve("extensions/browser/src/browser/playwright-core.runtime.ts"),
   );
   const undiciDispatcherOptionsPath = fs.realpathSync(
     path.resolve("src/infra/net/undici-dispatcher-options.ts"),
   );
-  const websocketRuntimePaths = new Set(
-    ["packages/gateway-client/src/websocket.ts", "src/gateway/server-runtime-state.ts"].map(
-      (source) => fs.realpathSync(path.resolve(source)),
-    ),
+  const treeSitterRuntimePath = fs.realpathSync(
+    path.resolve("src/infra/command-explainer/tree-sitter-runtime.ts"),
   );
-  const transcriptionWebsocketPath = fs.realpathSync(
-    path.resolve("src/realtime-transcription/websocket-session.ts"),
+  const websocketRuntimePath = fs.realpathSync(
+    path.resolve("packages/gateway-client/src/websocket.ts"),
   );
-  const [packageJsonPath, browsersJsonPath] = resolveWorkerDeployGeneratorInputs(rootDir);
+  const dynamicWebsocketRuntimePaths = new Set(
+    [
+      "src/node-host/node-stream-transport.ts",
+      "src/realtime-transcription/websocket-session.ts",
+    ].map(resolveOptionalBuildSource),
+  );
+  const [packageJsonPath, browsersJsonPath, treeSitterWasmPath, bashWasmPath, photonWasmPath] =
+    resolveWorkerDeployGeneratorInputs(rootDir);
   const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
     name: string;
     version: string;
@@ -112,22 +148,64 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
       if (resolvedId === browserRuntimeBridgePath) {
         return WORKER_BROWSER_RUNTIME_COMPOSITION;
       }
+      if (resolvedId === facadeRuntimePath) {
+        if (code.split(FACADE_ACTIVATION_LOADER).length !== 2) {
+          this.error("facade activation loader changed; update the worker deploy transform");
+        }
+        // Workers ship no activation sidecar. A literal require keeps activation
+        // lazy inside the sealed graph instead of resolving a host module.
+        return code.replace(
+          FACADE_ACTIVATION_LOADER,
+          `${FACADE_ACTIVATION_LOADER}
+  try {
+    return require("./facade-activation-check.runtime.js");
+  } catch (error) {
+    return throwFacadeActivationCheckRuntimeUnavailable(error);
+  }`,
+        );
+      }
       if (resolvedId === playwrightRuntimePath) {
         return WORKER_PLAYWRIGHT_RUNTIME;
       }
+      if (resolvedId === photonRuntimePath) {
+        if (!code.includes(PHOTON_WASM_INIT)) {
+          this.error("Photon WASM bootstrap changed; update the worker deploy transform");
+        }
+        return code.replace(
+          PHOTON_WASM_INIT,
+          `const bytes = Buffer.from(${JSON.stringify(fs.readFileSync(photonWasmPath).toString("base64"))}, "base64");`,
+        );
+      }
+      if (resolvedId === treeSitterRuntimePath) {
+        if (!code.includes(TREE_SITTER_INIT) || !code.includes(TREE_SITTER_BASH_WASM)) {
+          this.error("tree-sitter bootstrap changed; update the worker deploy transform");
+        }
+        // Sealed workers cannot read dependency assets. Keep byte decoding in the lazy parser.
+        return code
+          .replace(
+            TREE_SITTER_INIT,
+            `TreeSitter.Parser.init({ wasmBinary: Buffer.from(${JSON.stringify(fs.readFileSync(treeSitterWasmPath).toString("base64"))}, "base64") })`,
+          )
+          .replace(
+            TREE_SITTER_BASH_WASM,
+            `Buffer.from(${JSON.stringify(fs.readFileSync(bashWasmPath).toString("base64"))}, "base64")`,
+          );
+      }
       // Installed ws paths avoid Bun's adapter; portable Node workers must bundle
       // that same transport instead of resolving a missing package at runtime.
-      if (websocketRuntimePaths.has(resolvedId)) {
-        if (!code.includes(WS_REQUIRE_BOOTSTRAP)) {
+      if (resolvedId === websocketRuntimePath) {
+        if (WS_DIRECT_RUNTIME_FRAGMENTS.some((fragment) => !code.includes(fragment))) {
           this.error("ws bootstrap changed; update the worker deploy transform");
         }
-        return `import * as bundledWebSocket from "ws";\n${code.replace(WS_REQUIRE_BOOTSTRAP, "bundledWebSocket")}`;
+        const wsWrapperUrl = resolveWsWrapperUrl();
+        return `import * as bundledWebSocket from ${JSON.stringify(wsWrapperUrl)};
+export const { WebSocket, WebSocketServer, createWebSocketStream } = bundledWebSocket;`;
       }
-      if (resolvedId === transcriptionWebsocketPath) {
+      if (dynamicWebsocketRuntimePaths.has(resolvedId)) {
         if (!code.includes(WS_DYNAMIC_IMPORT)) {
           this.error("ws dynamic bootstrap changed; update the worker deploy transform");
         }
-        return code.replace(WS_DYNAMIC_IMPORT, '"ws"');
+        return code.replace(WS_DYNAMIC_IMPORT, JSON.stringify(resolveWsWrapperUrl()));
       }
       if (resolvedId === undiciDispatcherOptionsPath) {
         if (UNDICI_REQUIRE_BOOTSTRAP.some((fragment) => !code.includes(fragment))) {
@@ -136,7 +214,8 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
         return code
           .replace(UNDICI_REQUIRE_BOOTSTRAP[0], WORKER_UNDICI_IMPORT)
           .replace(UNDICI_REQUIRE_BOOTSTRAP[1], "")
-          .replace(UNDICI_REQUIRE_BOOTSTRAP[2], "return bundledUndici;");
+          .replace(UNDICI_REQUIRE_BOOTSTRAP[2], "")
+          .replace(UNDICI_REQUIRE_BOOTSTRAP[3], "return bundledUndici;");
       }
       if (
         resolvedId !== coreBundlePath ||

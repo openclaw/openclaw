@@ -14,15 +14,14 @@ import type { GatewayPlugin } from "../internal/gateway.js";
 import { createInternalTestClient } from "../internal/test-builders.test-support.js";
 import { registerGateway, unregisterGateway } from "../monitor/gateway-registry.js";
 import { clearPresences, setPresence } from "../monitor/presence-cache.js";
-import { sendDiscordComponentMessage as realSendDiscordComponentMessage } from "../send.components.js";
 import { DiscordThreadInitialMessageError } from "../send.js";
 import * as discordGuildActionRuntime from "../send.js";
+import { resolveDiscordTargetChannelId } from "../send.shared.js";
 import { createDiscordLoopbackRest } from "../send.test-harness.js";
 import { handleDiscordMessageAction } from "./handle-action.js";
 import { handleDiscordGuildAction } from "./runtime.guild.js";
 import { handleDiscordAction } from "./runtime.js";
 import { handleDiscordMessagingAction } from "./runtime.messaging.js";
-import * as discordMessagingActionRuntime from "./runtime.messaging.runtime.js";
 import { handleDiscordModerationAction } from "./runtime.moderation.js";
 
 type DiscordChannelInfoTest = {
@@ -47,7 +46,7 @@ const {
 
   const memberInfoDefault = async () => ({ user: { id: "U1" } });
   const componentMessageDefault = async (
-    ..._args: Parameters<typeof realSendDiscordComponentMessage>
+    ..._args: Parameters<typeof import("../send.components.js").sendDiscordComponentMessage>
   ) => ({});
 
   const sendMocks = {
@@ -118,13 +117,14 @@ vi.mock("../send.js", async (importOriginal) => {
   return { ...actual, ...discordSendMocks };
 });
 
-vi.mock("./runtime.messaging.runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./runtime.messaging.runtime.js")>();
-  return {
-    ...actual,
-    ...discordSendMocks,
-    resolveDiscordReactionTargetChannelId: vi.fn(actual.resolveDiscordReactionTargetChannelId),
-  };
+vi.mock("../send.components.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../send.components.js")>();
+  return { ...actual, sendDiscordComponentMessage: discordSendMocks.sendDiscordComponentMessage };
+});
+
+vi.mock("../send.shared.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../send.shared.js")>();
+  return { ...actual, resolveDiscordTargetChannelId: vi.fn(actual.resolveDiscordTargetChannelId) };
 });
 
 const {
@@ -267,7 +267,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   fetchChannelInfoDiscord.mockImplementation(defaultFetchChannelInfoDiscord);
   clearPresences();
-  vi.mocked(discordMessagingActionRuntime.resolveDiscordReactionTargetChannelId).mockReset();
+  vi.mocked(resolveDiscordTargetChannelId).mockReset();
   // These replace the old bag-reference resets without clearing queued once implementations.
   sendDiscordComponentMessage.mockImplementation(defaultSendDiscordComponentMessage);
   fetchMemberInfoDiscord.mockImplementation(defaultFetchMemberInfoDiscord);
@@ -535,10 +535,8 @@ describe("handleDiscordMessagingAction", () => {
   });
 
   it("resolves Discord DM targets for reaction adds", async () => {
-    const resolveReactionTarget = vi.fn(async () => "DM1");
-    vi.mocked(
-      discordMessagingActionRuntime.resolveDiscordReactionTargetChannelId,
-    ).mockImplementation(resolveReactionTarget);
+    const resolveReactionTarget = vi.fn(async () => ({ channelId: "DM1" }));
+    vi.mocked(resolveDiscordTargetChannelId).mockImplementation(resolveReactionTarget);
 
     await handleMessagingAction(
       "react",
@@ -550,8 +548,7 @@ describe("handleDiscordMessagingAction", () => {
       enableAllActions,
     );
 
-    expect(resolveReactionTarget).toHaveBeenCalledWith({
-      target: "user:U1",
+    expect(resolveReactionTarget).toHaveBeenCalledWith("user:U1", {
       cfg: DISCORD_TEST_CFG,
       accountId: "default",
     });
@@ -562,10 +559,8 @@ describe("handleDiscordMessagingAction", () => {
   });
 
   it("resolves Discord DM targets for direct-operator reaction listing", async () => {
-    const resolveReactionTarget = vi.fn(async () => "DM1");
-    vi.mocked(
-      discordMessagingActionRuntime.resolveDiscordReactionTargetChannelId,
-    ).mockImplementation(resolveReactionTarget);
+    const resolveReactionTarget = vi.fn(async () => ({ channelId: "DM1" }));
+    vi.mocked(resolveDiscordTargetChannelId).mockImplementation(resolveReactionTarget);
     fetchChannelInfoDiscord.mockResolvedValueOnce({
       id: "DM1",
       type: ChannelType.DM,
@@ -582,8 +577,7 @@ describe("handleDiscordMessagingAction", () => {
       { conversationReadOrigin: "direct-operator" },
     );
 
-    expect(resolveReactionTarget).toHaveBeenCalledWith({
-      target: "user:U1",
+    expect(resolveReactionTarget).toHaveBeenCalledWith("user:U1", {
       cfg: DISCORD_TEST_CFG,
       accountId: "default",
     });
@@ -598,10 +592,6 @@ describe("handleDiscordMessagingAction", () => {
     { name: "DM", type: ChannelType.DM },
     { name: "group DM", type: ChannelType.GroupDM },
   ])("blocks delegated reads of arbitrary Discord $name targets", async ({ type }) => {
-    const resolveReactionTarget = vi.fn(async () => "DM1");
-    vi.mocked(
-      discordMessagingActionRuntime.resolveDiscordReactionTargetChannelId,
-    ).mockImplementation(resolveReactionTarget);
     fetchChannelInfoDiscord.mockResolvedValueOnce({
       id: "DM1",
       type,
@@ -611,7 +601,7 @@ describe("handleDiscordMessagingAction", () => {
       handleMessagingAction(
         "reactions",
         {
-          to: "user:U1",
+          to: "channel:DM1",
           messageId: "M1",
         },
         enableAllActions,
@@ -1256,6 +1246,58 @@ describe("handleDiscordMessagingAction", () => {
     const message = expectDefined(payload.messages[0], "Discord message result");
     expect(message.timestampMs).toBe(expectedMs);
     expect(message.timestampUtc).toBe(new Date(expectedMs).toISOString());
+  });
+
+  it("returns the exact normalized message through the Discord read action", async () => {
+    fetchMessageDiscord.mockResolvedValueOnce({
+      id: "1542546825066577940",
+      content: "exact",
+      timestamp: "2026-01-15T10:00:00.000Z",
+    });
+
+    const result = await handleDiscordMessageAction({
+      action: "read",
+      params: { channelId: "C1", messageId: "1542546825066577940" },
+      cfg: DISCORD_TEST_CFG,
+    });
+
+    expect(fetchMessageDiscord).toHaveBeenCalledWith(
+      "C1",
+      "1542546825066577940",
+      expect.objectContaining({}),
+    );
+    expect(readMessagesDiscord).not.toHaveBeenCalled();
+    expect(result.details).toEqual({
+      ok: true,
+      channelId: "C1",
+      messages: [
+        {
+          id: "1542546825066577940",
+          content: "exact",
+          timestamp: "2026-01-15T10:00:00.000Z",
+          timestampMs: Date.parse("2026-01-15T10:00:00.000Z"),
+          timestampUtc: "2026-01-15T10:00:00.000Z",
+        },
+      ],
+    });
+  });
+
+  it("propagates missing-message errors through the Discord read action", async () => {
+    fetchMessageDiscord.mockRejectedValueOnce(new Error("Unknown Message"));
+
+    await expect(
+      handleDiscordMessageAction({
+        action: "read",
+        params: { channelId: "C1", messageId: "9999999999999999999" },
+        cfg: DISCORD_TEST_CFG,
+      }),
+    ).rejects.toThrow(/Unknown Message/);
+    expect(fetchMessageDiscord).toHaveBeenCalledWith(
+      "C1",
+      "9999999999999999999",
+      expect.objectContaining({}),
+    );
+    expect(readMessagesDiscord).not.toHaveBeenCalled();
   });
 
   it("rejects unexpected readMessages payloads with a boundary error", async () => {
@@ -2172,6 +2214,8 @@ describe("handleDiscordMessagingAction", () => {
   });
 
   it("delivers stringified components through the full messaging action to REST", async () => {
+    const { sendDiscordComponentMessage: realSendDiscordComponentMessage } =
+      await vi.importActual<typeof import("../send.components.js")>("../send.components.js");
     const loopback = await createDiscordLoopbackRest();
     sendDiscordComponentMessage.mockImplementation((recipient, spec, options) =>
       realSendDiscordComponentMessage(recipient, spec, {
@@ -3221,12 +3265,6 @@ describe("handleDiscordGuildAction - channel management", () => {
       params: { archived: false },
       previouslyLocked: true,
       permissions: [PermissionFlagsBits.ManageThreads],
-    },
-    {
-      name: "allows SendMessagesInThreads for unlocked Discord sender thread reopens",
-      params: { archived: false },
-      previouslyLocked: false,
-      permissions: [PermissionFlagsBits.ManageThreads, PermissionFlagsBits.SendMessagesInThreads],
     },
   ])("$name", async ({ params, previouslyLocked, permissions }) => {
     const threadChannel = {

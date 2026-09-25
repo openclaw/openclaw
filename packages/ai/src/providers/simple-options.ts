@@ -18,11 +18,12 @@ export function buildBaseOptions(
   model: Model,
   options?: SimpleStreamOptions,
   apiKey?: string,
-): StreamOptions & FirstEventStreamOptions {
+): StreamOptions & FirstEventStreamOptions & Pick<SimpleStreamOptions, "serviceTier"> {
   void model;
   const firstEventOptions = options as FirstEventStreamOptions | undefined;
   const baseOptions = {
     temperature: options?.temperature,
+    ...(options?.serviceTier ? { serviceTier: options.serviceTier } : {}),
     maxTokens: options?.maxTokens,
     responseFormat: options?.responseFormat,
     stop: options?.stop,
@@ -56,7 +57,7 @@ export function clampMaxTokensToModel(
 ): number | undefined {
   return requestedMaxTokens === undefined
     ? undefined
-    : Math.max(1, Math.min(requestedMaxTokens, model.maxTokens));
+    : Math.max(1, Math.min(requestedMaxTokens, model.maxTokens ?? requestedMaxTokens));
 }
 
 export function clampReasoning(effort: ThinkingLevel): Exclude<ThinkingLevel, "xhigh">;

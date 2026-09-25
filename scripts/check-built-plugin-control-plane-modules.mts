@@ -5,11 +5,15 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import type ts from "typescript";
+import * as ts from "typescript/unstable/ast";
+import { resolveNodeRuntimeExecutable } from "../src/infra/node-runtime-executable.ts";
 import { collectSourceCheckoutPluginBuildEntries } from "./lib/bundled-plugin-build-entries.mjs";
+import {
+  createNativeTypeScriptParser,
+  type NativeTypeScriptParser,
+} from "./lib/native-typescript.mts";
 import { isRecord } from "./lib/record-shared.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
-import { getTypeScript } from "./lib/ts-guard-utils.mts";
 
 type BuiltPluginControlPlaneModule = {
   pluginId: string;
@@ -70,14 +74,12 @@ process.stdout.write("\n${PROBE_RESULT_MARKER}" + JSON.stringify({ failures }));
 `;
 
 function propertyNameText(name: ts.PropertyName) {
-  const ts = getTypeScript();
-  return ts.isIdentifier(name) || ts.isStringLiteralLike(name) ? name.text : "";
+  return ts.isIdentifier(name) || ts.isStringLiteralLikeNode(name) ? name.text : "";
 }
 
-function listLegacySetupModuleSpecifiers(setupEntryPath: string) {
-  const ts = getTypeScript();
+function listLegacySetupModuleSpecifiers(setupEntryPath: string, parser: NativeTypeScriptParser) {
   const source = fs.readFileSync(setupEntryPath, "utf8");
-  const sourceFile = ts.createSourceFile(setupEntryPath, source, ts.ScriptTarget.Latest, true);
+  const sourceFile = parser.parseSourceFile(setupEntryPath, source);
   const specifiers: Array<{ kind: string; specifier: string }> = [];
   const visit = (node: ts.Node): void => {
     if (ts.isPropertyAssignment(node) && ts.isObjectLiteralExpression(node.initializer)) {
@@ -90,13 +92,13 @@ function listLegacySetupModuleSpecifiers(setupEntryPath: string) {
         if (
           specifierProperty &&
           ts.isPropertyAssignment(specifierProperty) &&
-          ts.isStringLiteralLike(specifierProperty.initializer)
+          ts.isStringLiteralLikeNode(specifierProperty.initializer)
         ) {
           specifiers.push({ kind, specifier: specifierProperty.initializer.text });
         }
       }
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
   visit(sourceFile);
   return specifiers;
@@ -107,6 +109,7 @@ export function listBuiltPluginControlPlaneModules(
   params: Pick<ProbeParams, "rootDir" | "env"> = {},
 ) {
   const rootDir = path.resolve(params.rootDir ?? ROOT);
+  using parser = createNativeTypeScriptParser({ cwd: rootDir });
   const extensionsDir = path.join(rootDir, "dist", "extensions");
   if (!fs.existsSync(extensionsDir)) {
     return [];
@@ -143,7 +146,7 @@ export function listBuiltPluginControlPlaneModules(
     if (!fs.existsSync(setupEntryPath)) {
       continue;
     }
-    for (const { kind, specifier } of listLegacySetupModuleSpecifiers(setupEntryPath)) {
+    for (const { kind, specifier } of listLegacySetupModuleSpecifiers(setupEntryPath, parser)) {
       const modulePath = path.resolve(pluginDir, specifier);
       const pluginRelativePath = path.relative(pluginDir, modulePath);
       if (pluginRelativePath.startsWith(`..${path.sep}`) || path.isAbsolute(pluginRelativePath)) {
@@ -168,12 +171,16 @@ export function probeBuiltPluginControlPlaneModules(
   }
   const rootDir = path.resolve(params.rootDir ?? ROOT);
   const encodedTargets = Buffer.from(JSON.stringify(modules), "utf8").toString("base64url");
-  const result = spawnSync(process.execPath, ["-e", REQUIRE_PROBE_SOURCE, encodedTargets], {
-    cwd: rootDir,
-    encoding: "utf8",
-    maxBuffer: 8 * 1024 * 1024,
-    timeout: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-  });
+  const result = spawnSync(
+    resolveNodeRuntimeExecutable() ?? process.execPath,
+    ["-e", REQUIRE_PROBE_SOURCE, encodedTargets],
+    {
+      cwd: rootDir,
+      encoding: "utf8",
+      maxBuffer: 8 * 1024 * 1024,
+      timeout: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    },
+  );
   if (result.error) {
     throw new Error(
       `built plugin control-plane native-require probe failed: ${result.error.message}`,
@@ -203,12 +210,10 @@ export function probeBuiltPluginControlPlaneModules(
 
 // Follow ESM declarations and eager CJS require calls emitted by isolated builds.
 // Dynamic imports and requires inside functions are lazy, not enumeration costs.
-function parseStaticModuleSpecifiers(source: string, filePath: string): string[] {
-  const ts = getTypeScript();
-  const sourceFile = ts.createSourceFile(filePath, source, ts.ScriptTarget.Latest, true);
+function parseStaticModuleSpecifiers(sourceFile: ts.SourceFile): string[] {
   const specifiers: string[] = [];
   const visit = (node: ts.Node): void => {
-    if (ts.isFunctionLike(node)) {
+    if (ts.isFunctionLikeDeclaration(node)) {
       return;
     }
     const moduleSpecifier =
@@ -219,10 +224,10 @@ function parseStaticModuleSpecifiers(source: string, filePath: string): string[]
             /^(?:require|_+require\d*)$/u.test(node.expression.text)
           ? node.arguments[0]
           : undefined;
-    if (moduleSpecifier && ts.isStringLiteralLike(moduleSpecifier)) {
+    if (moduleSpecifier && ts.isStringLiteralLikeNode(moduleSpecifier)) {
       specifiers.push(moduleSpecifier.text);
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
   visit(sourceFile);
   return specifiers;
@@ -235,7 +240,11 @@ function resolveBuiltChunkPath(importerPath: string, specifier: string): string 
 }
 
 /** Collects the bare dependencies a built artifact reaches through static imports. */
-function collectBuiltModuleStaticDependencies(entryPath: string): Map<string, string> {
+function collectBuiltModuleStaticDependencies(
+  entryPath: string,
+  parser: NativeTypeScriptParser,
+  moduleSpecifiers: Map<string, string[]>,
+): Map<string, string> {
   const dependencies = new Map<string, string>();
   const visited = new Set<string>();
   const pending: string[] = [entryPath];
@@ -245,13 +254,18 @@ function collectBuiltModuleStaticDependencies(entryPath: string): Map<string, st
       continue;
     }
     visited.add(filePath);
-    let source: string;
-    try {
-      source = fs.readFileSync(filePath, "utf8");
-    } catch {
-      continue;
+    let specifiers = moduleSpecifiers.get(filePath);
+    if (!specifiers) {
+      let source: string;
+      try {
+        source = fs.readFileSync(filePath, "utf8");
+      } catch {
+        continue;
+      }
+      specifiers = parseStaticModuleSpecifiers(parser.parseSourceFile(filePath, source));
+      moduleSpecifiers.set(filePath, specifiers);
     }
-    for (const reference of parseStaticModuleSpecifiers(source, filePath)) {
+    for (const reference of specifiers) {
       if (reference.startsWith(".") || reference.startsWith("/")) {
         const resolved = resolveBuiltChunkPath(filePath, reference);
         if (resolved) {
@@ -273,10 +287,15 @@ export function collectBuiltDoctorContractClosureViolations(
   params: { rootDir?: string } = {},
 ): BuiltDoctorContractClosureViolation[] {
   const rootDir = path.resolve(params.rootDir ?? ROOT);
+  using parser = createNativeTypeScriptParser({ cwd: rootDir });
   const violations: BuiltDoctorContractClosureViolation[] = [];
+  // Shared chunks are parsed once per check; each contract retains its own traversal and attribution.
+  const moduleSpecifiers = new Map<string, string[]>();
   for (const module of modules.filter((candidate) => candidate.kind === "doctor-contract")) {
     const dependencies = collectBuiltModuleStaticDependencies(
       path.join(rootDir, module.relativePath),
+      parser,
+      moduleSpecifiers,
     );
     for (const dependency of FORBIDDEN_DOCTOR_CONTRACT_DEPENDENCIES) {
       const importer = dependencies.get(dependency);

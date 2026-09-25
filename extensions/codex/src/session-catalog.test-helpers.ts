@@ -31,7 +31,9 @@ import {
 import type { SessionCatalogProvider as RegisteredSessionCatalogProvider } from "openclaw/plugin-sdk/session-catalog";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
@@ -62,7 +64,6 @@ import { catalogError, parseCatalogPage } from "./session-catalog-parsing.js";
 import {
   CODEX_TERMINAL_RESUME_COMMAND,
   CODEX_TERMINAL_START_COMMAND,
-  type CodexTerminalConfigSources,
 } from "./session-catalog-terminal.js";
 import type {
   CodexSessionCatalogControl,
@@ -87,11 +88,13 @@ export const CODEX_NODE_CONTINUE_COMMANDS = [
 ] as const;
 const originalPath = process.env.PATH;
 export const tempDirs: string[] = [];
+const catalogFactories = new Set<ReturnType<typeof createCodexSessionCatalogControlRuntime>>();
 
 beforeEach(() => {
   const stateDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "codex-catalog-owner-"));
   tempDirs.push(stateDir);
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  vi.stubEnv("CODEX_HOME", path.join(stateDir, "codex"));
   nodeHostMocks.runNodePtyCommand.mockClear();
   nodeHostMocks.userShellPaths.clear();
   commandRpcMocks.codexControlRequest.mockReset();
@@ -107,12 +110,16 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  await Promise.all([...catalogFactories].map((factory) => factory.stop()));
+  catalogFactories.clear();
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   resetPluginRuntimeStateForTest();
+  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
   vi.unstubAllEnvs();
   process.env.PATH = originalPath;
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
 const archiveLocalCodexSession = codexSessionCatalogRuntime.archiveLocal;
@@ -127,10 +134,12 @@ function createCodexSessionCatalogControlFactory(
     "resolveRuntimeOptions"
   >,
 ) {
-  return createCodexSessionCatalogControlRuntime({
+  const factory = createCodexSessionCatalogControlRuntime({
     ...params,
     resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
   });
+  catalogFactories.add(factory);
+  return factory;
 }
 
 function createCodexCatalogHomeResolver(
@@ -167,9 +176,18 @@ function asControlFactory(
   }
   const forRequest = "forRequest" in control ? control.forRequest : () => control;
   return {
+    hasActiveWork: () => false,
+    disconnect: async () => {},
     forRequest,
-    homesForAgent: () => [],
-    forUpstream: (agentId) => forRequest(agentId),
+    forNode: async () => ({
+      control: forRequest("main"),
+      sourceHomeId: "node-native",
+      codexHome: resolveCodexAppServerUserHomeDir(),
+      transport: "stdio",
+      assertCurrent: () => {},
+    }),
+    homesForAgent: async () => [],
+    forUpstream: async (agentId) => forRequest(agentId),
   };
 }
 
@@ -267,17 +285,9 @@ export function createCodexSessionCatalogNodeHostCommands(
     | CodexSessionCatalogControl
     | CodexSessionCatalogControlFactory
     | CodexSessionCatalogControlFactoryStub,
-  configSources: Omit<CodexTerminalConfigSources, "resolveRuntimeOptions"> = {
-    getPluginConfig: () => undefined,
-    getRuntimeConfig: () => config,
-  },
   bindingStore?: CodexAppServerBindingStore,
 ) {
-  return createCodexSessionCatalogNodeHostCommandsRuntime(
-    asControlFactory(control),
-    { ...configSources, resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions },
-    bindingStore,
-  );
+  return createCodexSessionCatalogNodeHostCommandsRuntime(asControlFactory(control), bindingStore);
 }
 
 type CreateSessionEntryParams = Parameters<
@@ -414,6 +424,7 @@ export function createControl(overrides: Partial<CodexSessionCatalogControl> = {
   const control = {
     connectionFingerprint: "catalog-connection",
     withPinnedConnection,
+    initialize: vi.fn(async () => undefined),
     requireEligibleThread: vi.fn(async (threadId: string) => idleThread({ id: threadId })),
     listPage: vi.fn(async () => ({ sessions: [] })),
     listDescendantPage: vi.fn(async () => ({ data: [] })),

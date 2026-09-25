@@ -12,7 +12,10 @@ import {
   createSignedFileSharedActivityRequest,
   createSignedVoiceMessageActivityRequest,
 } from "./monitor.test-fixtures.js";
-import { migrateNextcloudTalkLegacyReplayState } from "./webhook-spool-state.js";
+import {
+  migrateNextcloudTalkLegacyReplayState,
+  parseNextcloudTalkFileSharedActivity,
+} from "./webhook-spool-state.js";
 import { createNextcloudTalkWebhookSpool } from "./webhook-spool.js";
 
 type NextcloudTalkIngressQueue = NonNullable<
@@ -72,6 +75,19 @@ afterEach(() => {
 });
 
 describe("Nextcloud Talk durable ingress", () => {
+  it("accepts file metadata without the optional hide-download flag", () => {
+    const { body } = createSignedFileSharedActivityRequest();
+    const envelope = JSON.parse(body) as { object: { content: string } };
+    const content = JSON.parse(envelope.object.content) as {
+      parameters: { file: Record<string, unknown> };
+    };
+    delete content.parameters.file["hide-download"];
+    envelope.object.content = JSON.stringify(content);
+    expect(parseNextcloudTalkFileSharedActivity(envelope as Record<string, unknown>)).toEqual(
+      expect.objectContaining({ attachment: expect.objectContaining({ hideDownload: false }) }),
+    );
+  });
+
   it("does not start draining when migration completes after stop begins", async () => {
     await withQueue(async (queue) => {
       let releaseEntries: (() => void) | undefined;

@@ -7,12 +7,16 @@ export const UPDATE_OPTION_SPECS: readonly [
   ["--json", "Output result as JSON", false],
   ["--no-restart", "Skip restarting the gateway service after a successful update"],
   ["--dry-run", "Preview update actions without making changes", false],
+  [
+    "--admission <auto|installed>",
+    "Select candidate or installed admission checks (default: auto)",
+  ],
   ["--channel <stable|extended-stable|beta|dev>", "Persist update channel (git + npm)"],
   [
     "--tag <dist-tag|version|spec>",
     "Override the package target for this update (dist-tag, version, or package spec)",
   ],
-  ["--timeout <seconds>", "Timeout for each update step in seconds (default: 1800)"],
+  ["--timeout <seconds>", "Set a per-step deadline in seconds"],
   ["--yes", "Skip confirmation prompts (non-interactive)", false],
   [
     "--reapply-local-overrides",

@@ -24,18 +24,6 @@ import type { SecretInputMode } from "./onboard-types.js";
 
 const DEFAULT_GATEWAY_URL = "ws://127.0.0.1:18789";
 
-function buildLabel(beacon: GatewayBonjourBeacon): string {
-  return buildGatewayDiscoveryLabel(beacon);
-}
-
-function ensureWsUrl(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return DEFAULT_GATEWAY_URL;
-  }
-  return trimmed;
-}
-
 export function validateGatewayWebSocketUrl(value: string): string | undefined {
   const trimmed = value.trim();
   if (!trimmed.startsWith("ws://") && !trimmed.startsWith("wss://")) {
@@ -101,7 +89,7 @@ export async function promptRemoteGatewayConfig(
         options: [
           ...beacons.map((beacon, index) => ({
             value: String(index),
-            label: buildLabel(beacon),
+            label: buildGatewayDiscoveryLabel(beacon),
           })),
           { value: "manual", label: t("wizard.remote.enterUrlManually") },
         ],
@@ -162,7 +150,7 @@ export async function promptRemoteGatewayConfig(
         await prompter.note(
           [
             "Start a tunnel before using the CLI:",
-            `ssh -N -L 18789:127.0.0.1:18789 <user>@${host}${target.sshPort ? ` -p ${target.sshPort}` : ""}`,
+            `ssh -N -L 18789:127.0.0.1:${port} <user>@${host}${target.sshPort ? ` -p ${target.sshPort}` : ""}`,
             "Docs: https://docs.openclaw.ai/gateway/remote",
           ].join("\n"),
           t("wizard.remote.sshTunnelTitle"),
@@ -174,9 +162,9 @@ export async function promptRemoteGatewayConfig(
   const urlInput = await prompter.text({
     message: t("wizard.remote.websocketUrl"),
     initialValue: suggestedUrl,
-    validate: (value) => validateGatewayWebSocketUrl(value),
+    validate: validateGatewayWebSocketUrl,
   });
-  const url = ensureWsUrl(urlInput);
+  const url = urlInput.trim() || DEFAULT_GATEWAY_URL;
   // Discovery choices belong only to the accepted URL, never a subsequent manual edit.
   const selectedDiscovery = discoveryRemote?.url === url ? discoveryRemote : undefined;
 

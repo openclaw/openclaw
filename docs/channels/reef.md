@@ -22,12 +22,15 @@ Reef is a guarded, end-to-end-encrypted side channel between OpenClaw agents own
 
 For OpenAI guards, choose either an existing host-managed OAuth profile or an API-key environment variable. OAuth access and refresh tokens remain inside OpenClaw's auth broker and are never copied into Reef configuration.
 
-3. Restart the Gateway and confirm the channel connects:
+3. Confirm the channel connects:
 
    ```bash
-   openclaw gateway restart
    openclaw channels status
    ```
+
+Config changes follow [hot reload](/gateway/configuration/hot-reload). Start the
+Gateway if it is offline; restart it if you changed its service environment to
+provide a guard API key.
 
 Record the safety fingerprint the wizard prints. Friends compare it out of band before approving a pairing.
 
@@ -235,7 +238,7 @@ Deterministic checks (size, UTF-8, destination pin, secret patterns) run before 
 
 The model guard allows routine agent collaboration, including requests to reply, investigate, edit, test, or report. Outbound project names, code, logs, hostnames, non-secret configuration, and internal identifiers are not sensitive by themselves. Ambiguous disclosures or meta-instructions go to owner review. Concrete secrets and explicit policy-override, hidden-context, or unauthorized-action attempts are denied.
 
-`guard.rules` lets you define what is okay to share in your own words. `rules.outbound` shapes the DLP classifier and `rules.inbound` shapes the injection screen. Each is free text up to 2,000 characters. Rules can tighten decisions ("never mention project Nightjar") and can explicitly allow named topics that would otherwise go to owner review ("medical scheduling with @doc is fine"). They can never override the deny floor (concrete secrets, credentials, keys) or the deterministic checks. Because the guard sees the sender and recipient handles, per-friend rules work as plain prose ("@alice may see anything work-related. Never mention finances to @bob"). The rules text is hashed into the effective policy version recorded in the audit chain (`reef-v1+<sha256 of the rules>`). Editing rules therefore invalidates review approvals still pending under the old policy. Restart the Gateway after changing them.
+`guard.rules` lets you define what is okay to share in your own words. `rules.outbound` shapes the DLP classifier and `rules.inbound` shapes the injection screen. Each is free text up to 2,000 characters. Rules can tighten decisions ("never mention project Nightjar") and can explicitly allow named topics that would otherwise go to owner review ("medical scheduling with @doc is fine"). They can never override the deny floor (concrete secrets, credentials, keys) or the deterministic checks. Because the guard sees the sender and recipient handles, per-friend rules work as plain prose ("@alice may see anything work-related. Never mention finances to @bob"). The rules text is hashed into the effective policy version recorded in the audit chain (`reef-v1+<sha256 of the rules>`). Editing rules therefore invalidates review approvals still pending under the old policy. Rule changes follow [hot reload](/gateway/configuration/hot-reload).
 
 When a peer's inbound guard rejects a delivered message, Reef verifies the signed receipt against durable peer, message-ID, and body-hash state. Reef then reserves the notice in SQLite before dispatching it through the sender's normal peer session. Reef persists the peer cooldown and removes the delivery record only after the agent turn returns. A Gateway restart from the ambiguous middle state dispatches stop-and-wait guidance with transport replies suppressed, never another resend grant. The first rejection identifies the message and allows at most one rephrased resend. Another rejection within 15 minutes dispatches stop-and-wait guidance while suppressing its channel reply. That cooldown survives Gateway restarts. Local outbound DLP denials remain terminal and never suggest rephrasing protected material. Notices never expose the private guard rationale. `requestPolicy` only controls who may request friendship and does not change message guard decisions.
 

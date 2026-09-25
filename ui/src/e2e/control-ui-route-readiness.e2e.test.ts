@@ -1,10 +1,14 @@
+import path from "node:path";
+import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import { expect, it } from "vitest";
 import type { ChatPaneElement } from "../pages/chat/route-draft-focus-handoff.ts";
 import {
   controlUiSessionUrl,
+  defaultControlUiFeatureMethods,
   installMockGateway,
   navigateToControlUiSession,
 } from "../test-helpers/control-ui-e2e.ts";
+import { requireRecord } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI route readiness" });
@@ -21,16 +25,44 @@ suite.define(() => {
     { name: "mobile selection", width: 390, height: 844, reducedMotion: "reduce", ime: false },
     { name: "mobile composition", width: 390, height: 844, reducedMotion: "reduce", ime: true },
   ] as const)(
-    "keeps a short session's draft and $name while its first transcript loads",
+    "accepts a message and preserves the next draft's $name while first history loads",
     async ({ width, height, reducedMotion, ime }) => {
       await suite.withPage(
         { viewport: { width, height }, reducedMotion },
         async ({ page, context }) => {
           const sessionKey = "agent:main:thread:12345678-90ab-4def-8234-567890abcdef";
+          const sessionId = "session:history-ready";
+          const activeLeafEntryId = "history-ready-leaf";
+          const submittedMessage = "Send this before history arrives.";
+          const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()
+            ? suite.artifactDir
+            : undefined;
+          if (width > 400) {
+            const scope = gatewayOriginScope(suite.server.baseUrl.replace(/^http/u, "ws"));
+            await page.addInitScript(
+              (key) => localStorage.setItem(key, "involving-me"),
+              `openclaw.control.sidebarSessionOwnerFilter.v1:${scope}:history-profile`,
+            );
+          }
           const gateway = await installMockGateway(page, {
             sessionKey,
+            ...(width > 400
+              ? {
+                  presenceUsers: [{ self: true, id: "history-profile", name: "Fixture user" }],
+                  featureMethods: [...defaultControlUiFeatureMethods, "system.info"],
+                  methodResponses: { "system.info": { platform: "darwin" } },
+                }
+              : {}),
             sessions: [
-              { key: sessionKey, kind: "direct", updatedAt: 1, displayName: "Draft timing" },
+              {
+                key: sessionKey,
+                sessionId,
+                activeLeafEntryId,
+                kind: "direct",
+                updatedAt: 1,
+                displayName: "Draft timing",
+                hasActiveRun: false,
+              },
             ],
             historyMessages: [{ role: "assistant", content: "The conversation is ready." }],
             heldMethods: ["chat.startup", "chat.history"],
@@ -44,13 +76,29 @@ suite.define(() => {
           expect(await composer.evaluate((element) => element === document.activeElement)).toBe(
             false,
           );
-          await composer.fill("Draft written before history arrives.");
-          const input = await composer.elementHandle();
-          await expect.poll(() => pane.locator(".chat-send-btn--send").isDisabled()).toBe(true);
-          await composer.press("Enter");
+          await composer.fill(submittedMessage);
+          if (artifactDir) {
+            await page.screenshot({ path: path.join(artifactDir, "01-loading-before-submit.png") });
+          }
+          await expect.poll(() => pane.locator(".chat-send-btn--send").isEnabled()).toBe(true);
+          if (width > 400) {
+            await composer.press("Enter");
+          } else {
+            await pane.getByRole("button", { name: "Send message" }).click();
+          }
+          await expect.poll(() => composer.inputValue()).toBe("");
+          await pane.locator(".chat-queue").getByText(submittedMessage, { exact: true }).waitFor();
           expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+          expect(await pane.locator(".loading-skeleton").isVisible()).toBe(true);
+          if (artifactDir) {
+            await page.screenshot({
+              path: path.join(artifactDir, "02-accepted-while-loading.png"),
+            });
+          }
+
+          await composer.fill("Next draft written before history arrives.");
+          const input = await composer.elementHandle();
           let pendingDraft = await composer.inputValue();
-          expect(pendingDraft.trim()).toBe("Draft written before history arrives.");
           await composer.evaluate((element: HTMLTextAreaElement) =>
             element.setSelectionRange(6, 13, "backward"),
           );
@@ -69,7 +117,6 @@ suite.define(() => {
             end: element.selectionEnd,
             direction: element.selectionDirection,
           }));
-          // Enter inserts a newline while sending is disabled; let textarea autosizing finish.
           await page.evaluate(
             () =>
               new Promise((resolve) => {
@@ -78,6 +125,16 @@ suite.define(() => {
           );
           const before = await composer.boundingBox();
 
+          if (width > 400) {
+            expect(
+              (await gateway.getRequests("sessions.list")).filter(
+                (request) => requireRecord(request.params).involvingMe === true,
+              ),
+            ).toHaveLength(0);
+            expect(await gateway.getRequests("cron.list")).toHaveLength(0);
+            expect(await gateway.getRequests("cron.status")).toHaveLength(0);
+            expect(await gateway.getRequests("system.info")).toHaveLength(0);
+          }
           await gateway.resolveDeferred("chat.startup");
           await expect.poll(() => pane.locator(".loading-skeleton").count()).toBe(0);
           await expect.poll(() => pane.textContent()).toContain("The conversation is ready.");
@@ -98,20 +155,41 @@ suite.define(() => {
           expect(after?.x).toBeCloseTo(before!.x, 0);
           expect(after?.y).toBeCloseTo(before!.y, 0);
           expect(after?.width).toBeCloseTo(before!.width, 0);
-          expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+          const sent = await gateway.waitForRequest("chat.send");
+          expect(sent.params).toMatchObject({
+            sessionKey,
+            sessionId,
+            expectedLeafEntryId: activeLeafEntryId,
+            message: submittedMessage,
+          });
           if (cdp) {
             await cdp.send("Input.insertText", { text: "編集済み" });
             pendingDraft = await composer.inputValue();
             expect(pendingDraft).toContain("編集済み");
             await cdp.detach();
           }
-          await expect.poll(() => pane.locator(".chat-send-btn--send").isEnabled()).toBe(true);
-          await composer.press("Enter");
-          const sent = await gateway.waitForRequest("chat.send");
-          expect(sent.params).toMatchObject({
-            sessionKey,
-            message: pendingDraft.trim(),
-          });
+          expect(await composer.inputValue()).toBe(pendingDraft);
+          expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+          if (width > 400) {
+            await expect
+              .poll(async () =>
+                (await gateway.getRequests("sessions.list")).some(
+                  (request) => requireRecord(request.params).involvingMe === true,
+                ),
+              )
+              .toBe(true);
+            await Promise.all([
+              gateway.waitForRequest("cron.list"),
+              gateway.waitForRequest("cron.status"),
+              gateway.waitForRequest("system.info"),
+            ]);
+            expect(await composer.inputValue()).toBe(pendingDraft);
+            if (artifactDir) {
+              await page.screenshot({
+                path: path.join(artifactDir, "03-ready-with-next-draft.png"),
+              });
+            }
+          }
         },
       );
     },

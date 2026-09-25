@@ -2,13 +2,20 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { publishSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
+import {
+  copySqliteSessionGenerationRows,
+  readSqliteSessionGenerationWindows,
+  rehomeSqliteSessionGenerationWindow,
+} from "./session-accessor.sqlite-generation-copy.js";
 import { readSessionGenerationIdsForKeys } from "./session-accessor.sqlite-lifecycle-state.js";
 import {
   copySessionNodeArtifactsForRepair,
@@ -25,12 +32,11 @@ import { bindSessionWindowEntryProjection } from "./session-accessor.sqlite-sess
 import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import { ensureTranscriptGenerationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-key.js";
-import {
-  deleteSessionTranscriptIndexInTransaction,
-  reconcileSessionTranscriptIndexInTransaction,
-} from "./session-transcript-index.js";
+import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import type { SessionEntry } from "./types.js";
+
+type AgentCacheDatabase = Pick<OpenClawAgentKyselyDatabase, "cache_entries">;
 
 // Doctor-only cross-store transfer. Runtime readers never reconcile aliases.
 
@@ -103,15 +109,20 @@ export function copySqliteSessionOwnedStateForCanonicalRepair(params: {
     agentId: params.source.agentId,
   });
   const sourceDatabase = openOpenClawAgentDatabase(toDatabaseOptions(source));
-  copySqliteSessionOwnedStateForRepair({
-    canonicalKey: params.canonicalKey,
-    destination: params.destinationDatabase,
-    ...(params.preferredEntry ? { preferredEntry: params.preferredEntry } : {}),
-    ...(params.preferredSessionKey ? { preferredSessionKey: params.preferredSessionKey } : {}),
-    source: sourceDatabase,
-    sourceEntries: params.sourceEntries,
-    sourceKeys: params.sourceKeys,
-  });
+  runSqliteDeferredTransactionSync(
+    sourceDatabase.db,
+    () =>
+      copySqliteSessionOwnedStateForRepair({
+        canonicalKey: params.canonicalKey,
+        destination: params.destinationDatabase,
+        ...(params.preferredEntry ? { preferredEntry: params.preferredEntry } : {}),
+        ...(params.preferredSessionKey ? { preferredSessionKey: params.preferredSessionKey } : {}),
+        source: sourceDatabase,
+        sourceEntries: params.sourceEntries,
+        sourceKeys: params.sourceKeys,
+      }),
+    { databaseLabel: sourceDatabase.path, operationLabel: "session canonical repair source" },
+  );
 }
 
 /** Doctor-only inventory of every generation copied for one canonical-key group. */
@@ -163,6 +174,9 @@ export async function ensureSqliteTranscriptGenerationsForCanonicalRepair(
             ),
           ]);
           const db = getSessionKysely(database.db);
+          for (const sessionId of sessionIds) {
+            assertSessionTranscriptHot(database.db, sessionId);
+          }
           const eventSessionIds = executeSqliteQuerySync(
             database.db,
             db
@@ -266,18 +280,12 @@ function copySqliteSessionOwnedStateForRepair(params: {
   const entrySessionIds = uniqueStrings(
     params.sourceEntries.flatMap((entry) => [...collectSessionStateIdsForEntry(entry)]),
   );
-  const windows = executeSqliteQuerySync(
-    params.source.db,
-    sourceDb
-      .selectFrom("session_windows")
-      .selectAll()
-      .where((eb) =>
-        entrySessionIds.length === 0
-          ? eb("session_key", "in", sourceKeys)
-          : eb.or([eb("session_key", "in", sourceKeys), eb("session_id", "in", entrySessionIds)]),
-      ),
-  ).rows;
+  const windows = readSqliteSessionGenerationWindows(params.source, sourceKeys, entrySessionIds);
   const sessionIds = uniqueStrings([...windows.map((row) => row.session_id), ...entrySessionIds]);
+  for (const sessionId of sessionIds) {
+    assertSessionTranscriptHot(params.source.db, sessionId);
+    assertSessionTranscriptHot(params.destination.db, sessionId);
+  }
   const sessionLinks =
     sessionIds.length === 0
       ? []
@@ -346,6 +354,8 @@ function copySqliteSessionOwnedStateForRepair(params: {
           .onConflict((conflict) => conflict.column("conversation_id").doUpdateSet(replacement)),
       );
     }
+    const sourceCache = getNodeSqliteKysely<AgentCacheDatabase>(params.source.db);
+    const destinationCache = getNodeSqliteKysely<AgentCacheDatabase>(params.destination.db);
     for (const delivery of deliveries) {
       const canonicalDelivery = {
         ...delivery,
@@ -363,6 +373,32 @@ function copySqliteSessionOwnedStateForRepair(params: {
           .values(canonicalDelivery)
           .onConflict((conflict) => conflict.column("operation_id").doUpdateSet(replacement)),
       );
+      const snapshot = executeSqliteQueryTakeFirstSync(
+        params.source.db,
+        sourceCache
+          .selectFrom("cache_entries")
+          .selectAll()
+          .where("scope", "=", "conversation-progress")
+          .where("key", "=", delivery.operation_id),
+      );
+      if (snapshot) {
+        executeSqliteQuerySync(
+          params.destination.db,
+          destinationCache
+            .insertInto("cache_entries")
+            .values(snapshot)
+            .onConflict((conflict) => conflict.columns(["scope", "key"]).doUpdateSet(snapshot)),
+        );
+      } else {
+        // Replacing a receipt cannot retain another receipt's presentation at the same key.
+        executeSqliteQuerySync(
+          params.destination.db,
+          destinationCache
+            .deleteFrom("cache_entries")
+            .where("scope", "=", "conversation-progress")
+            .where("key", "=", delivery.operation_id),
+        );
+      }
     }
   }
   const preferredWindowProjection = params.preferredEntry
@@ -387,18 +423,7 @@ function copySqliteSessionOwnedStateForRepair(params: {
     : undefined;
   for (const window of windows) {
     const canonicalWindow = {
-      ...window,
-      session_key: params.canonicalKey,
-      parent_session_key:
-        window.parent_session_key &&
-        sourceLineageIdentities.has(normalizeStoreSessionKey(window.parent_session_key.trim()))
-          ? params.canonicalKey
-          : window.parent_session_key,
-      spawned_by:
-        window.spawned_by &&
-        sourceLineageIdentities.has(normalizeStoreSessionKey(window.spawned_by.trim()))
-          ? params.canonicalKey
-          : window.spawned_by,
+      ...rehomeSqliteSessionGenerationWindow(window, params.canonicalKey, sourceLineageIdentities),
       ...(preferredWindowProjection && window.session_id === params.preferredEntry?.sessionId
         ? { ...preferredWindowProjection, ...preferredWindowProvenance }
         : {}),
@@ -463,19 +488,12 @@ function copySqliteSessionOwnedStateForRepair(params: {
     );
   }
   for (const sessionId of sessionIds) {
-    const replaced = copySqliteSessionGenerationRows({
+    copySqliteSessionGenerationRows({
       destination: params.destination,
       sessionId,
       source: params.source,
       sourceWindowPresent: copiedWindowIds.has(sessionId),
     });
-    if (!replaced) {
-      continue;
-    }
-    // Doctor repair runs outside gateway requests and must atomically finish copied projections.
-    deleteSessionTranscriptIndexInTransaction(params.destination.db, sessionId);
-    reconcileSessionTranscriptIndexInTransaction(params.destination.db, sessionId);
-    publishSessionEntryCacheInvalidation(params.destination);
   }
   // Membership is authorization state and follows the selected winner. Boards,
   // suggestions, and heartbeat state merge by their own revision/id contracts.
@@ -494,99 +512,4 @@ function copySqliteSessionOwnedStateForRepair(params: {
     params.canonicalKey,
     { includeParticipants: false },
   );
-}
-
-function copySqliteSessionGenerationRows(params: {
-  destination: OpenClawAgentDatabase;
-  sessionId: string;
-  source: OpenClawAgentDatabase;
-  sourceWindowPresent: boolean;
-}): boolean {
-  const sourceDb = getSessionKysely(params.source.db);
-  const destinationDb = getSessionKysely(params.destination.db);
-  const transcriptEvents = executeSqliteQuerySync(
-    params.source.db,
-    sourceDb.selectFrom("transcript_events").selectAll().where("session_id", "=", params.sessionId),
-  ).rows;
-  const transcriptIdentities = executeSqliteQuerySync(
-    params.source.db,
-    sourceDb
-      .selectFrom("transcript_event_identities")
-      .selectAll()
-      .where("session_id", "=", params.sessionId),
-  ).rows;
-  const rewriteWatermarks = executeSqliteQuerySync(
-    params.source.db,
-    sourceDb
-      .selectFrom("transcript_rewrite_watermarks")
-      .selectAll()
-      .where("session_id", "=", params.sessionId),
-  ).rows;
-  const trajectoryEvents = executeSqliteQuerySync(
-    params.source.db,
-    sourceDb
-      .selectFrom("trajectory_runtime_events")
-      .selectAll()
-      .where("session_id", "=", params.sessionId),
-  ).rows;
-  const parentStreamEvents = executeSqliteQuerySync(
-    params.source.db,
-    sourceDb
-      .selectFrom("acp_parent_stream_events")
-      .selectAll()
-      .where("session_id", "=", params.sessionId),
-  ).rows;
-  if (
-    !params.sourceWindowPresent &&
-    transcriptEvents.length === 0 &&
-    transcriptIdentities.length === 0 &&
-    rewriteWatermarks.length === 0 &&
-    trajectoryEvents.length === 0 &&
-    parentStreamEvents.length === 0
-  ) {
-    return false;
-  }
-  for (const table of [
-    "transcript_event_identities",
-    "transcript_events",
-    "transcript_rewrite_watermarks",
-    "trajectory_runtime_events",
-    "acp_parent_stream_events",
-  ] as const) {
-    executeSqliteQuerySync(
-      params.destination.db,
-      destinationDb.deleteFrom(table).where("session_id", "=", params.sessionId),
-    );
-  }
-  for (const row of transcriptEvents) {
-    executeSqliteQuerySync(
-      params.destination.db,
-      destinationDb.insertInto("transcript_events").values(row),
-    );
-  }
-  for (const row of transcriptIdentities) {
-    executeSqliteQuerySync(
-      params.destination.db,
-      destinationDb.insertInto("transcript_event_identities").values(row),
-    );
-  }
-  for (const row of rewriteWatermarks) {
-    executeSqliteQuerySync(
-      params.destination.db,
-      destinationDb.insertInto("transcript_rewrite_watermarks").values(row),
-    );
-  }
-  for (const row of trajectoryEvents) {
-    executeSqliteQuerySync(
-      params.destination.db,
-      destinationDb.insertInto("trajectory_runtime_events").values(row),
-    );
-  }
-  for (const row of parentStreamEvents) {
-    executeSqliteQuerySync(
-      params.destination.db,
-      destinationDb.insertInto("acp_parent_stream_events").values(row),
-    );
-  }
-  return true;
 }

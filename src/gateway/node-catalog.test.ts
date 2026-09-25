@@ -1,6 +1,7 @@
 /**
  * Gateway node catalog regression tests.
  */
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { NODE_WORKER_PRIVATE_COMMANDS } from "../infra/node-commands.js";
 import { resolveNodePairApprovalScopes } from "../infra/node-pairing-authz.js";
@@ -661,5 +662,165 @@ describe("gateway/node-catalog", () => {
     const nodes = listKnownNodes(catalog);
     expect(nodes.map((entry) => entry.nodeId)).toEqual(["good-node"]);
     expect(getKnownNode(catalog, "good-node")).not.toBeNull();
+  });
+
+  it("compares the normalized public pending surface before selecting approval diagnostics", () => {
+    const pending = pendingNode({
+      caps: [" screen ", "screen"],
+      commands: [" screen.snapshot ", "screen.snapshot", ...NODE_WORKER_PRIVATE_COMMANDS],
+      permissions: undefined,
+    });
+    const live: CatalogInput["connectedNodes"][number] = {
+      nodeId: "mac-1",
+      connId: "conn-1",
+      client: {} as never,
+      declaredCaps: ["screen"],
+      caps: [],
+      declaredCommands: ["screen.snapshot"],
+      commands: [],
+      declaredNodePluginTools: [],
+      nodePluginTools: [],
+      nodeSkills: [],
+      connectedAtMs: 0,
+    };
+    const input = { pairedDevices: [], pendingNodes: [pending], connectedNodes: [live] };
+    const node = getKnownNode(createKnownNodeCatalog(input), "mac-1");
+    expect(node).toMatchObject({
+      approvalState: "pending-approval",
+      pendingDeclaredCaps: ["screen"],
+      pendingDeclaredCommands: ["screen.snapshot"],
+      caps: [],
+      commands: [],
+    });
+    live.declaredCommands.push(NODE_WORKER_PRIVATE_COMMANDS[0]);
+    expect(getKnownNode(createKnownNodeCatalog(input), "mac-1")).toMatchObject({
+      approvalState: "unapproved",
+      pendingRequestId: undefined,
+      pendingDeclaredCaps: undefined,
+      pendingDeclaredCommands: undefined,
+    });
+  });
+
+  it("keeps row identity while cloning snapshots and excluding private source fields", () => {
+    const permissions = { camera: true };
+    const hostStats = {
+      cpuCount: 4,
+      memoryTotalBytes: 8192,
+      memoryFreeBytes: 4096,
+      updatedAtMs: 0,
+    };
+    const live: CatalogInput["connectedNodes"][number] = {
+      nodeId: "mac-1",
+      connId: "private-connection",
+      client: {} as never,
+      declaredCaps: [],
+      caps: [],
+      declaredCommands: [],
+      commands: [],
+      declaredNodePluginTools: [],
+      nodePluginTools: [],
+      nodeSkills: [],
+      connectedAtMs: 0,
+      permissions,
+      hostStats,
+    };
+    const workerSlots = { total: 2, available: 1 };
+    const workerBundle = { status: "installed", version: "1" } as const;
+    const catalog = createKnownNodeCatalog({
+      pairedDevices: [pairedDevice()],
+      pairedNodes: [pairedNode()],
+      connectedNodes: [live],
+      workerSlotsByNodeId: new Map([["mac-1", workerSlots]]),
+      workerBundleByNodeId: new Map([["mac-1", workerBundle]]),
+    });
+    const node = expectDefined(getKnownNode(catalog, "mac-1"), "catalog row");
+    expect(listKnownNodes(catalog)[0]).toBe(node);
+    expect(listKnownNodes(catalog)).not.toBe(listKnownNodes(catalog));
+    expect(getKnownNode(catalog, "absent")).toBeNull();
+    expect(node.permissions).toBe(permissions);
+    expect(node.nodePluginTools).toBe(live.nodePluginTools);
+    expect(node.hostStats).toEqual(hostStats);
+    expect(node.hostStats).not.toBe(hostStats);
+    expect(node.workerSlots).toEqual(workerSlots);
+    expect(node.workerSlots).not.toBe(workerSlots);
+    expect(node.workerBundle).toEqual(workerBundle);
+    expect(node.workerBundle).not.toBe(workerBundle);
+    expect(Object.keys(node).toSorted()).toEqual(
+      [
+        "nodeId",
+        "displayName",
+        "platform",
+        "version",
+        "coreVersion",
+        "uiVersion",
+        "clientId",
+        "clientMode",
+        "deviceFamily",
+        "modelIdentifier",
+        "remoteIp",
+        "caps",
+        "commands",
+        "computerUse",
+        "sessionHost",
+        "hostStats",
+        "workerSlots",
+        "workerBundle",
+        "nodePluginTools",
+        "pathEnv",
+        "permissions",
+        "approvalState",
+        "pendingRequestId",
+        "pendingDeclaredCaps",
+        "pendingDeclaredCommands",
+        "pendingDeclaredPermissions",
+        "connectedAtMs",
+        "lastConnectedAtMs",
+        "lastDisconnectedAtMs",
+        "lastActiveAtMs",
+        "presenceUpdatedAtMs",
+        "lastSeenAtMs",
+        "lastSeenReason",
+        "approvedAtMs",
+        "paired",
+        "connected",
+      ].toSorted(),
+    );
+    expect(node).toMatchObject({
+      connectedAtMs: 0,
+      lastConnectedAtMs: 0,
+      lastSeenAtMs: undefined,
+      lastSeenReason: undefined,
+      lastDisconnectedAtMs: undefined,
+      sessionHost: false,
+    });
+    hostStats.memoryFreeBytes = 1;
+    workerSlots.available = 0;
+    permissions.camera = false;
+    expect(node.hostStats?.memoryFreeBytes).toBe(4096);
+    expect(node.workerSlots?.available).toBe(1);
+    expect(node.permissions?.camera).toBe(false);
+  });
+
+  it("keeps duplicate-source selection and last-seen tie precedence", () => {
+    const catalog = createKnownNodeCatalog({
+      pairedDevices: [pairedDevice({ lastSeenAtMs: 7, lastSeenReason: "device" })],
+      pairedNodes: [
+        pairedNode({ displayName: "Superseded" }),
+        pairedNode({
+          displayName: "Selected",
+          lastSeenAtMs: 7,
+          lastSeenReason: " surface ",
+          lastConnectedAtMs: 7,
+        }),
+      ],
+      pendingNodes: [pendingNode({ requestId: "newest" }), pendingNode({ requestId: "older" })],
+      connectedNodes: [],
+    });
+    expect(getKnownNode(catalog, "mac-1")).toMatchObject({
+      displayName: "Selected",
+      pendingRequestId: "newest",
+      lastSeenAtMs: 7,
+      lastSeenReason: "surface",
+    });
   });
 });

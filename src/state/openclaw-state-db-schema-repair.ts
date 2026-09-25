@@ -9,12 +9,9 @@ import {
 } from "./openclaw-state-db-audit-migration.js";
 import {
   OPENCLAW_STATE_STRICT_SCHEMA_VERSION,
-  type OpenClawStateDatabaseOptions,
   type OpenClawStateDatabaseSchemaMigration,
 } from "./openclaw-state-db-contract.js";
-import { resolveDatabasePath } from "./openclaw-state-db-maintenance.js";
 import * as operatorApprovalMigration from "./openclaw-state-db-operator-approval-migration.js";
-import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "./openclaw-state-db-readonly.js";
 import {
   tableExists,
   tableHasColumn,
@@ -168,6 +165,16 @@ export function migrateAgentDatabaseRelativePaths(
   const hasPath = db.prepare(
     "SELECT 1 FROM agent_databases WHERE agent_id = ? AND path = ? LIMIT 1",
   );
+  const retainNewerFacts = db.prepare(`
+    UPDATE agent_databases AS canonical
+       SET schema_version = source.schema_version,
+           last_seen_at = source.last_seen_at,
+           size_bytes = source.size_bytes
+      FROM agent_databases AS source
+     WHERE canonical.agent_id = ? AND canonical.path = ?
+       AND source.agent_id = canonical.agent_id AND source.path = ?
+       AND source.last_seen_at > canonical.last_seen_at
+  `);
   let relativized = 0;
   const reanchored: string[] = [];
   const deleted: string[] = [];
@@ -182,8 +189,15 @@ export function migrateAgentDatabaseRelativePaths(
     }
     const storedPath = resolveOpenClawAgentDatabaseStoredPath(databasePath, registeredPath);
     if (!path.isAbsolute(storedPath)) {
-      updatePath.run(storedPath, agentId, registeredPath);
-      relativized += 1;
+      if (hasPath.get(agentId, storedPath)) {
+        // Namespace aliases can converge before the foreign-path repair pass.
+        retainNewerFacts.run(agentId, storedPath, registeredPath);
+        deletePath.run(agentId, registeredPath);
+        deleted.push(registeredPath);
+      } else {
+        updatePath.run(storedPath, agentId, registeredPath);
+        relativized += 1;
+      }
     }
   }
   const stateDir = resolveOpenClawStateDirForDatabasePath(databasePath);
@@ -332,29 +346,6 @@ export function assertCanonicalStateSchemaShape(db: DatabaseSync, pathname: stri
     );
   }
 }
-export function detectOpenClawStateDatabaseSchemaMigrations(
-  options: OpenClawStateDatabaseOptions = {},
-  behavior: { artifactPreservingReadOnly?: boolean } = {},
-): OpenClawStateDatabaseSchemaMigration[] {
-  const pathname = resolveDatabasePath(options);
-  if (!existsSync(pathname)) {
-    return [];
-  }
-  if (behavior.artifactPreservingReadOnly) {
-    return (
-      withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
-        ({ db }) => detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(db, pathname),
-        { ...options, path: pathname },
-      ) ?? []
-    );
-  }
-  const db = openNodeSqliteDatabase(pathname, { readOnly: true });
-  try {
-    return detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(db, pathname);
-  } finally {
-    db.close();
-  }
-}
 
 /**
  * Detect migrations against a caller-owned handle.
@@ -433,6 +424,14 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
     !tableHasColumn(db, "worker_environments", "preparation_consumed_at_ms")
   ) {
     migrations.push({ kind: "prepared-worker-ownership-v17", path: pathname });
+  }
+  if (
+    userVersion < 18 &&
+    ["github_publication_session_lifecycles", "github_repository_publication_requests"].some(
+      (table) => tableExists(db, table) && !tableHasColumn(db, table, "requester_authority_json"),
+    )
+  ) {
+    migrations.push({ kind: "github-publication-requester-authority-v18", path: pathname });
   }
   if (!hasCanonicalAgentDatabasesPrimaryKey(db)) {
     migrations.push({ kind: "agent-databases-composite-primary-key", path: pathname });

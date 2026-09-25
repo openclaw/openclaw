@@ -1,4 +1,3 @@
-// Discord plugin module implements threading.starter behavior.
 import type { ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-reference";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -25,13 +24,8 @@ import type {
   DiscordThreadParentInfo,
   DiscordThreadStarter,
   DiscordThreadStarterRestAuthor,
-  DiscordThreadStarterRestMember,
   DiscordThreadStarterRestMessage,
 } from "./threading.types.js";
-
-function isDiscordForumParentType(parentType: ChannelType | undefined): boolean {
-  return parentType === ChannelType.GuildForum || parentType === ChannelType.GuildMedia;
-}
 
 const IN_FLIGHT_DISCORD_THREAD_STARTERS = new Map<string, Promise<DiscordThreadStarter | null>>();
 
@@ -109,7 +103,10 @@ export async function resolveDiscordThreadStarter(params: {
   parentType?: ChannelType;
   resolveTimestampMs: (value?: string | null) => number | undefined;
 }): Promise<DiscordThreadStarter | null> {
-  const messageChannelId = resolveDiscordThreadStarterMessageChannelId(params);
+  const messageChannelId =
+    params.parentType === ChannelType.GuildForum || params.parentType === ChannelType.GuildMedia
+      ? params.channel.id
+      : params.parentId;
   if (!messageChannelId) {
     return null;
   }
@@ -143,11 +140,11 @@ async function resolveDiscordThreadStarterUncached(
     setCachedThreadStarter(cacheKey, { kind: "miss" }, Date.now());
   };
   try {
-    const starter = await fetchDiscordThreadStarterMessage({
-      client: params.client,
+    const starter = (await getChannelMessage(
+      params.client.rest,
       messageChannelId,
-      threadId: params.channel.id,
-    });
+      params.channel.id,
+    )) as DiscordThreadStarterRestMessage | null;
     if (!starter) {
       cacheMiss();
       return null;
@@ -163,36 +160,11 @@ async function resolveDiscordThreadStarterUncached(
     setCachedThreadStarter(cacheKey, { kind: "hit", starter: payload }, Date.now());
     return payload;
   } catch (error) {
-    if (isDiscordThreadStarterNegativeCacheError(error)) {
+    if (error instanceof DiscordError && (error.status === 403 || error.status === 404)) {
       cacheMiss();
     }
     return null;
   }
-}
-
-function isDiscordThreadStarterNegativeCacheError(error: unknown): boolean {
-  return error instanceof DiscordError && (error.status === 403 || error.status === 404);
-}
-
-function resolveDiscordThreadStarterMessageChannelId(params: {
-  channel: DiscordThreadChannel;
-  parentId?: string;
-  parentType?: ChannelType;
-}): string | undefined {
-  return isDiscordForumParentType(params.parentType) ? params.channel.id : params.parentId;
-}
-
-async function fetchDiscordThreadStarterMessage(params: {
-  client: Client;
-  messageChannelId: string;
-  threadId: string;
-}): Promise<DiscordThreadStarterRestMessage | null> {
-  const starter = await getChannelMessage(
-    params.client.rest,
-    params.messageChannelId,
-    params.threadId,
-  );
-  return starter ? (starter as DiscordThreadStarterRestMessage) : null;
 }
 
 function buildDiscordThreadStarterPayload(params: {
@@ -203,35 +175,23 @@ function buildDiscordThreadStarterPayload(params: {
   if (!text) {
     return null;
   }
+  const starter = params.starter;
+  const authorTag = resolveDiscordThreadStarterAuthorTag(starter.author);
   return {
     text,
-    ...resolveDiscordThreadStarterIdentity(params.starter),
-    timestamp: params.resolveTimestampMs(params.starter.timestamp) ?? undefined,
-  };
-}
-
-function resolveDiscordThreadStarterIdentity(
-  starter: DiscordThreadStarterRestMessage,
-): Omit<DiscordThreadStarter, "text" | "timestamp"> {
-  const author = resolveDiscordThreadStarterAuthor(starter);
-  return {
-    author,
+    author:
+      starter.member?.nick ??
+      starter.member?.displayName ??
+      authorTag ??
+      starter.author?.username ??
+      starter.author?.id ??
+      "Unknown",
     authorId: starter.author?.id ?? undefined,
     authorName: starter.author?.username ?? undefined,
-    authorTag: resolveDiscordThreadStarterAuthorTag(starter.author),
-    memberRoleIds: resolveDiscordThreadStarterRoleIds(starter.member),
+    authorTag,
+    memberRoleIds: Array.isArray(starter.member?.roles) ? starter.member.roles : undefined,
+    timestamp: params.resolveTimestampMs(starter.timestamp) ?? undefined,
   };
-}
-
-function resolveDiscordThreadStarterAuthor(starter: DiscordThreadStarterRestMessage): string {
-  return (
-    starter.member?.nick ??
-    starter.member?.displayName ??
-    resolveDiscordThreadStarterAuthorTag(starter.author) ??
-    starter.author?.username ??
-    starter.author?.id ??
-    "Unknown"
-  );
 }
 
 function resolveDiscordThreadStarterAuthorTag(
@@ -244,12 +204,6 @@ function resolveDiscordThreadStarterAuthorTag(
     return `${author.username}#${author.discriminator}`;
   }
   return author.username;
-}
-
-function resolveDiscordThreadStarterRoleIds(
-  member: DiscordThreadStarterRestMember | null | undefined,
-): string[] | undefined {
-  return Array.isArray(member?.roles) ? member.roles : undefined;
 }
 
 export function resolveDiscordReplyTarget(opts: {
@@ -289,20 +243,15 @@ export function resolveDiscordReplyDeliveryPlan(params: {
   threadChannel?: DiscordThreadChannel | null;
   createdThreadId?: string | null;
 }): DiscordReplyDeliveryPlan {
-  const originalReplyTarget = params.replyTarget;
-  let deliverTarget = originalReplyTarget;
-  let replyTarget = originalReplyTarget;
-
-  if (params.createdThreadId) {
-    deliverTarget = `channel:${params.createdThreadId}`;
-    replyTarget = deliverTarget;
-  }
-  const allowReference = deliverTarget === originalReplyTarget;
+  const deliverTarget = params.createdThreadId
+    ? `channel:${params.createdThreadId}`
+    : params.replyTarget;
+  const allowReference = deliverTarget === params.replyTarget;
   const replyReference = createReplyReferencePlanner({
     replyToMode: allowReference ? params.replyToMode : "off",
     existingId: params.threadChannel ? params.messageId : undefined,
     startId: params.messageId,
     allowReference,
   });
-  return { deliverTarget, replyTarget, replyReference };
+  return { deliverTarget, replyTarget: deliverTarget, replyReference };
 }

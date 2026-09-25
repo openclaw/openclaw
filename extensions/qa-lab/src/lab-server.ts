@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements lab server behavior.
 import { once } from "node:events";
 import fs from "node:fs";
 import { createServer, type IncomingMessage } from "node:http";
@@ -9,6 +8,7 @@ import {
   acquireDebugProxyCaptureStore,
   resolveDebugProxySettings,
 } from "openclaw/plugin-sdk/proxy-capture";
+import type { QaRunnerModelOption } from "../runner-contract.js";
 import {
   closeQaHttpServer,
   dispatchQaHttpRequest,
@@ -51,7 +51,6 @@ import type {
   QaLabServerHandle,
   QaLabServerStartParams,
 } from "./lab-server.types.js";
-import type { QaRunnerModelOption } from "./model-catalog.runtime.js";
 import { createQaChannelGatewayConfig } from "./qa-channel-transport.js";
 import {
   qaTransportSupportsModuleFlows,
@@ -154,17 +153,10 @@ function injectKickoffMessage(params: {
 }
 
 function createBootstrapDefaults(autoKickoffTarget?: string): QaLabBootstrapDefaults {
-  if (autoKickoffTarget === "channel") {
-    return {
-      conversationKind: "channel",
-      conversationId: "qa-lab",
-      senderId: "qa-operator",
-      senderName: "QA Operator",
-    };
-  }
+  const channel = autoKickoffTarget === "channel";
   return {
-    conversationKind: "direct",
-    conversationId: "qa-operator",
+    conversationKind: channel ? "channel" : "direct",
+    conversationId: channel ? "qa-lab" : "qa-operator",
     senderId: "qa-operator",
     senderName: "QA Operator",
   };
@@ -223,10 +215,6 @@ function sanitizeControlUiPublicUrl(url: string | null): string | null {
   return stripSensitiveQueryParams(withoutFragment);
 }
 
-function createQaLabConfig(baseUrl: string): OpenClawConfig {
-  return createQaChannelGatewayConfig({ baseUrl });
-}
-
 function detectQaEvidenceArtifactContentType(filePath: string): string {
   const lower = filePath.toLowerCase();
   if (lower.endsWith(".png")) {
@@ -259,11 +247,11 @@ function detectQaEvidenceArtifactContentType(filePath: string): string {
   return "application/octet-stream";
 }
 
-async function startQaGatewayLoop(params: { state: QaBusState; baseUrl: string }) {
+async function startQaGatewayLoop(params: { baseUrl: string }) {
   const { qaChannelPlugin, setQaChannelRuntime } = await import("openclaw/plugin-sdk/qa-channel");
   const runtime = createQaRunnerRuntime();
   setQaChannelRuntime(runtime);
-  const cfg = createQaLabConfig(params.baseUrl);
+  const cfg = createQaChannelGatewayConfig({ baseUrl: params.baseUrl });
   const account = qaChannelPlugin.config.resolveAccount(cfg, "default");
   const abort = new AbortController();
   const task = Promise.resolve().then(
@@ -421,7 +409,7 @@ export async function startQaLabServer(
     });
     const result = await runQaSelfCheckAgainstState({
       state,
-      cfg: gateway?.cfg ?? createQaLabConfig(listenUrl),
+      cfg: gateway?.cfg ?? createQaChannelGatewayConfig({ baseUrl: listenUrl }),
       transportId: "qa-channel",
       outputPath: params?.outputPath,
       repoRoot,
@@ -796,16 +784,7 @@ export async function startQaLabServer(
             // Keep generated artifacts visible when authenticated verdict validation fails.
             let artifacts: ReturnType<typeof createIdleQaRunnerSnapshot>["artifacts"] = null;
             try {
-              const [{ runQaSuite }, channelDriverSelection] = await Promise.all([
-                import("./suite-launch.runtime.js"),
-                selection.channelDriver === "crabline" && selection.channel
-                  ? import("@openclaw/crabline").then((module) =>
-                      module.resolveOpenClawCrablineChannelDriverSelection({
-                        channel: selection.channel!,
-                      }),
-                    )
-                  : Promise.resolve(undefined),
-              ]);
+              const { runQaSuite } = await import("./suite-launch.runtime.js");
               const runtimeResult = await runQaSuite({
                 lab: labHandle ?? undefined,
                 startLab: startQaLabServer,
@@ -814,10 +793,7 @@ export async function startQaLabServer(
                 outputDir: createQaRunOutputDir(repoRoot),
                 channelDriver: selection.channelDriver,
                 ...(adapterFactories ? { adapterFactories } : {}),
-                ...(selection.channelDriver === "live" && selection.channel
-                  ? { channelId: selection.channel }
-                  : {}),
-                ...(channelDriverSelection ? { channelDriverSelection } : {}),
+                ...(selection.channel ? { channelId: selection.channel } : {}),
                 evidenceMode: selection.evidenceMode,
                 providerMode: selection.providerMode,
                 primaryModel: selection.primaryModel,
@@ -980,7 +956,7 @@ export async function startQaLabServer(
       advertisePort: params?.advertisePort,
     });
     if (embeddedGatewayEnabled) {
-      gateway = await startQaGatewayLoop({ state, baseUrl: listenUrl });
+      gateway = await startQaGatewayLoop({ baseUrl: listenUrl });
     }
     if (params?.sendKickoffOnStart) {
       injectKickoffMessage({

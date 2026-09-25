@@ -324,6 +324,11 @@ struct OnboardingAISetupView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(candidate.label)
                             .font(.callout.weight(.semibold))
+                        if candidate.modelTarget == .utility {
+                            Text("Setup & utility")
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(.secondary)
+                        }
                         Text(self.subtitle(for: candidate, status: status))
                             .font(.caption)
                             .foregroundStyle(self.subtitleStyle(for: status))
@@ -332,6 +337,11 @@ struct OnboardingAISetupView: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     Spacer(minLength: 0)
+                    if candidate.modelTarget == .utility, status == .untried {
+                        Text("Use for setup")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(Color.accentColor)
+                    }
                     self.trailingIndicator(status: status, selected: selected)
                 }
                 // Plain buttons hit-test only opaque label pixels; without this the
@@ -348,7 +358,9 @@ struct OnboardingAISetupView: View {
                     .padding(.top, 6)
             }
         }
-        .openClawSelectableRowChrome(selected: selected && !Self.isFailed(status))
+        .openClawSelectableRowChrome(
+            selected: selected && !Self.isFailed(status),
+            enabled: self.model.canSelectCandidate(kind: candidate.kind))
     }
 
     private func subtitle(

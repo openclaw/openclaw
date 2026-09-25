@@ -11,6 +11,8 @@ set -euo pipefail
 PACKAGE_TGZ=""
 AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT=""
 UPGRADE_SCENARIO_STAGE=""
+WORKER_RUNTIME_HOST_ROOT=""
+LIMITS_SUMMARY=""
 run_completed="0"
 diagnostics_ready=0
 cleanup_outer() {
@@ -31,6 +33,10 @@ cleanup_outer() {
       echo "Upgrade survivor diagnostics missing: no private capture prepared." >&2
     fi
   fi
+  if [ "$exit_status" -eq 0 ] && [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ] && [ "$diagnostics_ready" = "1" ]; then
+    publish_diagnostics passed ||
+      echo "Upgrade survivor diagnostics missing: successful receipt was not published." >&2
+  fi
   if [ -n "$PACKAGE_TGZ" ]; then
     docker_e2e_cleanup_package_tgz "$PACKAGE_TGZ"
   fi
@@ -40,8 +46,29 @@ cleanup_outer() {
   if [ -n "$UPGRADE_SCENARIO_STAGE" ]; then
     rm -rf "$UPGRADE_SCENARIO_STAGE"
   fi
+  if [ -n "$WORKER_RUNTIME_HOST_ROOT" ]; then
+    if [ "$exit_status" -eq 0 ] && [ "$run_completed" = "1" ]; then
+      # The image user owns the private child and can differ from the host user.
+      if ! docker_e2e_docker_cmd run --rm --network none \
+        --entrypoint rm \
+        -v "$WORKER_RUNTIME_HOST_ROOT:/tmp/openclaw-worker-cleanup" \
+        "$IMAGE_NAME" -rf -- /tmp/openclaw-worker-cleanup/runtime ||
+        ! rm -rf "$WORKER_RUNTIME_HOST_ROOT"; then
+        echo "Worker-cell runtime cleanup failed: $WORKER_RUNTIME_HOST_ROOT" >&2
+        exit_status=1
+      fi
+    else
+      echo "Preserved failed synthetic worker-cell state: $WORKER_RUNTIME_HOST_ROOT" >&2
+    fi
+  fi
   if [ "$exit_status" -ne 0 ]; then
     printf '[upgrade-survivor] FAILED (exit %s)\n' "$exit_status" >&2
+  fi
+  if [ -n "$LIMITS_SUMMARY" ]; then
+    if [ -n "${GITHUB_STEP_SUMMARY:-}" ] && [ -s "$LIMITS_SUMMARY" ]; then
+      cat "$LIMITS_SUMMARY" >> "$GITHUB_STEP_SUMMARY" || exit_status=1
+    fi
+    rm -f "$LIMITS_SUMMARY"
   fi
   exit "$exit_status"
 }
@@ -90,6 +117,13 @@ NODE
 esac
 openclaw_resolve_frozen_upgrade_survivor_capabilities "$ROOT_DIR"
 if [ "$UPGRADE_TARGET_TRAIN" = extended-stable ]; then
+  if [ -n "${OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS:-}" ]; then
+    echo "Selected extended-stable target does not support OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS with its frozen upgrade survivor runner." >&2
+    exit 2
+  elif [ "${OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI:-0}" = "1" ]; then
+    echo "Selected extended-stable target does not support OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI with its frozen upgrade survivor runner." >&2
+    exit 2
+  fi
   # Extended-stable retains shipped state expectations. Regular releases keep
   # the trusted runner and its serving-turn/post-inference assertions together.
   UPGRADE_SCENARIO_DIR="$(openclaw_resolve_frozen_target_file \
@@ -120,6 +154,7 @@ if [ "$UPGRADE_TARGET_TRAIN" = extended-stable ]; then
   UPGRADE_SCENARIO_STAGE="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-upgrade-scenario.XXXXXX")"
   cp -R "$UPGRADE_SCENARIO_DIR/." "$UPGRADE_SCENARIO_STAGE/"
   cp "$UPGRADE_DIAGNOSTICS" "$UPGRADE_SCENARIO_STAGE/diagnostics.mjs"
+  cp "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/backup-rollback-summary.mjs" "$UPGRADE_SCENARIO_STAGE/backup-rollback-summary.mjs"
   chmod 0755 "$UPGRADE_SCENARIO_STAGE"
   UPGRADE_SCENARIO_ARGS+=(
     -v "$UPGRADE_SCENARIO_STAGE:/app/scripts/e2e/lib/upgrade-survivor:ro"
@@ -137,6 +172,7 @@ SKIP_BUILD="${OPENCLAW_UPGRADE_SURVIVOR_E2E_SKIP_BUILD:-0}"
 DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1200s}"
 BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-}"
 SCENARIO="${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base}"
+SURVIVOR_RUNTIME_ROOT="${OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT:-/tmp/openclaw-upgrade-survivor-runtime}"
 if [ "$OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_MODE" = legacy ]; then
   legacy_clawhub_package="@openclaw/whatsapp"
   [ "$SCENARIO" = configured-plugin-installs ] && legacy_clawhub_package="@openclaw/matrix"
@@ -159,35 +195,28 @@ PROBE_MAX_BODY_BYTES="$(
   openclaw_e2e_read_positive_int_env OPENCLAW_UPGRADE_SURVIVOR_PROBE_MAX_BODY_BYTES 1048576
 )"
 ROOT_MANAGED_VPS="${OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS:-0}"
-LIVE_OPENAI="${OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI:-0}"
-LIVE_OPENAI_ENV_ARGS=()
-case "$LIVE_OPENAI" in
-  0)
-    ;;
-  1)
-    if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" != "1" ]; then
-      echo "OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI=1 requires OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1" >&2
-      exit 2
-    fi
-    if [ -z "${OPENAI_API_KEY:-}" ]; then
-      echo "OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI=1 requires OPENAI_API_KEY" >&2
-      exit 2
-    fi
-    LIVE_OPENAI_TIMEOUT_SECONDS="$(
-      openclaw_e2e_read_positive_int_env OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI_TIMEOUT_SECONDS 180
-    )"
-    LIVE_OPENAI_ENV_ARGS=(
-      -e OPENAI_API_KEY
-      -e OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI=1
-      -e OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI_MODEL="${OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI_MODEL:-openai/gpt-5.5}"
-      -e OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI_TIMEOUT_SECONDS="$LIVE_OPENAI_TIMEOUT_SECONDS"
-    )
-    ;;
-  *)
-    echo "OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI must be 0 or 1; got: $LIVE_OPENAI" >&2
+LIVE_MODEL_ROWS="$(node "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/live-models.mjs" rows)"
+LIVE_ENABLED=0
+LIVE_MODEL_ENV_ARGS=()
+if [ -n "$LIVE_MODEL_ROWS" ]; then
+  LIVE_ENABLED=1
+  if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" != "1" ]; then
+    echo "Live survivor turns require OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1" >&2
     exit 2
-    ;;
-esac
+  fi
+  LIVE_MODEL_TIMEOUT_SECONDS="$(
+    openclaw_e2e_read_positive_int_env OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI_TIMEOUT_SECONDS 180
+  )"
+  LIVE_MODEL_ENV_ARGS=(
+    -e OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS="${OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS:-}"
+    -e OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI="${OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI:-0}"
+    -e OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI_MODEL="${OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI_MODEL:-openai/gpt-5.5}"
+    -e OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI_TIMEOUT_SECONDS="$LIVE_MODEL_TIMEOUT_SECONDS"
+  )
+  while IFS=$'\t' read -r live_model live_provider live_key_env live_artifact; do
+    LIVE_MODEL_ENV_ARGS+=(-e "$live_key_env")
+  done <<<"$LIVE_MODEL_ROWS"
+fi
 
 if { [ "$SCENARIO" = "sqlite-volume" ] || [ "$SCENARIO" = "recovery-cleanup" ] || [ "$SCENARIO" = "legacy-operator-state" ]; } && [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" != "1" ]; then
   echo "$SCENARIO requires OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1" >&2
@@ -197,20 +226,46 @@ if [ "$SCENARIO" = "mobile-pairing-reconnect" ] && [ "${OPENCLAW_UPGRADE_SURVIVO
   echo "mobile-pairing-reconnect requires OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1" >&2
   exit 1
 fi
-if [ "$SCENARIO" = "recovery-cleanup" ] && { [ "$UPDATE_RESTART_MODE" != "manual" ] || [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_OPENAI" != "0" ]; }; then
+if [ "$SCENARIO" = "recovery-cleanup" ] && { [ "$UPDATE_RESTART_MODE" != "manual" ] || [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_ENABLED" != "0" ]; }; then
   echo "recovery-cleanup requires the isolated manual-restart fixture without live provider credentials" >&2
   exit 1
 fi
-if [ "$SCENARIO" = "mobile-pairing-reconnect" ] && { [ "$UPDATE_RESTART_MODE" != "manual" ] || [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_OPENAI" != "0" ]; }; then
+if [ "$SCENARIO" = "mobile-pairing-reconnect" ] && { [ "$UPDATE_RESTART_MODE" != "manual" ] || [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_ENABLED" != "0" ]; }; then
   echo "mobile-pairing-reconnect requires the isolated manual-restart fixture without live provider credentials" >&2
   exit 1
 fi
 
 if [ "$SCENARIO" = "abandoned-update" ] && {
   [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" != "1" ] ||
-  [ "$UPDATE_RESTART_MODE" != "auto-auth" ] || [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_OPENAI" != "0" ];
+  [ "$UPDATE_RESTART_MODE" != "auto-auth" ] || [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_ENABLED" != "0" ];
 }; then
   echo "abandoned-update requires the published baseline, auto-auth service fixture, and no live provider" >&2
+  exit 1
+fi
+
+if [ "$SCENARIO" = "projects-doctor" ] || [ "$SCENARIO" = "projects-startup-migration" ] || [ "$SCENARIO" = "taskflow-restoration" ]; then
+  if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" != "1" ] ||
+    [ "$BASELINE_SPEC" != "openclaw@2026.9.4" ] ||
+    [ "$UPDATE_RESTART_MODE" != "manual" ] || [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_ENABLED" != "0" ]; then
+    echo "$SCENARIO requires published openclaw@2026.9.4, manual restart, isolated state, and no live provider" >&2
+    exit 1
+  fi
+fi
+
+if [ "$SCENARIO" = "workshop-doctor-recovery" ] && {
+  [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" != "1" ] ||
+  [ "$UPDATE_RESTART_MODE" != "manual" ] || [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_ENABLED" != "0" ];
+}; then
+  echo "workshop-doctor-recovery requires the published baseline, manual restart, and no live provider" >&2
+  exit 1
+fi
+
+if [ "$SCENARIO" = "dreaming-cron-doctor" ] && {
+  [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" != "1" ] ||
+  [ "$BASELINE_SPEC" != "openclaw@2026.9.6" ] ||
+  [ "$UPDATE_RESTART_MODE" != "manual" ] || [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_ENABLED" != "0" ];
+}; then
+  echo "dreaming-cron-doctor requires published openclaw@2026.9.6, manual restart, isolated state, and no live provider" >&2
   exit 1
 fi
 
@@ -241,6 +296,19 @@ resolve_lane_artifact_suffix() {
 LANE_ARTIFACT_SUFFIX="$(resolve_lane_artifact_suffix)"
 LANE_ARTIFACT_SUFFIX="${LANE_ARTIFACT_SUFFIX//[^A-Za-z0-9_.-]/_}"
 ARTIFACT_DIR="${OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR:-$ROOT_DIR/.artifacts/upgrade-survivor/$LANE_ARTIFACT_SUFFIX}"
+UPGRADE_LIMITS_ARGS=()
+prepare_limit_summary() {
+  if [ "${GITHUB_ACTIONS:-}" != "true" ]; then
+    return 0
+  fi
+  LIMITS_SUMMARY="$(mktemp "$ARTIFACT_DIR/limit-warnings.XXXXXX")"
+  chmod 666 "$LIMITS_SUMMARY"
+  UPGRADE_LIMITS_ARGS=(
+    -e GITHUB_ACTIONS
+    -e GITHUB_STEP_SUMMARY=/tmp/openclaw-limits-summary.md
+    -v "$LIMITS_SUMMARY:/tmp/openclaw-limits-summary.md"
+  )
+}
 DOCKER_RUN_USER_ARGS=()
 PROBE_ENV_ARGS=(
   -e OPENCLAW_UPGRADE_SURVIVOR_PROBE_TIMEOUT_MS="$PROBE_TIMEOUT_MS"
@@ -291,8 +359,13 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
   fi
 
   mkdir -p "$ARTIFACT_DIR"
+  if [ "$SCENARIO" = "projects-doctor" ] || [ "$SCENARIO" = "projects-startup-migration" ] || [ "$SCENARIO" = "taskflow-restoration" ]; then
+    ARTIFACT_DIR="$(mktemp -d "$ARTIFACT_DIR/worker-run.XXXXXX")"
+    echo "Worker survivor artifacts: $ARTIFACT_DIR"
+  fi
   chmod -R a+rwX "$ARTIFACT_DIR" || true
   prepare_diagnostics_capture
+  prepare_limit_summary
 
   DOCKER_E2E_PACKAGE_ARGS=()
   CANDIDATE_RAW="${OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE:-current}"
@@ -323,17 +396,36 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
     CANDIDATE_SPEC="$(normalize_npm_candidate "$CANDIDATE_RAW")"
   fi
 
+  if { [ "$SCENARIO" = "projects-doctor" ] || [ "$SCENARIO" = "projects-startup-migration" ] || [ "$SCENARIO" = "taskflow-restoration" ] || [ "$SCENARIO" = "dreaming-cron-doctor" ]; } && [ "$CANDIDATE_KIND" != "tarball" ]; then
+    echo "$SCENARIO requires a frozen candidate tarball" >&2
+    exit 1
+  fi
+
   if [ "$CANDIDATE_IS_CURRENT" = "1" ] && [ -z "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
-    AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT="$(
-      mktemp -d "${TMPDIR:-/tmp}/openclaw-upgrade-survivor-plugin-registry.XXXXXX"
+    registry_required="$(
+      OPENCLAW_DOCKER_ALL_LANES=published-upgrade-survivor \
+        OPENCLAW_DOCKER_ALL_TIMINGS=0 \
+        OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS="$BASELINE_SPEC" \
+        OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS="$SCENARIO" \
+        node "$HARNESS_ROOT_DIR/scripts/test-docker-all.mjs" --plan-json | node -e '
+          const plan = JSON.parse(require("node:fs").readFileSync(0, "utf8"));
+          const required = plan.needs?.prepublishPluginRegistry;
+          if (typeof required !== "boolean") throw new Error("Docker planner omitted plugin registry requirements");
+          process.stdout.write(required ? "1" : "0");
+        '
     )"
-    OPENCLAW_DOCKER_ALL_LANES=published-upgrade-survivor \
-      OPENCLAW_DOCKER_ALL_LOG_DIR="$AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT" \
-      OPENCLAW_DOCKER_ALL_TIMINGS=0 \
-      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS="$BASELINE_SPEC" \
-      OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS="$SCENARIO" \
-      node "$HARNESS_ROOT_DIR/scripts/test-docker-all.mjs" --prepare-plugin-registry
-    export OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR="$AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT/prepublish-plugin-registry"
+    if [ "$registry_required" = "1" ]; then
+      AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT="$(
+        mktemp -d "${TMPDIR:-/tmp}/openclaw-upgrade-survivor-plugin-registry.XXXXXX"
+      )"
+      OPENCLAW_DOCKER_ALL_LANES=published-upgrade-survivor \
+        OPENCLAW_DOCKER_ALL_LOG_DIR="$AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT" \
+        OPENCLAW_DOCKER_ALL_TIMINGS=0 \
+        OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS="$BASELINE_SPEC" \
+        OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS="$SCENARIO" \
+        node "$HARNESS_ROOT_DIR/scripts/test-docker-all.mjs" --prepare-plugin-registry
+      export OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR="$AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT/prepublish-plugin-registry"
+    fi
   fi
 
   if [ -n "$PACKAGE_TGZ" ]; then
@@ -345,11 +437,35 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
 
   OPENCLAW_TEST_STATE_FUNCTION_B64="$(docker_e2e_test_state_function_b64)"
 
+  if [ "$SCENARIO" = "projects-startup-migration" ]; then
+    if [ ! -f "${OPENCLAW_UPGRADE_SURVIVOR_STARTUP_BINDINGS:-}" ]; then
+      echo "projects-startup-migration requires reviewed candidate bindings via OPENCLAW_UPGRADE_SURVIVOR_STARTUP_BINDINGS" >&2
+      exit 1
+    fi
+    startup_bindings="$(cd "$(dirname "$OPENCLAW_UPGRADE_SURVIVOR_STARTUP_BINDINGS")" && pwd)/$(basename "$OPENCLAW_UPGRADE_SURVIVOR_STARTUP_BINDINGS")"
+    UPGRADE_SCENARIO_ARGS+=(
+      -v "$startup_bindings:/tmp/openclaw-project-startup-bindings.json:ro"
+      -e OPENCLAW_UPGRADE_SURVIVOR_STARTUP_BINDINGS=/tmp/openclaw-project-startup-bindings.json
+    )
+  fi
+
+  if [ "$SCENARIO" = "projects-doctor" ] || [ "$SCENARIO" = "projects-startup-migration" ] || [ "$SCENARIO" = "taskflow-restoration" ]; then
+    WORKER_RUNTIME_HOST_ROOT="$(mktemp -d "$ARTIFACT_DIR/worker-runtime.XXXXXX")"
+    chmod a+rwx "$WORKER_RUNTIME_HOST_ROOT"
+    UPGRADE_SCENARIO_ARGS+=(
+      -v "$WORKER_RUNTIME_HOST_ROOT:$SURVIVOR_RUNTIME_ROOT"
+    )
+    # The container user creates/owns the private child, not the host mount point.
+    SURVIVOR_RUNTIME_ROOT="$SURVIVOR_RUNTIME_ROOT/runtime"
+  fi
+
   docker_e2e_build_or_reuse "$IMAGE_NAME" upgrade-survivor "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "bare" "$SKIP_BUILD"
 
   echo "Running published upgrade survivor Docker E2E..."
   # Keep candidate images from selecting an older copy of the trusted release runner.
   docker_e2e_run_with_harness \
+    --init \
+    ${UPGRADE_LIMITS_ARGS[@]+"${UPGRADE_LIMITS_ARGS[@]}"} \
     -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
     -e OPENCLAW_TEST_STATE_FUNCTION_B64="$OPENCLAW_TEST_STATE_FUNCTION_B64" \
     -e OPENCLAW_UPGRADE_SURVIVOR_BASELINE="$BASELINE_SPEC" \
@@ -357,7 +473,7 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
     -e OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_SPEC="$CANDIDATE_SPEC" \
     -e OPENCLAW_DOCKER_E2E_SELECTED_SHA="${OPENCLAW_DOCKER_E2E_SELECTED_SHA:-}" \
     -e OPENCLAW_UPGRADE_SURVIVOR_SCENARIO="$SCENARIO" \
-    -e OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT="${OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT:-/tmp/openclaw-upgrade-survivor-runtime}" \
+    -e OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT="$SURVIVOR_RUNTIME_ROOT" \
     -e OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE="$UPDATE_RESTART_MODE" \
     -e OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT="$COMMAND_TIMEOUT" \
     -e OPENCLAW_UPGRADE_SURVIVOR_VOLUME_SESSIONS="${OPENCLAW_UPGRADE_SURVIVOR_VOLUME_SESSIONS:-}" \
@@ -366,6 +482,7 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
     -e OPENCLAW_UPGRADE_SURVIVOR_VOLUME_IDEMPOTENCE_BUDGET_SECONDS="${OPENCLAW_UPGRADE_SURVIVOR_VOLUME_IDEMPOTENCE_BUDGET_SECONDS:-60}" \
     -e OPENCLAW_UPGRADE_SURVIVOR_LEGACY_RUNTIME_DEPS_SYMLINK="${OPENCLAW_UPGRADE_SURVIVOR_LEGACY_RUNTIME_DEPS_SYMLINK:-}" \
     -e OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS="$ROOT_MANAGED_VPS" \
+    -e OPENCLAW_UPGRADE_SURVIVOR_TSX_IMPORT=/usr/local/lib/node_modules/tsx/dist/loader.mjs \
     -e OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON=/tmp/openclaw-upgrade-survivor-artifacts/summary.json \
     -e OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS="$START_BUDGET_SECONDS" \
     -e OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS="$STATUS_BUDGET_SECONDS" \
@@ -374,7 +491,7 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
     -e OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_SERVER_SCRIPT=/tmp/openclaw-release-harness/scripts/e2e/lib/plugins/npm-registry-server.mjs \
     ${UPGRADE_COMPAT_ENV_ARGS[@]+"${UPGRADE_COMPAT_ENV_ARGS[@]}"} \
     "${PROBE_ENV_ARGS[@]}" \
-    ${LIVE_OPENAI_ENV_ARGS[@]+"${LIVE_OPENAI_ENV_ARGS[@]}"} \
+    ${LIVE_MODEL_ENV_ARGS[@]+"${LIVE_MODEL_ENV_ARGS[@]}"} \
     -v "$ARTIFACT_DIR:/tmp/openclaw-upgrade-survivor-artifacts" \
     -v "$HARNESS_ROOT_DIR/scripts/e2e/lib/clawhub-fixture-server.cjs:/tmp/openclaw-clawhub-fixture-server.cjs:ro" \
     -v "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/config-parking.mjs:/tmp/openclaw-config-parking.mjs:ro" \
@@ -410,11 +527,14 @@ OPENCLAW_TEST_STATE_FUNCTION_B64="$(docker_e2e_test_state_function_b64)"
 mkdir -p "$ARTIFACT_DIR"
 chmod -R a+rwX "$ARTIFACT_DIR" || true
 prepare_diagnostics_capture
+prepare_limit_summary
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" upgrade-survivor "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "bare" "$SKIP_BUILD"
 
 echo "Running upgrade survivor Docker E2E..."
 docker_e2e_run_with_harness \
+  --init \
+  ${UPGRADE_LIMITS_ARGS[@]+"${UPGRADE_LIMITS_ARGS[@]}"} \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e OPENCLAW_TEST_STATE_FUNCTION_B64="$OPENCLAW_TEST_STATE_FUNCTION_B64" \
   -e OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT=/tmp/openclaw-upgrade-survivor-artifacts \
@@ -703,10 +823,6 @@ CURRENT_PHASE="install-candidate"
 openclaw_e2e_install_package "$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/install.log" "upgrade survivor package" "$npm_config_prefix"
 command -v openclaw >/dev/null
 package_version="$(node -p "JSON.parse(require(\"node:fs\").readFileSync(process.argv[1] + \"/lib/node_modules/openclaw/package.json\", \"utf8\")).version" "$npm_config_prefix")"
-OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT="$(
-  node scripts/e2e/lib/package-compat.mjs "$package_version"
-)"
-export OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT
 
 echo "Checking dirty-state config before update..."
 CURRENT_PHASE="prepare-state"
@@ -781,9 +897,10 @@ else
   ready_epoch="$(node -e "process.stdout.write(String(Date.now()))")"
   start_seconds=$(((ready_epoch - start_epoch + 999) / 1000))
   if [ "$start_seconds" -gt "$START_BUDGET" ]; then
-    echo "gateway startup exceeded survivor budget: ${start_seconds}s > ${START_BUDGET}s" >&2
-    openclaw_e2e_print_log "$GATEWAY_LOG" >&2
-    exit 1
+    if ! node scripts/lib/check-limits.mts scripts/e2e/upgrade-survivor-docker.sh "Upgrade startup budget" "gateway startup exceeded survivor budget: ${start_seconds}s > ${START_BUDGET}s"; then
+      openclaw_e2e_print_log "$GATEWAY_LOG" >&2
+      exit 1
+    fi
   fi
   startup_summary="${start_seconds}s"
 fi
@@ -823,9 +940,10 @@ fi
 status_end="$(node -e "process.stdout.write(String(Date.now()))")"
 status_seconds=$(((status_end - status_start + 999) / 1000))
 if [ "$status_seconds" -gt "$STATUS_BUDGET" ]; then
-  echo "gateway status exceeded survivor budget: ${status_seconds}s > ${STATUS_BUDGET}s" >&2
-  openclaw_e2e_print_log "$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/status.json" >&2
-  exit 1
+  if ! node scripts/lib/check-limits.mts scripts/e2e/upgrade-survivor-docker.sh "Upgrade status budget" "gateway status exceeded survivor budget: ${status_seconds}s > ${STATUS_BUDGET}s"; then
+    openclaw_e2e_print_log "$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/status.json" >&2
+    exit 1
+  fi
 fi
 node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-status-json "$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/status.json"
 

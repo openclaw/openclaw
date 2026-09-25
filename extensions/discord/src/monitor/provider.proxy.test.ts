@@ -32,6 +32,7 @@ function resolveGatewayInfoFetch(resolve: ((value: Response) => void) | undefine
 const {
   GatewayIntents,
   baseRegisterClientSpy,
+  gatewayDisconnectSpy,
   captureHttpExchangeSpy,
   captureWsEventSpy,
   GatewayPlugin,
@@ -45,6 +46,8 @@ const {
   resetLastAgent,
   MockWebSocket,
   webSocketSpy,
+  webSocketCloseSpy,
+  webSocketTerminateSpy,
   httpsAgentSpy,
   wsProxyAgentSpy,
 } = vi.hoisted(() => {
@@ -52,13 +55,22 @@ const {
   const httpsAgentSpyLocal = vi.fn();
   const globalFetchMockLocal = vi.fn();
   const baseRegisterClientSpyLocal = vi.fn();
+  const gatewayDisconnectSpyLocal = vi.fn();
   const webSocketSpyLocal = vi.fn();
+  const webSocketCloseSpyLocal = vi.fn();
+  const webSocketTerminateSpyLocal = vi.fn();
   function MockWebSocketLocal(
     url: string,
     options?: { agent?: unknown; handshakeTimeout?: number; maxPayload?: number },
   ) {
     webSocketSpyLocal(url, options);
   }
+  MockWebSocketLocal.prototype.close = function (code?: number, reason?: string) {
+    webSocketCloseSpyLocal(code, reason);
+  };
+  MockWebSocketLocal.prototype.terminate = function () {
+    webSocketTerminateSpyLocal();
+  };
   const captureHttpExchangeSpyLocal = vi.fn();
   const captureWsEventSpyLocal = vi.fn();
   const resolveDebugProxySettingsMockLocal = vi.fn(() => ({ enabled: false }));
@@ -104,6 +116,15 @@ const {
     async registerClient(client: unknown) {
       baseRegisterClientSpyLocal(client);
     }
+    disconnect() {
+      gatewayDisconnectSpyLocal();
+      const socket = this.ws;
+      this.ws = null;
+      const close = socket ? Reflect.get(socket, "close") : undefined;
+      if (socket && typeof close === "function") {
+        Reflect.apply(close, socket, [1000, "Client disconnect"]);
+      }
+    }
   }
 
   class HttpsAgentLocal {
@@ -131,6 +152,7 @@ const {
 
   return {
     baseRegisterClientSpy: baseRegisterClientSpyLocal,
+    gatewayDisconnectSpy: gatewayDisconnectSpyLocal,
     GatewayIntents: GatewayIntentsLocal,
     GatewayPlugin: GatewayPluginLocal,
     globalFetchMock: globalFetchMockLocal,
@@ -148,6 +170,8 @@ const {
       HttpsProxyAgentLocal.lastCreated = undefined;
     },
     webSocketSpy: webSocketSpyLocal,
+    webSocketCloseSpy: webSocketCloseSpyLocal,
+    webSocketTerminateSpy: webSocketTerminateSpyLocal,
     MockWebSocket: MockWebSocketLocal,
     wsProxyAgentSpy: wsProxyAgentSpyLocal,
   };
@@ -178,7 +202,8 @@ vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
   resolveDebugProxySettings: resolveDebugProxySettingsMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
@@ -196,6 +221,7 @@ describe("createDiscordGatewayPlugin", () => {
   ] as const;
   let createDiscordGatewayPlugin: typeof import("./gateway-plugin.js").createDiscordGatewayPlugin;
   let waitForDiscordGatewayPluginRegistration: typeof import("./gateway-plugin.js").waitForDiscordGatewayPluginRegistration;
+  const discordApiUrlEnv = "DISCORD_API_URL";
 
   beforeAll(async () => {
     ({ createDiscordGatewayPlugin, waitForDiscordGatewayPluginRegistration } =
@@ -346,11 +372,14 @@ describe("createDiscordGatewayPlugin", () => {
     vi.stubGlobal("fetch", globalFetchMock);
     vi.useRealTimers();
     baseRegisterClientSpy.mockClear();
+    gatewayDisconnectSpy.mockClear();
     globalFetchMock.mockClear();
     fetchWithSsrFGuardMock.mockClear();
     httpsAgentSpy.mockClear();
     wsProxyAgentSpy.mockClear();
     webSocketSpy.mockClear();
+    webSocketCloseSpy.mockClear();
+    webSocketTerminateSpy.mockClear();
     captureHttpExchangeSpy.mockClear();
     captureWsEventSpy.mockClear();
     resolveDebugProxySettingsMock.mockReset().mockReturnValue({ enabled: false });
@@ -358,6 +387,7 @@ describe("createDiscordGatewayPlugin", () => {
   });
 
   afterEach(() => {
+    delete process.env[discordApiUrlEnv];
     vi.useRealTimers();
     vi.unstubAllEnvs();
   });
@@ -381,6 +411,45 @@ describe("createDiscordGatewayPlugin", () => {
     expect(fetchInit?.headers).toEqual({ Authorization: "Bot token-123" });
     expect(fetchInit?.signal).toBeInstanceOf(AbortSignal);
     expect(baseRegisterClientSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps metadata, initial sockets, and resume sockets on the configured endpoint", async () => {
+    process.env[discordApiUrlEnv] = "http://127.0.0.1:43210/api/v10";
+    globalFetchMock.mockResolvedValue(
+      new Response(createGatewayInfoBody({ url: "ws://127.0.0.1:43210/gateway" }), {
+        status: 200,
+      }),
+    );
+    const plugin = createDiscordGatewayPlugin({ discordConfig: {}, runtime: createRuntime() });
+
+    await registerGatewayClient(plugin);
+    const createWebSocket = (plugin as unknown as { createWebSocket: (url: string) => unknown })
+      .createWebSocket;
+    createWebSocket("ws://127.0.0.1:43210/gateway?v=10");
+    createWebSocket("ws://127.0.0.1:43210/gateway?resume=1");
+
+    expect(firstMockArg(globalFetchMock, "globalFetchMock")).toBe(
+      "http://127.0.0.1:43210/api/v10/gateway/bot",
+    );
+    expect(webSocketSpy.mock.calls.map(([url]) => url)).toEqual([
+      "ws://127.0.0.1:43210/gateway?v=10",
+      "ws://127.0.0.1:43210/gateway?resume=1",
+    ]);
+    expect(() => createWebSocket("wss://gateway.discord.gg/?v=10")).toThrow(
+      /outside the configured WebSocket origin/,
+    );
+    expect(httpsAgentSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not fall back to public Gateway metadata in endpoint mode", async () => {
+    process.env[discordApiUrlEnv] = "http://127.0.0.1:43210/api/v10";
+    globalFetchMock.mockResolvedValue(new Response("provider unavailable", { status: 503 }));
+    const plugin = createDiscordGatewayPlugin({ discordConfig: {}, runtime: createRuntime() });
+
+    await expect(registerGatewayClient(plugin)).rejects.toThrow(
+      "Failed to get gateway information from Discord",
+    );
+    expect((plugin as unknown as { gatewayInfo?: unknown }).gatewayInfo).toBeUndefined();
   });
 
   it("uses ws for gateway sockets even without proxy", () => {

@@ -24,6 +24,7 @@ export type ProviderModelAuthChecker = ((
 /** Creates a cached provider-auth evaluator bound to one agent/runtime context. */
 export function createProviderAuthChecker(params: {
   cfg?: OpenClawConfig;
+  agentId?: string;
   workspaceDir?: string;
   agentDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -45,6 +46,7 @@ export function createProviderAuthChecker(params: {
     });
     modelAuthResolver = createModelAuthAvailabilityResolver({
       cfg: params.cfg ?? {},
+      agentId: params.agentId,
       authStore,
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,

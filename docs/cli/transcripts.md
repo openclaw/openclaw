@@ -41,7 +41,14 @@ In the [Control UI](/web/control-ui/settings#meetings-page), open the sidebar's 
 at `/meetings`. You can pin Meetings to the sidebar; it is not pinned by default.
 Meeting notes are separate from agent chat history in **Sessions**.
 
-Search titles and session/source IDs; meeting URLs are not searched. Filter by
+Meetings appear in a newest-first timeline grouped by their start date, with a
+saved summary preview for each meeting. Opening the library shows the timeline
+at full width; selecting a meeting opens its reader. The library and reader
+show loading indicators while fetching data, and stored notes render as Markdown
+even when a long meeting exceeds chat-message rendering limits.
+
+Search titles, session/source IDs, saved summary notes, and transcript text;
+meeting URLs are not searched. Filter by
 exact provider, account, or agent ID, or by the session start date. Date filters
 use UTC: **Started on or after** includes the selected day, and **Started before**
 excludes it. Results load in deterministic pages. Changing a filter or selecting
@@ -51,9 +58,13 @@ Select a meeting to open its stored **Summary**. Existing
 `/meetings?selector=...` bookmarks keep working. Select **Transcript** for
 timestamped speaker text. **Search within this transcript** searches stored
 utterances on the Gateway, including text not yet loaded in the browser.
-**Load more** continues reading; the browser keeps the latest five loaded pages.
-The URL preserves the selected meeting and tab. Opening a meeting does not
-generate a missing summary.
+The reader automatically loads every page and keeps the full transcript visible.
+Standalone transcription artifacts such as `context:` and `###` are omitted from
+the reader, downloads, and newly generated notes. New captures skip these rows;
+existing raw archive rows remain unchanged.
+The URL preserves the selected meeting and tab. Opening a meeting with saved
+speech automatically generates missing notes when you have write access. The
+reader shows generation progress and offers a retry if generation fails.
 
 **Download Markdown** includes the transcript and any stored summary.
 **Download JSONL** exports the reader's public utterance projection, excluding
@@ -201,16 +212,18 @@ when one capture is active.
 
 Open **Meetings** in the [Control UI](/web/control-ui/settings#meetings-page) to browse
 captured meetings and notes without a terminal. The page and other Gateway
-clients use these read-only RPC methods:
+clients use these RPC methods:
 
-| Method               | Parameters                                                                                                                                             | Result                                                                                                                                                                     |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `transcripts.list`   | Optional `limit` (1–200, default 50), `cursor`, `query`, exact `providerId`/`accountId`/`agentId`, and `startedAfter`/`startedBefore` date-time bounds | Newest-first `sessions`, including participants, utterance counts, active state, summary availability, a bounded overview, and `nextCursor`.                               |
-| `transcripts.get`    | Required `selector`; optional `includeUtterances`, `limit` (1–100), `cursor`, and utterance `query`                                                    | One `session`, stored `summary`, optional `utterances`, and `nextCursor`. Explicit pagination returns full text; legacy requests retain the recent window described below. |
-| `transcripts.export` | Required `selector` and `format` (`markdown` or `jsonl`)                                                                                               | A base64-encoded file with `filename`, `mimeType`, and `sizeBytes`.                                                                                                        |
-| `transcripts.status` | None                                                                                                                                                   | Capture enablement, provider availability and setup metadata, configured-source health, active subscriptions, and the latest saved transcript.                             |
+| Method                  | Parameters                                                                                                                                             | Result                                                                                                                                                                      |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `transcripts.list`      | Optional `limit` (1–200, default 50), `cursor`, `query`, exact `providerId`/`accountId`/`agentId`, and `startedAfter`/`startedBefore` date-time bounds | Newest-first `sessions`, including participants, utterance counts, active state, summary availability, a bounded overview, and `nextCursor`.                                |
+| `transcripts.get`       | Required `selector`; optional `includeUtterances`, `limit` (1–100), `cursor`, and utterance `query`                                                    | One `session`, stored `summary`, optional `utterances`, and `nextCursor`. Explicit pagination returns full text; legacy requests retain the recent window described below.  |
+| `transcripts.summarize` | Required `selector`                                                                                                                                    | Generates missing notes and returns the same `session` and `summary` shape as `transcripts.get`. Existing notes are preserved; concurrent requests share the summary owner. |
+| `transcripts.export`    | Required `selector` and `format` (`markdown` or `jsonl`)                                                                                               | A base64-encoded file with `filename`, `mimeType`, and `sizeBytes`.                                                                                                         |
+| `transcripts.status`    | None                                                                                                                                                   | Capture enablement, provider availability and setup metadata, configured-source health, active subscriptions, and the latest saved transcript.                              |
 
-These methods require `operator.read` or its write/admin implication and expose
+Read methods require `operator.read` or its write/admin implication;
+`transcripts.summarize` requires `operator.write`. All methods expose
 meetings across one trusted Gateway domain. Restricted operator profiles need
 permission to read the shared archive; selecting an agent filter does not grant
 access. Use separate Gateway domains when readers need isolation. Source
@@ -218,14 +231,16 @@ locators contain only `providerId`, `accountId`, `guildId`, `channelId`, `thread
 `fileId`, `kind`, and sanitized `meetingUrl` when present, never arbitrary capture
 metadata. See [Gateway protocol](/gateway/protocol).
 
-List search matches titles and session/source IDs, excluding meeting URLs.
+List search matches titles, session/source IDs, saved summary Markdown and
+overviews, and stored utterance text, excluding source meeting URLs and private metadata.
 Date bounds use session start times: `startedAfter` is inclusive and
 `startedBefore` is exclusive. Dates are compared by instant using JavaScript
 date-string semantics, including stored UTC offsets. Original timestamps and
 selectors remain unchanged. Unparseable stored dates sort last and are excluded
 from date ranges. Equal instants sort by session ID, then original timestamp.
-Chronological page selection scans candidate captures before reading only the
-selected page's notes and participants, so read time grows with archive size.
+Chronological page selection scans candidate captures and, when searching,
+their saved notes and utterances before projecting only the selected page's
+notes and participants. Search time grows with the saved text being searched.
 Cursors belong to their current query and filters;
 changing either requires a fresh first page. A null `nextCursor` ends pagination.
 
@@ -297,6 +312,16 @@ Use default generated ids for automation. Use a fixed id like `standup` only
 when it will not repeat on the same date.
 
 ## Missing summaries
+
+Active captures save updated notes about every five minutes when new speech has
+arrived. Each update summarizes a saved transcript snapshot; speech arriving during
+generation remains available for the next update. Quiet captures do not repeatedly
+call the model. Stopping capture saves a final summary after received speech drains.
+The Control UI **Summary** tab shows the latest saved notes and their generation time.
+Opening a meeting with saved speech also requests missing notes through
+`transcripts.summarize`; this reuses the capture summary owner and saves notes
+without exporting files. Read-only clients can view existing notes but cannot
+request generation. The archive read RPCs themselves remain read-only.
 
 Meeting notes use the owning agent's utility model first, then its primary model
 when needed. If no model is available, a request times out, or the model returns
@@ -392,10 +417,10 @@ that draft without sending it to the new connection. Review it and select
 **Save** in the Settings footer. The full transcript schema editor is available
 under **Meeting capture → Advanced settings**.
 
-Changing only auto-start source titles applies to future captures without
-restarting or interrupting current captures. Current and historical notes keep
-their original title, source, agent attribution, and selector. Other source edits
-retain normal Gateway restart behavior.
+Meeting capture settings apply without restarting the Gateway. Removed or changed
+sources drain their received speech and finalize notes before replacement; unchanged
+sources keep recording. Source title edits apply to future captures. Current and
+historical notes keep their original title, source, agent attribution, and selector.
 
 Startup retries preserve the same admitted ID, original title, start time,
 source, and saved notes only while the exact failed provider attempt retains

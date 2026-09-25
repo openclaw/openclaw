@@ -9,6 +9,7 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-
 import { listUsageCountedTranscriptStats } from "../../infra/session-cost-usage-collection.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -24,10 +25,8 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "./session-accessor.js";
-import {
-  materializeSessionStateDeletePlans,
-  writeTranscriptArchive,
-} from "./session-accessor.sqlite-archive.js";
+import { writeTranscriptArchive } from "./session-accessor.sqlite-archive-artifact.js";
+import { materializeSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
 import {
   deleteMaterializedSessionStatePlans,
   planSessionStateDeleteIfUnreferenced,
@@ -36,7 +35,7 @@ import { touchTranscriptMutationInTransaction } from "./session-accessor.sqlite-
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import {
-  waitForSessionTranscriptIndexReconcile,
+  waitForSessionTranscriptIndexReconcilesInStateDir,
   waitForSessionTranscriptProjection,
 } from "./session-transcript-reconcile.js";
 
@@ -55,13 +54,11 @@ describe("SQLite transcript archive worker", () => {
   });
 
   afterEach(async () => {
-    // A deferred projection reconcile worker may still hold the agent DB open;
-    // Windows cannot unlink open files, so settle it before removing tempDir.
-    await waitForSessionTranscriptIndexReconcile({
-      agentId: "main",
-      path: resolveSqliteTargetFromSessionStorePath(storePath).path,
-    });
-    closeOpenClawAgentDatabasesForTest();
+    // Reconciliation and retained reclamation workers can still hold native handles;
+    // Windows requires their async owners to finish before deleting the fixture root.
+    await waitForSessionTranscriptIndexReconcilesInStateDir(tempDir);
+    await closeOpenClawAgentDatabasesAsync(tempDir);
+    closeOpenClawAgentDatabasesForTest(tempDir);
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 

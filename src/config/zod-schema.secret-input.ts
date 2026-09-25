@@ -1,11 +1,11 @@
 import { z } from "zod";
 import {
+  ENV_SECRET_REF_ID_RE,
   formatExecSecretRefIdValidationMessage,
   isValidExecSecretRefId,
   isValidFileSecretRefId,
   SECRET_PROVIDER_ALIAS_PATTERN,
 } from "../secrets/ref-contract.js";
-import { ENV_SECRET_REF_ID_RE } from "./types.secrets.js";
 
 const EnvSecretRefSchema = z
   .object({

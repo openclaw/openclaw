@@ -1,5 +1,5 @@
-// Discord plugin module implements security behavior.
 import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { identityEntryAuthenticationClassifier } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   createConditionalWarningCollector,
@@ -11,7 +11,6 @@ import {
   resolveDiscordAccountDmPolicy,
   type ResolvedDiscordAccount,
 } from "./accounts.js";
-import type { ChannelPlugin } from "./channel-api.js";
 import { discordIngressIdentity } from "./monitor/ingress-identity.js";
 
 const resolveDiscordDmPolicy = createScopedDmSecurityResolver<ResolvedDiscordAccount>({
@@ -53,7 +52,7 @@ const collectDiscordSecurityWarnings =
 const collectDiscordSecurityFindings = createConditionalWarningCollector.findings({
   collectWarnings: collectDiscordSecurityWarnings,
   checkId: "channels.discord.groups.open",
-  severity: "critical",
+  severity: "warn",
   title: "Discord security warning",
 });
 

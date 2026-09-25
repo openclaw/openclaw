@@ -14,7 +14,7 @@ import { createDebugProxyCaptureReader } from "../proxy-capture/store-readonly.j
 import { acquireDebugProxyCaptureStore } from "../proxy-capture/store.sqlite.js";
 import type { CaptureEventRecord } from "../proxy-capture/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
 import { closeProviderTransportDispatcherPool } from "./provider-transport-dispatcher-pool.js";
 
 const model: Model<"openai-responses"> = {

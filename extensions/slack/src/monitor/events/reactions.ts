@@ -1,9 +1,9 @@
-// Slack plugin module implements reactions behavior.
 import type { AllMiddlewareArgs, SlackEventMiddlewareArgs } from "@slack/bolt";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeStringEntriesLower } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
-import { allowListMatches, normalizeAllowListLower } from "../allow-list.js";
+import { allowListMatches } from "../allow-list.js";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackEventScope } from "../event-scope.js";
 import type { SlackReactionEvent } from "../types.js";
@@ -26,7 +26,7 @@ function shouldEmitSlackReactionNotification(params: {
     return Boolean(ctx.botUserId && event.item_user === ctx.botUserId);
   }
   if (ctx.reactionMode === "allowlist") {
-    const allowList = normalizeAllowListLower(ctx.reactionAllowlist);
+    const allowList = normalizeStringEntriesLower(ctx.reactionAllowlist);
     if (allowList.length === 0) {
       return false;
     }
@@ -56,20 +56,24 @@ export function registerSlackReactionEvents(params: {
     eventId: string,
   ) => {
     try {
+      const runtimeContext = await params.ctx.readRuntimeContext();
       const item = event.item;
       if (!item || item.type !== "message") {
         return;
       }
-      if (ctx.reactionMode === "off") {
+      if (runtimeContext.reactionMode === "off") {
         return;
       }
-      if (ctx.reactionMode === "own" && (!ctx.botUserId || event.item_user !== ctx.botUserId)) {
+      if (
+        runtimeContext.reactionMode === "own" &&
+        (!runtimeContext.botUserId || event.item_user !== runtimeContext.botUserId)
+      ) {
         return;
       }
       trackEvent?.();
 
       const ingressContext = await authorizeAndResolveSlackSystemEventContext({
-        ctx,
+        ctx: runtimeContext,
         senderId: event.user,
         channelId: item.channel,
         eventKind: "reaction",
@@ -88,7 +92,7 @@ export function registerSlackReactionEvents(params: {
       const [actorInfo, authorInfo] = await Promise.all([actorInfoPromise, authorInfoPromise]);
       if (
         !shouldEmitSlackReactionNotification({
-          ctx,
+          ctx: runtimeContext,
           event,
           eventScope,
           actorName: actorInfo?.name,
@@ -109,33 +113,19 @@ export function registerSlackReactionEvents(params: {
     }
   };
 
-  ctx.app.event(
-    "reaction_added",
-    async (args: SlackEventMiddlewareArgs<"reaction_added"> & AllMiddlewareArgs) => {
-      const { event, body, context, client } = args;
-      const eventScope = resolveSlackListenerEventScope({ ctx, body, context, client });
-      if (eventScope === null) {
-        return;
-      }
-      if (ctx.shouldDropMismatchedSlackEvent(body)) {
-        return;
-      }
-      await handleReactionEvent(event as SlackReactionEvent, "added", eventScope, body.event_id);
-    },
-  );
-
-  ctx.app.event(
-    "reaction_removed",
-    async (args: SlackEventMiddlewareArgs<"reaction_removed"> & AllMiddlewareArgs) => {
-      const { event, body, context, client } = args;
-      const eventScope = resolveSlackListenerEventScope({ ctx, body, context, client });
-      if (eventScope === null) {
-        return;
-      }
-      if (ctx.shouldDropMismatchedSlackEvent(body)) {
-        return;
-      }
-      await handleReactionEvent(event as SlackReactionEvent, "removed", eventScope, body.event_id);
-    },
-  );
+  for (const action of ["added", "removed"] as const) {
+    ctx.app.event(
+      `reaction_${action}`,
+      async (
+        args: SlackEventMiddlewareArgs<"reaction_added" | "reaction_removed"> & AllMiddlewareArgs,
+      ) => {
+        const { event, body, context, client } = args;
+        const eventScope = resolveSlackListenerEventScope({ ctx, body, context, client });
+        if (eventScope === null || ctx.shouldDropMismatchedSlackEvent(body)) {
+          return;
+        }
+        await handleReactionEvent(event as SlackReactionEvent, action, eventScope, body.event_id);
+      },
+    );
+  }
 }

@@ -31,16 +31,20 @@ vi.mock("../plugins/hook-runner-global.js", () => ({
 
 vi.mock("../secrets/egress-proxy/registry.js", () => ({
   isSecretEgressProxyActive: () => mocks.egressActive,
-  registerSecretEgressProxyRun: (_run: unknown, bindings: unknown) => {
+  registerSecretEgressProxyProcess: (bindings: unknown) => {
     mocks.proxyBindings.push(bindings);
     return {
-      HTTPS_PROXY: mocks.proxyUrl,
-      HTTP_PROXY: mocks.proxyUrl,
-      NODE_USE_ENV_PROXY: "1",
-      NODE_EXTRA_CA_CERTS: "/state/secret-egress/root-ca.pem",
-      SSL_CERT_FILE: "/state/secret-egress/root-ca.pem",
-      CURL_CA_BUNDLE: "/state/secret-egress/root-ca.pem",
-      REQUESTS_CA_BUNDLE: "/state/secret-egress/root-ca.pem",
+      revoke: () => {},
+      env: {
+        HTTPS_PROXY: mocks.proxyUrl,
+        HTTP_PROXY: mocks.proxyUrl,
+        NODE_USE_ENV_PROXY: "1",
+        NODE_EXTRA_CA_CERTS: "/state/secret-egress/root-ca.pem",
+        SSL_CERT_FILE: "/state/secret-egress/root-ca.pem",
+        CURL_CA_BUNDLE: "/state/secret-egress/root-ca.pem",
+        REQUESTS_CA_BUNDLE: "/state/secret-egress/root-ca.pem",
+        GIT_SSL_CAINFO: "/state/secret-egress/root-ca.pem",
+      },
     };
   },
 }));
@@ -133,6 +137,7 @@ const EGRESS_ENV = {
   SSL_CERT_FILE: "/state/secret-egress/root-ca.pem",
   CURL_CA_BUNDLE: "/state/secret-egress/root-ca.pem",
   REQUESTS_CA_BUNDLE: "/state/secret-egress/root-ca.pem",
+  GIT_SSL_CAINFO: "/state/secret-egress/root-ca.pem",
 } as const;
 
 async function withTeamStoreEntries(
@@ -188,7 +193,7 @@ async function captureStoreExecEnvironment(params: {
   });
   await tool.execute(params.callId, { command: "echo ok", yieldMs: 120_000 });
   if (params.host === "gateway") {
-    return mocks.gatewayParams.at(-1)?.env ?? {};
+    return mocks.spawnInputs.at(-1)?.env ?? {};
   }
   if (params.host === "node") {
     return mocks.nodeHostParams.at(-1)?.env ?? {};

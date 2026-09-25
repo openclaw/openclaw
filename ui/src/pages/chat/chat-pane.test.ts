@@ -15,8 +15,10 @@ import {
   waitForConfirmDialogActions,
   waitForInputDialog,
 } from "../../test-helpers/modal-dialog.ts";
+import { isExpiredIncognitoSession } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { ChatPaneBase } from "./chat-pane-base.ts";
+import { consumePaneSessionHandoff } from "./chat-pane-shared.ts";
 import { subscribeChatPaneSnapshotInvalidation } from "./chat-pane-startup-subscriptions.ts";
 import {
   createGatewayBrowserClientFixture,
@@ -28,6 +30,7 @@ import {
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { openSessionWorkspacePreview } from "./components/chat-session-workspace-state.ts";
 import type { SidebarContent } from "./components/chat-sidebar.ts";
 import { cacheChatSessionSnapshot, type ChatMessageCache } from "./session-message-cache.ts";
 import { openSlot } from "./sidebar-layout.ts";
@@ -699,6 +702,7 @@ describe("chat pane initialization", () => {
     expect(request).toHaveBeenCalledWith(
       "chat.startup",
       expect.objectContaining({ sessionKey: canonicalSessionKey }),
+      { signal: expect.any(AbortSignal) },
     );
   });
 
@@ -797,12 +801,12 @@ describe("chat pane keyboard shortcuts", () => {
       "workspace",
     ]);
     expect(state.sidebarContent).toBe(canvasContent);
-    state.attachmentSidebarContent = {
+    openSessionWorkspacePreview(state, "attachment:report", "report.pdf", {
       kind: "attachment",
       attachmentKind: "document",
       title: "report.pdf",
       src: "/media/report.pdf",
-    };
+    });
 
     const collapseEvent = new KeyboardEvent("keydown", {
       cancelable: true,
@@ -817,7 +821,7 @@ describe("chat pane keyboard shortcuts", () => {
     expect(hasWorkspace()).toBe(false);
     expect(state.sidebarLayout.columns[0]?.panels[0]?.slot).toBe("detail");
     expect(state.sidebarContent).toBe(canvasContent);
-    expect(state.attachmentSidebarContent).toBeNull();
+    expect(state.sessionWorkspaceState?.previews ?? []).toEqual([]);
 
     const mainSidebarEvent = dispatchSidebarShortcut(pane, false);
     expect(mainSidebarEvent.defaultPrevented).toBe(false);
@@ -863,6 +867,52 @@ describe("chat pane session creation lifecycle", () => {
       features: { methods: ["sessions.create"] },
     } as typeof pane.context.gateway.snapshot.hello;
   }
+
+  it("opens one fresh private session with unsent input while retaining failed input", async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const created = createDeferred<string | null>();
+    const request = vi.fn((method: string) => (method === "chat.history" ? { messages: [] } : {}));
+    const client = createGatewayBrowserClientFixture({ request });
+    const { pane, state } = createTestChatPane({ client });
+    const sessions = pane.context.sessions;
+    vi.spyOn(sessions, "create").mockImplementation(() => created.promise);
+    state.sessionKey = "agent:main:dashboard:incognito-expired";
+    state.chatMessage = "Unsent private draft";
+    state.chatAttachments = [
+      { id: "unsent-image", mimeType: "image/png", dataUrl: "data:image/png;base64,eA==" },
+    ];
+    const failed = {
+      id: "failed-copy",
+      text: "Failed private input",
+      createdAt: 1,
+      sendState: "failed" as const,
+    };
+    state.chatQueue = [failed];
+    await loadChatHistory(state);
+    expect(state.chatError).toBeNull();
+    expect(isExpiredIncognitoSession(state)).toBe(true);
+    advertiseSessionCreate(pane);
+    pane.context.gateway.snapshot.hello!.auth!.scopes = ["operator.admin"];
+    const navigate = vi.fn();
+    pane.onPaneSessionChange = navigate;
+
+    const pending = pane.createSession();
+    await expect(pane.createSession()).resolves.toBe(false);
+    expect(sessions.create).toHaveBeenCalledExactlyOnceWith({ agentId: "main", incognito: true });
+    const nextKey = "agent:main:dashboard:incognito-fresh";
+    created.resolve(nextKey);
+    await expect(pending).resolves.toBe(true);
+    expect(navigate).toHaveBeenCalledExactlyOnceWith(pane.paneId, nextKey);
+    expect(consumePaneSessionHandoff(pane.context, pane.paneId, nextKey)).toMatchObject({
+      draft: "Unsent private draft",
+      attachments: [{ mimeType: "image/png", dataUrl: "data:image/png;base64,eA==" }],
+    });
+    expect(state.chatQueue).toEqual([failed]);
+    expect(request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
+  });
 
   it("drops a created session after a same-client reconnect", async () => {
     const created = createDeferred<string | null>();
@@ -949,6 +999,10 @@ describe("chat pane history pagination intent", () => {
     pane.syncHistoryObserver = vi.fn();
     const event = new Event("scroll");
     const thread = document.createElement("div");
+    Object.defineProperties(thread, {
+      scrollHeight: { value: 1000 },
+      clientHeight: { value: 500 },
+    });
     thread.scrollTop = 80;
     Object.defineProperty(event, "target", { value: thread });
 
@@ -969,6 +1023,10 @@ describe("chat pane history pagination intent", () => {
     pane.transcriptScrollTop = 100;
     pane.syncHistoryObserver = vi.fn();
     const thread = document.createElement("div");
+    Object.defineProperties(thread, {
+      scrollHeight: { value: 1000 },
+      clientHeight: { value: 500 },
+    });
     const event = new Event("scroll");
     Object.defineProperty(event, "target", { value: thread });
 

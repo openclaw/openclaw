@@ -11,7 +11,10 @@ import { createThrowingTestRuntime } from "./test-runtime-config-helpers.js";
 async function avatarConfig(home: string): Promise<OpenClawConfig> {
   const image = await fs.readFile(path.resolve("extensions/nextcloud-talk/assets/icon.png"));
   return {
-    meta: { lastTouchedVersion: VERSION, migrations: { modelPolicyAllowlist: true } },
+    meta: {
+      lastTouchedVersion: VERSION,
+      migrations: { modelPolicyAllowlist: true, utilityModelSeparation: true },
+    },
     gateway: { mode: "local" },
     agents: {
       ownership: "explicit",

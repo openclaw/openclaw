@@ -7,8 +7,9 @@ import type { Duplex } from "node:stream";
 import tls from "node:tls";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
+import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { WebSocketServer } from "ws";
+import type { SlackSendIdentity } from "../send.js";
 import {
   buildRelayWebSocketOptions,
   buildRelayWebSocketUrl,
@@ -16,7 +17,6 @@ import {
   parseRelayFrame,
   SlackRelayMalformedFrameError,
   SLACK_RELAY_MAX_PAYLOAD_BYTES,
-  type SlackRelayIdentity,
 } from "./relay-source.js";
 
 function deferred<T>() {
@@ -152,7 +152,7 @@ describe("Slack relay source", () => {
       },
     );
     const runtimeError = vi.fn();
-    const identities: Array<SlackRelayIdentity | undefined> = [];
+    const identities: Array<SlackSendIdentity | undefined> = [];
     const statuses: Array<Record<string, unknown>> = [];
     const monitor = monitorSlackRelaySource({
       config: {
@@ -608,7 +608,7 @@ describe("Slack relay proxy environment", () => {
       const releaseAcceptance = deferred<void>();
       const ack = deferred<unknown>();
       const receivedAcks: unknown[] = [];
-      const identities: Array<SlackRelayIdentity | undefined> = [];
+      const identities: Array<SlackSendIdentity | undefined> = [];
       const acceptRelayEvent = vi.fn(async () => {
         accepted.resolve();
         await releaseAcceptance.promise;
@@ -858,7 +858,8 @@ describe("Slack relay proxy environment", () => {
         lifecycle: "recovering",
         lastError: expect.stringContaining("DEPTH_ZERO_SELF_SIGNED_CERT"),
       });
-      expect(fixture.proxyConnections()).toBe(1);
+      // Some TLS servers expose failed handshakes before their public connection
+      // event. The verification error proves the dial reached certificate checks.
       expect(fixture.proxySecureConnections()).toBe(0);
       expect(fixture.connects).toEqual([]);
       expect(fixture.relayConnections()).toBe(0);

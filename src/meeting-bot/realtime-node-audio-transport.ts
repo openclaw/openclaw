@@ -77,6 +77,9 @@ export function createNodeMeetingRealtimeAudioTransport(params: {
               params: { action: "pullAudio", bridgeId: params.bridgeId, timeoutMs: 250 },
               timeoutMs: 2_000,
             });
+            if (stopped) {
+              break;
+            }
             const rawRecord = asOptionalRecord(raw);
             const result = asOptionalRecord(rawRecord?.payload ?? raw) ?? {};
             const base64 = readNonBlankString(result.base64);

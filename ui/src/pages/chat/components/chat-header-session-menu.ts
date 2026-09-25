@@ -1,6 +1,11 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { UiSettings } from "../../../app/settings.ts";
+import { renderBoardGrantedCapabilities } from "../../../components/board/board-widget-capabilities.ts";
+import {
+  renderBoardWidgetMenuItems,
+  type BoardWidgetPageMenu,
+} from "../../../components/board/board-widget-cell-render.ts";
 import { icons } from "../../../components/icons.ts";
 import { activateMenuShortcut } from "../../../components/menu-shortcuts.ts";
 import {
@@ -31,10 +36,17 @@ export type HeaderMenuQuickAction = {
   id: string;
   label: string;
   icon: TemplateResult;
-  active?: boolean;
-  badge?: number;
-  onActivate: () => void;
-};
+  description?: string;
+} & (
+  | { kind: "status" }
+  | {
+      kind?: "action";
+      active?: boolean;
+      badge?: number;
+      disabled?: boolean;
+      onActivate: () => void;
+    }
+);
 
 const EMPTY_SETTINGS = {} as UiSettings;
 
@@ -62,6 +74,7 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
   @property({ attribute: false }) settings: UiSettings = EMPTY_SETTINGS;
   @property({ attribute: false }) panelActions: HeaderMenuQuickAction[] = [];
   @property({ attribute: false }) layoutActions: HeaderMenuQuickAction[] = [];
+  @property({ attribute: false }) boardWidgetMenu?: BoardWidgetPageMenu;
   @property({ attribute: false }) sharing: ChatSessionSharingProps | null = null;
   @property({ attribute: false }) groups: readonly string[] = [];
   @property({ attribute: false }) currentOwner: SessionCreatedActor | null = null;
@@ -71,6 +84,7 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
   @property({ attribute: false }) forkDisabled = false;
   @property({ attribute: false }) forkFromLastCompleted = false;
   @property({ attribute: false }) archiveAllowed = false;
+  @property({ attribute: false }) archiveShortcut = false;
   @property({ attribute: false }) deleteAllowed = false;
   @property({ attribute: false }) onOpen: () => void = () => {};
   @property({ attribute: false }) onOpenCommandPalette: () => void = () => {};
@@ -92,6 +106,7 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
       forkDisabled: this.forkDisabled,
       forkFromLastCompleted: this.forkFromLastCompleted,
       archiveAllowed: this.archiveAllowed,
+      archiveShortcut: this.archiveShortcut,
       deleteAllowed: this.deleteAllowed,
       groups: this.groups,
       currentOwner: this.currentOwner,
@@ -106,17 +121,13 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
     },
   );
 
-  private actionDisabled(kind: HeaderMenuActionKind, extra = false): boolean {
-    return extra || Boolean(this.actionDisabledReasons[kind]);
-  }
-
-  private actionTitle(kind: HeaderMenuActionKind): string | typeof nothing {
-    return this.actionDisabledReasons[kind] ?? nothing;
-  }
-
   private readonly handleSelect = (event: MenuSelectEvent) => {
     const value = event.detail.item.value;
     if (!value) {
+      return;
+    }
+    if (value.startsWith("board-widget:")) {
+      this.boardWidgetMenu?.onSelect(value.slice("board-widget:".length));
       return;
     }
     const compactView = compactSessionMenuViewForValue(value) ?? COMPACT_MENU_VIEW_BY_VALUE[value];
@@ -146,7 +157,7 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
       const [, group, id] = value.split(":");
       const actions = group === "panels" ? this.panelActions : this.layoutActions;
       const action = actions.find((candidate) => candidate.id === id);
-      if (action) {
+      if (action && action.kind !== "status" && !action.disabled) {
         action.onActivate();
       }
       return;
@@ -182,7 +193,7 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
       event.preventDefault();
       return;
     }
-    if (value === "continue-in-terminal" && !this.actionDisabled(value)) {
+    if (value === "continue-in-terminal" && !this.actionDisabledReasons[value]) {
       event.currentTarget.open = false;
       this.onAction({ kind: value });
     }
@@ -194,6 +205,24 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
     inline = false,
   ) {
     return actions.map((action) => {
+      const label = html`<span class="session-menu__text"
+        >${action.label}${
+          action.description
+            ? html`<span class="session-menu__description">${action.description}</span>`
+            : nothing
+        }</span
+      >`;
+      if (action.kind === "status") {
+        return html`<div
+          slot=${inline ? nothing : "submenu"}
+          class="session-menu__status"
+          data-menu-status=${action.id}
+          role="note"
+        >
+          <span class="session-menu__check" aria-hidden="true">${action.icon}</span>
+          ${label}
+        </div>`;
+      }
       const detail =
         typeof action.badge === "number" && action.badge > 0
           ? html`<span slot="details" class="session-menu__sub">${action.badge}</span>`
@@ -205,10 +234,10 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
           value=${`quick:${group}:${action.id}`}
           type=${action.active === undefined ? nothing : "checkbox"}
           .checked=${action.active ?? false}
+          ?disabled=${action.disabled}
         >
           <span slot="icon" class="session-menu__icon" aria-hidden="true">${action.icon}</span>
-          <span class="session-menu__text">${action.label}</span>
-          ${detail}
+          ${label} ${detail}
         </wa-dropdown-item>
       `;
     });
@@ -321,6 +350,29 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
               <div class="session-menu__separator" role="separator"></div>`
           : nothing
       }
+      ${
+        this.boardWidgetMenu
+          ? html`
+              <div class="board-widget__page-menu-heading">
+                <strong
+                  >${this.boardWidgetMenu.widget.title || this.boardWidgetMenu.widget.name}</strong
+                >
+              </div>
+              ${renderBoardGrantedCapabilities(this.boardWidgetMenu.widget, "details")}
+              ${
+                this.boardWidgetMenu.canMutate
+                  ? renderBoardWidgetMenuItems({
+                      widget: this.boardWidgetMenu.widget,
+                      tabs: this.boardWidgetMenu.tabs,
+                      disabled: false,
+                      prefix: "board-widget:",
+                    })
+                  : nothing
+              }
+              <div class="session-menu__separator" role="separator"></div>
+            `
+          : nothing
+      }
       ${this.renderQuickActions("panels", this.panelActions)}
       ${this.renderQuickActions("layout", this.layoutActions)}
       ${
@@ -358,8 +410,8 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
       slot=${inline ? nothing : "submenu"}
       class="session-menu__item"
       value="continue-in-terminal"
-      ?disabled=${this.actionDisabled("continue-in-terminal")}
-      title=${this.actionTitle("continue-in-terminal")}
+      ?disabled=${Boolean(this.actionDisabledReasons["continue-in-terminal"])}
+      title=${this.actionDisabledReasons["continue-in-terminal"] ?? nothing}
     >
       <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.terminal}</span>
       <span class="session-menu__text">${t("chat.sessionHeader.continueInTerminal.action")}</span>

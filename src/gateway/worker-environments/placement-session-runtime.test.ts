@@ -34,6 +34,15 @@ describe("worker placement runtime capabilities", () => {
     resetPluginRuntimeStateForTest();
   });
 
+  it("fails closed when residual auto policy lacks model and session context", () => {
+    expect(projectWorkerPlacementAgentRuntime({ id: "auto", source: "model" })).toEqual({
+      id: "auto",
+      cloudPlacementSupported: false,
+      devicePlacementSupported: false,
+      source: "model",
+    });
+  });
+
   it.each([
     {
       name: "ignores an unlocked historical runtime after selecting a different provider",
@@ -334,7 +343,7 @@ describe("resolveWorkerPlacementSessionRuntimeCapabilities", () => {
       registry.cliBackends.push({
         pluginId: "test-cli-plugin",
         pluginName: "test-cli-plugin",
-        backend: { id: "claude-cli", config: { command: "claude" } },
+        backend: { id: "claude-cli", modelProvider: "anthropic", config: { command: "claude" } },
         source: "test",
       });
     }
@@ -370,7 +379,7 @@ describe("resolveWorkerPlacementSessionRuntimeCapabilities", () => {
       registry.cliBackends.push({
         pluginId: "test-cli-plugin",
         pluginName: "test-cli-plugin",
-        backend: { id: "claude-cli", config: { command: "claude" } },
+        backend: { id: "claude-cli", modelProvider: "anthropic", config: { command: "claude" } },
         source: "test",
       });
     }

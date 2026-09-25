@@ -144,9 +144,6 @@ export function createMattermostDraftStream(params: {
   };
   const sealedAssistantTexts: Array<{ text: string; requiresBlockBoundary: boolean }> = [];
   const publishedAssistantParts = new Map<string, MattermostDraftPublishedPart>();
-  const trackPublishedAssistantPart = (part: MattermostDraftPublishedPart) => {
-    publishedAssistantParts.set(part.messageId, part);
-  };
 
   const sendOrEditStreamMessage = async (text: string): Promise<boolean> => {
     if (streamState.stopped && !streamState.final) {
@@ -243,6 +240,15 @@ export function createMattermostDraftStream(params: {
     const sealed = currentGeneration;
     const assistantText = sealed.latestAssistantText?.trim();
     let publishedAssistantOffset = 0;
+    const recordPublishedAssistantPart = (messageId: string, content: string, offset: number) => {
+      if (!assistantText) {
+        return;
+      }
+      publishedAssistantParts.set(messageId, { messageId, content });
+      publishedAssistantOffset =
+        consumeMattermostPublishedChunk({ source: assistantText, offset, chunk: content }) ??
+        offset;
+    };
     const boundary = (async () => {
       try {
         await sealed.ready;
@@ -267,16 +273,7 @@ export function createMattermostDraftStream(params: {
           if (assistantText && (sealed.lastProviderText || sealed.lastSentText)) {
             const publishedContent = sealed.lastProviderText ?? sealed.lastSentText;
             // The existing preview remains visible if its lossless boundary edit fails.
-            trackPublishedAssistantPart({
-              messageId: sealed.postId,
-              content: publishedContent,
-            });
-            publishedAssistantOffset =
-              consumeMattermostPublishedChunk({
-                source: assistantText,
-                offset: 0,
-                chunk: publishedContent,
-              }) ?? 0;
+            recordPublishedAssistantPart(sealed.postId, publishedContent, 0);
           }
           let providerFirstChunk = sealed.lastProviderText ?? firstChunk;
           if (firstChunk !== sealed.lastSentText) {
@@ -285,37 +282,14 @@ export function createMattermostDraftStream(params: {
             });
             providerFirstChunk = updated.message ?? firstChunk;
           }
-          if (assistantText) {
-            trackPublishedAssistantPart({
-              messageId: sealed.postId,
-              content: providerFirstChunk,
-            });
-            publishedAssistantOffset =
-              consumeMattermostPublishedChunk({
-                source: assistantText,
-                offset: 0,
-                chunk: providerFirstChunk,
-              }) ?? 0;
-          }
+          recordPublishedAssistantPart(sealed.postId, providerFirstChunk, 0);
         } else {
           const firstPost = await createMattermostPost(params.client, {
             channelId: params.channelId,
             message: firstChunk,
             rootId: params.rootId,
           });
-          if (assistantText) {
-            const publishedContent = firstPost.message ?? firstChunk;
-            trackPublishedAssistantPart({
-              messageId: firstPost.id,
-              content: publishedContent,
-            });
-            publishedAssistantOffset =
-              consumeMattermostPublishedChunk({
-                source: assistantText,
-                offset: 0,
-                chunk: publishedContent,
-              }) ?? 0;
-          }
+          recordPublishedAssistantPart(firstPost.id, firstPost.message ?? firstChunk, 0);
         }
         for (const chunk of chunks.slice(1)) {
           const post = await createMattermostPost(params.client, {
@@ -323,16 +297,7 @@ export function createMattermostDraftStream(params: {
             message: chunk,
             rootId: params.rootId,
           });
-          if (assistantText) {
-            const publishedContent = post.message ?? chunk;
-            trackPublishedAssistantPart({ messageId: post.id, content: publishedContent });
-            publishedAssistantOffset =
-              consumeMattermostPublishedChunk({
-                source: assistantText,
-                offset: publishedAssistantOffset,
-                chunk: publishedContent,
-              }) ?? publishedAssistantOffset;
-          }
+          recordPublishedAssistantPart(post.id, post.message ?? chunk, publishedAssistantOffset);
         }
         if (assistantText) {
           sealedAssistantTexts.push({ text: assistantText, requiresBlockBoundary: true });

@@ -34,18 +34,30 @@ vi.mock("node:worker_threads", async (importOriginal) => {
   return {
     ...actual,
     Worker: class extends actual.Worker {
-      constructor(...[filename, options]: ConstructorParameters<typeof actual.Worker>) {
-        const data: unknown = options?.workerData;
+      override postMessage(...[message, transfers]: Parameters<Worker["postMessage"]>) {
         // Inject only at structured cloning; parent facts and the real worker stay intact.
-        super(
-          filename,
-          workerBoundary.fingerprint && isRecord(data) && data.kind === "catalog"
-            ? {
-                ...options,
-                workerData: { ...data, generationFingerprint: workerBoundary.fingerprint },
-              }
-            : options,
-        );
+        if (
+          workerBoundary.fingerprint &&
+          isRecord(message) &&
+          isRecord(message.input) &&
+          isRecord(message.input.value) &&
+          typeof message.input.value.generationFingerprint === "string"
+        ) {
+          return super.postMessage(
+            {
+              ...message,
+              input: {
+                ...message.input,
+                value: {
+                  ...message.input.value,
+                  generationFingerprint: workerBoundary.fingerprint,
+                },
+              },
+            },
+            transfers,
+          );
+        }
+        return super.postMessage(message, transfers);
       }
     },
   };
@@ -92,9 +104,11 @@ async function createMismatchFixture() {
     env,
   };
   let current = true;
+  const retirement = new AbortController();
   const isCurrent = () => current;
   retireAfterTest(() => {
     current = false;
+    retirement.abort();
   });
   const build = (
     await startSerializedSnapshotBuildBatch(
@@ -103,6 +117,7 @@ async function createMismatchFixture() {
           input,
           catalogOwner: preparePublishedModelCatalogOwnerIdentity(input),
           isGenerationCurrent: isCurrent,
+          retirementSignal: retirement.signal,
           isBuildCurrent: isCurrent,
         },
       ],
@@ -114,6 +129,7 @@ async function createMismatchFixture() {
     ).pending
   )[0]!;
   const workerParams = {
+    retirementSignal: retirement.signal,
     agentFacts: {
       input: { agentId: "main", agentDir, workspaceDir, config, env },
       env,
@@ -186,7 +202,7 @@ describe("prepared model catalog worker generation mismatch", () => {
     });
   });
 
-  it("fences queued requests behind a transient mismatch and rebuilds a matching worker", async () => {
+  it("catalog worker request fences a transient mismatch and rebuilds a matching worker", async () => {
     const fixture = await createMismatchFixture();
     // Inject a mismatch only at the first worker clone boundary. This drives the real owner,
     // pool, and worker without depending on the production-only environmental trigger.
@@ -221,8 +237,11 @@ describe("prepared model catalog worker generation mismatch", () => {
       const recovered = await worker.loadCatalog();
       expect(spawned).toHaveLength(2);
       expect(recovered.modelCatalog.entries).toContainEqual(
-        expect.objectContaining({ provider: PROVIDER_ID, id: "account-scoped-model" }),
+        expect.objectContaining({ provider: PROVIDER_ID, id: "plugin-generation-v1" }),
       );
+      expect(
+        recovered.modelCatalog.entries.some((entry) => entry.id === "account-scoped-model"),
+      ).toBe(false);
       expect(fs.readFileSync(fixture.marker, "utf8")).toBe("start\ndone\n");
       await expect(worker.loadAuth({ providerIds: [PROVIDER_ID] })).resolves.toMatchObject({
         authStore: expect.objectContaining({ version: 1 }),
@@ -231,7 +250,7 @@ describe("prepared model catalog worker generation mismatch", () => {
     });
   });
 
-  it("keeps a replacement worker alive when an old mismatch finishes retiring", async () => {
+  it("catalog worker request keeps a replacement alive while an old mismatch retires", async () => {
     const fixture = await createMismatchFixture();
     const stopped = createDeferredCore();
     const releaseTermination = createDeferredCore();
@@ -274,10 +293,18 @@ describe("prepared model catalog worker generation mismatch", () => {
           for (const failure of initial) {
             expect(failure).toMatchObject({ name: "PreparedModelCatalogGenerationMismatchError" });
           }
-          expect(await outcome).toMatchObject({
+          const replacementResult = await outcome;
+          expect(replacementResult).toMatchObject({
             modelCatalog: {
               entries: expect.arrayContaining([
-                expect.objectContaining({ provider: PROVIDER_ID, id: "account-scoped-model" }),
+                expect.objectContaining({ provider: PROVIDER_ID, id: "plugin-generation-v1" }),
+              ]),
+            },
+          });
+          expect(replacementResult).not.toMatchObject({
+            modelCatalog: {
+              entries: expect.arrayContaining([
+                expect.objectContaining({ id: "account-scoped-model" }),
               ]),
             },
           });

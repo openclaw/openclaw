@@ -37,11 +37,12 @@ import type { EmbeddedRunContextRecoveryState } from "./context-recovery-state.j
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import { buildContextEngineCompactionSessionTarget } from "./session-bootstrap.js";
+import { resolveEmbeddedSessionContextLimits } from "./session-context-limits.js";
 import type { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 type ContextEngine = Awaited<ReturnType<typeof resolveContextEngine>>;
-type SessionPromptState = ReturnType<typeof createEmbeddedRunSessionPromptState>;
+type SessionPromptState = Awaited<ReturnType<typeof createEmbeddedRunSessionPromptState>>;
 type CompactionResult = Awaited<ReturnType<ContextEngine["compact"]>>;
 
 export type EmbeddedRunCompactionRecoveryInput = {
@@ -96,12 +97,12 @@ export type EmbeddedRunCompactionRecoveryInput = {
   usageAccumulator: UsageAccumulator;
 };
 
-/** Preserve one prepared owner snapshot for both timeout and overflow recovery. */
+/** Preserve one prepared owner snapshot throughout context and timeout recovery. */
 export async function compactEmbeddedRunForRecovery(
   input: EmbeddedRunCompactionRecoveryInput,
   recovery: {
     tokenBudget: number;
-    trigger: "overflow" | "timeout_recovery";
+    trigger: "budget" | "overflow" | "timeout_recovery";
     diagId: string;
     attempt: number;
     maxAttempts: number;
@@ -111,7 +112,12 @@ export async function compactEmbeddedRunForRecovery(
   const { runParams } = input;
   const owner = input.prepareRecoveryOwner();
   const activeSession = owner.session;
-  const reason = recovery.trigger === "overflow" ? "overflow recovery" : "timeout recovery";
+  const reason =
+    recovery.trigger === "budget"
+      ? "context budget recovery"
+      : recovery.trigger === "overflow"
+        ? "overflow recovery"
+        : "timeout recovery";
   await input.runOwnsCompactionBeforeHook(reason);
   owner.assertActive();
   const runtimeContext = {
@@ -170,9 +176,11 @@ export async function compactEmbeddedRunForRecovery(
       explicitAgentId: input.contextEngineAgentId,
       contextEnginePluginId: input.resolveContextEnginePluginId(),
       purpose:
-        recovery.trigger === "overflow"
-          ? "context-engine.overflow-compaction"
-          : "context-engine.timeout-compaction",
+        recovery.trigger === "budget"
+          ? "context-engine.compaction"
+          : recovery.trigger === "overflow"
+            ? "context-engine.overflow-compaction"
+            : "context-engine.timeout-compaction",
     }),
     onCompactionHookMessages: input.onCompactionHookMessages,
     ...(input.attempt.promptCache ? { promptCache: input.attempt.promptCache } : {}),
@@ -224,6 +232,8 @@ export async function compactEmbeddedRunForRecovery(
             if (backendParams.runtimeContext) {
               attachCompactionAccountingRecorder(backendParams.runtimeContext, {
                 requestBudget: input.state.compactionRequestBudget,
+                pendingRequestState:
+                  recovery.trigger === "timeout_recovery" ? undefined : "unresolved",
                 memoryTranscript: owner.sessionManager
                   ? {
                       sessionManager: owner.sessionManager,
@@ -235,7 +245,7 @@ export async function compactEmbeddedRunForRecovery(
                     }
                   : undefined,
                 recordUsage: (usage) => mergeUsageIntoAccumulator(input.usageAccumulator, usage),
-                recordCompaction: (tokensAfter) => {
+                recordCompaction: ({ tokensAfter }) => {
                   observedCompactions += 1;
                   input.state.observeContextAccounting({ kind: "compaction", tokensAfter });
                 },
@@ -422,11 +432,17 @@ export function createEmbeddedRunCompactionRuntime(input: {
       },
     };
   };
-  const prepareRecoverySession = () => {
+  const prepareRecoverySession = (contextTokenBudget: number) => {
     const owner = prepareRecoveryOwner();
     const sessionManager =
       memoryManager ??
-      (detached ? undefined : SessionManager.open(owner.session.target, params.workspaceDir));
+      (detached
+        ? undefined
+        : SessionManager.open(
+            owner.session.target,
+            params.workspaceDir,
+            resolveEmbeddedSessionContextLimits(contextTokenBudget),
+          ));
     return {
       sessionManager,
       assertActive: owner.assertActive,

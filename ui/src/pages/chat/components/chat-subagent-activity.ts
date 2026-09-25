@@ -4,112 +4,76 @@ import { keyed } from "lit/directives/keyed.js";
 import { repeat } from "lit/directives/repeat.js";
 import remend from "remend";
 import { icons } from "../../../components/icons.ts";
+import { currentThemeBranding } from "../../../components/neutral-mark.ts";
+import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
-import { isActiveTask, sortTasks, taskTimestampMs, taskTitle } from "../../../lib/tasks/data.ts";
+import { registerBackgroundTasksEnglish } from "../../../i18n/locales/en-background-tasks.ts";
+import { partitionTasks } from "../../../lib/tasks/data.ts";
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
+import {
+  backgroundTaskIsExecuting,
+  backgroundTaskStatusLabel,
+} from "./chat-background-tasks-shared.ts";
+
+registerBackgroundTasksEnglish();
 
 const SUBAGENT_ACTIVITY_LIMIT = 5;
-const SUBAGENT_ACTIVITY_TERMINAL_RETENTION_MS = 60_000;
 
 export type SubagentActivityPresentation = {
   rows: TaskSummary[];
-  overflowWorking: number;
+  overflowCount: number;
   taskIds: ReadonlySet<string>;
-  nextExpiryAt: number | null;
 };
 
 export function deriveSubagentActivity(params: {
   tasks: readonly TaskSummary[];
   sessionKey: string;
-  terminalObservedAtByTask: ReadonlyMap<string, number>;
   canonicalizeSessionKey: (sessionKey: string | undefined) => string;
-  now?: number;
 }): SubagentActivityPresentation {
-  const now = params.now ?? Date.now();
   const requesterSessionKey = params.canonicalizeSessionKey(params.sessionKey);
-  const matching = sortTasks(
-    params.tasks.filter((task) => {
-      const taskRequesterSessionKey = params.canonicalizeSessionKey(task.sessionKey);
-      return (
-        task.runtime === "subagent" &&
-        Boolean(requesterSessionKey) &&
-        taskRequesterSessionKey === requesterSessionKey
-      );
-    }),
-  );
-  const active = matching.filter(isActiveTask);
-  const recentTerminal: TaskSummary[] = [];
-  let nextExpiryAt: number | null = null;
-  for (const task of matching) {
-    if (isActiveTask(task)) {
-      continue;
-    }
-    const terminalAt =
-      params.terminalObservedAtByTask.get(task.id) ??
-      taskTimestampMs(task.endedAt ?? task.updatedAt);
-    const expiresAt = terminalAt + SUBAGENT_ACTIVITY_TERMINAL_RETENTION_MS;
-    if (terminalAt <= 0 || expiresAt <= now) {
-      continue;
-    }
-    recentTerminal.push(task);
-    nextExpiryAt = nextExpiryAt === null ? expiresAt : Math.min(nextExpiryAt, expiresAt);
-  }
-  // Active children stay visible ahead of retained completions so a burst of
-  // terminal events cannot displace work that is still progressing.
-  const eligible = [...active, ...recentTerminal];
-  const rows = eligible.slice(0, SUBAGENT_ACTIVITY_LIMIT);
-  const overflowWorking = eligible
-    .slice(SUBAGENT_ACTIVITY_LIMIT)
-    .filter((task) => task.status === "running").length;
+  const children = params.tasks.filter((task) => {
+    const taskRequesterSessionKey = params.canonicalizeSessionKey(task.sessionKey);
+    const childSessionKey = params.canonicalizeSessionKey(task.childSessionKey);
+    const isChild =
+      task.runtime === "subagent" ||
+      (task.runtime === "cli" &&
+        Boolean(childSessionKey) &&
+        childSessionKey !== taskRequesterSessionKey);
+    return (
+      isChild && Boolean(requesterSessionKey) && taskRequesterSessionKey === requesterSessionKey
+    );
+  });
+  const { active } = partitionTasks(children);
+  const ongoing = active.filter((task) => task.execution?.state !== "finished");
   return {
-    rows,
-    overflowWorking,
-    taskIds: new Set(eligible.map((task) => task.id)),
-    nextExpiryAt,
+    rows: ongoing.slice(0, SUBAGENT_ACTIVITY_LIMIT),
+    overflowCount: Math.max(0, ongoing.length - SUBAGENT_ACTIVITY_LIMIT),
+    // Finished children belong in Tasks history, including when other work keeps the aggregate visible.
+    taskIds: new Set(children.map((task) => task.id)),
   };
 }
 
-function subagentActivityLabel(task: TaskSummary): string {
-  if (isActiveTask(task)) {
-    return t("chat.backgroundTasks.subagentActivity.running");
-  }
-  if (task.status === "cancelled") {
-    return t("chat.backgroundTasks.subagentActivity.cancelled");
-  }
-  if (task.status === "failed" || task.status === "timed_out") {
-    return t("chat.backgroundTasks.subagentActivity.failed");
-  }
-  return t("chat.backgroundTasks.subagentActivity.finished");
-}
-
 function subagentActivitySnippet(task: TaskSummary): string | undefined {
-  if (!isActiveTask(task) && task.terminalSummary?.trim()) {
-    return task.terminalSummary.trim();
-  }
   return (
     task.lastActivity?.trim() ||
     task.progressSummary?.trim() ||
-    task.lastToolName?.trim() ||
+    (task.lastToolName?.trim()
+      ? `${t("chat.backgroundTasks.lastTool")}: ${task.lastToolName.trim()}`
+      : undefined) ||
     undefined
   );
 }
 
 function renderSubagentActivityIndicator(task: TaskSummary): TemplateResult {
-  if (isActiveTask(task)) {
-    return html`<span
-      class="chat-subagent-activity__indicator chat-reading-indicator"
-      aria-hidden="true"
-      >${icons.claw}</span
-    >`;
-  }
-  const failed = task.status !== "completed";
   return html`<span
-    class="chat-subagent-activity__indicator chat-subagent-activity__indicator--${
-      failed ? "failed" : "finished"
-    }"
+    class="chat-subagent-activity__indicator chat-subagent-activity__indicator--${task.status}"
     aria-hidden="true"
-    >${failed ? icons.x : icons.check}</span
-  >`;
+  >
+    <span
+      class="chat-subagent-activity__claw ${backgroundTaskIsExecuting(task) ? "chat-reading-indicator" : ""}"
+      >${currentThemeBranding().mascot === "none" ? icons.mark : icons.claw}</span
+    >
+  </span>`;
 }
 
 function renderSubagentActivityRow(
@@ -132,44 +96,44 @@ function renderSubagentActivityRow(
         }),
       )
     : undefined;
-  const label = subagentActivityLabel(task);
+  const title = task.title?.trim();
+  const label = title || t("chat.backgroundTasks.subagentActivity.untitled");
+  const statusDescription = backgroundTaskStatusLabel(task);
   const content = html`
     ${renderSubagentActivityIndicator(task)}
     <span class="chat-subagent-activity__label">${label}</span>
-    ${
-      snippet
-        ? keyed(
-            `${task.status}:${snippet}`,
-            html`<span
-              class="chat-subagent-activity__snippet chat-subagent-activity__snippet--updated"
-              title=${snippet}
-              >${snippet}</span
-            >`,
-          )
-        : nothing
-    }
+    ${keyed(
+      `${task.status}:${snippet ?? ""}`,
+      html`<span class="chat-subagent-activity__snippet chat-subagent-activity__snippet--updated"
+        >${snippet ?? ""}</span
+      >`,
+    )}
   `;
-  if (!onOpenTaskDetail) {
-    return html`<div
-      class="chat-subagent-activity__row"
-      data-subagent-task-id=${task.id}
-      role="status"
-      aria-live="off"
-    >
-      ${content}
-    </div> `;
-  }
-  return html`<button
-    class="chat-subagent-activity__row chat-subagent-activity__row--interactive"
-    data-subagent-task-id=${task.id}
-    type="button"
-    aria-label=${t("chat.backgroundTasks.subagentActivity.openDetails", {
-      title: taskTitle(task),
-    })}
-    @click=${() => onOpenTaskDetail(task)}
-  >
-    ${content}
-  </button>`;
+  const row = !onOpenTaskDetail
+    ? html`<div
+        class="chat-subagent-activity__row"
+        data-subagent-task-id=${task.id}
+        role="status"
+        aria-live="off"
+        aria-label=${`${label}. ${statusDescription}`}
+      >
+        ${content}
+      </div>`
+    : html`<button
+        class="chat-subagent-activity__row chat-subagent-activity__row--interactive"
+        data-subagent-task-id=${task.id}
+        type="button"
+        aria-label=${`${t("chat.backgroundTasks.subagentActivity.openDetails", { title: label })}. ${statusDescription}`}
+        @click=${() => onOpenTaskDetail(task)}
+      >
+        ${content}
+      </button>`;
+  return html`<openclaw-tooltip
+    class="chat-subagent-activity__tooltip"
+    .content=${[label, statusDescription, snippet].filter(Boolean).join("\n")}
+    .describe=${false}
+    >${row}</openclaw-tooltip
+  >`;
 }
 
 export function renderSubagentActivity(
@@ -190,10 +154,10 @@ export function renderSubagentActivity(
         (task) => renderSubagentActivityRow(task, onOpenTaskDetail),
       )}
       ${
-        presentation.overflowWorking > 0
+        presentation.overflowCount > 0
           ? html`<div class="chat-subagent-activity__overflow">
-              ${t("chat.backgroundTasks.subagentActivity.moreWorking", {
-                count: String(presentation.overflowWorking),
+              ${t("chat.backgroundTasks.subagentActivity.moreSubagents", {
+                count: String(presentation.overflowCount),
               })}
             </div>`
           : nothing

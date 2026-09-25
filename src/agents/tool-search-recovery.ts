@@ -4,6 +4,7 @@ import {
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 import { levenshteinDistance } from "../shared/levenshtein-distance.js";
+import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import { resolveAgentToolExecutionSchema } from "./agent-tool-availability.js";
 import { compactToolInputHint } from "./tool-schema-hints.js";
 import type {
@@ -16,13 +17,15 @@ function tokenizeLookupValue(input: string): Set<string> {
   return new Set(normalizeStringEntries(input.toLowerCase().split(/[^a-z0-9]+/u)));
 }
 
-function scoreUnknownToolSuggestion(needle: string, entry: ToolSearchCatalogEntry): number {
-  const normalizedNeedle = needle.toLowerCase();
+function scoreUnknownToolSuggestion(
+  normalizedNeedle: string,
+  needleTokens: ReadonlySet<string>,
+  entry: ToolSearchCatalogEntry,
+): number {
   const name = entry.name.toLowerCase();
   const id = entry.id.toLowerCase();
   const label = (entry.label ?? "").toLowerCase();
   const description = entry.description.toLowerCase();
-  const needleTokens = tokenizeLookupValue(needle);
   const entryTokens = tokenizeLookupValue(
     `${entry.name} ${entry.id} ${entry.label ?? ""} ${entry.description}`,
   );
@@ -66,11 +69,13 @@ export function formatUnknownToolIdError(
   for (const entry of entries) {
     nameCounts.set(entry.name, (nameCounts.get(entry.name) ?? 0) + 1);
   }
+  const normalizedNeedle = needle.toLowerCase();
+  const needleTokens = tokenizeLookupValue(needle);
   const suggestions = uniqueStrings(
     entries
       .map((entry) => ({
         value: options.exactIdOnly || (nameCounts.get(entry.name) ?? 0) > 1 ? entry.id : entry.name,
-        score: scoreUnknownToolSuggestion(needle, entry),
+        score: scoreUnknownToolSuggestion(normalizedNeedle, needleTokens, entry),
       }))
       .filter((candidate) => candidate.score > 0)
       .toSorted((a, b) => b.score - a.score || a.value.localeCompare(b.value))
@@ -119,4 +124,22 @@ export function formatCatalogInputError(
   const input = compactToolInputHint(schema);
   const signature = input === "unknown" ? "" : ` Expected input: ${input}.`;
   return `Invalid arguments for tool "${entry.id}": ${details}.${hint}${signature}`;
+}
+
+export function formatCatalogOutputError(
+  entry: ToolSearchCatalogEntry,
+  errors: import("../plugins/schema-validator.js").JsonSchemaValidationError[],
+): string {
+  const details = errors.slice(0, 5).map(({ text }) => {
+    const prefix = truncateUtf8Prefix(text, 256);
+    return prefix === text ? text : `${prefix} [truncated]`;
+  });
+  if (errors.length > details.length) {
+    details.push(`${errors.length - details.length} additional validation issues omitted`);
+  }
+  return (
+    `Tool "${entry.id}" returned details that do not match its declared outputSchema. ` +
+    "Check current state before retrying; the tool returned and side effects may already have occurred. " +
+    `Validation: ${details.join("; ")}.`
+  );
 }

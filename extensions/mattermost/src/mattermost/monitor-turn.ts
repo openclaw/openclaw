@@ -6,9 +6,9 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   bindIngressLifecycleToReplyOptions,
-  buildChannelProgressDraftLineForEntry,
   createMessageReceiptFromOutboundResults,
   createChannelProgressDraftCompositor,
+  createLivePreviewLifecycle,
   listMessageReceiptPlatformIds,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
@@ -29,7 +29,6 @@ import {
 import {
   deliverMattermostReplyWithDraftPreview,
   type MattermostPreviewFinalResolution,
-  type MattermostDraftPreviewState,
 } from "./monitor-draft-delivery.js";
 import type { MattermostEventPlan } from "./monitor-event-plan.js";
 import type { MattermostIngressLifecycle } from "./monitor-ingress.js";
@@ -145,6 +144,7 @@ export async function dispatchMattermostInboundTurn(
   let blockPreviewActivity: "none" | "reasoning" | "text" | "tool" = "none";
   let blockPreviewAssistantMessagePending = false;
   const progressDraft = createChannelProgressDraftCompositor({
+    preparedItems: true,
     entry: account.config,
     mode: account.streamingMode,
     active: draftPreviewEnabled,
@@ -190,7 +190,21 @@ export async function dispatchMattermostInboundTurn(
     }
     return boundarySettled;
   };
-  const previewState: MattermostDraftPreviewState = { finalizedViaPreviewPost: false };
+  const previewLifecycle = createLivePreviewLifecycle<ReplyPayload, string>({
+    draft: draftPreviewEnabled
+      ? {
+          flush: draftStream.flush,
+          id: draftStream.postId,
+          seal: draftStream.seal,
+          discardPending: draftStream.discardPending,
+          clear: draftStream.clear,
+        }
+      : undefined,
+    onFinalStarted: () => progressDraft.markFinalReplyStarted(),
+    onFinalDelivered: () => progressDraft.markFinalReplyDelivered(),
+    onCleanupFailure: (err) =>
+      monitor.logVerboseMessage(`mattermost draft preview cleanup failed: ${String(err)}`),
+  });
 
   const resolvePreviewFinalText = (text?: string): MattermostPreviewFinalResolution | undefined => {
     const resolution = draftStream.resolveFinalText(typeof text === "string" ? text : "");
@@ -296,16 +310,20 @@ export async function dispatchMattermostInboundTurn(
         await enterBlockPreviewActivity("text");
         // Final text uses only confirmed-visible generations, so join prior boundary work before deciding whether to edit in place.
         await draftStream.settleBoundaries();
-        progressDraft.markFinalReplyStarted();
       }
       // A visible same-thread final can be a send or an in-place draft edit; either path records participation.
       let threadParticipationRecorded = false;
-      const markThreadParticipation = () => {
+      const markThreadParticipation = async () => {
         if (!threadParticipationRecorded && kind !== "direct" && effectiveReplyToId) {
           threadParticipationRecorded = true;
-          recordMattermostThreadParticipation(account.accountId, channelId, effectiveReplyToId, {
-            agentId: route.agentId,
-          });
+          await recordMattermostThreadParticipation(
+            account.accountId,
+            channelId,
+            effectiveReplyToId,
+            {
+              agentId: route.agentId,
+            },
+          );
         }
       };
       const result = await deliverMattermostReplyWithDraftPreview({
@@ -313,10 +331,9 @@ export async function dispatchMattermostInboundTurn(
         info,
         kind,
         client,
-        draftStream,
+        previewLifecycle,
         effectiveReplyToId,
         resolvePreviewFinalText,
-        previewState,
         logVerboseMessage: monitor.logVerboseMessage,
         recordThreadParticipation: markThreadParticipation,
         deliverPayload: async (payloadToDeliver) => {
@@ -348,23 +365,7 @@ export async function dispatchMattermostInboundTurn(
             textLimit,
             tableMode,
             sendMessage: sendMessageMattermost,
-          }).catch((error: unknown) => {
-            if (isChannelPartialDeliveryError(error)) {
-              markThreadParticipation();
-            }
-            throw error;
           });
-          // Record only visible sends so reasoning-only, empty, or suppressed threads do not auto-engage later.
-          if (deliveryResult.outcome === "text" || deliveryResult.outcome === "media") {
-            markThreadParticipation();
-          } else if (
-            deliveryResult.outcome === "empty" &&
-            finalTextResolution?.kind === "already-delivered"
-          ) {
-            // The terminal payload confirms the already-published assistant block as
-            // the visible final reply even though this delivery has no remaining text.
-            markThreadParticipation();
-          }
           const deliveryLog = formatMattermostFinalDeliveryOutcomeLog({
             outcome: deliveryResult.outcome,
             payload: resolvedPayload,
@@ -377,22 +378,14 @@ export async function dispatchMattermostInboundTurn(
           }
           return deliveryResult;
         },
-      }).catch((error: unknown) => {
+      }).catch(async (error: unknown) => {
         if (isChannelPartialDeliveryError(error)) {
-          markThreadParticipation();
-          if (info.kind === "final") {
-            // The provider final is already visible even though later bookkeeping failed.
-            // Settle progress before rethrowing so late callbacks cannot revive stale draft state.
-            progressDraft.markFinalReplyDelivered();
-          }
+          await markThreadParticipation();
         }
         throw error;
       });
       if (result.visibleReplySent) {
-        markThreadParticipation();
-      }
-      if (info.kind === "final") {
-        progressDraft.markFinalReplyDelivered();
+        await markThreadParticipation();
       }
       return result;
     },
@@ -466,6 +459,8 @@ export async function dispatchMattermostInboundTurn(
           dispatcherOptions,
           delivery,
           replyOptions: {
+            progressPreambleEnabled: draftProgressEnabled,
+            commentaryProgressEnabled: progressDraft.commentaryProgressEnabled,
             ...(turnAdoptionLifecycle
               ? bindIngressLifecycleToReplyOptions(turnAdoptionLifecycle)
               : {}),
@@ -473,7 +468,9 @@ export async function dispatchMattermostInboundTurn(
               ? true
               : undefined,
             preserveProgressCallbackStartOrder: draftPreviewEnabled ? true : undefined,
-            onObservedReplyDelivery: draftProgressEnabled ? () => draftStream.clear() : undefined,
+            onObservedReplyDelivery: draftPreviewEnabled
+              ? () => previewLifecycle.observeDelivery({ visibleReplySent: true })
+              : undefined,
             disableBlockStreaming: draftPreviewEnabled ? true : replyOptions.disableBlockStreaming,
             ...(suppressDefaultToolProgressMessages
               ? { suppressDefaultToolProgressMessages: true }
@@ -522,40 +519,19 @@ export async function dispatchMattermostInboundTurn(
               const boundarySettled = enterBlockPreviewActivity("tool");
               const progressSettled = progressDraft.pushPlanProgress(payloadValue.steps, {
                 explanation: payloadValue.explanation,
+                explanationFormat: payloadValue.explanationFormat,
               });
               previewBoundaryController.noteUpdate();
               const [, visible] = await Promise.all([boundarySettled, progressSettled]);
               return visible;
             },
-            onToolStart: async (payloadValue) => {
-              if (!draftProgressEnabled) {
-                return false;
-              }
-              const boundarySettled = enterBlockPreviewActivity("tool");
-              // Boundary detach and progress staging both happen synchronously before
-              // their first await; agent callbacks may be dispatched fire-and-forget.
-              const progressSettled = progressDraft.pushToolProgress(
-                buildChannelProgressDraftLineForEntry(
-                  account.config,
-                  {
-                    event: "tool",
-                    itemId: payloadValue.itemId,
-                    toolCallId: payloadValue.toolCallId,
-                    name: payloadValue.name,
-                    phase: payloadValue.phase,
-                    args: payloadValue.args,
-                  },
-                  payloadValue.detailMode ? { detailMode: payloadValue.detailMode } : undefined,
-                ),
-                { startImmediately: true },
-              );
-              previewBoundaryController.noteUpdate();
-              const [, visible] = await Promise.all([boundarySettled, progressSettled]);
-              return visible;
-            },
+            onToolStart: (payload) => progressDraft.pushToolEvent(payload),
             onItemEvent: async (payloadLocal) => {
               if (!draftProgressEnabled) {
                 return false;
+              }
+              if (payloadLocal.hideFromChannelProgress || payloadLocal.suppressChannelProgress) {
+                return progressDraft.pushItemEvent(payloadLocal);
               }
               const boundarySettled = enterBlockPreviewActivity("tool");
               const progressSettled = progressDraft.pushItemEvent(payloadLocal);
@@ -570,6 +546,7 @@ export async function dispatchMattermostInboundTurn(
   } finally {
     try {
       await draftStream.stop();
+      await previewLifecycle.cleanup();
     } catch (err) {
       monitor.logVerboseMessage(`mattermost draft preview cleanup failed: ${String(err)}`);
     }

@@ -9,9 +9,9 @@ import * as network from "openclaw/plugin-sdk/ssrf-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import * as tar from "tar";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ensureManagedCrabboxBinary } from "../cli-runtime-api.js";
 import {
   CRABBOX_MIN_VERSION,
-  ensureManagedCrabboxBinary,
   probeCrabboxVersion,
   resolveManagedCrabboxBinaryPath,
 } from "./crabbox-managed-binary.js";
@@ -32,7 +32,7 @@ const runCommand: CrabboxCommandRunner = async ([binary]) => ({
   termination: "exit",
 });
 
-async function fixture(version = "0.54.0") {
+async function fixture(version = "0.55.0") {
   const root = tempDirs.make("crabbox-managed-");
   const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
   const candidate = path.join(root, "operator-crabbox");
@@ -93,7 +93,7 @@ describe("managed Crabbox", () => {
     );
   });
 
-  it.each(["0.55.0", "0.55.1", "1.0.0"])(
+  it.each(["0.56.0", "0.56.1", "1.0.0"])(
     "uses supported operator version %s without network or state mutation",
     async (version) => {
       const test = await fixture(version);
@@ -107,6 +107,50 @@ describe("managed Crabbox", () => {
     },
   );
 
+  it("keeps a supported configured binary through startup contention", async () => {
+    const test = await fixture("0.64.0");
+    const started = createDeferred<void>();
+    const delayedRunner: CrabboxCommandRunner = async (argv, options) => {
+      const result = await runCommand(argv, options);
+      if (argv[0] !== test.candidate) {
+        return result;
+      }
+      const deadline = buildTimeoutAbortSignal({
+        timeoutMs: options.timeoutMs,
+        signal: options.signal,
+      });
+      const completed = createDeferred<typeof result>();
+      const timer = setTimeout(() => completed.resolve(result), 7_000);
+      const onAbort = () =>
+        completed.resolve({ ...result, stdout: "", code: 124, termination: "timeout" });
+      deadline.signal?.addEventListener("abort", onAbort, { once: true });
+      started.resolve();
+      try {
+        return await completed.promise;
+      } finally {
+        clearTimeout(timer);
+        deadline.signal?.removeEventListener("abort", onAbort);
+        deadline.cleanup();
+      }
+    };
+    vi.useFakeTimers();
+    const pending = ensureManagedCrabboxBinary({
+      binary: test.candidate,
+      env: test.env,
+      runCommand: delayedRunner,
+    });
+    const result = pending.then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
+    await started.promise;
+    await vi.advanceTimersByTimeAsync(7_000);
+    vi.useRealTimers();
+    await expect(result).resolves.toEqual({ value: { binary: test.candidate, version: "0.64.0" } });
+    expect(test.fetch).not.toHaveBeenCalled();
+    await expect(fs.access(test.env.OPENCLAW_STATE_DIR)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("upgrades an old candidate, preserves its complete distribution, and reuses it offline", async () => {
     const test = await fixture();
     const params = { binary: test.candidate, env: test.env, runCommand };
@@ -114,7 +158,7 @@ describe("managed Crabbox", () => {
       binary: test.binary,
       version: CRABBOX_MIN_VERSION,
     });
-    expect(await fs.readFile(test.candidate, "utf8")).toBe("0.54.0");
+    expect(await fs.readFile(test.candidate, "utf8")).toBe("0.55.0");
     expect(
       await fs.readFile(path.join(path.dirname(test.binary), "companion-helper"), "utf8"),
     ).toBe("keep me");
@@ -125,11 +169,11 @@ describe("managed Crabbox", () => {
         );
       }
     }
-    await fs.writeFile(test.binary, "0.56.0");
+    await fs.writeFile(test.binary, "0.57.0");
     test.fetch.mockRejectedValue(new Error("offline"));
     await expect(ensureManagedCrabboxBinary(params)).resolves.toEqual({
       binary: test.binary,
-      version: "0.56.0",
+      version: "0.57.0",
     });
     expect(test.fetch).toHaveBeenCalledTimes(2);
     expect(await fs.readdir(path.dirname(path.dirname(test.binary)))).toEqual([
@@ -155,18 +199,73 @@ describe("managed Crabbox", () => {
     });
     await expect(ensureManagedCrabboxBinary(params)).rejects.toThrow("checksum mismatch");
     expect(await fs.readdir(path.dirname(path.dirname(test.binary)))).toEqual([]);
-    expect(await fs.readFile(test.candidate, "utf8")).toBe("0.54.0");
+    expect(await fs.readFile(test.candidate, "utf8")).toBe("0.55.0");
     await expect(ensureManagedCrabboxBinary(params)).resolves.toEqual({
       binary: test.binary,
       version: CRABBOX_MIN_VERSION,
     });
   });
 
+  it("keeps release writes inside the original staging directory after a download await", async () => {
+    const test = await fixture();
+    const external = path.join(test.root, "external");
+    await fs.mkdir(external);
+    const fetch = test.fetch.getMockImplementation()!;
+    test.fetch.mockImplementation(async (params) => {
+      if (!params.url.endsWith("/checksums.txt")) {
+        const parent = path.dirname(path.dirname(test.binary));
+        const staging = (await fs.readdir(parent)).find((entry) => entry.startsWith(".install-"))!;
+        const stagingPath = path.join(parent, staging);
+        await fs.rename(stagingPath, path.join(test.root, "original-staging"));
+        await fs.symlink(external, stagingPath, process.platform === "win32" ? "junction" : "dir");
+      }
+      return fetch(params);
+    });
+
+    await expect(
+      ensureManagedCrabboxBinary({ binary: test.candidate, env: test.env, runCommand }),
+    ).rejects.toThrow();
+    expect(await fs.readdir(external)).toEqual([]);
+    await expect(fs.access(test.binary)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it.each(["advertised", "streamed"])(
+    "rejects %s oversized checksums and releases the transport before cleanup",
+    async (size) => {
+      const test = await fixture();
+      const cancelled = createDeferred<void>();
+      const release = vi.fn(async () => {
+        await cancelled.promise;
+      });
+      test.fetch.mockResolvedValueOnce({
+        response: new Response(
+          new ReadableStream<Uint8Array>({
+            pull(controller) {
+              controller.enqueue(new Uint8Array(64 * 1024 + 1));
+            },
+            cancel() {
+              cancelled.resolve();
+              throw new Error("cancellation failed");
+            },
+          }),
+          size === "advertised" ? { headers: { "content-length": String(64 * 1024 + 1) } } : {},
+        ),
+        finalUrl: "https://github.com",
+        release,
+      });
+      await expect(
+        ensureManagedCrabboxBinary({ binary: test.candidate, env: test.env, runCommand }),
+      ).rejects.toThrow(/bytes|large/i);
+      expect(release).toHaveBeenCalledOnce();
+      expect(await fs.readdir(path.dirname(path.dirname(test.binary)))).toEqual([]);
+    },
+  );
+
   it("rejects an executable whose version disagrees with the verified release", async () => {
     const test = await fixture();
     const staleRunner: CrabboxCommandRunner = async (argv, options) => ({
       ...(await runCommand(argv, options)),
-      stdout: "crabbox version 0.54.0",
+      stdout: "crabbox version 0.55.0",
     });
     await expect(
       ensureManagedCrabboxBinary({
@@ -174,7 +273,7 @@ describe("managed Crabbox", () => {
         env: test.env,
         runCommand: staleRunner,
       }),
-    ).rejects.toThrow("does not satisfy 0.55.0");
+    ).rejects.toThrow("does not satisfy 0.56.0");
     expect(await fs.readdir(path.dirname(path.dirname(test.binary)))).toEqual([]);
   });
 
@@ -263,7 +362,7 @@ describe("managed Crabbox", () => {
     ).toBe("keep me");
   });
 
-  it.each(["missing", "0.54.0", "corrupt"])(
+  it.each(["missing", "0.55.0", "corrupt"])(
     "repairs a %s managed executable while preserving the previous directory",
     async (damage) => {
       const test = await fixture();
@@ -277,7 +376,7 @@ describe("managed Crabbox", () => {
         ensureManagedCrabboxBinary({ binary: test.candidate, env: test.env, runCommand }),
       ).resolves.toEqual({ binary: test.binary, version: CRABBOX_MIN_VERSION });
       expect(await fs.readFile(test.binary, "utf8")).toBe(CRABBOX_MIN_VERSION);
-      expect(await fs.readFile(test.candidate, "utf8")).toBe("0.54.0");
+      expect(await fs.readFile(test.candidate, "utf8")).toBe("0.55.0");
       const parent = path.dirname(destination);
       const entries = await fs.readdir(parent);
       const backups = entries.filter((name) =>
@@ -379,6 +478,7 @@ describe("managed Crabbox", () => {
     async ({ transfer, elapsedMs, succeeds }) => {
       const test = await fixture();
       const started = createDeferred<void>();
+      const chunks = Array.from({ length: elapsedMs / 20_000 }, () => createDeferred<void>());
       test.fetch.mockImplementation(async ({ url, signal, timeoutMs }) => {
         if (url.endsWith("/checksums.txt")) {
           return { response: new Response(test.checksums), finalUrl: url, release: async () => {} };
@@ -387,33 +487,47 @@ describe("managed Crabbox", () => {
         const deadline = buildTimeoutAbortSignal({ signal, timeoutMs });
         let timer: ReturnType<typeof setTimeout> | undefined;
         let offset = 0;
+        let requested = 0;
         let abort: () => void = () => {};
-        const body = new ReadableStream<Uint8Array>({
-          start(controller) {
-            abort = () => {
+        let finishPull = () => {};
+        const body = new ReadableStream<Uint8Array>(
+          {
+            start(controller) {
+              abort = () => {
+                clearTimeout(timer);
+                controller.error(deadline.signal?.reason);
+                finishPull();
+              };
+              deadline.signal?.addEventListener("abort", abort, { once: true });
+            },
+            pull(controller) {
+              started.resolve();
+              chunks[requested]?.resolve();
+              requested += 1;
+              return new Promise<void>((resolve) => {
+                finishPull = resolve;
+                if (transfer !== "stall") {
+                  timer = setTimeout(() => {
+                    const size = transfer === "trickle" ? 1 : Math.ceil(test.archive.length / 8);
+                    controller.enqueue(
+                      new Uint8Array(test.archive.subarray(offset, offset + size)),
+                    );
+                    offset += size;
+                    if (offset >= test.archive.length) {
+                      controller.close();
+                    }
+                    resolve();
+                  }, 20_000);
+                }
+              });
+            },
+            cancel() {
               clearTimeout(timer);
-              controller.error(deadline.signal?.reason);
-            };
-            deadline.signal?.addEventListener("abort", abort, { once: true });
-            const next = () => {
-              const size = transfer === "trickle" ? 1 : Math.ceil(test.archive.length / 8);
-              controller.enqueue(new Uint8Array(test.archive.subarray(offset, offset + size)));
-              offset += size;
-              if (offset >= test.archive.length) {
-                controller.close();
-              } else {
-                timer = setTimeout(next, 20_000);
-              }
-            };
-            if (transfer !== "stall") {
-              timer = setTimeout(next, 20_000);
-            }
-            started.resolve();
+              finishPull();
+            },
           },
-          cancel() {
-            clearTimeout(timer);
-          },
-        });
+          { highWaterMark: 0 },
+        );
         return {
           response: new Response(body),
           finalUrl: url,
@@ -443,9 +557,14 @@ describe("managed Crabbox", () => {
         },
       );
       await started.promise;
-      await vi.advanceTimersByTimeAsync(elapsedMs - 1);
-      expect(settled).toBe(false);
-      await vi.advanceTimersByTimeAsync(1);
+      for (let elapsed = 0; elapsed < elapsedMs; elapsed += 20_000) {
+        if (transfer !== "stall") {
+          await chunks[elapsed / 20_000]!.promise;
+        }
+        await vi.advanceTimersByTimeAsync(Math.min(20_000, elapsedMs - elapsed) - 1);
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+      }
       vi.useRealTimers();
       if (succeeds) {
         await expect(result).resolves.toEqual({
@@ -463,10 +582,11 @@ describe("managed Crabbox", () => {
 
 describe("Crabbox version admission", () => {
   it.each([
-    ["0.54.9", "outdated"],
-    ["0.55.0-rc.1", "outdated"],
-    ["0.55.0+build.1", "supported"],
-    ["0.56.0-dev", "supported"],
+    ["0.55.0", "outdated"],
+    ["0.55.9", "outdated"],
+    ["0.56.0-rc.1", "outdated"],
+    ["0.56.0+build.1", "supported"],
+    ["0.57.0-dev", "supported"],
     ["0.9007199254740993.0", "indeterminate"],
     ["development", "indeterminate"],
   ])("classifies %s as %s", async (version, status) => {

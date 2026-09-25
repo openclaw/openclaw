@@ -27,6 +27,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     private var isChatWindowVisible = false
     private var observedPaused: Bool
     private var observedConnectionMode: AppState.ConnectionMode
+    private var observedHostsLocalGateway: Bool
     private var observedPushToTalk: Bool
 
     init(state: AppState, updater: UpdaterProviding) {
@@ -34,6 +35,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         self.updater = updater
         self.observedPaused = state.isPaused
         self.observedConnectionMode = state.connectionMode
+        self.observedHostsLocalGateway = state.hostsLocalGatewayWithRemotePrimary
         self.observedPushToTalk = state.voicePushToTalkEnabled
         super.init()
     }
@@ -45,7 +47,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         self.menu.delegate = self
         StatusMenuAppearance.pin(self.menu)
 
-        let renderer = StatusMenuRenderer(menu: self.menu, state: self.state)
+        let renderer = StatusMenuRenderer(menu: self.menu, state: self.state, approvalQueue: self.approvals)
         renderer.onInstallUpdate = { [weak self] in
             self?.updater.checkForUpdates(nil)
         }
@@ -70,7 +72,6 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         self.refreshTask = nil
         self.sessions.cancelPreviewTasks()
         self.summaries.menuDidClose()
-        self.approvals.stop()
         if let clickMonitor = self.clickMonitor {
             NSEvent.removeMonitor(clickMonitor)
             self.clickMonitor = nil
@@ -160,16 +161,12 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             else { return event }
             let point = button.convert(event.locationInWindow, from: nil)
             guard button.bounds.contains(point) else { return event }
-            switch event.type {
-            case .leftMouseDown:
-                AppNavigationActions.openDashboard()
-                return nil
-            case .rightMouseDown:
+            if event.type == .rightMouseDown || event.modifierFlags.contains(.control) {
                 self.presentMenu()
-                return nil
-            default:
-                return event
+            } else {
+                AppNavigationActions.openDashboard()
             }
+            return nil
         }
     }
 
@@ -229,6 +226,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         withObservationTracking {
             _ = self.state.isPaused
             _ = self.state.connectionMode
+            _ = self.state.hostsLocalGatewayWithRemotePrimary
             _ = self.gatewayManager.status
             _ = self.controlChannel.state
             _ = self.state.voiceWakeMeterActive
@@ -270,25 +268,26 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
 
     private func applyStateSideEffects() {
         let paused = self.state.isPaused
-        if paused != self.observedPaused {
-            self.observedPaused = paused
-            if self.state.connectionMode == .local {
-                self.gatewayManager.setActive(!paused)
-            } else {
-                self.gatewayManager.stop()
-            }
-        }
-
         let mode = self.state.connectionMode
-        if mode != self.observedConnectionMode {
+        let hostsLocalGateway = self.state.hostsLocalGatewayWithRemotePrimary
+        let modeChanged = mode != self.observedConnectionMode
+        if modeChanged || paused != self.observedPaused || hostsLocalGateway != self.observedHostsLocalGateway {
+            self.observedPaused = paused
             self.observedConnectionMode = mode
+            self.observedHostsLocalGateway = hostsLocalGateway
             Task {
-                await ConnectionModeCoordinator.shared.apply(mode: mode, paused: self.state.isPaused)
-                if self.state.connectionMode == mode, AppLaunchRuntimePlan.current.allowsAutomaticPresentation {
+                guard self.state.connectionMode == mode, self.state.isPaused == paused,
+                      self.state.hostsLocalGatewayWithRemotePrimary == hostsLocalGateway else { return }
+                await ConnectionModeCoordinator.shared.apply(mode: mode, paused: paused)
+                if modeChanged, self.state.connectionMode == mode,
+                   AppLaunchRuntimePlan.current.allowsAutomaticPresentation
+                {
                     CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "connection-mode")
                 }
             }
-            BrowserProfileImportModel.shared.handleConnectionModeChange()
+            if modeChanged {
+                BrowserProfileImportModel.shared.handleConnectionModeChange()
+            }
         }
 
         let pushToTalk = self.state.voicePushToTalkEnabled
@@ -382,7 +381,7 @@ private struct StatusMenuIconView: View {
             earBoostActive: self.state.earBoostActive,
             blinkTick: self.state.blinkTick,
             sendCelebrationTick: self.state.sendCelebrationTick,
-            gatewayStatus: GatewayProcessManager.shared.status,
+            gatewayStatus: self.state.connectionMode == .local ? GatewayProcessManager.shared.status : .stopped,
             connectionMode: self.state.connectionMode,
             controlChannelState: ControlChannel.shared.state,
             animationsEnabled: self.state.iconAnimationsEnabled && !sleeping,
@@ -392,12 +391,6 @@ private struct StatusMenuIconView: View {
 
     private var effectiveIconState: IconState {
         let selection = self.state.iconOverride
-        guard selection != .system else { return WorkActivityStore.shared.iconState }
-        return switch selection.toIconState() {
-        case let .workingMain(kind), let .workingOther(kind), let .overridden(kind):
-            .overridden(kind)
-        case .idle:
-            .idle
-        }
+        return selection.fixedIconState() ?? WorkActivityStore.shared.iconState
     }
 }

@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-node_version="24.19.0"
-pnpm_spec="pnpm@12.3.4+sha512.961aa41fb077da3a04a441d9f8e15ebc0c96da8ef710b2eb67bf9ee7cb0610eabd48f1fd85f51cffe73846785fa0f87c56a3a872a1d893f8446741b5cce45457"
-# Trusted main's historical pin is needed to validate older contributor heads.
-historical_pnpm_spec="pnpm@12.1.0+sha512.d9b8276d97f6ec86e49815877f91ee9f63cee61f2063b304e43b6dab8fa07ce8a9afd46d2facd39f921e6a9d06b3c75a81349c7b888c2d22886bae0229901037"
+node_version="24.21.0"
+pnpm_spec="pnpm@12.4.2+sha512.08adc6613180275c7c9edada39dcf08c9c61ad4e7eaf330a4f3461f102b0f907423454d117f98e72d47fef0616070644d7bffc973a6a57f5090a6d7c368b07c9"
+# Keep exact formerly trusted pins so older contributor heads remain verifiable.
+historical_pnpm_specs=(
+  "pnpm@12.4.0+sha512.37536c26ed40ab4134b6511e09f6b27f3ebb45687468f2406ca3805279a4e5ca158c1931350ad9774d6ab2108d71b3dbaeb39943159294375e4d053e8e05685c"
+  "pnpm@12.3.4+sha512.961aa41fb077da3a04a441d9f8e15ebc0c96da8ef710b2eb67bf9ee7cb0610eabd48f1fd85f51cffe73846785fa0f87c56a3a872a1d893f8446741b5cce45457"
+  "pnpm@12.1.0+sha512.d9b8276d97f6ec86e49815877f91ee9f63cee61f2063b304e43b6dab8fa07ce8a9afd46d2facd39f921e6a9d06b3c75a81349c7b888c2d22886bae0229901037"
+)
 
 if [[ $# -lt 2 ]]; then
   echo "usage: $0 <expected-head-sha> <command> [args...]" >&2
@@ -39,11 +43,11 @@ fi
 case "$(/usr/bin/uname -m)" in
   x86_64)
     node_arch="x64"
-    node_sha256="14b342e71204f811bde6153be8e04b62aef63c236fef92b55f9c83154b409647"
+    node_sha256="fd8e59d5a511510f6a298afb548f18c7d2b1be404d8b4a27d94fbe49f56cb2d6"
     ;;
   aarch64 | arm64)
     node_arch="arm64"
-    node_sha256="01443c1e1a29e531ccad5a46fefa6df490d2189c49f7955904aecdbb0fe86fdc"
+    node_sha256="6ad1325edbdb5649c379b75a237147a666c95d4f9ae8d340fef2d1575d289ad2"
     ;;
   *)
     echo "unsupported architecture: $(/usr/bin/uname -m)" >&2
@@ -104,9 +108,9 @@ INSTALL_NODE
 candidate_package_json="$PWD/package.json"
 pnpm_spec="$(
   cd "$install_root"
-  "$install_root/bin/node" - "$candidate_package_json" "$pnpm_spec" "$historical_pnpm_spec" <<'PACKAGE_MANAGER'
+  "$install_root/bin/node" - "$candidate_package_json" "$pnpm_spec" "${historical_pnpm_specs[@]}" <<'PACKAGE_MANAGER'
 const fs = require("node:fs");
-const [file, current, historical] = process.argv.slice(2);
+const [file, ...approvedPins] = process.argv.slice(2);
 let pkg;
 try {
   pkg = JSON.parse(fs.readFileSync(file, "utf8"));
@@ -114,7 +118,7 @@ try {
   console.error("refusing untrusted run: invalid package.json");
   process.exit(1);
 }
-if (pkg?.packageManager !== current && pkg?.packageManager !== historical) {
+if (!approvedPins.includes(pkg?.packageManager)) {
   console.error("refusing untrusted run: packageManager pin differs from trusted main or approved history");
   process.exit(1);
 }
@@ -126,11 +130,11 @@ pnpm_version="${pnpm_spec#pnpm@}"
 pnpm_version="${pnpm_version%%+*}"
 pnpm_native_sha512=""
 case "$pnpm_version:$node_arch" in
-  12.3.4:x64)
-    pnpm_native_sha512="d99a8e9523e47f05f5879711f853e259ff3e17eda1653ff74ef8542b9b22807ab06900888aaf11ec21b186774ab3adc9b5c2e2d9ad50a68fb05ff128c9f8f225"
+  12.4.2:x64)
+    pnpm_native_sha512="fe96edd145536bc34c0e1cce58b4117d9e86f5138a5e524f66dc7ce3906ac967dcee10ab5978532c177bd323b6cbcf84f8858dde81ccd6cfc9b0840d1a4d72be"
     ;;
-  12.3.4:arm64)
-    pnpm_native_sha512="b7bd40540ecb46a88a4f2679c4c61a65cda7e437dda4c6dfa2466e8883971c138cd371029c5d2de226306810ea26056394a6143b0685fdb4506a318d038709e3"
+  12.4.2:arm64)
+    pnpm_native_sha512="d9d4a20d7ca1c7e4531ec7b0c5ec7c7ff8d58ea417589da8a30e240951c459d64a781a60331bd9e9f1e44c050125782a85b2880c7bee3656413fb8097d458be4"
     ;;
 esac
 pnpm_archive="pnpm-${pnpm_version}.tgz"

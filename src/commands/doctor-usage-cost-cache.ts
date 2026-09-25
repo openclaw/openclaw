@@ -6,9 +6,10 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveStateDir } from "../config/paths.js";
 import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
 import { deleteSessionCostUsageRollupsExcept } from "../infra/session-cost-usage-cache.sqlite.js";
+import { openUsageCostRefreshFailures } from "../infra/session-cost-usage-refresh-health.js";
 import { listOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db.js";
 import { shortenHomePath } from "../utils.js";
-import { runDoctorAgentDatabaseOperation } from "./doctor-agent-database-operation.js";
+import { runDoctorAgentDatabaseOperationAsync } from "./doctor-agent-database-operation.js";
 import { maybeScrubConfigAuditLog } from "./doctor-config-audit-scrub.js";
 
 const LEGACY_USAGE_COST_TEMP_GRACE_MS = 10_000;
@@ -170,20 +171,38 @@ export async function maybeRepairLegacyRuntimeFiles(
   shouldRepair: boolean,
   env?: NodeJS.ProcessEnv,
 ): Promise<void> {
+  const failures = await openUsageCostRefreshFailures(env)
+    .entries()
+    .catch((error: unknown) => {
+      note(
+        `Could not read usage refresh failure history: ${formatErrorMessage(error)}`,
+        "Usage cost cache",
+      );
+      return [];
+    });
+  if (failures.length > 0) {
+    note(
+      failures
+        .map(({ value }) => `- ${value.agentId}: ${value.sessionFile}: ${value.reason}`)
+        .join("\n"),
+      "Usage cost cache",
+    );
+  }
   await maybeScrubConfigAuditLog({ shouldRepair, env });
   await maybeRemoveLegacyUsageCostCacheFiles({ shouldRepair, env });
   if (shouldRepair) {
     for (const entry of listOpenClawRegisteredAgentDatabases({ env })) {
       if ((await fs.stat(entry.path).catch(() => null))?.isFile()) {
-        runDoctorAgentDatabaseOperation({
+        await runDoctorAgentDatabaseOperationAsync({
           agentId: entry.agentId,
           path: entry.path,
           run: () =>
             deleteSessionCostUsageRollupsExcept({
               agentId: entry.agentId,
+              env,
               databasePath: entry.path,
               liveKeys: new Set(),
-              // Doctor retires old scopes only; current v2 rows are not prune candidates.
+              // Doctor retires old scopes only; current rows are not prune candidates.
               rows: [],
             }),
         });

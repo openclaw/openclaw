@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import path from "node:path";
+import { format } from "node:util";
 // Inventories extension imports to enforce plugin SDK boundary rules.
 import {
   BUNDLED_PLUGIN_PATH_PREFIX,
@@ -33,8 +34,8 @@ type BoundaryCheckIo = {
 
 const MODES = new Set<BoundaryMode>([
   "src-outside-plugin-sdk",
-  "relative-outside-package",
   "normalization-core-bypass",
+  "relative-outside-package",
 ]);
 
 const ruleTextByMode: Record<BoundaryMode, string> = {
@@ -269,6 +270,25 @@ export function createExtensionPluginSdkBoundaryChecker(options: { repoRoot?: st
     argv: string[] = process.argv.slice(2),
     streams: BoundaryCheckIo = { stdout: process.stdout, stderr: process.stderr },
   ): Promise<0 | 1> {
+    if (argv.includes("--all")) {
+      if (argv.includes("--json") || argv.some((arg) => arg.startsWith("--mode="))) {
+        throw new Error("--all cannot be combined with --json or --mode");
+      }
+      let exitCode: 0 | 1 = 0;
+      // Each mode reports independently; all consume this checker's complete inventory.
+      for (const mode of MODES) {
+        try {
+          if ((await run([`--mode=${mode}`], streams)) !== 0) {
+            exitCode = 1;
+          }
+        } catch (error) {
+          writeLine(streams.stderr, `${ruleTextByMode[mode]} check failed:`);
+          writeLine(streams.stderr, format(error));
+          exitCode = 1;
+        }
+      }
+      return exitCode;
+    }
     const json = argv.includes("--json");
     const modeArg = argv.find((arg) => arg.startsWith("--mode="));
     const modeValue = modeArg?.slice("--mode=".length) ?? "src-outside-plugin-sdk";

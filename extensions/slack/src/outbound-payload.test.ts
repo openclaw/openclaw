@@ -864,27 +864,89 @@ describe("slackOutbound sendPayload", () => {
     expect(result.messageId).toBe("sl-controls");
   });
 
-  it("rolls over authored blocks instead of dropping over-limit content", async () => {
-    const { run, sendMock } = createHarness({
-      payload: {
-        channelData: {
-          slack: { blocks: Array.from({ length: 50 }, () => ({ type: "divider" })) },
+  it.each(["blocks", "table", "chart"] as const)(
+    "rolls over the %s budget while keeping control indexes reply-wide",
+    async (budget) => {
+      const rawData =
+        budget === "blocks"
+          ? Array.from({ length: 48 }, () => ({ type: "divider" }))
+          : budget === "table"
+            ? [
+                {
+                  type: "data_table",
+                  caption: "Existing table",
+                  rows: [
+                    [{ type: "raw_text", text: "N" }],
+                    [{ type: "raw_text", text: "x".repeat(9_999) }],
+                  ],
+                },
+              ]
+            : Array.from({ length: 2 }, () => ({
+                type: "data_visualization",
+                title: "Existing chart",
+                chart: { type: "pie", segments: [{ label: "Open", value: 5 }] },
+              }));
+      const rawBlocks = [
+        ...rawData,
+        { type: "divider", block_id: "openclaw_reply_buttons_7suffix" },
+        { type: "divider", block_id: "openclaw_reply_select_11" },
+      ];
+      const { run, sendMock, to } = createHarness({
+        payload: {
+          channelData: {
+            slack: { blocks: rawBlocks },
+          },
+          presentation: {
+            blocks: [
+              budget === "chart"
+                ? createPipelineChart()
+                : { type: "table", caption: "Accounts", headers: ["Account"], rows: [["Acme"]] },
+              valueButtons("Stage", "stage"),
+              { type: "select", options: [{ label: "Production", value: "production" }] },
+            ],
+          },
+          interactive: {
+            blocks: [
+              valueButtons("Approve", "approve"),
+              { type: "select", options: [{ label: "Recent", value: "recent" }] },
+            ],
+          },
         },
-        presentation: {
-          blocks: [{ type: "table", caption: "Accounts", headers: ["Account"], rows: [["Acme"]] }],
-        },
-        interactive: interactiveButtons("Allow", "pluginbind:approval-123:o"),
-      },
-    });
+        sendResults: [{ messageId: "sl-first" }, { messageId: "sl-second" }],
+      });
 
-    await expect(run()).resolves.toMatchObject({ messageId: "sl-1" });
-    expect(sendMock).toHaveBeenCalledTimes(2);
-    expect(sentSlackMessage(sendMock, 0).options.blocks).toHaveLength(50);
-    expect(sentSlackMessage(sendMock, 1).options.blocks?.map((block) => block.type)).toEqual([
-      "data_table",
-      "actions",
-    ]);
-  });
+      await expect(run()).resolves.toMatchObject({ channel: "slack", messageId: "sl-second" });
+      expect(sendMock).toHaveBeenCalledTimes(2);
+      expect(sentSlackMessage(sendMock, 0)).toMatchObject({ to, options: { blocks: rawBlocks } });
+      const second = sentSlackMessage(sendMock, 1);
+      expect(second.to).toBe(to);
+      expect(second.options.blocks?.map((block) => block.type)).toEqual([
+        budget === "chart" ? "data_visualization" : "data_table",
+        "actions",
+        "actions",
+        "actions",
+        "actions",
+      ]);
+      expect(second.options.blocks?.slice(1)).toMatchObject([
+        {
+          block_id: "openclaw_reply_buttons_8",
+          elements: [{ action_id: "openclaw:reply_button:8:1" }],
+        },
+        {
+          block_id: "openclaw_reply_select_12",
+          elements: [{ action_id: "openclaw:reply_select:12" }],
+        },
+        {
+          block_id: "openclaw_reply_buttons_9",
+          elements: [{ action_id: "openclaw:reply_button:9:1" }],
+        },
+        {
+          block_id: "openclaw_reply_select_13",
+          elements: [{ action_id: "openclaw:reply_select:13" }],
+        },
+      ]);
+    },
+  );
 
   it("offsets presentation controls against native Slack blocks before standalone interactive controls", async () => {
     const { run, sendMock, to } = createHarness({

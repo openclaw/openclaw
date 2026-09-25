@@ -8,7 +8,15 @@ import * as kyselySync from "../infra/kysely-sync.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import * as busyTimeout from "../infra/sqlite-busy-timeout.js";
 import * as sqliteWal from "../infra/sqlite-wal.js";
-import { acquireStateDatabaseHandleExclusion } from "../infra/state-database-coordinator.js";
+import {
+  acquireStateDatabaseHandleExclusion,
+  resolveStateDatabaseCoordinatorPath,
+  withStateDatabaseCoordinatorRuntimeDirectory,
+} from "../infra/state-database-coordinator.js";
+import { setConsoleSubsystemFilter } from "../logging/console.js";
+import { setLoggerOverride } from "../logging/logger.js";
+import { loggingState } from "../logging/state.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   openClawStateDatabaseCache,
   recordOpenClawStateDatabaseOpenFailure,
@@ -30,14 +38,27 @@ describe("unpublished state database acquisition", () => {
         }
       }
       databases.clear();
+      // Expire idle coordinator handles before discarding the fake clock.
+      vi.runOnlyPendingTimers();
       vi.clearAllTimers();
       vi.useRealTimers();
       cleanup();
     });
   });
 
+  function observeMaintenanceTimers() {
+    const scheduled = vi.spyOn(globalThis, "setInterval");
+    const cleared = vi.spyOn(globalThis, "clearInterval");
+    return () =>
+      scheduled.mock.results.filter(
+        (result) =>
+          result.type === "return" && !cleared.mock.calls.some(([timer]) => timer === result.value),
+      ).length;
+  }
+
   function acquisitionFixture() {
     vi.useFakeTimers();
+    const maintenanceTimerCount = observeMaintenanceTimers();
     const pathname = path.join(tempDirs.make("openclaw-state-acquisition-"), "state.sqlite");
     const params = {
       pathname,
@@ -65,23 +86,99 @@ describe("unpublished state database acquisition", () => {
       }
       return db;
     });
-    return { params, open, openNative, opened };
+    return { params, open, openNative, opened, maintenanceTimerCount };
   }
 
   function expectSuccessfulReopen(params: Parameters<typeof openUnpublishedStateDatabase>[0]) {
+    const maintenanceTimerCount = observeMaintenanceTimers();
     const reopened = openUnpublishedStateDatabase(params);
     try {
       expect(reopened.db.prepare("SELECT value FROM payload").all()).toEqual([
         { value: "committed" },
       ]);
       expect(reopened.db.isOpen).toBe(true);
-      expect(vi.getTimerCount()).toBe(1);
+      expect(maintenanceTimerCount()).toBe(1);
     } finally {
       reopened.walMaintenance.close();
       closeTrackedStateDatabase(reopened.db);
     }
-    expect(vi.getTimerCount()).toBe(0);
+    expect(maintenanceTimerCount()).toBe(0);
   }
+
+  it("keeps the admitted coordinator directory for delayed maintenance", () => {
+    const { params, open } = acquisitionFixture();
+    const runtimeDirectory = tempDirs.make("openclaw-maintenance-scope-");
+    const database = withStateDatabaseCoordinatorRuntimeDirectory(runtimeDirectory, () =>
+      openUnpublishedStateDatabase(params),
+    );
+    const coordinatorPath = resolveStateDatabaseCoordinatorPath({
+      databasePath: params.pathname,
+      runtimeDirectory,
+      uid: typeof process.getuid === "function" ? process.getuid() : undefined,
+    });
+    try {
+      open.mockClear();
+      vi.advanceTimersByTime(30 * 60 * 1000);
+      expect(open.mock.calls.map(([location]) => location)).toContain(coordinatorPath);
+    } finally {
+      database.walMaintenance.close();
+      closeTrackedStateDatabase(database.db);
+    }
+  });
+
+  it("records and reports SQLite errors from scheduled shared-state checkpoints", async () => {
+    await withEnvAsync({ OPENCLAW_LOG_LEVEL: undefined }, async () => {
+      const previousLogging = { ...loggingState };
+      const warn = vi.fn<(line: string) => void>();
+      try {
+        setLoggerOverride({ level: "silent", consoleLevel: "warn", consoleStyle: "json" });
+        setConsoleSubsystemFilter(["state/db"]);
+        loggingState.forceConsoleToStderr = false;
+        loggingState.rawConsole = { log: vi.fn(), info: vi.fn(), warn, error: vi.fn() };
+        const { params } = acquisitionFixture();
+        const database = openUnpublishedStateDatabase(params);
+        const prepare = database.db.prepare.bind(database.db);
+        const checkpointFailure = new Error("checkpoint storage unavailable");
+        const intercepted = vi.spyOn(database.db, "prepare").mockImplementation((sql) => {
+          if (sql === "PRAGMA wal_checkpoint(PASSIVE);") {
+            throw checkpointFailure;
+          }
+          return prepare(sql);
+        });
+        try {
+          warn.mockClear();
+          await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+          expect(database.walMaintenance.health).toMatchObject({
+            state: "error",
+            error: "checkpoint storage unavailable",
+            warning: true,
+          });
+          expect(warn.mock.calls.map(([line]) => JSON.parse(line) as unknown)).toContainEqual(
+            expect.objectContaining({
+              level: "warn",
+              subsystem: "state/db",
+              message: "Shared-state WAL maintenance failed",
+              error: "checkpoint storage unavailable",
+              path: params.pathname,
+              checkpoint: database.walMaintenance.health,
+            }),
+          );
+          intercepted.mockRestore();
+          await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+          expect(database.walMaintenance.health).toMatchObject({
+            state: "complete",
+            warning: false,
+          });
+        } finally {
+          intercepted.mockRestore();
+          database.walMaintenance.close();
+          closeTrackedStateDatabase(database.db);
+        }
+      } finally {
+        Object.assign(loggingState, previousLogging);
+      }
+    });
+  });
 
   it.each([
     "statement cache",
@@ -91,7 +188,7 @@ describe("unpublished state database acquisition", () => {
     "schema",
     "hardening",
   ])("releases every acquisition after failed %s and preserves committed state", (phase) => {
-    const { params, open, openNative, opened } = acquisitionFixture();
+    const { params, open, openNative, opened, maintenanceTimerCount } = acquisitionFixture();
     const failure = new Error(`${phase} failed`);
     if (phase === "statement cache") {
       vi.spyOn(kyselySync, "enableNodeSqliteKyselyStatementCache").mockImplementation(() => {
@@ -150,7 +247,7 @@ describe("unpublished state database acquisition", () => {
       const db = expectDefined(opened.at(-1), "failed acquisition");
       expect(db.isOpen).toBe(false);
       expect(kyselyCache.kyselyByDatabase.has(db)).toBe(false);
-      expect(vi.getTimerCount()).toBe(0);
+      expect(maintenanceTimerCount()).toBe(0);
     }
     expect(params.recordOpenFailure).not.toHaveBeenCalled();
     vi.restoreAllMocks();
@@ -169,7 +266,7 @@ describe("unpublished state database acquisition", () => {
   )(
     "preserves the $phase error and $cleanupFailure cleanup failures with a disposal-only owner",
     ({ phase, cleanupFailure }) => {
-      const { params, opened } = acquisitionFixture();
+      const { params, opened, maintenanceTimerCount } = acquisitionFixture();
       const failure = new Error(`${phase} failed`);
       const maintenanceFailure = new Error("maintenance close failed");
       const nativeFailure = new Error("native close failed");
@@ -226,7 +323,7 @@ describe("unpublished state database acquisition", () => {
       });
       expect(db.isOpen).toBe(nativeFails);
       expect(kyselyCache.kyselyByDatabase.has(db)).toBe(false);
-      expect(vi.getTimerCount()).toBe(0);
+      expect(maintenanceTimerCount()).toBe(0);
       expect(
         openClawStateDatabaseCache.getOpenClawStateDatabaseIfOpenAtPath(params.pathname),
       ).toBeUndefined();
@@ -270,7 +367,7 @@ describe("unpublished state database acquisition", () => {
   )(
     "latches the real $terminal failure without retrying retained native cleanup (cache failure: $cacheFails)",
     ({ terminal, cacheFails }) => {
-      const { params, open, openNative, opened } = acquisitionFixture();
+      const { params, open, openNative, opened, maintenanceTimerCount } = acquisitionFixture();
       const seed = openNative(params.pathname);
       try {
         if (terminal === "schema") {
@@ -318,7 +415,7 @@ describe("unpublished state database acquisition", () => {
       }
       const db = expectDefined(opened.at(-1), "terminal failed acquisition");
       const terminalFailure = expectDefined(
-        openClawStateDatabaseCache.getOpenClawStateDatabaseRuntimeFailure(params.pathname),
+        openClawStateDatabaseCache.getOpenClawStateDatabaseRecordedFailure(params.pathname),
         "latched terminal failure",
       );
       expect(terminalFailure.name).toBe(
@@ -344,7 +441,7 @@ describe("unpublished state database acquisition", () => {
       expect(() =>
         acquireStateDatabaseHandleExclusion({ databasePath: params.pathname, busyTimeoutMs: 0 }),
       ).toThrow(/state-handles/);
-      expect(vi.getTimerCount()).toBe(0);
+      expect(maintenanceTimerCount()).toBe(0);
       vi.restoreAllMocks();
       expect(openClawStateDatabaseCache.closeOpenClawStateDatabaseByPath(params.pathname)).toBe(
         true,
@@ -356,7 +453,7 @@ describe("unpublished state database acquisition", () => {
       });
       exclusion.release();
       expect(
-        openClawStateDatabaseCache.getOpenClawStateDatabaseRuntimeFailure(params.pathname),
+        openClawStateDatabaseCache.getOpenClawStateDatabaseRecordedFailure(params.pathname),
       ).toBe(terminalFailure);
     },
   );

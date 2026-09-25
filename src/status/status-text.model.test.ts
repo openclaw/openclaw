@@ -1,5 +1,5 @@
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection-config.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
@@ -9,18 +9,48 @@ import {
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import * as transcriptTail from "../config/sessions/session-accessor.sqlite-active-events.js";
-import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
+import {
+  SessionTranscriptProjectionUnavailableError,
+  SessionTranscriptStorageUnavailableError,
+} from "../config/sessions/session-transcript-projection-error.js";
 import type { InternalSessionEntry, SessionContextBudgetStatus } from "../config/sessions/types.js";
-import * as transcriptUsage from "../gateway/session-transcript-readers.js";
+import * as transcriptUsage from "../gateway/session-transcript-usage.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { attachSessionTranscriptRunId } from "../sessions/transcript-events.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { buildStatusReplyParts } from "./status-text.js";
+
+vi.mock(import("../infra/session-cost-usage.js"), async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    loadSessionCostSummariesFromCache: async () => ({
+      summaries: [null],
+      cacheStatus: {
+        status: "partial",
+        cachedFiles: 0,
+        pendingFiles: 1,
+        staleFiles: 0,
+      },
+    }),
+  };
+});
 
 type StatusTextParams = Parameters<typeof buildStatusReplyParts>[0];
 
 describe("buildStatusText prepared context windows", () => {
-  afterEach(() => cliBackendsTesting.resetDepsForTest());
+  let state: OpenClawTestState;
+  beforeEach(async () => {
+    state = await createOpenClawTestState({ label: "status-model" });
+  });
+  afterEach(async () => {
+    cliBackendsTesting.resetDepsForTest();
+    await state.cleanup();
+  });
   const catalog = [
     {
       provider: "deepseek",
@@ -74,6 +104,37 @@ describe("buildStatusText prepared context windows", () => {
       ...overrides,
     });
   }
+
+  it.each([
+    { agentThinking: undefined, agentDefault: undefined, expected: "high" },
+    { agentThinking: false, agentDefault: undefined, expected: "off" },
+    { agentThinking: "high", agentDefault: "minimal", expected: "minimal" },
+  ] as const)(
+    "renders configured thinking precedence (model=$agentThinking, agent=$agentDefault)",
+    async ({ agentThinking, agentDefault, expected }) => {
+      const parts = await renderPreparedStatus({
+        cfg: {
+          agents: {
+            defaults: {
+              thinkingDefault: "low",
+              models: { "fixture/reasoning-model": { params: { thinking: "high" } } },
+            },
+            entries: {
+              main: {
+                thinkingDefault: agentDefault,
+                models: { "fixture/reasoning-model": { params: { thinking: agentThinking } } },
+              },
+            },
+          },
+        },
+        provider: "fixture",
+        model: "reasoning-model",
+        thinkingCatalog: [{ provider: "fixture", id: "reasoning-model", reasoning: true }],
+      });
+
+      expect(parts.text).toContain(`think ${expected}`);
+    },
+  );
 
   async function renderTerminalFallback(
     params: {
@@ -146,12 +207,50 @@ describe("buildStatusText prepared context windows", () => {
 
   it.each([
     ["stale runtime telemetry", {}],
-    ["stale resolved context", { contextTokensSource: "resolved-v1" }],
-    ["absent runtime model", { modelProvider: undefined, model: undefined }],
-  ] satisfies Array<[string, Partial<InternalSessionEntry>]>)(
+    ["stale resolved context", { entry: { contextTokensSource: "resolved-v1" } }],
+    ["absent runtime model", { entry: { modelProvider: undefined, model: undefined } }],
+    [
+      "padded selected notice",
+      {
+        entry: {
+          fallbackNotice: {
+            kind: "active",
+            selectedModel: "  deepseek/deepseek-v4-flash  ",
+            activeModel: "fallback/small-model",
+          },
+        },
+      },
+    ],
+    [
+      "literal provider-local model",
+      {
+        status: { provider: "MiXeD", model: "Vendor/Model:opaque" },
+        entry: {
+          fallbackNotice: {
+            kind: "active",
+            selectedModel: "mixed/Vendor/Model:opaque",
+            activeModel: "fallback/small-model",
+          },
+        },
+      },
+    ],
+    [
+      "legacy embedded provider",
+      {
+        entry: {
+          modelOverride: "MiXeD/Model:Case",
+          fallbackNotice: {
+            kind: "active",
+            selectedModel: "MiXeD/Model:Case",
+            activeModel: "fallback/small-model",
+          },
+        },
+      },
+    ],
+  ] satisfies Array<[string, Parameters<typeof renderTerminalFallback>[0]]>)(
     "projects a settled terminal fallback over %s without relabeling the entry",
-    async (_name, entry) => {
-      const parts = await renderTerminalFallback({ entry });
+    async (_name, params) => {
+      const parts = await renderTerminalFallback(params);
       expect(parts.text).toContain("Fallback: fallback/small-model");
       expect(parts.text).toContain("Context: 45k/128k");
       expect(parts.text).not.toContain("45k/1.0m");
@@ -192,18 +291,6 @@ describe("buildStatusText prepared context windows", () => {
       },
     ],
     [
-      "stale selected notice",
-      {
-        entry: {
-          fallbackNotice: {
-            kind: "active",
-            selectedModel: "deepseek/older-model",
-            activeModel: "fallback/small-model",
-          },
-        },
-      },
-    ],
-    [
       "unmatched active notice",
       {
         entry: {
@@ -223,6 +310,26 @@ describe("buildStatusText prepared context windows", () => {
       expect(parts.text).toContain("Context: 45k/1.0m");
     },
   );
+
+  it("skips terminal transcript access for a stale selected notice", async () => {
+    const readTail = vi.spyOn(transcriptTail, "readSessionTranscriptBoundedMessageTailPage");
+    try {
+      const parts = await renderTerminalFallback({
+        entry: {
+          fallbackNotice: {
+            kind: "active",
+            selectedModel: "deepseek/older-model",
+            activeModel: "fallback/small-model",
+          },
+        },
+      });
+      expect(parts.text).not.toContain("Fallback: fallback/small-model");
+      expect(parts.text).toContain("Context: 45k/1.0m");
+      expect(readTail).not.toHaveBeenCalled();
+    } finally {
+      readTail.mockRestore();
+    }
+  });
 
   it("retains the incoming prepared cap when it already belongs to the terminal pair", async () => {
     const parts = await renderTerminalFallback({
@@ -386,7 +493,7 @@ describe("buildStatusText prepared context windows", () => {
     {
       name: "canonical default with absent agent configuration",
       cfg: {},
-      expectedModel: "openai/gpt-5.6-sol",
+      expectedModel: "openai/gpt-6-astra",
     },
     {
       name: "literal self-provider prefix in a prepared model ID",
@@ -480,41 +587,39 @@ describe("buildStatusText prepared context windows", () => {
     expect(sessionEntry).toEqual(original);
   });
 
-  it.each([false, true])(
-    "catches only unavailable terminal projections (unavailable=%s)",
-    async (unavailable) => {
-      const error = unavailable
-        ? new SessionTranscriptProjectionUnavailableError("projection")
-        : new Error("unexpected reader failure");
-      const readTail = vi
-        .spyOn(transcriptTail, "readSessionTranscriptBoundedMessageTailPage")
-        .mockImplementation(() => {
-          throw error;
-        });
-      try {
-        const sessionEntry: InternalSessionEntry = {
-          sessionId: "projection",
-          updatedAt: 1,
-          status: "done",
-          lastRunId: "settled-run",
-          fallbackNotice: {
-            kind: "active",
-            selectedModel: "deepseek/deepseek-v4-flash",
-            activeModel: "fallback/small-model",
-          },
-        };
-        const result = renderPreparedStatus({ sessionEntry });
-        if (unavailable) {
-          expect((await result).text).not.toContain("Fallback:");
-        } else {
-          await expect(result).rejects.toBe(error);
-        }
-        expect(readTail).toHaveBeenCalledOnce();
-      } finally {
-        readTail.mockRestore();
+  it.each([
+    { error: new SessionTranscriptProjectionUnavailableError("projection"), unavailable: true },
+    { error: new SessionTranscriptStorageUnavailableError(), unavailable: true },
+    { error: new Error("unexpected reader failure"), unavailable: false },
+  ])("catches only unavailable terminal data ($error.name)", async ({ error, unavailable }) => {
+    const readTail = vi
+      .spyOn(transcriptTail, "readSessionTranscriptBoundedMessageTailPage")
+      .mockImplementation(() => {
+        throw error;
+      });
+    try {
+      const sessionEntry: InternalSessionEntry = {
+        sessionId: "projection",
+        updatedAt: 1,
+        status: "done",
+        lastRunId: "settled-run",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "deepseek/deepseek-v4-flash",
+          activeModel: "fallback/small-model",
+        },
+      };
+      const result = renderPreparedStatus({ sessionEntry });
+      if (unavailable) {
+        expect((await result).text).not.toContain("Fallback:");
+      } else {
+        await expect(result).rejects.toBe(error);
       }
-    },
-  );
+      expect(readTail).toHaveBeenCalledOnce();
+    } finally {
+      readTail.mockRestore();
+    }
+  });
 
   it("renders a cold-cache prepared window in plain and rich status", async () => {
     const parts = await renderPreparedStatus();

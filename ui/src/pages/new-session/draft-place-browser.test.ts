@@ -8,7 +8,7 @@ import { DraftGatewayState } from "./draft-gateway-state.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { PICKER_INPUT_DEBOUNCE_MS } from "./place-browser-state.ts";
-import { loadNewSessionPreference, patchNewSessionPreference } from "./preferences.ts";
+import { loadNewSessionPreference, replaceBrowserPreference } from "./preferences.ts";
 import { TestReactiveControllerHost } from "./reactive-controller-host.test-support.ts";
 
 afterEach(() => {
@@ -20,8 +20,9 @@ function createBrowser(
   data?: NewSessionRouteData,
   recoveryReady = true,
   isAdmin = false,
+  view?: { host: TestReactiveControllerHost; root: HTMLElement },
 ) {
-  const host = new TestReactiveControllerHost();
+  const host = view?.host ?? new TestReactiveControllerHost();
   const controllers: ReactiveController[] = [];
   vi.spyOn(host, "addController").mockImplementation((controller) => controllers.push(controller));
   const client = {
@@ -38,6 +39,7 @@ function createBrowser(
   };
   const context = {
     gateway: {
+      subscribe: () => () => undefined,
       connection: { gatewayUrl: "ws://gateway.example" },
       snapshot: {
         phase: "connected",
@@ -94,9 +96,9 @@ function createBrowser(
       onProjectMissing,
       onSelectProject,
       onApprovedListing: vi.fn(),
-      querySelector: () => null,
-      activeElement: () => null,
-      body: () => null,
+      querySelector: (selector) => view?.root.querySelector(selector) ?? null,
+      activeElement: () => view?.root.ownerDocument.activeElement ?? null,
+      body: () => view?.root.ownerDocument.body ?? null,
     },
   );
   onTestFinished(() => {
@@ -112,6 +114,16 @@ function createBrowser(
     client,
     context,
     hello,
+    detachHost() {
+      for (const controller of controllers) {
+        controller.hostDisconnected?.();
+      }
+    },
+    queuedUpdate() {
+      for (const controller of controllers) {
+        controller.hostUpdate?.();
+      }
+    },
     update() {
       gateway.synchronize(context.gateway);
       for (const controller of controllers) {
@@ -122,6 +134,89 @@ function createBrowser(
 }
 
 describe("DraftPlaceBrowser", () => {
+  it.each(["current", "closed", "disconnected", "focus moved", "returned"])(
+    "hands keyboard focus to the current project view after rendering (%s)",
+    async (change) => {
+      const update = createDeferred<boolean>();
+      const host = new (class extends TestReactiveControllerHost {
+        override readonly updateComplete = update.promise;
+      })();
+      const root = document.body.appendChild(document.createElement("div"));
+      onTestFinished(() => root.remove());
+      const popover = root.appendChild(document.createElement("div"));
+      popover.className = "new-session-page__project-popover";
+      const browse = popover.appendChild(document.createElement("button"));
+      browse.dataset.value = "browse";
+      browse.textContent = "Browse";
+      const elsewhere = root.appendChild(document.createElement("button"));
+      const { browser } = createBrowser(
+        async () => ({ path: "/workspace", home: "/", entries: [] }),
+        undefined,
+        true,
+        false,
+        { host, root },
+      );
+      browser.onPopoverShow("project");
+      browse.focus();
+      browser.selectGatewayBrowser("/workspace");
+      const path = document.createElement("input");
+      path.className = "new-session-page__browser-path";
+      popover.replaceChildren(path);
+      expect(document.activeElement).toBe(document.body);
+
+      if (change === "closed") {
+        browser.close();
+      } else if (change === "disconnected") {
+        browser.disconnect();
+      } else if (change === "focus moved") {
+        elsewhere.focus();
+      } else if (change === "returned") {
+        browser.showRoot();
+        popover.replaceChildren(browse);
+      }
+      update.resolve(true);
+      await host.updateComplete;
+      expect(document.activeElement).toBe(
+        change === "current"
+          ? path
+          : change === "returned"
+            ? browse
+            : change === "focus moved"
+              ? elsewhere
+              : document.body,
+      );
+      if (change === "current") {
+        browser.showRoot();
+        popover.replaceChildren(browse);
+        await host.updateComplete;
+        expect(document.activeElement).toBe(browse);
+      }
+    },
+  );
+
+  it("retains catalog context for a detached draft until its lifetime owner disposes it", async () => {
+    const project = { id: "project", displayName: "Project", repoRoot: "/project" };
+    const fixture = createBrowser(async () => ({ projects: [project] }));
+    await fixture.browser.refreshProjects();
+    fixture.browser.selectProject({ kind: "local", id: project.id });
+    fixture.detachHost();
+    expect(fixture.browser.selectedProject()).toEqual(project);
+  });
+
+  it("does not reattach a disposed draft catalog from a queued Lit update", async () => {
+    const request = vi.fn(async () => ({ projects: [] }));
+    const fixture = createBrowser(request);
+    await fixture.browser.refreshProjects();
+    const reads = request.mock.calls.length;
+    fixture.gateway.disconnect();
+    fixture.browser.disconnect();
+    fixture.queuedUpdate();
+    await Promise.resolve();
+    expect(request).toHaveBeenCalledTimes(reads);
+    fixture.update();
+    await fixture.browser.refreshProjects();
+    expect(request).toHaveBeenCalledTimes(reads + 1);
+  });
   it("keeps environment search transient and separate from project search", () => {
     const { browser } = createBrowser(async () => ({}));
     const writeStorage = vi.spyOn(Storage.prototype, "setItem");
@@ -412,6 +507,18 @@ describe("DraftPlaceBrowser", () => {
 });
 
 describe("DraftGatewayState", () => {
+  it("does not start preference reads after the draft disconnects during module loading", async () => {
+    const request = vi.fn(async () => ({ status: "ok", entries: {} }));
+    const fixture = createBrowser(request);
+    fixture.context.gateway.snapshot.selfUser = { id: "profile-one" };
+    fixture.hello.features.methods.push("users.prefs.get", "users.prefs.set");
+    fixture.gateway.synchronize(fixture.context.gateway);
+    expect(fixture.gateway.preferenceLoading).toBe(true);
+    fixture.gateway.disconnect();
+    await vi.dynamicImportSettled();
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it.each(["disconnect", "credential", "gateway"])(
     "rejects late place catalogs synchronously after %s invalidation",
     async (change) => {
@@ -435,6 +542,8 @@ describe("DraftGatewayState", () => {
       if (change === "gateway") {
         fixture.context.gateway.connection.gatewayUrl = "ws://gateway-b.example";
       }
+      const current = createDeferred<Awaited<typeof pending.promise>>();
+      request.mockReturnValue(current.promise);
       // Retirement must happen in synchronize, before Lit schedules hostUpdate.
       fixture.gateway.synchronize(fixture.context.gateway);
       pending.resolve({
@@ -448,6 +557,7 @@ describe("DraftGatewayState", () => {
       });
       expect(fixture.browser.projects).toEqual([]);
       expect(fixture.gateway.environments).toBeNull();
+      current.resolve({ projects: [], environments: [], profiles: [] });
     },
   );
 
@@ -500,7 +610,9 @@ describe("DraftGatewayState", () => {
   });
 
   it("retains a discovered name when the same connection's recovery scope arrives", async () => {
-    const fixture = createBrowser(async () => ({ machineName: "Gateway A" }));
+    const fixture = createBrowser(async (method) =>
+      method === "projects.list" ? { projects: [] } : { machineName: "Gateway A" },
+    );
     fixture.hello.features.methods.push("system.info");
     fixture.client.recoveryScopeReady = false;
     fixture.update();
@@ -514,7 +626,9 @@ describe("DraftGatewayState", () => {
 
   it("hides a disconnected name until the same client's new discovery completes", async () => {
     const pending = createDeferred<{ machineName: string }>();
-    const request = vi.fn(async () => ({ machineName: "Gateway A" }));
+    const request = vi.fn(async (method: string) =>
+      method === "projects.list" ? { projects: [] } : { machineName: "Gateway A" },
+    );
     const fixture = createBrowser(request);
     fixture.hello.features.methods.push("system.info");
     fixture.update();
@@ -523,7 +637,9 @@ describe("DraftGatewayState", () => {
     fixture.context.gateway.snapshot.phase = "reconnecting";
     fixture.update();
     expect(fixture.gateway.gatewayName).toBe("");
-    request.mockImplementation(() => pending.promise);
+    request.mockImplementation((method) =>
+      method === "projects.list" ? Promise.resolve({ projects: [] }) : pending.promise,
+    );
     fixture.context.gateway.snapshot.phase = "connected";
     fixture.update();
     expect(fixture.gateway.gatewayName).toBe("");
@@ -534,10 +650,14 @@ describe("DraftGatewayState", () => {
   it("ignores a late name from the replaced client", async () => {
     const oldName = createDeferred<{ machineName: string }>();
     const newName = createDeferred<{ machineName: string }>();
-    const fixture = createBrowser(() => oldName.promise);
+    const fixture = createBrowser((method) =>
+      method === "projects.list" ? Promise.resolve({ projects: [] }) : oldName.promise,
+    );
     fixture.hello.features.methods.push("system.info");
     fixture.update();
-    fixture.context.gateway.snapshot.client = createTestGatewayClient(() => newName.promise);
+    fixture.context.gateway.snapshot.client = createTestGatewayClient((method) =>
+      method === "projects.list" ? Promise.resolve({ projects: [] }) : newName.promise,
+    );
     fixture.update();
     oldName.resolve({ machineName: "Retired Gateway" });
     // Flush the retired request's promise continuations before checking the active owner.
@@ -557,7 +677,10 @@ describe("DraftGatewayState", () => {
     "settles name discovery with advertisement $advertised and response $response",
     async ({ advertised, response, name }) => {
       let current: typeof response | { machineName: string } = { machineName: "Current Gateway" };
-      const request = vi.fn(async (_method: string) => {
+      const request = vi.fn(async (method: string) => {
+        if (method === "projects.list") {
+          return { projects: [] };
+        }
         if (!current) {
           throw new Error("System info unavailable");
         }
@@ -583,8 +706,8 @@ describe("DraftGatewayState", () => {
     },
   );
 
-  it("keeps group route defaults isolated from ordinary New Session preferences", () => {
-    patchNewSessionPreference("ws://gateway.example", "main", {
+  it("keeps group route defaults isolated from ordinary New Session preferences", async () => {
+    replaceBrowserPreference("ws://gateway.example", "main", {
       folder: "/workspace/ordinary",
       worktree: true,
     });
@@ -604,13 +727,14 @@ describe("DraftGatewayState", () => {
     });
 
     expect(gateway.readPreference("main")).toBeNull();
-    gateway.persistPreference("main", "/workspace", {
+    await gateway.persistPreference("main", "/workspace", {
       folder: "/workspace/client",
       worktree: false,
     });
     expect(loadNewSessionPreference("ws://gateway.example", "main")).toEqual({
       folder: "/workspace/ordinary",
       worktree: true,
+      freshWorkspace: false,
     });
   });
 });

@@ -18,6 +18,7 @@ import {
   type BoardSize,
 } from "./board-layout.js";
 import { BOARD_REPORT_WIDGET_KIND, parseBoardReport } from "./board-report.js";
+import { BOARD_WEBSITE_WIDGET_KIND, parseBoardWebsite } from "./board-website.js";
 import { GITHUB_ACTIONS_GRANT_PREFIX } from "./github-actions-capability.js";
 
 export type BoardWidgetHtmlDocument = {
@@ -64,6 +65,11 @@ export type BoardWriteOptions = {
   assertCurrent?: () => void;
 };
 
+export type BoardWidgetWriteOptions = BoardWriteOptions & {
+  /** Refresh source permission under writer admission before persisting an interactive MCP pin. */
+  resolveMcpAppInteraction?: () => Promise<boolean>;
+};
+
 export interface BoardStore {
   /** Start consumption in the authoritative read turn; release the database before awaiting its result. */
   useSnapshot<T>(
@@ -87,7 +93,7 @@ export interface BoardStore {
   ): Promise<BoardSnapshot>;
   putWidget(
     params: BoardWidgetMaterializedPutParams,
-    options?: BoardWriteOptions,
+    options?: BoardWidgetWriteOptions,
   ): Promise<BoardWidgetPutResult>;
   grant(
     target: BoardSessionTarget,
@@ -243,6 +249,9 @@ function validatePluginContent(params: BoardWidgetMaterializedPutParams): void {
       `board plugin widget props exceed ${BOARD_WIDGET_PROPS_MAX_BYTES} UTF-8 bytes`,
     );
   }
+  if (params.content.pluginKind === BOARD_WEBSITE_WIDGET_KIND) {
+    parseBoardWebsite(params.content.props);
+  }
 }
 
 function validateRegisteredContent(params: BoardWidgetMaterializedPutParams): void {
@@ -378,7 +387,11 @@ export function createBoardWidgetPutSnapshot(
                 ? "pending"
                 : "none",
       revision: widgetRevision,
-      ...(params.content.kind !== "plugin" ? { instanceId: context.instanceId } : {}),
+      // Native widget resources follow the insertion; document grants follow each put.
+      instanceId:
+        params.content.kind === "plugin"
+          ? (existing?.instanceId ?? context.instanceId)
+          : context.instanceId,
       ...(declaredSummary ? { declaredSummary } : {}),
       ...(declared ? { declared } : {}),
     },

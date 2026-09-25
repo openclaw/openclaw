@@ -34,11 +34,14 @@ openclaw plugins install @openclaw/irc
 }
 ```
 
-3. Start/restart the Gateway:
+3. Verify the channel:
 
 ```bash
-openclaw gateway run
+openclaw channels status --probe
 ```
+
+Config changes follow [hot reload](/gateway/configuration/hot-reload). If the
+Gateway is offline, start it with `openclaw gateway run`.
 
 Prefer a private IRC server for bot coordination. If you intentionally use a public IRC network, common choices include Libera.Chat, OFTC, and Snoonet. Avoid predictable public channels for bot or swarm backchannel traffic.
 
@@ -84,6 +87,9 @@ Long replies are rendered before splitting into IRC messages, so code fences and
 inline formatting remain consistent across chunk boundaries. `textChunkLimit`
 and `streaming.chunkMode` control text splitting; the socket also enforces
 IRC's line-size limit.
+
+If nonempty text becomes empty during formatting or IRC sanitization, the send
+fails instead of reporting delivery. Reply references do not count as message content.
 
 Send directly to a channel or nick with the message CLI:
 

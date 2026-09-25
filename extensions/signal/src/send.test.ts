@@ -498,6 +498,7 @@ describe("sendMessageSignal receipts", () => {
     "Signal RPC -32602: quote rejected",
     'Signal RPC -32602: Unrecognized field "quoteTimestamp"',
     "Signal REST 400: quote metadata invalid",
+    "Signal RPC -32602: quote metadata rejected (redacted)",
   ])("falls back to an ordinary send when native quote metadata fails: %s", async (message) => {
     signalRpcRequestMock
       .mockRejectedValueOnce(new Error(message))

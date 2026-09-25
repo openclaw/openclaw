@@ -78,7 +78,7 @@ function parseFileAttachment(value: unknown): NextcloudTalkInboundAttachment | u
     !mimeType ||
     !shareUrl ||
     declaredSizeBytes === undefined ||
-    (hideDownload !== "yes" && hideDownload !== "no")
+    (hideDownload !== undefined && hideDownload !== "yes" && hideDownload !== "no")
   ) {
     return undefined;
   }

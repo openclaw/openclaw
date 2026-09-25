@@ -15,12 +15,29 @@ import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
 import {
   continuePostCoreUpdateInFreshProcess,
   preparePostCorePluginInstallRecordsForFreshProcess,
+  postCoreUpdateParentOwnsCompletion,
+  resolvePostCoreUpdateOperatorOptions,
   readPostCorePluginInstallRecordsFile,
   shouldResumePostCoreUpdateInFreshProcess,
   writePostCorePluginInstallRecordsFile,
+  writePostCorePluginUpdateResultFile,
+  writePostCoreUpdateFailureFile,
 } from "./update-command-post-core.js";
 
 const tempDirs: string[] = [];
+const pluginUpdate: PostCorePluginUpdateResult = {
+  status: "ok",
+  changed: true,
+  sync: {
+    changed: false,
+    switchedToBundled: [],
+    switchedToNpm: [],
+    warnings: [],
+    errors: [],
+  },
+  npm: { changed: false, outcomes: [] },
+  integrityDrifts: [],
+};
 
 afterEach(async () => {
   await Promise.all(
@@ -43,24 +60,21 @@ describe("continuePostCoreUpdateInFreshProcess", () => {
       const root = await withTempDir();
       const settledPath = path.join(root, "settled");
       const pidPath = path.join(root, "writer.pid");
-      const pluginUpdate: PostCorePluginUpdateResult = {
-        status: "ok",
-        changed: true,
-        sync: {
-          changed: false,
-          switchedToBundled: [],
-          switchedToNpm: [],
-          warnings: [],
-          errors: [],
-        },
-        npm: { changed: false, outcomes: [] },
-        integrityDrifts: [],
+      const argvPath = path.join(root, "argv.json");
+      const handoffPath = path.join(root, "handoff-observation.json");
+      const pluginInstallRecords: Record<string, PluginInstallRecord> = {
+        demo: { source: "npm", spec: "@openclaw/demo@1.0.0" },
+      };
+      const preUpdateConfig = {
+        sourceConfig: { gateway: { port: 18789 } },
+        authoredConfig: { gateway: { port: 18790 } },
       };
       await fs.mkdir(path.join(root, "dist"));
       await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ version: "9999.0.0" }));
       await fs.writeFile(
         path.join(root, "dist", "entry.mjs"),
         `import fs from "node:fs/promises";
+import path from "node:path";
 const hold = setInterval(() => {}, 1000);
 setTimeout(() => process.exit(2), 10000).unref();
 process.once("SIGTERM", () => {
@@ -71,6 +85,15 @@ process.once("SIGTERM", () => {
   }, 150);
 });
 await fs.writeFile(${JSON.stringify(pidPath)}, String(process.pid));
+await fs.writeFile(${JSON.stringify(argvPath)}, JSON.stringify(process.argv.slice(2)));
+const resultDir = path.dirname(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH);
+await fs.writeFile(${JSON.stringify(handoffPath)}, JSON.stringify({
+  resultDir,
+  mode: (await fs.stat(resultDir)).mode & 0o777,
+  marker: JSON.parse(await fs.readFile(path.join(resultDir, "handoff.json"), "utf8")),
+  installRecords: await fs.readFile(process.env.OPENCLAW_UPDATE_POST_CORE_INSTALL_RECORDS_PATH, "utf8"),
+  sourceConfig: await fs.readFile(process.env.OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH, "utf8"),
+}));
 await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.stringify(JSON.stringify(pluginUpdate))});
 `,
       );
@@ -83,8 +106,9 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
           root,
           channel: "stable",
           requestedChannel: null,
-          opts: { json: true, yes: true },
-          pluginInstallRecords: {},
+          opts: { json: true, yes: true, timeout: cooperative ? undefined : "3600" },
+          pluginInstallRecords,
+          preUpdateConfig,
           updateStartedAtMs: Date.now(),
           timeoutMs: 5000,
           nodeRunner: process.execPath,
@@ -103,8 +127,57 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
         expect(await waitForPidToExit(pid)).toBe(true);
       }
       expect(result).toEqual({ resumed: true, pluginUpdate });
+      expect(JSON.parse(await fs.readFile(argvPath, "utf8"))).toEqual([
+        "update",
+        "--json",
+        "--yes",
+        "--timeout",
+        cooperative ? "5" : "3600",
+      ]);
       expect(aliveAtReturn).toBe(false);
       expect(settledAtReturn).toBe(cooperative ? "settled" : undefined);
+      const handoff = JSON.parse(await fs.readFile(handoffPath, "utf8"));
+      expect(handoff).toEqual({
+        resultDir: expect.any(String),
+        mode: 0o700,
+        marker: {
+          completionOwner: "parent",
+          timeout: {
+            version: 1,
+            serialized: cooperative ? "5" : "3600",
+            operator: cooperative ? null : "3600",
+          },
+        },
+        installRecords: `${JSON.stringify(pluginInstallRecords)}\n`,
+        sourceConfig: `${JSON.stringify(preUpdateConfig)}\n`,
+      });
+      await expect(fs.stat(handoff.resultDir)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+});
+
+describe("post-core result publication", () => {
+  it.runIf(process.platform !== "win32").each(["success", "failure"] as const)(
+    "keeps the handoff private after publishing %s",
+    async (outcome) => {
+      const dir = await withTempDir();
+      await fs.chmod(dir, 0o700);
+      const siblingPath = path.join(dir, "source-config.json");
+      const sibling = '{"sourceConfig":{"gateway":{"port":18789}}}\n';
+      await fs.writeFile(siblingPath, sibling);
+      const resultPath = path.join(dir, "plugins.json");
+      if (outcome === "success") {
+        await writePostCorePluginUpdateResultFile(resultPath, pluginUpdate);
+      } else {
+        await writePostCoreUpdateFailureFile(resultPath, new Error("Plugin finalization failed"));
+      }
+      expect((await fs.stat(dir)).mode & 0o777).toBe(0o700);
+      expect(await fs.readFile(siblingPath, "utf8")).toBe(sibling);
+      expect(JSON.parse(await fs.readFile(resultPath, "utf8"))).toEqual(
+        outcome === "success"
+          ? pluginUpdate
+          : { status: "failed", error: "Plugin finalization failed" },
+      );
     },
   );
 });
@@ -278,10 +351,10 @@ describe("shouldResumePostCoreUpdateInFreshProcess", () => {
     ).toBe(true);
   });
 
-  it("keeps a metadata-identical git update in process when the install kind is unchanged", () => {
+  it("does not resume a skipped git update with unchanged metadata", () => {
     expect(
       shouldResumePostCoreUpdateInFreshProcess({
-        result: unchangedGitResult,
+        result: { ...unchangedGitResult, status: "skipped" },
         downgradeRisk: false,
         installKindChanged: false,
       }),
@@ -317,5 +390,73 @@ describe("shouldResumePostCoreUpdateInFreshProcess", () => {
         downgradeRisk: true,
       }),
     ).toBe(fresh);
+  });
+});
+
+describe("post-core operator deadline provenance", () => {
+  it.each([
+    {
+      name: "omitted operator deadline",
+      value: { version: 1, serialized: "2700", operator: null },
+      expected: undefined,
+    },
+    {
+      name: "explicit operator deadline",
+      value: { version: 1, serialized: "2700", operator: "2700" },
+      expected: "2700",
+    },
+    { name: "legacy metadata", value: undefined, expected: "2700" },
+    {
+      name: "missing operator provenance",
+      value: { version: 1, serialized: "2700" },
+      expected: "2700",
+    },
+    {
+      name: "mismatched command",
+      value: { version: 1, serialized: "1800", operator: null },
+      expected: "2700",
+    },
+    {
+      name: "unknown version",
+      value: { version: 2, serialized: "2700", operator: null },
+      expected: "2700",
+    },
+    {
+      name: "malformed operator",
+      value: { version: 1, serialized: "2700", operator: false },
+      expected: "2700",
+    },
+    { name: "malformed metadata", value: "default", expected: "2700" },
+  ])("preserves intent for $name", async ({ value, expected }) => {
+    const root = await withTempDir();
+    const resultPath = path.join(root, "plugins.json");
+    await fs.writeFile(
+      path.join(root, "handoff.json"),
+      JSON.stringify({ completionOwner: "parent", timeout: value }),
+    );
+    const opts = { json: true, timeout: "2700" };
+    expect(await resolvePostCoreUpdateOperatorOptions({ opts, resultPath })).toEqual({
+      ...opts,
+      timeout: expected,
+    });
+    // The shipped completion reader ignores added metadata and keeps its ownership contract.
+    expect(await postCoreUpdateParentOwnsCompletion(resultPath)).toBe(true);
+  });
+
+  it("retains an explicit deadline without private parent ownership", async () => {
+    const root = await withTempDir();
+    const resultPath = path.join(root, "plugins.json");
+    const opts = { timeout: "3" };
+    expect(await resolvePostCoreUpdateOperatorOptions({ opts, resultPath })).toBe(opts);
+    await fs.writeFile(
+      path.join(root, "handoff.json"),
+      JSON.stringify({
+        completionOwner: "child",
+        timeout: { version: 1, serialized: "3", operator: null },
+      }),
+    );
+    expect(await resolvePostCoreUpdateOperatorOptions({ opts, resultPath })).toBe(opts);
+    await fs.writeFile(path.join(root, "handoff.json"), "{");
+    await expect(resolvePostCoreUpdateOperatorOptions({ opts, resultPath })).rejects.toThrow();
   });
 });

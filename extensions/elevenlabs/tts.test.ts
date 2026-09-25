@@ -1,8 +1,8 @@
 // Elevenlabs tests cover tts plugin behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import { MAX_AUDIO_BYTES } from "openclaw/plugin-sdk/media-runtime";
 import { synthesizeElevenLabsLiveSpeech } from "openclaw/plugin-sdk/provider-test-contracts";
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
+import { MAX_AUDIO_BYTES } from "openclaw/plugin-sdk/speech-provider";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createStreamingErrorResponse } from "../test-support/streaming-error-response.js";
 import { elevenLabsTTS, elevenLabsTTSStream } from "./tts.js";
@@ -100,12 +100,7 @@ describe("elevenlabs tts diagnostics", () => {
   });
 
   it("rejects JSON success bodies as malformed audio", async () => {
-    const fetchMock = vi.fn<typeof fetch>(
-      async () =>
-        new Response(JSON.stringify({ error: "not audio" }), {
-          headers: { "content-type": "application/json" },
-        }),
-    );
+    const fetchMock = vi.fn<typeof fetch>(async () => Response.json({ error: "not audio" }));
     globalThis.fetch = fetchMock;
 
     await expectDefaultTtsRequestToThrow("ElevenLabs API error: malformed audio response");
@@ -303,12 +298,7 @@ describe("elevenlabs tts diagnostics", () => {
   });
 
   it("rejects JSON success stream responses as malformed audio", async () => {
-    const fetchMock = vi.fn<typeof fetch>(
-      async () =>
-        new Response(JSON.stringify({ error: "not audio" }), {
-          headers: { "content-type": "application/json" },
-        }),
-    );
+    const fetchMock = vi.fn<typeof fetch>(async () => Response.json({ error: "not audio" }));
     globalThis.fetch = fetchMock;
 
     await expect(elevenLabsTTSStream(createDefaultTtsRequest())).rejects.toThrow(

@@ -7,7 +7,10 @@ import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor
 import { projectPublicSessionEntry } from "../../config/sessions/session-entry-projection.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
+import {
+  runOutsidePluginRuntimeGenerationScope,
+  withPluginRuntimeGenerationScope,
+} from "../../plugins/runtime/generation-scope.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
 import {
   AsyncWorkScope,
@@ -43,10 +46,7 @@ import type {
   CompactEmbeddedAgentSessionParams,
   CompactEmbeddedAgentSessionRuntimeParams,
 } from "./compact.types.js";
-import {
-  containsRealConversationMessages,
-  resolveCompactionProviderStream,
-} from "./compaction-diagnostics.js";
+import { containsRealConversationMessages } from "./compaction-diagnostics.js";
 import {
   buildBeforeCompactionHookMetrics,
   estimateTokensAfterCompaction,
@@ -345,72 +345,77 @@ export async function compactEmbeddedAgentSessionDirect(
       : (requestedParams.abortSignal ?? parentSignal);
   const work = new AsyncWorkScope();
   let context = work.run(() => AsyncLocalStorage.snapshot());
-  let releasePreparedRuntime: (() => void) | undefined;
+  let releasePreparedRuntime: (() => Promise<void>) | undefined;
   const runPreparedCompaction = async () => {
-    const preparedModelRuntimeLease = await acquireAgentRunPreparedModelRuntime(
-      {
-        config: requestedParams.config ?? {},
-        agentId: requestedAgentIds.sessionAgentId,
-        agentDir: requestedAgentDir,
-        workspaceDir: requestedWorkspaceDir,
-        preserveWorkspaceDirOnRefresh: requestedWorkspaceDir !== canonicalWorkspaceDir,
-        ...(requestedParams.allowGatewaySubagentBinding
-          ? { allowGatewaySubagentBinding: true }
-          : {}),
-      },
-      {
-        abortSignal: requestedParams.abortSignal,
-        deriveRuntimePluginSelections: ({ config: admittedConfig, metadataSnapshot }) => {
-          const config = projectCodexHostTranscriptBytePreflightConfig(
-            admittedConfig,
-            Boolean(transcriptBytePreflightAuthority),
-          );
-          const selected = resolveCompactionRuntimeSelection({
-            ...requestedParams,
-            config,
-            modelId: requestedParams.model,
-            boundHarnessRuntime: requestedParams.agentHarnessId,
-            preparedRuntimePlan: requestedParams.runtimePlan,
-            manifestPlugins: metadataSnapshot,
-            allowPluginNormalization: false,
-          });
-          const pluginPlanCandidates = resolveModelCandidateChain({
-            cfg: config,
-            agentId: requestedAgentIds.sessionAgentId,
-            manifestPlugins: metadataSnapshot,
-            allowPluginNormalization: false,
-            provider: selected.provider,
-            model: selected.modelId,
-            requestedRouteResolution: "resolved",
-            fallbacksOverride: transcriptBytePreflightAuthority
-              ? []
-              : resolveCompactionFallbacksOverride({ ...requestedParams, config }),
-          });
-          return [
-            {
-              provider: selected.provider,
-              modelId: selected.modelId,
-              ...(selected.selectedHarnessRuntime
-                ? { runtime: selected.selectedHarnessRuntime }
-                : {}),
-              agentId: requestedAgentIds.sessionAgentId,
-            },
-            ...pluginPlanCandidates
-              .filter(
-                (candidate) =>
-                  candidate.provider !== selected.provider || candidate.model !== selected.modelId,
-              )
-              .map((candidate) => ({
-                provider: candidate.provider,
-                modelId: candidate.model,
-                runtime: selected.boundHarnessRuntime,
-                agentId: requestedAgentIds.sessionAgentId,
-              })),
-          ];
+    // Compaction admits new work even when an engine restores a predecessor context.
+    // Keep caller authority, but select metadata from the committed inventory.
+    const preparedModelRuntimeLease = await runOutsidePluginRuntimeGenerationScope(() =>
+      acquireAgentRunPreparedModelRuntime(
+        {
+          config: requestedParams.config ?? {},
+          agentId: requestedAgentIds.sessionAgentId,
+          agentDir: requestedAgentDir,
+          workspaceDir: requestedWorkspaceDir,
+          preserveWorkspaceDirOnRefresh: requestedWorkspaceDir !== canonicalWorkspaceDir,
+          ...(requestedParams.allowGatewaySubagentBinding
+            ? { allowGatewaySubagentBinding: true }
+            : {}),
         },
-      },
+        {
+          abortSignal: requestedParams.abortSignal,
+          deriveRuntimePluginSelections: ({ config: admittedConfig, metadataSnapshot }) => {
+            const config = projectCodexHostTranscriptBytePreflightConfig(
+              admittedConfig,
+              Boolean(transcriptBytePreflightAuthority),
+            );
+            const selected = resolveCompactionRuntimeSelection({
+              ...requestedParams,
+              config,
+              modelId: requestedParams.model,
+              boundHarnessRuntime: requestedParams.agentHarnessId,
+              preparedRuntimePlan: requestedParams.runtimePlan,
+              manifestPlugins: metadataSnapshot,
+              allowPluginNormalization: false,
+            });
+            const pluginPlanCandidates = resolveModelCandidateChain({
+              cfg: config,
+              agentId: requestedAgentIds.sessionAgentId,
+              manifestPlugins: metadataSnapshot,
+              allowPluginNormalization: false,
+              provider: selected.provider,
+              model: selected.modelId,
+              requestedRouteResolution: "resolved",
+              fallbacksOverride: transcriptBytePreflightAuthority
+                ? []
+                : resolveCompactionFallbacksOverride({ ...requestedParams, config }),
+            });
+            return [
+              {
+                provider: selected.provider,
+                modelId: selected.modelId,
+                ...(selected.selectedHarnessRuntime
+                  ? { runtime: selected.selectedHarnessRuntime }
+                  : {}),
+                agentId: requestedAgentIds.sessionAgentId,
+              },
+              ...pluginPlanCandidates
+                .filter(
+                  (candidate) =>
+                    candidate.provider !== selected.provider ||
+                    candidate.model !== selected.modelId,
+                )
+                .map((candidate) => ({
+                  provider: candidate.provider,
+                  modelId: candidate.model,
+                  runtime: selected.boundHarnessRuntime,
+                  agentId: requestedAgentIds.sessionAgentId,
+                })),
+            ];
+          },
+        },
+      ),
     );
-    releasePreparedRuntime = () => preparedModelRuntimeLease.release();
+    releasePreparedRuntime = () => preparedModelRuntimeLease[Symbol.asyncDispose]();
     try {
       const preparedModelRuntimeOwnerSnapshot = preparedModelRuntimeLease.snapshot;
       const preparedConfig =
@@ -583,7 +588,7 @@ export async function compactEmbeddedAgentSessionDirect(
         );
       } finally {
         try {
-          releasePreparedRuntime?.();
+          await releasePreparedRuntime?.();
         } finally {
           cancellationSignal?.removeEventListener("abort", closeWork);
         }
@@ -598,7 +603,6 @@ export const testing = {
   containsRealConversationMessages,
   estimateTokensAfterCompaction,
   buildBeforeCompactionHookMetrics,
-  resolveCompactionProviderStream,
   prepareCompactionSessionAgent,
   runBeforeCompactionHooks,
   runAfterCompactionHooks,

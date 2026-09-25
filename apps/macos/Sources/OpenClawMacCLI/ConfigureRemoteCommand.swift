@@ -125,6 +125,7 @@ func runConfigureRemote(_ args: [String], context: MacCLIContext) {
               --ssh-target <t>    SSH target for the remote gateway host.
               --direct-url <url>  Direct remote gateway URL; skips SSH tunneling.
               --local-port <p>    Local tunnel port for the mac app/UI. Default: 18789.
+                                  Leaves the local Gateway hosting port unchanged.
               --remote-port <p>   Gateway port on the remote host. Default: 18789.
               --ssh-host-key-policy <strict|openssh>
                                   Require a trusted host key (default), or explicitly use SSH config policy.
@@ -201,7 +202,6 @@ private func configureSSHRemote(
         .trimmingCharacters(in: .whitespacesAndNewlines)
 
     gateway["mode"] = "remote"
-    gateway["port"] = opts.localPort
     remote["transport"] = "ssh"
     remote["url"] = localURL
     remote["remotePort"] = opts.remotePort

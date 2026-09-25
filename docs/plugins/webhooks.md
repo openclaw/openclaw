@@ -19,8 +19,9 @@ hooks](/automation/cron-jobs#webhooks). To react to internal agent events, use
 [internal hooks](/automation/hooks). Those surfaces do not share this plugin's routes or authentication.
 
 The plugin runs inside the Gateway process. For a remote Gateway, install and
-configure it on that host, then restart the Gateway. It ships with no routes
-configured, so it is a no-op until you add at least one route.
+configure it on that host. It ships with no routes configured, so it is a no-op
+until you add at least one route. With the default hybrid reload mode, route
+configuration changes apply automatically; see [Hot reload](/gateway/configuration/hot-reload).
 
 ## Configure routes
 
@@ -66,12 +67,13 @@ Route fields:
 
 `secret` accepts a plain string or a SecretRef: `{ source: "env" | "file" | "exec" | "store", provider: "default", id: "..." }`.
 
-SecretRefs resolve into the Gateway's startup config snapshot. When one route's
+SecretRefs resolve into the Gateway's runtime config snapshot. When one route's
 secret cannot resolve, the Gateway keeps running and that exact route stays
 registered but cold: requests receive a generic authentication failure (`401`).
-Other routes remain available. Fix the SecretRef source, then reload or restart
-the Gateway to activate the new snapshot. SecretRef values are never resolved
-on the public request path.
+Other routes remain available. After repairing a file, exec, or store SecretRef
+source, run `openclaw plugins reload webhooks` to rebuild routes with refreshed
+secrets. Environment changes require a Gateway restart with the updated
+environment. SecretRef values are never resolved on the public request path.
 
 ## Security model
 
@@ -191,6 +193,11 @@ the managed flow id returned by `create_flow`, and the `childSessionKey` and
 `runId` from that existing run. Inventing a child key or run id does not start
 work or grant authority.
 
+The response waits for worker-backed SQLite linkage and registry reconciliation.
+The worker checks the current flow and backing before writing; a backing run
+that has already completed cannot create a new queued or running projection.
+Retrying an existing terminal projection can merge metadata without restarting it.
+
 ```json
 {
   "action": "run_task",
@@ -266,16 +273,16 @@ reason not covered by the named codes above.
 
 ### Errors and troubleshooting
 
-| Response              | Next check                                                                                              |
-| --------------------- | ------------------------------------------------------------------------------------------------------- |
-| `401`                 | Use the route secret. An unresolved SecretRef leaves that route cold; repair it and reload/restart.     |
-| `405` / `415`         | Send `POST` with `Content-Type: application/json`.                                                      |
-| `408` / `413`         | Send the JSON body within 15 seconds and below 256 KiB.                                                 |
-| `429`                 | Reduce request rate or concurrent requests, including clients sharing a proxy.                          |
-| `400 invalid_request` | Check the action's fields and types; unknown fields are rejected.                                       |
-| `404 not_found`       | The mutation target does not exist in the route's bound session.                                        |
-| `409`                 | Inspect `code`: reconcile revisions, managed-flow status, cancellation state, or backing-run ownership. |
-| `503 persist_failed`  | The record could not be persisted; investigate Gateway storage/logs before retrying.                    |
+| Response              | Next check                                                                                                             |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `401`                 | Use the route secret. For an unresolved SecretRef, follow [route secret recovery](/plugins/webhooks#configure-routes). |
+| `405` / `415`         | Send `POST` with `Content-Type: application/json`.                                                                     |
+| `408` / `413`         | Send the JSON body within 15 seconds and below 256 KiB.                                                                |
+| `429`                 | Reduce request rate or concurrent requests, including clients sharing a proxy.                                         |
+| `400 invalid_request` | Check the action's fields and types; unknown fields are rejected.                                                      |
+| `404 not_found`       | The mutation target does not exist in the route's bound session.                                                       |
+| `409`                 | Inspect `code`: reconcile revisions, managed-flow status, cancellation state, or backing-run ownership.                |
+| `503 persist_failed`  | The record could not be persisted; investigate Gateway storage/logs before retrying.                                   |
 
 Failures before action validation can be plain text, not the JSON envelope
 above. A Bearer header takes precedence over `x-openclaw-webhook-secret`.

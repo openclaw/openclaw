@@ -16,6 +16,15 @@ function fail(message = "Unsupported survivor manager request or generated unit 
   throw new Error(message);
 }
 
+function expandSpecifiers(value) {
+  return value.replace(/%%|%h|%/g, (specifier) => {
+    if (specifier === "%") {
+      fail();
+    }
+    return specifier === "%h" ? process.env.HOME : "%";
+  });
+}
+
 // buildSystemdUnit quotes whole words and escapes only quotes/backslashes.
 function words(value) {
   const result = [];
@@ -31,14 +40,7 @@ function words(value) {
     result.push(word.startsWith('"') ? word.slice(1, -1).replace(/\\(["\\])/g, "$1") : word);
     offset = pattern.lastIndex;
   }
-  return result.map((word) =>
-    word.replace(/%%|%h|%/g, (specifier) => {
-      if (specifier === "%") {
-        fail();
-      }
-      return specifier === "%h" ? process.env.HOME : "%";
-    }),
-  );
+  return result.map(expandSpecifiers);
 }
 
 function assignments(values) {
@@ -88,10 +90,12 @@ function parseUnit(content) {
   if (!programArguments.length || !path.isAbsolute(programArguments[0])) {
     fail();
   }
-  const workingDirectories = words(single("WorkingDirectory"));
-  if (workingDirectories.length > 1) {
+  const expanded = expandSpecifiers(single("WorkingDirectory"));
+  if (expanded && !path.isAbsolute(expanded)) {
     fail();
   }
+  // Remove only the renderer's trailing /. shield; normalizing .. would change symlink traversal.
+  const workingDirectory = expanded.endsWith("/.") ? expanded.slice(0, -2) || "/" : expanded;
   const environment = assignments(
     (directives.get("Environment") || []).flatMap((value) => {
       if (!value) {
@@ -102,11 +106,17 @@ function parseUnit(content) {
   );
   const environmentFiles = (directives.get("EnvironmentFile") || []).map((value) => {
     const optional = value.startsWith("-");
-    const filenames = words(optional ? value.slice(1) : value);
-    if (filenames.length !== 1 || !path.isAbsolute(filenames[0])) {
+    const pattern = expandSpecifiers(optional ? value.slice(1) : value);
+    if (!path.isAbsolute(pattern)) {
       fail();
     }
-    return [filenames[0], optional];
+    // This copied, dependency-free shim accepts only the renderer's literal glob escapes.
+    // Keep the expanded pattern for manager properties; reject unsupported wildcards at load.
+    const filename = pattern.replace(
+      /\\([?*()[\]\\])|[?*[\]\\]/g,
+      (_match, literal) => literal ?? fail(),
+    );
+    return { pattern, filename, optional };
   });
   const supported = new Set([
     "ExecStart",
@@ -127,7 +137,7 @@ function parseUnit(content) {
   }
   return {
     programArguments,
-    workingDirectory: workingDirectories[0] || "",
+    workingDirectory,
     environment,
     environmentFiles,
     killMode: single("KillMode") || "control-group",
@@ -170,33 +180,32 @@ function runtimePaths() {
   return { ...JSON.parse(fs.readFileSync(file, "utf8")), uid: stat.uid, owner: `:1.${stat.ino}` };
 }
 
-function nativeRuntime() {
-  const paths = runtimePaths();
-  let pid;
-  let generation = 0;
+function livePid(value, processGroup = false) {
+  if (value === 0) {
+    return 0;
+  }
+  if (!Number.isSafeInteger(value) || value < 1 || value > 0xffffffff) {
+    fail();
+  }
   try {
-    const raw = fs.readFileSync(paths.pidFile, "utf8").trim();
-    if (!/^[1-9][0-9]*$/.test(raw)) {
-      fail();
-    }
-    pid = Number(raw);
-    if (!Number.isSafeInteger(pid) || pid > 0xffffffff) {
-      fail();
-    }
-    process.kill(pid, 0);
-    generation = Math.trunc(fs.statSync(paths.pidFile).mtimeMs * 1000);
-    if (process.platform === "linux") {
-      const state = fs.readFileSync(`/proc/${pid}/stat`, "utf8").split(") ").at(-1);
+    process.kill(processGroup ? -value : value, 0);
+    if (!processGroup && process.platform === "linux") {
+      const state = fs.readFileSync(`/proc/${value}/stat`, "utf8").split(") ").at(-1);
       if (state.startsWith("Z ")) {
-        pid = 0;
+        return 0;
       }
     }
+    return value;
   } catch (error) {
     if (!["ENOENT", "ESRCH"].includes(error.code)) {
       throw error;
     }
-    pid = 0;
+    return 0;
   }
+}
+
+function nativeRuntime() {
+  const paths = runtimePaths();
   const readOptional = (file) => {
     try {
       return JSON.parse(fs.readFileSync(file, "utf8"));
@@ -209,12 +218,18 @@ function nativeRuntime() {
   };
   const last = readOptional(`${paths.daemonLog}.exit.json`)?.last;
   const counts = readOptional(`${paths.daemonLog}.runtime.json`);
+  const pid = livePid(counts?.pid ?? 0);
+  const supervisorPid = livePid(counts?.supervisorPid ?? 0);
+  const groupPid = livePid(counts?.groupPid ?? 0, true);
+  const unsettled = counts?.starting || supervisorPid || groupPid;
   const successful = !last || last.code === 0;
   return {
     pid,
-    active: pid ? "active" : "inactive",
-    sub: pid ? "running" : "dead",
-    generation,
+    // A manager draining descendants or awaiting restart is not a settled service.
+    active: pid ? "active" : unsettled ? "activating" : "inactive",
+    sub: pid ? "running" : unsettled ? "auto-restart" : "dead",
+    generation: counts?.entered ?? 0,
+    settled: !pid && !unsettled,
     restarts: counts?.restarts ?? 0,
     result: successful ? "success" : "exit-code",
     exitStatus: Number.isInteger(last?.code) ? last.code : (osConstants.signals[last?.signal] ?? 0),
@@ -223,8 +238,12 @@ function nativeRuntime() {
 }
 
 function inspectLoadedRuntime(args) {
-  const prefix = ["--user", "--auto-start=no", "--json=short"];
-  if (!prefix.every((value, index) => args[index] === value)) {
+  const prefix = args.slice(0, 3);
+  if (
+    prefix[0] !== "--user" ||
+    !prefix.includes("--auto-start=no") ||
+    !prefix.includes("--json=short")
+  ) {
     return false;
   }
   const request = args.slice(prefix.length);
@@ -243,6 +262,16 @@ function inspectLoadedRuntime(args) {
     writeProperties([["u", [paths.uid]]]);
     return true;
   }
+  if (request[1] !== paths.owner) {
+    return false;
+  }
+  if (matches(["call", paths.owner, root, `${manager}.Manager`, "LoadUnit", "s", unitName])) {
+    if (!readUnit()) {
+      fail(`Call failed: Unit ${unitName} not found.`);
+    }
+    writeProperties([["o", [object]]]);
+    return true;
+  }
   // GetUnit observes already loaded state; unlike the legacy LoadUnit fixture
   // path it never creates a loaded definition or activates a process.
   if (!fs.existsSync(loadedPath)) {
@@ -255,6 +284,20 @@ function inspectLoadedRuntime(args) {
   if (matches(["call", paths.owner, root, `${manager}.Manager`, "GetUnit", "s", unitName])) {
     writeProperties([["o", [object]]]);
     return true;
+  }
+  for (const scope of ["Unit", "Service"]) {
+    if (
+      matches([
+        "get-property",
+        paths.owner,
+        object,
+        `${manager}.${scope}`,
+        ...commandPropertyNames(scope),
+      ])
+    ) {
+      writeCommandProperties(readUnit(false, true), scope);
+      return true;
+    }
   }
   const runtime = nativeRuntime();
   if (
@@ -308,7 +351,7 @@ function inspectLoadedRuntime(args) {
       ["i", runtime.exitStatus],
       ["i", runtime.exitCode],
       ["s", unit.killMode],
-      ["t", runtime.pid ? unknown : 0],
+      ["t", runtime.settled ? 0 : unknown],
       ["t", unknown],
     ]);
     return true;
@@ -322,8 +365,109 @@ function writeProperties(properties) {
   }
 }
 
+function commandPropertyNames(scope) {
+  return scope === "Unit"
+    ? ["FragmentPath", "DropInPaths", "NeedDaemonReload", "LoadState"]
+    : ["ExecStart", "WorkingDirectory", "Environment", "EnvironmentFiles", "UnsetEnvironment"];
+}
+
+function writeCommandProperties(unit, scope) {
+  if (!unit) {
+    fail("Fixture unit is not loaded.");
+  }
+  writeProperties(
+    scope === "Unit"
+      ? [
+          ["s", unitPath],
+          ["as", []],
+          ["b", unit.reloadPending],
+          ["s", "loaded"],
+        ]
+      : [
+          [
+            "a(sasbttttuii)",
+            [[unit.programArguments[0], unit.programArguments, false, 0, 0, 0, 0, 0, 0, 0]],
+          ],
+          ["s", unit.workingDirectory],
+          ["as", Object.entries(unit.environment).map(([key, value]) => `${key}=${value}`)],
+          ["a(sb)", unit.environmentFiles.map(({ pattern, optional }) => [pattern, optional])],
+          ["as", []],
+        ],
+  );
+}
+
+function recordCaller(file, parentPid, action) {
+  const roles = [];
+  let pid = Number(parentPid);
+  for (let depth = 0; depth < 64 && Number.isSafeInteger(pid) && pid > 1; depth++) {
+    try {
+      // Commander replaces argv[0] with these titles before executing the action.
+      const title = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0")[0];
+      if (title === "openclaw-doctor" || title === "openclaw-update") {
+        roles.push(title.slice("openclaw-".length));
+      }
+      const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+      pid = Number(stat.slice(stat.lastIndexOf(") ") + 2).split(" ")[1]);
+    } catch (error) {
+      if (error.code !== "ENOENT" && error.code !== "ESRCH") {
+        throw error;
+      }
+      break;
+    }
+  }
+  // Caller evidence contains roles only; never retain process arguments or environment values.
+  fs.appendFileSync(file, `${JSON.stringify({ action, roles })}\n`);
+}
+
 function run() {
   const [operation, ...args] = process.argv.slice(2);
+  if (operation === "begin-start" && !args.length) {
+    const file = `${runtimePaths().daemonLog}.runtime.json`;
+    const claim = `${file}.start`;
+    const descriptor = fs.openSync(claim, "wx");
+    try {
+      // Serialize the settled check and publication across concurrent start callers.
+      if (!nativeRuntime().settled) {
+        fail("Previous survivor service generation is not settled.");
+      }
+      // Keep launch custody visible before the detached supervisor publishes its child.
+      // A failed launch remains unknown instead of authorizing offline restoration.
+      fs.writeFileSync(`${file}.pending`, JSON.stringify({ starting: true }));
+      fs.renameSync(`${file}.pending`, file);
+    } finally {
+      fs.closeSync(descriptor);
+      fs.rmSync(claim);
+    }
+    return;
+  }
+  if (operation === "is-active" && !args.length) {
+    const runtime = nativeRuntime();
+    process.exitCode = runtime.pid ? 0 : runtime.settled ? 3 : 1;
+    return;
+  }
+  if (operation === "runtime" && !args.length) {
+    const runtime = nativeRuntime();
+    console.log(`ActiveState=${runtime.active}\nSubState=${runtime.sub}\nMainPID=${runtime.pid}`);
+    if (runtime.exitCode) {
+      console.log(
+        `ExecMainStatus=${runtime.exitStatus}\nExecMainCode=${runtime.exitCode === 1 ? "exited" : "killed"}`,
+      );
+    }
+    return;
+  }
+  if (operation === "record-caller" && args.length === 3) {
+    recordCaller(...args);
+    return;
+  }
+  if (
+    operation === "busctl" &&
+    args.length === 7 &&
+    args.join(" ") ===
+      `--user --auto-start=no get-property ${manager} ${root} ${manager}.Manager Version`
+  ) {
+    console.log('s "252.39-1~deb12u2"');
+    return;
+  }
   if (operation === "busctl" && inspectLoadedRuntime(args)) {
     return;
   }
@@ -341,7 +485,7 @@ function run() {
       fail("Cannot launch an absent fixture unit.");
     }
     const environment = { ...unit.environment };
-    for (const [filename, optional] of unit.environmentFiles) {
+    for (const { filename, optional } of unit.environmentFiles) {
       let content;
       try {
         content = fs.readFileSync(filename, "utf8");
@@ -374,8 +518,9 @@ function run() {
       ...Object.entries(environment).map(([key, value]) => `${key}=${value}`),
       ...unit.programArguments,
     ];
+    // Physical traversal matches chdir: shell-logical .. can select a different directory.
     console.log(
-      `cd ${quote(unit.workingDirectory || process.env.HOME)} && exec ${command.map(quote).join(" ")}`,
+      `cd -P ${quote(unit.workingDirectory || process.env.HOME)} && exec ${command.map(quote).join(" ")}`,
     );
     return;
   }
@@ -421,10 +566,7 @@ function run() {
     manager,
     object,
     `${manager}.Unit`,
-    "FragmentPath",
-    "DropInPaths",
-    "NeedDaemonReload",
-    "LoadState",
+    ...commandPropertyNames("Unit"),
   ]);
   const serviceQuery = matches([
     ...prefix,
@@ -432,11 +574,7 @@ function run() {
     manager,
     object,
     `${manager}.Service`,
-    "ExecStart",
-    "WorkingDirectory",
-    "Environment",
-    "EnvironmentFiles",
-    "UnsetEnvironment",
+    ...commandPropertyNames("Service"),
   ]);
   if (!load && !unitQuery && !serviceQuery) {
     fail();
@@ -450,24 +588,8 @@ function run() {
   }
   if (load) {
     writeProperties([["o", [object]]]);
-  } else if (unitQuery) {
-    writeProperties([
-      ["s", unitPath],
-      ["as", []],
-      ["b", unit.reloadPending],
-      ["s", "loaded"],
-    ]);
   } else {
-    writeProperties([
-      [
-        "a(sasbttttuii)",
-        [[unit.programArguments[0], unit.programArguments, false, 0, 0, 0, 0, 0, 0, 0]],
-      ],
-      ["s", unit.workingDirectory],
-      ["as", Object.entries(unit.environment).map(([key, value]) => `${key}=${value}`)],
-      ["a(sb)", unit.environmentFiles],
-      ["as", []],
-    ]);
+    writeCommandProperties(unit, unitQuery ? "Unit" : "Service");
   }
 }
 

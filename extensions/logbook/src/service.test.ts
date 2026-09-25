@@ -1,9 +1,13 @@
 import { mkdtempSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveLogbookConfig } from "./config.js";
 import { LogbookService } from "./service.js";
+import { logbookSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
+
+const workerModuleUrl = resolveRuntimeWorkerUrl(logbookSqliteBackendEntrypoint);
 
 type NodeRecord = { nodeId: string; displayName?: string; commands: string[] };
 
@@ -38,6 +42,7 @@ async function makeService(params: {
       fullConfig: (params.fullConfig ?? {}) as never,
       logger: quietLogger as never,
       dataDir,
+      workerModuleUrl,
     },
   );
   await service.start();

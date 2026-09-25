@@ -5,6 +5,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createEmptyPluginMetadataSnapshot } from "../agents/test-helpers/embedded-agent-runner-e2e-mocks.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import {
   SET_RUNTIME_API_KEY_FIELD,
   imageRuntimeMocks,
@@ -26,6 +27,7 @@ const {
 } = imageRuntimeMocks;
 
 const { describeImageWithModelCore } = await import("./image.js");
+const imageModelRuntime = await import("./image-model-runtime.js");
 
 describe("describeImageWithModelCore", () => {
   installImageRuntimeTestHooks();
@@ -619,95 +621,142 @@ describe("describeImageWithModelCore", () => {
 
   it.each(
     (["timeout", "cancellation"] as const).flatMap((mode) =>
-      (["admission", "model", "credential", "credential-model", "runtime-auth"] as const).map(
-        (stage) => ({ mode, stage }),
+      (["admission", "model", "credential", "credential-model", "runtime-auth"] as const).flatMap(
+        (stage) => [false, true].map((cleanupFails) => ({ mode, stage, cleanupFails })),
       ),
     ),
-  )("stops image setup after $mode during $stage", async ({ mode, stage }) => {
-    vi.useFakeTimers();
-    const started = createDeferred();
-    const finish = createDeferred();
-    const delay = async <T>(value: T): Promise<T> => {
-      started.resolve();
-      await finish.promise;
-      return value;
-    };
-    const resolved = {
-      authStorage: preparedAuthStorage,
-      model: {
-        provider: "openai",
-        id: "gpt-5.4-mini",
-        api: "openai-responses",
-        input: ["text", "image"],
-      },
-      modelRegistry: {},
-    };
-    resolveModelAsyncMock.mockResolvedValue(resolved);
-    shouldPreferProviderRuntimeResolvedModelMock.mockReturnValue(stage === "credential-model");
-    if (stage === "admission") {
-      acquireAgentRunPreparedModelRuntimeMock.mockImplementationOnce(() =>
-        delay({
-          snapshot: {
-            agentDir: "/tmp/openclaw-agent",
-            config: {},
-            metadataSnapshot: createEmptyPluginMetadataSnapshot(),
-            createStores: () => ({ authStorage: preparedAuthStorage, modelRegistry: {} }),
-          },
-          release: releasePreparedModelRuntimeMock,
+  )(
+    "stops image setup after $mode during $stage (cleanup failure: $cleanupFails)",
+    async ({ mode, stage, cleanupFails }) => {
+      vi.useFakeTimers();
+      const resolution = vi.spyOn(imageModelRuntime, "resolveImageRuntime");
+      const cleanupError = new Error("late image runtime disposal failed");
+      const cleanupStarted = createDeferred();
+      const finishCleanup = createDeferred();
+      releasePreparedModelRuntimeMock.mockImplementationOnce(async () => {
+        cleanupStarted.resolve();
+        await finishCleanup.promise;
+        if (cleanupFails) {
+          throw cleanupError;
+        }
+      });
+      const started = createDeferred();
+      const finish = createDeferred();
+      const delay = async <T>(value: T): Promise<T> => {
+        started.resolve();
+        await finish.promise;
+        return value;
+      };
+      const resolved = {
+        authStorage: preparedAuthStorage,
+        model: {
+          provider: "openai",
+          id: "gpt-5.4-mini",
+          api: "openai-responses",
+          input: ["text", "image"],
+        },
+        modelRegistry: {},
+      };
+      resolveModelAsyncMock.mockResolvedValue(resolved);
+      shouldPreferProviderRuntimeResolvedModelMock.mockReturnValue(stage === "credential-model");
+      if (stage === "admission") {
+        acquireAgentRunPreparedModelRuntimeMock.mockImplementationOnce(() =>
+          delay({
+            snapshot: {
+              agentDir: "/tmp/openclaw-agent",
+              config: {},
+              metadataSnapshot: createEmptyPluginMetadataSnapshot(),
+              createStores: () => ({ authStorage: preparedAuthStorage, modelRegistry: {} }),
+            },
+            [Symbol.asyncDispose]: releasePreparedModelRuntimeMock,
+          }),
+        );
+      } else if (stage === "model") {
+        resolveModelAsyncMock.mockImplementationOnce(() => delay(resolved));
+      } else if (stage === "credential") {
+        getApiKeyForModelMock.mockImplementationOnce(() =>
+          delay({ apiKey: "test-token", source: "test", mode: "oauth" }),
+        );
+      } else if (stage === "credential-model") {
+        resolveModelAsyncMock
+          .mockResolvedValueOnce(resolved)
+          .mockImplementationOnce(() => delay(resolved));
+      } else {
+        prepareProviderRuntimeAuthMock.mockImplementationOnce(() =>
+          delay({ apiKey: "prepared-test-token" }),
+        );
+      }
+      const controller = new AbortController();
+      const work = new AsyncWorkScope();
+      const pending = work.track(() =>
+        describeImageWithModelCore({
+          cfg: {},
+          agentDir: "/tmp/openclaw-agent",
+          provider: "openai",
+          model: "gpt-5.4-mini",
+          buffer: Buffer.from("png-bytes"),
+          fileName: "image.png",
+          mime: "image/png",
+          prompt: "Describe the image.",
+          timeoutMs: 25,
+          signal: controller.signal,
         }),
       );
-    } else if (stage === "model") {
-      resolveModelAsyncMock.mockImplementationOnce(() => delay(resolved));
-    } else if (stage === "credential") {
-      getApiKeyForModelMock.mockImplementationOnce(() =>
-        delay({ apiKey: "test-token", source: "test", mode: "oauth" }),
+      const rejected = expect(pending).rejects.toThrow(
+        mode === "timeout"
+          ? "image description setup timed out after 25ms before provider request started"
+          : "caller cancelled during setup",
       );
-    } else if (stage === "credential-model") {
-      resolveModelAsyncMock
-        .mockResolvedValueOnce(resolved)
-        .mockImplementationOnce(() => delay(resolved));
-    } else {
-      prepareProviderRuntimeAuthMock.mockImplementationOnce(() =>
-        delay({ apiKey: "prepared-test-token" }),
+      await started.promise;
+      if (mode === "timeout") {
+        await vi.advanceTimersByTimeAsync(25);
+      } else {
+        controller.abort(new Error("caller cancelled during setup"));
+      }
+      await rejected;
+      expect(releasePreparedModelRuntimeMock).not.toHaveBeenCalled();
+      const setup = resolution.mock.results[0]?.value;
+      const producerFailure = expect(setup).rejects.toMatchObject({
+        name: mode === "timeout" ? "AbortError" : "Error",
+      });
+      let drained = false;
+      let drain: Promise<void> | undefined;
+      try {
+        finish.resolve();
+        await producerFailure;
+        await cleanupStarted.promise;
+        drain = work.drain().then(() => {
+          drained = true;
+        });
+        await Promise.resolve();
+        expect(drained).toBe(false);
+        expect(releasePreparedModelRuntimeMock).toHaveBeenCalledOnce();
+        finishCleanup.resolve();
+        await drain;
+        expect(drained).toBe(true);
+        const disposal = releasePreparedModelRuntimeMock.mock.results[0]!.value;
+        if (cleanupFails) {
+          await expect(disposal).rejects.toBe(cleanupError);
+        } else {
+          await expect(disposal).resolves.toBeUndefined();
+        }
+      } finally {
+        finish.resolve();
+        finishCleanup.resolve();
+        await drain;
+        await work.drain();
+      }
+      expect(resolveModelAsyncMock).toHaveBeenCalledTimes(
+        stage === "admission" ? 0 : stage === "credential-model" ? 2 : 1,
       );
-    }
-    const controller = new AbortController();
-    const pending = describeImageWithModelCore({
-      cfg: {},
-      agentDir: "/tmp/openclaw-agent",
-      provider: "openai",
-      model: "gpt-5.4-mini",
-      buffer: Buffer.from("png-bytes"),
-      fileName: "image.png",
-      mime: "image/png",
-      prompt: "Describe the image.",
-      timeoutMs: 25,
-      signal: controller.signal,
-    });
-    const rejected = expect(pending).rejects.toThrow(
-      mode === "timeout"
-        ? "image description setup timed out after 25ms before provider request started"
-        : "caller cancelled during setup",
-    );
-    await started.promise;
-    if (mode === "timeout") {
-      await vi.advanceTimersByTimeAsync(25);
-    } else {
-      controller.abort(new Error("caller cancelled during setup"));
-    }
-    await rejected;
-    expect(releasePreparedModelRuntimeMock).not.toHaveBeenCalled();
-    finish.resolve();
-    await vi.runAllTimersAsync();
-    await vi.waitFor(() => expect(releasePreparedModelRuntimeMock).toHaveBeenCalledOnce());
-    expect(resolveModelAsyncMock).toHaveBeenCalledTimes(
-      stage === "admission" ? 0 : stage === "credential-model" ? 2 : 1,
-    );
-    expect(getApiKeyForModelMock).toHaveBeenCalledTimes(
-      stage === "admission" || stage === "model" ? 0 : 1,
-    );
-    expect(prepareProviderRuntimeAuthMock).toHaveBeenCalledTimes(stage === "runtime-auth" ? 1 : 0);
-    expect(setRuntimeApiKeyMock).not.toHaveBeenCalled();
-    expect(completeMock).not.toHaveBeenCalled();
-  });
+      expect(getApiKeyForModelMock).toHaveBeenCalledTimes(
+        stage === "admission" || stage === "model" ? 0 : 1,
+      );
+      expect(prepareProviderRuntimeAuthMock).toHaveBeenCalledTimes(
+        stage === "runtime-auth" ? 1 : 0,
+      );
+      expect(setRuntimeApiKeyMock).not.toHaveBeenCalled();
+      expect(completeMock).not.toHaveBeenCalled();
+    },
+  );
 });

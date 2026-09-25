@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
-import * as transcriptReaders from "../gateway/session-transcript-readers.js";
+import * as transcriptReaders from "../gateway/session-transcript-usage.js";
 
 vi.mock("../version.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../version.js")>();
@@ -130,6 +130,29 @@ describe("buildStatusMessageParts presentation", () => {
     expect(rows.get("🪢 Queue")).toBe("steer");
     expect(String(rows.get("📚 Context"))).not.toContain("▰");
     expect(parts.presentation.blocks.some((block) => block.type === "text")).toBe(false);
+  });
+
+  it("shows the sanitized endpoint in text and tables", () => {
+    const parts = buildStatusMessageParts({
+      modelRefs: statusModelRefs({ provider: "openai", model: "selected-model" }),
+      agent: { model: "openai/selected-model" },
+      selectedEndpoint: "https://user:secret@api.openai.com/v1?token=private#private",
+    });
+    const table = parts.presentation.blocks.find((block) => block.type === "table");
+    const rows = new Map(table?.type === "table" ? table.rows.map((row) => [row[0], row[1]]) : []);
+    expect(parts.text).toContain("Endpoint: https://api.openai.com/v1");
+    expect(rows.get("🌐 Endpoint")).toBe("https://api.openai.com/v1");
+    expect(JSON.stringify(parts)).not.toMatch(/secret|private|user:/);
+  });
+
+  it("does not infer endpoints from a model or credential label without route facts", () => {
+    const parts = buildStatusMessageParts({
+      modelRefs: statusModelRefs({ provider: "openai", model: "selected-model" }),
+      agent: { model: "openai/selected-model" },
+      modelAuth: "oauth (codex)",
+    });
+    expect(parts.text).toContain("Endpoint: unknown");
+    expect(JSON.stringify(parts)).not.toContain("https://");
   });
 
   it("shows a context meter and a pressure warning when the window runs hot", () => {
@@ -309,30 +332,30 @@ describe.each(["session", "transcript", "session with unreported transcript"] as
 describe("buildStatusMessage context window", () => {
   it("rejects a stale runtime window after a same-model harness change", () => {
     const text = buildStatusMessage({
-      modelRefs: statusModelRefs({ provider: "openai", model: "gpt-5.6-sol" }),
+      modelRefs: statusModelRefs({ provider: "openai", model: "gpt-5.6-luna" }),
       config: {
         agents: {
           defaults: {
-            model: "openai/gpt-5.6-sol",
+            model: "openai/gpt-5.6-luna",
           },
         },
         models: {
           providers: {
             openai: {
               baseUrl: "https://api.openai.com/v1",
-              models: [statusTestModel("gpt-5.6-sol", "GPT-5.6 Sol", 1_050_000)],
+              models: [statusTestModel("gpt-5.6-luna", "GPT-5.6 Luna", 1_050_000)],
             },
           },
         },
       },
-      agent: { model: "openai/gpt-5.6-sol" },
+      agent: { model: "openai/gpt-5.6-luna" },
       runtimeContextTokens: 1_000_000,
       resolvedHarness: "codex",
       sessionEntry: {
         sessionId: "same-model-runtime-change",
         updatedAt: 0,
         modelProvider: "openai",
-        model: "gpt-5.6-sol",
+        model: "gpt-5.6-luna",
         agentHarnessId: "openclaw",
         contextTokens: 272_000,
         contextTokensSource: "runtime",
@@ -352,11 +375,11 @@ describe("buildStatusMessage context window", () => {
 
   it("replaces matching runtime telemetry with a newly authored effective cap", () => {
     const text = buildStatusMessage({
-      modelRefs: statusModelRefs({ provider: "openai", model: "gpt-5.6-sol" }),
+      modelRefs: statusModelRefs({ provider: "openai", model: "gpt-5.6-luna" }),
       config: {
         agents: {
           defaults: {
-            model: "openai/gpt-5.6-sol",
+            model: "openai/gpt-5.6-luna",
           },
         },
         models: {
@@ -365,7 +388,7 @@ describe("buildStatusMessage context window", () => {
               baseUrl: "https://api.openai.com/v1",
               models: [
                 {
-                  ...statusTestModel("gpt-5.6-sol", "GPT-5.6 Sol", 1_050_000),
+                  ...statusTestModel("gpt-5.6-luna", "GPT-5.6 Luna", 1_050_000),
                   contextTokens: 1_000_000,
                 },
               ],
@@ -373,14 +396,14 @@ describe("buildStatusMessage context window", () => {
           },
         },
       },
-      agent: { model: "openai/gpt-5.6-sol" },
+      agent: { model: "openai/gpt-5.6-luna" },
       runtimeContextTokens: 1_000_000,
       resolvedHarness: "codex",
       sessionEntry: {
         sessionId: "authored-context-cap",
         updatedAt: 0,
         modelProvider: "openai",
-        model: "gpt-5.6-sol",
+        model: "gpt-5.6-luna",
         agentHarnessId: "codex",
         contextTokens: 272_000,
         contextTokensSource: "runtime",
@@ -400,8 +423,8 @@ describe("buildStatusMessage context window", () => {
 
   it("preserves a locked legacy session window", () => {
     const text = buildStatusMessage({
-      modelRefs: statusModelRefs({ provider: "openai", model: "gpt-5.6-sol" }),
-      agent: { model: "openai/gpt-5.6-sol" },
+      modelRefs: statusModelRefs({ provider: "openai", model: "gpt-5.6-luna" }),
+      agent: { model: "openai/gpt-5.6-luna" },
       runtimeContextTokens: 272_000,
       resolvedHarness: "codex",
       sessionEntry: {
@@ -425,15 +448,15 @@ describe("buildStatusMessage context window", () => {
 
   it("caps matching unlocked runtime telemetry to the lower current window", () => {
     const text = buildStatusMessage({
-      modelRefs: statusModelRefs({ provider: "openai", model: "gpt-5.6-sol" }),
-      agent: { model: "openai/gpt-5.6-sol" },
+      modelRefs: statusModelRefs({ provider: "openai", model: "gpt-5.6-luna" }),
+      agent: { model: "openai/gpt-5.6-luna" },
       runtimeContextTokens: 272_000,
       resolvedHarness: "codex",
       sessionEntry: {
         sessionId: "unlocked-runtime-window",
         updatedAt: 0,
         modelProvider: "openai",
-        model: "gpt-5.6-sol",
+        model: "gpt-5.6-luna",
         agentHarnessId: "codex",
         contextTokens: 1_000_000,
         contextTokensSource: "runtime",

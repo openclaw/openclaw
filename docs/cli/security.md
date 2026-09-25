@@ -79,6 +79,8 @@ Run `openclaw doctor --fix` to rotate a persisted reused `hooks.token`, then upd
 - Warns when npm-based plugin/hook install records are unpinned, missing integrity metadata, or drift from currently installed package versions.
 - Warns when channel allowlists rely on mutable names/emails/tags instead of stable IDs (Discord, Slack, Google Chat, Microsoft Teams, Mattermost, IRC scopes where applicable).
 
+Source scans skip files above their per-file byte limit, including files that grow while being read. If a file changes during a read, the audit reports a scan failure; rerun after edits finish.
+
 ### Dangerous flags
 
 Settings prefixed with `dangerous`/`dangerously` are explicit break-glass operator overrides. Enabling one is not, by itself, a security vulnerability report. Audit reports them under the `config.insecure_or_dangerous_flags` checkId. For the complete dangerous-parameter inventory, see "Insecure or dangerous flags summary" in [Security](/gateway/security).

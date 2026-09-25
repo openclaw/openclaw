@@ -151,7 +151,7 @@ export function createTelegramInboundMedia({
     if (!isGroup || !hasInboundMedia(msg) || mayNeedDownload) {
       return "process";
     }
-    const sessionState = resolveTelegramSessionState({
+    const sessionState = await resolveTelegramSessionState({
       chatId,
       isGroup,
       threadSpec,
@@ -188,7 +188,6 @@ export function createTelegramInboundMedia({
       senderId,
       effectiveDmAllow: authorization.effectiveDmAllow,
       effectiveGroupAllow: authorization.effectiveGroupAllow,
-      ownerAccess: { ownerList: [], senderIsOwner: false },
       eventKind: "message",
       allowTextCommands: true,
       hasControlCommand: hasControlCommandInMessage,

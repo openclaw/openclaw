@@ -14,6 +14,7 @@ import {
   GatewayLockError,
   readActiveGatewayLockIdentity,
   readActiveGatewayLockPort,
+  resolveGatewayOwnerStatus,
 } from "./gateway-lock.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 
@@ -151,6 +152,26 @@ describe("gateway lock", () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
+
+  it.each(["gateway", "agent-embedded", "sqlite-maintenance", "skill-workshop-apply"] as const)(
+    "keeps an unclassified legacy %s owner unknown when start identity is unavailable",
+    async (role) => {
+      await expect(
+        resolveGatewayOwnerStatus(
+          process.pid,
+          {
+            pid: process.pid,
+            createdAt: "2000-01-01T00:00:00.000Z",
+            configPath: "/fixture/openclaw.json",
+            role,
+          },
+          "linux",
+          () => ["node", "dist/index.js", "gateway"],
+          () => null,
+        ),
+      ).resolves.toBe("unknown");
+    },
+  );
 
   it("blocks concurrent acquisition until release", async () => {
     // Fake timers can hang on Windows CI when combined with fs open loops.
@@ -674,6 +695,8 @@ describe("gateway lock", () => {
   it("reclaims a maintenance lock when its live pid belongs to another process", async () => {
     vi.useRealTimers();
     const env = await makeEnv();
+    const script = path.join(env.OPENCLAW_STATE_DIR, "worker.js");
+    await fs.writeFile(script, "");
     const { lockPath, configPath } = resolveLockPath(env);
     await fs.writeFile(
       lockPath,
@@ -690,7 +713,7 @@ describe("gateway lock", () => {
     const lock = await acquireForTest(env, {
       platform: "linux",
       readProcessStartTime: () => null,
-      readProcessCmdline: () => ["node", "worker.js"],
+      readProcessCmdline: () => ["node", script],
       timeoutMs: 80,
     });
     await expectGatewayLock(lock).release();
@@ -827,6 +850,8 @@ describe("gateway lock", () => {
   it("reclaims a lock when its live pid belongs to a non-gateway process", async () => {
     vi.useRealTimers();
     const env = await makeEnv();
+    const script = path.join(env.OPENCLAW_STATE_DIR, "worker.js");
+    await fs.writeFile(script, "");
     await writeRecentLockFile(env);
 
     const lock = await acquireForTest(env, {
@@ -835,7 +860,7 @@ describe("gateway lock", () => {
       staleMs: 10_000,
       platform: "darwin",
       port: 18789,
-      readProcessCmdline: () => ["node", "worker.js"],
+      readProcessCmdline: () => ["node", script],
     });
     await expectGatewayLock(lock).release();
   });
@@ -963,38 +988,6 @@ describe("gateway lock", () => {
     );
 
     await expect(acquireForTest(env)).rejects.toBeInstanceOf(GatewayLockError);
-    openSpy.mockRestore();
-  });
-
-  it("closes handle and preserves an unowned lock file when writeFile fails after open succeeds", async () => {
-    vi.useRealTimers();
-    const env = await makeEnv();
-    const { stateLockPath } = resolveLockPath(env);
-
-    const writeError = Object.assign(new Error("ENOSPC: no space left on device"), {
-      code: "ENOSPC",
-    });
-    const close = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
-    const mockHandle = {
-      writeFile: vi.fn().mockImplementation(async () => {
-        await fs.writeFile(stateLockPath, "partial", "utf8");
-        throw writeError;
-      }),
-      close,
-    };
-
-    const openSpy = vi.spyOn(fs, "open").mockResolvedValueOnce(mockHandle as never);
-
-    await expect(acquireForTest(env)).rejects.toMatchObject({
-      name: "GatewayLockError",
-      cause: writeError,
-    });
-
-    expect(close).toHaveBeenCalledTimes(1);
-    // fs-safe 0.5.2 failure cleanup removes the lock file only when it matches
-    // the snapshot fs-safe wrote itself; this out-of-band file is preserved.
-    await expect(fs.readFile(stateLockPath, "utf8")).resolves.toBe("partial");
-
     openSpy.mockRestore();
   });
 

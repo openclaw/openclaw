@@ -307,14 +307,14 @@ describe("worker transcript commit client", () => {
       content: [{ type: "text", text: "done" }],
       api: "openai-responses",
       provider: "openai",
-      model: "gpt-5.6-sol",
+      model: "gpt-5.6-luna",
       providerReplay: {
         v: 1,
         type: "openai-responses-compaction",
         data: "x".repeat(60 * 1024),
         provider: "openai",
         api: "openai-responses",
-        model: "gpt-5.6-sol",
+        model: "gpt-5.6-luna",
       },
       usage: {
         input: 1,

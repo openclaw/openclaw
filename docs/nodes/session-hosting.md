@@ -53,12 +53,20 @@ installation and retention lifecycle.
 
 You can also enroll and enable a service host in one step with
 `openclaw connect --service --session-host`. In Control UI New Session, a
-write-scoped operator selects a Gateway project or folder and then either a
-specific paired device or **Auto**. OpenClaw creates a
-session-owned managed worktree on the Gateway, dispatches it with the exact
+write-scoped operator chooses either a specific paired device or **Auto**.
+Without an explicit project or folder selection, **New workspace** starts an
+empty isolated workspace without requiring a user Git repository. A selected
+GitHub repository or Gateway Git checkout remains an optional source. OpenClaw creates a
+session-owned managed workspace, dispatches it with the exact
 `deviceId` or `autoDevice: true`, and sends the first turn only after the chosen
 device placement becomes active. New Session does not bind `execNode` or browse
 the device filesystem.
+
+On POSIX hosts, OpenClaw keeps its managed workspace directories private (`0700`),
+including when the host uses umask `0002`. Existing node-owned workspace ancestry
+is tightened when reopened, so transfers can recover after an update without
+changing the host's umask. Files inside a transferred workspace retain their
+manifest permissions.
 
 The Devices page shows the validated Gateway-owned worker version in the node's
 metadata. If the current artifact is missing or fails validation, Devices shows
@@ -73,6 +81,13 @@ headless node, run `openclaw update` followed by `openclaw node restart`. The
 Gateway does not fall back to the node's local OpenClaw package or an older
 supervisor dialect.
 
+OpenClaw worker turns also require a node that supports the Gateway's captured
+exec policy. If you update the Gateway first, older nodes show **Update required**
+for OpenClaw sessions until you update and reconnect them. Their Codex remote
+execution and other approved node commands retain their existing requirements.
+Updating a node first remains compatible with an older Gateway; the node
+advertises this support only when the Gateway understands it.
+
 This setting enables supervised session turns on the paired device, including
 Gateway-owned workspace transfer and result reconciliation. By default, each
 node has one worker slot per available CPU core. Configure the slot count with
@@ -80,14 +95,28 @@ node has one worker slot per available CPU core. Configure the slot count with
 for a durable slot; while all slots are occupied, the node remains available
 for status and cancellation but is not selected for a new session turn.
 
+Stopping an active hosted turn records the accepted cancellation even if the
+worker encounters an error while stopping. Worker diagnostics retain the shutdown
+failure separately. A worker slot becomes available only after its process tree
+or container has finished cleanup.
+
+Current Linux and macOS node hosts also retain that cleanup ownership when the
+application worker or node host crashes, when the Gateway-provided worker bundle
+supports process lineage. Update the Gateway and update and restart the node host
+to receive this protection; installing a new worker bundle alone does not update
+the node's supervisor. Recovery keeps capacity occupied while the previous owner
+finishes stopping its commands. An upgraded node host preserves the released
+startup message and detached process-group ownership for older worker bundles.
+
 The picker derives every device row from `environments.list`. Every selected
 runtime requires an available, connected paired session host. OpenClaw worker
-turns additionally require valid exact worker slots with at least one free
-slot. Codex paired-device execution launches its exec-server directly, so it
-does not consume or require a worker slot; instead, its required command must
-appear in the node's effective `invocableCommands`, not merely its declared
-capabilities. A declared command is usable only when the approved pairing and
-Gateway command allowlist both authorize it. Connected non-hosts, ineligible
+turns additionally require captured exec-policy support and valid exact worker
+slots with at least one free slot. Codex paired-device execution launches its
+exec-server directly, so it does not consume or require a worker slot. Its
+required command must appear in the node's effective `invocableCommands`,
+not merely its declared capabilities. A declared command is usable only when
+the approved pairing and Gateway command allowlist both authorize it.
+Connected non-hosts, ineligible
 or saturated hosts, update-required devices, and unavailable hosts remain
 visible but disabled with an actionable reason. Enable hosting with
 `openclaw connect --service --session-host` or the `nodeHost.workerRuns`
@@ -100,15 +129,26 @@ arrives. Local remains selectable; cached worker slots never authorize a new
 remote session.
 
 Choose **Auto** to let the Gateway select an eligible paired,
-connected session host. For OpenClaw worker turns, it selects the host with the
-most available worker slots and breaks ties by device ID. Runtimes that do not
-consume worker slots choose the eligible host with the lowest device ID instead.
-If a selected host disconnects, reaches capacity, or otherwise becomes
-ineligible before dispatch finishes, the Gateway tries the next ranked host, up
-to three hosts total. Other dispatch failures are returned immediately. If no
-host is eligible, the error explains whether no session hosts are paired, hosts
-are disconnected or at capacity, a host needs an update, or the selected runtime
-is unsupported. The dispatch response identifies the device that was selected.
+connected session host. For OpenClaw worker turns, it first prefers hosts with
+less admitted work relative to their worker capacity. It then compares free
+worker slots after accounting for dispatches still starting, and breaks
+remaining ties by device ID. A session's placement alone does not reserve a
+worker slot. Runtimes that do not consume worker slots choose the eligible host
+with the lowest device ID instead.
+
+If a selected host becomes ineligible before workspace preparation begins, the
+Gateway tries the next ranked host, up to three hosts total, after confirming
+that any failed allocation has been cleaned up. Other dispatch failures are
+returned immediately; Auto never replays workspace preparation or work already
+started. Once workspace preparation is admitted, another turn filling the host's
+slots does not cancel it; the node checks physical capacity when the session
+launches a turn.
+Node identity and command authorization remain checked throughout preparation.
+
+If no host is eligible, the error explains whether no session hosts are paired,
+hosts are disconnected or at capacity, a host needs an update, or the selected
+runtime is unsupported. The dispatch response identifies the device that was
+selected.
 
 When a known session host disconnects, its paired-device record preserves only
 the last accepted current-v6 hosting consent. The offline row remains visible

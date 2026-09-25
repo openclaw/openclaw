@@ -11,6 +11,7 @@ import {
 } from "openclaw/plugin-sdk/security-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { signalCheck } from "./client-adapter.js";
+import { prepareSignalSocketPath } from "./socket-path.js";
 
 type SignalDaemonOpts = {
   cliPath: string;
@@ -18,6 +19,7 @@ type SignalDaemonOpts = {
   account?: string;
   httpHost: string;
   httpPort: number;
+  socketPath?: string;
   receiveMode?: "on-start" | "manual";
   ignoreAttachments?: boolean;
   ignoreStories?: boolean;
@@ -51,8 +53,15 @@ function formatSignalDaemonEndpoint(httpHost: string, httpPort: number): string 
 export async function assertSignalDaemonEndpointAvailable(params: {
   httpHost: string;
   httpPort: number;
+  socketPath?: string;
   abortSignal?: AbortSignal;
 }): Promise<void> {
+  if (params.socketPath) {
+    params.abortSignal?.throwIfAborted();
+    await prepareSignalSocketPath(params.socketPath, params.abortSignal);
+    params.abortSignal?.throwIfAborted();
+    return;
+  }
   try {
     await ensurePortAvailable(params.httpPort, params.httpHost, params.abortSignal);
   } catch (error) {
@@ -181,10 +190,17 @@ function buildDaemonArgs(opts: SignalDaemonOpts): string[] {
     args.push("-a", opts.account);
   }
   args.push("daemon");
-  args.push("--http", `${opts.httpHost}:${opts.httpPort}`);
+  if (opts.socketPath) {
+    args.push("--socket", opts.socketPath);
+  } else {
+    args.push("--http", `${opts.httpHost}:${opts.httpPort}`);
+  }
   args.push("--no-receive-stdout");
 
-  if (opts.receiveMode) {
+  if (opts.socketPath) {
+    // The socket client explicitly subscribes; automatic subscriptions would duplicate events.
+    args.push("--receive-mode", "manual");
+  } else if (opts.receiveMode) {
     args.push("--receive-mode", opts.receiveMode);
   }
   if (opts.ignoreAttachments) {

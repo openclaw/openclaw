@@ -17,6 +17,7 @@ import { buildChatItems } from "./chat-thread-build.ts";
 import {
   admitChatSubmission,
   getChatSessionProjection,
+  getChatModelObservedRunId,
   readChatSessionProjectionScope,
   reduceChatSessionProjection,
   publishChatSessionProjection,
@@ -87,6 +88,22 @@ function failedHistory(): ChatHistoryResult {
 }
 
 describe("chat history in-flight assistant recovery", () => {
+  it("recovers the observed model from chat.history without a new model event or exact ID set", async () => {
+    const history = activeHistory("held-fallback");
+    history.sessionInfo = {
+      key: "main",
+      kind: "direct",
+      updatedAt: 1,
+      hasActiveRun: true,
+      activeModel: "fallback",
+      activeModelProvider: "example",
+    };
+    const state = createState(history);
+    await loadChatHistory(state);
+    expect(state.chatRunId).toBe("held-fallback");
+    expect(getChatModelObservedRunId(state, history.sessionInfo)).toBe("held-fallback");
+  });
+
   it("retires an interrupted run from authoritative history after missing its live terminal", async () => {
     const active = activeHistory("run-interrupted");
     const interrupted: ChatHistoryResult = {
@@ -142,7 +159,7 @@ describe("chat history in-flight assistant recovery", () => {
             "run-first",
           ),
         );
-        admitChatSubmission(state);
+        admitChatSubmission(state, undefined);
       }
 
       await loadChatHistory(state, { startup: method === "chat.startup" });
@@ -303,14 +320,17 @@ describe("chat history in-flight assistant recovery", () => {
     await loadHistoryWithBrowserTimers(state);
 
     expect(state.chatRunId).toBe("run-live");
-    expect(state.chatStream).toBeNull();
-    expect(state.chatStreamSegments).toContainEqual(
-      expect.objectContaining({
-        runId: "run-live",
-        text: "The active response survived reconnect.",
-        toolCallId: "call-reconnected",
-      }),
-    );
+    expect(state.chatStream).toBe("The active response survived reconnect.");
+    expect(state.chatStreamSegments).toEqual([]);
+    const continued = "The active response survived reconnect. Still streaming.";
+    handleChatGatewayEvent(state, {
+      runId: "run-live",
+      sessionKey: state.sessionKey,
+      state: "delta",
+      message: { role: "assistant", content: continued },
+    });
+    expect(renderedText(state)).toContain(continued);
+    expect(renderedText(state)).not.toContain("The active response survived reconnect.");
     expect(state.chatToolMessages[0]).toMatchObject({
       runId: "run-live",
       toolCallId: "call-reconnected",
@@ -1018,7 +1038,16 @@ describe("chat history in-flight assistant recovery", () => {
     const { promise: historyPromise, resolve: resolveHistory } =
       createDeferred<ChatHistoryResult>();
     const request = vi.fn().mockReturnValue(historyPromise);
-    const state = createState(activeHistory("run-reconnected"));
+    const history = activeHistory("run-reconnected");
+    history.sessionInfo = {
+      ...history.sessionInfo,
+      key: "main",
+      kind: "direct",
+      activeRunIds: undefined,
+      activeModel: "old-fallback",
+      activeModelProvider: "example",
+    };
+    const state = createState(history);
     state.client = { request } as unknown as GatewayBrowserClient;
 
     const loadPromise = loadChatHistory(state);
@@ -1037,10 +1066,11 @@ describe("chat history in-flight assistant recovery", () => {
     });
     expect(state.chatRunId).toBeNull();
 
-    resolveHistory(activeHistory("run-reconnected"));
+    resolveHistory(history);
     await loadPromise;
 
     expect(state.chatRunId).toBeNull();
     expect(state.chatStream).toBeNull();
+    expect(getChatModelObservedRunId(state, history.sessionInfo)).toBeUndefined();
   });
 });

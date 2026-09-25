@@ -16,6 +16,7 @@ describe("selected lineage after a full sessions.changed event", () => {
   it.each(["filtered omitted", "unfiltered metadata", "managed member"] as const)(
     "%s keeps accepted event fields visible after list refresh failures",
     async (mode) => {
+      vi.useFakeTimers();
       const filtered = mode !== "unfiltered metadata";
       const managedMember = mode === "managed member";
       const reparent = mode !== "unfiltered metadata";
@@ -217,6 +218,7 @@ describe("selected lineage after a full sessions.changed event", () => {
           activeRunIds: [],
           status: "done",
         });
+        await vi.advanceTimersByTimeAsync(5_000);
         await waitForFast(() =>
           expect(sessions.state.result?.sessions.find((entry) => entry.key === key)).toMatchObject({
             sessionId: child.sessionId,
@@ -232,7 +234,9 @@ describe("selected lineage after a full sessions.changed event", () => {
         });
         await sidebar.updateComplete;
         expect(sessions.canonicalListRevision).toBe(revisionBefore);
-        expect(controllerChildReads).toBe(1);
+        // A retained parent query refreshes its changed member; reparenting
+        // retires the old query before its scheduled refresh runs.
+        expect(controllerChildReads).toBe(reparent ? 1 : 2);
         if (mode === "filtered omitted") {
           expect(sidebar.sessionData.sessionsResult?.sessions.map((entry) => entry.key)).toEqual([
             p1,
@@ -256,6 +260,7 @@ describe("selected lineage after a full sessions.changed event", () => {
           expect(directParent()).toBe(expectedParent);
         });
       } finally {
+        vi.useRealTimers();
         failedLists = false;
         provider.remove();
         sessions.dispose();

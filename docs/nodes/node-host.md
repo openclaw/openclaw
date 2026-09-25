@@ -76,6 +76,8 @@ them before using the link if that access is too broad. See
 
 `node run` also accepts `--pair`, `--context-path` (Gateway WS context path), `--tls`, `--tls-fingerprint <sha256>`, and `--node-id` (override the legacy client instance ID; this does not reset pairing). On macOS, pass `--share-installed-apps` to advertise `device.apps`; sharing is off by default. Use `--no-share-installed-apps` to disable a previously saved opt-in.
 
+Pass `--session-host` to enable worker hosting for this foreground process without changing the saved preference. Automatic restarts preserve this choice.
+
 ### Remote gateway via SSH tunnel (loopback bind)
 
 If the Gateway binds to loopback (`gateway.bind=loopback`, default in local mode), remote node hosts cannot connect directly. Create an SSH tunnel and point the node host at the local end of the tunnel.
@@ -101,6 +103,37 @@ Notes:
 - If active local `gateway.auth.*` SecretRefs are configured but unresolved, node-host auth fails closed.
 - Node-host auth resolution only honors `OPENCLAW_GATEWAY_*` env vars.
 
+### Restrict the node command surface
+
+Pass `--commands <ids>` to `openclaw node run`, `openclaw node install`, or
+`openclaw connect` to advertise only an explicit comma-separated list of exact
+command IDs. For example, a [Session Share](/plugins/session-share) node can
+publish sessions without exposing execution or other machine capabilities:
+
+```bash
+openclaw connect <join-url> --service \
+  --commands openclaw.sessions.list.v1,openclaw.sessions.read.v1
+```
+
+The flag is repeatable. The allowlist is saved in the node's durable machine
+state, including for installed services; omitting it on a later start keeps
+the saved list. The node advertises only commands that are both available
+and allowlisted, with only their required capabilities. Startup fails if no
+requested command is available. The Gateway pairing approval shows exactly
+the declared commands; Gateway command policy still applies to invocation.
+
+An explicit allowlist also disables computer use, skill scanning and
+publication, plugin-tool publication, MCP servers, and worker hosting. An
+allowlist does not enable a disabled plugin or make an unavailable command
+available.
+
+Restore the full default surface with `openclaw node run --all-commands` in
+the foreground or `openclaw node install --force --all-commands` for an
+installed service. When enrolling with `openclaw connect`, add `--all-commands`
+and optionally `--service`. This durably removes the saved allowlist and
+replaces the service's `--commands` arguments. Do not combine `--all-commands`
+with `--commands`.
+
 ### Start a node host (service)
 
 ```bash
@@ -110,6 +143,28 @@ openclaw node restart
 ```
 
 `node install` also accepts `--context-path`, `--tls`, `--tls-fingerprint`, `--node-id` (legacy client instance ID only), `--share-installed-apps` / `--no-share-installed-apps`, `--runtime <node|bun>` (default: `node`), and `--force` to reinstall. Bun requires version 1.4+ with WAL-reset-safe `node:sqlite` and is an explicit opt-in; Node remains recommended. `node status`, `node stop`, and `node uninstall` are also available.
+
+Node shutdown waits for plugin availability watchers and active computer executions
+to finish cleanup, and reports failures from those cleanup operations. If a command
+reports `Node plugin cleanup failed`, reconnect the node to retry disconnect cleanup
+before sending another command.
+
+### Automatic node updates
+
+Packaged headless nodes check for updates hourly by default, in both foreground
+and service mode. They prepare a separate runtime, wait until all node work is
+idle, then restart and reconnect with the same identity, pairing, and launch
+options. A node update does not replace the global CLI package or a co-located
+Gateway. Automatic activations are at least 12 hours apart, and busy work can
+defer an update indefinitely.
+
+Set `nodeHost.autoUpdate.enabled: false` on the node to opt out. The shared
+`update.checkOnStart: false` and `OPENCLAW_NO_AUTO_UPDATE=1` opt-outs also apply.
+Source checkouts, native app nodes, private workers, `dev`, and
+`extended-stable` installs do not auto-apply. Releases requiring database
+migrations defer to the normal update workflow. See
+[Headless node updates](/install/updating/automatic-updates#headless-node-updates)
+for the idle-work rules and configuration.
 
 ### Pair + name
 

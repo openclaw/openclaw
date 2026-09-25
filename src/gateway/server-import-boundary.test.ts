@@ -2,10 +2,13 @@
 // heavyweight cron, doctor, secret, task, and WebSocket handlers from eager loads.
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
-import ts from "typescript";
-import { describe, expect, it } from "vitest";
+import * as ts from "typescript/unstable/ast";
+import { afterAll, describe, expect, it } from "vitest";
+import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
 
 function readSource(relativePath: string): string {
   return readFileSync(path.join(repoRoot, relativePath), "utf8");
@@ -29,12 +32,12 @@ function resolveRelativeSource(importer: string, specifier: string): string | nu
 }
 
 function staticValueSpecifiers(filePath: string, source: string): string[] {
-  const sourceFile = ts.createSourceFile(filePath, source, ts.ScriptTarget.Latest, true);
+  const sourceFile = parser.parseSourceFile(filePath, source);
   const specifiers: string[] = [];
   for (const statement of sourceFile.statements) {
     if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier)) {
       const clause = statement.importClause;
-      if (clause?.isTypeOnly) {
+      if (clause?.phaseModifier === ts.SyntaxKind.TypeKeyword) {
         continue;
       }
       if (
@@ -100,19 +103,18 @@ function readServerImplementation(): string {
 }
 
 describe("gateway startup import boundaries", () => {
-  it.each(["src/gateway/methods/core-descriptors.ts", "src/gateway/method-scopes.ts"])(
-    "keeps static method policy independent of session storage: %s",
-    (entryPath) => {
-      const graph = collectStaticValueImportGraph(entryPath);
-      const sessionStorageImports = [...graph.keys()]
-        .map((filePath) => path.relative(repoRoot, filePath))
-        .filter((filePath) =>
-          filePath.startsWith(path.join("src", "config", "sessions") + path.sep),
-        );
+  it.each([
+    "src/gateway/methods/core-descriptors.ts",
+    "src/gateway/methods/core-method-policy.ts",
+    "src/gateway/method-scopes.ts",
+  ])("keeps static method policy independent of session storage: %s", (entryPath) => {
+    const graph = collectStaticValueImportGraph(entryPath);
+    const sessionStorageImports = [...graph.keys()]
+      .map((filePath) => path.relative(repoRoot, filePath))
+      .filter((filePath) => filePath.startsWith(path.join("src", "config", "sessions") + path.sep));
 
-      expect(sessionStorageImports).toEqual([]);
-    },
-  );
+    expect(sessionStorageImports).toEqual([]);
+  });
 
   it("keeps remote catalog refresh networking behind the overlay boundary", () => {
     const startupGraph = collectStaticValueImportGraph(
@@ -166,9 +168,6 @@ describe("gateway startup import boundaries", () => {
     expect(serverImpl).not.toMatch(
       /import\s+\{[^}]*resolveSessionKeyForRun[^}]*\}\s+from "\.\/server-session-key\.js"/s,
     );
-    expect(serverImpl).not.toMatch(
-      /export\s+\{[^}]*resetPreparedModelCatalogForTest[^}]*\}\s+from "\.\/server-model-catalog\.js"/s,
-    );
     expect(readSource("src/gateway/server-runtime-subscriptions.ts")).toContain(
       'import("./server-session-key.js")',
     );
@@ -186,14 +185,17 @@ describe("gateway startup import boundaries", () => {
     expect(readSource("src/gateway/server-reload-managed.ts")).not.toContain(
       'from "../secrets/runtime.js"',
     );
+    const connection = readSource("src/gateway/server/connection.ts");
     const wsConnection = readSource("src/gateway/server/ws-connection.ts");
     const wsGraph = collectStaticValueImportGraph("src/gateway/server/ws-connection.ts");
     expect([...wsGraph.keys()]).not.toContain(
       path.join(repoRoot, "src/gateway/server/ws-connection/message-handler.ts"),
     );
-    expect(wsConnection).not.toContain('from "../talk-realtime-relay.js"');
-    expect(wsConnection).not.toContain('from "../talk-transcription-relay.js"');
-    expect(wsConnection).toContain('from "../talk-session-registry.js"');
+    for (const source of [connection, wsConnection]) {
+      expect(source).not.toContain('from "../talk/relay/index.js"');
+      expect(source).not.toContain('from "../talk/transcription-relay.js"');
+    }
+    expect(connection).toContain('from "../talk/session-registry.js"');
     expect(readSource("src/gateway/server-aux-handlers.ts")).not.toMatch(
       /import\s+\{[^}]*create(?:Exec|Plugin|Secrets)[^}]*\}\s+from "\.\/server-methods\//s,
     );
@@ -228,14 +230,13 @@ describe("gateway startup import boundaries", () => {
   it("defers retained plugin generation cleanup to the post-ready idle scheduler", () => {
     const serverImpl = readServerImplementation();
     const cleanup = readSource("src/gateway/server-retained-plugin-cleanup.ts");
-    const importBoundary = serverImpl.indexOf("type LoadGatewayModelCatalog");
+    const staticImports = staticValueSpecifiers("server-implementation.ts", serverImpl);
     const serverStart = serverImpl.indexOf("export async function startGatewayServerCore");
     const postReadyStart = serverImpl.indexOf("scheduleGatewayPostReadyMaintenance({", serverStart);
     const cleanupCall = serverImpl.lastIndexOf("cleanupRetainedPluginInstallGenerations(");
 
-    expect(importBoundary).toBeGreaterThan(-1);
-    expect(serverImpl.slice(0, importBoundary)).not.toContain("managed-npm-retention");
-    expect(serverImpl.slice(0, importBoundary)).not.toContain("installed-plugin-index-records");
+    expect(staticImports).not.toContain("../plugins/managed-npm-retention.js");
+    expect(staticImports).not.toContain("../plugins/installed-plugin-index-records.js");
     expect(cleanup).toContain('import("../plugins/managed-npm-retention.js")');
     expect(cleanup).toContain('import("../plugins/installed-plugin-index-records.js")');
     expect(postReadyStart).toBeGreaterThan(serverStart);

@@ -4,11 +4,13 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import { rewindChatHistory, switchChatHistoryBranch } from "./chat-history-actions.ts";
+import { loadOlderChatHistoryPage, requestChatSessionSnapshot } from "./chat-history-request.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
 import { createState, type TestState } from "./chat-history.inflight.test-support.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import type { ChatState } from "./chat-state-contract.ts";
+import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
 import {
   getChatSessionProjection,
   publishChatSessionProjection,
@@ -21,6 +23,30 @@ import {
   type ChatMessageCache,
 } from "./session-message-cache.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
+
+it("preserves prepared quiet activity through older pages and prefetched snapshots", async () => {
+  const message = {
+    role: "toolResult",
+    toolCallId: "wait",
+    toolName: "sessions_yield",
+    content: [{ type: "text", text: "Waiting finished" }],
+    __openclaw: { id: "wait-result", seq: 3 },
+  };
+  const state = createState({
+    messages: [message],
+    activity: [{ messageId: "wait-result", items: [] }],
+  });
+  const expected = [{ ...message, activity: [] }];
+  expect((await loadOlderChatHistoryPage(state, 1))?.messages).toEqual(expected);
+  const prefetched = await requestChatSessionSnapshot(
+    state.client!,
+    state.sessionKey,
+    state,
+    () => true,
+  );
+  expect(prefetched).toMatchObject({ kind: "snapshot", snapshot: { messages: expected } });
+  expect(message).not.toHaveProperty("activity");
+});
 
 function activeHistory(runId: string): ChatHistoryResult {
   return {
@@ -49,12 +75,16 @@ it.each(["main", "workspace"])(
     state.agentsList = { defaultId: "main", mainKey: "workspace", scope: "global" };
     const request = vi.spyOn(state.client!, "request");
     await loadChatHistory(state);
-    expect(request).toHaveBeenCalledWith("chat.history", {
-      sessionKey,
-      agentId: "main",
-      limit: 80,
-      maxBytes: 256 * 1024,
-    });
+    expect(request).toHaveBeenCalledWith(
+      "chat.history",
+      {
+        sessionKey,
+        agentId: "main",
+        limit: 80,
+        maxBytes: 256 * 1024,
+      },
+      { signal: expect.any(AbortSignal) },
+    );
   },
 );
 
@@ -260,7 +290,11 @@ describe("rewindChatHistory", () => {
       },
     );
 
-    const result = await rewindChatHistory(state as never, "user-entry");
+    const result = await rewindChatHistory(
+      state as never,
+      "user-entry",
+      new ChatAttachmentReadLifecycle(() => {}),
+    );
 
     expect(state.sessions.rewind).toHaveBeenCalledWith(
       state.sessionKey,
@@ -324,7 +358,11 @@ describe("rewindChatHistory", () => {
       },
     );
 
-    const result = await rewindChatHistory(state as never, "user-entry");
+    const result = await rewindChatHistory(
+      state as never,
+      "user-entry",
+      new ChatAttachmentReadLifecycle(() => {}),
+    );
 
     expect(
       readChatMessagesFromCache(state.chatMessagesBySession, state, {
@@ -351,7 +389,11 @@ describe("rewindChatHistory", () => {
       refreshReplacement: vi.fn(async () => null),
     });
 
-    const pending = rewindChatHistory(state as never, "user-entry");
+    const pending = rewindChatHistory(
+      state as never,
+      "user-entry",
+      new ChatAttachmentReadLifecycle(() => {}),
+    );
     state.connected = false;
     state.connectionEpoch += 1;
     state.connected = true;

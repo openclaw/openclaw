@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
+import { DEFAULT_MISSING_TOOL_RESULT_TEXT } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
   appendTranscriptEvent,
@@ -12,10 +13,69 @@ import {
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
+
+it("reports context queue overload without losing context and recovers in admission order", async () => {
+  await withOpenClawTestState({ label: "model-context-pressure" }, async (state) => {
+    const scope = {
+      agentId: "main",
+      sessionId: "context-pressure",
+      sessionKey: "agent:main:context-pressure",
+      storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    const source = SessionManager.open(scope);
+    source.appendMessage(makeUserMessage("retain this context", 1));
+    await waitForSessionTranscriptProjection(scope);
+    const expected = source.buildSessionContext();
+    const release = createDeferredCore();
+    const completed: number[] = [];
+    const spy = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementationOnce(function (
+      this: WorkerTaskPool<unknown, unknown>,
+      input,
+      options,
+    ) {
+      spy.mockRestore();
+      // Hold this caller's first preparation while real pool admission fills the queue.
+      return this.run(async () => {
+        await release.promise;
+        return input;
+      }, options);
+    });
+    const accepted = Array.from({ length: 128 }, (_, index) =>
+      SessionManager.openModelContextAsync(scope).then((context) => {
+        completed.push(index);
+        return context.buildSessionContext();
+      }),
+    );
+    let reported: unknown;
+    const excess = SessionManager.openModelContextAsync(scope).catch((error: unknown) => {
+      reported = error;
+    });
+    try {
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(reported).toMatchObject({ name: "WorkerTaskError", code: "overloaded" });
+      expect(completed).toEqual([]);
+      expect(source.buildSessionContext()).toEqual(expected);
+      release.resolve();
+      expect(await Promise.all(accepted)).toEqual(Array.from({ length: 128 }, () => expected));
+      expect(completed).toEqual(Array.from({ length: 128 }, (_, index) => index));
+      expect((await SessionManager.openModelContextAsync(scope)).buildSessionContext()).toEqual(
+        expected,
+      );
+    } finally {
+      release.resolve();
+      spy.mockRestore();
+      await Promise.allSettled([...accepted, excess]);
+    }
+  });
+});
 
 it("acquires a long sparse context with bounded queries and preserved message order", async () => {
   await withOpenClawTestState({ label: "model-context-batch" }, async (state) => {
@@ -44,7 +104,8 @@ it("acquires a long sparse context with bounded queries and preserved message or
     ]);
     const database = openOpenClawAgentDatabase({ agentId: "main", path: scope.storePath });
     const prototype = Object.getPrototypeOf(database.db.prepare("SELECT 1")) as StatementSync;
-    const spy = vi.spyOn(prototype, "iterate");
+    const iterate = vi.spyOn(prototype, "iterate");
+    const get = vi.spyOn(prototype, "get");
     try {
       const context = SessionManager.openModelContext(scope).buildSessionContext();
       expect(context.messages.map((message) => "content" in message && message.content)).toEqual(
@@ -53,17 +114,27 @@ it("acquires a long sparse context with bounded queries and preserved message or
           .map((entry) => entry.message.content),
       );
       // Protect acquisition cost independently of the exact chunk size or query implementation.
-      expect(spy.mock.calls.length).toBeLessThan(20);
+      expect(iterate.mock.calls.length + get.mock.calls.length).toBeLessThan(20);
       expect((await SessionManager.openModelContextAsync(scope)).buildSessionContext()).toEqual(
         context,
       );
     } finally {
-      spy.mockRestore();
+      iterate.mockRestore();
+      get.mockRestore();
     }
   });
 });
 
-it.each(["whole", "reset", "compaction", "reset-compaction", "leaf", "opaque"])(
+it.each([
+  "whole",
+  "reset",
+  "compaction",
+  "reset-compaction",
+  "leaf",
+  "opaque",
+  "opaque-compaction",
+  "leaf-compaction",
+])(
   "acquires detached %s context without native payloads or changing stored evidence",
   async (scenario) => {
     await withOpenClawTestState({ label: "model-context" }, async (state) => {
@@ -84,8 +155,8 @@ it.each(["whole", "reset", "compaction", "reset-compaction", "leaf", "opaque"])(
         sender: { id: "synthetic-sender" },
         media: { type: "synthetic" },
       };
-      source.appendThinkingLevelChange("high");
-      source.appendModelChange("openai", "gpt-5.6-luna");
+      await source.appendThinkingLevelChange("high");
+      await source.appendModelChange("openai", "gpt-5.6-luna");
       const old = source.appendMessage({
         role: "user",
         content: "old",
@@ -146,6 +217,19 @@ it.each(["whole", "reset", "compaction", "reset-compaction", "leaf", "opaque"])(
       }
       if (scenario === "compaction" || scenario === "reset-compaction") {
         source.appendCompaction("summary", scenario === "compaction" ? excluded : kept, 100);
+      }
+      if (scenario === "opaque-compaction") {
+        await appendTranscriptEvent(scope, {
+          type: "opaque-synthetic",
+          id: "opaque-keep",
+          parentId: kept,
+        });
+        source.reloadPersistedTranscript();
+        source.appendCompaction("summary", "opaque-keep", 100);
+      }
+      if (scenario === "leaf-compaction") {
+        const leafMarker = source.appendLeafControl({ targetId: kept, appendParentId: kept });
+        source.appendCompaction("summary", leafMarker.id, 100);
       }
       if (scenario === "leaf") {
         source.branch(old);
@@ -715,67 +799,94 @@ it.each([false, true])(
   },
 );
 
-it("keeps the real result when reset retention replaces a synthetic missing result", async () => {
-  await withOpenClawTestState({ label: "model-pairing" }, async (state) => {
-    const scope = {
-      agentId: "main",
-      sessionId: "pairing",
-      sessionKey: "agent:main:pairing",
-      storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-    };
-    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    const source = SessionManager.open(scope);
-    const firstKept = source.appendMessage(
-      makeAgentAssistantMessage({
-        content: [{ type: "toolCall", id: "repeat", name: "read", arguments: {} }],
-      }),
-    );
-    source.appendMessage({
-      role: "toolResult",
-      toolCallId: "repeat",
-      toolName: "read",
-      isError: true,
-      content: [{ type: "text", text: "missing" }],
-      details: { openclawSyntheticMissingToolResult: true },
-      timestamp: 1,
-    });
-    source.appendMessage({
-      role: "toolResult",
-      toolCallId: "repeat",
-      toolName: "read",
-      isError: false,
-      content: [{ type: "text", text: "real output" }],
-      timestamp: 2,
-    });
-    source.appendMessage({
-      role: "toolResult",
-      toolCallId: "orphan",
-      toolName: "read",
-      isError: false,
-      content: [{ type: "text", text: "orphan-body:" + "x".repeat(512 * 1024) }],
-      timestamp: 3,
-    });
-    source.appendResetBoundary("new", firstKept);
-    const originalParse = JSON.parse;
-    let orphanBytes = 0;
-    const spy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
-      if (typeof text === "string" && text.includes("orphan-body:")) {
-        orphanBytes += text.length;
+it.each(["details", "text", "duplicate-object", "late-array-call"])(
+  "keeps real tool output across reset (%s)",
+  async (marker) => {
+    await withOpenClawTestState({ label: "model-pairing" }, async (state) => {
+      const scope = {
+        agentId: "main",
+        sessionId: "pairing",
+        sessionKey: "agent:main:pairing",
+        storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+      };
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const source = SessionManager.open(scope);
+      const firstKept = source.appendMessage(
+        makeAgentAssistantMessage({
+          content: [
+            ...Array.from({ length: marker === "late-array-call" ? 16 : 1 }, () => ({
+              type: "text" as const,
+              text: "Reading the file",
+            })),
+            { type: "toolCall", id: "repeat", name: "read", arguments: { path: "synthetic.txt" } },
+          ],
+        }),
+      );
+      const missingResult = source.appendMessage({
+        role: "toolResult",
+        toolCallId: "repeat",
+        toolName: "read",
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: marker === "details" ? "missing" : DEFAULT_MISSING_TOOL_RESULT_TEXT,
+          },
+        ],
+        ...(marker === "details" ? { details: { openclawSyntheticMissingToolResult: true } } : {}),
+        timestamp: 1,
+      });
+      source.appendMessage({
+        role: "toolResult",
+        toolCallId: "repeat",
+        toolName: "read",
+        isError: false,
+        content: [{ type: "text", text: "real output" }],
+        timestamp: 2,
+      });
+      source.appendMessage({
+        role: "toolResult",
+        toolCallId: "orphan",
+        toolName: "read",
+        isError: false,
+        content: [{ type: "text", text: "orphan-body:" + "x".repeat(512 * 1024) }],
+        timestamp: 3,
+      });
+      source.appendResetBoundary("new", firstKept);
+      if (marker === "duplicate-object") {
+        await waitForSessionTranscriptProjection(scope);
+        const database = openOpenClawAgentDatabase({ agentId: "main", path: scope.storePath });
+        // Preserve duplicate members from imported JSON; JavaScript objects would collapse them.
+        const content = `{"part":{"type":"text","text":"ordinary"},"part":{"type":"text","text":${JSON.stringify(DEFAULT_MISSING_TOOL_RESULT_TEXT)}}}`;
+        database.db
+          .prepare(
+            "UPDATE transcript_events SET event_json = json_set(event_json, '$.message.content', json(?)) WHERE session_id = ? AND json_extract(event_json, '$.id') = ?",
+          )
+          .run(content, scope.sessionId, missingResult);
       }
-      return originalParse(text, reviver);
+      const originalParse = JSON.parse;
+      let orphanBytes = 0;
+      const spy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
+        if (typeof text === "string" && text.includes("orphan-body:")) {
+          orphanBytes += text.length;
+        }
+        return originalParse(text, reviver);
+      });
+      let messages: ReturnType<SessionManager["buildSessionContext"]>["messages"];
+      try {
+        messages = SessionManager.openModelContext(scope).buildSessionContext().messages;
+      } finally {
+        spy.mockRestore();
+      }
+      expect(orphanBytes).toBe(0);
+      expect(
+        messages
+          .filter((message) => message.role === "toolResult")
+          .map((message) => message.content),
+      ).toEqual([[{ type: "text", text: "real output" }]]);
     });
-    let messages: ReturnType<SessionManager["buildSessionContext"]>["messages"];
-    try {
-      messages = SessionManager.openModelContext(scope).buildSessionContext().messages;
-    } finally {
-      spy.mockRestore();
-    }
-    expect(orphanBytes).toBe(0);
-    expect(
-      messages.filter((message) => message.role === "toolResult").map((message) => message.content),
-    ).toEqual([[{ type: "text", text: "real output" }]]);
-  });
-});
+  },
+);
 
 it.each(["reset", "compaction"])(
   "does not acquire checkpoints invalidated by %s",

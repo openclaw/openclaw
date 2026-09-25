@@ -120,6 +120,36 @@ describe("resolveConfigEnvVars", () => {
     });
   });
 
+  it("retains sparse arrays, literal keys, escaping and depth-first callback order", () => {
+    const items: unknown[] = [];
+    items.length = 3;
+    items[1] = { missing: "${FIRST}", resolved: "${LATER}", escaped: "$${LATER}" };
+    const env = { LATER: "before-callback" };
+    const warnings: EnvSubstitutionWarning[] = [];
+    const result = resolveConfigEnvVars({ items, tail: "${LAST}", "${KEY}": "literal-key" }, env, {
+      onMissing: (warning) => {
+        warnings.push(warning);
+        env.LATER = "after-callback";
+      },
+    });
+    const expectedItems: unknown[] = [];
+    expectedItems.length = 3;
+    expectedItems[1] = {
+      missing: "${FIRST}",
+      resolved: "after-callback",
+      escaped: "${LATER}",
+    };
+    expect(result).toStrictEqual({
+      items: expectedItems,
+      tail: "${LAST}",
+      "${KEY}": "literal-key",
+    });
+    expect(warnings).toEqual([
+      { varName: "FIRST", configPath: "items[1].missing" },
+      { varName: "LAST", configPath: "tail" },
+    ]);
+  });
+
   describe("missing env var handling", () => {
     it("throws MissingEnvVarError with var name and config path details", () => {
       const scenarios: MissingEnvScenario[] = [
@@ -181,11 +211,11 @@ describe("resolveConfigEnvVars", () => {
           configPath: 'plugins.entries.fixture.config.headers["0"]',
         },
         {
-          name: "existing non-plugin root record paths stay unchanged",
+          name: "dotted non-plugin record key is one quoted segment",
           config: { "root.key": "${MISSING}" },
           env: {},
           varName: "MISSING",
-          configPath: "root.key",
+          configPath: '["root.key"]',
         },
         {
           name: "plugin config array indices remain canonical",
@@ -383,7 +413,7 @@ describe("resolveConfigEnvVars", () => {
         ['plugins.entries.foo.config.headers["X.Trace"]', "DOTTED_HEADER"],
         ["plugins.entries.foo.config.headers.X.Trace", "NESTED_HEADER"],
         ["models.providers.alpha:beta.apiKey", "CORE_PROVIDER"],
-        ["models.providers.alpha:beta.headers.X.Trace", "CORE_HEADER"],
+        ['models.providers.alpha:beta.headers["X.Trace"]', "CORE_HEADER"],
       ]);
       expect([...resolvedEnvSecretRefs]).toEqual([["resolved", "RESOLVED_SECRET"]]);
       for (const [configPath, id] of pendingEnvSecretRefs) {
@@ -524,6 +554,220 @@ describe("resolveConfigEnvVars", () => {
       ];
 
       expectResolvedScenarios(scenarios);
+    });
+  });
+
+  describe("default value syntax", () => {
+    it("resolves ${VAR:-default} from the fallback, the env value, or an empty fallback", () => {
+      const scenarios: SubstitutionScenario[] = [
+        {
+          name: "filed case: unset var falls back to the default",
+          config: { env: { NAUTOBOT_TIMEOUT: "${NAUTOBOT_TIMEOUT:-60}" } },
+          env: {},
+          expected: { env: { NAUTOBOT_TIMEOUT: "60" } },
+        },
+        {
+          name: "set var wins over the default",
+          config: { env: { NAUTOBOT_TIMEOUT: "${NAUTOBOT_TIMEOUT:-60}" } },
+          env: { NAUTOBOT_TIMEOUT: "90" },
+          expected: { env: { NAUTOBOT_TIMEOUT: "90" } },
+        },
+        {
+          name: "empty var takes the default, matching existing missing-var semantics",
+          config: { env: { NAUTOBOT_TIMEOUT: "${NAUTOBOT_TIMEOUT:-60}" } },
+          env: { NAUTOBOT_TIMEOUT: "" },
+          expected: { env: { NAUTOBOT_TIMEOUT: "60" } },
+        },
+        {
+          name: "empty fallback resolves to an empty string",
+          config: { key: "${OPTIONAL_SUFFIX:-}" },
+          env: {},
+          expected: { key: "" },
+        },
+        {
+          name: "fallback is used inline",
+          config: { key: "https://${API_HOST:-api.example.com}/v1" },
+          env: {},
+          expected: { key: "https://api.example.com/v1" },
+        },
+        {
+          name: "multiple references in one string mix resolved and fallback",
+          config: { key: "${API_HOST:-localhost}:${API_PORT:-8080}" },
+          env: { API_HOST: "example.com" },
+          expected: { key: "example.com:8080" },
+        },
+        {
+          name: "fallback text is preserved verbatim",
+          config: { key: "${VAR:-a b  c}" },
+          env: {},
+          expected: { key: "a b  c" },
+        },
+        {
+          name: "fallback may itself contain the operator",
+          config: { key: "${VAR:-:-}" },
+          env: {},
+          expected: { key: ":-" },
+        },
+        {
+          name: "fallback may start with a dash",
+          config: { key: "${VAR:--5}" },
+          env: {},
+          expected: { key: "-5" },
+        },
+      ];
+
+      expectResolvedScenarios(scenarios);
+    });
+
+    it("treats a fallback as a resolution, so no warning is collected", () => {
+      const warnings: EnvSubstitutionWarning[] = [];
+      const resolved = resolveConfigEnvVars(
+        {
+          mcp: { servers: { nautobot: { env: { NAUTOBOT_TIMEOUT: "${NAUTOBOT_TIMEOUT:-60}" } } } },
+        },
+        {},
+        { onMissing: (warning) => warnings.push(warning) },
+      );
+
+      expect(resolved).toEqual({
+        mcp: { servers: { nautobot: { env: { NAUTOBOT_TIMEOUT: "60" } } } },
+      });
+      expect(warnings).toEqual([]);
+    });
+
+    it("does not throw MissingEnvVarError when a fallback is authored", () => {
+      expect(resolveConfigEnvVars({ key: "${ABSENT_VAR:-fallback}" }, {})).toEqual({
+        key: "fallback",
+      });
+      // A bare reference with no fallback keeps throwing.
+      expect(() => resolveConfigEnvVars({ key: "${ABSENT_VAR}" }, {})).toThrow(MissingEnvVarError);
+    });
+
+    it("keeps the escape winning over the fallback form", () => {
+      const scenarios: SubstitutionScenario[] = [
+        {
+          name: "escaped fallback form stays a literal even when the var is set",
+          config: { key: "$${VAR:-x}" },
+          env: { VAR: "from-env" },
+          expected: { key: "${VAR:-x}" },
+        },
+        {
+          name: "escaped fallback form stays a literal when the var is unset",
+          config: { key: "$${VAR:-x}" },
+          env: {},
+          expected: { key: "${VAR:-x}" },
+        },
+      ];
+
+      expectResolvedScenarios(scenarios);
+    });
+
+    it("leaves every operator other than :- untouched", () => {
+      const scenarios: SubstitutionScenario[] = [
+        { name: "assign", config: { key: "${VAR:=d}" }, env: {}, expected: { key: "${VAR:=d}" } },
+        { name: "error", config: { key: "${VAR:?m}" }, env: {}, expected: { key: "${VAR:?m}" } },
+        { name: "alt", config: { key: "${VAR:+a}" }, env: {}, expected: { key: "${VAR:+a}" } },
+        {
+          name: "unset-only dash is not supported; empty and unset are one state here",
+          config: { key: "${VAR-d}" },
+          env: {},
+          expected: { key: "${VAR-d}" },
+        },
+        { name: "prefix", config: { key: "${VAR#p}" }, env: {}, expected: { key: "${VAR#p}" } },
+        { name: "suffix", config: { key: "${VAR%s}" }, env: {}, expected: { key: "${VAR%s}" } },
+        {
+          name: "replace",
+          config: { key: "${VAR/a/b}" },
+          env: {},
+          expected: { key: "${VAR/a/b}" },
+        },
+        {
+          name: "json modifier proposed by PR #95603 does not collide with :-",
+          config: { key: "${VAR:json}" },
+          env: {},
+          expected: { key: "${VAR:json}" },
+        },
+      ];
+
+      expectResolvedScenarios(scenarios);
+    });
+
+    it("requires a valid uppercase name to the left of the operator", () => {
+      const scenarios: SubstitutionScenario[] = [
+        {
+          name: "lowercase name",
+          config: { key: "${lowercase:-d}" },
+          env: { lowercase: "value" },
+          expected: { key: "${lowercase:-d}" },
+        },
+        {
+          name: "mixed-case name",
+          config: { key: "${MixedCase:-d}" },
+          env: {},
+          expected: { key: "${MixedCase:-d}" },
+        },
+        {
+          name: "numeric prefix",
+          config: { key: "${123INVALID:-d}" },
+          env: {},
+          expected: { key: "${123INVALID:-d}" },
+        },
+        { name: "empty name", config: { key: "${:-d}" }, env: {}, expected: { key: "${:-d}" } },
+        {
+          name: "other template dialects stay untouched",
+          config: { key: "${my-service} ${count+1} ${a=b}" },
+          env: {},
+          expected: { key: "${my-service} ${count+1} ${a=b}" },
+        },
+      ];
+
+      expectResolvedScenarios(scenarios);
+    });
+
+    it("does not change how a fallback containing $ or { is handled", () => {
+      // The fallback grammar deliberately excludes "$" and "{" so the scan for the closing
+      // brace stays a plain indexOf("}"). These inputs therefore resolve exactly as they do
+      // without default-value support: the outer expression stays literal and only a valid
+      // inner reference substitutes.
+      const scenarios: SubstitutionScenario[] = [
+        {
+          name: "nested reference: outer literal, inner substitutes",
+          config: { key: "${A:-${B}}" },
+          env: { A: "a-value", B: "b-value" },
+          expected: { key: "${A:-b-value}" },
+        },
+        {
+          name: "nested reference with both unset",
+          config: { key: "${A:-${B:-c}}" },
+          env: {},
+          expected: { key: "${A:-c}" },
+        },
+        {
+          name: "fallback containing a brace",
+          config: { key: '${A:-{"n":1}}' },
+          env: {},
+          expected: { key: '${A:-{"n":1}}' },
+        },
+        {
+          name: "fallback containing a bare dollar",
+          config: { key: "${PRICE:-$5}" },
+          env: {},
+          expected: { key: "${PRICE:-$5}" },
+        },
+      ];
+
+      expectResolvedScenarios(scenarios);
+    });
+
+    it("counts a fallback reference as an env var reference", () => {
+      expect(containsEnvVarReference("${VAR:-x}")).toBe(true);
+      expect(containsEnvVarReference("prefix-${VAR:-x}")).toBe(true);
+      expect(containsEnvVarReference("${VAR:-}")).toBe(true);
+      // Escaped and unsupported forms are still not references.
+      expect(containsEnvVarReference("$${VAR:-x}")).toBe(false);
+      expect(containsEnvVarReference("${VAR:=x}")).toBe(false);
+      expect(containsEnvVarReference("${VAR-x}")).toBe(false);
+      expect(containsEnvVarReference("${lowercase:-x}")).toBe(false);
     });
   });
 });

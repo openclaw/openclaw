@@ -12,6 +12,7 @@ import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import { inspectPersistedInstalledPluginIndexInstallRecordsSync } from "../../../plugins/installed-plugin-index-record-state.js";
 import {
   loadInstalledPluginIndexInstallRecords,
+  loadInstalledPluginIndexInstallRecordsSync,
   readPersistedInstalledPluginIndexInstallRecords,
   withoutPluginInstallRecords,
 } from "../../../plugins/installed-plugin-index-records.js";
@@ -101,6 +102,40 @@ function invalidPersistedInstallRecordMessage(filePath: string): string {
 const INVALID_CONFIG_INSTALL_RECORD_MESSAGE =
   "plugins.installs contains invalid records. Back up openclaw.json, correct or remove the invalid retired plugins.installs record, then rerun `openclaw doctor --fix`.";
 
+function mergeShippedPluginInstallRecords(
+  previous: Record<string, PluginInstallRecord>,
+  persisted: Record<string, PluginInstallRecord> | null,
+  source: Record<string, PluginInstallRecord>,
+): Record<string, PluginInstallRecord> {
+  const next = copyPluginInstallRecordMap(previous);
+  for (const [pluginId, record] of Object.entries(source)) {
+    // Authored provenance outranks disk recovery, but never an existing ledger owner.
+    if (!persisted || !Object.hasOwn(persisted, pluginId)) {
+      setPluginInstallRecordMapEntry(next, pluginId, record);
+    }
+  }
+  return migrateOfficialPluginInstallProvenance(next);
+}
+
+/** Preview the same install-record merge that the importer repeats under its lease. */
+export function readShippedPluginInstallConfigImportRecords(
+  snapshot: ConfigFileSnapshot,
+  options: { env?: NodeJS.ProcessEnv } = {},
+): Record<string, PluginInstallRecord> | undefined {
+  const source = inspectShippedPluginInstallConfigRecords(snapshot.sourceConfig);
+  if (source.status === "missing") {
+    return undefined;
+  }
+  if (source.status === "invalid") {
+    throw new InvalidPluginInstallRecordStateError(INVALID_CONFIG_INSTALL_RECORD_MESSAGE);
+  }
+  return mergeShippedPluginInstallRecords(
+    loadInstalledPluginIndexInstallRecordsSync(options),
+    readPersistedInstalledPluginIndexInstallRecords(options),
+    source.records,
+  );
+}
+
 export type ShippedPluginInstallConfigImport = {
   source: Pick<ConfigFileSnapshot, "path" | "hash" | "sourceConfig">;
   databasePath: string;
@@ -135,6 +170,9 @@ export function assertShippedPluginInstallConfigImportCurrent(
 /** Preserve retired source records before Doctor can restore or rewrite their config. */
 export async function importShippedPluginInstallConfigForDoctor(
   snapshot: ConfigFileSnapshot,
+  options: {
+    validateRecords?: (records: Record<string, PluginInstallRecord>) => void;
+  } = {},
 ): Promise<ShippedPluginInstallConfigImport | undefined> {
   const source = inspectShippedPluginInstallConfigRecords(snapshot.sourceConfig);
   if (source.status === "missing") {
@@ -175,14 +213,12 @@ export async function importShippedPluginInstallConfigForDoctor(
       const storeOptions = { filePath: lease.databasePath };
       const previousInstallRecords = await loadInstalledPluginIndexInstallRecords(storeOptions);
       const persisted = readPersistedInstalledPluginIndexInstallRecords(storeOptions);
-      let nextInstallRecords = copyPluginInstallRecordMap(previousInstallRecords);
-      for (const [pluginId, record] of Object.entries(source.records)) {
-        // Authored provenance outranks disk recovery, but never an existing ledger owner.
-        if (!persisted || !Object.hasOwn(persisted, pluginId)) {
-          setPluginInstallRecordMapEntry(nextInstallRecords, pluginId, record);
-        }
-      }
-      nextInstallRecords = migrateOfficialPluginInstallProvenance(nextInstallRecords);
+      const nextInstallRecords = mergeShippedPluginInstallRecords(
+        previousInstallRecords,
+        persisted,
+        source.records,
+      );
+      options.validateRecords?.(nextInstallRecords);
       if (isDeepStrictEqual(nextInstallRecords, persisted)) {
         return receipt(lease.databasePath, false);
       }

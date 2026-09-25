@@ -1,4 +1,3 @@
-// Slack plugin module implements captionless audio mention preflight behavior.
 import fs from "node:fs/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { mimeTypeFromFilePath } from "openclaw/plugin-sdk/media-mime";
@@ -25,8 +24,11 @@ const slackPreflightAudio = createChannelPreflightAudio({
   isAudio: isSlackAudioFile,
 });
 
-export function findCaptionlessSlackAudioFile(message: SlackMessageEvent): SlackFile | undefined {
-  if (message.text?.trim()) {
+export function findSlackPreflightAudioFile(
+  message: SlackMessageEvent,
+  options: { allowCaptioned?: boolean } = {},
+): SlackFile | undefined {
+  if (!options.allowCaptioned && message.text?.trim()) {
     return undefined;
   }
   return message.files?.slice(0, MAX_SLACK_MEDIA_FILES).find(isSlackAudioFile);
@@ -73,15 +75,8 @@ export async function resolveSlackPreflightAudioTranscript(params: {
   return transcript ? { transcript, mediaIndex } : null;
 }
 
-export async function sendSlackPreflightAudioTranscriptEcho(params: {
-  transcript: string;
-  cfg: OpenClawConfig;
-  accountId: string;
-  originatingTo: string;
-  messageThreadId?: string;
-}): Promise<void> {
-  await slackPreflightAudio.send(params);
-}
+export const sendSlackPreflightAudioTranscriptEcho =
+  slackPreflightAudio.send.bind(slackPreflightAudio);
 
 export async function discardSlackPreflightMedia(
   media: readonly SlackMediaResult[] | null | undefined,

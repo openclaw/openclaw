@@ -14,10 +14,18 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { SessionManager } from "./session-manager.js";
 
-const dirs = useAutoCleanupTempDirTracker(afterEach);
+const dirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    for (const stateDir of dirs.dirs) {
+      await cleanupSessionStateForTest({ stateDir });
+    }
+    cleanup();
+  }),
+);
 async function fixture(data: unknown, prefixEntries = 0) {
   const dir = dirs.make("retained-transcript-data-");
   const scope = {
@@ -211,6 +219,8 @@ describe("bounded cleanup retaining opaque custom data", () => {
     const f = await fixture(data);
     expect(f.remove()).toBe(1);
     const rows = loadTranscriptEventsSync(f.scope) as Array<{ id?: string; data?: unknown }>;
-    expect(isDeepStrictEqual(rows.find((row) => row.id === f.metadataId)?.data, data)).toBe(true);
+    expect(JSON.stringify(rows.find((row) => row.id === f.metadataId)?.data)).toBe(
+      JSON.stringify(data),
+    );
   });
 });

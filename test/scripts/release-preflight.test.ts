@@ -3,9 +3,11 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
 const SCRIPT = resolve("scripts/release-preflight.mjs");
+const testNodeExecPath = resolveTestNodeExecPath();
 const CHECK_COMMANDS = [
   "pnpm deps:root-ownership:check",
   "node scripts/generate-npm-package-lock.mjs --all",
@@ -52,7 +54,7 @@ function makeFakePnpm(waitFor?: { command: string; event: string }): {
     const binPath = join(binDir, bin);
     writeFileSync(
       binPath,
-      `#!${process.execPath}
+      `#!${testNodeExecPath}
 import { appendFileSync, readFileSync } from "node:fs";
 
 const command = ${JSON.stringify(bin)} + " " + process.argv.slice(2).join(" ");
@@ -90,7 +92,7 @@ function runPreflight(
   extraEnv: NodeJS.ProcessEnv = {},
   cwd = process.cwd(),
 ) {
-  return spawnSync(process.execPath, [SCRIPT, ...args], {
+  return spawnSync(testNodeExecPath, [SCRIPT, ...args], {
     cwd,
     encoding: "utf8",
     env: {
@@ -174,7 +176,7 @@ function runIsolatedPreflight(
   delete env.NODE_PATH;
   delete env.PNPM_CONFIG_MODULES_DIR;
   delete env.npm_config_modules_dir;
-  return spawnSync(process.execPath, [fixture.script, ...args], {
+  return spawnSync(testNodeExecPath, [fixture.script, ...args], {
     cwd: fixture.root,
     encoding: "utf8",
     env,
@@ -243,7 +245,7 @@ describe("scripts/release-preflight.mjs", () => {
 
   it("runs independent generators while blocking only failed dependents", () => {
     const fakePnpm = makeFakePnpm();
-    const result = spawnSync(process.execPath, [SCRIPT, "--fix"], {
+    const result = spawnSync(testNodeExecPath, [SCRIPT, "--fix"], {
       cwd: process.cwd(),
       encoding: "utf8",
       env: {

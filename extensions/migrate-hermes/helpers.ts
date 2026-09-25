@@ -9,7 +9,7 @@ import {
   MIGRATION_REASON_MISSING_SOURCE_OR_TARGET,
 } from "openclaw/plugin-sdk/migration";
 import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";
-import { appendRegularFile, pathExists } from "openclaw/plugin-sdk/security-runtime";
+import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { parse as parseYaml } from "yaml";
 
@@ -22,9 +22,7 @@ export function resolveHomePath(input: string): string {
   return value ? path.resolve(value.replace(HOME_SHORTHAND_RE, () => os.homedir())) : value;
 }
 
-export async function exists(filePath: string): Promise<boolean> {
-  return await pathExists(filePath);
-}
+export { pathExists as exists } from "openclaw/plugin-sdk/security-runtime";
 
 export async function isDirectory(dirPath: string): Promise<boolean> {
   const stat = await fs.stat(dirPath).catch(() => undefined);
@@ -45,13 +43,7 @@ export function parseEnv(content: string | undefined): Record<string, string> {
 }
 
 export function parseHermesConfig(content: string | undefined): Record<string, unknown> {
-  if (!content) {
-    return {};
-  }
-  const parsed = parseYaml(content);
-  return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-    ? (parsed as Record<string, unknown>)
-    : {};
+  return content ? asNonArrayRecord(parseYaml(content)) : {};
 }
 
 export function childRecord(

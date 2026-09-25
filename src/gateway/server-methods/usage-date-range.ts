@@ -272,19 +272,6 @@ const resolveRangeDays = (raw: unknown): number | "all" | undefined => {
   return undefined;
 };
 
-const resolveTrailingDays = (
-  endDateParts: DateParts,
-  days: number,
-  interpretation: DateInterpretation,
-): DateRangeResolution => {
-  const startMs = datePartsToStartMs(shiftDateParts(endDateParts, -(days - 1)), interpretation);
-  const endMs = datePartsToEndMs(endDateParts, interpretation);
-  if (startMs === undefined || endMs === undefined) {
-    return { ok: false, error: "calendar day does not exist in requested time zone" };
-  }
-  return { ok: true, value: { startMs, endMs } };
-};
-
 /**
  * Get date range from params (startDate/endDate or days).
  * Falls back to last 30 days if not provided.
@@ -351,16 +338,10 @@ export const resolveDateRange = (
       value: { startMs: 0, endMs: todayEndMs, includeUntimestamped: true },
     };
   }
-  if (rangeDays !== undefined) {
-    return resolveTrailingDays(todayDateParts, rangeDays, interpretation);
+  const days = Math.max(1, rangeDays ?? parseDays(params.days) ?? 30);
+  const startMs = datePartsToStartMs(shiftDateParts(todayDateParts, -(days - 1)), interpretation);
+  if (startMs === undefined) {
+    return { ok: false, error: "calendar day does not exist in requested time zone" };
   }
-
-  const days = parseDays(params.days);
-  if (days !== undefined) {
-    const clampedDays = Math.max(1, days);
-    return resolveTrailingDays(todayDateParts, clampedDays, interpretation);
-  }
-
-  // Default to last 30 days
-  return resolveTrailingDays(todayDateParts, 30, interpretation);
+  return { ok: true, value: { startMs, endMs: todayEndMs } };
 };

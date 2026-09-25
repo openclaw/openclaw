@@ -3,14 +3,14 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
+import { sameFileIdentity, type FileIdentityStat } from "@openclaw/fs-safe/advanced";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { sha256Hex, sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import { syncDirectoryIfSupported } from "../infra/directory-durability.js";
 import { isMissingPathError } from "../infra/errors.js";
 import { withFileLock } from "../infra/file-lock.js";
-import { sameFileIdentity, type FileIdentityStat } from "../infra/fs-safe-advanced.js";
-import { FsSafeError, root as createFsSafeRoot } from "../infra/fs-safe.js";
+import { FsSafeError, root as createFsSafeRoot, walkDirectory } from "../infra/fs-safe.js";
 import {
   MAX_MEMORY_HOST_PUBLIC_EXPORT_BYTES,
   serializeMemoryHostEventExport,
@@ -175,7 +175,8 @@ async function readMemoryHostEventExportOwnership(
   };
   const identityOwned =
     storedIdentity !== undefined && sameFileIdentity(storedIdentity, exportIdentity);
-  try {
+  {
+    await using exportOwner = openedExport;
     if (openedExport.stat.size > MAX_MEMORY_HOST_PUBLIC_EXPORT_BYTES) {
       return identityOwned
         ? {
@@ -187,9 +188,7 @@ async function readMemoryHostEventExportOwnership(
           }
         : { kind: "foreign" };
     }
-    exportContent = await openedExport.handle.readFile({ encoding: "utf8" });
-  } finally {
-    await openedExport.handle.close().catch(() => undefined);
+    exportContent = await exportOwner.handle.readFile({ encoding: "utf8" });
   }
   const exportSha256 = sha256Hex(exportContent);
   const currentSha256 = (parsed as { contentSha256?: string }).contentSha256;
@@ -223,22 +222,6 @@ export type {
 export { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 export { resolveSessionAgentId } from "./agent-scope-runtime.js";
 export { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
-
-async function listMarkdownFilesRecursive(rootDir: string): Promise<string[]> {
-  const entries = await fs.readdir(rootDir, { withFileTypes: true }).catch(() => []);
-  const files: string[] = [];
-  for (const entry of entries) {
-    const fullPath = path.join(rootDir, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...(await listMarkdownFilesRecursive(fullPath)));
-      continue;
-    }
-    if (entry.isFile() && entry.name.endsWith(".md")) {
-      files.push(fullPath);
-    }
-  }
-  return files.toSorted((left, right) => left.localeCompare(right));
-}
 
 async function materializeMemoryHostEventExport(params: {
   workspaceDir: string;
@@ -474,7 +457,13 @@ async function listMemoryWorkspacePublicArtifacts(params: {
   }
 
   const memoryDir = path.join(params.workspaceDir, "memory");
-  for (const absolutePath of await listMarkdownFilesRecursive(memoryDir)) {
+  const memoryFiles = await walkDirectory(memoryDir, {
+    symlinks: "skip",
+    include: (entry) => entry.kind === "file" && entry.name.endsWith(".md"),
+  });
+  for (const { path: absolutePath } of memoryFiles.entries.toSorted((left, right) =>
+    left.path.localeCompare(right.path),
+  )) {
     const relativePath = path.relative(params.workspaceDir, absolutePath).replace(/\\/g, "/");
     artifacts.push({
       kind: relativePath.startsWith("memory/dreaming/") ? "dream-report" : "daily-note",

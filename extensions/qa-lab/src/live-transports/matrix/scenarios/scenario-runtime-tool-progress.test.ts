@@ -2,6 +2,8 @@ import { readdir, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it } from "vitest";
+import type { MatrixQaObservedEvent } from "../substrate/events.js";
+import { createCurrentScenarioEventPredicate } from "./scenario-runtime-event-scope.js";
 import {
   MATRIX_QA_TOOL_PROGRESS_MENTION_GATE_DIRECTORY,
   type MatrixQaScenarioContext,
@@ -10,6 +12,22 @@ import { prepareMatrixMentionProgressGate } from "./scenario-runtime-tool-progre
 import { runToolProgressMentionSafetyScenario } from "./scenario-runtime-tool-progress.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+it("does not reuse events observed before the current progress scenario", () => {
+  const event = (eventId: string): MatrixQaObservedEvent => ({
+    kind: "message",
+    roomId: "!room:example.test",
+    eventId,
+    type: "m.room.message",
+  });
+  const stale = event("$stale");
+  const observedEvents = [stale, event("$current")];
+  const isCurrentScenarioEvent = createCurrentScenarioEventPredicate(observedEvents, 1);
+
+  expect(isCurrentScenarioEvent(stale)).toBe(false);
+  expect(isCurrentScenarioEvent(event("$stale"))).toBe(false);
+  expect(isCurrentScenarioEvent(event("$current"))).toBe(true);
+});
 
 it("skips the release-directory-backed mention progress scenario on Windows", async () => {
   const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");

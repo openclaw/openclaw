@@ -2,11 +2,13 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { createRouter, definePage } from "@openclaw/uirouter";
+import { IDBFactory } from "fake-indexeddb";
 import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewaySessionRow, ModelCatalogEntry } from "../../api/types.ts";
+import type { RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { resolveChatThinkingSelectState } from "../../lib/chat/thinking.ts";
 import {
@@ -19,6 +21,7 @@ import { createStorageMock } from "../../test-helpers/storage.ts";
 import type { ChatHistoryResponse } from "./chat-history-snapshot.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
+import { subscribeChatPaneSnapshotInvalidation } from "./chat-pane-startup-subscriptions.ts";
 import { createInitializationContext, createRenderTestChatPane } from "./chat-pane.test-support.ts";
 import { createPageState } from "./chat-state-page.ts";
 import {
@@ -28,9 +31,15 @@ import {
 } from "./chat-state-refresh.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { renderChat } from "./chat-view.ts";
+import {
+  installTranscriptDomMocks,
+  resetTranscriptTestDom,
+} from "./components/chat-transcript.test-support.ts";
 import { loadChatRoute } from "./route-loader.ts";
-import { cacheChatSessionSnapshot } from "./session-message-cache.ts";
+import { cacheChatSessionSnapshot, observeChatCache } from "./session-message-cache.ts";
 import type { ChatRouteData } from "./session-route-data.ts";
+import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
+import { SessionSnapshotStore } from "./session-snapshot-store.ts";
 
 const key = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
 const initial = {
@@ -336,6 +345,7 @@ describe("history descriptor observation order", () => {
     const first = h.begin(h.makeState());
     const current = { ...initial, updatedAt: 5, label: "Newer managed read" };
     await h.refreshManaged(current);
+    expect(h.sessions.state.result?.sessions.find((row) => row.key === key)).toMatchObject(current);
     const late = h.begin(h.makeState());
     expect(h.reads).toHaveLength(1);
     h.reads[0]!.pending.resolve(
@@ -343,10 +353,10 @@ describe("history descriptor observation order", () => {
     );
     await Promise.all([first, late]);
 
-    expect(h.managedRow()?.label).toBe(current.label);
-    expect(h.sessions.state.result?.sessions.find((row) => row.key === key)?.label).toBe(
-      initial.label,
-    );
+    // Both projections must retain the accepted managed read, not the late history descriptor.
+    expect(h.managedRow()).toMatchObject(current);
+    expect(h.sessions.state.result?.sessions.find((row) => row.key === key)).toMatchObject(current);
+    expect(h.sessions.state.result?.sessions.map((row) => row.key)).toEqual([key, sibling.key]);
   });
 
   it.each(["chat.history", "chat.startup"] as const)(
@@ -445,7 +455,7 @@ describe("history descriptor observation order", () => {
     async (retried) => {
       const h = await fixture({ ...initial, key: "agent:main:unrelated", sessionId: "unrelated" });
       const lifecycle = new AbortController();
-      const router = createRouter<"chat", ApplicationContext, null, ChatRouteData>({
+      const router = createRouter<RouteId, ApplicationContext, null, ChatRouteData>({
         routes: [
           definePage({
             id: "chat",
@@ -526,6 +536,7 @@ describe("history descriptor observation order", () => {
 it.each([false, true])(
   "publishes Retry history through the page owner (startup: %s)",
   async (startup) => {
+    installTranscriptDomMocks();
     const h = await fixture();
     const pane = createRenderTestChatPane();
     const state = pane.initialize(h.context);
@@ -552,6 +563,7 @@ it.each([false, true])(
       container.remove();
       retireChatMetadataRequests(state);
       await vi.dynamicImportSettled();
+      resetTranscriptTestDom();
     });
 
     const failed = h.begin(state, startup);
@@ -614,3 +626,47 @@ it.each([false, true])(
     expect(h.reads).toHaveLength(2);
   },
 );
+
+it("keeps an authoritative empty startup committed when its cache entry is evicted", async () => {
+  vi.useRealTimers();
+  vi.stubGlobal("indexedDB", new IDBFactory());
+  const h = await fixture(initial, false);
+  const state = h.makeState();
+  state.sessionKey = "agent:main:empty";
+  const store = new SessionSnapshotStore(state.chatMessagesBySession);
+  store.connect();
+  observeChatCache(state.chatMessagesBySession, store);
+  const stop = subscribeChatPaneSnapshotInvalidation(() => state);
+  onTestFinished(async () => {
+    stop();
+    store.disconnect();
+    await store.whenIdle();
+    await clearStoredChatSnapshots();
+  });
+
+  const broadcasts = vi.spyOn(localStorage, "setItem");
+  const loading = h.begin(state, true);
+  expect(getChatHistoryLoadState(state).phase).toBe("in-flight");
+  expectDefined(h.reads[0], "Startup request").pending.resolve({ messages: [] });
+  await loading;
+
+  expect(getChatHistoryLoadState(state).phase).toBe("committed");
+  expect(state.chatMessages).toEqual([]);
+  expect(state.currentSessionId).toBeNull();
+  expect(await store.read(state.sessionKey)).toBeNull();
+  const eviction = expectDefined(
+    broadcasts.mock.calls.findLast(
+      ([name]) => name === "openclaw.control.chatSnapshots.invalidate.v1",
+    )?.[1],
+    "Cache eviction broadcast",
+  );
+  window.dispatchEvent(
+    new StorageEvent("storage", {
+      key: "openclaw.control.chatSnapshots.invalidate.v1",
+      newValue: eviction,
+    }),
+  );
+  expect(getChatHistoryLoadState(state).phase).toBe("committed");
+  await store.delete(state.sessionKey);
+  expect(getChatHistoryLoadState(state).phase).toBe("idle");
+});

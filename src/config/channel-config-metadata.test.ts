@@ -106,12 +106,10 @@ describe("collectChannelSchemaMetadataWithOwnership", () => {
   );
 
   // Non-bundled channel schemas are cloned and recursively walked here, before any validator
-  // runs, so this producer is where a deeply nested manifest has to be contained; otherwise
-  // config validation dies with a raw RangeError instead of reporting an issue. "feishu" takes
-  // only the core-owned normalization; "qqbot" additionally hits the official-channel secret
-  // widening, which clones the schema a second time.
+  // runs. This producer owns the fixed traversal limit so runtime stack size cannot change
+  // whether normalization mutates the surfaced schema.
   it.each(["feishu", "qqbot"])(
-    "surfaces a deeply nested %s schema instead of overflowing the stack",
+    "surfaces the raw deeply nested %s schema after bounded traversal",
     (channelId) => {
       let schema: Record<string, unknown> = { type: "object" };
       for (let depth = 0; depth < 3_000; depth++) {
@@ -122,9 +120,8 @@ describe("collectChannelSchemaMetadataWithOwnership", () => {
         createChannelSchemaRegistry(channelId, schema),
       );
 
-      expect(entries).toContainEqual(
-        expect.objectContaining({ id: channelId, configSchema: schema }),
-      );
+      expect(entries[0]).toMatchObject({ id: channelId });
+      expect(entries[0]?.configSchema).toBe(schema);
     },
   );
 
@@ -138,7 +135,7 @@ describe("collectChannelSchemaMetadataWithOwnership", () => {
       collectChannelSchemaMetadataWithOwnership(
         createChannelSchemaRegistry("qqbot", schema, "bundled"),
       ),
-    ).toThrow();
+    ).toThrow("channel config schema exceeds maximum traversal depth of 256");
   });
 });
 

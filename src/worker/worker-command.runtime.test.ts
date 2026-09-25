@@ -220,7 +220,18 @@ describe("worker command lifetime gate", () => {
     expect(diagnostics).toContain("worker state diagnostic");
   });
 
-  it("rejects an internal worker IPC start type inherited from the prototype", async () => {
+  it.each([
+    [
+      "inherited type",
+      () =>
+        Object.assign(Object.create({ type: "openclaw-worker-start-v1" }), { unexpected: true }),
+    ],
+    ["empty lineage", () => ({ type: "openclaw-worker-start-v1", lineageFds: [] })],
+    ["standard descriptor", () => ({ type: "openclaw-worker-start-v1", lineageFds: [2] })],
+    ["fractional descriptor", () => ({ type: "openclaw-worker-start-v1", lineageFds: [3.5] })],
+    ["duplicate descriptor", () => ({ type: "openclaw-worker-start-v1", lineageFds: [3, 3] })],
+    ["string descriptor", () => ({ type: "openclaw-worker-start-v1", lineageFds: ["3"] })],
+  ] as const)("rejects an internal worker IPC start with %s", async (_label, makeInvalidStart) => {
     const stdout = new PassThrough();
     const stderr = new PassThrough();
     const originalConsole = globalThis.console;
@@ -245,10 +256,7 @@ describe("worker command lifetime gate", () => {
     loggingState.forceConsoleToStderr = false;
     loggingState.rawConsole = null;
     loggingState.streamErrorHandlersInstalled = false;
-    const invalidStart = Object.assign(
-      Object.create({ type: "openclaw-worker-start-v1" }) as Record<string, unknown>,
-      { unexpected: true },
-    );
+    const invalidStart = makeInvalidStart();
 
     try {
       const running = runWorkerProcess({ internalWorkerIpc: true });

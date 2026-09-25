@@ -395,6 +395,26 @@ export function resolveCommandArgChoices(params: {
   );
 }
 
+/** Argument-only check for whether a command can still offer an argument menu. */
+export function canResolveCommandArgMenu<
+  T extends { command: ChatCommandDefinition; args?: CommandArgs },
+>(
+  params: T,
+): params is T & {
+  command: ChatCommandDefinition & Required<Pick<ChatCommandDefinition, "args" | "argsMenu">>;
+} {
+  const { command, args } = params;
+  if (!command.args || !command.argsMenu || command.argsParsing === "none") {
+    return false;
+  }
+  if (args?.raw && !args.values) {
+    return false;
+  }
+  return command.argsMenu === "auto"
+    ? command.args.some((arg) => args?.values?.[arg.name] == null)
+    : args?.values?.[command.argsMenu.arg] == null;
+}
+
 /** Resolves the next argument menu to show for commands with selectable choices. */
 export function resolveCommandArgMenu(params: {
   command: ChatCommandDefinition;
@@ -406,13 +426,10 @@ export function resolveCommandArgMenu(params: {
   catalog?: ThinkingCatalogEntry[];
   session?: { agentId: string; sessionKey: string };
 }): { arg: CommandArgDefinition; choices: ResolvedCommandArgChoice[]; title?: string } | null {
+  if (!canResolveCommandArgMenu(params)) {
+    return null;
+  }
   const { command, args, cfg, provider, model, agentRuntime, catalog } = params;
-  if (!command.args || !command.argsMenu) {
-    return null;
-  }
-  if (command.argsParsing === "none") {
-    return null;
-  }
   const resolvedCatalog = catalog ?? (cfg ? buildConfiguredModelCatalog({ cfg }) : undefined);
   const argSpec = command.argsMenu;
   const argName =
@@ -434,9 +451,6 @@ export function resolveCommandArgMenu(params: {
     return null;
   }
   if (args?.values && args.values[argName] != null) {
-    return null;
-  }
-  if (args?.raw && !args.values) {
     return null;
   }
   const arg = command.args.find((entry) => entry.name === argName);

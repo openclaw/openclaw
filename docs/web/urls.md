@@ -23,6 +23,11 @@ the connected Gateway's HTTP(S) address; a tunnel-only address remains local.
 Normal navigation and **Open in** continue using the current UI. Copied links
 contain no connection credentials, and recipients still need Gateway access.
 
+If the Gateway disconnects while a session link is loading, the Control UI retries
+the interrupted load after reconnecting. Navigating elsewhere cancels that recovery;
+it does not reopen an old destination or add a browser-history entry. Already loaded
+conversations stay mounted across reconnects.
+
 The Dashboards gallery adds `?dashboard=expanded` to the owning task's chat
 link, for example `/chat/main/deploy-monitor-6db92d48?dashboard=expanded`.
 This makes Dashboard the main view and focuses it. **Restore split** brings
@@ -51,7 +56,7 @@ The path grammar is:
 agent's main session. The other forms encode one immutable session key in one of
 two ways.
 
-The short-id form applies when the session key's rest, everything after
+The short-id form applies to non-Incognito sessions when the key's rest, everything after
 `agent:<agentId>:`, ends in a UUID. `<sessionRef>` is an optional display-name
 slug plus a short id, such as `deploy-monitor-6db92d48`. The short id is the
 authoritative part: at least eight lowercase hexadecimal characters from the
@@ -59,11 +64,25 @@ start of the key's trailing UUID, with UUID dashes omitted. Longer prefixes up
 to all 32 hexadecimal characters are accepted. The row's rotating `sessionId`
 is not part of the URL identity.
 
+The Control UI generates links with all 32 UUID characters by default, so a
+selected session keeps its identity even when another session shares its prefix
+and display name. Existing shorter links still resolve, and the disambiguation
+view can offer the shortest unique prefix. Resolving a literal or display-name
+link to a UUID session also keeps the full UUID in its canonical URL.
+
 Every other key uses the literal-key form. Each colon-delimited segment after
 `agent:<agentId>:` becomes one URL-encoded path segment. For example,
 `agent:main:telegram:12345` becomes `/chat/main/telegram/12345`, and
 `agent:main:cron:nightly:run:8821` becomes
 `/chat/main/cron/nightly/run/8821`.
+
+Incognito sessions always use the literal-key form, even when their keys end
+in a UUID. For example, an Incognito link looks like
+`/chat/main/dashboard/incognito-12345678-90ab-cdef-1234-567890abcdef`.
+Incognito sessions are excluded from short-id and display-name discovery;
+their exact links still require administrator access and work only while the
+session exists. Reopen an existing session from the sidebar to replace an old
+short-id link that reports **Session not found**.
 
 Literal rest segments exactly equal to `.` or `..` use `~dot` and `~dotdot` so
 browsers cannot collapse them as relative path segments. A literal segment that
@@ -295,6 +314,33 @@ Clearing the person filter returns
 to `/activity` while retaining those filters. Normal Gateway authentication
 and session visibility rules apply to every form.
 
+## Terminal URLs
+
+The main terminal page keeps the sidebar and application chrome:
+
+```text
+/terminal
+/terminal/<terminalSessionId>
+/terminal?catalog=<catalogId>&host=<hostId>&thread=<threadId>
+```
+
+`/terminal` opens the terminal's default restore or picker view.
+`/terminal/<terminalSessionId>` attaches the Gateway terminal session returned by
+`sessions.catalog.startTerminal` or `terminal.open`; encode the ID as one path
+segment. The catalog query resumes the native CLI thread identified by the same
+`catalog`, `host`, and `thread` values used by native catalog links. Encode query
+values with `URLSearchParams`. An explicit terminal session ID takes precedence
+over a catalog query.
+
+Starting a native CLI from New session replaces the draft URL with its terminal
+session URL. Catalog **Open in terminal** actions open the catalog query form.
+Leaving the terminal page preserves its Gateway PTY for reattachment, subject to
+the [terminal session lifecycle](/web/control-ui/panels#operator-terminal).
+
+`/terminal` is the normal-route counterpart of `/focus/terminal`, which removes
+the sidebar and application chrome. Both require the terminal capability and
+operator access. All terminal paths accept the configured Control UI base path.
+
 ## Focus presentation routes
 
 A focus route renders one supported content surface without the normal Control
@@ -452,6 +498,9 @@ for a tab with an available slug is replaced once in browser history with
 `/<slug>`, preserving `p.*` parameters and the fragment. Tabs without an available
 slug keep the generic URL. Both forms mount the same plugin page inside the
 Control UI shell; slugs do not create plugin HTTP routes.
+Opening or reloading a slug keeps that destination while the Gateway connects,
+even when the browser remembers a chat session. Unknown slugs fall back to chat
+after the Gateway supplies its plugin tabs.
 
 Automation links open the exact job independently of the current list filters or
 loaded page. Adding `run` opens its run history and highlights the matching loaded
@@ -460,6 +509,12 @@ run. A missing job shows the Gateway's lookup error.
 Settings routes that use schema-backed deep links accept `?section=<section>`,
 `?advanced=1`, and `#<setting-id>`. These values select content within the page;
 they do not change the route identity.
+
+Links to Settings sections that moved to another page replace the old URL with
+the current destination while keeping the setting anchor. Back returns to the
+page before the link, and Forward returns to the current destination.
+
+Model setup links with `?firstRun=1` or `?firstRun=explicit` retain the first-run onboarding flow. Without either marker, `/settings/model-setup` and `/model-setup` redirect to `/settings/model-providers?connect=1`, which opens the connection dialog on Models. The Models page otherwise stays in place while connecting a provider or reviewing Gateway discovery.
 
 The retired General route and its `/config` alias are replaced once with
 `/settings/appearance?section=__appearance__#settings-language`. The historical

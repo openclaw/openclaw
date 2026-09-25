@@ -1,5 +1,5 @@
 /** Transcript-backed prompt projection state cached by an embedded session lifecycle. */
-import { createHash } from "node:crypto";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
@@ -138,7 +138,7 @@ export function getEmbeddedSessionPromptState(sessionId: string): EmbeddedSessio
 export function hashToolResultProjectionSnapshot(
   snapshot: ReturnType<typeof serializeCacheTtlToolResultProjections>,
 ): string {
-  return createHash("sha256").update(JSON.stringify(snapshot)).digest("hex");
+  return sha256Hex(JSON.stringify(snapshot));
 }
 
 export function persistToolResultProjections(

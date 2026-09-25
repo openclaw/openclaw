@@ -12,6 +12,7 @@ struct DashboardBrowserTabState: Codable, Equatable, Sendable {
     let canGoForward: Bool
     let openedBy: String
     let openerTabId: String?
+    let favicon: String?
 }
 
 struct DashboardBrowserState: Codable, Equatable, Sendable {
@@ -98,7 +99,8 @@ final class DashboardNativeBrowserHost {
                 canGoBack: browser.webView.canGoBack,
                 canGoForward: browser.webView.canGoForward,
                 openedBy: tab.openedBy,
-                openerTabId: tab.openerTabId)
+                openerTabId: tab.openerTabId,
+                favicon: browser.favicon)
         })
     }
 
@@ -224,7 +226,10 @@ final class DashboardNativeBrowserHost {
     }
 
     func navigationWillStart(_ url: URL, in webView: WKWebView) {
-        self.tabs.first { $0.browser.webView === webView }?.browser.updateRepresentedURL(url)
+        guard let browser = self.browserTab(for: webView) else { return }
+        browser.updateRepresentedURL(url)
+        browser.favicon = nil
+        browser.faviconGeneration &+= 1
         self.scheduleStatePush()
     }
 
@@ -236,9 +241,24 @@ final class DashboardNativeBrowserHost {
     }
 
     func navigationDidFinish(_ navigation: WKNavigation?, for webView: WKWebView) {
-        self.tabs.first { $0.browser.webView === webView }?.browser.finishNavigation(
-            navigation, at: webView.url, title: webView.title)
+        guard let browser = self.browserTab(for: webView) else { return }
+        browser.finishNavigation(navigation, at: webView.url, title: webView.title)
         self.scheduleStatePush()
+        let generation = browser.faviconGeneration
+        Task { @MainActor [weak self, weak browser] in
+            guard let self, let browser, self.browserTab(for: webView) === browser,
+                  browser.faviconGeneration == generation else { return }
+            let value = try? await webView.callAsyncJavaScript(
+                "return (\(BrowserFaviconScript.source))(65536, 10000)",
+                arguments: [:],
+                in: nil,
+                contentWorld: .defaultClient)
+            guard self.browserTab(for: webView) === browser,
+                  browser.faviconGeneration == generation,
+                  let favicon = Self.acceptedFavicon(value) else { return }
+            browser.favicon = favicon
+            self.scheduleStatePush()
+        }
     }
 
     func navigationDidFail(for webView: WKWebView) {
@@ -275,6 +295,17 @@ final class DashboardNativeBrowserHost {
             width: rect.width,
             height: rect.height).intersection(dashboardFrame)
         return frame.isNull || frame.isEmpty ? .zero : frame
+    }
+
+    nonisolated static func acceptedFavicon(_ value: Any?) -> String? {
+        // ICU case folding accepts Unicode lookalikes that the bridge's ASCII pattern rejects.
+        guard let favicon = value as? String,
+              favicon.utf8.count <= 98304,
+              favicon.unicodeScalars.allSatisfy(\.isASCII),
+              favicon.range(
+                  of: #"^data:image/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+$"#,
+                  options: [.regularExpression, .caseInsensitive]) != nil else { return nil }
+        return favicon
     }
 
     private func updatePresentations() {

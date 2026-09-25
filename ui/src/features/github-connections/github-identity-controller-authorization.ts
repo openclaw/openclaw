@@ -268,6 +268,7 @@ export class GitHubDeviceAuthorizationController {
       }
       if (result.status === "success") {
         this.host.applySuccess(operation.owner, result, refreshError);
+        this.host.authorizationSucceeded?.();
         this.state = { phase: "idle" };
         succeeded = true;
       } else {

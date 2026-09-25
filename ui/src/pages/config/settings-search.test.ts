@@ -544,6 +544,11 @@ describe("findSettingsSearchBlocks", () => {
         searchText:
           "Meeting capture Choose which sources can save meeting notes on this Gateway. Auto-start sources recording transcription meetings autoStart",
       },
+      expect.objectContaining({
+        routeId: "appearance",
+        label: "Chat",
+        hash: "#settings-appearance-chat",
+      }),
       {
         routeId: "ai-agents",
         label: "Tools",
@@ -595,12 +600,18 @@ describe("findSettingsSearchBlocks", () => {
   it.each([
     ["language", "Language", "#settings-language"],
     ["locale", "Language", "#settings-language"],
+    ["typography", "Typography", "#settings-appearance-typography"],
+    ["font", "Typography", "#settings-appearance-typography"],
+    ["typeface", "Typography", "#settings-appearance-typography"],
+    ["interface", "Typography", "#settings-appearance-typography"],
+    ["chat prose", "Typography", "#settings-appearance-typography"],
     ["sidebar", "Sidebar", "#settings-appearance-sidebar"],
     ["live agent activity", "Sidebar", "#settings-appearance-sidebar"],
     ["session observer", "Sidebar", "#settings-appearance-sidebar"],
     ["small model", "Sidebar", "#settings-appearance-sidebar"],
     ["camera", "Chat", "#settings-appearance-chat"],
     ["message width", "Chat", "#settings-appearance-chat"],
+    ["show task progress cards", "Chat", "#settings-appearance-chat"],
     ["centered transcript", "Chat", "#settings-appearance-chat"],
     ["hold microphone", "Chat", "#settings-appearance-chat"],
     ["dictate", "Chat", "#settings-appearance-chat"],
@@ -717,4 +728,22 @@ describe("findSettingsSearchBlocks", () => {
       }),
     ]);
   });
+});
+
+it("only offers personal instructions search on a multi-user Gateway", () => {
+  const search = (multipleProfiles: boolean) =>
+    findSettingsSearchBlocks({
+      query: "personal instructions",
+      schema: null,
+      value: null,
+      uiHints: {},
+      identityAvailable: true,
+      multipleProfiles,
+    });
+  expect(
+    search(false).some((block) => block.hash === "#settings-profile-personal-instructions"),
+  ).toBe(false);
+  expect(
+    search(true).some((block) => block.hash === "#settings-profile-personal-instructions"),
+  ).toBe(true);
 });

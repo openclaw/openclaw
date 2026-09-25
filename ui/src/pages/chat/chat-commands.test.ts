@@ -1,18 +1,19 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+import { expectObjectFields } from "../../../../src/test-utils/mock-call-assertions.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { createRequireRecord } from "../../../../test/helpers/record.js";
 import { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
-import {
-  invalidateChatMetadataStore,
-  beginChatMetadataPublication,
-} from "../../lib/chat/chat-metadata-store.ts";
+import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
+import { beginChatMetadataPublication } from "../../lib/chat/chat-metadata-store.ts";
 import {
   SLASH_COMMANDS,
   getSlashCommandCategoryLabel,
   getSlashCommandDescription,
   type SlashCommandDef,
 } from "../../lib/chat/commands.ts";
+import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import {
   applyRemoteSlashCommandsResult,
@@ -20,6 +21,7 @@ import {
   dispatchChatSlashCommand,
   refreshSlashCommands,
 } from "./chat-commands.ts";
+import { makeChatHost } from "./chat-host.test-support.ts";
 
 function requireCommandByName(name: string): Record<string, unknown> {
   const command = SLASH_COMMANDS.find((entry) => entry.name === name);
@@ -29,14 +31,10 @@ function requireCommandByName(name: string): Record<string, unknown> {
   return command as unknown as Record<string, unknown>;
 }
 
+const requireRecord = createRequireRecord("record", "expected-label-object");
+
 function expectRecordFields(value: unknown, label: string, expected: Record<string, unknown>) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be an object`);
-  }
-  const record = value as Record<string, unknown>;
-  for (const [key, expectedValue] of Object.entries(expected)) {
-    expect(record[key]).toEqual(expectedValue);
-  }
+  expectObjectFields(requireRecord(value, label), expected);
 }
 
 function connectedSessionAccess() {
@@ -402,6 +400,28 @@ describe("refreshSlashCommands", () => {
 });
 
 describe("conversation reset confirmation", () => {
+  it.each(["owner", "member", "viewer"] as const)(
+    "authorizes /stop with narrow scope for a %s session",
+    async (sharingRole) => {
+      const sessionKey = "agent:main:current";
+      const host = makeChatHost({
+        sessionKey,
+        chatRunId: "run-1",
+        hello: sessionMutationGatewayHello(["operator.sessions.write"]),
+        sessionsResult: {
+          ...createSessionsListResult(),
+          sessions: [{ key: sessionKey, kind: "direct", sessionId: "session-1", sharingRole }],
+        },
+        requestHandlers: { "chat.abort": { aborted: true } },
+      });
+      const result = await dispatchChatSlashCommand(host, "stop", "", {
+        sendResetMessage: vi.fn(),
+      });
+      expect(result).toBe(sharingRole === "owner" ? "completed" : "failed");
+      expect(host.request).toHaveBeenCalledTimes(sharingRole === "owner" ? 1 : 0);
+    },
+  );
+
   it.each([
     ["stop", "chat.abort"],
     ["reset", "chat.send"],

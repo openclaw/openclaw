@@ -19,8 +19,9 @@ import {
 } from "./context-cache.js";
 import {
   type ContextTokenResolutionParams,
+  type ModelContextTokenProjection,
   type ModelsConfig,
-  resolveContextTokensForModelFromCache,
+  resolveModelContextTokenProjectionFromCache,
 } from "./context-resolution.js";
 import {
   beginContextWindowCacheRefresh,
@@ -247,13 +248,18 @@ export async function waitForContextWindowCacheLoad(options?: {
   }
 }
 
-/** Replace cached model context metadata for the active runtime configuration. */
-export async function refreshContextWindowCache(cfg: OpenClawConfig): Promise<void> {
+/** Restore configured context limits without acquiring a model catalog. */
+export function resetContextWindowCache(cfg: OpenClawConfig): void {
   beginContextWindowCacheRefresh();
   const caches = getContextWindowCaches();
   caches.configuredTokenCache.clear();
   caches.contextWindowCache.clear();
   primeConfiguredContextWindowsFromConfig(cfg);
+}
+
+/** Replace cached model context metadata for the active runtime configuration. */
+export async function refreshContextWindowCache(cfg: OpenClawConfig): Promise<void> {
+  resetContextWindowCache(cfg);
   await ensureContextWindowCacheLoaded();
 }
 
@@ -291,14 +297,16 @@ export function lookupContextTokens(
 export function resolveContextTokensForModel(
   params: ContextTokenResolutionParams,
 ): number | undefined {
+  return resolveModelContextTokenProjection(params).contextTokens;
+}
+
+export function resolveModelContextTokenProjection(
+  params: ContextTokenResolutionParams,
+): ModelContextTokenProjection {
   const lookupOptions = {
     allowAsyncLoad: params.allowAsyncLoad,
     skipRuntimeConfigLoad: Boolean(params.cfg),
   };
   prepareContextWindowCache(lookupOptions);
-  return resolveContextTokensForModelFromCache(
-    params,
-    (modelId) => lookupCachedContextTokens(modelId),
-    (modelId) => lookupCachedContextWindow(modelId),
-  );
+  return resolveModelContextTokenProjectionFromCache(params);
 }

@@ -109,34 +109,45 @@ function estimateTranscriptBoundaryTokenPressure(params: {
   toolSchemaTokens?: number;
 }): TranscriptBoundaryTokenPressure {
   const replay = params.replay
-    ? resolveCompactionReplayPressure(params.messages, params.replay.model, params.replay, {
-        text: estimateStringTokenPressure,
-        image: () => IMAGE_BLOCK_TOKENS,
-        json: estimateJsonPayloadTokenPressure,
-      })
+    ? resolveCompactionReplayPressure(
+        params.messages,
+        params.replay.model,
+        params.replay,
+        {
+          text: estimateStringTokenPressure,
+          image: () => IMAGE_BLOCK_TOKENS,
+          json: estimateJsonPayloadTokenPressure,
+          toolResult: (value) =>
+            estimateStringTokenPressure(value, ESTIMATED_CHARS_PER_TOKEN, "tool-result"),
+        },
+        params.systemPrompt,
+      )
     : undefined;
   const messages = replay?.messages ?? params.messages;
   const boundary = resolveProviderContextBoundary(messages);
+  const measuredTokens = replay?.measuredTokens ?? boundary?.totalTokens;
   // The provider total owns transcript items through its assistant record. It has
   // no system-prompt provenance, so the current rendered prompt stays local too.
   const messagesForPressure = boundary ? messages.slice(boundary.index + 1) : messages;
   const locallyEstimatedTokens = messagesForPressure.reduce(
     (sum, message) => sum + estimateMessageTokenPressure(message),
-    estimateRenderedPromptTokens(params) + (boundary ? 0 : (replay?.prefixTokens ?? 0)),
+    estimateRenderedPromptTokens(params) +
+      (boundary ? 0 : (replay?.prefixTokens ?? 0) - (replay?.measuredTokens ?? 0)),
   );
   const toolSchemaTokens = Math.max(0, params.toolSchemaTokens ?? 0);
   return {
     estimatedPromptTokens:
-      (boundary?.totalTokens ?? 0) +
+      (measuredTokens ?? 0) +
       Math.ceil(locallyEstimatedTokens * SAFETY_MARGIN) +
-      // The provider boundary already includes tool schemas from its request;
-      // only add them when estimating from the raw transcript.
-      (boundary ? 0 : toolSchemaTokens),
-    source: boundary
-      ? "provider_context_usage"
-      : replay
-        ? "provider_compaction_estimate"
-        : "transcript_estimate",
+      // A saved replay prefix does not bind today's tool definitions. Reserve
+      // their current size even when covered conversation usage is measured.
+      (boundary && !replay ? 0 : toolSchemaTokens),
+    source:
+      measuredTokens !== undefined
+        ? "provider_context_usage"
+        : replay
+          ? "provider_compaction_estimate"
+          : "transcript_estimate",
     messages,
     hasCompactionReplay: Boolean(replay),
   };

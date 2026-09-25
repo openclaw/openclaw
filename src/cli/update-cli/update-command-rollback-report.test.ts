@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { withTriageTerminal } from "../../commands/triage.test-support.js";
 import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   UpdateCommandFailure,
@@ -135,7 +135,7 @@ describe("verified rollback failure actions", () => {
       }),
     );
     expect(mocks.prepare).toHaveBeenCalledExactlyOnceWith(
-      { attemptId: runId, result: f.result },
+      { attemptId: runId, action: "cli", result: f.result, recordedRun: undefined },
       { env: f.env, stateDir: f.env.OPENCLAW_STATE_DIR },
     );
     expect(mocks.confirm).toHaveBeenCalledExactlyOnceWith(
@@ -144,6 +144,7 @@ describe("verified rollback failure actions", () => {
     expect(mocks.submit).toHaveBeenCalledExactlyOnceWith(f.prepared, f.prepared.previewDigest, {
       env: f.env,
       stateDir: f.env.OPENCLAW_STATE_DIR,
+      allowBrowserFallback: false,
     });
     expect(mocks.triage).not.toHaveBeenCalled();
     expect(f.result.status).toBe("error");

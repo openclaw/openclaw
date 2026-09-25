@@ -5,26 +5,78 @@
     "stateMigrations": [{ "id": "crabbox-warm-profile-v3", "doctorOnly": true }]
   },
   "name": "Crabbox Worker Provider",
-  "description": "Cloud worker provider backed by the Crabbox CLI.",
+  "description": "Cloud worker provider and lease-backed sandbox backend for the Crabbox CLI.",
   "cliCommands": [
     {
       "name": "crabbox",
-      "description": "Inspect and recover Crabbox warm images",
+      "description": "Run model-backed commands and manage Crabbox warm images",
       "hasSubcommands": true
     }
   ],
   "activation": {
     "onStartup": false,
-    "onCommands": ["crabbox"]
+    "onCommands": ["crabbox"],
+    "onConfigPaths": ["plugins.entries.crabbox.config.sandbox"]
   },
   "commandAliases": [{ "name": "crabbox", "kind": "cli" }],
   "contracts": {
-    "workerProviders": ["crabbox"]
+    "workerProviders": ["crabbox"],
+    "tools": ["crabbox"]
   },
+  "skills": ["./skills"],
+  "toolMetadata": {
+    "crabbox": { "profiles": ["coding"] }
+  },
+  "configGroups": [
+    {
+      "id": "sandbox",
+      "title": "Sandbox",
+      "order": 10,
+      "properties": ["sandbox"]
+    },
+    {
+      "id": "warm-images",
+      "title": "Warm images",
+      "order": 20,
+      "properties": ["warmImages"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "sandbox": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Lease a Crabbox box for tool-call isolation with agents.defaults.sandbox.backend=crabbox. Requires a direct provider with fixed lease IDs.",
+        "properties": {
+          "provider": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Crabbox provider for sandbox leases; defaults to the configured Crabbox selection."
+          },
+          "class": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Crabbox machine class for sandbox leases."
+          },
+          "ttl": {
+            "type": "string",
+            "pattern": "^\\d+(?:ms|s|m|h)$",
+            "description": "Maximum lease lifetime passed to crabbox warmup --ttl."
+          },
+          "idleTimeout": {
+            "type": "string",
+            "pattern": "^\\d+(?:ms|s|m|h)$",
+            "description": "Idle release passed to crabbox warmup --idle-timeout."
+          },
+          "binary": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Explicit crabbox executable; defaults to the discovered binary."
+          }
+        }
+      },
       "warmImages": {
         "type": "object",
         "additionalProperties": false,

@@ -60,6 +60,53 @@ function assistantToolCall(
 }
 
 describe("transformTransportMessages synthetic tool-result policy", () => {
+  it.each(["openai-completions", "openai-responses"] as const)(
+    "compacts sparse %s history without changing the source or sharing assistant arrays",
+    (api) => {
+      const hidden = makeAssistantMessageFixture({
+        api,
+        content: [{ type: "thinking", thinking: "unfinished reasoning" }],
+      });
+      const failed = makeAssistantMessageFixture({
+        api,
+        content: [{ type: "text", text: "unfinished answer" }],
+      });
+      const retained = makeAssistantMessageFixture({
+        api,
+        stopReason: "stop",
+        content: [{ type: "text", text: "completed answer" }],
+      });
+      const user: Context["messages"][number] = {
+        role: "user",
+        content: "continue",
+        timestamp: 1,
+      };
+      const messages: Context["messages"] = [];
+      messages[1] = hidden;
+      messages[3] = failed;
+      messages[4] = retained;
+      messages[6] = user;
+      messages.length = 8;
+      const original = structuredClone(messages);
+
+      const result = transformTransportMessages(messages, makeModel(api, "openai", "test-model"));
+
+      expect(result).toStrictEqual([
+        { ...failed, content: [{ type: "text", text: EXPECTED_FAILURE_MARKER }] },
+        retained,
+        user,
+      ]);
+      const replayedAssistant = result[1];
+      if (replayedAssistant?.role !== "assistant") {
+        throw new Error("expected the completed assistant turn");
+      }
+      replayedAssistant.stopReason = "length";
+      replayedAssistant.content.push({ type: "text", text: "replay-only addition" });
+      result.pop();
+      expect(messages).toStrictEqual(original);
+    },
+  );
+
   it("preserves unframed tool results only for a selected compaction replay window", () => {
     const model = makeModel("openai-responses", "openai", "gpt-5.4");
     const messages = [

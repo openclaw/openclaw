@@ -179,6 +179,41 @@ context whenever tools are assembled. Argument preparation and execution use the
 same instance. Retained tools stop working when their owning plugin registry is
 retired.
 
+### Owner-authorized continuations
+
+To participate when the exact parent resumes after an explicit `sessions_yield`,
+register an `OpenClawPluginToolFactory<2>` descriptor through `api.registerTool`:
+
+```typescript
+api.registerTool(
+  {
+    contextVersion: 2,
+    create(context) {
+      if (context.senderIsOwner !== true) return null;
+      return createPrivilegedTool({ assertCurrent: context.assertInvocationCurrent });
+    },
+  },
+  { name: "my_privileged_tool" },
+);
+```
+
+The `OpenClawPluginToolContext<2>` type requires `assertInvocationCurrent`.
+Carry it through awaited work and invoke it in the final synchronous write or
+request guard, before effects—not only before starting work or after returning.
+It checks the captured plugin lifetime and admitted run/worker authority; a
+continuation also checks the original owner's live exact-parent binding. Standalone
+HTTP/RPC calls use their authenticated request lifetime, while MCP tools retain
+the existing authenticated grant or loopback-runtime lifetime.
+Metadata-only catalog construction does not grant invocation authority. A retained
+versioned tool without an admitted invocation fails when its guard is called.
+
+Legacy function and static-tool registrations remain supported with their existing
+direct-turn context; this change introduces no removal date or shortened
+compatibility window. They do **not** receive continued owner identity. Opt-in
+alone grants nothing: management-only callers, unrelated sessions, and detached
+cron runs still cannot acquire the owner's identity. `senderIsOwner` is an
+availability check, never a substitute for the required final-effect guard.
+
 Set `hideFromChannelProgress: true` on the concrete factory tool to keep its
 transient activity out of channel progress drafts. Lifecycle events and the
 final tool result still flow normally. OpenClaw preserves the current factory's
@@ -279,6 +314,13 @@ marks the call failed unless `ok` or `success` is explicitly `true`, even when
 `execute` returned normally. Domain data that
 uses one of those names belongs under a wrapper key, such as `{ card }`,
 instead of at the top level of `details`.
+
+For a tool-owned timeout, return `timedOut: true` and a positive integer
+`timeoutMs` in `details`. If the agent provides no final reply, OpenClaw includes
+that duration in the fallback warning without exposing raw error text. Return
+`partial: true` with a nonempty `results` array when usable partial results are
+available; the warning includes their count. These diagnostics do not turn an
+incomplete operation into a successful call.
 
 ## Configuration
 
@@ -429,9 +471,10 @@ openclaw plugins install npm-pack:./openclaw-plugin-stock-quotes-0.1.0.tgz
 openclaw plugins inspect stock-quotes --runtime --json
 ```
 
-After installing, restart or reload the Gateway and ask the agent to use the
-tool. If the tool is not visible, inspect the plugin runtime and the effective
+Installation applies to a running local Gateway automatically; start the Gateway
+if it was stopped. Ask the agent to use the tool. If the tool is not visible, inspect the plugin runtime and the effective
 tool catalog before changing code (see [Troubleshooting](#troubleshooting)).
+After later source or manifest edits, use [plugin Reload](/cli/plugins#reload).
 
 ## Publish
 
@@ -498,7 +541,7 @@ Check these in order:
 2. `openclaw plugins validate --root <plugin-root> --entry ./dist/index.js`
 3. `openclaw.plugin.json` has `contracts.tools` with the expected tool names.
 4. `package.json` has `openclaw.extensions: ["./dist/index.js"]`.
-5. The Gateway was restarted or reloaded after installing the plugin.
+5. Installation reported successful runtime application; after source edits or a repaired activation failure, run `openclaw plugins reload <plugin-id>`.
 
 ## See also
 

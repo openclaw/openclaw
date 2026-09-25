@@ -33,6 +33,12 @@ background work.
 
 ## Recommended rollout
 
+For a ready-made starting point, `openclaw agents team create` ships these lane
+contracts as coordinator, researcher, writer, and reviewer roles. Each role puts
+its scope, artifact handoff, approval gates, and escalation rules in `AGENTS.md`.
+The preset wires the coordinator to the specialists and instructs specialists
+to return results without further delegation. See [Team preset](/concepts/multi-agent#team-preset).
+
 ### Phase 1: lane contracts + background heavy work
 
 Give every lane a written contract in its [agent workspace](/concepts/agent-workspace)
@@ -71,6 +77,9 @@ Tune queue and model capacity around the business value of each lane:
   },
 }
 ```
+
+`maxConcurrent` caps the shared main lane; `subagents.maxConcurrent` gives each
+spawning session its own child execution budget.
 
 Use direct/personal chats and production-ops agents for high-priority work. Let
 research, drafting, and batch coding move to background tasks when the system is

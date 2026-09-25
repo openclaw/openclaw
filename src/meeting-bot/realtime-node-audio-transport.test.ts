@@ -117,12 +117,14 @@ describe("node meeting realtime audio transport", () => {
     }
     await transport.writeOutput(output);
     const health = transport.getHealth?.();
-    transport.startInput(() => {});
+    const onAudio = vi.fn();
+    transport.startInput(onAudio);
     await transport.stop();
     pendingPull.resolve({ base64: output.toString("base64") });
     await setImmediate();
 
     expect(transport.getHealth?.()).toEqual(health);
+    expect(onAudio).not.toHaveBeenCalled();
   });
 
   it("fences output writes across clear and stop", async () => {

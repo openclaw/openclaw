@@ -1,4 +1,3 @@
-// Discord plugin module implements message text behavior.
 import { ComponentType } from "discord-api-types/v10";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Message } from "../internal/discord.js";
@@ -229,9 +228,10 @@ export function resolveDiscordRawMessageText(
     attachments: message.attachments ?? undefined,
     stickers: resolveDiscordSnapshotStickers(message),
   });
-  const embedText = resolveDiscordEmbedText(message.embeds);
-  const componentText = extractDiscordComponentsV2Text(message.components);
-  const forwardedText = resolveDiscordForwardedMessagesTextFromSnapshots(message.message_snapshots);
-  const text = content || embedText || componentText || forwardedText;
+  const text =
+    content ||
+    resolveDiscordEmbedText(message.embeds) ||
+    extractDiscordComponentsV2Text(message.components) ||
+    resolveDiscordForwardedMessagesTextFromSnapshots(message.message_snapshots);
   return [text, mediaText].filter(Boolean).join("\n");
 }

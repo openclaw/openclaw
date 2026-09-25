@@ -501,6 +501,43 @@ describe("Bedrock thinking request composition", () => {
   } as never;
 
   it.each([
+    ...[
+      { id: "anthropic.claude-fable-5", name: "Claude Fable 5" },
+      { id: "us.anthropic.claude-fable-5-1", name: "Claude Fable 5.1" },
+      {
+        id: "production-fable-5",
+        name: "Production deployment",
+        params: { canonicalModelId: "claude-fable-5" },
+      },
+      {
+        id: "production-fable-5-1",
+        name: "Production deployment",
+        params: { canonicalModelId: "claude-fable-5-1" },
+      },
+      {
+        id: "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abcdefghijk",
+        name: "US Claude Fable 5.1",
+      },
+    ].map((modelOverrides) => ({
+      name: `${modelOverrides.id} default`,
+      model: () =>
+        bedrockModel({ ...modelOverrides, contextWindow: 1_000_000, maxTokens: 128_000 }),
+      reasoning: undefined,
+      expectedMaxTokens: 128_000,
+      expectedEffort: "medium",
+    })),
+    {
+      name: "Fable 5 explicit off",
+      model: () =>
+        bedrockModel({
+          id: "anthropic.claude-fable-5",
+          contextWindow: 1_000_000,
+          maxTokens: 128_000,
+        }),
+      reasoning: "off" as const,
+      expectedMaxTokens: 128_000,
+      expectedEffort: "low",
+    },
     {
       name: "Opus 5 default",
       model: () =>

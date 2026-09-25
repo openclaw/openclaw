@@ -78,6 +78,7 @@ describe("method scope resolution", () => {
   });
 
   it.each([
+    ["canvas.document.preview", ["operator.read"]],
     ["canvas.document.view", ["operator.read"]],
     ["sessions.resolve", ["operator.read"]],
     ["tasks.list", ["operator.read"]],
@@ -86,6 +87,9 @@ describe("method scope resolution", () => {
     ["audit.list", ["operator.read"]],
     ["users.list", ["operator.read"]],
     ["users.self", ["operator.read"]],
+    ["users.personalFile.get", ["operator.read"]],
+    ["users.personalFile.set", ["operator.read"]],
+    ["agents.files.set", ["operator.admin"]],
     ["users.linkEmail", ["operator.admin"]],
     ["users.setDisplayName", ["operator.write"]],
     ["users.setAvatar", ["operator.write"]],
@@ -138,6 +142,8 @@ describe("method scope resolution", () => {
     ["environments.status", ["operator.read"]],
     ["diagnostics.stability", ["operator.read"]],
     ["diagnostics.lanes", ["operator.read"]],
+    ["diagnostics.cpuProfile", ["operator.admin"]],
+    ["diagnostics.heapProfile", ["operator.admin"]],
     ["gateway.restart.preflight", ["operator.read"]],
     ["skills.curator.status", ["operator.read"]],
     ["hooks.status", ["operator.read"]],
@@ -159,6 +165,7 @@ describe("method scope resolution", () => {
     ["talk.session.steer", ["operator.talk"]],
     ["talk.session.close", ["operator.talk"]],
     ["update.status", ["operator.admin"]],
+    ["update.report", ["operator.admin"]],
     ["update.runs.get", ["operator.admin"]],
     ["update.runs.list", ["operator.admin"]],
     ["update.hold", ["operator.admin"]],
@@ -642,22 +649,13 @@ describe("method scope resolution", () => {
     ).toEqual({ allowed: false, missingScope: "operator.admin" });
   });
 
-  it("delegates effort patches to the admin-scoped session policy", () => {
-    const params = { key: "agent:main:ios-1", thinkingLevel: "high" };
-    expect(resolveLeastPrivilegeOperatorScopesForMethod("sessions.patch", params)).toEqual([
-      "operator.admin",
-    ]);
-    expect(authorizeOperatorScopesForMethod("sessions.patch", ["operator.write"], params)).toEqual({
-      allowed: false,
-      missingScope: "operator.admin",
-    });
-    expect(authorizeOperatorScopesForMethod("sessions.patch", ["operator.admin"], params)).toEqual({
-      allowed: true,
-    });
-  });
-
-  it("delegates model patches to the write-scoped session policy", () => {
-    const params = { key: "agent:main:ios-1", model: "anthropic/claude-sonnet-5" };
+  it.each([
+    { model: "anthropic/claude-sonnet-5" },
+    { thinkingLevel: "high" },
+    { fastMode: true },
+    { thinkingLevel: null, fastMode: null },
+  ])("delegates model and effort patches to the write-scoped session policy: %j", (patch) => {
+    const params = { key: "agent:main:ios-1", ...patch };
     expect(resolveLeastPrivilegeOperatorScopesForMethod("sessions.patch", params)).toEqual([
       "operator.write",
     ]);
@@ -922,10 +920,10 @@ describe("operator scope authorization", () => {
     "question.resolve",
     "question.get",
     "question.list",
-  ])("requires questions scope for %s", (method) => {
+  ])("keeps broad question authority distinct from own-run admission for %s", (method) => {
     expect(authorizeOperatorScopesForMethod(method, ["operator.write"])).toEqual({
-      allowed: false,
-      missingScope: "operator.questions",
+      allowed: true,
+      sessionScope: "operator.sessions.write",
     });
     expect(authorizeOperatorScopesForMethod(method, ["operator.questions"])).toEqual({
       allowed: true,

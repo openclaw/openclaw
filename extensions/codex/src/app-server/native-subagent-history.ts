@@ -2,20 +2,26 @@ import type { AgentHarnessV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveCodexBindingAppServerConnection } from "./binding-connection.js";
-import { itemToolArgs, itemTranscriptResultText } from "./event-projector-tool-items.js";
+import { itemStatus } from "./event-projector-items.js";
+import {
+  itemToolArgs,
+  itemTranscriptResultText,
+  projectCodexToolActivity,
+} from "./event-projector-tool-items.js";
 import {
   codexNativeSubagentHistoryConnectionFingerprint,
   readCodexNativeSubagentHistoryOwner,
 } from "./native-subagent-history-owner.js";
 import {
-  CODEX_NATIVE_SUBAGENT_RUN_ID_PREFIX,
   CODEX_NATIVE_SUBAGENT_TASK_KIND,
+  readCodexNativeSubagentRunId,
+  readThreadParentThreadId,
 } from "./native-subagent-task-ids.js";
 import {
   buildCodexAppServerConnectionFingerprint,
   buildCodexAppServerRuntimeFingerprint,
 } from "./plugin-app-cache-key.js";
-import type { CodexAppServerRequestParams, CodexThread } from "./protocol.js";
+import type { CodexAppServerRequestParams } from "./protocol.js";
 import { sessionBindingIdentity } from "./session-binding-record.js";
 import type { CodexAppServerBindingStore } from "./session-binding.js";
 import {
@@ -30,19 +36,6 @@ type TaskHistoryParams = Parameters<NonNullable<AgentHarnessV2["taskHistory"]>["
 const MAX_SUBAGENT_ANCESTRY_READS = 32;
 const taskHistoryToolItems = { itemToolArgs, itemTranscriptResultText };
 
-function parentThreadId(thread: CodexThread): string | undefined {
-  const source = thread.source;
-  const spawn =
-    source &&
-    typeof source === "object" &&
-    "subAgent" in source &&
-    typeof source.subAgent === "object" &&
-    "thread_spawn" in source.subAgent
-      ? source.subAgent.thread_spawn
-      : undefined;
-  return thread.parentThreadId?.trim() ?? spawn?.parent_thread_id.trim();
-}
-
 /** Resolves history from the parent binding's native store without adopting the child. */
 export async function readCodexNativeSubagentHistory(
   params: TaskHistoryParams,
@@ -52,9 +45,7 @@ export async function readCodexNativeSubagentHistory(
   const { task, cfg } = params;
   const sessionKey = task.requesterSessionKey;
   const agentId = task.agentId;
-  const threadId = task.runId?.startsWith(CODEX_NATIVE_SUBAGENT_RUN_ID_PREFIX)
-    ? task.runId.slice(CODEX_NATIVE_SUBAGENT_RUN_ID_PREFIX.length)
-    : undefined;
+  const threadId = readCodexNativeSubagentRunId(task.runId)?.threadId;
   if (task.taskKind !== CODEX_NATIVE_SUBAGENT_TASK_KIND || !sessionKey || !agentId || !threadId) {
     throw new Error("Subagent transcript owner is unavailable.");
   }
@@ -117,10 +108,12 @@ export async function readCodexNativeSubagentHistory(
     }
   };
   const agentDir = resolveAgentDir(cfg, agentId);
-  const connection = resolveCodexBindingAppServerConnection({
+  const connection = await resolveCodexBindingAppServerConnection({
     binding,
     pluginConfig: options.pluginConfig,
     agentDir,
+    config: cfg,
+    assertCurrent,
     authProfileId: binding.authProfileId,
   });
   const client = await getLeasedSharedCodexAppServerClient({
@@ -164,7 +157,7 @@ export async function readCodexNativeSubagentHistory(
     const visited = new Set([threadId]);
     let ancestor = thread;
     for (;;) {
-      const parentId = parentThreadId(ancestor);
+      const parentId = readThreadParentThreadId(ancestor);
       if (parentId === historyParentThreadId) {
         break;
       }
@@ -192,24 +185,40 @@ export async function readCodexNativeSubagentHistory(
       },
       {
         project: (entries) =>
-          entries.map((entry) =>
-            projectCodexThreadHistoryItem(thread, entry, taskHistoryToolItems).map((message) => {
-              const messageIdentity = readMirrorIdentity(message);
-              if (!messageIdentity) {
-                throw new Error("Subagent history message is missing its native identity.");
-              }
-              // The shared transcript reader uses messageId to merge live and older pages.
-              return Object.assign(message, {
-                messageId: JSON.stringify([threadId, messageIdentity]),
-              });
-            }),
-          ),
+          entries.map((entry) => {
+            const item = projectCodexToolActivity(
+              entry.item,
+              itemStatus(entry.item) === "running" ? "start" : "result",
+            );
+            const messages = projectCodexThreadHistoryItem(thread, entry, taskHistoryToolItems).map(
+              (message) => {
+                const messageIdentity = readMirrorIdentity(message);
+                if (!messageIdentity) {
+                  throw new Error("Subagent history message is missing its native identity.");
+                }
+                return Object.assign(message, {
+                  messageId: JSON.stringify([threadId, messageIdentity]),
+                });
+              },
+            );
+            return {
+              messages,
+              activity: item
+                ? messages.map(({ messageId }) => ({
+                    messageId,
+                    items: item.hideFromChannelProgress ? [] : [item],
+                  }))
+                : [],
+            };
+          }),
         fits: (result) => Buffer.byteLength(JSON.stringify(result), "utf8") <= 512 * 1024,
       },
     );
     assertCurrent();
+    const rows = page.items.toReversed();
     return {
-      messages: page.items.toReversed().flat(),
+      messages: rows.flatMap((row) => row.messages),
+      activity: rows.flatMap((row) => row.activity),
       ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
     };
   } finally {

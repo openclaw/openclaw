@@ -389,7 +389,7 @@ NODE
     "$gateway_port"
 
   echo "==> Representative CLI state under $runtime_label"
-  run_installed_cli status --json --timeout 1 >"$CLI_STATUS_LOG" 2>&1
+  run_installed_cli status --json >"$CLI_STATUS_LOG" 2>&1
   run_installed_cli plugins list --json >"$CLI_PLUGINS_LOG" 2>&1
 
   echo "==> Local mocked agent turn under $runtime_label"
@@ -449,15 +449,19 @@ NODE
       "$bun_path" \
       "$openclaw_bin" \
       "$openclaw_version" \
-      "$runtime_label" <<'NODE'
+      "$runtime_label" \
+      "$package_root" <<'NODE'
 import fs from "node:fs";
 import path from "node:path";
 
-const [, , proofPath, bunPath, openclawPath, openclawVersion, runtime] = process.argv;
+const [, , proofPath, bunPath, openclawPath, openclawVersion, runtime, installedPackageRoot] = process.argv;
+const installedPackageVersion = JSON.parse(
+  fs.readFileSync(path.join(installedPackageRoot, "package.json"), "utf8"),
+).version;
 fs.mkdirSync(path.dirname(proofPath), { recursive: true });
 fs.writeFileSync(
   proofPath,
-  `${JSON.stringify({ bunPath, openclawPath, openclawVersion, runtime }, null, 2)}\n`,
+  `${JSON.stringify({ bunPath, openclawPath, openclawVersion, runtime, installedPackageRoot, installedPackageVersion }, null, 2)}\n`,
 );
 NODE
   fi

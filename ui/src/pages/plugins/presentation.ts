@@ -1,199 +1,8 @@
-// Presentation data for the plugins catalog: bundled cover art and deterministic
-// fallback gradients.
 import { expectDefined } from "@openclaw/normalization-core";
-import { inferControlUiPublicAssetPath } from "../../app/public-assets.ts";
 import { takeGraphemes } from "../../lib/graphemes.ts";
 
-/**
- * Cover art bundled at ui/public/plugin-art/<slug>.webp. The gateway CSP is
- * img-src 'self', so catalog artwork must ship with the Control UI bundle;
- * remote icon URLs cannot render here.
- */
-const PLUGIN_ART_SLUGS: ReadonlySet<string> = new Set([
-  "acpx",
-  "active-memory",
-  "admin-http-rpc",
-  "airtable",
-  "alibaba",
-  "amazon-bedrock",
-  "amazon-bedrock-mantle",
-  "anthropic",
-  "anthropic-vertex",
-  "arcee",
-  "azure-speech",
-  "bonjour",
-  "brave",
-  "browser",
-  "byteplus",
-  "canva",
-  "canvas",
-  "cerebras",
-  "chutes",
-  "clawrouter",
-  "clickclack",
-  "cloudflare-ai-gateway",
-  "codex",
-  "cohere",
-  "comfy",
-  "context7",
-  "copilot",
-  "copilot-proxy",
-  "deepgram",
-  "deepinfra",
-  "deepseek",
-  "deepwiki",
-  "device-pair",
-  "diagnostics-otel",
-  "diagnostics-prometheus",
-  "diffs",
-  "diffs-language-pack",
-  "discord",
-  "document-extract",
-  "duckduckgo",
-  "dungeon-master",
-  "elevenlabs",
-  "email-inbox",
-  "exa",
-  "fal",
-  "featherless",
-  "feishu",
-  "file-transfer",
-  "firecrawl",
-  "fireworks",
-  "github",
-  "github-copilot",
-  "gmi",
-  "google",
-  "google-calendar",
-  "google-meet",
-  "googlechat",
-  "gradium",
-  "grafana",
-  "groq",
-  "home-assistant",
-  "hugging-face",
-  "huggingface",
-  "imessage",
-  "inworld",
-  "irc",
-  "jira",
-  "kilocode",
-  "kimi",
-  "kubernetes",
-  "line",
-  "linear",
-  "litellm",
-  "llama-cpp",
-  "llm-task",
-  "lmstudio",
-  "lobster",
-  "logbook",
-  "longcat",
-  "maps",
-  "matrix",
-  "mattermost",
-  "memory-core",
-  "memory-lancedb",
-  "memory-wiki",
-  "meta",
-  "microsoft",
-  "microsoft-foundry",
-  "migrate-claude",
-  "migrate-hermes",
-  "minimax",
-  "mistral",
-  "moonshot",
-  "morning-brief",
-  "msteams",
-  "nextcloud-talk",
-  "nostr",
-  "notes",
-  "notion",
-  "novita",
-  "nvidia",
-  "oc-path",
-  "ollama",
-  "openai",
-  "opencode",
-  "opencode-go",
-  "openrouter",
-  "openshell",
-  "parallel",
-  "pdf-tools",
-  "perplexity",
-  "philips-hue",
-  "pixverse",
-  "policy",
-  "portfolio-pulse",
-  "qa-channel",
-  "qa-lab",
-  "qianfan",
-  "qqbot",
-  "qwen",
-  "raft",
-  "reddit",
-  "reef",
-  "runway",
-  "searxng",
-  "senseaudio",
-  "sentry",
-  "sglang",
-  "signal",
-  "slack",
-  "sms",
-  "sonos",
-  "spotify",
-  "stepfun",
-  "stripe",
-  "synology-chat",
-  "synthetic",
-  "talk-voice",
-  "tavily",
-  "telegram",
-  "tencent",
-  "tlon",
-  "todoist",
-  "together",
-  "tokenjuice",
-  "transcription",
-  "translation",
-  "trip-scout",
-  "tts-local-cli",
-  "twitch",
-  "vault",
-  "venice",
-  "vercel-ai-gateway",
-  "vllm",
-  "voice-call",
-  "volcengine",
-  "voyage",
-  "vydra",
-  "web-readability",
-  "webhooks",
-  "whatsapp",
-  "workboard",
-  "xai",
-  "xiaomi",
-  "youtube",
-  "zai",
-  "zalo",
-  "zalouser",
-]);
-
-// Only the trusted first-party scope may drop package role suffixes. Broader
-// unscoping would let third-party catalog ids claim bundled OpenClaw art.
-const OPENCLAW_PLUGIN_ART_ID = /^@openclaw\/(.+?)(?:-(?:plugin|provider))?$/u;
-
-export function pluginArtPath(id: string): string | null {
-  const scopedSlug = OPENCLAW_PLUGIN_ART_ID.exec(id)?.[1];
-  const slug = PLUGIN_ART_SLUGS.has(id) ? id : scopedSlug;
-  return slug && PLUGIN_ART_SLUGS.has(slug)
-    ? inferControlUiPublicAssetPath(`plugin-art/${slug}.webp`)
-    : null;
-}
-
 export function resolvePluginCatalogIconUrl(
-  plugin: { pluginId?: string; packageName?: string; imageUrl?: string },
+  plugin: { pluginId?: string; imageUrl?: string },
   urls: {
     pluginIconUrls: Readonly<Record<string, string>>;
     iconUrls: Readonly<Record<string, string>>;
@@ -202,23 +11,15 @@ export function resolvePluginCatalogIconUrl(
 ): string | null {
   const packageIcon = plugin.pluginId ? urls.pluginIconUrls[plugin.pluginId] : undefined;
   const catalogIcon = plugin.imageUrl ? urls.iconUrls[plugin.imageUrl] : undefined;
-  // A package's identity takes precedence over a colliding runtime id so third-party
-  // packages cannot borrow first-party art. Uninstalled packages have no local id.
-  const artIdentity = plugin.packageName
-    ? OPENCLAW_PLUGIN_ART_ID.test(plugin.packageName)
-      ? plugin.packageName
-      : undefined
-    : plugin.pluginId;
-  const bundledArt = artIdentity ? pluginArtPath(artIdentity) : null;
   return (
-    [packageIcon, bundledArt, catalogIcon].find((url): url is string =>
+    [packageIcon, catalogIcon].find((url): url is string =>
       Boolean(url && !failedUrls?.has(url)),
     ) ?? null
   );
 }
 
 /**
- * Deterministic two-stop gradients for plugins without bundled art so every
+ * Deterministic two-stop gradients for plugins without package icons so every
  * tile keeps a distinct identity instead of an empty box.
  */
 const FALLBACK_GRADIENTS: ReadonlyArray<readonly [string, string]> = [

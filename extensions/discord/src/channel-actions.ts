@@ -1,4 +1,3 @@
-// Discord plugin module implements channel actions behavior.
 import { createUnionActionGate } from "openclaw/plugin-sdk/channel-actions";
 import type {
   ChannelMessageActionAdapter,
@@ -6,7 +5,7 @@ import type {
   ChannelMessageToolDiscovery,
   ChannelMessageToolSchemaContribution,
 } from "openclaw/plugin-sdk/channel-contract";
-import type { DiscordActionConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { DiscordActionConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
@@ -15,7 +14,7 @@ import { inspectDiscordAccount } from "./account-inspect.js";
 import { createDiscordActionGate, listDiscordAccountIds } from "./accounts.js";
 import { coerceDiscordComponentParam, readDiscordComponentSpec } from "./components.js";
 import { withDiscordInboundEventDeliveryMetadata } from "./inbound-event-delivery.js";
-import { normalizeDiscordMessagingTarget } from "./normalize.js";
+import { matchesDiscordToolContextTarget, normalizeDiscordMessagingTarget } from "./normalize.js";
 import { isTrustedRequesterGuildAdminAction } from "./trusted-requester-actions.js";
 
 const localExecutionActions = new Set<ChannelMessageActionName>([
@@ -67,59 +66,52 @@ function matchesCurrentDiscordThread(params: {
   if (!requestedTarget) {
     return false;
   }
-  return [params.toolContext.currentChannelId, params.toolContext.currentMessagingTarget].some(
-    (currentTarget) =>
-      currentTarget !== undefined &&
-      normalizeDiscordMessagingTarget(currentTarget) === requestedTarget,
-  );
+  return matchesDiscordToolContextTarget({
+    target: requestedTarget,
+    toolContext: params.toolContext,
+  });
 }
 
 const loadDiscordChannelActionsRuntime = createLazyRuntimeModule(
   () => import("./channel-actions.runtime.js"),
 );
 
-function listDiscoverableDiscordAccounts(cfg: OpenClawConfig) {
-  return listDiscordAccountIds(cfg)
-    .map((accountId) => inspectDiscordAccount({ cfg, accountId }))
-    .filter((account) => account.enabled && account.configured);
-}
-
-function resolveDiscordActionDiscovery(cfg: OpenClawConfig) {
-  const accounts = listDiscoverableDiscordAccounts(cfg);
-  if (accounts.length === 0) {
-    return null;
-  }
-  const unionGate = createUnionActionGate(accounts, (account) =>
-    createDiscordActionGate({
-      cfg,
-      accountId: account.accountId,
-    }),
-  );
-  return {
-    isEnabled: (key: keyof DiscordActionConfig, defaultValue = true) =>
-      unionGate(key, defaultValue),
-  };
-}
-
-function resolveScopedDiscordActionDiscovery(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}) {
-  if (!params.accountId) {
-    return resolveDiscordActionDiscovery(params.cfg);
-  }
-  const account = inspectDiscordAccount({ cfg: params.cfg, accountId: params.accountId });
-  if (!account.enabled || !account.configured) {
-    return null;
-  }
-  const gate = createDiscordActionGate({
-    cfg: params.cfg,
-    accountId: account.accountId,
-  });
-  return {
-    isEnabled: (key: keyof DiscordActionConfig, defaultValue = true) => gate(key, defaultValue),
-  };
-}
+const discordActionGroups: ReadonlyArray<{
+  gate: keyof DiscordActionConfig;
+  actions: readonly ChannelMessageActionName[];
+  defaultEnabled?: false;
+}> = [
+  { gate: "polls", actions: ["poll"] },
+  { gate: "reactions", actions: ["react", "reactions", "emoji-list"] },
+  { gate: "messages", actions: ["upload-file", "read", "edit", "delete"] },
+  { gate: "pins", actions: ["pin", "unpin", "list-pins"] },
+  { gate: "permissions", actions: ["permissions"] },
+  { gate: "threads", actions: ["thread-create", "thread-list", "thread-reply"] },
+  { gate: "search", actions: ["search"] },
+  { gate: "stickers", actions: ["sticker"] },
+  { gate: "memberInfo", actions: ["member-info"] },
+  { gate: "roleInfo", actions: ["role-info"] },
+  { gate: "emojiUploads", actions: ["emoji-upload"] },
+  { gate: "stickerUploads", actions: ["sticker-upload"] },
+  { gate: "roles", actions: ["role-add", "role-remove"], defaultEnabled: false },
+  { gate: "channelInfo", actions: ["channel-info", "channel-list"] },
+  {
+    gate: "channels",
+    actions: [
+      "channel-create",
+      "channel-edit",
+      "channel-delete",
+      "channel-move",
+      "category-create",
+      "category-edit",
+      "category-delete",
+    ],
+  },
+  { gate: "voiceStatus", actions: ["voice-status"] },
+  { gate: "events", actions: ["event-list", "event-create"] },
+  { gate: "moderation", actions: ["timeout", "kick", "ban"], defaultEnabled: false },
+  { gate: "presence", actions: ["set-presence"], defaultEnabled: false },
+];
 
 function describeDiscordMessageTool({
   cfg,
@@ -127,91 +119,26 @@ function describeDiscordMessageTool({
 }: Parameters<
   NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>
 >[0]): ChannelMessageToolDiscovery {
-  const discovery = resolveScopedDiscordActionDiscovery({ cfg, accountId });
-  if (!discovery) {
+  const accounts = (accountId ? [accountId] : listDiscordAccountIds(cfg))
+    .map((id) => inspectDiscordAccount({ cfg, accountId: id }))
+    .filter((account) => account.enabled && account.configured);
+  if (accounts.length === 0) {
     return {
       actions: [],
       capabilities: [],
       schema: null,
     };
   }
+  const isEnabled = createUnionActionGate(accounts, (account) =>
+    createDiscordActionGate({ cfg, accountId: account.accountId }),
+  );
   const actions = new Set<ChannelMessageActionName>(["send"]);
-  if (discovery.isEnabled("polls")) {
-    actions.add("poll");
-  }
-  if (discovery.isEnabled("reactions")) {
-    actions.add("react");
-    actions.add("reactions");
-    actions.add("emoji-list");
-  }
-  if (discovery.isEnabled("messages")) {
-    actions.add("upload-file");
-    actions.add("read");
-    actions.add("edit");
-    actions.add("delete");
-  }
-  if (discovery.isEnabled("pins")) {
-    actions.add("pin");
-    actions.add("unpin");
-    actions.add("list-pins");
-  }
-  if (discovery.isEnabled("permissions")) {
-    actions.add("permissions");
-  }
-  if (discovery.isEnabled("threads")) {
-    actions.add("thread-create");
-    actions.add("thread-list");
-    actions.add("thread-reply");
-  }
-  if (discovery.isEnabled("search")) {
-    actions.add("search");
-  }
-  if (discovery.isEnabled("stickers")) {
-    actions.add("sticker");
-  }
-  if (discovery.isEnabled("memberInfo")) {
-    actions.add("member-info");
-  }
-  if (discovery.isEnabled("roleInfo")) {
-    actions.add("role-info");
-  }
-  if (discovery.isEnabled("emojiUploads")) {
-    actions.add("emoji-upload");
-  }
-  if (discovery.isEnabled("stickerUploads")) {
-    actions.add("sticker-upload");
-  }
-  if (discovery.isEnabled("roles", false)) {
-    actions.add("role-add");
-    actions.add("role-remove");
-  }
-  if (discovery.isEnabled("channelInfo")) {
-    actions.add("channel-info");
-    actions.add("channel-list");
-  }
-  if (discovery.isEnabled("channels")) {
-    actions.add("channel-create");
-    actions.add("channel-edit");
-    actions.add("channel-delete");
-    actions.add("channel-move");
-    actions.add("category-create");
-    actions.add("category-edit");
-    actions.add("category-delete");
-  }
-  if (discovery.isEnabled("voiceStatus")) {
-    actions.add("voice-status");
-  }
-  if (discovery.isEnabled("events")) {
-    actions.add("event-list");
-    actions.add("event-create");
-  }
-  if (discovery.isEnabled("moderation", false)) {
-    actions.add("timeout");
-    actions.add("kick");
-    actions.add("ban");
-  }
-  if (discovery.isEnabled("presence", false)) {
-    actions.add("set-presence");
+  for (const group of discordActionGroups) {
+    if (isEnabled(group.gate, group.defaultEnabled ?? true)) {
+      for (const action of group.actions) {
+        actions.add(action);
+      }
+    }
   }
   const schema: ChannelMessageToolSchemaContribution[] = [];
   if (actions.has("react")) {
@@ -269,6 +196,22 @@ function describeDiscordMessageTool({
 
 export const discordMessageActions: ChannelMessageActionAdapter = {
   providerOwnedReadGates: true,
+  readAuthorityActions: [
+    "read",
+    "search",
+    "reactions",
+    "list-pins",
+    "thread-list",
+    "channel-info",
+    "permissions",
+    "member-info",
+    "role-info",
+    "emoji-list",
+    "channel-list",
+    "voice-status",
+    "event-list",
+  ],
+  writeAuthorityActions: ["channel-edit", "delete", "edit", "pin", "unpin"],
   // Credential-only Discord actions run in the gateway when one is available.
   // Send/file-style actions stay local because core owns their thread, media,
   // component, and client-local payload semantics.
@@ -358,6 +301,8 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
     inboundEventKind,
     conversationReadOrigin,
     reply,
+    progressSnapshot,
+    assertDirectAdapterHandoff,
   }) => {
     return await (
       await loadDiscordChannelActionsRuntime()
@@ -377,6 +322,8 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
       ...(requesterAccountId ? { requesterAccountId } : {}),
       ...(conversationReadOrigin ? { conversationReadOrigin } : {}),
       ...(reply ? { reply } : {}),
+      ...(progressSnapshot ? { progressSnapshot } : {}),
+      ...(assertDirectAdapterHandoff ? { assertDirectAdapterHandoff } : {}),
     });
   },
 };

@@ -95,9 +95,7 @@ vi.mock("openclaw/plugin-sdk/cron-store-runtime", async () => {
   };
 });
 
-export function installMaybePersistResolvedTelegramTargetTests(params?: {
-  includeGatewayScopeCases?: boolean;
-}) {
+export function installMaybePersistResolvedTelegramTargetTests() {
   describe("maybePersistResolvedTelegramTarget", () => {
     let maybePersistResolvedTelegramTarget: typeof import("./target-writeback.js").maybePersistResolvedTelegramTarget;
 
@@ -145,103 +143,101 @@ export function installMaybePersistResolvedTelegramTargetTests(params?: {
       expect(loadCronStore).not.toHaveBeenCalled();
     });
 
-    if (params?.includeGatewayScopeCases) {
-      it("skips config and cron writeback for gateway callers missing operator.admin", async () => {
-        await maybePersistResolvedTelegramTarget({
-          cfg: {
-            cron: { store: "/tmp/cron/jobs.json" },
-          } as OpenClawConfig,
-          rawTarget: "t.me/mychannel",
-          resolvedChatId: "-100123",
-          gatewayClientScopes: ["operator.write"],
-        });
-
-        expect(readConfigFileSnapshotForWrite).not.toHaveBeenCalled();
-        expect(writeConfigFile).not.toHaveBeenCalled();
-        expect(loadCronStore).not.toHaveBeenCalled();
-        expect(saveCronStore).not.toHaveBeenCalled();
+    it("skips config and cron writeback for gateway callers missing operator.admin", async () => {
+      await maybePersistResolvedTelegramTarget({
+        cfg: {
+          cron: { store: "/tmp/cron/jobs.json" },
+        } as OpenClawConfig,
+        rawTarget: "t.me/mychannel",
+        resolvedChatId: "-100123",
+        gatewayClientScopes: ["operator.write"],
       });
 
-      it("does not let internal writeback override non-admin gateway scopes", async () => {
-        await maybePersistResolvedTelegramTarget({
-          cfg: {
-            cron: { store: "/tmp/cron/jobs.json" },
-          } as OpenClawConfig,
-          rawTarget: "t.me/mychannel",
-          resolvedChatId: "-100123",
-          gatewayClientScopes: ["operator.write"],
-          trustedInternalWriteback: true,
-        });
+      expect(readConfigFileSnapshotForWrite).not.toHaveBeenCalled();
+      expect(writeConfigFile).not.toHaveBeenCalled();
+      expect(loadCronStore).not.toHaveBeenCalled();
+      expect(saveCronStore).not.toHaveBeenCalled();
+    });
 
-        expect(readConfigFileSnapshotForWrite).not.toHaveBeenCalled();
-        expect(writeConfigFile).not.toHaveBeenCalled();
-        expect(loadCronStore).not.toHaveBeenCalled();
-        expect(saveCronStore).not.toHaveBeenCalled();
+    it("does not let internal writeback override non-admin gateway scopes", async () => {
+      await maybePersistResolvedTelegramTarget({
+        cfg: {
+          cron: { store: "/tmp/cron/jobs.json" },
+        } as OpenClawConfig,
+        rawTarget: "t.me/mychannel",
+        resolvedChatId: "-100123",
+        gatewayClientScopes: ["operator.write"],
+        trustedInternalWriteback: true,
       });
 
-      it("skips config and cron writeback for gateway callers with an empty scope set", async () => {
-        await maybePersistResolvedTelegramTarget({
-          cfg: {
-            cron: { store: "/tmp/cron/jobs.json" },
-          } as OpenClawConfig,
-          rawTarget: "t.me/mychannel",
-          resolvedChatId: "-100123",
-          gatewayClientScopes: [],
-        });
+      expect(readConfigFileSnapshotForWrite).not.toHaveBeenCalled();
+      expect(writeConfigFile).not.toHaveBeenCalled();
+      expect(loadCronStore).not.toHaveBeenCalled();
+      expect(saveCronStore).not.toHaveBeenCalled();
+    });
 
-        expect(readConfigFileSnapshotForWrite).not.toHaveBeenCalled();
-        expect(writeConfigFile).not.toHaveBeenCalled();
-        expect(loadCronStore).not.toHaveBeenCalled();
-        expect(saveCronStore).not.toHaveBeenCalled();
+    it("skips config and cron writeback for gateway callers with an empty scope set", async () => {
+      await maybePersistResolvedTelegramTarget({
+        cfg: {
+          cron: { store: "/tmp/cron/jobs.json" },
+        } as OpenClawConfig,
+        rawTarget: "t.me/mychannel",
+        resolvedChatId: "-100123",
+        gatewayClientScopes: [],
       });
 
-      it("skips config and cron writeback when gateway scopes are missing", async () => {
-        await maybePersistResolvedTelegramTarget({
-          cfg: {
-            cron: { store: "/tmp/cron/jobs.json" },
-          } as OpenClawConfig,
-          rawTarget: "t.me/mychannel",
-          resolvedChatId: "-100123",
-          gatewayClientScopes: undefined,
-        });
+      expect(readConfigFileSnapshotForWrite).not.toHaveBeenCalled();
+      expect(writeConfigFile).not.toHaveBeenCalled();
+      expect(loadCronStore).not.toHaveBeenCalled();
+      expect(saveCronStore).not.toHaveBeenCalled();
+    });
 
-        expect(readConfigFileSnapshotForWrite).not.toHaveBeenCalled();
-        expect(writeConfigFile).not.toHaveBeenCalled();
-        expect(loadCronStore).not.toHaveBeenCalled();
-        expect(saveCronStore).not.toHaveBeenCalled();
+    it("skips config and cron writeback when gateway scopes are missing", async () => {
+      await maybePersistResolvedTelegramTarget({
+        cfg: {
+          cron: { store: "/tmp/cron/jobs.json" },
+        } as OpenClawConfig,
+        rawTarget: "t.me/mychannel",
+        resolvedChatId: "-100123",
+        gatewayClientScopes: undefined,
       });
 
-      it("writes back for gateway callers with operator.admin", async () => {
-        readConfigFileSnapshotForWrite.mockResolvedValue({
-          snapshot: {
-            config: {
-              channels: {
-                telegram: {
-                  defaultTo: "t.me/mychannel",
-                },
+      expect(readConfigFileSnapshotForWrite).not.toHaveBeenCalled();
+      expect(writeConfigFile).not.toHaveBeenCalled();
+      expect(loadCronStore).not.toHaveBeenCalled();
+      expect(saveCronStore).not.toHaveBeenCalled();
+    });
+
+    it("writes back for gateway callers with operator.admin", async () => {
+      readConfigFileSnapshotForWrite.mockResolvedValue({
+        snapshot: {
+          config: {
+            channels: {
+              telegram: {
+                defaultTo: "t.me/mychannel",
               },
             },
           },
-          writeOptions: {},
-        });
-        loadCronStore.mockResolvedValue({
-          version: 1,
-          jobs: [{ id: "a", delivery: { channel: "telegram", to: "t.me/mychannel" } }],
-        });
-
-        await maybePersistResolvedTelegramTarget({
-          cfg: {
-            cron: { store: "/tmp/cron/jobs.json" },
-          } as OpenClawConfig,
-          rawTarget: "t.me/mychannel",
-          resolvedChatId: "-100123",
-          gatewayClientScopes: ["operator.admin"],
-        });
-
-        expect(writeConfigFile).toHaveBeenCalledTimes(1);
-        expect(saveCronStore).toHaveBeenCalledTimes(1);
+        },
+        writeOptions: {},
       });
-    }
+      loadCronStore.mockResolvedValue({
+        version: 1,
+        jobs: [{ id: "a", delivery: { channel: "telegram", to: "t.me/mychannel" } }],
+      });
+
+      await maybePersistResolvedTelegramTarget({
+        cfg: {
+          cron: { store: "/tmp/cron/jobs.json" },
+        } as OpenClawConfig,
+        rawTarget: "t.me/mychannel",
+        resolvedChatId: "-100123",
+        gatewayClientScopes: ["operator.admin"],
+      });
+
+      expect(writeConfigFile).toHaveBeenCalledTimes(1);
+      expect(saveCronStore).toHaveBeenCalledTimes(1);
+    });
 
     it("writes back matching config and cron targets", async () => {
       readConfigFileSnapshotForWrite.mockResolvedValue({
@@ -293,59 +289,55 @@ export function installMaybePersistResolvedTelegramTargetTests(params?: {
       ]);
     });
 
-    it.each(
-      scopedTargetWritebackCases.flatMap((testCase) =>
-        (["config", "cron"] as const).map((surface) => ({
-          name: testCase.name,
-          surface,
-          testCase,
-        })),
-      ),
-    )("rewrites only matching $name $surface targets", async ({ surface, testCase }) => {
-      const unmatchedAccounts = Object.fromEntries(
-        testCase.unmatchedTargets.map((target, index) => [`other${index}`, { defaultTo: target }]),
-      );
-      readConfigFileSnapshotForWrite.mockResolvedValue({
-        snapshot: {
-          config: {
-            channels: {
-              telegram: {
-                defaultTo: testCase.matchingTarget,
-                accounts: unmatchedAccounts,
+    it.each(scopedTargetWritebackCases)(
+      "rewrites only matching $name targets",
+      async (testCase) => {
+        const unmatchedAccounts = Object.fromEntries(
+          testCase.unmatchedTargets.map((target, index) => [
+            `other${index}`,
+            { defaultTo: target },
+          ]),
+        );
+        readConfigFileSnapshotForWrite.mockResolvedValue({
+          snapshot: {
+            config: {
+              channels: {
+                telegram: {
+                  defaultTo: testCase.matchingTarget,
+                  accounts: unmatchedAccounts,
+                },
               },
             },
           },
-        },
-        writeOptions: {},
-      });
-      loadCronStore.mockResolvedValue({
-        version: 1,
-        jobs: [testCase.matchingTarget, ...testCase.unmatchedTargets].map((target, index) => ({
-          id: String(index),
-          delivery: { channel: "telegram", to: target },
-        })),
-      });
+          writeOptions: {},
+        });
+        loadCronStore.mockResolvedValue({
+          version: 1,
+          jobs: [testCase.matchingTarget, ...testCase.unmatchedTargets].map((target, index) => ({
+            id: String(index),
+            delivery: { channel: "telegram", to: target },
+          })),
+        });
 
-      await maybePersistResolvedTelegramTarget({
-        cfg: {} as OpenClawConfig,
-        rawTarget: testCase.rawTarget,
-        resolvedChatId: "-100123",
-        gatewayClientScopes: undefined,
-        trustedInternalWriteback: true,
-      });
+        await maybePersistResolvedTelegramTarget({
+          cfg: {} as OpenClawConfig,
+          rawTarget: testCase.rawTarget,
+          resolvedChatId: "-100123",
+          gatewayClientScopes: undefined,
+          trustedInternalWriteback: true,
+        });
 
-      const persistedTargets =
-        surface === "config"
-          ? [
-              requireWriteConfigCall()[0].channels?.telegram?.defaultTo,
-              ...Object.values(requireWriteConfigCall()[0].channels?.telegram?.accounts ?? {}).map(
-                (account) => account.defaultTo,
-              ),
-            ]
-          : requireSaveCronStoreCall()[1].jobs.map((job) => job.delivery.to);
-
-      expect(persistedTargets).toEqual([testCase.resolvedTarget, ...testCase.unmatchedTargets]);
-    });
+        const writtenTelegram = requireWriteConfigCall()[0].channels?.telegram;
+        const expectedTargets = [testCase.resolvedTarget, ...testCase.unmatchedTargets];
+        expect([
+          writtenTelegram?.defaultTo,
+          ...Object.values(writtenTelegram?.accounts ?? {}).map((account) => account.defaultTo),
+        ]).toEqual(expectedTargets);
+        expect(requireSaveCronStoreCall()[1].jobs.map((job) => job.delivery.to)).toEqual(
+          expectedTargets,
+        );
+      },
+    );
 
     it("matches username targets case-insensitively", async () => {
       readConfigFileSnapshotForWrite.mockResolvedValue({

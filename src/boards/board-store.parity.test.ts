@@ -7,10 +7,16 @@ import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { migrateLegacyMediaPersistence } from "../infra/state-migrations.media-persistence.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { removeCanonicalValidationFromHistoricalAgentFixture } from "../state/openclaw-agent-db.test-support.js";
+import { restoreEmptyV21StorageForHistoricalFixture } from "../state/openclaw-agent-schema-v21.test-support.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { readBoardHtml, createTestBoardStore } from "./board-store.test-support.js";
 import { SqliteBoardStore } from "./sqlite-board-store.js";
 
@@ -26,8 +32,10 @@ function seedSession(env: NodeJS.ProcessEnv, agentId: string, sessionKey: string
   return database.path;
 }
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
 });
 
@@ -183,164 +191,83 @@ describe("SqliteBoardStore behavior", () => {
     );
   });
 
-  it("replaces omitted plugin props without changing unrelated layout state", async () => {
-    const store = createStore();
-    const initial = await store.putWidget({
-      ...boardSession,
-      name: "work-item",
-      content: {
-        kind: "plugin",
-        pluginKind: "workboard:card",
-        props: { cardId: "card-123", compact: true },
-      },
-    });
-    await store.putWidget({
-      ...boardSession,
-      name: "left",
-      content: { kind: "plugin", pluginKind: "workboard:card", props: { side: "left" } },
-    });
-    await store.putWidget({
-      ...boardSession,
-      name: "right",
-      content: { kind: "plugin", pluginKind: "workboard:card", props: { side: "right" } },
-    });
-
-    expect(initial.widgets[0]).toMatchObject({
-      name: "work-item",
-      contentKind: "plugin",
-      pluginKind: "workboard:card",
-      props: { cardId: "card-123", compact: true },
-      grantState: "none",
-    });
-    expect(initial.widgets[0]).not.toHaveProperty("instanceId");
-    expect(await readBoardHtml(store, boardSession, "work-item")).toBeUndefined();
-    expect(await store.readWidgetMcpApp(boardSession, "work-item")).toBeUndefined();
-
-    const moved = await store.applyOps(boardSession, [
-      { kind: "widget_move", name: "work-item", after: "right" },
-    ]);
-    expect(moved.widgets.map((widget) => widget.name)).toEqual(["left", "right", "work-item"]);
-    expect(moved.widgets[2]?.props).toEqual({ cardId: "card-123", compact: true });
-    const [left, right] = moved.widgets;
-
-    const put = await store.putWidget({
-      ...boardSession,
-      name: "work-item",
-      content: { kind: "plugin", pluginKind: "workboard:card" },
-    });
-
-    expect(put.widgets.map((widget) => widget.name)).toEqual(["left", "right", "work-item"]);
-    expect(put.widgets[0]).toEqual(left);
-    expect(put.widgets[1]).toEqual(right);
-    expect(put.widgets[2]).not.toHaveProperty("props");
-    const { resolvedWidgetName: putName, ...putSnapshot } = put;
-    expect(putName).toBe("work-item");
-    expect(await store.getSnapshot(boardSession)).toEqual(putSnapshot);
-
-    const placed = await store.putWidget({
-      ...boardSession,
-      name: "work-item",
-      content: { kind: "plugin", pluginKind: "workboard:card" },
-      placement: { after: "left" },
-    });
-    expect(placed.widgets.map((widget) => widget.name)).toEqual(["left", "work-item", "right"]);
-    expect(placed.widgets[0]).toEqual(left);
-    expect(placed.widgets[1]).not.toHaveProperty("props");
-    expect(placed.widgets[2]).toEqual({ ...right, position: 2 });
-    const { resolvedWidgetName: placedName, ...placedSnapshot } = placed;
-    expect(placedName).toBe("work-item");
-    expect(await store.getSnapshot(boardSession)).toEqual(placedSnapshot);
-  });
-
-  it("rejects oversized plugin props and capability declarations", async () => {
-    const store = createStore();
-    await expect(
-      store.putWidget({
+  it.each(["html", "registered"] as const)(
+    "preserves %s grants only for unchanged bytes with equal or narrower declarations",
+    async (kind) => {
+      const documentContent = (text: string) =>
+        kind === "html"
+          ? { kind, html: text }
+          : { kind, contentKind: "diagram", pluginKind: "diagram:diagram", source: text };
+      const store = createStore();
+      const first = await store.putWidget({
         ...boardSession,
-        name: "too-large",
-        content: {
-          kind: "plugin",
-          pluginKind: "workboard:mini",
-          props: { value: "x".repeat(8 * 1024) },
+        name: "scoped",
+        content: documentContent("one"),
+        declared: {
+          netOrigins: ["https://one.example", "https://two.example"],
+          tools: ["weather.read", "weather.refresh"],
         },
-      }),
-    ).rejects.toThrow("props exceed 8192 UTF-8 bytes");
-    await expect(
-      store.putWidget({
+      });
+      await store.grant(boardSession, "scoped", "granted", 1, first.widgets[0]?.instanceId);
+
+      const equal = await store.putWidget({
         ...boardSession,
-        name: "declared",
-        content: { kind: "plugin", pluginKind: "workboard:card" },
-        declared: { tools: ["workboard.cards.move"] },
-      }),
-    ).rejects.toThrow("do not accept sandbox capability declarations");
-  });
+        name: "scoped",
+        content: documentContent("one"),
+        declared: {
+          netOrigins: ["https://one.example", "https://two.example"],
+          tools: ["weather.read", "weather.refresh"],
+        },
+      });
+      expect(equal.widgets[0]).toMatchObject({ revision: 2, grantState: "granted" });
+      expect(
+        await store.useWidgetDocument(boardSession, "scoped", (document) => document),
+      ).toMatchObject({
+        ...(kind === "html" ? { html: "one" } : { source: "one" }),
+        grantState: "granted",
+      });
 
-  it("preserves grants only for unchanged bytes with equal or narrower declarations", async () => {
-    const store = createStore();
-    const first = await store.putWidget({
-      ...boardSession,
-      name: "scoped",
-      content: { kind: "html", html: "one" },
-      declared: {
-        netOrigins: ["https://one.example", "https://two.example"],
-        tools: ["weather.read", "weather.refresh"],
-      },
-    });
-    await store.grant(boardSession, "scoped", "granted", 1, first.widgets[0]?.instanceId);
+      const narrower = await store.putWidget({
+        ...boardSession,
+        name: "scoped",
+        content: documentContent("one"),
+        declared: {
+          netOrigins: ["https://one.example"],
+          tools: ["weather.read"],
+        },
+      });
+      expect(narrower.widgets[0]).toMatchObject({ revision: 3, grantState: "granted" });
 
-    const equal = await store.putWidget({
-      ...boardSession,
-      name: "scoped",
-      content: { kind: "html", html: "one" },
-      declared: {
-        netOrigins: ["https://one.example", "https://two.example"],
-        tools: ["weather.read", "weather.refresh"],
-      },
-    });
-    expect(equal.widgets[0]).toMatchObject({ revision: 2, grantState: "granted" });
-    expect(await readBoardHtml(store, boardSession, "scoped")).toMatchObject({
-      html: "one",
-      grantState: "granted",
-    });
+      const changed = await store.putWidget({
+        ...boardSession,
+        name: "scoped",
+        content: documentContent("two"),
+        declared: {
+          netOrigins: ["https://one.example"],
+          tools: ["weather.read"],
+        },
+      });
+      expect(changed.widgets[0]).toMatchObject({ revision: 4, grantState: "pending" });
+      expect(
+        await store.useWidgetDocument(boardSession, "scoped", (document) => document),
+      ).toMatchObject({
+        ...(kind === "html" ? { html: "two" } : { source: "two" }),
+        grantState: "pending",
+      });
+      await store.grant(boardSession, "scoped", "granted", 4, changed.widgets[0]?.instanceId);
 
-    const narrower = await store.putWidget({
-      ...boardSession,
-      name: "scoped",
-      content: { kind: "html", html: "one" },
-      declared: {
-        netOrigins: ["https://one.example"],
-        tools: ["weather.read"],
-      },
-    });
-    expect(narrower.widgets[0]).toMatchObject({ revision: 3, grantState: "granted" });
-
-    const changed = await store.putWidget({
-      ...boardSession,
-      name: "scoped",
-      content: { kind: "html", html: "two" },
-      declared: {
-        netOrigins: ["https://one.example"],
-        tools: ["weather.read"],
-      },
-    });
-    expect(changed.widgets[0]).toMatchObject({ revision: 4, grantState: "pending" });
-    expect(await readBoardHtml(store, boardSession, "scoped")).toMatchObject({
-      html: "two",
-      grantState: "pending",
-    });
-    await store.grant(boardSession, "scoped", "granted", 4, changed.widgets[0]?.instanceId);
-
-    const wider = await store.putWidget({
-      ...boardSession,
-      name: "scoped",
-      content: { kind: "html", html: "two" },
-      declared: {
-        netOrigins: ["https://one.example", "https://three.example"],
-        tools: ["weather.read"],
-      },
-    });
-    expect(wider.widgets[0]).toMatchObject({ revision: 5, grantState: "pending" });
-  });
+      const wider = await store.putWidget({
+        ...boardSession,
+        name: "scoped",
+        content: documentContent("two"),
+        declared: {
+          netOrigins: ["https://one.example", "https://three.example"],
+          tools: ["weather.read"],
+        },
+      });
+      expect(wider.widgets[0]).toMatchObject({ revision: 5, grantState: "pending" });
+    },
+  );
 
   it("requires a fresh grant when an MCP app widget changes servers", async () => {
     const store = createStore();
@@ -579,11 +506,15 @@ describe("SqliteBoardStore persistence", () => {
     seedSession(env, "main", sessionKey);
     const opened = openOpenClawAgentDatabase({ agentId: "main", env });
     const databasePath = opened.path;
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
 
     const { DatabaseSync } = requireNodeSqlite();
     const existingV14 = new DatabaseSync(databasePath);
+    restoreEmptyV21StorageForHistoricalFixture(existingV14);
+    removeCanonicalValidationFromHistoricalAgentFixture(existingV14);
     existingV14.exec(`
       DROP TABLE board_widgets;
       DROP TABLE board_tabs;
@@ -678,6 +609,8 @@ describe("SqliteBoardStore persistence", () => {
       /^CREATE TABLE board_widgets/u,
       "CREATE TABLE board_widgets_legacy",
     );
+    restoreEmptyV21StorageForHistoricalFixture(opened.db);
+    removeCanonicalValidationFromHistoricalAgentFixture(opened.db);
     opened.db.exec(`
       PRAGMA foreign_keys = OFF;
       BEGIN IMMEDIATE;
@@ -693,6 +626,7 @@ describe("SqliteBoardStore persistence", () => {
       PRAGMA user_version = 14;
       UPDATE schema_meta SET schema_version = 14 WHERE meta_key = 'primary';
     `);
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
 
     expect((await migrateLegacyMediaPersistence({ env })).warnings).toEqual([]);
@@ -1056,7 +990,9 @@ describe("SqliteBoardStore persistence", () => {
       content: { kind: "html", html: "beta" },
     });
 
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
 
     const reopened = new SqliteBoardStore(options);

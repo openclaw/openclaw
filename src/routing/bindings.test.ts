@@ -19,26 +19,29 @@ describe("route binding account helpers", () => {
     );
   });
 
-  it("keeps implicit bindings out of outbound account selection", () => {
-    const cfg: OpenClawConfig = {
-      agents: { entries: { main: {} } },
-      channels: { telegram: { defaultAccount: "work" } },
-      bindings: [{ agentId: "main", match: { channel: "telegram" } }],
-    };
-    expect(resolveDefaultAgentBoundAccountId(cfg, "telegram")).toBeNull();
-    expect(
-      resolveFirstBoundAccountId({ cfg, channelId: "telegram", agentId: "main" }),
-    ).toBeUndefined();
+  it.each([false, true])(
+    "keeps implicit bindings out of outbound account selection (explicit sole: %s)",
+    (explicitOwnership) => {
+      const cfg: OpenClawConfig = {
+        agents: { ...(explicitOwnership ? { ownership: "explicit" } : {}), entries: { main: {} } },
+        channels: { telegram: { defaultAccount: "work" } },
+        bindings: [{ agentId: "main", match: { channel: "telegram" } }],
+      };
+      expect(resolveDefaultAgentBoundAccountId(cfg, "telegram")).toBeNull();
+      expect(
+        resolveFirstBoundAccountId({ cfg, channelId: "telegram", agentId: "main" }),
+      ).toBeUndefined();
 
-    cfg.bindings = [
-      { agentId: "main", match: { channel: "telegram" } },
-      { agentId: "main", match: { channel: "telegram", accountId: "alerts" } },
-    ];
-    expect(resolveDefaultAgentBoundAccountId(cfg, "telegram")).toBe("alerts");
-    expect(resolveFirstBoundAccountId({ cfg, channelId: "telegram", agentId: "main" })).toBe(
-      "alerts",
-    );
-  });
+      cfg.bindings = [
+        { agentId: "main", match: { channel: "telegram" } },
+        { agentId: "main", match: { channel: "telegram", accountId: "alerts" } },
+      ];
+      expect(resolveDefaultAgentBoundAccountId(cfg, "telegram")).toBe("alerts");
+      expect(resolveFirstBoundAccountId({ cfg, channelId: "telegram", agentId: "main" })).toBe(
+        "alerts",
+      );
+    },
+  );
 
   it("preserves account order and agent scope while deduplicating implicit defaults", () => {
     const cfg: OpenClawConfig = {
@@ -64,4 +67,24 @@ describe("route binding account helpers", () => {
     );
     expect(resolveDefaultAgentBoundAccountId(cfg, "telegram")).toBeNull();
   });
+
+  it.each([undefined, "explicit"] as const)(
+    "uses the designated binding owner only with explicit ownership (%s)",
+    (ownership) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          ownership,
+          defaults: { systemAgent: { agentId: "research" } },
+          entries: { ops: { default: true }, research: {} },
+        },
+        bindings: [
+          { agentId: "ops", match: { channel: "telegram", accountId: "legacy" } },
+          { agentId: "research", match: { channel: "telegram", accountId: "designated" } },
+        ],
+      };
+      expect(resolveDefaultAgentBoundAccountId(cfg, "telegram")).toBe(
+        ownership === "explicit" ? "designated" : "legacy",
+      );
+    },
+  );
 });

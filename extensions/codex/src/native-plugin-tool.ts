@@ -1,4 +1,5 @@
 /** Owner-scoped, read-only discovery of plugins already known to Codex. */
+import { isDeepStrictEqual } from "node:util";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/core";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { asOptionalRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -54,31 +55,50 @@ export function createCodexPluginsTool(options: CodexPluginsToolOptions): AnyAge
         typeof params.limit === "number" && Number.isInteger(params.limit)
           ? Math.max(1, Math.min(params.limit, 20))
           : 12;
+      const { codexBindingConnectionSelection, resolveCodexBindingAppServerConnection } =
+        await import("./app-server/binding-connection.js");
       const pluginConfig = options.getPluginConfig();
-      const binding = options.context.sessionId
-        ? options.bindingStore.read(
-            sessionBindingIdentity({
-              sessionId: options.context.sessionId,
-              sessionKey: options.context.sessionKey,
-              agentId: options.context.agentId,
-              config: runtimeConfig(),
-            }),
-          )
+      const config = runtimeConfig();
+      const identity = options.context.sessionId
+        ? sessionBindingIdentity({
+            sessionId: options.context.sessionId,
+            sessionKey: options.context.sessionKey,
+            agentId: options.context.agentId,
+            config,
+          })
         : undefined;
+      const readBinding = () => (identity ? options.bindingStore.read(identity) : undefined);
+      const binding = readBinding();
+      const selection = codexBindingConnectionSelection(binding);
+      const assertCurrent = () => {
+        options.context.assertInvocationCurrent?.();
+        if (
+          runtimeConfig() !== config ||
+          !isDeepStrictEqual(options.getPluginConfig(), pluginConfig) ||
+          !isDeepStrictEqual(codexBindingConnectionSelection(readBinding()), selection)
+        ) {
+          throw new Error("Codex plugin discovery ownership changed; retry the request.");
+        }
+      };
       const workspaceDir =
         binding?.cwd?.trim() ||
         options.context.workspaceDir?.trim() ||
         resolveCodexDefaultWorkspaceDir(pluginConfig);
       const request = options.request ?? (await import("./command-rpc.js")).codexControlRequest;
-      const { resolveCodexBindingAppServerConnection } =
-        await import("./app-server/binding-connection.js");
-      const connection = resolveCodexBindingAppServerConnection({ binding, pluginConfig });
+      const connection = await resolveCodexBindingAppServerConnection({
+        binding,
+        pluginConfig,
+        config,
+        agentDir: options.context.agentDir,
+        assertCurrent,
+      });
       const discovered = await discoverCodexMarketplacePlugins({
         workspaceDir,
         request: async (requestParams) =>
           await request(pluginConfig, CODEX_CONTROL_METHODS.listPlugins, requestParams, {
             agentDir: options.context.agentDir,
-            config: runtimeConfig(),
+            config,
+            assertCurrent,
             sessionId: options.context.sessionId,
             sessionKey: options.context.sessionKey,
             startOptions: connection.appServer.start,
@@ -100,21 +120,8 @@ export function createCodexPluginsTool(options: CodexPluginsToolOptions): AnyAge
   };
 }
 
-function projectAvailablePlugin(plugin: CodexAvailablePlugin): {
-  id: string;
-  pluginName: string;
-  marketplaceName: string;
-  untrustedDisplayName?: string;
-  untrustedDeveloperName?: string;
-  untrustedDescription?: string;
-  installed: boolean;
-  enabled: boolean;
-  available: boolean;
-  installPolicy?: string;
-  authPolicy?: string;
-  mustShowInstallationInterstitial?: boolean | null;
-} {
-  const projected: ReturnType<typeof projectAvailablePlugin> = {
+function projectAvailablePlugin(plugin: CodexAvailablePlugin) {
+  return {
     id: plugin.id,
     pluginName: plugin.pluginName,
     marketplaceName: plugin.marketplaceName,
@@ -123,18 +130,11 @@ function projectAvailablePlugin(plugin: CodexAvailablePlugin): {
     installed: plugin.installed,
     enabled: plugin.enabled,
     available: plugin.available,
+    ...(plugin.description ? { untrustedDescription: plugin.description } : {}),
+    ...(plugin.installPolicy ? { installPolicy: plugin.installPolicy } : {}),
+    ...(plugin.authPolicy ? { authPolicy: plugin.authPolicy } : {}),
+    ...(plugin.mustShowInstallationInterstitial !== undefined
+      ? { mustShowInstallationInterstitial: plugin.mustShowInstallationInterstitial }
+      : {}),
   };
-  if (plugin.description) {
-    projected.untrustedDescription = plugin.description;
-  }
-  if (plugin.installPolicy) {
-    projected.installPolicy = plugin.installPolicy;
-  }
-  if (plugin.authPolicy) {
-    projected.authPolicy = plugin.authPolicy;
-  }
-  if (plugin.mustShowInstallationInterstitial !== undefined) {
-    projected.mustShowInstallationInterstitial = plugin.mustShowInstallationInterstitial;
-  }
-  return projected;
 }

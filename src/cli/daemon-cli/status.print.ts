@@ -15,6 +15,7 @@ import {
   resolveGatewaySupervisorLogPaths,
 } from "../../daemon/restart-logs.js";
 import { buildGatewayRuntimeRecoveryHints } from "../../daemon/runtime-hints.js";
+import { SERVICE_RUNTIME_AUDIT_CODES } from "../../daemon/service-audit-runtime.js";
 import { formatServiceInspectionReason } from "../../daemon/service-inspection-error.js";
 import { isSystemdStartLimitHit } from "../../daemon/service-runtime.js";
 import {
@@ -25,10 +26,14 @@ import { classifySystemdUnavailableDetail } from "../../daemon/systemd-unavailab
 import { resolveControlUiLinks } from "../../gateway/control-ui-links.js";
 import { formatGatewayRestartHandoffDiagnostic } from "../../infra/restart-handoff.js";
 import { isWSLEnv } from "../../infra/wsl.js";
-import { resolvePluginVersionDriftUpdateCommand } from "../../plugins/plugin-version-drift.js";
+import {
+  resolvePluginVersionDriftRegistryLag,
+  resolvePluginVersionDriftUpdateCommand,
+} from "../../plugins/plugin-version-drift.js";
 import { defaultRuntime } from "../../runtime.js";
 import { shortenHomePath } from "../../utils.js";
 import { formatCliCommand } from "../command-format.js";
+import { quoteCliArg } from "../quote-cli-arg.js";
 import {
   createCliStatusTextStyles,
   formatRuntimeStatus,
@@ -42,13 +47,7 @@ import {
   renderPortDiagnosticsForCli,
   resolvePortListeningAddresses,
 } from "./status.gather.js";
-
-function formatCliVersionLine(cli: DaemonStatus["cli"]): string | null {
-  if (!cli) {
-    return null;
-  }
-  return cli.entrypoint ? `${cli.version} (${shortenHomePath(cli.entrypoint)})` : cli.version;
-}
+import { printDaemonStatusVersions } from "./status.print.version.js";
 
 function formatConnectionLine(
   connection: NonNullable<DaemonStatus["connections"]>["established"][number],
@@ -62,6 +61,15 @@ function formatConnectionLine(
     ? ` cmd=${shortenHomePath(connection.commandLine)}`
     : "";
   return `${pid}${ppid}${direction}${command}${address}${commandLine}`;
+}
+
+function formatProbeEventLoop(
+  eventLoop: NonNullable<NonNullable<DaemonStatus["rpc"]>["eventLoop"]>,
+) {
+  const state = eventLoop.degraded ? "degraded" : "ok";
+  return `${state} max=${Math.round(eventLoop.delayMaxMs)}ms p99=${Math.round(
+    eventLoop.delayP99Ms,
+  )}ms util=${eventLoop.utilization} cpu=${eventLoop.cpuCoreRatio}`;
 }
 
 export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; deep?: boolean }) {
@@ -82,6 +90,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
   const reinstallCommand = formatCliCommand("openclaw gateway install --force");
 
   const { service, rpc, extraServices } = status;
+  const managerUnavailable = service.inspectionReason === "service-manager-unavailable";
   const serviceTargetsProbe = service.targetRole !== "diagnostic-only";
   const diagnosticOnlySuffix = serviceTargetsProbe
     ? ""
@@ -91,14 +100,27 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     ? okText(service.loadedText)
     : warnText(service.loadState.status === "not-loaded" ? service.notLoadedText : "unknown");
   defaultRuntime.log(
-    `${label("Service:")} ${accent(service.label)} (${serviceStatus})${diagnosticOnlySuffix}`,
+    `${label("Service:")} ${accent(service.label)}${managerUnavailable ? "" : ` (${serviceStatus})`}${diagnosticOnlySuffix}`,
   );
+  if (
+    managerUnavailable &&
+    (service.command ||
+      (service.systemdInstallation && service.systemdInstallation.kind !== "none"))
+  ) {
+    defaultRuntime.log(warnText("The recorded service unit is stale and was left unchanged."));
+  }
+  const transport = service.runtime?.systemd?.transport;
+  if (opts.deep && transport) {
+    defaultRuntime.log(
+      `${label("Systemd transport:")} ${infoText(`${transport.kind} (${transport.kind === "machine" ? transport.user : transport.address})`)}`,
+    );
+  }
   if (status.logFile) {
     defaultRuntime.log(`${label("File logs:")} ${infoText(shortenHomePath(status.logFile))}`);
   }
   if (service.command?.programArguments?.length) {
     defaultRuntime.log(
-      `${label("Command:")} ${infoText(service.command.programArguments.join(" "))}`,
+      `${label(managerUnavailable ? "Recorded command:" : "Command:")} ${infoText(service.command.programArguments.join(" "))}`,
     );
   }
   if (service.command?.sourcePath) {
@@ -107,7 +129,9 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     );
   }
   if (service.command?.reloadPending) {
-    defaultRuntime.log(warnText("Systemd reload: pending (run systemctl --user daemon-reload)"));
+    const systemctl =
+      service.runtime?.systemd?.scope === "system" ? "sudo systemctl --system" : "systemctl --user";
+    defaultRuntime.log(warnText(`Systemd reload: pending (run ${systemctl} daemon-reload)`));
   }
   if (service.command?.workingDirectory) {
     defaultRuntime.log(
@@ -133,47 +157,41 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       const detail = issue.detail ? ` (${issue.detail})` : "";
       defaultRuntime.error(`${warnText("Service config issue:")} ${issue.message}${detail}`);
     }
-    const recommendation =
-      installBlock ??
-      `Recommendation: run "${formatCliCommand("openclaw doctor")}" interactively for guided checks, or reinstall with "${reinstallCommand}".`;
+    const runtimeNeedsAttention = service.configAudit.issues.some((issue) =>
+      Object.values(SERVICE_RUNTIME_AUDIT_CODES).some((code) => code === issue.code),
+    );
+    const recommendation = managerUnavailable
+      ? `Run "${formatCliCommand("openclaw doctor")}" for guidance about this recorded service unit.`
+      : (installBlock ??
+        (runtimeNeedsAttention
+          ? `Recommendation: run "${formatCliCommand("openclaw doctor")}" interactively to resolve the runtime findings before reinstalling. Reinstalling alone may select the same runtime.`
+          : `Recommendation: run "${formatCliCommand("openclaw doctor")}" interactively for guided checks, or reinstall with "${reinstallCommand}".`));
     defaultRuntime.error(warnText(recommendation));
   }
 
   if (status.config) {
-    const cliCfg = `${shortenHomePath(status.config.cli.path)}${status.config.cli.exists ? "" : " (missing)"}${status.config.cli.valid ? "" : " (invalid)"}`;
-    defaultRuntime.log(`${label("Config (cli):")} ${infoText(cliCfg)}`);
-    if (!status.config.cli.valid && status.config.cli.issues?.length) {
-      for (const issue of status.config.cli.issues.slice(0, 5)) {
-        defaultRuntime.error(
-          `${errorText("Config issue:")} ${formatConfigIssueLine(issue, "", { normalizeRoot: true })}`,
-        );
+    for (const [kind, config] of [
+      ["cli", status.config.cli],
+      ["service", status.config.daemon],
+    ] as const) {
+      if (!config) {
+        continue;
       }
-    }
-    if (status.config.cli.warnings?.length) {
-      defaultRuntime.error(warnText("Config warnings:"));
-      for (const warning of status.config.cli.warnings.slice(0, 5)) {
-        defaultRuntime.error(
-          warnText(formatConfigIssueLine(warning, "-", { normalizeRoot: true })),
-        );
-      }
-    }
-    if (status.config.daemon) {
-      const daemonCfg = `${shortenHomePath(status.config.daemon.path)}${status.config.daemon.exists ? "" : " (missing)"}${status.config.daemon.valid ? "" : " (invalid)"}`;
-      defaultRuntime.log(`${label("Config (service):")} ${infoText(daemonCfg)}`);
-      if (!status.config.daemon.valid && status.config.daemon.issues?.length) {
-        for (const issue of status.config.daemon.issues.slice(0, 5)) {
+      const configPath = `${shortenHomePath(config.path)}${config.exists ? "" : " (missing)"}${config.valid ? "" : " (invalid)"}`;
+      defaultRuntime.log(`${label(`Config (${kind}):`)} ${infoText(configPath)}`);
+      if (!config.valid && config.issues?.length) {
+        const issueLabel = kind === "cli" ? "Config issue:" : "Service config issue:";
+        for (const issue of config.issues.slice(0, 5)) {
           defaultRuntime.error(
-            `${errorText("Service config issue:")} ${formatConfigIssueLine(issue, "", { normalizeRoot: true })}`,
+            `${errorText(issueLabel)} ${formatConfigIssueLine(issue, "", { normalizeRoot: true })}`,
           );
         }
       }
-      if (status.config.daemon !== status.config.cli && status.config.daemon.warnings?.length) {
+      if (config.warnings?.length && (kind === "cli" || config !== status.config.cli)) {
         const warningsLabel =
-          status.config.daemon.path === status.config.cli.path
-            ? "Config warnings:"
-            : "Service config warnings:";
+          config.path === status.config.cli.path ? "Config warnings:" : "Service config warnings:";
         defaultRuntime.error(warnText(warningsLabel));
-        for (const warning of status.config.daemon.warnings.slice(0, 5)) {
+        for (const warning of config.warnings.slice(0, 5)) {
           defaultRuntime.error(
             warnText(formatConfigIssueLine(warning, "-", { normalizeRoot: true })),
           );
@@ -227,27 +245,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     spacer();
   }
 
-  const gatewayVersion = rpc?.server?.version?.trim() || status.gateway?.version?.trim();
-  const cliVersionLine = formatCliVersionLine(status.cli);
-  if (gatewayVersion) {
-    if (cliVersionLine) {
-      defaultRuntime.log(`${label("CLI version:")} ${infoText(cliVersionLine)}`);
-    }
-    defaultRuntime.log(`${label("Gateway version:")} ${infoText(gatewayVersion)}`);
-    if (status.cli?.version && status.cli.version !== gatewayVersion) {
-      defaultRuntime.error(
-        warnText(
-          `Warning: this OpenClaw command is version ${status.cli.version}, but the running Gateway is version ${gatewayVersion}.`,
-        ),
-      );
-      defaultRuntime.error(
-        warnText(
-          "Check `openclaw --version`, `which openclaw`, and `openclaw gateway status --deep`; if this mismatch is unexpected, update PATH so `openclaw` points to the version you want, or reinstall the Gateway service from that same OpenClaw install.",
-        ),
-      );
-    }
-    spacer();
-  }
+  printDaemonStatusVersions(status, { label, infoText, warnText });
 
   const runtimeLine = formatRuntimeStatus(
     service.inspectionReason ? { ...service.runtime, detail: undefined } : service.runtime,
@@ -261,6 +259,15 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
   if (service.restartHandoff) {
     defaultRuntime.log(infoText(formatGatewayRestartHandoffDiagnostic(service.restartHandoff)));
   }
+  if (status.gateway?.lastShutdown) {
+    const { reason, completedAtMs } = status.gateway.lastShutdown;
+    defaultRuntime.log(
+      `${label("Last shutdown:")} ${infoText(sanitizeTerminalText(reason ?? "unknown"))} at ${new Date(completedAtMs).toISOString()}`,
+    );
+  }
+  if (status.gateway?.duelingScopesWarning) {
+    defaultRuntime.error(warnText(sanitizeTerminalText(status.gateway.duelingScopesWarning)));
+  }
 
   if (
     rpc &&
@@ -269,23 +276,17 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     serviceLoaded &&
     service.runtime?.status === "running"
   ) {
-    // The RPC probe failed while the service is loaded and running. Only the case where
-    // the gateway process is up and owns the listening port (health.healthy === true with
-    // no stale gateway PIDs, deep status only) is an unambiguous "not warm-up" signal, so it
-    // gets recovery guidance. `healthy` can also be set from bare reachability after
-    // ownership failed (see restart-health.ts), which can coexist with a non-empty
-    // staleGatewayPids; treat that combination as ambiguous rather than owns-port so it
-    // doesn't contradict the dedicated stale-PID diagnostic below. Every other
-    // health.healthy === false sub-case — a just-started gateway that has not bound the port
-    // yet, a foreign process holding the port, or a stale gateway PID — is either a normal
-    // warm-up window or is already covered by the dedicated stale-PID / port-not-listening /
-    // port-conflict diagnostics below, so it keeps the warm-up hint (as does unknown health
-    // from shallow status). A wedged gateway that owns the port is reported as healthy ===
-    // true with no stale gateway PIDs, so it is steered by the first branch.
-    if (status.health?.healthy === true && status.health.staleGatewayPids.length === 0) {
+    // Port ownership proves the process is listening, not that startup completed.
+    if (rpc.timedOut && rpc.gatewayReached) {
       defaultRuntime.log(
         warnText(
-          "Gateway process is running and owns the gateway port, so this is not a warm-up delay. Check the probe credentials/config, or restart the gateway and inspect its logs if it stays unresponsive.",
+          "Gateway accepted the connection, but the read probe timed out. Inspect event-loop load and retry before treating the service as unreachable.",
+        ),
+      );
+    } else if (status.health?.healthy === true && status.health.staleGatewayPids.length === 0) {
+      defaultRuntime.log(
+        warnText(
+          "Gateway process is running and owns the gateway port, but readiness is not yet confirmed. Warm-up is still possible. Try openclaw gateway status --deep again shortly; check the probe credentials/config and logs if it stays unresponsive.",
         ),
       );
     } else {
@@ -299,9 +300,18 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     if (rpc.ok) {
       defaultRuntime.log(`${label(probeLabel)} ${okText("ok")}`);
     } else {
-      defaultRuntime.error(`${label(probeLabel)} ${errorText("failed")}`);
-      if (rpc.authWarning) {
-        defaultRuntime.error(`${label("Probe auth:")} ${warnText(rpc.authWarning)}`);
+      const timeoutStatus = rpc.gatewayReached
+        ? rpc.eventLoop?.degraded
+          ? "timed out under event-loop load"
+          : "timed out after reaching Gateway"
+        : "timed out before reaching Gateway";
+      defaultRuntime.error(
+        `${label(probeLabel)} ${rpc.timedOut ? warnText(timeoutStatus) : errorText("failed")}`,
+      );
+      if (rpc.timedOut && rpc.eventLoop) {
+        defaultRuntime.error(
+          `${label("Gateway event loop:")} ${warnText(formatProbeEventLoop(rpc.eventLoop))}`,
+        );
       }
       if (rpc.url) {
         defaultRuntime.error(`${label("Probe target:")} ${rpc.url}`);
@@ -313,6 +323,9 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       if (status.port?.status === "busy" && status.lastError) {
         defaultRuntime.error(`${errorText("Last gateway error:")} ${status.lastError}`);
       }
+    }
+    if (rpc.authWarning) {
+      defaultRuntime.error(`${label("Probe auth:")} ${warnText(rpc.authWarning)}`);
     }
     const capability = rpc.capability ? rpc.capability.replaceAll("_", "-") : null;
     if (capability) {
@@ -366,8 +379,16 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       ? service.loadState.detail
       : undefined;
   if (serviceInspectionDetail) {
-    defaultRuntime.error(errorText(`Service inspection failed: ${serviceInspectionDetail}`));
-    defaultRuntime.error(errorText(`Retry: ${formatCliCommand("openclaw gateway status --deep")}`));
+    defaultRuntime.error(
+      managerUnavailable
+        ? warnText(serviceInspectionDetail)
+        : errorText(`Service inspection failed: ${serviceInspectionDetail}`),
+    );
+    if (!managerUnavailable) {
+      defaultRuntime.error(
+        errorText(`Retry: ${formatCliCommand("openclaw gateway status --deep")}`),
+      );
+    }
     spacer();
   }
   const systemdUnavailableDetail =
@@ -393,9 +414,15 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
   }
 
   if (service.runtime?.missingUnit) {
-    defaultRuntime.error(errorText("Service unit not found."));
-    const recovery = installBlock ?? `Run: ${installCommand}`;
-    defaultRuntime.error(errorText(recovery));
+    if (serviceTargetsProbe) {
+      defaultRuntime.error(errorText("Service unit not found."));
+      const recovery = installBlock ?? `Run: ${installCommand}`;
+      defaultRuntime.error(errorText(recovery));
+    } else {
+      defaultRuntime.log(
+        infoText("Native service is not installed; diagnostic only, not the probe target."),
+      );
+    }
   } else if (
     service.runtime?.missingGuiSession ||
     (serviceLoaded && service.runtime?.status === "stopped")
@@ -421,6 +448,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       restartCommand: formatCliCommand("openclaw gateway restart", env),
       env,
       logFile: status.logFile,
+      systemd: service.runtime?.systemd,
     })) {
       defaultRuntime.error(errorText(hint));
     }
@@ -527,9 +555,12 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       defaultRuntime.error(`${errorText("Last gateway error:")} ${status.lastError}`);
     }
     if (process.platform === "linux") {
-      const unit = resolveGatewaySystemdServiceName(serviceEnv.OPENCLAW_PROFILE);
+      const unit =
+        service.runtime?.systemd?.unit ??
+        `${resolveGatewaySystemdServiceName(serviceEnv.OPENCLAW_PROFILE)}.service`;
+      const scope = service.runtime?.systemd?.scope === "system" ? "--system" : "--user";
       defaultRuntime.error(
-        errorText(`Logs: journalctl --user -u ${unit}.service -n 200 --no-pager`),
+        errorText(`Logs: journalctl ${scope} -u ${quoteCliArg(unit)} -n 200 --no-pager`),
       );
     } else if (process.platform === "darwin") {
       const logs = resolveGatewaySupervisorLogPaths(serviceEnv, { platform: "darwin" });
@@ -550,8 +581,11 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     for (const svc of extraServices) {
       defaultRuntime.log(`- ${warnText(svc.label)} (${svc.scope}, ${svc.detail})`);
     }
-    for (const hint of renderGatewayServiceCleanupHints(extraServices)) {
-      defaultRuntime.log(`${infoText("Cleanup hint:")} ${hint}`);
+    for (const svc of extraServices) {
+      const hintLabel = svc.platform === "linux" ? "Inspection hint:" : "Cleanup hint:";
+      for (const hint of renderGatewayServiceCleanupHints([svc])) {
+        defaultRuntime.log(`${infoText(hintLabel)} ${hint}`);
+      }
     }
     spacer();
   }
@@ -570,10 +604,15 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
         const sourceLabel = entry.source === "clawhub" ? "clawhub" : "npm";
         const resolvedTarget =
           entry.targetResolution?.status === "resolved"
-            ? `; npm target ${entry.targetResolution.packageName}@${entry.targetResolution.version}`
+            ? `; ${sourceLabel} target ${entry.targetResolution.packageName}@${entry.targetResolution.version}`
             : "";
+        // A registry-confirmed version is the only target an update can actually reach.
+        const expectedVersion =
+          entry.targetResolution?.status === "resolved"
+            ? entry.targetResolution.version
+            : drift.gatewayVersion;
         defaultRuntime.log(
-          `- ${warnText(entry.pluginId)}: ${entry.installedVersion} (${sourceLabel}) → expected ${drift.gatewayVersion}${resolvedTarget}`,
+          `- ${warnText(entry.pluginId)}: ${entry.installedVersion} (${sourceLabel}) → expected ${expectedVersion}${resolvedTarget}`,
         );
       }
       const repairs = drift.drifts.map((entry) => ({
@@ -584,7 +623,17 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
         .map(({ command }) => command)
         .filter((command): command is string => Boolean(command))
         .map((command) => formatCliCommand(command));
-      const unresolvedRepairs = repairs.filter(({ command }) => !command);
+      const unresolvedRepairs = repairs.filter(
+        ({ entry, command }) => !command && !resolvePluginVersionDriftRegistryLag(entry),
+      );
+      for (const { entry } of repairs) {
+        const registryLag = resolvePluginVersionDriftRegistryLag(entry);
+        if (registryLag) {
+          defaultRuntime.log(
+            `- ${entry.pluginId}: registry version ${registryLag.registryVersion} is already installed; no release reaches ${registryLag.expectedVersion} yet, so no update command applies.`,
+          );
+        }
+      }
       if (unresolvedRepairs.length > 0) {
         defaultRuntime.error(errorText("Plugin repair target resolution failed:"));
         for (const { entry } of unresolvedRepairs) {

@@ -3,6 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { SessionScope } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import {
   buildAgentMainSessionKey,
@@ -108,7 +109,9 @@ function resolveEventSessionAllowFrom(params: {
   }
   const accountId = normalizeLowercaseStringOrEmpty(params.accountId ?? params.target?.accountId);
   const accountConfig =
-    accountId && isRecord(channelConfig.accounts) ? channelConfig.accounts[accountId] : undefined;
+    accountId && isRecord(channelConfig.accounts)
+      ? resolveChannelAccountEntry(channelConfig.accounts, accountId, channelKey, (id) => id)
+      : undefined;
   const accountNestedConfig = readAccountConfig(accountConfig);
   return (
     readDmAllowFrom(accountConfig) ??

@@ -77,7 +77,7 @@ describe("cron task run terminal records", () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: `openclaw-cron-${testCase.id}-` },
       async () => {
-        resetTaskRegistryForTests();
+        resetTaskRegistryForTests({ persist: false });
         let resolveStarted!: () => void;
         let resolveRun!: () => void;
         const started = new Promise<void>((resolve) => {
@@ -159,7 +159,7 @@ describe("cron task run terminal records", () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-cron-core-ledger-runtime-" },
       async () => {
-        resetTaskRegistryForTests();
+        resetTaskRegistryForTests({ persist: false });
         const customCreate = vi.fn(() => null);
         const customFinalize = vi.fn(() => []);
         setDetachedTaskLifecycleRuntime({
@@ -263,15 +263,15 @@ describe("cron task run terminal records", () => {
   });
 
   it.each([
-    { owner: "assigned", agentId: "finn", ownerlessManualRun: undefined },
-    { owner: "ownerless manual", agentId: undefined, ownerlessManualRun: true as const },
+    { owner: "assigned", agentId: "finn", ownerlessRun: undefined },
+    { owner: "ownerless", agentId: undefined, ownerlessRun: true as const },
   ])("creates terminal history for an $owner skipped-only event", async (testCase) => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-cron-skipped-task-" },
       async () => {
-        resetTaskRegistryForTests();
+        resetTaskRegistryForTests({ persist: false });
         const startedAt = 1_000;
-        const error = testCase.ownerlessManualRun
+        const error = testCase.ownerlessRun
           ? CRON_AGENT_SELECTION_REQUIRED_MESSAGE
           : "cron: job execution timed out";
         const job: CronJob = {
@@ -301,7 +301,7 @@ describe("cron task run terminal records", () => {
 
         tryFinishCronTaskRun(state, {
           job,
-          ownerlessManualRun: testCase.ownerlessManualRun,
+          ownerlessRun: testCase.ownerlessRun,
           event: {
             jobId: job.id,
             action: "finished",
@@ -361,7 +361,7 @@ describe("cron task run terminal records", () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-cron-distinct-task-runs-" },
       async () => {
-        resetTaskRegistryForTests();
+        resetTaskRegistryForTests({ persist: false });
         const startedAt = 1_500;
         const job: CronJob = {
           id: "same-millisecond-job",
@@ -432,7 +432,7 @@ describe("cron task run terminal records", () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-cron-cancelled-task-" },
       async () => {
-        resetTaskRegistryForTests();
+        resetTaskRegistryForTests({ persist: false });
         const startedAt = 2_000;
         const job: CronJob = {
           id: "cancelled-job",
@@ -526,7 +526,7 @@ describe("cron task run terminal records", () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-cron-task-retry-" },
       async () => {
-        resetTaskRegistryForTests();
+        resetTaskRegistryForTests({ persist: false });
         const startedAt = 3_000;
         const job: CronJob = {
           id: "retry-job",
@@ -594,7 +594,7 @@ describe("cron task run terminal records", () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-cron-task-lost-recovery-" },
       async () => {
-        resetTaskRegistryForTests();
+        resetTaskRegistryForTests({ persist: false });
         const startedAt = 4_000;
         const job: CronJob = {
           id: "lost-job",
@@ -687,7 +687,7 @@ describe("cron task run terminal records", () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-cron-provisional-watchdog-timeout-" },
       async () => {
-        resetTaskRegistryForTests();
+        resetTaskRegistryForTests({ persist: false });
         const startedAt = 5_000;
         const job: CronJob = {
           id: "provisional-watchdog-timeout",
@@ -742,7 +742,7 @@ describe("cron task run terminal records", () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-cron-task-timeout-recovery-" },
       async () => {
-        resetTaskRegistryForTests();
+        resetTaskRegistryForTests({ persist: false });
         const startedAt = 5_000;
         const job: CronJob = {
           id: "provisional-timeout-job",
@@ -808,7 +808,7 @@ describe("cron task run terminal records", () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-cron-task-legacy-runid-" },
       async () => {
-        resetTaskRegistryForTests();
+        resetTaskRegistryForTests({ persist: false });
         const startedAt = 7_000;
         const state = createCronServiceState({
           storePath: "/tmp/jobs.json",
@@ -879,7 +879,7 @@ describe("cron task run terminal records", () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-cron-task-store-recovery-" },
       async (fixture) => {
-        resetTaskRegistryForTests();
+        resetTaskRegistryForTests({ persist: false });
         const startedAt = 8_000;
         const job: CronJob = {
           id: "shared-job",

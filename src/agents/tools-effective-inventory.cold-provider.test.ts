@@ -50,6 +50,12 @@ import {
 import { buildBundleMcpToolsFromCatalog } from "./agent-bundle-mcp-tools.js";
 import type { McpToolCatalog } from "./agent-bundle-mcp-types.js";
 import { resolveModelAsync } from "./embedded-agent-runner/model.js";
+import * as modelCatalog from "./model-catalog.js";
+import {
+  encodePluginModelCatalogRelativePath,
+  PLUGIN_MODEL_CATALOG_GENERATED_BY,
+  replacePersistedPluginModelCatalogs,
+} from "./plugin-model-catalog.js";
 import {
   acquireReadOnlyPreparedModelRuntime,
   markPreparedModelRuntimeSnapshotsStale,
@@ -71,7 +77,7 @@ vi.mock("./agent-tools.js", () => {
     throw new Error("Inventory must not execute tools");
   };
   return {
-    createOpenClawCodingTools: () =>
+    createOpenClawCodingToolsInternal: () =>
       [
         {
           name: "healthy_tool",
@@ -96,6 +102,7 @@ const pluginId = "cold-inventory-plugin";
 const pinnedId = "chat-2026-08-17-pinned";
 const curatedId = "chat-latest";
 const throwingId = "chat-throws";
+const persistedId = "Persisted-Session-Model";
 
 function ownerCount() {
   // Reuse the existing owner API without importing the harness that mocks preparation.
@@ -261,7 +268,7 @@ module.exports = {
         const owners = globalThis[Symbol.for("openclaw.preparedModelRuntimeTestApi")]
           .getPreparedModelRuntimeOwnerCountForTest();
         fs.appendFileSync(${JSON.stringify(normalizationTrace)}, JSON.stringify({
-          owners, workspaceDir: ctx.workspaceDir, tools: ctx.tools.map(tool => tool.name),
+          owners, workspaceDir: ctx.workspaceDir, tools: ctx.tools.map(tool => tool.name), modelId: ctx.model.id,
         }) + "\\n");
         if (fs.existsSync(${JSON.stringify(normalizationFailure)})) {
           throw new Error("Synthetic inventory normalization failed");
@@ -343,6 +350,28 @@ module.exports = {
   };
 }
 
+function selectPersistedModel(fixture: ReturnType<typeof createFixture>) {
+  fixture.config.agents = {
+    defaults: { model: { primary: "other/configured" }, workspace: fixture.input.workspaceDir },
+  };
+  fixture.inventoryParams.modelId = persistedId;
+  replacePersistedPluginModelCatalogs({
+    agentDir: fixture.input.agentDir,
+    pluginCatalogWrites: {
+      [encodePluginModelCatalogRelativePath(pluginId)]: JSON.stringify({
+        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+        providers: {
+          [provider]: {
+            api: "openai-completions",
+            baseUrl: "https://inventory.invalid/v1",
+            models: [{ id: persistedId, name: "Persisted session model" }],
+          },
+        },
+      }),
+    },
+  });
+}
+
 function pickerIds(fixture: ReturnType<typeof createFixture>) {
   const snapshot = resolvePluginMetadataSnapshot({
     config: fixture.config,
@@ -371,7 +400,7 @@ async function createInventoryInvocation(
           sessionId: "cold-inventory-session",
           updatedAt: 1,
           providerOverride: provider,
-          modelOverride: pinnedId,
+          modelOverride: fixture.inventoryParams.modelId,
           modelOverrideSource: "user",
         },
       },
@@ -432,12 +461,12 @@ describe("cold dynamic-model effective inventory", () => {
             closing = closePreparedModelRuntimeSnapshots();
             expect(fixture.connections[1]!.database.isOpen).toBe(true);
           } else {
-            lease.release();
+            await lease[Symbol.asyncDispose]();
           }
           expect(current?.()).toBe(false);
           expect(signal?.aborted).toBe(true);
           expect(donorCurrent?.()).toBe(true);
-          lease.release();
+          await lease[Symbol.asyncDispose]();
           await closing;
           await expect.poll(() => fixture.connections[1]!.disposals).toBe(1);
           expect(fixture.connections[0]!.disposals).toBe(0);
@@ -445,7 +474,7 @@ describe("cold dynamic-model effective inventory", () => {
             value: 42,
           });
         } finally {
-          lease.release();
+          await lease[Symbol.asyncDispose]();
           await closing;
         }
       });
@@ -487,7 +516,7 @@ describe("cold dynamic-model effective inventory", () => {
         const providers = resolve();
         expect(providers).toHaveLength(1);
         expect(providers[0]!.isCacheTtlEligible?.({ provider, modelId: pinnedId })).toBe(true);
-        lease.release();
+        await lease[Symbol.asyncDispose]();
         await closePreparedModelRuntimeSnapshots();
         expect(fixture.connections[1]!.database.isOpen).toBe(true);
         expect(fixture.connections[1]!.disposals).toBe(0);
@@ -499,7 +528,7 @@ describe("cold dynamic-model effective inventory", () => {
         expect(fixture.connections[1]!.disposals).toBe(1);
         expect(fixture.connections[0]!.database.isOpen).toBe(true);
       } finally {
-        lease.release();
+        await lease[Symbol.asyncDispose]();
         await host.close();
       }
     });
@@ -519,7 +548,7 @@ describe("cold dynamic-model effective inventory", () => {
         expect(fixture.connections).toEqual([]);
         expect(isColdPluginRuntimeLoaded(fixture.selected)).toBe(false);
       } finally {
-        lease.release();
+        await lease[Symbol.asyncDispose]();
       }
     });
   });
@@ -538,7 +567,7 @@ describe("cold dynamic-model effective inventory", () => {
       try {
         expect(fixture.connections).toHaveLength(1);
         const connection = fixture.connections[0]!;
-        first.release();
+        await first[Symbol.asyncDispose]();
         expect(connection.disposals).toBe(0);
         const resolved = await resolveModelAsync(
           provider,
@@ -554,15 +583,15 @@ describe("cold dynamic-model effective inventory", () => {
         );
         expect(resolved.model?.id).toBe(pinnedId);
         expect(connection.database.isOpen).toBe(true);
-        second.release();
+        await second[Symbol.asyncDispose]();
         await expect.poll(() => connection.disposals).toBe(1);
         expect(connection.database.isOpen).toBe(false);
-        first.release();
-        second.release();
+        await first[Symbol.asyncDispose]();
+        await second[Symbol.asyncDispose]();
         expect(connection.disposals).toBe(1);
       } finally {
-        first.release();
-        second.release();
+        await first[Symbol.asyncDispose]();
+        await second[Symbol.asyncDispose]();
       }
     });
   });
@@ -619,19 +648,19 @@ describe("cold dynamic-model effective inventory", () => {
         await expect.poll(() => original.disposals).toBe(1);
         expect(fixture.connections[2]!.database.isOpen).toBe(true);
         expect(fixture.connections[2]!.disposals).toBe(0);
-        replacement.release();
+        await replacement[Symbol.asyncDispose]();
         await expect.poll(() => fixture.connections[2]!.disposals).toBe(1);
         expect(rootConnection.disposals).toBe(0);
         expect(rootConnection.database.isOpen).toBe(true);
       } finally {
         gate.resume.resolve();
-        replacement?.release();
+        await replacement?.[Symbol.asyncDispose]();
         await pendingReplacement?.then(
-          (lease) => lease.release(),
+          (lease) => lease[Symbol.asyncDispose](),
           () => undefined,
         );
         await first.then(
-          (lease) => lease.release(),
+          (lease) => lease[Symbol.asyncDispose](),
           () => undefined,
         );
       }
@@ -666,12 +695,12 @@ describe("cold dynamic-model effective inventory", () => {
         await expect(acquireReadOnlyPreparedModelRuntime(fixture.input)).rejects.toThrow(
           "process lifetime closed",
         );
-        lease.release();
+        await lease[Symbol.asyncDispose]();
         await closing;
         expect(fixture.connections[0]!.disposals).toBe(1);
         expect(fixture.connections[0]!.database.isOpen).toBe(false);
       } finally {
-        lease.release();
+        await lease[Symbol.asyncDispose]();
         await closing;
       }
     });
@@ -696,51 +725,64 @@ describe("cold dynamic-model effective inventory", () => {
         closing = closePreparedModelRuntimeSnapshots().then(() => {
           closed = true;
         });
-        original.release();
+        await original[Symbol.asyncDispose]();
         await expect.poll(() => fixture.connections[0]!.disposals).toBe(1);
         expect(closed).toBe(false);
         expect(fixture.connections[1]!.database.isOpen).toBe(true);
-        successor.release();
+        await successor[Symbol.asyncDispose]();
         await closing;
         expect(fixture.connections.map(({ disposals }) => disposals)).toEqual([1, 1]);
         expect(fixture.connections.every(({ database }) => !database.isOpen)).toBe(true);
       } finally {
-        original.release();
-        successor?.release();
+        await original[Symbol.asyncDispose]();
+        await successor?.[Symbol.asyncDispose]();
         await closing;
       }
     });
   });
 
-  it("includes provider-supported tools through the default Gateway inventory path", async () => {
-    await withColdFixture(async (fixture) => {
-      expect(pickerIds(fixture)).toEqual([curatedId]);
-      expect(isColdPluginRuntimeLoaded(fixture.selected)).toBe(false);
-      const { respond, invoke } = await createInventoryInvocation(fixture);
-      await invoke();
-      expect(respond).toHaveBeenCalledExactlyOnceWith(true, expect.any(Object), undefined);
-      const inventory = respond.mock.calls[0]?.[1] as EffectiveToolInventoryResult;
-      expect({
-        tools: inventory.groups.flatMap((group) => group.tools.map((tool) => tool.id)),
-        notices: inventory.notices,
-      }).toEqual({
-        tools: ["healthy_tool", "parameterless_tool"],
-        notices: undefined,
+  it.each(["configured", "persisted"] as const)(
+    "includes provider-supported tools without full catalog preparation (%s)",
+    async (source) => {
+      await withColdFixture(async (fixture) => {
+        if (source === "persisted") {
+          selectPersistedModel(fixture);
+        }
+        expect(pickerIds(fixture)).toEqual([curatedId]);
+        expect(isColdPluginRuntimeLoaded(fixture.selected)).toBe(false);
+        const { respond, invoke } = await createInventoryInvocation(fixture);
+        const fullCatalog = vi.spyOn(modelCatalog, "buildPreparedModelCatalogSnapshot");
+        try {
+          await invoke();
+          expect(respond).toHaveBeenCalledExactlyOnceWith(true, expect.any(Object), undefined);
+          const inventory = respond.mock.calls[0]?.[1] as EffectiveToolInventoryResult;
+          expect({
+            tools: inventory.groups.flatMap((group) => group.tools.map((tool) => tool.id)),
+            notices: inventory.notices,
+          }).toEqual({
+            tools: ["healthy_tool", "parameterless_tool"],
+            notices: undefined,
+          });
+          expect(isColdPluginRuntimeLoaded(fixture.selected)).toBe(true);
+          expect(fixture.config.agents?.defaults?.model).toEqual({
+            primary: source === "persisted" ? "other/configured" : `${provider}/${pinnedId}`,
+          });
+          expect(pickerIds(fixture)).toEqual([curatedId]);
+          expect(fixture.readNormalizations()).toEqual([
+            {
+              owners: 1,
+              workspaceDir: fixture.input.workspaceDir,
+              tools: ["healthy_tool", "parameterless_tool"],
+              modelId: fixture.inventoryParams.modelId,
+            },
+          ]);
+          expect(fullCatalog).not.toHaveBeenCalled();
+        } finally {
+          fullCatalog.mockRestore();
+        }
       });
-      expect(isColdPluginRuntimeLoaded(fixture.selected)).toBe(true);
-      expect(fixture.config.agents?.defaults?.model).toEqual({
-        primary: `${provider}/${pinnedId}`,
-      });
-      expect(pickerIds(fixture)).toEqual([curatedId]);
-      expect(fixture.readNormalizations()).toEqual([
-        {
-          owners: 1,
-          workspaceDir: fixture.input.workspaceDir,
-          tools: ["healthy_tool", "parameterless_tool"],
-        },
-      ]);
-    });
-  });
+    },
+  );
 
   it.each([false, true])(
     "owns base and warm MCP normalization without retaining cached models (sandbox: %s)",
@@ -863,54 +905,64 @@ describe("cold dynamic-model effective inventory", () => {
           expect(isColdPluginRuntimeLoaded(fixture.selected)).toBe(true);
           expect(pickerIds(fixture)).toEqual([curatedId]);
         } finally {
-          lease.release();
+          await lease[Symbol.asyncDispose]();
         }
         expect(ownerCount()).toBe(1);
       } finally {
-        catalogLease.release();
+        await catalogLease[Symbol.asyncDispose]();
       }
     });
   });
 
-  it.each([
-    { policy: "global disable", plugins: { enabled: false } },
-    { policy: "entry disable", plugins: { entries: { [pluginId]: { enabled: false } } } },
-    { policy: "deny", plugins: { deny: [pluginId] } },
-    { policy: "restrictive allow omission", plugins: { allow: ["unrelated-inventory-plugin"] } },
-  ])("honors $policy despite an ambient competing provider", async ({ plugins }) => {
-    await withColdFixture(async (fixture) => {
-      const config: OpenClawConfig = {
-        ...fixture.config,
-        plugins: { ...fixture.config.plugins, ...plugins },
-      };
-      const ambientHook = vi.fn(() => {
-        throw new Error("Ambient provider must not resolve the model");
-      });
-      const registry = createEmptyPluginRegistry();
-      registry.providers.push({
-        pluginId: "ambient-provider",
-        source: "test",
-        provider: {
-          id: provider,
-          label: "Ambient provider",
-          auth: [],
-          prepareDynamicModel: ambientHook,
-          resolveDynamicModel: ambientHook,
-        },
-      });
-      await withPluginRuntimeRegistryScope(registry, async () => {
-        expect(resolveProviderRuntimePlugin({ provider, config })).toBeUndefined();
-        const acquired = await acquireEffectiveToolInventoryRuntimeModelContext({
-          ...fixture.inventoryParams,
-          cfg: config,
+  it.each(
+    [
+      { policy: "global disable", plugins: { enabled: false } },
+      { policy: "entry disable", plugins: { entries: { [pluginId]: { enabled: false } } } },
+      { policy: "deny", plugins: { deny: [pluginId] } },
+      { policy: "restrictive allow omission", plugins: { allow: ["unrelated-inventory-plugin"] } },
+    ].flatMap(({ policy, plugins }) =>
+      (["configured", "persisted"] as const).map((source) => ({ policy, plugins, source })),
+    ),
+  )(
+    "honors $policy despite an ambient competing provider ($source)",
+    async ({ plugins, source }) => {
+      await withColdFixture(async (fixture) => {
+        if (source === "persisted") {
+          selectPersistedModel(fixture);
+        }
+        const config: OpenClawConfig = {
+          ...fixture.config,
+          plugins: { ...fixture.config.plugins, ...plugins },
+        };
+        const ambientHook = vi.fn(() => {
+          throw new Error("Ambient provider must not resolve the model");
         });
-        expect(acquired.run((context) => context)).toEqual({});
-        acquired.release();
+        const registry = createEmptyPluginRegistry();
+        registry.providers.push({
+          pluginId: "ambient-provider",
+          source: "test",
+          provider: {
+            id: provider,
+            label: "Ambient provider",
+            auth: [],
+            prepareDynamicModel: ambientHook,
+            resolveDynamicModel: ambientHook,
+          },
+        });
+        await withPluginRuntimeRegistryScope(registry, async () => {
+          expect(resolveProviderRuntimePlugin({ provider, config })).toBeUndefined();
+          const acquired = await acquireEffectiveToolInventoryRuntimeModelContext({
+            ...fixture.inventoryParams,
+            cfg: config,
+          });
+          expect(acquired.run((context) => context)).toEqual({});
+          await acquired[Symbol.asyncDispose]();
+        });
+        expect(ambientHook).not.toHaveBeenCalled();
+        expect(isColdPluginRuntimeLoaded(fixture.selected)).toBe(false);
       });
-      expect(ambientHook).not.toHaveBeenCalled();
-      expect(isColdPluginRuntimeLoaded(fixture.selected)).toBe(false);
-    });
-  });
+    },
+  );
 
   it.each([
     { modelId: "chat-unknown", throws: false },
@@ -926,7 +978,7 @@ describe("cold dynamic-model effective inventory", () => {
       } else {
         const acquired = await resolution;
         expect(acquired.run((context) => context)).toEqual({});
-        acquired.release();
+        await acquired[Symbol.asyncDispose]();
       }
       expect(isColdPluginRuntimeLoaded(fixture.selected)).toBe(true);
     });

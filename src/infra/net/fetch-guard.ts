@@ -14,6 +14,8 @@ import {
   shouldResolveConfiguredLocalOriginManagedProxyBypass,
   type ConfiguredLocalOriginManagedProxyBypass,
 } from "./configured-local-origin-bypass.js";
+import { captureGuardedFetchRequestAuthority } from "./fetch-request-authority.js";
+import { responseWithAbortSignal } from "./guarded-body-stream.js";
 import { PinnedDispatcherPool, type PinnedDispatcherLease } from "./pinned-dispatcher-pool.js";
 import { shouldUseEnvHttpProxyForUrl } from "./proxy-env.js";
 import { retainSafeHeadersForCrossOriginRedirect as retainSafeRedirectHeaders } from "./redirect-headers.js";
@@ -436,6 +438,7 @@ export async function fetchConfiguredLocalOriginWithSsrFGuard({
 async function fetchWithSsrFGuardInternal(
   params: GuardedFetchInternalOptions,
 ): Promise<GuardedFetchResult> {
+  const assertCurrent = captureGuardedFetchRequestAuthority();
   const globalFetch = globalThis.fetch;
   const defaultFetch: FetchLike | undefined = params.fetchImpl ?? globalFetch;
   if (!defaultFetch) {
@@ -656,9 +659,11 @@ async function fetchWithSsrFGuardInternal(
         void Promise.resolve(beforeRequestResult).catch(() => undefined);
         throw new TypeError("beforeRequest must be synchronous.");
       }
+      assertCurrent?.();
       const captureParams = {
         url: parsedUrl.toString(),
         method: currentInit?.method ?? "GET",
+        signal: process.versions.bun ? (init.signal ?? undefined) : undefined,
         requestHeaders: currentInit?.headers as Headers | Record<string, string> | undefined,
         requestBody:
           (currentInit as (RequestInit & { body?: BodyInit | null }) | undefined)?.body ?? null,
@@ -722,8 +727,15 @@ async function fetchWithSsrFGuardInternal(
         continue;
       }
 
+      // oxlint-disable-next-line no-warning-comments -- removal awaits an upstream Bun runtime fix.
+      // TODO: Remove this wrapper once Bun propagates post-header aborts through
+      // installed Undici response and clone body streams.
+      const returnedResponse =
+        process.versions.bun && !(response instanceof Response)
+          ? responseWithAbortSignal(response, init.signal ?? undefined)
+          : response;
       return {
-        response,
+        response: returnedResponse,
         finalUrl: currentUrl,
         release: async () => finishRequest(releaseDispatcher),
         refreshTimeout: refresh,

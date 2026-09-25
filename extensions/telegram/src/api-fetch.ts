@@ -1,4 +1,3 @@
-// Telegram plugin module implements api fetch behavior.
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";

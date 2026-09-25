@@ -12,6 +12,10 @@ import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
+import {
+  runInDetachedAsyncContext,
+  runOutsideAsyncWorkScope,
+} from "../../shared/async-work-scope.js";
 import { removeCronRunContinuationSessionIfIdle } from "../../tasks/cron-run-continuation-cleanup.js";
 import {
   completeTaskRunByRunId,
@@ -187,17 +191,14 @@ function touchMediaGenerationTaskRunContext(handle: MediaGenerationTaskHandle) {
   });
 }
 
-function createMediaGenerationTaskRun(params: {
-  sessionKey?: string;
-  requesterAgentId?: string;
-  requesterOrigin?: DeliveryContext;
-  prompt: string;
-  providerId?: string;
-  toolName: string;
-  taskKind: string;
-  label: string;
-  queuedProgressSummary: string;
-}): MediaGenerationTaskHandle | null {
+function createMediaGenerationTaskRun(
+  params: CreateMediaGenerationTaskRunParams & {
+    toolName: string;
+    taskKind: string;
+    label: string;
+    queuedProgressSummary: string;
+  },
+): MediaGenerationTaskHandle | null {
   const sessionKey = params.sessionKey?.trim();
   if (!sessionKey) {
     return null;
@@ -253,11 +254,7 @@ function createMediaGenerationTaskRun(params: {
   }
 }
 
-function recordMediaGenerationTaskProgress(params: {
-  handle: MediaGenerationTaskHandle | null;
-  progressSummary: string;
-  eventSummary?: string;
-}) {
+function recordMediaGenerationTaskProgress(params: RecordMediaGenerationTaskProgressParams) {
   if (!params.handle) {
     return;
   }
@@ -313,14 +310,11 @@ async function withMediaGenerationTaskKeepalive<T>(params: {
   }
 }
 
-function completeMediaGenerationTaskRun(params: {
-  handle: MediaGenerationTaskHandle | null;
-  provider: string;
-  model: string;
-  count: number;
-  generatedLabel: string;
-  terminalResult?: RequiredCompletionTerminalResult;
-}) {
+function completeMediaGenerationTaskRun(
+  params: CompleteMediaGenerationTaskRunParams & {
+    generatedLabel: string;
+  },
+) {
   if (!params.handle) {
     return;
   }
@@ -343,11 +337,11 @@ function completeMediaGenerationTaskRun(params: {
   }
 }
 
-function failMediaGenerationTaskRun(params: {
-  handle: MediaGenerationTaskHandle | null;
-  error: unknown;
-  progressSummary: string;
-}) {
+function failMediaGenerationTaskRun(
+  params: FailMediaGenerationTaskRunParams & {
+    progressSummary: string;
+  },
+) {
   if (!params.handle) {
     return;
   }
@@ -375,9 +369,13 @@ export function createDefaultMediaGenerateBackgroundScheduler(params: {
   onCrash: (message: string, meta?: Record<string, unknown>) => void;
 }): MediaGenerateBackgroundScheduler {
   return (work) => {
-    queueMicrotask(() => {
-      void work().catch((error: unknown) => {
-        params.onCrash(`Detached ${params.toolName} job crashed`, { error });
+    runInDetachedAsyncContext(() => {
+      runOutsideAsyncWorkScope(() => {
+        queueMicrotask(() => {
+          void work().catch((error: unknown) => {
+            params.onCrash(`Detached ${params.toolName} job crashed`, { error });
+          });
+        });
       });
     });
   };
@@ -596,9 +594,7 @@ export function createMediaGenerationTaskLifecycle(params: {
       });
     },
 
-    recordTaskProgress(progressParams: RecordMediaGenerationTaskProgressParams) {
-      recordMediaGenerationTaskProgress(progressParams);
-    },
+    recordTaskProgress: recordMediaGenerationTaskProgress,
 
     completeTaskRun(completionParams: CompleteMediaGenerationTaskRunParams) {
       completeMediaGenerationTaskRun({

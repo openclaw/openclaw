@@ -135,18 +135,7 @@ const resolveAllowAlwaysPatternCoverageMock = vi.hoisted(() =>
     patterns: [{ pattern: "/trusted/bin/tool" }],
   })),
 );
-const resolveExecApprovalsFromFileMock = vi.hoisted(() =>
-  vi.fn((): MockExecApprovalsResolved => ({
-    allowlist: [],
-    file: { version: 1, agents: {} },
-    agent: {
-      security: "full",
-      ask: "off",
-      askFallback: "deny",
-      autoAllowSkills: false,
-    },
-  })),
-);
+const resolveExecApprovalsFromFileMock = vi.hoisted(() => vi.fn<() => MockExecApprovalsResolved>());
 const requiresExecApprovalMock = vi.hoisted(() =>
   vi.fn((_raw?: RequiresExecApprovalMockParams) => true),
 );

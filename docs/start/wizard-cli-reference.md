@@ -216,8 +216,10 @@ What you set:
     When a beacon is selected, choose direct WebSocket or an SSH tunnel:
     - **Direct**: connects over `wss://` and prompts to trust the discovered
       TLS fingerprint (trust-on-first-use pinning; only pinned if you accept).
-    - **SSH tunnel**: prints an `ssh -N -L 18789:127.0.0.1:18789 <user>@<host>`
-      command to run first, then connects to the local tunnel endpoint.
+    - **SSH tunnel**: prints an `ssh -N -L 18789:127.0.0.1:<gateway-port> <user>@<host>`
+      command using the resolved Gateway service port, with `-p <ssh-port>` when
+      advertised. Run it first, then connect to the local tunnel endpoint at
+      `ws://127.0.0.1:18789`.
   </Step>
   <Step title="Auth">
     Enter the configured token or password in **Gateway secret**. The Gateway
@@ -260,21 +262,21 @@ on a different release.
     Browser flow; paste `code#state`.
 
     On a fresh setup with no primary model, sets `agents.defaults.model` to
-    `openai/gpt-5.6-sol` through the Codex runtime.
+    `openai/gpt-6-astra` through the Codex runtime.
 
   </Accordion>
   <Accordion title="OpenAI Code subscription (device pairing)">
     Browser pairing flow with a short-lived device code.
 
     On a fresh setup with no primary model, sets `agents.defaults.model` to
-    `openai/gpt-5.6-sol` through the Codex runtime.
+    `openai/gpt-6-astra` through the Codex runtime.
 
   </Accordion>
   <Accordion title="OpenAI API key">
     Uses `OPENAI_API_KEY` if present or prompts for a key, then stores the credential in auth profiles.
 
     On a fresh setup with no primary model, sets `agents.defaults.model` to
-    `openai/gpt-5.6-sol`. The bare direct-API `openai/gpt-5.6` alias remains
+    `openai/gpt-6-astra`. The bare direct-API `openai/gpt-5.6` alias remains
     supported and resolves to the same tier.
 
     Adding or reauthenticating OpenAI preserves an existing explicit primary
@@ -443,7 +445,7 @@ Typical fields in `~/.openclaw/openclaw.json`:
 - `agents.defaults.workspace`
 - `agents.defaults.skipBootstrap` when `--skip-bootstrap` is passed
 - `agents.defaults.model` and provider config when the selected provider needs it
-- `tools.profile` (local onboarding defaults to `"coding"` when unset; existing explicit values are preserved)
+- `tools.profile` (local onboarding selects `"full"` when unset, including on a rerun; explicit profiles and other tool policies are preserved). Full tool selection is not Full Access execution permissions. See [Tool profiles](/gateway/config-tools/tool-policy#tool-profiles).
 - `gateway.*` (mode, bind, auth, tailscale)
 - `session.dmScope` (onboarding preserves explicit values and otherwise leaves it unset, so the `main` default keeps all direct messages across channels in the agent's rolling main session—the personal-agent default. For shared or multi-user inboxes, use `per-channel-peer`; `openclaw security audit` recommends isolation when it detects multi-user DM traffic)
 - `channels.telegram.botToken`, `channels.discord.token`, `channels.matrix.*`, `channels.signal.*`, `channels.imessage.*`

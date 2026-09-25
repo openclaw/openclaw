@@ -1,12 +1,14 @@
 import { expectDefined } from "@openclaw/normalization-core";
 // @vitest-environment node
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
+import { expectObjectFields } from "../../../../src/test-utils/mock-call-assertions.js";
+import { createRequireRecord } from "../../../../test/helpers/record.js";
 import {
   buildFallbackSlashCommands,
   buildSlashCommandsFromEntries,
   findInlineSlashCompletion,
   getRemoteCommandEntries,
+  getSlashCommandDescription,
   getSkillCommandCompletions,
   getSlashCommandCompletions,
   isModelIndependentChatCommand,
@@ -231,10 +233,7 @@ function requireArray(value: unknown, label: string): unknown[] {
 }
 
 function expectRecordFields(value: unknown, label: string, expected: Record<string, unknown>) {
-  const record = requireRecord(value, label);
-  for (const [key, expectedValue] of Object.entries(expected)) {
-    expect(record[key]).toEqual(expectedValue);
-  }
+  expectObjectFields(requireRecord(value, label), expected);
 }
 
 function requireCommandByName(name: string): Record<string, unknown> {
@@ -277,6 +276,31 @@ function slashCommand(
 }
 
 describe("getSlashCommandCompletions", () => {
+  it.each([false, true])(
+    "describes browser exports without workspace arguments (discovered: %s)",
+    (discovered) => {
+      if (discovered) {
+        applyRemoteEntries([
+          {
+            name: "export-session",
+            textAliases: ["/export-session", "/export"],
+            description: "Export current session to an owner-only HTML file in the workspace.",
+            source: "native",
+            scope: "both",
+            acceptsArgs: true,
+            args: [{ name: "path", description: "Output path", type: "string" }],
+          },
+        ]);
+      }
+      for (const alias of ["export", "export-session"]) {
+        const command = expectDefined(getSlashCommandCompletions(alias)[0], "export completion");
+        expect(command.key).toBe("export-session");
+        expect(getSlashCommandDescription(command)).toBe("Download this conversation as Markdown");
+        expect(command.args).toBeUndefined();
+      }
+    },
+  );
+
   it("presents the first-class dashboard command with the dashboard icon", () => {
     const dashboard = SLASH_COMMANDS.find((entry) => entry.name === "dashboard");
 
@@ -648,7 +672,7 @@ describe("parseSlashCommand", () => {
     expectRecordFields(requireCommandByName("safe-name"), "safe-name command", {
       name: "safe-name",
     });
-    expect(SLASH_COMMANDS.find((entry) => entry.name === "prose now")).toBeUndefined();
+    expect(SLASH_COMMANDS.find((entry) => entry.name === "draft now")).toBeUndefined();
     expect(SLASH_COMMANDS.find((entry) => entry.name === "bad:alias")).toBeUndefined();
     expectParsedSlash("/safe-name", { name: "safe-name" }, "");
   });

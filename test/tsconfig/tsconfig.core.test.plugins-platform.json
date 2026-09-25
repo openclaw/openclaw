@@ -6,13 +6,7 @@
   "include": [
     "../../src/plugins/**/*.test.ts",
     "../../src/plugins/**/*.test.tsx",
-    "../../src/security/**/*.test.ts",
-    "../../src/security/**/*.test.tsx",
     "../../src/acp/**/*.test.ts",
-    "../../src/acp/**/*.test.tsx",
-    "../../src/system-agent/**/*.test.ts",
-    "../../src/system-agent/**/*.test.tsx",
-    "../../src/hooks/**/*.test.ts",
-    "../../src/hooks/**/*.test.tsx"
+    "../../src/acp/**/*.test.tsx"
   ]
 }

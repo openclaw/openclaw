@@ -3,10 +3,15 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { ManagedWorktreeRecord } from "../../agents/worktrees/types.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { createWorktreesHandlers } from "./worktrees.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
+});
 
 function worktreeRecord(repoRoot: string): ManagedWorktreeRecord {
   return {

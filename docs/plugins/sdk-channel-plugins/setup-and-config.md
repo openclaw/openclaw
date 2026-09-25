@@ -86,6 +86,64 @@ senders or falling back to the root list. These collection and allowlist rules
 are owner-selected, not universal channel defaults. Keep credentials, transport
 selection, and other channel-specific account concerns in the plugin.
 
+### Stored account-key selection
+
+Import `resolveAccountKey`, `resolveNormalizedAccountEntry`, and
+`ChannelAccountKeyPolicy` from `openclaw/plugin-sdk/account-resolution`.
+Use the selected stored key for writes so an edit preserves the operator's key
+spelling and updates the same entry that readers use.
+
+For registered channel callbacks, use
+`resolveAccountKey(accounts, accountId, undefined, undefined, { channelId })` to consume the selected
+manifest policy from the owning operation or Gateway snapshot. Keep that metadata
+scope active through reads, setup, and deletion. Do not import a second policy
+from the runtime plugin's manifest: another manifest may own the channel policy.
+
+`resolveAccountKey(accounts, accountId, normalizeAccountId?, policy?, options?)` returns a
+stored key or `undefined`:
+
+| Argument               | Meaning                                                                                                                                                                                                                              |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `accounts`             | Authored account map, or `undefined`.                                                                                                                                                                                                |
+| `accountId`            | Requested account id. With a policy, routing normalization runs first and the exact canonical key wins. Without a policy, the exact requested key wins.                                                                              |
+| `normalizeAccountId`   | Optional function applied to the requested id and stored keys when no policy is supplied. Omit both for case-insensitive lookup. A policy selects routing normalization.                                                             |
+| `policy`               | Optional `ChannelAccountKeyPolicy` with `canonicalAliasesRequireOwnField`, the account field that must contain its own nonempty string before a canonical-only alias is eligible. Existing case-insensitive matches remain eligible. |
+| `options.channelId`    | Optional channel whose selected manifest supplies the policy. An explicit `policy` takes precedence. Without a channel or selected policy, the normalizer and case-insensitive behavior stay unchanged.                              |
+| `options.allowMissing` | Return the creation target when no stored key is eligible. Reserved object keys throw before a writer can create an unreadable account.                                                                                              |
+
+The shipped v2026.9.4 SDK does not export `resolveAccountKey`; use these options
+only with a host SDK that supplies this selector and channel context. This does
+not change the behavior of the older entry-returning helpers.
+
+`resolveNormalizedAccountEntry(accounts, accountId, normalizeAccountId, policy?)`
+takes the same arguments, requires the normalizer, and returns the selected entry
+instead of its key. An unmatched or ineligible alias returns `undefined`; normal
+channel inheritance can then apply.
+
+`resolveMergedAccountConfig` takes `channelConfig` (root defaults), `accounts`
+(the authored map), and `accountId`, plus optional `normalizeAccountId`,
+`channelId`, and `accountKeyPolicy`. `channelId` selects the rule from the current
+operation's prepared plugin metadata snapshot, or the published Gateway snapshot.
+`accountKeyPolicy` remains available for callers with an explicitly supplied
+policy. It works without `channelId` or `normalizeAccountId` and takes precedence
+over the snapshot rule. Account-key selection precedes the existing field merge and
+collection inheritance rules.
+
+The setup and config adapter factories accept the same optional `accountKeyPolicy`.
+Registered adapters use the prepared channel policy. The scoped setup,
+account-name, enable, delete, and field-clear helpers
+also accept `accountKeyPolicy`; their `accountId` is the normalized routing ID,
+not a stored spelling. The registered adapters normalize operator input before
+calling these helpers. `clearAccountEntryFields` additionally accepts `channelId`
+to select prepared metadata, or an explicit policy without `channelId`.
+
+Declare the rule in
+[`channelAccountKeyPolicies`](/plugins/manifest/surfaces#channelaccountkeypolicies-reference)
+so generic channel readers and writers receive the same policy. Deletion reruns
+the selector on the proposed remaining map and refuses a deletion that would
+activate a colliding row. Creation with `allowMissing: true` rejects reserved
+object keys instead of writing an account that readers cannot select.
+
 ## Other narrow channel subpaths
 
 For other hot channel paths, prefer the narrow helpers over broader legacy

@@ -31,10 +31,7 @@ describe("minimaxTTS", () => {
   it("caps oversized request timeout before arming abort timers", async () => {
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     fetchWithSsrFGuardMock.mockResolvedValue({
-      response: new Response(
-        JSON.stringify({ data: { audio: Buffer.from("audio").toString("hex") } }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      ),
+      response: Response.json({ data: { audio: Buffer.from("audio").toString("hex") } }),
       release: vi.fn(async () => undefined),
     });
 
@@ -57,13 +54,10 @@ describe("minimaxTTS", () => {
 
   it("throws on base_resp envelope error even when data.audio is present (regression #76904)", async () => {
     fetchWithSsrFGuardMock.mockResolvedValue({
-      response: new Response(
-        JSON.stringify({
-          data: { audio: Buffer.from("placeholder").toString("hex") },
-          base_resp: { status_code: 1002, status_msg: "Quota exceeded" },
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      ),
+      response: Response.json({
+        data: { audio: Buffer.from("placeholder").toString("hex") },
+        base_resp: { status_code: 1002, status_msg: "Quota exceeded" },
+      }),
       release: vi.fn(async () => undefined),
     });
 
@@ -81,12 +75,9 @@ describe("minimaxTTS", () => {
 
   it("throws on base_resp envelope error with empty audio", async () => {
     fetchWithSsrFGuardMock.mockResolvedValue({
-      response: new Response(
-        JSON.stringify({
-          base_resp: { status_code: 1001, status_msg: "Rate limit" },
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      ),
+      response: Response.json({
+        base_resp: { status_code: 1001, status_msg: "Rate limit" },
+      }),
       release: vi.fn(async () => undefined),
     });
 
@@ -104,13 +95,10 @@ describe("minimaxTTS", () => {
 
   it("succeeds when base_resp.status_code is 0", async () => {
     fetchWithSsrFGuardMock.mockResolvedValue({
-      response: new Response(
-        JSON.stringify({
-          data: { audio: Buffer.from("real-audio").toString("hex") },
-          base_resp: { status_code: 0, status_msg: "success" },
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      ),
+      response: Response.json({
+        data: { audio: Buffer.from("real-audio").toString("hex") },
+        base_resp: { status_code: 0, status_msg: "success" },
+      }),
       release: vi.fn(async () => undefined),
     });
 

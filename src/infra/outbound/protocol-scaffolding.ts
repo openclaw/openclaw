@@ -91,16 +91,22 @@ function unwrapPromptDataWrapperLines(text: string): string {
 }
 
 export function stripInternalRuntimeScaffolding(text: string): string {
+  // Removal and whitespace normalization cannot introduce a missing "<".
+  const hasAngleMarker = text.includes("<");
   let stripped = stripInternalRuntimeContext(
-    unwrapPromptDataWrapperLines(stripInlineInternalRuntimeContextBlocks(text))
-      .replace(INTERNAL_RUNTIME_SCAFFOLDING_BLOCK_RE, "")
-      .replace(INTERNAL_RUNTIME_SCAFFOLDING_SELF_CLOSING_RE, "")
-      .replace(INTERNAL_RUNTIME_SCAFFOLDING_TAG_RE, ""),
+    hasAngleMarker
+      ? unwrapPromptDataWrapperLines(stripInlineInternalRuntimeContextBlocks(text))
+          .replace(INTERNAL_RUNTIME_SCAFFOLDING_BLOCK_RE, "")
+          .replace(INTERNAL_RUNTIME_SCAFFOLDING_SELF_CLOSING_RE, "")
+          .replace(INTERNAL_RUNTIME_SCAFFOLDING_TAG_RE, "")
+      : text,
     { preserveSurroundingWhitespace: true },
   );
-  // Global replacement resets lastIndex, including between nested payload fields.
-  for (const pattern of INTERNAL_RUNTIME_MARKER_LINE_PATTERNS) {
-    stripped = stripped.replace(pattern, "");
+  if (hasAngleMarker) {
+    // Global replacement resets lastIndex, including between nested payload fields.
+    for (const pattern of INTERNAL_RUNTIME_MARKER_LINE_PATTERNS) {
+      stripped = stripped.replace(pattern, "");
+    }
   }
   return stripPlainTextToolCallBlocks(stripped, { resolveProtectedRanges: findCodeRegions });
 }

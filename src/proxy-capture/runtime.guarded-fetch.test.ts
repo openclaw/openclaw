@@ -5,7 +5,7 @@ import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
 import { resolveDebugProxySettings } from "./env.js";
 import { finalizeDebugProxyCapture, initializeDebugProxyCapture } from "./runtime.js";
 import { acquireDebugProxyCaptureStore, closeDebugProxyCaptureStore } from "./store.sqlite.js";

@@ -278,11 +278,16 @@ it("renders ordered static participant actors without presence filtering", async
   await vi.waitFor(async () => {
     await facepile.updateComplete;
     expect(
-      [...facepile.querySelectorAll("openclaw-viewer-avatar .viewer-avatar")].map((node) =>
+      [...facepile.querySelectorAll(".viewer-avatar:not(.viewer-avatar--overflow)")].map((node) =>
         node.getAttribute("aria-label"),
       ),
     ).toEqual(["Ada", "Research"]);
   });
+  await vi.waitFor(() =>
+    expect(facepile.querySelector(".identity-avatar__agent-face")).not.toBeNull(),
+  );
+  expect(facepile.querySelectorAll("openclaw-viewer-avatar")).toHaveLength(1);
+  expect(facepile.querySelector("[data-viewer-id]")).toBeNull();
   expect(facepile.querySelector(".viewer-avatar--overflow")?.textContent?.trim()).toBe("+1");
 });
 

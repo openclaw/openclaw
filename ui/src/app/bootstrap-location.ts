@@ -1,76 +1,41 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { RouteLocation } from "@openclaw/uirouter";
-import type { SessionsResolveResult } from "../../../packages/gateway-protocol/src/index.js";
+import type {
+  ModelCatalogTarget,
+  SessionsResolveResult,
+} from "../../../packages/gateway-protocol/src/index.js";
 import type { AgentsListResult } from "../api/types.ts";
-import { pathForRoute } from "../app-route-paths.ts";
-import { routeIdFromPath } from "../app-routes.ts";
+import { pathForRoute, pluginSlugCandidate } from "../app-route-paths.ts";
+import { routeIdFromPath, type ApplicationRouter } from "../app-routes.ts";
 import { pathForSession } from "../app-session-path-builder.ts";
-import type { BoardFace } from "../lib/board/settings.ts";
+import { sessionRefFromPath } from "../app-session-route-paths.ts";
 import { parseCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import {
   buildAgentMainSessionKey,
   isUiGlobalSessionKey,
-  normalizeAgentId,
   parseAgentSessionKey,
   resolveUiConversationIdentity,
   resolveUiConfiguredMainKey,
   resolveUiDefaultAgentId,
 } from "../lib/sessions/session-key.ts";
-import type { ApplicationGateway } from "./context.ts";
+import { resolveChatSnapshotKey } from "../pages/chat/session-snapshot-key.ts";
+import { isDefaultChatLanding } from "../pages/model-setup/first-run.ts";
+import { newSessionLocationFromSearch } from "../pages/new-session/location.ts";
+import type { ApplicationContext, ApplicationGateway } from "./context.ts";
 import { waitForGatewayClient } from "./gateway-readiness.ts";
+import { releasedSessionQuery, resolvePersistedAgentId } from "./released-session-query.ts";
+import { loadGatewaySessionSelection } from "./settings.ts";
 
-type ReleasedSessionQuery = {
-  face: BoardFace;
-  sessionKey: string;
-};
-
-// Saved selection only fills an implicit landing. Agent paths remain explicit,
-// even when first-run setup is eligible to run on that same path.
+// Saved selection only fills an implicit landing. Agent paths and plugin slug
+// candidates remain explicit, even before Gateway hello registers plugin tabs.
 function isPersistedSessionLanding(location: RouteLocation, basePath: string): boolean {
   return (
     !new URLSearchParams(location.search + "&" + location.hash.slice(1)).has("session") &&
+    !pluginSlugCandidate(location.pathname, basePath) &&
     (routeIdFromPath(location.pathname, basePath) === null ||
       /^\/chat\/?$/u.test(location.pathname.slice(basePath.length)))
   );
-}
-
-function resolvePersistedAgentId(
-  selectedAgentId: string | null | undefined,
-  agentsList: AgentsListResult | null,
-): string | null {
-  const selectedId = selectedAgentId?.trim();
-  if (!selectedId || !agentsList) {
-    return null;
-  }
-  const normalizedId = normalizeAgentId(selectedId);
-  return agentsList.agents.some((agent) => normalizeAgentId(agent.id) === normalizedId)
-    ? normalizedId
-    : null;
-}
-
-function releasedSessionQuery(
-  location: RouteLocation,
-  basePath: string,
-): ReleasedSessionQuery | null {
-  const params = new URLSearchParams(location.search);
-  if (!params.has("session")) {
-    return null;
-  }
-  const chatRoot = pathForRoute("chat", basePath);
-  const dashboardRoot = pathForRoute("dashboard", basePath);
-  const pathFace =
-    location.pathname === chatRoot || location.pathname === `${chatRoot}/`
-      ? "chat"
-      : location.pathname === dashboardRoot || location.pathname === `${dashboardRoot}/`
-        ? "dashboard"
-        : null;
-  if (!pathFace) {
-    return null;
-  }
-  return {
-    face: params.get("face") === "dashboard" ? "dashboard" : pathFace,
-    sessionKey: params.get("session")?.trim() ?? "",
-  };
 }
 
 async function normalizeReleasedSessionQueryLocation(params: {
@@ -146,6 +111,50 @@ export function normalizeInitialApplicationLocation(
   const search = new URLSearchParams(location.search);
   new URLSearchParams(options.search).forEach((value, key) => search.set(key, value));
   return { ...location, pathname: options.pathname, search: search.size ? `?${search}` : "" };
+}
+
+export function resolveBootstrapModelCatalogTarget(
+  location: RouteLocation,
+  basePath: string,
+  gatewayUrl: string,
+): ModelCatalogTarget | undefined {
+  if (routeIdFromPath(location.pathname, basePath) === "new-session") {
+    const agentId = newSessionLocationFromSearch(location.search).agentId;
+    return agentId ? { agentId } : {};
+  }
+  const selection = loadGatewaySessionSelection(gatewayUrl);
+  if (routeIdFromPath(location.pathname, basePath) === "model-providers") {
+    return selection.selectedAgentId ? { agentId: selection.selectedAgentId } : {};
+  }
+  const initial = normalizeInitialApplicationLocation(
+    location,
+    basePath,
+    selection.sessionKey,
+    selection.selectedAgentId ?? "",
+  );
+  const target = sessionRefFromPath(initial.pathname, basePath);
+  if (target?.kind === "literal") {
+    return { agentId: target.agentId, sessionKey: target.sessionKey };
+  }
+  if (target?.kind === "main") {
+    return {
+      agentId: target.agentId,
+      sessionKey: buildAgentMainSessionKey({ agentId: target.agentId }),
+    };
+  }
+  if (target?.kind === "short") {
+    return {
+      agentId: target.agentId,
+      shortId: target.shortId,
+      ...(target.slugHint ? { slugHint: target.slugHint } : {}),
+    };
+  }
+  if (isDefaultChatLanding(location, basePath, routeIdFromPath)) {
+    const agentId =
+      parseAgentSessionKey(selection.sessionKey)?.agentId ?? selection.selectedAgentId;
+    return { sessionKey: selection.sessionKey, ...(agentId ? { agentId } : {}) };
+  }
+  return undefined;
 }
 
 export function createInitialApplicationLocationResolver(params: {
@@ -253,4 +262,67 @@ export async function resolveInitialApplicationLocation(params: {
     row?.agentId ?? agentId,
     mainKey,
   );
+}
+
+/** Bind route and selection facts to the connection scheduler before roster hydration subscribes. */
+export function subscribeForegroundChatBootstrap({
+  router,
+  gateway,
+  agents,
+  agentSelection,
+  connectionBootstrap,
+  initialChatRoute,
+  chatSubmissions,
+}: Pick<
+  ApplicationContext,
+  "gateway" | "agents" | "agentSelection" | "connectionBootstrap" | "chatSubmissions"
+> & {
+  router: ApplicationRouter;
+  initialChatRoute: boolean;
+}): () => void {
+  connectionBootstrap.setForegroundRoute(initialChatRoute ? undefined : null);
+  const stopConnection = gateway.subscribe((snapshot) => {
+    connectionBootstrap.synchronize({
+      client: snapshot.client,
+      connected: snapshot.phase === "connected",
+    });
+  });
+  const synchronizeRoute = (state: ReturnType<ApplicationRouter["getState"]>) => {
+    const match = state.pendingMatches[0] ?? state.matches[0];
+    if (!match && state.status === "idle") {
+      return;
+    }
+    const data = asOptionalRecord(match?.data);
+    const key =
+      data?.kind === "session" && typeof data.sessionKey === "string" ? data.sessionKey : null;
+    // Admission previews have no transcript controller and cannot claim its
+    // bootstrap priority. Resume ordinary scheduling until the real pane mounts.
+    connectionBootstrap.setForegroundRoute(
+      match?.routeId !== "chat" || chatSubmissions.creation
+        ? null
+        : match.status === "pending"
+          ? undefined
+          : match.status === "success" && key && !parseCatalogSessionKey(key)
+            ? resolveChatSnapshotKey(
+                {
+                  agentsList: agents.state.agentsList,
+                  hello: gateway.snapshot.hello,
+                  assistantAgentId: agentSelection.state.selectedId,
+                },
+                {
+                  sessionKey: key,
+                  agentId: typeof data?.agentId === "string" ? data.agentId : undefined,
+                },
+              )
+            : null,
+    );
+  };
+  const synchronize = () => synchronizeRoute(router.getState());
+  const stops = [
+    stopConnection,
+    router.subscribe(synchronizeRoute),
+    agentSelection.subscribe(synchronize),
+    chatSubmissions.subscribeCreate(synchronize),
+  ];
+  return () => stops.forEach((stop) => stop());
 }

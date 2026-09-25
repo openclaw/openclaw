@@ -102,18 +102,17 @@ describe("worker placement dispatch", () => {
         os: "os-a",
       });
 
-      expect(harness.environments.create).not.toHaveBeenCalled();
-      expect(harness.environments.createFromProfileSnapshot).toHaveBeenCalledWith(
-        { profileId: REQUEST.profileId, ...inheritedProfile },
-        expect.stringMatching(/^session-dispatch:/u),
-        "beast",
-        REQUEST.executionMode,
-        path.join(root, "workspace"),
-        undefined,
-        "os-a",
+      expect(harness.environments.createWithRequest).toHaveBeenCalledWith({
+        profileId: REQUEST.profileId,
+        idempotencyKey: expect.stringMatching(/^session-dispatch:/u),
+        machineClass: "beast",
+        executionMode: REQUEST.executionMode,
+        projectPath: path.join(root, "workspace"),
+        os: "os-a",
         runSetupScript,
         inheritedProfile,
-      );
+        admittedIntent: inheritedProfile,
+      });
     },
   );
 
@@ -562,7 +561,7 @@ describe("worker placement dispatch", () => {
 
     expect(rejectedHarness.placements.current()).toBeUndefined();
     expect(rejectedHarness.log).toEqual(["barrier", "preflight"]);
-    expect(rejectedHarness.environments.create).not.toHaveBeenCalled();
+    expect(rejectedHarness.environments.createWithRequest).not.toHaveBeenCalled();
 
     const correctedHarness = createTestHarness();
     const active = await correctedHarness.service.dispatch(REQUEST);
@@ -669,7 +668,7 @@ describe("worker placement dispatch", () => {
     harness.markEnvironmentProtocolFeatures(["worker-execution-context-v1"]);
 
     await expect(harness.service.dispatch(REQUEST)).rejects.toThrow(
-      "current execution-context contract",
+      "current worker launch contract",
     );
 
     expect(harness.placements.current()).toMatchObject({ state: "failed" });
@@ -707,7 +706,7 @@ describe("worker placement dispatch", () => {
       "tunnel:attached",
       "placement:adopted",
     ]);
-    expect(harness.environments.create).not.toHaveBeenCalled();
+    expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
     expect(harness.environments.destroy).not.toHaveBeenCalled();
   });
 

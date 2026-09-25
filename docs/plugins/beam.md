@@ -19,8 +19,10 @@ Beam ships with OpenClaw but is disabled by default. When enabled, it registers:
 
 ```bash
 openclaw plugins enable beam
-openclaw gateway restart
 ```
+
+Enablement applies to a running Gateway automatically. If it is offline, start
+it to use Beam. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 Equivalent config:
 
@@ -38,7 +40,6 @@ Disable the plugin when the ingest route is not needed:
 
 ```bash
 openclaw plugins disable beam
-openclaw gateway restart
 ```
 
 ## Authentication
@@ -138,7 +139,9 @@ User turns are attributed to the verified publisher of the current snapshot, usi
 ### Delete
 
 Any operator with `operator.write` can delete a Beam from its sidebar row menu.
-Deletion is permanent and immediate. Re-uploading the same `beamId` recreates the
+After confirmation, the sidebar hides the row while deletion finishes. If deletion
+fails, the row returns and an error appears. Successful deletion is permanent.
+Re-uploading the same `beamId` recreates the
 row, whether through the manual skill or a still-active mirror's next upload.
 Mirrors skip unchanged snapshots, so recreation does not necessarily happen on
 the next poll. Deleting a Beam does not affect continuations already created from it.
@@ -190,7 +193,7 @@ When browsing Claude sessions on paired nodes, update those nodes alongside the 
 
 ## Troubleshooting
 
-**`404 Not Found`** The Beam plugin is disabled, the Gateway has not reloaded it since enablement, or the request is reaching another Gateway.
+**`404 Not Found`** The Beam plugin is disabled, runtime application failed, or the request is reaching another Gateway. Check the enablement result and [inspect the plugin](/plugins/manage-plugins#apply-changes-and-inspect).
 
 **`401 Unauthorized`** The request did not satisfy Gateway HTTP auth. Check the bearer credential or trusted-proxy/Access session.
 

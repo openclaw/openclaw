@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { parseCmdScriptCommandLine } from "../daemon/cmd-argv.js";
+import { splitArgsPreservingQuotes } from "../daemon/arg-split.js";
 import { parseWindowsNetstatListeners } from "./ports-netstat.js";
 import { resolveDiagnosticProcessEnv } from "./process-env.js";
 import {
@@ -103,46 +103,81 @@ function extractWindowsCommandLine(raw: Buffer | string): string | null {
 export function readWindowsProcessArgsSync(
   pid: number,
   timeoutMs = DEFAULT_TIMEOUT_MS,
+  env: NodeJS.ProcessEnv = process.env,
+  deadlineMs?: number,
 ): string[] | null {
-  const result = readWindowsProcessArgsResultSync(pid, timeoutMs);
+  const result = readWindowsProcessArgsResultSync(pid, timeoutMs, env, deadlineMs);
   return result.ok ? result.args : null;
 }
 
 export function readWindowsProcessArgsResultSync(
   pid: number,
   timeoutMs = DEFAULT_TIMEOUT_MS,
+  env: NodeJS.ProcessEnv = process.env,
+  deadlineMs?: number,
 ): WindowsProcessArgsResult {
+  const remainingTimeoutMs = () =>
+    deadlineMs === undefined
+      ? timeoutMs
+      : Math.min(timeoutMs, Math.max(0, Math.ceil(deadlineMs - performance.now())));
+  if (remainingTimeoutMs() <= 0) {
+    return { ok: false, permanent: false };
+  }
+  const powershellPath = getWindowsPowerShellExePath(env, deadlineMs);
+  const powershellTimeoutMs = remainingTimeoutMs();
+  if (powershellTimeoutMs <= 0) {
+    return { ok: false, permanent: false };
+  }
   const powershell = spawnSync(
-    getWindowsPowerShellExePath(),
+    powershellPath,
     [
       "-NoProfile",
       "-Command",
       `(Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}" | Select-Object -ExpandProperty CommandLine)`,
     ],
     {
-      env: resolveDiagnosticProcessEnv(),
+      env: resolveDiagnosticProcessEnv(env),
       encoding: "utf8",
-      timeout: timeoutMs,
+      timeout: powershellTimeoutMs,
       windowsHide: true,
     },
   );
   if (!powershell.error && powershell.status === 0) {
     const command = powershell.stdout.trim();
-    return { ok: true, args: command ? parseCmdScriptCommandLine(command) : null };
+    // Native process argv has already passed through any batch-script escaping.
+    return {
+      ok: true,
+      args: command
+        ? splitArgsPreservingQuotes(command, { escapeMode: "backslash-quote-only" })
+        : null,
+    };
+  }
+  if (remainingTimeoutMs() <= 0) {
+    return { ok: false, permanent: false };
+  }
+  const wmicPath = getWindowsWmicExePath(env, deadlineMs);
+  const wmicTimeoutMs = remainingTimeoutMs();
+  if (wmicTimeoutMs <= 0) {
+    return { ok: false, permanent: false };
   }
   const wmic = spawnSync(
-    getWindowsWmicExePath(),
+    wmicPath,
     ["process", "where", `ProcessId=${pid}`, "get", "CommandLine", "/value"],
     {
-      env: resolveDiagnosticProcessEnv(),
-      timeout: timeoutMs,
+      env: resolveDiagnosticProcessEnv(env),
+      timeout: wmicTimeoutMs,
       windowsHide: true,
       stdio: ["ignore", "pipe", "ignore"],
     },
   );
   if (!wmic.error && wmic.status === 0) {
     const command = extractWindowsCommandLine(wmic.stdout);
-    return { ok: true, args: command ? parseCmdScriptCommandLine(command) : null };
+    return {
+      ok: true,
+      args: command
+        ? splitArgsPreservingQuotes(command, { escapeMode: "backslash-quote-only" })
+        : null,
+    };
   }
   const code = ((wmic.error ?? powershell.error) as NodeJS.ErrnoException | undefined)?.code;
   return { ok: false, permanent: code === "ENOENT" || code === "EACCES" || code === "EPERM" };

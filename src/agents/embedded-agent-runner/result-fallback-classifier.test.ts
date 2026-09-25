@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../failover/user-copy.js";
 import { runWithModelFallback } from "../model-fallback-runner.js";
+import { resolveEmbeddedCyberFailoverConfig } from "./embedded-cyber-failover.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./result-fallback-classifier.js";
 
 const supplementalSpeechPayload = {
@@ -10,6 +11,108 @@ const supplementalSpeechPayload = {
 };
 
 describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
+  it("defaults embedded cyber failover to Daybreak Blue", () => {
+    expect(resolveEmbeddedCyberFailoverConfig(undefined)).toEqual({
+      mode: "auto",
+      model: "openai/gpt-daybreak-blue-latest",
+      cooloffMs: 600_000,
+    });
+  });
+
+  it("accepts an embedded cyber failover override", () => {
+    expect(
+      resolveEmbeddedCyberFailoverConfig({
+        agents: {
+          defaults: {
+            embeddedAgent: {
+              cyberFailover: {
+                mode: "off",
+                model: "openai/gpt-daybreak-red-latest",
+                cooloffMs: 30_000,
+              },
+            },
+          },
+        },
+      }),
+    ).toEqual({
+      mode: "off",
+      model: "openai/gpt-daybreak-red-latest",
+      cooloffMs: 30_000,
+    });
+  });
+
+  const cyberRefusalResult = () => ({
+    payloads: [
+      {
+        isError: true,
+        text: "The provider refused this request (category: cyber). Revise the request and try again.",
+      },
+    ],
+    meta: {
+      durationMs: 1,
+      agentMeta: {
+        sessionId: "session-cyber",
+        provider: "openai",
+        model: "gpt-general",
+        agentHarnessId: "openclaw",
+        providerRefusal: { provider: "openai", category: "cyber" },
+      },
+      error: {
+        kind: "incomplete_turn" as const,
+        message: "provider refusal",
+        fallbackSafe: false,
+      },
+    },
+  });
+
+  it("classifies a replay-safe embedded OpenAI cyber refusal for policy failover", () => {
+    expect(
+      classifyEmbeddedAgentRunResultForModelFallback({
+        provider: "openai",
+        model: "gpt-general",
+        result: cyberRefusalResult(),
+      }),
+    ).toMatchObject({
+      reason: "unknown",
+      code: "OPENAI_CYBER_POLICY_REFUSAL",
+      preserveResultOnExhaustion: true,
+    });
+  });
+
+  it("keeps an explicit misalignment refusal terminal despite a fallback-safe error projection", () => {
+    const result = cyberRefusalResult();
+    result.meta.agentMeta.providerRefusal.category = "misalignment";
+    result.meta.error.fallbackSafe = true;
+    expect(
+      classifyEmbeddedAgentRunResultForModelFallback({
+        provider: "openai",
+        model: "gpt-general",
+        result,
+      }),
+    ).toBeNull();
+  });
+
+  it.each([
+    { label: "another provider", provider: "anthropic", harness: "openclaw", replayInvalid: false },
+    { label: "another harness", provider: "openai", harness: "codex", replayInvalid: false },
+    { label: "replay-unsafe work", provider: "openai", harness: "openclaw", replayInvalid: true },
+  ])(
+    "keeps $label out of embedded cyber policy failover",
+    ({ provider, harness, replayInvalid }) => {
+      const result = cyberRefusalResult();
+      result.meta.agentMeta.provider = provider;
+      result.meta.agentMeta.agentHarnessId = harness;
+      Object.assign(result.meta, replayInvalid ? { replayInvalid: true } : {});
+      expect(
+        classifyEmbeddedAgentRunResultForModelFallback({
+          provider,
+          model: "gpt-general",
+          result,
+        }),
+      ).toBeNull();
+    },
+  );
+
   it("does not fallback when sessions_spawn accepted a child session", () => {
     // Accepted child sessions mean the turn made progress even if the parent did
     // not emit a normal assistant reply.
@@ -355,7 +458,11 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     expect(result).toBeNull();
   });
 
-  it("does not retry non-business transport error payloads", () => {
+  it("treats a provider 500 error payload as a fallback-eligible server_error", () => {
+    // An untyped 500 is a provider-side failure, not a timing one. #143649 already
+    // made `timeout` payloads fallback-eligible, so this payload reached the chain
+    // before, but labelled `timeout`; it now carries `server_error`, which is also
+    // an allowlisted ProviderErrorPayloadFailoverReason.
     const result = classifyEmbeddedAgentRunResultForModelFallback({
       provider: "custom",
       model: "llama-3.1",
@@ -364,6 +471,50 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
           {
             isError: true,
             text: "HTTP 500: internal server error",
+          },
+        ],
+        meta: {
+          durationMs: 42,
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      message: "custom/llama-3.1 ended with a provider error: HTTP 500: internal server error",
+      reason: "server_error",
+      code: "embedded_error_payload",
+      rawError: "HTTP 500: internal server error",
+    });
+  });
+
+  it("classifies generic 'LLM request failed.' payloads as timeout fallback (#138531)", () => {
+    const rawError = "LLM request failed.";
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "custom",
+      model: "llama-3.1",
+      result: {
+        payloads: [{ isError: true, text: rawError }],
+        meta: { durationMs: 42 },
+      },
+    });
+
+    expect(result).toEqual({
+      message: `custom/llama-3.1 ended with a provider error: ${rawError}`,
+      reason: "timeout",
+      code: "embedded_error_payload",
+      rawError,
+    });
+  });
+
+  it("does not retry non-business transport error payloads", () => {
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "custom",
+      model: "llama-3.1",
+      result: {
+        payloads: [
+          {
+            isError: true,
+            text: "connection closed before a response arrived",
           },
         ],
         meta: {

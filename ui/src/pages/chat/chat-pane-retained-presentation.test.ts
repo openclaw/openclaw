@@ -8,12 +8,8 @@ import type { SessionWorkspaceGetResult } from "../../api/types.ts";
 import { chatInputOwnerForContext } from "../../app/chat-input-owner.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { collectGarbageForTest } from "../../test-helpers/garbage-collection.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import {
-  getChatAttachmentDataUrl,
-  registerChatAttachmentPayload,
-  releaseChatAttachmentPayload,
-} from "./attachment-payload-store.ts";
 import { renderComposerFixture } from "./chat-composer.test-support.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
@@ -24,7 +20,6 @@ import {
 } from "./chat-pane-attachment-handoff.ts";
 import { ChatPaneBase } from "./chat-pane-base.ts";
 import {
-  clearPaneSessionHandoffs,
   consumePaneSessionHandoff,
   focusChatComposerFromPrintableKeydown,
   preparePaneSessionHandoff,
@@ -37,6 +32,7 @@ import {
 } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
+import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
 import { resetChatComposerState } from "./components/chat-composer.ts";
 import { openSessionWorkspaceFile } from "./components/chat-session-workspace.ts";
 import { readTaskTranscript, type TaskDetailHost } from "./components/chat-task-detail-state.ts";
@@ -53,12 +49,62 @@ describe("chat pane retained presentation lifecycle", () => {
     vi.unstubAllGlobals();
   });
 
+  it.each(["connection", "pane"] as const)(
+    "releases reply preview objects at the %s retirement boundary",
+    async (boundary) => {
+      class ReplyPreviewMessage {
+        role = "assistant";
+        content = "Previous connection's answer";
+      }
+      let preview: WeakRef<ReplyPreviewMessage> | undefined;
+      let requests = 0;
+      const client = createGatewayBrowserClientFixture({
+        request: async (method) => {
+          if (method !== "chat.message.get") {
+            return {};
+          }
+          requests += 1;
+          const message = new ReplyPreviewMessage();
+          preview = new WeakRef(message);
+          return { ok: true, message };
+        },
+      });
+      const { pane } = createTestChatPane({ client });
+      pane.requestReplyMessage("source-message");
+      await vi.waitFor(() => expect(pane.readReplyMessage("source-message")).toBeDefined());
+
+      pane.resetOlderMessagesViewport();
+      pane.presented = false;
+      pane.presented = true;
+      const retainedControl = new WeakRef({ unowned: true });
+      await collectGarbageForTest();
+      expect(retainedControl.deref()).toBeUndefined();
+      expect(preview!.deref()).toBeDefined();
+      pane.requestReplyMessage("source-message");
+      expect(requests).toBe(1);
+
+      if (boundary === "connection") {
+        pane.applyGatewaySnapshot({ ...pane.context.gateway.snapshot, phase: "stopped" });
+      } else {
+        pane.disconnectedCallback();
+      }
+      const retiredControl = new WeakRef({ unowned: true });
+      await collectGarbageForTest();
+      expect(retiredControl.deref()).toBeUndefined();
+      expect(preview!.deref()).toBeUndefined();
+      expect(pane.readReplyMessage("source-message")).toBeUndefined();
+    },
+  );
+
   it.each([false, true])(
     "restores dormant sidebar tabs for compact=%s without replacing saved task preferences",
     (compact) => {
       vi.stubGlobal("localStorage", createStorageMock());
       const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
-      const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+      const { pane, state } = createTestChatPane({
+        client,
+        sessions: createSessionCapabilityFixture(),
+      });
       const layout = promoteSidebarPanel(
         openSlot(openSlot({ columns: [] }, "workspace"), "companion"),
         "companion",
@@ -95,11 +141,11 @@ describe("chat pane retained presentation lifecycle", () => {
     const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
     const page = createTestChatPane({
       client,
-      sessions: {} as SessionCapability,
+      sessions: createSessionCapabilityFixture(),
     });
     const dock = createTestChatPane({
       client,
-      sessions: {} as SessionCapability,
+      sessions: createSessionCapabilityFixture(),
     });
     const listeners = new Set<(draft: string) => void>();
     page.pane.context.nativeChatDrafts.subscribe = (listener) => {
@@ -160,63 +206,6 @@ describe("chat pane retained presentation lifecycle", () => {
     }
   });
 
-  it("expires abandoned eviction payload ownership", () => {
-    vi.useFakeTimers();
-    const id = "expired-retained-attachment";
-    try {
-      const { pane } = createTestChatPane({
-        client: {} as GatewayBrowserClient,
-        sessions: {} as SessionCapability,
-      });
-      const attachment = registerChatAttachmentPayload({
-        attachment: { id, mimeType: "image/png" },
-        dataUrl: "data:image/png;base64,ZXhwaXJlZA==",
-        file: new File(["expired"], "expired.png", { type: "image/png" }),
-      });
-      preparePaneSessionHandoff(pane.context, "p1", "agent:main:expired", {
-        attachments: [attachment],
-        draft: "",
-        restore: true,
-      });
-
-      vi.advanceTimersByTime(30_000);
-
-      expect(consumePaneSessionHandoff(pane.context, "p1", "agent:main:expired")).toBeNull();
-      expect(getChatAttachmentDataUrl(attachment)).toBeNull();
-    } finally {
-      releaseChatAttachmentPayload(id);
-      vi.useRealTimers();
-    }
-  });
-
-  it("clears every unmounted eviction handoff for a permanently discarded pane", () => {
-    const { pane } = createTestChatPane({
-      client: {} as GatewayBrowserClient,
-      sessions: {} as SessionCapability,
-    });
-    const attachment = registerChatAttachmentPayload({
-      attachment: { id: "permanently-discarded-attachment", mimeType: "image/png" },
-      dataUrl: "data:image/png;base64,ZGlzY2FyZGVk",
-      file: new File(["discarded"], "discarded.png", { type: "image/png" }),
-    });
-    preparePaneSessionHandoff(pane.context, "p1", "agent:main:evicted-a", {
-      attachments: [attachment],
-      draft: "evicted a",
-      restore: true,
-    });
-    preparePaneSessionHandoff(pane.context, "p1", "agent:main:evicted-b", {
-      attachments: [],
-      draft: "evicted b",
-      restore: true,
-    });
-
-    clearPaneSessionHandoffs(pane.context, "p1");
-
-    expect(consumePaneSessionHandoff(pane.context, "p1", "agent:main:evicted-a")).toBeNull();
-    expect(consumePaneSessionHandoff(pane.context, "p1", "agent:main:evicted-b")).toBeNull();
-    expect(getChatAttachmentDataUrl(attachment)).toBeNull();
-  });
-
   it("restores draft attachments and memory fallbacks after LRU eviction", () => {
     const source = createTestChatPane({
       client: {} as GatewayBrowserClient,
@@ -241,7 +230,7 @@ describe("chat pane retained presentation lifecycle", () => {
 
     source.pane.prepareForEviction();
     const owner = source.pane.context.gateway.snapshot.client;
-    preparePaneStagedAttachments(source.pane.context, source.pane.paneId, source.state, owner);
+    preparePaneStagedAttachments(source.pane.context, source.pane.paneId, source.state, owner, 0);
 
     const destination = createTestChatPane({
       client: {} as GatewayBrowserClient,
@@ -474,6 +463,32 @@ describe("chat pane retained presentation lifecycle", () => {
     }
   });
 
+  it.each(["connection", "pane"] as const)(
+    "retires task transcript work without deleting saved selection at the %s boundary",
+    (boundary) => {
+      const { pane, state } = createTestChatPane({ client: createGatewayBrowserClientFixture() });
+      const selected = openSlot(state.sidebarLayout, "tasks");
+      selected.columns
+        .flatMap((column) => column.panels)
+        .find((panel) => panel.slot === "tasks")!.taskId = "task-retired";
+      state.updateSidebarLayout(selected);
+      createBackgroundTasksProps(state, { presented: false });
+      readTaskTranscript(state, { taskId: "task-retired" });
+      expect(state.taskDetailState).toBeDefined();
+      if (boundary === "connection") {
+        pane.applyGatewaySnapshot({ ...pane.context.gateway.snapshot, phase: "stopped" });
+      } else {
+        pane.disconnectedCallback();
+      }
+      expect(
+        state.sidebarLayout.columns
+          .flatMap((column) => column.panels)
+          .find((panel) => panel.slot === "tasks")?.taskId,
+      ).toBe("task-retired");
+      expect(state.taskDetailState).toBeUndefined();
+    },
+  );
+
   it("retires foreground-only state when a retained pane is hidden", () => {
     const { pane, state } = createTestChatPane({
       client: {} as GatewayBrowserClient,
@@ -483,7 +498,13 @@ describe("chat pane retained presentation lifecycle", () => {
     const release = vi.fn();
     state.realtimeTalkSession = { stop } as unknown as ChatPageHost["realtimeTalkSession"];
     state.realtimeTalkActive = true;
-    state.sidebarContent = { kind: "task", taskId: "task-live" };
+    state.sidebarContent = { kind: "markdown", content: "Review selection" };
+    const selected = openSlot(state.sidebarLayout, "tasks");
+    selected.columns
+      .flatMap((column) => column.panels)
+      .find((panel) => panel.slot === "tasks")!.taskId = "task-live";
+    state.updateSidebarLayout(selected);
+    createBackgroundTasksProps(state, { presented: false });
     state.imageLightbox = { release, src: "blob:test", title: "preview" };
     const detailHost = state as unknown as TaskDetailHost;
     readTaskTranscript(detailHost, {
@@ -500,8 +521,12 @@ describe("chat pane retained presentation lifecycle", () => {
     expect(stop).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledOnce();
     expect(state.sidebarContent).toBeNull();
-    // The wiped detail slot can no longer reset the loader itself; retirement
-    // must stop its timer/fetch loop so hidden panes stop reading history.
+    expect(
+      state.sidebarLayout.columns
+        .flatMap((column) => column.panels)
+        .find((panel) => panel.slot === "tasks")?.taskId,
+    ).toBe("task-live");
+    // Retirement must stop the selected task's timer/fetch loop.
     expect(detailHost.taskDetailState).toBeUndefined();
     expect(announcement.getAttribute("aria-live")).toBe("off");
   });
@@ -535,7 +560,7 @@ describe("chat pane retained presentation lifecycle", () => {
       expect(getFile).toHaveBeenCalledExactlyOnceWith(state.sessionKey, "README.md", {
         agentId: "main",
       });
-      expect(isSidebarSlotVisible(state.sidebarLayout, "detail")).toBe(true);
+      expect(isSidebarSlotVisible(state.sidebarLayout, "workspace")).toBe(true);
 
       if (retirement === "hidden") {
         pane.presented = false;
@@ -543,6 +568,8 @@ describe("chat pane retained presentation lifecycle", () => {
         pane.disconnectedCallback();
       }
       expect(state.sidebarContent).toBeNull();
+      expect(state.sessionWorkspaceState?.previews).toEqual([]);
+      expect(state.sessionWorkspaceState?.activePreviewId).toBeNull();
       file.resolve({
         sessionKey: state.sessionKey,
         file: {
@@ -556,6 +583,8 @@ describe("chat pane retained presentation lifecycle", () => {
       await file.promise;
 
       expect(state.sidebarContent).toBeNull();
+      expect(state.sessionWorkspaceState?.previews).toEqual([]);
+      expect(state.sessionWorkspaceState?.activePreviewId).toBeNull();
     },
   );
 

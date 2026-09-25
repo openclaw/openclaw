@@ -27,10 +27,23 @@ export type QueueConfig = DefinedSchemaInput<typeof QueueSchema>;
 export type InboundDebounceConfig = DefinedSchemaInput<typeof InboundDebounceSchema>;
 export type InboundDebounceByProvider = NonNullable<InboundDebounceConfig["byChannel"]>;
 
+export type BroadcastGroupConfig = Exclude<
+  DefinedSchemaInput<typeof BroadcastSchema>[string],
+  string[]
+>;
+
+export type BroadcastEntry = string[] | BroadcastGroupConfig;
+
 export type BroadcastStrategy = NonNullable<DefinedSchemaInput<typeof BroadcastSchema>["strategy"]>;
 export type BroadcastConfig = {
   strategy?: BroadcastStrategy;
-  [peerId: string]: string[] | BroadcastStrategy | undefined;
+  /**
+   * Map channel-qualified peer IDs to participant arrays or bounded group options.
+   * Unqualified WhatsApp peer arrays retain single-pass behavior.
+   *
+   * Note: the index signature includes `undefined` so `strategy?: ...` remains type-safe.
+   */
+  [peerId: string]: BroadcastEntry | BroadcastStrategy | undefined;
 };
 
 type MessagesSchemaInput = DefinedSchemaInput<typeof MessagesSchema>;

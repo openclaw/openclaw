@@ -49,6 +49,17 @@ forward directory-scan errors through the same error event. Use the result in
 the watcher lifecycle owner to stop native retries and select an existing
 refresh path.
 
+### Streaming file verification
+
+`sha256File(pathOrHandle, { maxBytes, signal })` from
+`openclaw/plugin-sdk/file-access-runtime` returns `{ bytes, digest }` without
+loading the whole file into memory. It reads through EOF and rejects files
+that grow beyond the byte limit. A borrowed handle stays open at its original
+offset; the caller owns admission and close. Path inputs reject final symlinks
+and close their owned handle. Cancellation settles pending work before rejecting.
+The optional native helper hashes off the JavaScript event loop; the fallback
+uses bounded buffers. Neither route provides a snapshot of concurrent writes.
+
 ### SQLite write admission
 
 `runSqliteImmediateTransaction(db, prepare, options?)` from
@@ -69,6 +80,80 @@ total deadline for preparation or transaction execution. `options` supplies the
 same transaction diagnostics as `runSqliteImmediateTransactionSync`. Keep the
 database handle and its owning operation alive until the returned promise settles.
 The callback and SQLite calls still run synchronously on the caller's thread.
+
+For a repeated fixed query, `prepareSqliteQuerySync(db, build)` compiles its
+Kysely shape once and binds fresh parameters on each call. It uses the normal
+synchronous executor and the connection's bounded statement cache when enabled.
+Keep the prepared function with its database owner and discard it when closing
+the connection; transaction callbacks must remain synchronous.
+
+### Worker task admission
+
+`WorkerTaskPool` from `openclaw/plugin-sdk/process-runtime` supports reusable
+computation workers for bundled and separately published official plugins.
+Inside those workers, import `serveWorkerTasks` and the
+`WorkerTaskControl` type from `openclaw/plugin-sdk/worker-task-server` to avoid
+loading the host process and pool runtime. Both paths use the same task protocol.
+
+The older serving exports in `process-runtime` remain for released official
+plugins. Bundled workers use `worker-task-server`; remove the older exports only
+after supported official plugin versions have migrated to hosts with this subpath.
+
+Each pool defaults to 128 outstanding tasks and 256 MiB of reported input bytes,
+including queued, preparing, and running tasks. Set `maxPendingTasks` and
+`maxPendingBytes` when constructing a pool to choose different positive limits.
+Report known retained input with `run(input, { inputBytes })`, including buffers
+captured by an input factory. Omitted `inputBytes` counts as zero; this accounting
+does not measure serialized payload size, decoded data, results, or worker heaps.
+
+Capacity exhaustion rejects `run()` with `WorkerTaskError.code = "overloaded"`
+before preparing or executing that input. Accepted work remains ordered within
+a single-worker pool. Report the rejected operation as unsuccessful; do not
+substitute an empty result or bypass the limit with synchronous execution.
+After accepted work settles, the same pool accepts new work again. A caller may
+retry a rejected operation after pressure drains and its original authority and
+deadline are revalidated; the pool does not retry it automatically.
+
+For stateless computation, `sharedCompute: true` also shares an aggregate
+128-task/256-MiB admission budget and CPU execution capacity with participating
+pools in the same isolate. Dedicated ordered pools retain their own execution
+capacity and still enforce their individual admission limits.
+
+Pass static Node.js Worker settings in `workerOptions`. For per-worker settings,
+`prepareWorker()` runs once per Worker creation attempt and returns
+`{ options, temporaryDirectory? }`. Its `options` shallowly override
+`workerOptions`: properties such as `env`, `workerData`, and `resourceLimits`
+replace the whole static property rather than merging nested values.
+
+A returned `temporaryDirectory` transfers a newly allocated disposable directory
+to the pool. Preparation owns cleanup if it fails before returning. The pool
+removes the directory only after that Worker exits, including startup failure or
+cancellation, and reports deletion failures without replacing the task outcome.
+Worker exit releases execution capacity; `close()` also waits for pending file
+cleanup. Keep persistent data and files borrowed outside the Worker out of this
+directory.
+
+When native termination fails, the pool retains that worker's input custody and
+capacity. `retryFailedRetirements()` retries only those failed retirements and
+joins native exit and pending file cleanup without interrupting healthy tasks or
+waiting for them to finish. It does not replay failed work or close the pool.
+An owner that is shutting down must stop new admissions, drain healthy tasks,
+and finish with `close()`.
+
+`serveWorkerTasks` supplies a third handler argument, `WorkerTaskControl`. Await
+`control.runNativeSection(() => nativeOperation())` around each bounded native
+operation that must finish before its worker can be terminated. The fence also
+awaits a returned promise, for native libraries with asynchronous entrypoints.
+Keep unrelated work and rendering outside the fence; do not fence an entire
+document or a host request. Call `control.throwIfCancelled()` between pages or
+other units of work so cancellation cannot start another native operation.
+
+Cancellation, deadlines, pool closure, and worker retirement close native-section
+admission atomically. An unfenced worker is terminated immediately; a fenced
+worker remains charged against admission and execution capacity until its current
+native operation finishes and the worker exits. A deadline requests cancellation;
+it cannot safely interrupt a stuck native call. Native sections must therefore
+have bounded inputs and must not wait for network, user input, or unbounded work.
 
 ### SQLite worker stores
 
@@ -96,6 +181,24 @@ Declare private build entries with
 [`openclaw.build.workerEntries`](/plugins/dependency-resolution#native-imports-from-a-standalone-source-build)
 and derive their locations from the loader's `api.runtimeSource` fact.
 
+Pass `existingOnly: true` when acquisition must preserve a missing database.
+The call returns `undefined` without starting a worker or invoking a factory
+when the file is absent and no active actor retains that path. A cold existing
+open requires the module's explicit
+`openExistingSqliteWorkerBackend(input, { databasePath })` export. The host
+never substitutes the ordinary creation factory. The existing factory must
+use SQLite's native read-only or existing-file opening mode and validate the
+current schema without creating or migrating it. A filesystem existence check
+followed by ordinary create-if-missing opening does not satisfy this contract.
+
+The host checks physical identity before dispatching the existing factory and
+again before returning the store. Disappearance or replacement after admission
+rejects acquisition. Existing-only and ordinary clients share the same physical
+actor when their module and initialization input match; changing open intent
+does not rerun a factory or create another connection. Domain commands still
+own write permission and any later schema initialization. Existing-only
+acquisition provides no read-only capability for subsequent commands.
+
 Abort signals remove operations that are still queued. Once dispatched, an
 operation retains its result or failure; cancellation does not prove rollback.
 `close()` rejects new work and drains that client's accepted operations. The
@@ -110,11 +213,29 @@ and joins that worker before reporting `outcome-unknown`; it does the same when
 a completed reply cannot be decoded. Failed cleanup retains its original error
 while the worker is drained.
 
-The process-wide host starts lazily and permits at most four workers, 64 opening
-or live store clients (including clients sharing a database), 128 outstanding
-operations, and 64 MiB of queued input. Each input message is limited to 32 MiB
-and each result to 64 MiB; capacity exhaustion rejects with
-`code: "overloaded"`. Operations for one database share its connection owner
+The process-wide host starts lazily and uses two to eight shared Node workers
+based on available CPUs. Bun uses up to 64 dedicated workers until its native
+SQLite close fix ships. The host permits 64 opening or live store clients
+(including clients sharing a database), 128 outstanding operations per worker,
+and 256 MiB of queued and retained input across all workers. Count-only overflow
+waits in FIFO order on its worker for up to ten seconds; an independent worker
+keeps its own request capacity. Byte, message, and store limits refuse immediately
+with `code: "overloaded"`. Each input message is limited to 32 MiB. Larger execute
+inputs arrive in 8 MiB chunks; the backend runs once after the complete command is
+validated. Factory initialization input remains a single bounded message.
+
+Commands retaining at most 64 MiB of serialized input can queue, with their full
+byte length charged until settlement. A larger command must start immediately
+on an idle worker with a reserved 32 MiB transport window; otherwise it rejects
+with `overloaded` before dispatch.
+The aggregate budget bounds admitted queue bytes and reserved transport windows,
+not the complete value held by an active oversized command or result. Once
+staging starts, the existing post-dispatch cancellation and drainage rules apply.
+
+Results up to 64 MiB use an inline reply; larger results transfer their complete serialized value
+in bounded 8 MiB chunks. Callers still materialize the complete result in memory,
+and the original operation remains owned through transfer validation and cleanup.
+Operations for one database share its connection owner
 and execute in order. There are no reader replicas or worker-pool configuration
 options.
 
@@ -125,6 +246,16 @@ checks cannot protect against an uncoordinated filesystem replacement.
 Each client retains its admitted lexical and canonical pathnames through
 drainage and close. The backend's opening paths remain pinned for its native
 lifetime; released secondary aliases do not accumulate while other clients live.
+
+### Computation worker entrypoints
+
+For a plugin-owned worker, pass `package: { name, distWorkerPath }` to
+`resolveRuntimeWorkerUrl` from the same SDK subpath. Use the plugin's
+`package.json` name and a worker path relative to its `dist` directory. The
+descriptor then supports bundled and standalone installations, including renamed
+installation directories. Declare the worker's source entry in
+[`openclaw.build.workerEntries`](/plugins/dependency-resolution#native-imports-from-a-standalone-source-build)
+so package builds emit it.
 
 ### Webhook body rejection
 
@@ -157,6 +288,18 @@ requests apply input backpressure until earlier responses finish; finite pipelin
 drain in order. Use separate connections for concurrent requests. Keep the release hook returned by
 `beginWebhookRequestPipelineOrReject` in `finally`; it retains any selected
 rejection cleanup before releasing the in-flight slot.
+
+Channel webhook listeners that own their `createServer` admission serialize each
+connection with `runHttpConnectionRequest(req, run, res?)` from
+`openclaw/plugin-sdk/webhook-request-guards`. Pass the `ServerResponse` as the
+third argument: the shared owner waits for response completion (`finish` or
+`close`) before admitting the connection's next request, so a close-aware
+rejection — whose cleanup may destroy the socket within one second — can never
+overtake an earlier queued acknowledgement. Omitting the response argument
+releases the next request before the current response finishes and loses that
+guarantee; omit it only for dispatch that writes no response on the shared
+connection. Already admitted work always finishes; queued work is never
+dispatched after closure, and a closing connection cannot admit later requests.
 
 ### Post-ack webhook work
 

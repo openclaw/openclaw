@@ -2,14 +2,14 @@
  * Repairs malformed tool-call arguments in embedded-agent stream results.
  */
 import { extractBalancedJsonPrefix } from "@openclaw/normalization-core";
-import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
+import { safeParseJson, safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
+import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeProviderId } from "../../model-selection.js";
 import type { StreamFn } from "../../runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "../../stream-compat.js";
 import { log } from "../logger.js";
-import { createHtmlEntityToolCallArgumentDecodingWrapper } from "../tool-call-argument-decoding.js";
-import { isRunnerToolCallBlockType } from "./attempt-tool-call-block-type.js";
-import { wrapStreamObjectEvents } from "./stream-wrapper.js";
+import { isRunnerToolCallBlock } from "./attempt-tool-call-block-type.js";
+import { mapAssistantMessageStream, wrapStreamObjectEvents } from "./stream-wrapper.js";
 
 const MAX_TOOLCALL_REPAIR_BUFFER_CHARS = 64_000;
 const MAX_TOOLCALL_REPAIR_LEADING_CHARS = 96;
@@ -176,12 +176,8 @@ function readAsciiQuotedString(
   if (endIndex < 0) {
     return undefined;
   }
-  try {
-    const parsed = JSON.parse(raw.slice(startIndex, endIndex + 1)) as unknown;
-    return typeof parsed === "string" ? { value: parsed, endIndex: endIndex + 1 } : undefined;
-  } catch {
-    return undefined;
-  }
+  const parsed = safeParseJson(raw.slice(startIndex, endIndex + 1));
+  return typeof parsed === "string" ? { value: parsed, endIndex: endIndex + 1 } : undefined;
 }
 
 function readSmartQuotedObjectKey(
@@ -233,22 +229,6 @@ function extractToolNameFromLeadingPrefix(prefix: string): string | undefined {
   return match?.[1] ? normalizeToolCallRepairToolName(match[1]) : undefined;
 }
 
-function isToolSpecificValueSuccessor(params: {
-  toolName?: string;
-  valueKey: string;
-  nextKey: string;
-}): boolean {
-  const toolName = params.toolName;
-  if (!toolName) {
-    return false;
-  }
-  return (
-    TOOLCALL_REPAIR_TOOL_VALUE_SUCCESSOR_KEYS.get(toolName)
-      ?.get(params.valueKey)
-      ?.includes(params.nextKey) ?? false
-  );
-}
-
 function shouldCloseSmartQuotedValueAt(
   raw: string,
   quoteIndex: number,
@@ -271,7 +251,10 @@ function shouldCloseSmartQuotedValueAt(
   if (!TOOLCALL_REPAIR_FREEFORM_VALUE_KEYS.has(valueKey)) {
     return (
       TOOLCALL_REPAIR_KNOWN_ARG_KEYS.has(nextKey) ||
-      isToolSpecificValueSuccessor({ toolName, valueKey, nextKey })
+      (TOOLCALL_REPAIR_TOOL_VALUE_SUCCESSOR_KEYS.get(toolName ?? "")
+        ?.get(valueKey)
+        ?.includes(nextKey) ??
+        false)
     );
   }
   return TOOLCALL_REPAIR_FREEFORM_SUCCESSOR_KEYS[valueKey] === nextKey;
@@ -348,15 +331,8 @@ function parseJsonValuePrefix(
   startIndex: number,
   endIndex: number,
 ): ToolCallRepairJsonValue | undefined {
-  const json = raw.slice(startIndex, endIndex).trim();
-  if (!json) {
-    return undefined;
-  }
-  try {
-    return { value: JSON.parse(json) as unknown, endIndex };
-  } catch {
-    return undefined;
-  }
+  const value = safeParseJson(raw.slice(startIndex, endIndex).trim());
+  return value === undefined ? undefined : { value, endIndex };
 }
 
 function readSmartQuotedEditArray(
@@ -555,204 +531,113 @@ function tryExtractUsableToolCallArguments(
   );
 }
 
-function readToolCallNameInMessage(message: unknown, contentIndex: number): string | undefined {
-  if (!message || typeof message !== "object") {
-    return undefined;
-  }
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content)) {
-    return undefined;
-  }
-  const block = content[contentIndex];
-  if (!block || typeof block !== "object") {
-    return undefined;
-  }
-  const typedBlock = block as { type?: unknown; name?: unknown };
-  if (!isRunnerToolCallBlockType(typedBlock.type) || typeof typedBlock.name !== "string") {
-    return undefined;
-  }
-  return normalizeToolCallRepairToolName(typedBlock.name);
+function readToolCallBlock(message: unknown, contentIndex: number) {
+  const content = asOptionalObjectRecord(message)?.content;
+  const block: unknown = Array.isArray(content) ? content[contentIndex] : undefined;
+  return isRunnerToolCallBlock(block) ? block : undefined;
 }
 
-function repairToolCallArgumentsInMessage(
-  message: unknown,
-  contentIndex: number,
-  repairedArgs: Record<string, unknown>,
-): void {
-  if (!message || typeof message !== "object") {
-    return;
-  }
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content)) {
-    return;
-  }
-  const block = content[contentIndex];
-  if (!block || typeof block !== "object") {
-    return;
-  }
-  const typedBlock = block as { type?: unknown; arguments?: unknown };
-  if (!isRunnerToolCallBlockType(typedBlock.type)) {
-    return;
-  }
-  typedBlock.arguments = repairedArgs;
-}
-
-function hasMeaningfulToolCallArgumentsInMessage(message: unknown, contentIndex: number): boolean {
-  if (!message || typeof message !== "object") {
-    return false;
-  }
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content)) {
-    return false;
-  }
-  const block = content[contentIndex];
-  if (!block || typeof block !== "object") {
-    return false;
-  }
-  const typedBlock = block as { type?: unknown; arguments?: unknown };
-  if (!isRunnerToolCallBlockType(typedBlock.type)) {
-    return false;
-  }
-  return (
-    typedBlock.arguments !== null &&
-    typeof typedBlock.arguments === "object" &&
-    !Array.isArray(typedBlock.arguments) &&
-    Object.keys(typedBlock.arguments as Record<string, unknown>).length > 0
-  );
-}
-
-function clearToolCallArgumentsInMessage(message: unknown, contentIndex: number): void {
-  if (!message || typeof message !== "object") {
-    return;
-  }
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content)) {
-    return;
-  }
-  const block = content[contentIndex];
-  if (!block || typeof block !== "object") {
-    return;
-  }
-  const typedBlock = block as { type?: unknown; arguments?: unknown };
-  if (!isRunnerToolCallBlockType(typedBlock.type)) {
-    return;
-  }
-  typedBlock.arguments = {};
-}
-
-function repairMalformedToolCallArgumentsInMessage(
-  message: unknown,
-  repairedArgsByIndex: Map<number, Record<string, unknown>>,
-): void {
-  if (!message || typeof message !== "object") {
-    return;
-  }
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content)) {
-    return;
-  }
-  for (const [index, repairedArgs] of repairedArgsByIndex.entries()) {
-    repairToolCallArgumentsInMessage(message, index, repairedArgs);
-  }
-}
+type ToolCallRepairState = {
+  partialJson: string;
+  repairedArgs?: Record<string, unknown>;
+  hadPreexistingArgs?: boolean;
+  disabled?: boolean;
+  loggedRepair?: boolean;
+};
 
 function wrapStreamRepairMalformedToolCallArguments(
   stream: MutableAssistantMessageEventStream,
 ): MutableAssistantMessageEventStream {
-  const partialJsonByIndex = new Map<number, string>();
-  const repairedArgsByIndex = new Map<number, Record<string, unknown>>();
-  const hadPreexistingArgsByIndex = new Set<number>();
-  const disabledIndices = new Set<number>();
-  const loggedRepairIndices = new Set<number>();
+  const stateByIndex = new Map<number, ToolCallRepairState>();
   const originalResult = stream.result.bind(stream);
   stream.result = async () => {
     const message = await originalResult();
-    repairMalformedToolCallArgumentsInMessage(message, repairedArgsByIndex);
-    partialJsonByIndex.clear();
-    repairedArgsByIndex.clear();
-    hadPreexistingArgsByIndex.clear();
-    disabledIndices.clear();
-    loggedRepairIndices.clear();
+    for (const [index, state] of stateByIndex) {
+      const block = readToolCallBlock(message, index);
+      if (block && state.repairedArgs) {
+        block.arguments = state.repairedArgs;
+      }
+    }
+    stateByIndex.clear();
     return message;
   };
 
   wrapStreamObjectEvents(stream, (event) => {
-    if (
-      typeof event.contentIndex === "number" &&
-      Number.isInteger(event.contentIndex) &&
-      event.type === "toolcall_delta" &&
-      typeof event.delta === "string"
-    ) {
-      if (disabledIndices.has(event.contentIndex)) {
+    const index = event.contentIndex;
+    if (typeof index !== "number" || !Number.isInteger(index)) {
+      return;
+    }
+    if (event.type === "toolcall_delta" && typeof event.delta === "string") {
+      const state: ToolCallRepairState = stateByIndex.get(index) ?? { partialJson: "" };
+      if (state.disabled) {
         return;
       }
-      const nextPartialJson = (partialJsonByIndex.get(event.contentIndex) ?? "") + event.delta;
-      if (nextPartialJson.length > MAX_TOOLCALL_REPAIR_BUFFER_CHARS) {
-        partialJsonByIndex.delete(event.contentIndex);
-        repairedArgsByIndex.delete(event.contentIndex);
-        disabledIndices.add(event.contentIndex);
+      stateByIndex.set(index, state);
+      state.partialJson += event.delta;
+      if (state.partialJson.length > MAX_TOOLCALL_REPAIR_BUFFER_CHARS) {
+        state.partialJson = "";
+        state.repairedArgs = undefined;
+        state.disabled = true;
         return;
       }
-      partialJsonByIndex.set(event.contentIndex, nextPartialJson);
-      const shouldReevaluateRepair =
-        shouldAttemptMalformedToolCallRepair(nextPartialJson, event.delta) ||
-        repairedArgsByIndex.has(event.contentIndex);
-      if (shouldReevaluateRepair) {
-        const hadRepairState = repairedArgsByIndex.has(event.contentIndex);
-        const toolName =
-          readToolCallNameInMessage(event.partial, event.contentIndex) ??
-          readToolCallNameInMessage(event.message, event.contentIndex);
-        const repair = tryExtractUsableToolCallArguments(nextPartialJson, toolName);
-        if (repair) {
-          if (
-            !hadRepairState &&
-            (hasMeaningfulToolCallArgumentsInMessage(event.partial, event.contentIndex) ||
-              hasMeaningfulToolCallArgumentsInMessage(event.message, event.contentIndex))
-          ) {
-            hadPreexistingArgsByIndex.add(event.contentIndex);
-          }
-          repairedArgsByIndex.set(event.contentIndex, repair.args);
-          repairToolCallArgumentsInMessage(event.partial, event.contentIndex, repair.args);
-          repairToolCallArgumentsInMessage(event.message, event.contentIndex, repair.args);
-          if (!loggedRepairIndices.has(event.contentIndex) && repair.kind === "repaired") {
-            loggedRepairIndices.add(event.contentIndex);
-            log.warn(
-              `repairing malformed tool call arguments with ${repair.leadingPrefix.length} leading chars and ${repair.trailingSuffix.length} trailing chars`,
-            );
-          }
-        } else {
-          repairedArgsByIndex.delete(event.contentIndex);
-          // Keep args that were already present on the streamed message, but
-          // clear repair-only state so stale repaired args do not get replayed.
-          const hadPreexistingArgs =
-            hadPreexistingArgsByIndex.has(event.contentIndex) ||
-            (!hadRepairState &&
-              (hasMeaningfulToolCallArgumentsInMessage(event.partial, event.contentIndex) ||
-                hasMeaningfulToolCallArgumentsInMessage(event.message, event.contentIndex)));
-          if (!hadPreexistingArgs) {
-            clearToolCallArgumentsInMessage(event.partial, event.contentIndex);
-            clearToolCallArgumentsInMessage(event.message, event.contentIndex);
+      const hadRepairState = state.repairedArgs !== undefined;
+      if (
+        !shouldAttemptMalformedToolCallRepair(state.partialJson, event.delta) &&
+        !hadRepairState
+      ) {
+        return;
+      }
+      const blocks = [
+        readToolCallBlock(event.partial, index),
+        readToolCallBlock(event.message, index),
+      ];
+      const toolName = blocks
+        .map((block) =>
+          typeof block?.name === "string" ? normalizeToolCallRepairToolName(block.name) : undefined,
+        )
+        .find((name) => name !== undefined);
+      const repair = tryExtractUsableToolCallArguments(state.partialJson, toolName);
+      const hadPreexistingArgs =
+        state.hadPreexistingArgs ||
+        (!hadRepairState &&
+          blocks.some(
+            (block) => isRecord(block?.arguments) && Object.keys(block.arguments).length > 0,
+          ));
+      state.repairedArgs = repair?.args;
+      if (repair) {
+        state.hadPreexistingArgs = hadPreexistingArgs;
+      }
+      // Keep args that predate repair, but clear stale repair-only state.
+      if (repair || !hadPreexistingArgs) {
+        for (const block of blocks) {
+          if (block) {
+            block.arguments = repair?.args ?? {};
           }
         }
+      }
+      if (repair?.kind === "repaired" && !state.loggedRepair) {
+        state.loggedRepair = true;
+        log.warn(
+          `repairing malformed tool call arguments with ${repair.leadingPrefix.length} leading chars and ${repair.trailingSuffix.length} trailing chars`,
+        );
       }
     }
-    if (
-      typeof event.contentIndex === "number" &&
-      Number.isInteger(event.contentIndex) &&
-      event.type === "toolcall_end"
-    ) {
-      const repairedArgs = repairedArgsByIndex.get(event.contentIndex);
+    if (event.type === "toolcall_end") {
+      const repairedArgs = stateByIndex.get(index)?.repairedArgs;
       if (repairedArgs) {
-        if (event.toolCall && typeof event.toolCall === "object") {
-          (event.toolCall as { arguments?: unknown }).arguments = repairedArgs;
+        for (const block of [
+          asOptionalObjectRecord(event.toolCall),
+          readToolCallBlock(event.partial, index),
+          readToolCallBlock(event.message, index),
+        ]) {
+          if (block) {
+            block.arguments = repairedArgs;
+          }
         }
-        repairToolCallArgumentsInMessage(event.partial, event.contentIndex, repairedArgs);
-        repairToolCallArgumentsInMessage(event.message, event.contentIndex, repairedArgs);
+        stateByIndex.set(index, { partialJson: "", repairedArgs });
+      } else {
+        stateByIndex.delete(index);
       }
-      partialJsonByIndex.delete(event.contentIndex);
-      hadPreexistingArgsByIndex.delete(event.contentIndex);
-      disabledIndices.delete(event.contentIndex);
-      loggedRepairIndices.delete(event.contentIndex);
     }
   });
 
@@ -760,15 +645,11 @@ function wrapStreamRepairMalformedToolCallArguments(
 }
 
 export function wrapStreamFnRepairMalformedToolCallArguments(baseFn: StreamFn): StreamFn {
-  return (model, context, options) => {
-    const maybeStream = baseFn(model, context, options);
-    if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
-      return Promise.resolve(maybeStream).then((stream) =>
-        wrapStreamRepairMalformedToolCallArguments(stream),
-      );
-    }
-    return wrapStreamRepairMalformedToolCallArguments(maybeStream);
-  };
+  return (model, context, options) =>
+    mapAssistantMessageStream(
+      baseFn(model, context, options),
+      wrapStreamRepairMalformedToolCallArguments,
+    );
 }
 
 export function shouldRepairMalformedToolCallArguments(params: {
@@ -782,8 +663,3 @@ export function shouldRepairMalformedToolCallArguments(params: {
     TOOLCALL_REPAIR_RESPONSES_APIS.has(modelApi)
   );
 }
-
-export function wrapStreamFnDecodeXaiToolCallArguments(baseFn: StreamFn): StreamFn {
-  return createHtmlEntityToolCallArgumentDecodingWrapper(baseFn);
-}
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

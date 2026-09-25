@@ -3,14 +3,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import {
-  closeOpenClawStateDatabaseByPath,
-  openOpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db-cache.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { createSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import {
   forkSessionRepositoryWorkspace,
-  readSessionRepositoryCheckpoint,
+  readSessionRepositoryArtifacts,
   recoverSessionRepositoryCheckpoint,
   stageSessionRepositoryCheckpoint,
   withSessionRepositoryCheckpoint,
@@ -20,6 +18,7 @@ import { readActualWorkspaceManifest } from "./workspace-reconcile-core.js";
 import { requireWorkspaceResultGit } from "./workspace-result-git.js";
 import {
   hasWorkerWorkspaceResultRef,
+  readStagedWorkerWorkspaceResult,
   workerWorkspaceResultRef,
 } from "./workspace-result-staging.js";
 
@@ -82,6 +81,25 @@ async function fixture() {
   return { root, remote, database, store, workspace, stage };
 }
 
+async function publicationFixture(root: string, content = "working tree\n") {
+  const normalized = Buffer.from(content);
+  const sha = await requireWorkspaceResultGit(root, ["hash-object", "--stdin"], {
+    input: normalized,
+  });
+  const publicationStagingRoot = path.join(root, "publication");
+  await fs.mkdir(path.join(publicationStagingRoot, "blobs"), { recursive: true });
+  await fs.writeFile(path.join(publicationStagingRoot, "blobs", sha), normalized);
+  const metadata = JSON.stringify({
+    version: 1,
+    baseCommit,
+    baseTree: "b".repeat(40),
+    workspaceTree: "c".repeat(40),
+    entries: [{ path: "edit.txt", mode: "100644", sha }],
+  });
+  await fs.writeFile(path.join(publicationStagingRoot, "snapshot.json"), metadata);
+  return { sha, input: { publicationStagingRoot, publicationDigest: hash(metadata) } };
+}
+
 it("retains cumulative multi-turn files, deletions and executable modes in a bare artifact repo", async () => {
   const { remote, store, workspace, stage } = await fixture();
   await fs.writeFile(path.join(remote, "first.txt"), "first turn\n");
@@ -127,12 +145,12 @@ it("retains cumulative multi-turn files, deletions and executable modes in a bar
     },
   );
   expect(accepted.checkpointRef).toBe(second.checkpointRef);
-  const firstSnapshot = await readSessionRepositoryCheckpoint({
-    store,
-    workspaceId: workspace.workspaceId,
-    checkpointRef: first.checkpointRef,
-  });
-  expect(firstSnapshot.current.entries.some((entry) => entry.path === "second.sh")).toBe(false);
+  await withSessionRepositoryCheckpoint(
+    { store, workspaceId: workspace.workspaceId, checkpointRef: first.checkpointRef },
+    async (snapshot) => {
+      expect(snapshot.current.entries.some((entry) => entry.path === "second.sh")).toBe(false);
+    },
+  );
 });
 
 it("recovers a published artifact after the acceptance transaction fails, without accepting a closed claim", async () => {
@@ -175,11 +193,51 @@ it("recovers a published artifact after the acceptance transaction fails, withou
       assertCurrent,
     }),
   ).toEqual(recovered);
-  const snapshot = await readSessionRepositoryCheckpoint({
+  const snapshot = await readSessionRepositoryArtifacts({
     store: reopened,
     workspaceId: workspace.workspaceId,
+    previewPath: "edit.txt",
+    assertCurrent,
   });
-  expect((await snapshot.readEntry(snapshot.changedEntries[0]!)).toString()).toBe("recover me\n");
+  expect(snapshot.preview).toEqual(new Uint8Array(Buffer.from("recover me\n")));
+});
+
+it("retries failed candidate cleanup and keeps completed cleanup independent of later Git locks", async () => {
+  const { remote, store, workspace, stage } = await fixture();
+  await fs.writeFile(path.join(remote, "edit.txt"), "recover after cleanup\n");
+  const prepared = await stage("turn-cleanup-retry");
+  const artifact = store.artifactPath(workspace.workspaceId);
+  const candidate = await requireWorkspaceResultGit(artifact, [
+    "for-each-ref",
+    "--format=%(refname)",
+    "refs/openclaw/worker-result-candidates/",
+  ]);
+  expect(candidate).not.toBe("");
+  const lockPath = path.join(artifact, `${candidate}.lock`);
+  await fs.writeFile(lockPath, "another Git writer\n", { flag: "wx" });
+  const attempts = await Promise.allSettled([prepared.discard(), prepared.discard()]);
+  expect(attempts.map((attempt) => attempt.status)).toEqual(["rejected", "rejected"]);
+  expect(await hasWorkerWorkspaceResultRef({ root: artifact, stagedResultRef: candidate })).toBe(
+    true,
+  );
+  await fs.rm(lockPath);
+  await Promise.all([prepared.discard(), prepared.discard()]);
+  expect(await hasWorkerWorkspaceResultRef({ root: artifact, stagedResultRef: candidate })).toBe(
+    false,
+  );
+
+  await fs.mkdir(path.dirname(lockPath), { recursive: true });
+  await fs.writeFile(lockPath, "another Git writer\n", { flag: "wx" });
+  await Promise.all([prepared.discard(), prepared.discard()]);
+  const accepted = await prepared.publish();
+  expect(accepted.checkpointRef).toBe(prepared.checkpointRef);
+  const snapshot = await readSessionRepositoryArtifacts({
+    store,
+    workspaceId: workspace.workspaceId,
+    previewPath: "edit.txt",
+    assertCurrent,
+  });
+  expect(snapshot.preview).toEqual(new Uint8Array(Buffer.from("recover after cleanup\n")));
 });
 
 it.each([false, true])(
@@ -187,27 +245,28 @@ it.each([false, true])(
   async (corrupt) => {
     const { root, remote, store, workspace, stage } = await fixture();
     await fs.writeFile(path.join(remote, "edit.txt"), "working tree\r\n");
-    const normalized = Buffer.from("working tree\n");
-    const sha = createHash("sha1")
-      .update(`blob ${normalized.length}\0`)
-      .update(normalized)
-      .digest("hex");
-    const publicationStagingRoot = path.join(root, "publication");
-    await fs.mkdir(path.join(publicationStagingRoot, "blobs"), { recursive: true });
-    await fs.writeFile(path.join(publicationStagingRoot, "blobs", sha), normalized);
-    const metadata = JSON.stringify({
-      version: 1,
-      baseCommit,
-      baseTree: "b".repeat(40),
-      workspaceTree: "c".repeat(40),
-      entries: [{ path: "edit.txt", mode: "100644", sha }],
-    });
-    await fs.writeFile(path.join(publicationStagingRoot, "snapshot.json"), metadata);
-    const prepared = await stage("turn-publication", {
-      publicationStagingRoot,
-      publicationDigest: hash(metadata),
-    });
+    const { sha, input } = await publicationFixture(root);
+    const prepared = await stage("turn-publication", input);
+    const sourceArtifact = store.artifactPath(workspace.workspaceId);
+    const candidates = (
+      await requireWorkspaceResultGit(sourceArtifact, [
+        "for-each-ref",
+        "--format=%(refname)",
+        "refs/openclaw/worker-result-candidates/",
+      ])
+    ).split("\n");
+    expect(candidates).toHaveLength(2);
     await prepared.publish();
+    for (const candidate of candidates) {
+      await fs.mkdir(path.dirname(path.join(sourceArtifact, candidate)), { recursive: true });
+      await fs.writeFile(path.join(sourceArtifact, `${candidate}.lock`), "another Git writer\n", {
+        flag: "wx",
+      });
+    }
+    await Promise.all([prepared.discard(), prepared.discard()]);
+    for (const candidate of candidates) {
+      await fs.rm(path.join(sourceArtifact, `${candidate}.lock`));
+    }
     const fork = await forkSessionRepositoryWorkspace({
       store,
       sourceWorkspaceId: workspace.workspaceId,
@@ -240,7 +299,7 @@ it.each([false, true])(
           expect(snapshot.publicationStagingRoot).toBeUndefined();
           expect(snapshot.publicationDigest).toBeUndefined();
         } else {
-          expect(snapshot.publicationDigest).toBe(hash(metadata));
+          expect(snapshot.publicationDigest).toBe(input.publicationDigest);
           expect(
             await fs.readFile(path.join(snapshot.publicationStagingRoot!, "blobs", sha), "utf8"),
           ).toBe("working tree\n");
@@ -260,6 +319,74 @@ it.each([false, true])(
     expect(reads).toBe(2);
   },
 );
+
+it.each(["recovery", "publication"])(
+  "verifies the peeled %s candidate and rejects its replacement or removal",
+  async (target) => {
+    const { root, remote, store, workspace, stage } = await fixture();
+    await fs.writeFile(path.join(remote, "edit.txt"), "working tree\r\n");
+    const { input } = await publicationFixture(root);
+    const prepared = await stage("turn-verify", input);
+    const artifact = store.artifactPath(workspace.workspaceId);
+    const refs = (
+      await requireWorkspaceResultGit(artifact, [
+        "for-each-ref",
+        "--format=%(refname)",
+        "refs/openclaw/worker-result-candidates/",
+      ])
+    ).split("\n");
+    const candidates = await Promise.all(
+      refs.map(async (ref) => ({
+        ref,
+        objectId: await requireWorkspaceResultGit(artifact, ["rev-parse", `${ref}^{commit}`]),
+        snapshot: await readStagedWorkerWorkspaceResult(artifact, ref),
+      })),
+    );
+    expect(candidates).toHaveLength(2);
+    const candidate = candidates.find(
+      (value) => (value.snapshot.base.baseCommit === baseCommit) === (target === "recovery"),
+    )!;
+    const other = candidates.find((value) => value !== candidate)!;
+    const tag = await requireWorkspaceResultGit(artifact, ["mktag"], {
+      input: Buffer.from(
+        `object ${candidate.objectId}\ntype commit\ntag checkpoint-peel\ntagger Checkpoint Test <checkpoint@example.invalid> 0 +0000\n\nsame candidate\n`,
+      ),
+    });
+    await requireWorkspaceResultGit(artifact, ["update-ref", candidate.ref, tag]);
+    await prepared.verify();
+    await requireWorkspaceResultGit(artifact, ["update-ref", candidate.ref, other.objectId]);
+    await expect(prepared.verify()).rejects.toThrow(
+      target === "recovery"
+        ? "Repository checkpoint preparation changed"
+        : "Repository publication preparation changed",
+    );
+    await requireWorkspaceResultGit(artifact, ["update-ref", "-d", candidate.ref]);
+    await expect(prepared.verify()).rejects.toThrow();
+    expect(store.get(workspace.workspaceId)?.checkpointRef).toBeNull();
+    await prepared.discard();
+  },
+);
+
+it("cannot replace an immutable publication companion when recovery bytes are unchanged", async () => {
+  const { root, remote, store, workspace, stage } = await fixture();
+  await fs.writeFile(path.join(remote, "edit.txt"), "working tree\r\n");
+  const original = await publicationFixture(root);
+  const initial = await stage("turn-immutable-publication", original.input);
+  await initial.publish();
+  const replacement = await publicationFixture(root, "different publication\n");
+  const collision = await stage("turn-immutable-publication", replacement.input);
+  await expect(collision.publish()).rejects.toThrow("different result");
+  await collision.discard();
+  await withSessionRepositoryCheckpoint(
+    { store, workspaceId: workspace.workspaceId, includePublication: true },
+    async (snapshot) => {
+      expect(snapshot.publicationDigest).toBe(original.input.publicationDigest);
+      expect(await fs.readFile(path.join(snapshot.stagingRoot, "edit.txt"), "utf8")).toBe(
+        "working tree\r\n",
+      );
+    },
+  );
+});
 
 it("accepts raw recovery files when a publication blob fails validation", async () => {
   const { root, remote, store, workspace, stage } = await fixture();
@@ -311,11 +438,13 @@ it("rejects mismatched transferred bytes and cannot replace an immutable checkpo
   const collision = await stage("turn-immutable");
   await expect(collision.publish()).rejects.toThrow("different result");
   await collision.discard();
-  const snapshot = await readSessionRepositoryCheckpoint({
+  const snapshot = await readSessionRepositoryArtifacts({
     store,
     workspaceId: workspace.workspaceId,
+    previewPath: "edit.txt",
+    assertCurrent,
   });
-  expect((await snapshot.readEntry(snapshot.changedEntries[0]!)).toString()).toBe("first\n");
+  expect(snapshot.preview).toEqual(new Uint8Array(Buffer.from("first\n")));
   const expected = await readActualWorkspaceManifest({ root: remote, baseCommit });
   await fs.writeFile(path.join(remote, "edit.txt"), "tampered\n");
   await expect(

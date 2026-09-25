@@ -255,6 +255,7 @@ describe("cron listPage sort guards", () => {
     ];
     const state = createMockCronStateForJobs({ jobs });
     const clone = vi.spyOn(globalThis, "structuredClone");
+    state.schedulerStarted = true;
 
     try {
       const options = { limit: 1, offset: 1, sortBy: "name" as const };
@@ -266,7 +267,9 @@ describe("cron listPage sort guards", () => {
       expect(clonedArrays[0]?.[0]).toEqual([jobs[1]]);
       expect(page.jobs[0]).not.toBe(jobs[1]);
 
-      jobs[2]!.state.lastStatus = "ok";
+      await locked(state, async () => {
+        jobs[2]!.state.lastStatus = "ok";
+      });
       const changed = await listPage(state, options);
 
       expect(changed.jobs.map((job) => job.id)).toEqual(["job-b"]);

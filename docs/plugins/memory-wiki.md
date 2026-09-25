@@ -21,8 +21,10 @@ Enable the plugin before using its CLI, tools, or runtime integration:
 
 ```bash
 openclaw plugins enable memory-wiki
-openclaw gateway restart
 ```
+
+Enablement applies to a running Gateway automatically. If it is offline, start
+it to use the runtime integration. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 | Layer                | Owns                                                                              |
 | -------------------- | --------------------------------------------------------------------------------- |

@@ -93,6 +93,7 @@ function createClaudeSessionNodeHostCommands(): OpenClawPluginNodeHostCommand[] 
       command: CLAUDE_SESSIONS_LIST_COMMAND,
       cap: CLAUDE_SESSIONS_CAPABILITY,
       dangerous: false,
+      hasActiveWork: () => false,
       isAvailable: ({ env }) => claudeProjectsAvailable(env),
       handle: async (paramsJSON) =>
         await (await loadClaudeSessionNodeCommands()).listClaudeSessions(paramsJSON),
@@ -101,6 +102,7 @@ function createClaudeSessionNodeHostCommands(): OpenClawPluginNodeHostCommand[] 
       command: CLAUDE_SESSION_READ_COMMAND,
       cap: CLAUDE_SESSIONS_CAPABILITY,
       dangerous: false,
+      hasActiveWork: () => false,
       isAvailable: ({ env }) => claudeProjectsAvailable(env),
       handle: async (paramsJSON) =>
         await (await loadClaudeSessionNodeCommands()).readClaudeSession(paramsJSON),
@@ -110,6 +112,7 @@ function createClaudeSessionNodeHostCommands(): OpenClawPluginNodeHostCommand[] 
       cap: CLAUDE_SESSIONS_CAPABILITY,
       dangerous: false,
       duplex: true,
+      hasActiveWork: () => false,
       isAvailable: ({ env }) =>
         claudeProjectsAvailable(env) && Boolean(resolveClaudeTerminalExecutable(env)),
       handle: async (paramsJSON, io) =>
@@ -120,6 +123,7 @@ function createClaudeSessionNodeHostCommands(): OpenClawPluginNodeHostCommand[] 
       cap: CLAUDE_SESSIONS_CAPABILITY,
       dangerous: false,
       duplex: true,
+      hasActiveWork: () => false,
       isAvailable: ({ env }) => Boolean(resolveClaudeTerminalExecutable(env)),
       handle: async (paramsJSON, io) =>
         await (await loadClaudeSessionNodeCommands()).startClaudeSession(paramsJSON, io),

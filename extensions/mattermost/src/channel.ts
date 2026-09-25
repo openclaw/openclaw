@@ -9,6 +9,7 @@ import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
   ChannelMessageToolDiscovery,
+  ChannelOutboundContext,
   ChannelThreadingContext,
   ChannelThreadingToolContext,
   ChannelToolSend,
@@ -53,6 +54,10 @@ import {
   normalizeMattermostAllowEntry as normalizeAllowEntry,
   resolveMattermostGatewayAuthBypassPaths,
 } from "./channel-config-shared.js";
+import {
+  createMattermostDeliveryProgressReporter,
+  toMattermostOutboundResult,
+} from "./channel-send-result.js";
 import { MattermostChannelConfigSchema } from "./config-surface.js";
 import { mattermostDoctor } from "./doctor.js";
 import { resolveMattermostGroupRequireMention } from "./group-mentions.js";
@@ -67,7 +72,6 @@ import {
 } from "./mattermost/accounts.js";
 import { normalizeMattermostEmojiName } from "./mattermost/emoji.js";
 import { mattermostIngressIdentity } from "./mattermost/ingress-identity.js";
-import type { MattermostSendResult } from "./mattermost/send.js";
 import {
   looksLikeMattermostTargetId,
   normalizeMattermostMessagingTarget,
@@ -337,6 +341,7 @@ async function listMattermostDirectoryPeers(params: MattermostDirectoryListParam
 
 const mattermostMessageActions: ChannelMessageActionAdapter = {
   providerOwnedReadGates: ["read"],
+  readAuthorityActions: ["read"],
   describeMessageTool: describeMattermostMessageTool,
   extractToolSend: ({ args }) => extractMattermostToolSend(args),
   prepareSendPayload: ({ ctx, payload }) => {
@@ -546,23 +551,28 @@ function resolveMattermostSendAttachmentMedia(params: Record<string, unknown>): 
   return mediaUrls[0];
 }
 
-type MattermostOutboundContext = Parameters<NonNullable<ChannelOutboundAdapter["sendText"]>>[0];
-
-function toMattermostOutboundResult(result: MattermostSendResult) {
-  const { channelId, ...delivery } = result;
-  return { ...delivery, target: { kind: "channel" as const, id: channelId } };
-}
-
-function createMattermostDeliveryProgressReporter(
-  onDeliveryResult: MattermostOutboundContext["onDeliveryResult"],
+async function sendMattermostMedia(
+  ctx: ChannelOutboundContext,
+  content: { text: string; mediaUrl?: string; buttons?: unknown[]; attachmentText?: string } = ctx,
 ) {
-  return onDeliveryResult
-    ? async (result: MattermostSendResult) => {
-        await onDeliveryResult(
-          attachChannelToResult("mattermost", toMattermostOutboundResult(result)),
-        );
-      }
-    : undefined;
+  const result = await (
+    await loadMattermostChannelRuntime()
+  ).sendMessageMattermost(ctx.to, content.text, {
+    cfg: ctx.cfg,
+    accountId: ctx.accountId ?? undefined,
+    mediaUrl: content.mediaUrl,
+    mediaLocalRoots: ctx.mediaLocalRoots ?? ctx.mediaAccess?.localRoots,
+    mediaReadFile: ctx.mediaReadFile ?? ctx.mediaAccess?.readFile,
+    ...(ctx.mediaAccess?.workspaceDir ? { workspaceDir: ctx.mediaAccess.workspaceDir } : {}),
+    requireMediaUpload: requiresMattermostMediaUpload(content.mediaUrl) ? true : undefined,
+    replyToId: ctx.replyToId ?? (ctx.threadId != null ? String(ctx.threadId) : undefined),
+    ...(content.buttons?.length ? { buttons: content.buttons } : {}),
+    ...(content.attachmentText !== undefined ? { attachmentText: content.attachmentText } : {}),
+    assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
+    onPlatformSendDispatch: ctx.onPlatformSendDispatch,
+    onDeliveryResult: createMattermostDeliveryProgressReporter(ctx.onDeliveryResult),
+  });
+  return toMattermostOutboundResult(result);
 }
 
 const mattermostOutbound: ChannelOutboundAdapter = {
@@ -621,22 +631,13 @@ const mattermostOutbound: ChannelOutboundAdapter = {
       })
         .map((url) => url.trim())
         .find(Boolean);
-      const result = await (
-        await loadMattermostChannelRuntime()
-      ).sendMessageMattermost(ctx.to, ctx.payload.text ?? ctx.text, {
-        cfg: ctx.cfg,
-        accountId: ctx.accountId ?? undefined,
+      const result = await sendMattermostMedia(ctx, {
+        text: ctx.payload.text ?? ctx.text,
         mediaUrl,
-        mediaLocalRoots: ctx.mediaLocalRoots ?? ctx.mediaAccess?.localRoots,
-        mediaReadFile: ctx.mediaReadFile ?? ctx.mediaAccess?.readFile,
-        ...(ctx.mediaAccess?.workspaceDir ? { workspaceDir: ctx.mediaAccess.workspaceDir } : {}),
-        requireMediaUpload: requiresMattermostMediaUpload(mediaUrl) ? true : undefined,
-        replyToId: ctx.replyToId ?? (ctx.threadId != null ? String(ctx.threadId) : undefined),
-        buttons: buttons?.length ? buttons : undefined,
+        buttons,
         attachmentText,
-        onDeliveryResult: createMattermostDeliveryProgressReporter(ctx.onDeliveryResult),
       });
-      return attachChannelToResult("mattermost", toMattermostOutboundResult(result));
+      return attachChannelToResult("mattermost", result);
     }
     return await sendTextMediaPayload({ channel: "mattermost", ctx, adapter: mattermostOutbound });
   },
@@ -654,45 +655,20 @@ const mattermostOutbound: ChannelOutboundAdapter = {
   },
   ...createAttachedChannelResultAdapter({
     channel: "mattermost",
-    sendText: async ({ cfg, to, text, accountId, replyToId, threadId, onDeliveryResult }) =>
+    sendText: async (ctx) =>
       toMattermostOutboundResult(
         await (
           await loadMattermostChannelRuntime()
-        ).sendMessageMattermost(to, text, {
-          cfg,
-          accountId: accountId ?? undefined,
-          replyToId: replyToId ?? (threadId != null ? String(threadId) : undefined),
-          onDeliveryResult: createMattermostDeliveryProgressReporter(onDeliveryResult),
+        ).sendMessageMattermost(ctx.to, ctx.text, {
+          cfg: ctx.cfg,
+          accountId: ctx.accountId ?? undefined,
+          replyToId: ctx.replyToId ?? (ctx.threadId != null ? String(ctx.threadId) : undefined),
+          assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
+          onPlatformSendDispatch: ctx.onPlatformSendDispatch,
+          onDeliveryResult: createMattermostDeliveryProgressReporter(ctx.onDeliveryResult),
         }),
       ),
-    sendMedia: async ({
-      cfg,
-      to,
-      text,
-      mediaUrl,
-      mediaAccess,
-      mediaLocalRoots,
-      mediaReadFile,
-      accountId,
-      replyToId,
-      threadId,
-      onDeliveryResult,
-    }) =>
-      toMattermostOutboundResult(
-        await (
-          await loadMattermostChannelRuntime()
-        ).sendMessageMattermost(to, text, {
-          cfg,
-          accountId: accountId ?? undefined,
-          mediaUrl,
-          mediaLocalRoots: mediaLocalRoots ?? mediaAccess?.localRoots,
-          mediaReadFile: mediaReadFile ?? mediaAccess?.readFile,
-          ...(mediaAccess?.workspaceDir ? { workspaceDir: mediaAccess.workspaceDir } : {}),
-          requireMediaUpload: requiresMattermostMediaUpload(mediaUrl) ? true : undefined,
-          replyToId: replyToId ?? (threadId != null ? String(threadId) : undefined),
-          onDeliveryResult: createMattermostDeliveryProgressReporter(onDeliveryResult),
-        }),
-      ),
+    sendMedia: sendMattermostMedia,
   }),
 };
 

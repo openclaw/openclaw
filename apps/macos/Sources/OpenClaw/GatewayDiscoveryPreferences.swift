@@ -54,14 +54,12 @@ enum GatewayDiscoveryPreferences {
         root: [String: Any] = OpenClawConfigFile.loadDict()) -> String?
     {
         guard connectionMode == .remote else { return nil }
-        let defaultRemotePort = GatewayEnvironment.gatewayPort(root: root)
         let sshRemotePort: Int = if remoteTransport == .ssh {
-            RemotePortTunnel.resolveRemotePortOverride(
-                defaultRemotePort: defaultRemotePort,
-                for: CommandResolver.parseSSHTarget(remoteTarget)?.host ?? "",
-                root: root) ?? defaultRemotePort
+            RemotePortTunnel.ports(
+                root: root,
+                sshHost: CommandResolver.parseSSHTarget(remoteTarget)?.host ?? "").remote
         } else {
-            defaultRemotePort
+            18789
         }
         return OnboardingSystemAgentResumeStore.routeIdentity(
             connectionMode: .remote,
@@ -110,8 +108,7 @@ enum GatewayDiscoveryPreferences {
             preferredGatewayID: nil,
             remoteTransport: remoteTransport,
             remoteURL: remoteURL,
-            remoteTarget: remoteTarget,
-            sshRemotePort: GatewayEnvironment.gatewayPort(root: root))
+            remoteTarget: remoteTarget)
     }
 
     @discardableResult

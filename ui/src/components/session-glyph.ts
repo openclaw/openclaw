@@ -1,5 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../i18n/index.ts";
+import "./tooltip.ts";
 
 type SessionGlyphContent = TemplateResult | typeof nothing;
 
@@ -11,8 +12,7 @@ export type SessionGlyphRing = "circle" | "pair";
 // in components.css); the cusps sit at x = 0, y = ±sqrt(11² − 5²).
 const PAIR_TRACE_PATH = "M0,-9.798A11,11 0 1 1 0,9.798A11,11 0 1 1 0,-9.798Z";
 
-function renderRunRing(ring: SessionGlyphRing, queued: boolean): TemplateResult {
-  const label = t(queued ? "sessionsView.statusQueued" : "sessionsView.activeRun");
+function renderRunRing(ring: SessionGlyphRing, queued: boolean, label: string): TemplateResult {
   if (ring === "pair") {
     return html`<svg
       class="session-glyph__trace${queued ? " session-glyph__trace--queued" : ""}"
@@ -34,14 +34,14 @@ function renderRunRing(ring: SessionGlyphRing, queued: boolean): TemplateResult 
 /**
  * Persistent artwork in the sidebar's leading slot (owner avatar, page icon,
  * attention glyph). Callers can carry run state as a ring when that surface
- * owns activity in the leading slot. Circular content already fits the ring;
- * arbitrary square icons and thumbnails scale down so their corners stay
- * inside it.
+ * owns activity in the leading slot. Artwork keeps its resting size inside
+ * a consistent circle; owner pairs retain their fitted two-face trace.
  */
 export function renderSessionGlyph(options: {
   content: SessionGlyphContent;
   running: boolean;
   queued?: boolean;
+  runningLabel?: string;
   circular?: boolean;
   badge?: SessionGlyphContent;
   ring?: SessionGlyphRing;
@@ -50,17 +50,24 @@ export function renderSessionGlyph(options: {
     content,
     running,
     queued = false,
+    runningLabel,
     circular = false,
     badge = nothing,
     ring = "circle",
   } = options;
   // A glyph-less row still owns its run state in the lead slot; the bare
-  // modifier lets CSS draw a compact ring there instead of a 24px empty circle.
+  // modifier lets CSS draw a compact ring there instead of a full-size empty circle.
   const modifiers = `${circular ? " session-glyph--circular" : ""}${running ? " session-glyph--running" : ""}${content === nothing ? " session-glyph--bare" : ""}`;
-  return html`<span class="session-glyph${modifiers}">
+  const glyph = html`<span class="session-glyph${modifiers}">
     <span class="session-glyph__content">${content}</span>
-    ${running ? renderRunRing(ring, queued) : nothing} ${badge}
+    ${running ? renderRunRing(ring, queued, runningLabel ?? t(queued ? "sessionsView.statusQueued" : "sessionsView.activeRun")) : nothing}
+    ${badge}
   </span>`;
+  return running && runningLabel
+    ? html`<openclaw-tooltip .content=${runningLabel} .describe=${false}
+        >${glyph}</openclaw-tooltip
+      >`
+    : glyph;
 }
 
 export function renderSessionUnreadBadge(): TemplateResult {

@@ -9,7 +9,9 @@ import {
   hasBundledChannelPackageState,
   listBundledChannelIdsForPackageState,
 } from "../channels/plugins/package-state-probes.js";
+import { normalizePluginsConfig } from "../plugins/config-state.js";
 import type { PluginDiscoveryResult } from "../plugins/discovery.types.js";
+import { hasExplicitManifestOwnerTrust } from "../plugins/manifest-owner-policy.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.types.js";
 import { isChannelConfigured } from "./channel-configured.js";
 import type { PluginAutoEnableCandidate } from "./plugin-auto-enable.types.js";
@@ -21,12 +23,17 @@ function normalizeManifestChannelId(channelId: string): string {
 
 function collectPluginIdsForConfiguredChannel(
   channelId: string,
+  config: OpenClawConfig,
   registry: PluginManifestRegistry,
 ): string[] {
   const normalizedChannelId = normalizeManifestChannelId(channelId);
   const builtInId = normalizeChatChannelId(normalizedChannelId);
-  const claims = registry.plugins.filter((record) =>
-    record.channels.some((id) => normalizeManifestChannelId(id) === normalizedChannelId),
+  const normalizedConfig = normalizePluginsConfig(config.plugins);
+  const claims = registry.plugins.filter(
+    (record) =>
+      (record.origin !== "workspace" ||
+        hasExplicitManifestOwnerTrust({ plugin: record, normalizedConfig })) &&
+      record.channels.some((id) => normalizeManifestChannelId(id) === normalizedChannelId),
   );
 
   if (claims.length === 0) {
@@ -60,7 +67,7 @@ export function collectAutoEnableChannelIds(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
   discovery?: PluginDiscoveryResult,
-  ambientEnvTriggers: AmbientEnvTriggerPolicy = "allow",
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy,
 ): string[] {
   const configuredStateChannelIds = new Set(
     listBundledChannelIdsForPackageState("configuredState", discovery),
@@ -124,7 +131,11 @@ export function resolveConfiguredChannelAutoEnableCandidates(
   const changes: PluginAutoEnableCandidate[] = [];
   for (const channelId of params.configuredChannelIds ??
     collectAutoEnableChannelIds(params.config, params.env)) {
-    for (const pluginId of collectPluginIdsForConfiguredChannel(channelId, params.registry)) {
+    for (const pluginId of collectPluginIdsForConfiguredChannel(
+      channelId,
+      params.config,
+      params.registry,
+    )) {
       changes.push({ pluginId, kind: "channel-configured", channelId });
     }
   }

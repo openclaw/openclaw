@@ -19,6 +19,7 @@ import {
   resolveGatewaySessionStoreTargetWithStore,
 } from "../session-utils.js";
 import { resolveWorkerPlacementSessionRuntimeCapabilities } from "../worker-environments/placement-session-runtime.js";
+import type { SessionWorkerPlacementContext } from "../worker-environments/session-placement-lifecycle.js";
 import { resolveWorkerPlacementArchiveRestoreError } from "../worker-environments/session-placement-lifecycle.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 export { resolveSessionWorkerPlacementMutationError } from "../worker-environments/session-placement-lifecycle.js";
@@ -35,7 +36,7 @@ export function respondSessionWorkerPlacementMutationError(
 export function resolveSessionWorkerPlacementPatchError(params: {
   agentId: string;
   cfg: OpenClawConfig;
-  context: GatewayRequestContext;
+  context: SessionWorkerPlacementContext;
   entry: SessionEntry | undefined;
   key: string;
   patch: SessionsPatchParams;
@@ -69,7 +70,9 @@ export function resolveSessionWorkerPlacementPatchError(params: {
   }
   if (
     !params.validateModelRuntime ||
-    params.patch.model === undefined ||
+    (params.patch.model === undefined &&
+      params.patch.agentRuntime === undefined &&
+      params.patch.nativeRuntimeConsent === undefined) ||
     !params.entry?.sessionId
   ) {
     return undefined;

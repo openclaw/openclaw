@@ -2,12 +2,14 @@ import type { GatewayBrowserClient, GatewayHelloOk } from "../../../api/gateway.
 import type { SessionWorkspaceListResult } from "../../../api/types.ts";
 import type { ChatWorkspaceDock, UiSettings } from "../../../app/settings.ts";
 import type { SessionCapability, SessionScopeHost } from "../../../lib/sessions/index.ts";
+import type { FileSidebarNavigation } from "./chat-sidebar-content-types.ts";
 import type { SidebarContent, SidebarSelection } from "./chat-sidebar.ts";
 
 export type SessionWorkspaceFilter = "all" | "changed" | "read" | "artifacts";
 
 export type SessionWorkspaceProps = {
   filter: SessionWorkspaceFilter;
+  browserPath: string;
   browserSearch: string;
   collapsed: boolean;
   sessionKey: string;
@@ -35,7 +37,20 @@ export type SessionWorkspaceProps = {
   onOpenDiff?: () => void;
 };
 
+export type SessionWorkspacePreview = {
+  id: string;
+  label: string;
+  content: SidebarSelection;
+  canonicalKey?: string;
+  requestIds?: string[];
+  navigation?: FileSidebarNavigation;
+  navigationOrder?: number;
+};
+
 export type SessionWorkspaceState = {
+  navigationOrder?: number;
+  previews: SessionWorkspacePreview[];
+  activePreviewId: string | null;
   filter: SessionWorkspaceFilter;
   activeId: string | null;
   agentId: string;
@@ -47,6 +62,7 @@ export type SessionWorkspaceState = {
   dock: ChatWorkspaceDock;
   diffContent?: SidebarContent;
   error: string | null;
+  errorOwner?: object;
   list: SessionWorkspaceListResult | null;
   loading: boolean;
   pendingReload: boolean;
@@ -62,6 +78,7 @@ export type SessionWorkspaceHost = {
   connected: boolean;
   connectionEpoch: number;
   hello: GatewayHelloOk | null;
+  resourceBasePath?: string;
   terminalAvailable?: boolean;
   browserPanelAvailable?: boolean;
   assistantAgentId?: string | null;

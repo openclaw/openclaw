@@ -12,7 +12,6 @@ import {
   type ApprovalSnapshot,
 } from "../../../../packages/gateway-protocol/src/approval-result-validators.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
-import type { RouteId } from "../../app-route-paths.ts";
 import {
   applicationContext,
   type ApplicationContext,
@@ -50,16 +49,13 @@ function formatApprovalTime(timestampMs: number): string {
 }
 
 function decisionLabel(decision: ApprovalDecision): string {
-  switch (decision) {
-    case "allow-once":
-      return t("execApproval.allowOnce");
-    case "allow-always":
-      return t("execApproval.alwaysAllow");
-    case "deny":
-      return t("execApproval.deny");
-  }
-  const unreachable: never = decision;
-  return unreachable;
+  return t(
+    {
+      "allow-once": "execApproval.allowOnce",
+      "allow-always": "execApproval.alwaysAllow",
+      deny: "execApproval.deny",
+    }[decision],
+  );
 }
 
 function appliedDecisionMatches(
@@ -91,49 +87,41 @@ function terminalTitle(approval: ApprovalSnapshot, origin: ResolutionOrigin): st
   if (origin === "here" && approval.status === "denied") {
     return t("approvalPage.deniedHere");
   }
-  const status = approval.status;
-  switch (status) {
-    case "allowed":
-      return t("approvalPage.approved");
-    case "denied":
-      return t("approvalPage.denied");
-    case "expired":
-      return t("approvalPage.expired");
-    case "cancelled":
-      return t("approvalPage.cancelled");
-    case "pending":
-      return t("approvalPage.pending");
-  }
-  const unreachable: never = status;
-  return unreachable;
+  return t(
+    {
+      allowed: "approvalPage.approved",
+      denied: "approvalPage.denied",
+      expired: "approvalPage.expired",
+      cancelled: "approvalPage.cancelled",
+      pending: "approvalPage.pending",
+    }[approval.status],
+  );
 }
 
 function terminalDescription(approval: ApprovalSnapshot, origin: ResolutionOrigin): string {
   if (origin === "elsewhere" && (approval.status === "allowed" || approval.status === "denied")) {
     return t("approvalPage.resolvedElsewhereDescription");
   }
-  const status = approval.status;
-  switch (status) {
-    case "allowed":
-      return approval.decision === "allow-always"
-        ? t("approvalPage.allowedAlwaysDescription")
-        : t("approvalPage.allowedOnceDescription");
-    case "denied":
-      return t("approvalPage.deniedDescription");
-    case "expired":
-      return t("approvalPage.expiredDescription");
-    case "cancelled":
-      return t("approvalPage.cancelledDescription");
-    case "pending":
-      return t("approvalPage.pendingDescription");
+  if (approval.status === "allowed") {
+    return t(
+      approval.decision === "allow-always"
+        ? "approvalPage.allowedAlwaysDescription"
+        : "approvalPage.allowedOnceDescription",
+    );
   }
-  const unreachable: never = status;
-  return unreachable;
+  return t(
+    {
+      denied: "approvalPage.deniedDescription",
+      expired: "approvalPage.expiredDescription",
+      cancelled: "approvalPage.cancelledDescription",
+      pending: "approvalPage.pendingDescription",
+    }[approval.status],
+  );
 }
 
 export class ApprovalPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: false })
-  context!: ApplicationContext<RouteId>;
+  context!: ApplicationContext;
 
   @property({ attribute: "approval-id" }) approvalId = "";
 
@@ -494,50 +482,44 @@ export class ApprovalPage extends OpenClawLightDomElement {
     `;
   }
 
-  private renderLoading() {
+  private renderState(kind: "loading" | "unavailable" | "missing-scope" | "connection") {
+    const title = {
+      loading: "approvalPage.loadingTitle",
+      unavailable: "approvalPage.unavailableTitle",
+      "missing-scope": "common.disabled",
+      connection: "approvalPage.connectionErrorTitle",
+    }[kind];
+    const description = {
+      loading: "approvalPage.loadingDescription",
+      unavailable: "approvalPage.unavailableDescription",
+      connection: "approvalPage.connectionErrorDescription",
+    };
     return html`
-      <div class="approval-page__state approval-page__state--loading" role="status">
-        <div class="approval-page__spinner" aria-hidden="true"></div>
-        <h1 id="approval-page-title">${t("approvalPage.loadingTitle")}</h1>
-        <p>${t("approvalPage.loadingDescription")}</p>
-      </div>
-    `;
-  }
-
-  private renderUnavailable() {
-    return html`
-      <div class="approval-page__state approval-page__state--unavailable" role="alert">
-        <div class="approval-page__state-mark" aria-hidden="true">!</div>
-        <h1 id="approval-page-title">${t("approvalPage.unavailableTitle")}</h1>
-        <p>${t("approvalPage.unavailableDescription")}</p>
-      </div>
-    `;
-  }
-
-  private renderMissingScope() {
-    return html`
-      <div class="approval-page__state approval-page__state--unavailable" role="alert">
-        <div class="approval-page__state-mark" aria-hidden="true">!</div>
-        <h1 id="approval-page-title">${t("common.disabled")}</h1>
-        <p><code>${APPROVAL_REQUIRED_SCOPE}</code></p>
-      </div>
-    `;
-  }
-
-  private renderConnectionState() {
-    return html`
-      <div class="approval-page__state approval-page__state--connection" role="alert">
-        <div class="approval-page__state-mark" aria-hidden="true">!</div>
-        <h1 id="approval-page-title">${t("approvalPage.connectionErrorTitle")}</h1>
-        <p>${t("approvalPage.connectionErrorDescription")}</p>
-        <button
-          type="button"
-          class="btn"
-          ?disabled=${!this.hasGatewayConnection || !this.hasApprovalAccess || this.loading}
-          @click=${() => void this.loadApproval()}
-        >
-          ${t("approvalPage.retry")}
-        </button>
+      <div
+        class="approval-page__state approval-page__state--${kind === "missing-scope" ? "unavailable" : kind}"
+        role=${kind === "loading" ? "status" : "alert"}
+      >
+        ${
+          kind === "loading"
+            ? html`<div class="approval-page__spinner" aria-hidden="true"></div>`
+            : html`<div class="approval-page__state-mark" aria-hidden="true">!</div>`
+        }
+        <h1 id="approval-page-title">${t(title)}</h1>
+        <p>
+          ${kind === "missing-scope" ? html`<code>${APPROVAL_REQUIRED_SCOPE}</code>` : t(description[kind])}
+        </p>
+        ${
+          kind === "connection"
+            ? html`<button
+                type="button"
+                class="btn"
+                ?disabled=${!this.hasGatewayConnection || !this.hasApprovalAccess || this.loading}
+                @click=${() => void this.loadApproval()}
+              >
+                ${t("approvalPage.retry")}
+              </button>`
+            : nothing
+        }
       </div>
     `;
   }
@@ -679,13 +661,13 @@ export class ApprovalPage extends OpenClawLightDomElement {
           <div class="approval-page__content">
             ${
               missingScope
-                ? this.renderMissingScope()
+                ? this.renderState("missing-scope")
                 : this.loading && !this.approval
-                  ? this.renderLoading()
+                  ? this.renderState("loading")
                   : disconnected
-                    ? this.renderConnectionState()
+                    ? this.renderState("connection")
                     : unavailable || !this.approval
-                      ? this.renderUnavailable()
+                      ? this.renderState("unavailable")
                       : this.renderApproval(this.approval)
             }
           </div>

@@ -3,7 +3,8 @@ import { formatInternationalPhoneNumberForDisplay } from "@openclaw/normalizatio
 import { html, nothing } from "lit";
 import type { WhatsAppStatus } from "../../api/types.ts";
 import { i18n, t } from "../../i18n/index.ts";
-import { formatRelativeTimestamp, formatDurationHuman } from "../../lib/format.ts";
+import { formatDurationHuman } from "../../lib/format-duration.ts";
+import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { renderChannelConfigSection } from "./view.config.ts";
 import {
   boolStatusKind,
@@ -21,7 +22,7 @@ export function renderWhatsAppCard(params: {
   const { props, whatsapp, accountCount } = params;
   const configured = resolveChannelConfigured("whatsapp", props);
   const linked = whatsapp?.linked === true;
-  const hasQr = props.whatsappQrDataUrl != null;
+  const hasQr = props.channels.whatsappLoginQrDataUrl != null;
   const rawPhoneNumber = whatsapp?.self?.e164;
   const phoneNumber = rawPhoneNumber
     ? (formatInternationalPhoneNumberForDisplay(rawPhoneNumber, i18n.getLocale()) ?? rawPhoneNumber)
@@ -81,22 +82,25 @@ export function renderWhatsAppCard(params: {
     lastError: whatsapp?.lastError,
     extraContent: html`
       ${
-        props.whatsappMessage
+        props.channels.whatsappLoginMessage
           ? html`
-              <div class="settings-row">
+              <div class="settings-row" role="status">
                 <div class="settings-row__text">
-                  <span class="settings-row__desc">${props.whatsappMessage}</span>
+                  <span class="settings-row__desc">${props.channels.whatsappLoginMessage}</span>
                 </div>
               </div>
             `
           : nothing
       }
       ${
-        props.whatsappQrDataUrl
+        props.channels.whatsappLoginQrDataUrl
           ? html`
               <div class="settings-row settings-row--stacked">
                 <div class="qr-wrap">
-                  <img src=${props.whatsappQrDataUrl} alt=${t("channels.setup.whatsappQrAlt")} />
+                  <img
+                    src=${props.channels.whatsappLoginQrDataUrl}
+                    alt=${t("channels.setup.whatsappQrAlt")}
+                  />
                 </div>
               </div>
             `
@@ -109,24 +113,24 @@ export function renderWhatsAppCard(params: {
         linked
           ? html`<button
               class="btn"
-              ?disabled=${props.whatsappBusy}
+              ?disabled=${props.channels.whatsappBusy}
               @click=${() => props.onWhatsAppStart(true)}
             >
               ${t("common.relink")}
             </button>`
           : html`<button
               class="btn primary"
-              ?disabled=${props.whatsappBusy}
+              ?disabled=${props.channels.whatsappBusy}
               @click=${() => props.onWhatsAppStart(false)}
             >
-              ${props.whatsappBusy ? t("common.working") : t("common.showQr")}
+              ${props.channels.whatsappBusy ? t("common.working") : t("common.showQr")}
             </button>`
       }
       ${
         hasQr
           ? html`<button
               class="btn"
-              ?disabled=${props.whatsappBusy}
+              ?disabled=${props.channels.whatsappBusy}
               @click=${() => props.onWhatsAppWait()}
             >
               ${t("common.waitForScan")}
@@ -135,7 +139,7 @@ export function renderWhatsAppCard(params: {
       }
       <button
         class="btn danger"
-        ?disabled=${props.whatsappBusy}
+        ?disabled=${props.channels.whatsappBusy}
         @click=${() => props.onWhatsAppLogout()}
       >
         ${t("common.logout")}

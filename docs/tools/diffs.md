@@ -22,8 +22,10 @@ The [Control UI](/web/control-ui) already highlights inline tool diffs and sessi
   <Step title="Install the plugin">
     ```bash
     openclaw plugins install clawhub:@openclaw/diffs
-    openclaw gateway restart
     ```
+
+    Installation applies to a running Gateway automatically; otherwise it takes effect
+    on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
     `diffs` and its language pack ship as separate packages rather than with
     OpenClaw, so the install needs a scoped locator. The `clawhub:` prefix

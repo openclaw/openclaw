@@ -1,11 +1,10 @@
-// Feishu plugin module implements bitable behavior.
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import { optionalPositiveIntegerSchema } from "openclaw/plugin-sdk/channel-actions";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
-import { Type, type TSchema } from "typebox";
+import { Type, type Static, type TSchema } from "typebox";
 import type { OpenClawPluginApi } from "../runtime-api.js";
-import { createFeishuToolClient, resolveAnyEnabledFeishuToolsConfig } from "./tool-account.js";
+import { createFeishuToolClient } from "./tool-account.js";
+import { registerFeishuTool } from "./tool-registration.js";
 import { feishuExternalToolResult as json } from "./tool-result.js";
 
 type LarkResponse<T = unknown> = { code?: number; msg?: string; data?: T };
@@ -470,7 +469,7 @@ async function updateRecord(
   appToken: string,
   tableId: string,
   recordId: string,
-  fields: NonNullable<NonNullable<BitableRecordUpdatePayload["data"]>["fields"]>,
+  fields: BitableRecordUpdateFields,
 ) {
   const res = await client.bitable.appTableRecord.update({
     path: { app_token: appToken, table_id: tableId, record_id: recordId },
@@ -521,7 +520,7 @@ const GetRecordSchema = Type.Object({
 
 // TypeBox emits an empty schema for Any/Unknown, which Bedrock-backed validators
 // can reject inside patternProperties. Keep the existing any-JSON-value contract explicit.
-const BitableFieldValueSchema = Type.Unsafe<unknown>({
+const BitableFieldValueSchema = Type.Unsafe<BitableRecordFields[string]>({
   type: ["string", "number", "boolean", "object", "array", "null"],
 });
 
@@ -572,55 +571,35 @@ const UpdateRecordSchema = Type.Object({
 // ============ Tool Registration ============
 
 export function registerFeishuBitableTools(api: OpenClawPluginApi) {
-  type AccountAwareParams = { accountId?: string };
-
-  const registerBitableTool = <
-    // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Tool params bind each schema-specific executor to its registered tool.
-    TParams extends AccountAwareParams,
-  >(params: {
+  const registerBitableTool = <TSchemaType extends TSchema>(tool: {
     name: string;
     label: string;
     description: string;
-    parameters: TSchema;
-    execute: (args: { params: TParams; client: Lark.Client }) => Promise<unknown>;
+    parameters: TSchemaType;
+    execute: (args: { params: Static<TSchemaType>; client: Lark.Client }) => Promise<unknown>;
   }) => {
-    api.registerTool(
-      (ctx) => {
-        const cfg = ctx.runtimeConfig ?? ctx.config ?? api.config;
-        if (!cfg || !resolveAnyEnabledFeishuToolsConfig(cfg).bitable) {
-          return null;
-        }
-        return {
-          name: params.name,
-          resultContentSource: "network",
-          label: params.label,
-          description: params.description,
-          parameters: params.parameters,
-          async execute(_toolCallId, rawParams) {
-            const executeParams = rawParams as TParams;
-            try {
-              return json(
-                await params.execute({
-                  params: executeParams,
-                  client: createFeishuToolClient({
-                    cfg,
-                    executeParams,
-                    defaultAccountId: ctx.agentAccountId,
-                    requiredTool: { family: "bitable", label: "Bitable" },
-                  }),
-                }),
-              );
-            } catch (err) {
-              return json({ error: formatErrorMessage(err) });
-            }
-          },
+    registerFeishuTool(api, {
+      ...tool,
+      family: "bitable",
+      createExecute(ctx, cfg) {
+        return async (params) => {
+          return json(
+            await tool.execute({
+              params,
+              client: createFeishuToolClient({
+                cfg,
+                executeParams: params,
+                defaultAccountId: ctx.agentAccountId,
+                requiredTool: { family: "bitable", label: "Bitable" },
+              }),
+            }),
+          );
         };
       },
-      { name: params.name },
-    );
+    });
   };
 
-  registerBitableTool<{ url: string; accountId?: string }>({
+  registerBitableTool({
     name: "feishu_bitable_get_meta",
     label: "Feishu Bitable Get Meta",
     description:
@@ -631,7 +610,7 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     },
   });
 
-  registerBitableTool<{ app_token: string; table_id: string; accountId?: string }>({
+  registerBitableTool({
     name: "feishu_bitable_list_fields",
     label: "Feishu Bitable List Fields",
     description: "List all fields (columns) in a Bitable table with their types and properties",
@@ -641,13 +620,7 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     },
   });
 
-  registerBitableTool<{
-    app_token: string;
-    table_id: string;
-    page_size?: number;
-    page_token?: string;
-    accountId?: string;
-  }>({
+  registerBitableTool({
     name: "feishu_bitable_list_records",
     label: "Feishu Bitable List Records",
     description: "List records (rows) from a Bitable table with pagination support",
@@ -657,18 +630,13 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
         client,
         params.app_token,
         params.table_id,
-        readBitableListRecordsPageSize(params as Record<string, unknown>),
+        readBitableListRecordsPageSize(params),
         params.page_token,
       );
     },
   });
 
-  registerBitableTool<{
-    app_token: string;
-    table_id: string;
-    record_id: string;
-    accountId?: string;
-  }>({
+  registerBitableTool({
     name: "feishu_bitable_get_record",
     label: "Feishu Bitable Get Record",
     description: "Get a single record by ID from a Bitable table",
@@ -678,12 +646,7 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     },
   });
 
-  registerBitableTool<{
-    app_token: string;
-    table_id: string;
-    fields: BitableRecordFields;
-    accountId?: string;
-  }>({
+  registerBitableTool({
     name: "feishu_bitable_create_record",
     label: "Feishu Bitable Create Record",
     description: "Create a new record (row) in a Bitable table",
@@ -693,13 +656,7 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     },
   });
 
-  registerBitableTool<{
-    app_token: string;
-    table_id: string;
-    record_id: string;
-    fields: BitableRecordUpdateFields;
-    accountId?: string;
-  }>({
+  registerBitableTool({
     name: "feishu_bitable_update_record",
     label: "Feishu Bitable Update Record",
     description: "Update an existing record (row) in a Bitable table",
@@ -715,7 +672,7 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     },
   });
 
-  registerBitableTool<{ name: string; folder_token?: string; accountId?: string }>({
+  registerBitableTool({
     name: "feishu_bitable_create_app",
     label: "Feishu Bitable Create App",
     description: "Create a new Bitable (multidimensional table) application",
@@ -728,14 +685,7 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     },
   });
 
-  registerBitableTool<{
-    app_token: string;
-    table_id: string;
-    field_name: string;
-    field_type: number;
-    property?: Record<string, unknown>;
-    accountId?: string;
-  }>({
+  registerBitableTool({
     name: "feishu_bitable_create_field",
     label: "Feishu Bitable Create Field",
     description: "Create a new field (column) in a Bitable table",

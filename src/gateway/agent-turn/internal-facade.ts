@@ -21,14 +21,11 @@ import {
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import type { GatewayRequestOptions } from "../server-methods/types.js";
 import { validateGatewayMethodParams } from "../server-methods/validation.js";
-import { prepareAgentRequestPreflight } from "./agent-request-preflight.js";
-import { createAgentTurnService } from "./agent-turn-service.js";
 import type {
   InternalAgentTurnDispatchOptions,
   InternalAgentTurnFacade,
   InternalAgentTurnPrincipalOptions,
 } from "./internal-facade.types.js";
-import { captureAgentTurnPrincipal, resolveAgentTurnRunObserver } from "./principal.js";
 import type { AgentTurnIo } from "./types.js";
 
 type InternalAgentTurnFacadeOptions = InternalAgentTurnPrincipalOptions & {
@@ -71,6 +68,7 @@ export function createInternalAgentTurnFacade(
       client: options.client,
       context,
     });
+    let preparationOwnedByExecution = false;
     try {
       const methodRegistry = getMethodRegistry();
       const authorization = await authorizeGatewayRequestPreDispatch({
@@ -80,6 +78,7 @@ export function createInternalAgentTurnFacade(
         context,
         methodRegistry,
       });
+      throwIfGatewayDispatchAborted(method, dispatchOptions.signal);
       entry?.assertOpen();
       if (authorization.error) {
         return { ok: false, error: authorization.error };
@@ -218,47 +217,65 @@ export function createInternalAgentTurnFacade(
           ? { emitExecutionStarted: dispatchOptions.onExecutionStarted }
           : {}),
       };
-      const operation = context.trackExecution(() =>
-        runWithGatewayRequestEnvelope(
-          method,
-          options.client,
-          async () => {
-            entry?.assertOpen();
-            dispatchOptions.assertAdmissionCurrent?.();
-            entry?.release();
-            const principal = captureAgentTurnPrincipal(options.client);
-            const preflight = prepareAgentRequestPreflight({
-              request,
+      const operation = context.trackExecution(async () => {
+        preparationOwnedByExecution = true;
+        try {
+          return await runWithGatewayRequestEnvelope(
+            method,
+            options.client,
+            async () => {
+              const [
+                { prepareAgentRequestPreflight },
+                { createAgentTurnService },
+                { captureAgentTurnPrincipal, resolveAgentTurnRunObserver },
+              ] = await Promise.all([
+                import("./agent-request-preflight.js"),
+                import("./agent-turn-service.js"),
+                import("./principal.js"),
+              ]);
+              throwIfGatewayDispatchAborted(method, dispatchOptions.signal);
+              entry?.assertOpen();
+              options.assertContextCurrent?.();
+              dispatchOptions.assertAdmissionCurrent?.();
+              entry?.release();
+              const principal = captureAgentTurnPrincipal(options.client);
+              const preflight = prepareAgentRequestPreflight({
+                request,
+                context,
+                client: principal,
+                io,
+              });
+              if (!preflight) {
+                return;
+              }
+              const onRunObserved = resolveAgentTurnRunObserver({
+                principal,
+                registerToolEventRecipient: context.registerToolEventRecipient,
+              });
+              await createAgentTurnService(
+                { context, isWebchatConnect },
+                options.assertContextCurrent,
+              ).startTurn({
+                preflight,
+                principal,
+                io,
+                onRunObserved,
+                assertAdmissionCurrent: dispatchOptions.assertAdmissionCurrent,
+                privateCompletion: dispatchOptions.privateCompletion,
+                settleWakeReplay: dispatchOptions.settleWakeReplay,
+              });
+            },
+            {
               context,
-              client: principal,
-              io,
-            });
-            if (!preflight) {
-              return;
-            }
-            const onRunObserved = resolveAgentTurnRunObserver({
-              principal,
-              registerToolEventRecipient: context.registerToolEventRecipient,
-            });
-            await createAgentTurnService(
-              { context, isWebchatConnect },
-              options.assertContextCurrent,
-            ).startTurn({
-              preflight,
-              principal,
-              io,
-              onRunObserved,
-              assertAdmissionCurrent: dispatchOptions.assertAdmissionCurrent,
-            });
-          },
-          {
-            context,
-            isWebchatConnect,
-            methodRegistry,
-            reject: (error) => io.emitAcceptance([false, undefined, error]),
-          },
-        ),
-      );
+              isWebchatConnect,
+              methodRegistry,
+              reject: (error) => io.emitAcceptance([false, undefined, error]),
+            },
+          );
+        } finally {
+          entry?.release();
+        }
+      });
       void operation.then(
         () => {
           if (!acceptance) {
@@ -307,7 +324,9 @@ export function createInternalAgentTurnFacade(
         dispatchOptions.cancelOnDeadline ? () => cancelAcceptedRun("timeout") : undefined,
       );
     } finally {
-      entry?.release();
+      if (!preparationOwnedByExecution) {
+        entry?.release();
+      }
     }
   };
 
@@ -338,6 +357,7 @@ export function createInternalAgentTurnFacade(
       client: options.client,
       context,
     });
+    let preparationOwnedByExecution = false;
     try {
       const methodRegistry = getMethodRegistry();
       const authorization = await authorizeGatewayRequestPreDispatch({
@@ -347,6 +367,7 @@ export function createInternalAgentTurnFacade(
         context,
         methodRegistry,
       });
+      throwIfGatewayDispatchAborted(method, signal);
       entry?.assertOpen();
       if (authorization.error) {
         return throwEnvelopeRejection(method, authorization.error);
@@ -356,26 +377,40 @@ export function createInternalAgentTurnFacade(
         return throwEnvelopeRejection(method, validationError);
       }
       options.assertContextCurrent?.();
-      const result = context.trackExecution(() =>
-        runWithGatewayRequestEnvelope(
-          method,
-          options.client,
-          () => {
-            entry?.assertOpen();
-            entry?.release();
-            return createAgentTurnService({ context, isWebchatConnect }).waitForTurn(params);
-          },
-          {
-            context,
-            isWebchatConnect,
-            methodRegistry,
-            reject: (error) => throwEnvelopeRejection(method, error),
-          },
-        ),
-      );
+      const result = context.trackExecution(async () => {
+        preparationOwnedByExecution = true;
+        try {
+          return await runWithGatewayRequestEnvelope(
+            method,
+            options.client,
+            async () => {
+              const { createAgentTurnService } = await import("./agent-turn-service.js");
+              throwIfGatewayDispatchAborted(method, signal);
+              entry?.assertOpen();
+              options.assertContextCurrent?.();
+              entry?.release();
+              const observation = await createAgentTurnService({
+                context,
+                isWebchatConnect,
+              }).waitForTurn(params);
+              return observation.result;
+            },
+            {
+              context,
+              isWebchatConnect,
+              methodRegistry,
+              reject: (error) => throwEnvelopeRejection(method, error),
+            },
+          );
+        } finally {
+          entry?.release();
+        }
+      });
       return (await waitForGatewayDispatch(method, result, timeoutMs, signal, onSignalAbort)) as T;
     } finally {
-      entry?.release();
+      if (!preparationOwnedByExecution) {
+        entry?.release();
+      }
     }
   };
 

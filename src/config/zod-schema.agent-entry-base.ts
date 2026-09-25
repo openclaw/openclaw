@@ -1,8 +1,8 @@
 import { parseProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { z } from "zod";
-import { AgentModelSchema } from "./zod-schema.agent-model.js";
+import { AgentModelSchema, DecisionModelSchema } from "./zod-schema.agent-model.js";
 
-const AgentRuntimePolicySchema = z
+export const AgentRuntimePolicySchema = z
   .object({
     id: z.string().optional(),
   })
@@ -11,10 +11,28 @@ const AgentRuntimePolicySchema = z
 
 const AgentModelRuntimeEntrySchema = z
   .object({
+    /** Optional display/lookup alias for this provider/model entry. */
     alias: z.string().optional(),
+    /** Provider-specific API parameters (e.g., GLM-4.7 thinking mode). */
     params: z.record(z.string(), z.unknown()).optional(),
+    /** Optional agent execution runtime for this specific provider/model entry. */
     agentRuntime: AgentRuntimePolicySchema,
+    /** Additional explicit runtime choices in the model picker; does not change the default. */
+    pickerRuntimes: z
+      .array(
+        z
+          .string()
+          .trim()
+          .min(1)
+          .max(128)
+          .regex(/^[a-z][a-z0-9-]*$/)
+          .refine((id) => id !== "auto" && id !== "default"),
+      )
+      .max(8)
+      .optional(),
+    /** OpenClaw Code Mode override; omitted inherits the enclosing activation policy. */
     codeMode: z.boolean().optional(),
+    /** Enable streaming for this model (default: true, false for Ollama to avoid SDK issue #1205). */
     streaming: z.boolean().optional(),
   })
   .strict();
@@ -23,6 +41,16 @@ export const AgentModelMapSchema = z
   .record(z.string(), AgentModelRuntimeEntrySchema)
   .superRefine((models, ctx) => {
     for (const [ref, entry] of Object.entries(models)) {
+      if (
+        entry.pickerRuntimes !== undefined &&
+        (ref.includes("*") || !parseProviderModelRef(ref))
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [ref, "pickerRuntimes"],
+          message: "Picker runtimes require an exact provider/model entry.",
+        });
+      }
       if (entry.codeMode !== undefined && (ref.includes("*") || !parseProviderModelRef(ref))) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
@@ -36,15 +64,20 @@ export const AgentModelMapSchema = z
 
 export const AgentModelPolicySchema = z
   .object({
+    /** Model refs allowed for session/run overrides. Empty or omitted allows any model. */
     allow: z.array(z.string()).optional(),
   })
   .strict();
 
 const AgentRuntimeAcpSchema = z
   .object({
+    /** ACP harness adapter id (for example codex, claude). */
     agent: z.string().optional(),
+    /** Optional ACP backend override for this agent runtime. */
     backend: z.string().optional(),
+    /** Optional ACP session mode override. */
     mode: z.enum(["persistent", "oneshot"]).optional(),
+    /** Optional runtime working directory override. */
     cwd: z.string().optional(),
   })
   .strict()
@@ -74,6 +107,7 @@ export const AgentEntryBaseSchema = z
     agentDir: z.string().optional(),
     model: AgentModelSchema.optional(),
     utilityModel: z.string().optional(),
+    decisionModel: DecisionModelSchema.optional(),
     models: AgentModelMapSchema.optional(),
     modelPolicy: AgentModelPolicySchema.optional(),
     thinkingDefault: z
@@ -88,7 +122,12 @@ export const AgentEntryBaseSchema = z
       .optional(),
     bootstrapMaxChars: z.number().int().positive().optional(),
     bootstrapTotalMaxChars: z.number().int().positive().optional(),
-    experimental: z.object({ localModelLean: z.boolean().optional() }).strict().optional(),
+    experimental: z
+      .object({
+        localModelLean: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     skills: z.array(z.string()).optional(),
     subagents: z
       .object({

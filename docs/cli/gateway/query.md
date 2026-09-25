@@ -14,6 +14,11 @@ The WebSocket RPC query subcommands and their shared options. Part of the [`open
 
 All query commands use WebSocket RPC.
 
+With token, password, or `none` authentication, ordinary RPC calls to the
+configured local loopback Gateway do not open the shared state database for device
+authentication. Explicit URL targets and paired remote connections retain their
+device authentication rules.
+
 <Tabs>
   <Tab title="Output modes">
     - Default: human-readable (colored in TTY).
@@ -34,6 +39,10 @@ All query commands use WebSocket RPC.
 <Note>
 When you set `--url`, the CLI does not fall back to config or environment credentials. Pass `--token` or `--password` explicitly. Missing explicit credentials is an error.
 </Note>
+
+WebSocket opening-handshake timeouts report a Gateway transport error with
+`ETIMEDOUT`, including the target and a status-check hint. JSON error output uses
+`error.type: "gateway_transport_error"`, as for other connection failures.
 
 ### `gateway health`
 
@@ -109,7 +118,8 @@ openclaw gateway stability --json
 <AccordionGroup>
   <Accordion title="Privacy and bundle behavior">
     - Records keep operational metadata: event names, counts, byte sizes, memory readings, queue/session state, approval ids, channel/plugin names, and redacted session summaries. They exclude chat text, webhook bodies, tool outputs, raw request/response bodies, tokens, cookies, secret values, hostnames, and raw session ids. Set `diagnostics.enabled: false` to disable the recorder entirely.
-    - Fatal Gateway exits, shutdown timeouts, and restart startup failures write the same diagnostic snapshot to `~/.openclaw/logs/stability/openclaw-stability-*.json` when the recorder has events. Inspect the newest bundle with `openclaw gateway stability --bundle latest`; `--limit`, `--type`, and `--since-seq` apply to bundle output too.
+    - Fatal Gateway exits, shutdown timeouts, and restart startup failures write a diagnostic snapshot to `~/.openclaw/logs/stability/openclaw-stability-*.json`, even when the recorder has no events. When the error has a stack, `error.stack` retains it with secrets redacted and a limit of 8,000 UTF-16 code units. Inspect the newest bundle with `openclaw gateway stability --bundle latest`; `--limit`, `--type`, and `--since-seq` apply to bundle output too.
+    - Failed shutdown steps include `evidence.shutdown`: the step and redacted error names, messages, codes, and stacks, including nested causes and aggregate errors. Use `openclaw gateway stability --bundle latest --json` to inspect these details. Capture is bounded to 32 errors and 8,000 UTF-16 code units per stack. `gateway.restart_close_failed` identifies a thrown close failure; `gateway.restart_shutdown_timeout` identifies the overall shutdown deadline. A timeout also retains any shutdown error already observed. Restart and stop failures flush the existing file logger before exit, within its shutdown budget.
 
   </Accordion>
 </AccordionGroup>
@@ -195,6 +205,7 @@ openclaw gateway status --port 19001
 <AccordionGroup>
   <Accordion title="Status semantics">
     - Stays available for diagnostics even when the local CLI config is missing or invalid.
+    - If service discovery cannot inspect a required file, such as a systemd environment file readable only by root, status reports the native service as unknown and continues with the caller's Gateway target and credentials. Observed service ownership refusals remain errors; status does not change file permissions or relax lifecycle checks.
     - Default output proves service state, WebSocket connect, and the auth capability visible at handshake time — not read/write/admin operations.
     - Probes are non-mutating for first-time device auth: they reuse an existing cached device token when one exists, but never create a new CLI device identity or read-only pairing record just to check status.
     - Resolves configured auth SecretRefs for probe auth when possible. If a required SecretRef is unresolved, `--json` reports `rpc.authWarning` when probe connectivity/auth fails; pass `--token`/`--password` explicitly or fix the secret source. Unresolved-auth warnings are suppressed once the probe succeeds.
@@ -205,12 +216,14 @@ openclaw gateway status --port 19001
     - `--deep` also runs config validation in plugin-aware mode (`pluginValidation: "full"`) and surfaces plugin manifest warnings (e.g. missing channel config metadata). Default `gateway status` keeps the fast read-only path that skips plugin validation.
     - On Linux, status reports the effective service currently loaded by systemd, including loaded drop-ins. If the unit or a drop-in changed on disk, `Systemd reload: pending` means you must run `systemctl --user daemon-reload` (or `sudo systemctl daemon-reload` for a system service) before those changes take effect.
     - Human output includes the resolved file log path plus CLI-vs-service config paths/validity to help diagnose profile or state-dir drift.
+    - If the Gateway reports no version, human output still shows the locally inspected service package version and path when readable. A version mismatch suggests reinstalling only when that service is the probe target; installation restrictions appear as the existing refusal message.
+    - A missing native service is informational when that service is diagnostic-only, such as a Gateway using a non-default state directory. The connectivity probe still reports the selected Gateway's result.
     - Install and reinstall guidance follows the invoking shell's installation rules, not the stored service environment or probe target. Nix mode, external supervision, noncanonical installation identity, and Linux sudo/user-manager mismatches show the install refusal instead of an unusable command. A diagnostic-only target is not itself a refusal. Nix mode blocks installation, not starting an existing service.
     - Human output includes `Gateway heap:` with configured service heap controls and a separate install-time recommendation based on memory visible to the CLI. JSON output exposes the same report as `service.gatewayHeap`. Neither is a measurement of the running Gateway's V8 heap ceiling; use runtime memory diagnostics for that.
 
   </Accordion>
   <Accordion title="Linux systemd auth-drift checks">
-    - Service auth drift checks read both `Environment=` and `EnvironmentFile=` from the unit (including `%h`, quoted paths, multiple files, and optional `-` files).
+    - Service auth drift checks read both `Environment=` and `EnvironmentFile=` from the unit. `Environment=` assignments may be quoted. Use one unquoted absolute path per `EnvironmentFile=` directive, including paths with spaces; multiple directives and optional `-` files are supported. `%h` expands to the service home, and `%%` represents a literal percent sign.
     - Resolves `gateway.auth.token` SecretRefs using merged runtime env (service command env first, then process env fallback).
     - Token-drift checks skip config token resolution when token auth is not effectively active (`gateway.auth.mode` explicitly `password`/`none`/`trusted-proxy`, or mode unset where password can win and no token candidate can win).
 
@@ -308,11 +321,20 @@ Config defaults (optional): `gateway.remote.sshTarget`, `gateway.remote.sshIdent
 
 Low-level RPC helper.
 
+Use `--expect-url <url>` to bind a call to a previously observed Gateway endpoint
+without changing URL selection or authentication. The CLI compares the exact
+resolved URL before connecting and fails if the destination changed. Automation
+can obtain the endpoint from `gateway.url` in `openclaw status --json`; a redacted
+URL cannot serve as an exact endpoint assertion.
+
 ```bash
 openclaw gateway call status
 openclaw gateway call health --port 18999
 openclaw gateway call logs.tail --params '{"limit": 200}'
 ```
+
+To add an existing checkout to the Control UI's Place picker, use the
+[project registration and listing examples](/web/control-ui/sessions-and-sidebar#register-an-existing-repository).
 
 For `sessions.send` and `chat.send`, JSON `timeoutMs` is the receiving agent's
 execution budget, not an acknowledgment timeout. Omit it for ordinary
@@ -322,9 +344,16 @@ coordination; `--timeout` independently limits how long this CLI waits:
 openclaw gateway call sessions.send --params '{"key":"<session-key>","message":"Status update"}' --timeout 10000
 ```
 
-A `started` response confirms acceptance, not a completed reply. Agents should
-normally use [`sessions_send` with `timeoutSeconds: 0`](/concepts/session-tool#sending-cross-session-messages)
-for nonblocking coordination.
+A `started` response confirms acceptance, not a completed reply. These CLI methods
+are for operators and external automation. Agents use their exposed
+[`sessions_send` tool](/concepts/session-tool#sending-cross-session-messages),
+never a shell or direct RPC substitute. An unavailable messaging tool is not
+permission to use the CLI. Subagents return results through their accepted task
+completion path; the parent relays any necessary coordination with other sessions.
+
+In an agent's `exec` subprocess (`OPENCLAW_SHELL=exec`), message RPCs are
+refused before connecting so worker reports cannot appear as fresh human input.
+Ordinary operator terminals and non-message Gateway diagnostics are unchanged.
 
 <ParamField path="--params <json>" type="string" default="{}">
   JSON object string for params.
@@ -387,4 +416,6 @@ openclaw gateway resume <suspensionId> --port 18999 --json
 ```
 
 An already expired or resumed lease is a successful no-op. A different active
-suspension ID is rejected.
+suspension ID is rejected. Once shutdown commits, resume is refused even for the
+original owner; `gateway.suspend.status` reports that owner's shutdown progress
+until server teardown closes RPC access.

@@ -13,14 +13,13 @@ import {
   openNodeSqliteDatabase,
   runSqliteImmediateTransactionSync,
   type SqliteWorkerCommand,
-} from "openclaw/plugin-sdk/sqlite-runtime";
+} from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { MAX_REPORT_BYTES } from "./limits.js";
 import { DAY_MS } from "./periods.js";
 import type {
   PeriodListEntry,
   PersonDay,
   ReportRun,
-  RunPeriod,
   StoredPeriod,
   TeamReportsOperations,
 } from "./store-contract.js";
@@ -31,7 +30,10 @@ import {
   summaryDocumentSchema,
   TEAM_REPORTS_SCHEMA_SQL,
 } from "./store-schema.js";
-import type { Period, ReportDocument, SummaryDocument } from "./types.js";
+import type { Period, ReportDocument } from "./types.js";
+
+// Bound each 12-column person-day insert to 768 parameters.
+const PERSON_DAY_INSERT_BATCH_SIZE = 64;
 
 type PeriodRow = {
   period: Period;
@@ -75,12 +77,11 @@ type ReportsDatabase = {
   team_reports_runs: RunRow;
 };
 
-function readPeriod(row: PeriodRow): StoredPeriod {
+function readPeriod(row: Pick<PeriodRow, "data_json" | "summary_json">) {
   return {
     report: reportDocumentSchema.parse(JSON.parse(row.data_json)),
     summary:
       row.summary_json === null ? null : summaryDocumentSchema.parse(JSON.parse(row.summary_json)),
-    markdown: row.markdown,
   };
 }
 
@@ -104,7 +105,7 @@ class TeamReportsDatabase {
     this.query = getNodeSqliteKysely<ReportsDatabase>(db);
   }
 
-  upsertPeriod(value: Omit<StoredPeriod, "summary"> & { summary?: SummaryDocument | null }): void {
+  upsertPeriod(value: TeamReportsOperations["upsertPeriod"]["input"]): void {
     const { report } = value;
     const dataJson = JSON.stringify(report);
     if (Buffer.byteLength(dataJson, "utf8") > MAX_REPORT_BYTES) {
@@ -151,10 +152,12 @@ class TeamReportsDatabase {
             .deleteFrom("team_reports_person_days")
             .where("day_key", "=", report.period.key),
         );
-        for (const person of people) {
+        for (let start = 0; start < people.length; start += PERSON_DAY_INSERT_BATCH_SIZE) {
           executeSqliteQuerySync(
             this.db,
-            this.query.insertInto("team_reports_person_days").values(person),
+            this.query
+              .insertInto("team_reports_person_days")
+              .values(people.slice(start, start + PERSON_DAY_INSERT_BATCH_SIZE)),
           );
         }
       }
@@ -164,57 +167,38 @@ class TeamReportsDatabase {
   getPeriod(period: Period, key: string): StoredPeriod | undefined {
     const row = executeSqliteQueryTakeFirstSync(
       this.db,
-      this.query
-        .selectFrom("team_reports_periods")
-        .selectAll()
-        .where("period", "=", period)
-        .where("period_key", "=", key),
+      this.selectPeriodDocument(period, key).select("markdown"),
     );
+    return row ? { ...readPeriod(row), markdown: row.markdown } : undefined;
+  }
+
+  getPeriodDocument(period: Period, key: string) {
+    const row = executeSqliteQueryTakeFirstSync(this.db, this.selectPeriodDocument(period, key));
     return row ? readPeriod(row) : undefined;
   }
 
-  listPeriods(
-    options: {
-      period?: Period;
-      status?: "partial" | "closed";
-      limit?: number;
-    } = {},
-  ): PeriodListEntry[] {
-    let query = this.query
-      .selectFrom("team_reports_periods")
-      .select([
-        "period",
-        "period_key as key",
-        "since_ms as sinceMs",
-        "until_ms as untilMs",
-        "status",
-        "generated_at_ms as generatedAtMs",
-      ])
-      // SQLite extracts only the chart totals instead of materializing every report in JavaScript.
-      .select((eb) => [
-        eb.fn<number>("json_extract", ["data_json", eb.val("$.activeMembers")]).as("activeMembers"),
-        eb.fn<number>("json_extract", ["data_json", eb.val("$.memberCount")]).as("memberCount"),
-        eb
-          .fn<number>("json_extract", ["data_json", eb.val("$.totals.github.total")])
-          .as("githubTotal"),
-        eb
-          .fn<number>("json_extract", ["data_json", eb.val("$.totals.discord.messages")])
-          .as("discordMessages"),
-        eb
-          .fn<number>("json_extract", ["data_json", eb.val("$.totals.github.commits")])
-          .as("commits"),
-        eb
-          .fn<number>("json_extract", ["data_json", eb.val("$.totals.github.prsOpened")])
-          .as("prsOpened"),
-        eb
-          .fn<number>("json_extract", ["data_json", eb.val("$.totals.github.prsMerged")])
-          .as("prsMerged"),
-        eb
-          .fn<number>("json_extract", ["data_json", eb.val("$.totals.github.securityAdvisories")])
-          .as("securityAdvisories"),
-      ])
-      .orderBy("since_ms", "desc")
-      .orderBy("period", "asc");
+  private selectPeriodDocument(period: Period, key: string) {
+    return (
+      this.query
+        .selectFrom("team_reports_periods")
+        // Retain native scalar decoding before validating the complete report and summary.
+        .select([
+          "period",
+          "period_key",
+          "since_ms",
+          "until_ms",
+          "status",
+          "generated_at_ms",
+          "data_json",
+          "summary_json",
+        ])
+        .where("period", "=", period)
+        .where("period_key", "=", key)
+    );
+  }
+
+  listPeriods(options: TeamReportsOperations["listPeriods"]["input"] = {}): PeriodListEntry[] {
+    let query = this.selectPeriods();
     if (options.period) {
       query = query.where("period", "=", options.period);
     }
@@ -222,6 +206,91 @@ class TeamReportsDatabase {
       query = query.where("status", "=", options.status);
     }
     return executeSqliteQuerySync(this.db, query.limit(options.limit ?? 180)).rows;
+  }
+
+  private selectPeriods() {
+    return (
+      this.query
+        .selectFrom("team_reports_periods")
+        .select([
+          "period",
+          "period_key as key",
+          "since_ms as sinceMs",
+          "until_ms as untilMs",
+          "status",
+          "generated_at_ms as generatedAtMs",
+        ])
+        // SQLite extracts only the chart totals instead of materializing every report in JavaScript.
+        .select((eb) => [
+          eb
+            .fn<number>("json_extract", ["data_json", eb.val("$.activeMembers")])
+            .as("activeMembers"),
+          eb.fn<number>("json_extract", ["data_json", eb.val("$.memberCount")]).as("memberCount"),
+          eb
+            .fn<number>("json_extract", ["data_json", eb.val("$.totals.github.total")])
+            .as("githubTotal"),
+          eb
+            .fn<number>("json_extract", ["data_json", eb.val("$.totals.discord.messages")])
+            .as("discordMessages"),
+          eb
+            .fn<number>("json_extract", ["data_json", eb.val("$.totals.github.commits")])
+            .as("commits"),
+          eb
+            .fn<number>("json_extract", ["data_json", eb.val("$.totals.github.prsOpened")])
+            .as("prsOpened"),
+          eb
+            .fn<number>("json_extract", ["data_json", eb.val("$.totals.github.prsMerged")])
+            .as("prsMerged"),
+          eb
+            .fn<number>("json_extract", ["data_json", eb.val("$.totals.github.securityAdvisories")])
+            .as("securityAdvisories"),
+        ])
+        .orderBy("since_ms", "desc")
+        .orderBy("period", "asc")
+    );
+  }
+
+  private latestDay() {
+    return this.selectPeriods()
+      .select(["data_json", "summary_json"])
+      .where("period", "=", "day")
+      .limit(1);
+  }
+
+  latestSourceWarnings(): string[] {
+    const row = executeSqliteQueryTakeFirstSync(this.db, this.latestDay());
+    if (!row) {
+      return [];
+    }
+    const { report, summary } = readPeriod(row);
+    return report.sources.github.warnings.concat(
+      report.sources.discord?.warnings ?? [],
+      summary?.warnings ?? [],
+    );
+  }
+
+  latestPeople(): TeamReportsOperations["latestPeople"]["output"] {
+    const row = executeSqliteQueryTakeFirstSync(this.db, this.latestDay());
+    if (!row) {
+      return undefined;
+    }
+    // Validate the complete stored documents before omitting activity and summary payloads.
+    const { report } = readPeriod(row);
+    return {
+      key: row.key,
+      members: report.members.map(
+        ({ login, aliases, display, affiliation, roleGroup, roleLabel, access, areas }) => ({
+          login,
+          aliases,
+          display,
+          affiliation,
+          roleGroup,
+          roleLabel,
+          access,
+          areas,
+        }),
+      ),
+    };
   }
 
   getDayReports(sinceMs: number, untilMs: number): ReportDocument[] {
@@ -239,7 +308,7 @@ class TeamReportsDatabase {
 
   listPersonDays(
     login: string,
-    options: { since?: string; until?: string; limit?: number } = {},
+    options: TeamReportsOperations["listPersonDays"]["input"]["options"] = {},
   ): PersonDay[] {
     let query = this.selectPersonDays()
       .where("login", "=", login.toLowerCase())
@@ -282,12 +351,7 @@ class TeamReportsDatabase {
       ]);
   }
 
-  startRun(run: {
-    id: string;
-    kind: ReportRun["kind"];
-    startedAtMs: number;
-    periods: RunPeriod[];
-  }): void {
+  startRun(run: TeamReportsOperations["startRun"]["input"]): void {
     executeSqliteQuerySync(
       this.db,
       this.query.insertInto("team_reports_runs").values({
@@ -303,15 +367,7 @@ class TeamReportsDatabase {
     );
   }
 
-  finishRun(
-    id: string,
-    result: {
-      finishedAtMs: number;
-      status: "ok" | "error";
-      stats?: Record<string, unknown>;
-      error?: string;
-    },
-  ): void {
+  finishRun(id: string, result: TeamReportsOperations["finishRun"]["input"]["result"]): void {
     const updated = executeSqliteQuerySync(
       this.db,
       this.query
@@ -332,7 +388,7 @@ class TeamReportsDatabase {
 
   listRuns(
     limit = 20,
-    filter: { kind?: ReportRun["kind"]; status?: ReportRun["status"] } = {},
+    filter: TeamReportsOperations["listRuns"]["input"]["filter"] = {},
   ): ReportRun[] {
     let query = this.query.selectFrom("team_reports_runs").selectAll();
     if (filter.kind) {
@@ -462,8 +518,14 @@ export function createSqliteWorkerBackend(_input: undefined, context: { database
           return database.upsertPeriod(command.input);
         case "getPeriod":
           return database.getPeriod(command.input.period, command.input.key);
+        case "getPeriodDocument":
+          return database.getPeriodDocument(command.input.period, command.input.key);
         case "listPeriods":
           return database.listPeriods(command.input);
+        case "latestSourceWarnings":
+          return database.latestSourceWarnings();
+        case "latestPeople":
+          return database.latestPeople();
         case "getDayReports":
           return database.getDayReports(command.input.sinceMs, command.input.untilMs);
         case "listPersonDays":

@@ -1,26 +1,25 @@
-// Feishu plugin module implements monitor.transport behavior.
 import crypto from "node:crypto";
 import * as http from "node:http";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import { channelBlockedPatch, channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
+  applyBasicWebhookRequestGuards,
+  resolveRequestClientIp,
+} from "openclaw/plugin-sdk/webhook-ingress";
+import {
   createWebhookInFlightLimiter,
+  installRequestBodyLimitGuard,
+  readWebhookBodyOrReject,
   sendHttpRequestRejection,
 } from "openclaw/plugin-sdk/webhook-request-guards";
+import type { RuntimeEnv } from "../runtime-api.js";
 import { waitForAbortableDelay } from "./async.js";
 import { createFeishuWSClient } from "./client.js";
 import type { FeishuWebhookInvoker } from "./feishu-ingress.js";
 import { buildFeishuWebhookRateLimitKey } from "./monitor-rate-limit-key.js";
-import {
-  applyBasicWebhookRequestGuards,
-  installRequestBodyLimitGuard,
-  readWebhookBodyOrReject,
-  resolveRequestClientIp,
-  safeEqualSecret,
-  type RuntimeEnv,
-} from "./monitor-transport-runtime-api.js";
 import type { FeishuStatusSink } from "./monitor.js";
 import {
   clearFeishuBotIdentityState,
@@ -67,10 +66,6 @@ const FEISHU_WS_RECONNECT_EXHAUSTED_RE = /^WebSocket reconnect exhausted after \
 const FEISHU_WS_AUTORECONNECT_DISABLED_ERROR =
   "WebSocket connect failed and autoReconnect is disabled";
 
-function isFeishuWebhookPayload(value: unknown): value is Record<string, unknown> {
-  return isRecord(value);
-}
-
 const BLOCKED_FEISHU_WEBHOOK_PAYLOAD_KEYS = new Set([
   "__proto__",
   "prototype",
@@ -96,7 +91,7 @@ function buildFeishuWebhookEnvelope(
 function parseFeishuWebhookPayload(rawBody: string): Record<string, unknown> | null {
   try {
     const parsed = JSON.parse(rawBody) as unknown;
-    return isFeishuWebhookPayload(parsed) ? parsed : null;
+    return isRecord(parsed) ? parsed : null;
   } catch {
     return null;
   }

@@ -138,7 +138,7 @@ type EditDiscordComponentMessage = (
 type RegisterBuiltDiscordComponentMessage = (params: {
   buildResult: DiscordComponentBuildResult;
   messageId: string;
-}) => void;
+}) => Promise<void>;
 
 type DiscordApiFacadeModule = {
   collectDiscordStatusIssues: (accounts: ChannelAccountSnapshot[]) => ChannelStatusIssue[];
@@ -316,7 +316,7 @@ export const editDiscordComponentMessage: DiscordRuntimeFacadeModule["editDiscor
       ...args,
     )) as DiscordRuntimeFacadeModule["editDiscordComponentMessage"];
 
-/** Register a built component message after Discord assigns its message id. */
+/** Await callback registration after Discord assigns the built component message its id. */
 export const registerBuiltDiscordComponentMessage: DiscordRuntimeFacadeModule["registerBuiltDiscordComponentMessage"] =
   ((...args) =>
     loadDiscordRuntimeFacadeModule().registerBuiltDiscordComponentMessage(

@@ -27,6 +27,7 @@
   "ignorePatterns": [
     "apps/",
     "CHANGELOG.md",
+    "CHANGELOG/**",
     "CLAUDE.md",
     "docker-compose.yml",
     "dist/",

@@ -16,11 +16,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import { applyCommandTextToParams } from "./command-context-rewrite.js";
 import { commandReply as goalReply, defineAuthorizedTextCommand } from "./command-gates.js";
 import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
-import type {
-  CommandHandler,
-  CommandHandlerResult,
-  HandleCommandsParams,
-} from "./commands-types.js";
+import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
 
 const GOAL_COMMAND_PREFIX = "/goal";
 const GOAL_CONTINUATION_PROMPT_PREFIX =
@@ -54,14 +50,15 @@ export function parseGoalCommand(raw: string): { action: string; text: string } 
   if (!argText) {
     return { action: "status", text: "" };
   }
-  const [actionRaw = "", ...rest] = argText.split(/\s+/);
+  const actionEnd = argText.search(/\s/);
+  const actionRaw = actionEnd === -1 ? argText : argText.slice(0, actionEnd);
   const action = normalizeOptionalLowercaseString(actionRaw) ?? "status";
   if (!GOAL_ACTIONS.has(action)) {
     return { action: "start", text: argText };
   }
   return {
     action,
-    text: rest.join(" ").trim(),
+    text: actionEnd === -1 ? "" : argText.slice(actionEnd).trim(),
   };
 }
 
@@ -109,15 +106,6 @@ export function isFormattedGoalContinuationPrompt(message: string): boolean {
     trimmed.startsWith(GOAL_CONTINUATION_PROMPT_PREFIX) ||
     trimmed.startsWith(GOAL_RESUME_NOTE_PROMPT_PREFIX)
   );
-}
-
-function goalContinuation(): CommandHandlerResult {
-  return { shouldContinue: true };
-}
-
-function goalErrorReply(error: unknown): CommandHandlerResult {
-  const message = error instanceof Error ? error.message : String(error);
-  return goalReply(`Goal error: ${message}`);
 }
 
 type ParsedGoalCommand = NonNullable<ReturnType<typeof parseGoalCommand>>;
@@ -241,11 +229,12 @@ export const handleGoalCommand: CommandHandler = defineAuthorizedTextCommand(
       }
       if (result.continuationPrompt) {
         applyCommandTextToParams(params, result.continuationPrompt);
-        return goalContinuation();
+        return { shouldContinue: true };
       }
       return goalReply(result.text);
     } catch (error) {
-      return goalErrorReply(error);
+      const message = error instanceof Error ? error.message : String(error);
+      return goalReply(`Goal error: ${message}`);
     }
   },
 );

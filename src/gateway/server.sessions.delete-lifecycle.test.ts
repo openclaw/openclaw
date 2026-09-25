@@ -19,7 +19,7 @@ import {
   beginSessionWorkAdmission,
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
-import { embeddedRunMock, rpcReq, writeSessionStore } from "./test-helpers.js";
+import { embeddedRunMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
   sessionLifecycleHookMocks,
@@ -96,6 +96,26 @@ function expectThreadBindingsUnbound(targetSessionKey: string) {
     reason: "session-delete",
   });
 }
+
+test("sessions.delete protects the sole explicit agent's global session before cleanup", async () => {
+  const { storePath } = await createSessionStoreDir();
+  testState.agentsConfig = { ownership: "explicit", entries: { ops: {} } };
+  testState.sessionConfig = { scope: "global" };
+  const target = { agentId: "ops", sessionKey: "global", storePath };
+  await replaceSessionEntry(target, sessionStoreEntry("sole-global"));
+  const before = loadSessionEntry(target);
+  embeddedRunMock.activeIds.add("sole-global");
+  embeddedRunMock.waitResults.set("sole-global", true);
+
+  const result = await directSessionReq("sessions.delete", { key: "global", agentId: "ops" });
+
+  expect(result.ok).toBe(false);
+  expect(result.error?.message).toBe("Cannot delete the main session (global).");
+  expect(loadSessionEntry(target)).toEqual(before);
+  expect(embeddedRunMock.abortCalls).not.toContain("sole-global");
+  expect(bundleMcpRuntimeMocks.disposeSessionMcpRuntime).not.toHaveBeenCalled();
+  expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).not.toHaveBeenCalled();
+});
 
 test("sessions.delete rejects main and aborts active runs", async () => {
   const { dir } = await createSessionStoreDir();

@@ -2,18 +2,16 @@
 // Validates the npm tarball Docker E2E lanes install.
 // This is intentionally tarball-only: the check proves Docker lanes consume the
 // prebuilt package artifact with dist inventory, not a source checkout.
-import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { pathToFileURL } from "node:url";
-import { gte as semverGte, valid as validSemver } from "semver";
 import { extract as extractTar, list as listTar, type ReadEntry } from "tar";
 import { coerceErrorMessage } from "./lib/error-format.mts";
-import { LOCAL_BUILD_METADATA_DIST_PATHS } from "./lib/local-build-metadata-paths.mts";
 import { collectNpmPackInventory, compareNpmPackInventory } from "./lib/npm-pack-inventory.mts";
+import { assertNpmShrinkwrapDependencies } from "./lib/npm-shrinkwrap-dependencies.mjs";
+import { collectBundledDependencyErrors } from "./lib/package-bundled-dependencies.mts";
 import { collectPackageDistImportErrors } from "./lib/package-dist-imports.mjs";
 import {
   comparePackageDistInventory,
@@ -111,39 +109,6 @@ const PACKAGE_DEPENDENCY_SECTIONS = [
   "peerDependencies",
   "devDependencies",
 ] as const;
-const REQUIRED_BUNDLED_WORKSPACE_DEPENDENCIES = ["@openclaw/ai"];
-// Strict Docker artifacts bundle this private runtime rather than resolving it
-// from npm. Keep the concrete load-bearing entries explicit instead of
-// reimplementing Node's conditional package-exports resolver here.
-const REQUIRED_BUNDLED_WORKSPACE_RUNTIME_ENTRIES = new Map([
-  [
-    "@openclaw/ai",
-    [
-      { specifier: "@openclaw/ai", entry: "dist/index.mjs" },
-      { specifier: "@openclaw/ai/providers", entry: "dist/providers.mjs" },
-      {
-        specifier: "@openclaw/ai/transports",
-        entry: "dist/transports.mjs",
-        whenExported: "./transports",
-      },
-      {
-        specifier: "@openclaw/ai/internal/openai-responses-payload-policy",
-        entry: "dist/internal/openai-responses-payload-policy.mjs",
-        whenExported: "./internal/openai-responses-payload-policy",
-      },
-      {
-        specifier: "@openclaw/ai/internal/runtime",
-        entry: "dist/internal/runtime.mjs",
-      },
-      {
-        specifier: "@openclaw/ai/internal/tool-schema",
-        entry: "dist/internal/tool-schema.mjs",
-        whenExported: "./internal/tool-schema",
-      },
-    ],
-  ],
-]);
-
 function collectWorkspaceProtocolDependencyErrors(packageJson: unknown, label: string): string[] {
   const errors: string[] = [];
   if (!packageJson || typeof packageJson !== "object") {
@@ -162,173 +127,6 @@ function collectWorkspaceProtocolDependencyErrors(packageJson: unknown, label: s
         errors.push(`${label} ${section}.${name} must not use workspace protocol ${spec}`);
       }
     }
-  }
-
-  return errors;
-}
-
-function listBundleDependencies(packageJson: unknown): string[] {
-  if (!packageJson || typeof packageJson !== "object") {
-    return [];
-  }
-  const packageRecord = packageJson as Record<string, unknown>;
-  if (packageRecord.bundleDependencies === true) {
-    return Object.keys((packageRecord.dependencies ?? {}) as object);
-  }
-  const bundleDependencies = Array.isArray(packageRecord.bundleDependencies)
-    ? packageRecord.bundleDependencies
-    : packageRecord.bundledDependencies;
-  return Array.isArray(bundleDependencies)
-    ? bundleDependencies.filter((name): name is string => typeof name === "string")
-    : [];
-}
-
-function resolveBundledPackageSpecifiers(
-  packageRoot: string,
-  specifiers: string[],
-): Record<string, string> | null {
-  const result = spawnSync(
-    process.execPath,
-    [
-      "--input-type=module",
-      "--eval",
-      `const resolutions = {};
-for (const specifier of JSON.parse(process.argv[1])) {
-  try {
-    resolutions[specifier] = import.meta.resolve(specifier);
-  } catch {
-    resolutions[specifier] = "";
-  }
-}
-process.stdout.write(JSON.stringify(resolutions));`,
-      JSON.stringify(specifiers),
-    ],
-    { cwd: packageRoot, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-  );
-  if (result.status !== 0) {
-    return null;
-  }
-  try {
-    return JSON.parse(result.stdout) as Record<string, string>;
-  } catch {
-    return null;
-  }
-}
-
-function collectBundledPackageRuntimeErrors({
-  name,
-  entries,
-  files,
-  packageRoot,
-  readText,
-}: {
-  entries: ReadonlySet<string>;
-  files: string[];
-  name: string;
-  packageRoot: string;
-  readText: (relativePath: string) => string;
-}): string[] {
-  const errors: string[] = [];
-  const packagePrefix = `node_modules/${name}/`;
-  const manifestPath = `${packagePrefix}package.json`;
-  let bundledPackageJson: Record<string, unknown>;
-  try {
-    bundledPackageJson = JSON.parse(readText(manifestPath)) as Record<string, unknown>;
-  } catch (error) {
-    errors.push(`unreadable bundled ${name} package.json: ${coerceErrorMessage(error)}`);
-    return errors;
-  }
-  if (bundledPackageJson.name !== name) {
-    errors.push(`bundled ${name} package.json must name ${name}`);
-  }
-  const packageExports =
-    bundledPackageJson.exports &&
-    typeof bundledPackageJson.exports === "object" &&
-    !Array.isArray(bundledPackageJson.exports)
-      ? (bundledPackageJson.exports as Record<string, unknown>)
-      : {};
-  // Trusted current-main harnesses validate frozen release targets. Require
-  // post-cut runtime subpaths only when the candidate manifest owns them.
-  const runtimeEntries = (REQUIRED_BUNDLED_WORKSPACE_RUNTIME_ENTRIES.get(name) ?? []).filter(
-    ({ whenExported }) => !whenExported || Object.hasOwn(packageExports, whenExported),
-  );
-  const resolutions = resolveBundledPackageSpecifiers(
-    packageRoot,
-    runtimeEntries.map(({ specifier }) => specifier),
-  );
-  if (!resolutions) {
-    errors.push(`bundled ${name} runtime specifier resolution failed`);
-  }
-  for (const { entry, specifier } of runtimeEntries) {
-    if (!entries.has(`${packagePrefix}${entry}`)) {
-      errors.push(`bundled ${name} is missing required runtime entry ${entry}`);
-    }
-    const resolvedUrl = resolutions?.[specifier] ?? "";
-    if (!resolvedUrl) {
-      errors.push(`bundled ${name} runtime specifier ${specifier} is not resolvable`);
-      continue;
-    }
-    const expectedUrl = pathToFileURL(path.join(packageRoot, packagePrefix, entry)).href;
-    if (resolvedUrl !== expectedUrl) {
-      errors.push(
-        `bundled ${name} runtime specifier ${specifier} resolves to ${resolvedUrl} instead of ${expectedUrl}`,
-      );
-    }
-  }
-  const bundledFiles = files
-    .filter((file) => file.startsWith(packagePrefix))
-    .map((file) => file.slice(packagePrefix.length));
-  errors.push(
-    ...collectPackageDistImportErrors({
-      files: bundledFiles,
-      readText: (file: string) => readText(`${packagePrefix}${file}`),
-    }).map((error) => `bundled ${name} ${error}`),
-  );
-  return errors;
-}
-
-function collectRequiredBundledWorkspaceDependencyErrors(
-  packageJson: unknown,
-  entrySet: ReadonlySet<string>,
-  files: string[],
-  packageRoot: string,
-  readText: (relativePath: string) => string,
-): string[] {
-  const errors: string[] = [];
-  if (!packageJson || typeof packageJson !== "object") {
-    return errors;
-  }
-  const packageRecord = packageJson as Record<string, unknown>;
-
-  const dependencies = packageRecord.dependencies;
-  if (!dependencies || typeof dependencies !== "object" || Array.isArray(dependencies)) {
-    return errors;
-  }
-  const dependencyRecord = dependencies as Record<string, unknown>;
-
-  const bundledDependencies = new Set(listBundleDependencies(packageJson));
-  for (const name of REQUIRED_BUNDLED_WORKSPACE_DEPENDENCIES) {
-    if (typeof dependencyRecord[name] !== "string") {
-      continue;
-    }
-    if (!bundledDependencies.has(name)) {
-      errors.push(
-        `package.json dependencies.${name} must be listed in bundleDependencies because it is private to the OpenClaw workspace`,
-      );
-    }
-    if (!entrySet.has(`node_modules/${name}/package.json`)) {
-      errors.push(`package.json dependencies.${name} must be bundled in node_modules/${name}`);
-      continue;
-    }
-    errors.push(
-      ...collectBundledPackageRuntimeErrors({
-        name,
-        entries: entrySet,
-        files,
-        packageRoot,
-        readText,
-      }),
-    );
   }
 
   return errors;
@@ -622,44 +420,12 @@ try {
 const entrySet = new Set(normalized);
 const errors: string[] = [];
 const warnings: string[] = [];
-const CODE_MODE_WORKER_PATH = "dist/agents/code-mode.worker.js";
-const FIRST_CODE_MODE_WORKER_VERSION = "2026.5.14-beta.2";
+const LEGACY_CODE_MODE_WORKER_PATH = "dist/agents/code-mode.worker.js";
+const CODE_MODE_WORKER_PATH = "dist/agents/code-mode-node.worker.js";
 const REQUIRED_TARBALL_ENTRIES = ["dist/control-ui/index.html", ...WORKSPACE_TEMPLATE_PACK_PATHS];
 const REQUIRED_TARBALL_ENTRY_PREFIXES = ["dist/control-ui/assets/"];
-const LEGACY_PACKAGE_ACCEPTANCE_COMPAT_MAX = { year: 2026, month: 4, day: 25 };
-const LEGACY_LOCAL_BUILD_METADATA_COMPAT_MAX = { year: 2026, month: 4, day: 26 };
 // 2026.8.1 shipped the old dist guard. Historical inspection must still accept it.
 const LEGACY_LIFECYCLE_MARKER_COMPAT_MAX = { year: 2026, month: 8, day: 1 };
-const FORBIDDEN_LOCAL_BUILD_METADATA_FILES = new Set<string>(LOCAL_BUILD_METADATA_DIST_PATHS);
-
-const LEGACY_OMITTED_PRIVATE_QA_INVENTORY_PREFIXES = [
-  "dist/extensions/qa-channel/",
-  "dist/extensions/qa-lab/",
-  "dist/extensions/qa-matrix/",
-  "dist/plugin-sdk/extensions/qa-channel/",
-  "dist/plugin-sdk/extensions/qa-lab/",
-];
-const LEGACY_OMITTED_PRIVATE_QA_INVENTORY_FILES = new Set([
-  "dist/plugin-sdk/qa-channel.d.ts",
-  "dist/plugin-sdk/qa-channel.js",
-  "dist/plugin-sdk/qa-channel-protocol.d.ts",
-  "dist/plugin-sdk/qa-channel-protocol.js",
-  "dist/plugin-sdk/qa-lab.d.ts",
-  "dist/plugin-sdk/qa-lab.js",
-  "dist/plugin-sdk/qa-runtime.d.ts",
-  "dist/plugin-sdk/qa-runtime.js",
-  "dist/plugin-sdk/src/plugin-sdk/qa-channel.d.ts",
-  "dist/plugin-sdk/src/plugin-sdk/qa-channel-protocol.d.ts",
-  "dist/plugin-sdk/src/plugin-sdk/qa-lab.d.ts",
-  "dist/plugin-sdk/src/plugin-sdk/qa-runtime.d.ts",
-]);
-
-function isLegacyOmittedPrivateQaInventoryEntry(relativePath: string): boolean {
-  return (
-    LEGACY_OMITTED_PRIVATE_QA_INVENTORY_FILES.has(relativePath) ||
-    LEGACY_OMITTED_PRIVATE_QA_INVENTORY_PREFIXES.some((prefix) => relativePath.startsWith(prefix))
-  );
-}
 
 function parseCalver(version: string): Calver | null {
   const match = /^(\d{4})\.(\d{1,2})\.(\d{1,2})(?:[-+].*)?$/u.exec(version);
@@ -680,16 +446,6 @@ function compareCalver(left: Calver, right: Calver): number {
     }
   }
   return 0;
-}
-
-function isLegacyPackageAcceptanceCompatVersion(version: string): boolean {
-  const parsed = parseCalver(version);
-  return parsed ? compareCalver(parsed, LEGACY_PACKAGE_ACCEPTANCE_COMPAT_MAX) <= 0 : false;
-}
-
-function isLegacyLocalBuildMetadataCompatVersion(version: string): boolean {
-  const parsed = parseCalver(version);
-  return parsed ? compareCalver(parsed, LEGACY_LOCAL_BUILD_METADATA_COMPAT_MAX) <= 0 : false;
 }
 
 function isLegacyLifecycleMarkerCompatVersion(version: string): boolean {
@@ -739,17 +495,16 @@ if (entrySet.has("package.json")) {
     packageJson = JSON.parse(readTarEntry("package.json")) as PackageManifest;
     packageVersion = typeof packageJson.version === "string" ? packageJson.version : "";
     errors.push(...collectWorkspaceProtocolDependencyErrors(packageJson, "package.json"));
-    if (cliArgs.requireBundledWorkspaceDeps) {
-      errors.push(
-        ...collectRequiredBundledWorkspaceDependencyErrors(
-          packageJson,
-          entrySet,
-          normalized,
-          extractedPackageRoot,
-          readTarEntry,
-        ),
-      );
-    }
+    errors.push(
+      ...collectBundledDependencyErrors({
+        packageJson,
+        entries: entrySet,
+        files: normalized,
+        packageRoot: extractedPackageRoot,
+        readText: readTarEntry,
+        requireBundledWorkspaceDeps: cliArgs.requireBundledWorkspaceDeps,
+      }),
+    );
   } catch {
     packageVersion = "";
   }
@@ -769,19 +524,15 @@ if (packageJson) {
     errors.push(`unreadable packaged extension asset metadata: ${coerceErrorMessage(error)}`);
   }
 }
-const allowsLegacyLocalBuildMetadata = isLegacyLocalBuildMetadataCompatVersion(packageVersion);
-errors.push(
-  ...collectForbiddenPackedPathErrors(
-    allowsLegacyLocalBuildMetadata
-      ? normalized.filter((entry) => !FORBIDDEN_LOCAL_BUILD_METADATA_FILES.has(entry))
-      : normalized,
-  ),
-);
-const validPackageVersion = validSemver(packageVersion);
-const requiresCodeModeWorker =
-  validPackageVersion !== null && semverGte(validPackageVersion, FIRST_CODE_MODE_WORKER_VERSION);
-if (requiresCodeModeWorker && !entrySet.has(CODE_MODE_WORKER_PATH)) {
-  errors.push(`missing required tar entry ${CODE_MODE_WORKER_PATH}`);
+errors.push(...collectForbiddenPackedPathErrors(normalized));
+// Published packages before executor plugins retain the original QuickJS worker.
+const codeModeWorkerPath =
+  isRecord(packageJson?.exports) &&
+  Object.hasOwn(packageJson.exports, "./plugin-sdk/code-mode-executor-runtime")
+    ? CODE_MODE_WORKER_PATH
+    : LEGACY_CODE_MODE_WORKER_PATH;
+if (!entrySet.has(codeModeWorkerPath)) {
+  errors.push(`missing required tar entry ${codeModeWorkerPath}`);
 }
 const hasShrinkwrap = entrySet.has("npm-shrinkwrap.json");
 const declaresShrinkwrap =
@@ -793,6 +544,7 @@ if (hasShrinkwrap && !declaresShrinkwrap) {
 if (hasShrinkwrap && declaresShrinkwrap) {
   try {
     const shrinkwrap = JSON.parse(readTarEntry("npm-shrinkwrap.json")) as ShrinkwrapManifest;
+    assertNpmShrinkwrapDependencies(packageJson, shrinkwrap);
     const rootPackage = shrinkwrap.packages?.[""];
     if (shrinkwrap.name !== "openclaw") {
       errors.push("npm-shrinkwrap.json root name must be openclaw");
@@ -878,20 +630,11 @@ if (
 ) {
   errors.push(`forbidden legacy tar entry ${LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH}`);
 }
-if (allowsLegacyLocalBuildMetadata) {
-  for (const forbiddenEntry of FORBIDDEN_LOCAL_BUILD_METADATA_FILES) {
-    if (entrySet.has(forbiddenEntry)) {
-      warnings.push(`legacy package includes local build metadata tar entry ${forbiddenEntry}`);
-    }
-  }
-}
 if (!entrySet.has(PACKAGE_DIST_INVENTORY_RELATIVE_PATH)) {
   errors.push(`missing ${PACKAGE_DIST_INVENTORY_RELATIVE_PATH}`);
 }
 if (entrySet.has(PACKAGE_DIST_INVENTORY_RELATIVE_PATH)) {
   try {
-    const allowLegacyPrivateQaInventoryOmissions =
-      isLegacyPackageAcceptanceCompatVersion(packageVersion);
     const inventory = JSON.parse(readTarEntry(PACKAGE_DIST_INVENTORY_RELATIVE_PATH));
     if (!Array.isArray(inventory) || inventory.some((entry) => typeof entry !== "string")) {
       errors.push(`invalid ${PACKAGE_DIST_INVENTORY_RELATIVE_PATH}`);
@@ -933,13 +676,6 @@ if (entrySet.has(PACKAGE_DIST_INVENTORY_RELATIVE_PATH)) {
         }
       }
       for (const missingEntry of parity.inventoryEntriesMissingFromPackage) {
-        if (
-          allowLegacyPrivateQaInventoryOmissions &&
-          isLegacyOmittedPrivateQaInventoryEntry(missingEntry)
-        ) {
-          warnings.push(`legacy inventory references omitted private QA tar entry ${missingEntry}`);
-          continue;
-        }
         errors.push(`inventory references missing tar entry ${missingEntry}`);
       }
     }

@@ -1,6 +1,6 @@
 // Logbook plugin entrypoint: automatic work journal built from screen snapshots.
-import { readFileSync } from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   ErrorCodes,
@@ -13,8 +13,8 @@ import {
   type OpenClawPluginNodeHostCommand,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveLogbookConfig } from "./src/config.js";
+import { dayKeyFor } from "./src/day.js";
 import { LogbookService } from "./src/service.js";
-import { dayKeyFor } from "./src/store.js";
 
 const DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -46,6 +46,7 @@ function readNumberParam(params: unknown, key: string): number {
 const logbookNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
   {
     command: "logbook.snapshot",
+    hasActiveWork: () => false,
     cap: "screen",
     dangerous: false,
     handle: async (paramsJSON) => {
@@ -149,11 +150,18 @@ export default definePluginEntry({
           return;
         }
         stopping = undefined;
+        if (!api.runtimeSource) {
+          throw new Error("Logbook requires an OpenClaw host with runtime entrypoint metadata");
+        }
         const next = new LogbookService(config, {
           runtime: api.runtime,
           fullConfig: ctx.config,
           logger: ctx.logger,
           dataDir: path.join(ctx.stateDir, "logbook"),
+          workerModuleUrl: new URL(
+            `./src/store.worker${path.extname(api.runtimeSource)}`,
+            pathToFileURL(api.runtimeSource),
+          ),
         });
         opening = next;
         try {
@@ -218,28 +226,17 @@ export default definePluginEntry({
     registerWrite("logbook.frames", async (params) => {
       const startMs = readNumberParam(params, "startMs");
       const endMs = readNumberParam(params, "endMs");
-      const frames = (await requireService().framesInRange(startMs, endMs)).map((frame) => ({
-        id: frame.id,
-        capturedAtMs: frame.capturedAtMs,
-        idle: frame.idle,
-      }));
+      const frames = await requireService().framesInRange(startMs, endMs);
       return { frames };
     });
 
     registerWrite("logbook.frame", async (params) => {
       const frameId = readNumberParam(params, "frameId");
-      const frame = await requireService().frameById(frameId);
+      const frame = await requireService().framePayload(frameId);
       if (!frame) {
         throw new Error(`frame ${frameId} not found`);
       }
-      return {
-        frameId: frame.id,
-        capturedAtMs: frame.capturedAtMs,
-        width: frame.width,
-        height: frame.height,
-        format: "jpeg",
-        base64: readFileSync(frame.path).toString("base64"),
-      };
+      return frame;
     });
 
     // Standup and ask spend model tokens; capture/analyze mutate runtime state.

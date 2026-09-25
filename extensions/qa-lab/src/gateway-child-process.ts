@@ -89,7 +89,6 @@ export function createQaGatewayChildLogCollector() {
     const wasTruncated = mark < start;
     const offset = Math.min(recent.length, Math.max(0, mark - start));
     return {
-      prefix: recent.slice(0, offset),
       text: recent.slice(offset),
       wasTruncated,
     };

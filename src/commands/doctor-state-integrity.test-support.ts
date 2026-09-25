@@ -6,6 +6,7 @@ import {
   resolveSessionStorePathCore,
   resolveSessionTranscriptsDirForAgent,
 } from "../config/sessions/paths.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { noteStateIntegrity as noteStateIntegrityRaw } from "./doctor-state-integrity.js";
 
 export const noteMock = vi.fn();
@@ -78,6 +79,7 @@ export function writeSessionStore(
   sessions: Record<string, { sessionId: string; updatedAt: number } & Record<string, unknown>>,
   agentId = "main",
 ) {
+  openOpenClawStateDatabase({ env: process.env });
   setupSessionState(cfg, process.env, process.env.HOME ?? "", agentId);
   const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
   fs.writeFileSync(storePath, JSON.stringify(sessions, null, 2));

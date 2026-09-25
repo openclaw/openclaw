@@ -4,18 +4,19 @@ import type {
   SessionsCatalogHostEvent,
   SessionsCatalogListResult,
 } from "../../../../packages/gateway-protocol/src/index.ts";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import {
   catalogPage,
   createGatewayHarness,
   createSessions,
-  deferred,
   mountSidebar,
+  mountSessionCatalogSidebar,
 } from "../app-sidebar.ts";
 
 export function registerCatalogPageHostTests() {
-  it("pages only cursor hosts and preserves exhausted hosts through the next poll refresh", async () => {
+  it("pages only cursor hosts and preserves exhausted hosts through a catalog change", async () => {
     vi.useFakeTimers();
     try {
       const exhaustedHost: SessionCatalogHost = {
@@ -46,20 +47,9 @@ export function registerCatalogPageHostTests() {
           catalogPage([{ threadId: "thread-2", name: "Current title" }], "page-3"),
         )
         .mockResolvedValueOnce(catalogPage([{ threadId: "thread-3", name: "Oldest" }]));
-      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
-      gateway.publish({
-        hello: {
-          features: { methods: ["sessions.catalog.list"] },
-        } as ApplicationGatewaySnapshot["hello"],
-      });
-      const { sidebar } = await mountSidebar(
-        gateway.gateway,
-        createSessions("main", ["agent:main:main"]),
-      );
-      sidebar.connected = true;
-      await sidebar.updateComplete;
-      await vi.advanceTimersByTimeAsync(0);
-      await sidebar.updateComplete;
+      const { gateway, sidebar } = await mountSessionCatalogSidebar({
+        request,
+      } as unknown as GatewayBrowserClient);
 
       const catalogRows = () =>
         sidebar.querySelectorAll('[data-session-section="catalog:codex"] [data-session-key]');
@@ -73,6 +63,7 @@ export function registerCatalogPageHostTests() {
         agentId: "main",
         limitPerHost: 40,
         progressId: expect.any(String),
+        allowPartialResults: true,
       });
       expect(catalogRows()).toHaveLength(2);
       loadMore()?.click();
@@ -90,12 +81,14 @@ export function registerCatalogPageHostTests() {
       expect(sidebar.textContent).toContain("Retained remote session");
       expect(retainedHost()).toEqual(exhaustedHost);
 
-      await vi.advanceTimersByTimeAsync(30_000);
+      gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
+      await vi.advanceTimersByTimeAsync(5_000);
       await sidebar.updateComplete;
       expect(request).toHaveBeenNthCalledWith(3, "sessions.catalog.list", {
         agentId: "main",
         limitPerHost: 40,
         progressId: expect.any(String),
+        allowPartialResults: true,
       });
       expect(request).toHaveBeenNthCalledWith(4, "sessions.catalog.list", {
         agentId: "main",
@@ -143,7 +136,7 @@ export function registerCatalogPageHostTests() {
       const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
       gateway.publish({
         hello: {
-          features: { methods: ["sessions.catalog.list"] },
+          features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
         } as ApplicationGatewaySnapshot["hello"],
       });
       const { sidebar } = await mountSidebar(
@@ -156,7 +149,8 @@ export function registerCatalogPageHostTests() {
 
       sidebar.querySelector<HTMLButtonElement>('[data-session-catalog-load-more="codex"]')?.click();
       await vi.advanceTimersByTimeAsync(0);
-      await vi.advanceTimersByTimeAsync(30_000);
+      gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
+      await vi.advanceTimersByTimeAsync(5_000);
       expect(request).toHaveBeenCalledTimes(4);
 
       const progressId = (request.mock.calls[2]?.[1] as { progressId?: string })?.progressId;

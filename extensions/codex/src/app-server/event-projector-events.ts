@@ -1,6 +1,7 @@
 import {
   embeddedAgentLog,
   emitAgentEvent as emitGlobalAgentEvent,
+  projectAgentActivityItem,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   type ToolProgressDetailMode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -10,18 +11,20 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   isNonSuccessItemStatus,
+  isProjectedNativeToolItem,
   itemKind,
   itemName,
   itemStatus,
   itemTitle,
   matchesCodexSnapshotTurn,
-  shouldSynthesizeToolProgressForItem,
+  unknownItemStatus,
 } from "./event-projector-items.js";
 import {
   itemMeta,
   isCommandBearingToolItem,
   itemToolArgs,
   itemToolResult,
+  projectCodexToolActivity,
   shouldSuppressChannelProgressForItem,
 } from "./event-projector-tool-items.js";
 import {
@@ -107,7 +110,7 @@ export function projectNormalizedToolItem(params: {
   detailMode?: ToolProgressDetailMode;
 }): NormalizedToolItemProjection | undefined {
   const { item } = params;
-  if (!item || !shouldSynthesizeToolProgressForItem(item)) {
+  if (!item || !isProjectedNativeToolItem(item)) {
     return undefined;
   }
   const name = itemName(item);
@@ -118,7 +121,7 @@ export function projectNormalizedToolItem(params: {
   const args = itemToolArgs(item);
   const commandBearing = isCommandBearingToolItem(item, args);
   const meta = itemMeta(item, params.detailMode);
-  const event = shouldEmitTranscriptToolProgress(name, args)
+  const event = shouldEmitTranscriptToolProgress(name)
     ? {
         stream: "tool",
         data: {
@@ -301,6 +304,10 @@ export class CodexEventProjection {
     this.responseModel = toModel ?? this.responseModel;
     if (fromModel && toModel && fromModel !== toModel) {
       this.emitAgentEvent({
+        stream: "lifecycle",
+        data: { phase: "model", provider: this.provider, model: toModel },
+      });
+      this.emitAgentEvent({
         stream: "fallback",
         data: { fromModel, toModel, ...(reason ? { reason } : {}) },
       });
@@ -480,7 +487,11 @@ export class CodexEventProjection {
             : "running"
           : params.phase === "start"
             ? "running"
-            : itemStatus(item);
+            : kind === "analysis"
+              ? "completed"
+              : unknownItemStatus(item)
+                ? undefined
+                : itemStatus(item);
     const meta = subagent
       ? [
           interaction ? "message sent" : activity ? subagentStatus : status,
@@ -492,20 +503,32 @@ export class CodexEventProjection {
     const suppressChannelProgress = shouldSuppressChannelProgressForItem(item);
     this.emitAgentEvent({
       stream: "item",
-      data: {
-        itemId:
-          activity && !interaction
-            ? `subagent:${readString(item, "agentThreadId") ?? item.id}`
-            : item.id,
-        phase: params.phase,
-        kind,
-        title: itemTitle(item),
-        status,
-        ...(name ? { name } : {}),
-        ...(meta ? { meta } : {}),
-        ...(commandBearing ? { commandBearing: true } : {}),
-        ...(suppressChannelProgress ? { suppressChannelProgress: true } : {}),
-      },
+      data: projectAgentActivityItem(
+        {
+          itemId:
+            activity && !interaction
+              ? `subagent:${readString(item, "agentThreadId") ?? item.id}`
+              : item.id,
+          phase: params.phase,
+          kind,
+          title: itemTitle(item),
+          ...(status ? { status } : {}),
+          ...(status === undefined
+            ? { summary: "Outcome unknown", title: `${itemTitle(item)} — outcome unknown` }
+            : {}),
+          toolCallId: item.id,
+          ...(name ? { name } : {}),
+          ...(meta ? { meta } : {}),
+          ...(commandBearing ? { commandBearing: true } : {}),
+          ...(suppressChannelProgress ? { suppressChannelProgress: true } : {}),
+        },
+        {
+          args: itemToolArgs(item),
+          ...(item.type === "collabAgentToolCall" && item.tool === "wait"
+            ? { nativeOperation: "wait" as const }
+            : {}),
+        },
+      ),
     });
   }
 
@@ -517,7 +540,7 @@ export class CodexEventProjection {
   }): Promise<void> {
     const { item, activeItemIds, completedItemIds, isActive } = params;
     if (
-      !shouldSynthesizeToolProgressForItem(item) ||
+      !isProjectedNativeToolItem(item) ||
       !matchesCodexSnapshotTurn(item, this.turnId) ||
       completedItemIds.has(item.id) ||
       itemStatus(item) === "running"
@@ -561,14 +584,16 @@ export class CodexEventProjection {
     if (params.phase === "result") {
       this.toolProgress.recordNativeToolError({ item, name, meta, status });
     }
-    if (!event) {
-      if (params.phase === "result") {
-        this.toolTranscript.emitAfterToolCallObservation(item);
-        await this.onNativeToolResultRecorded?.();
+    if (event) {
+      const activity = projectCodexToolActivity(item, params.phase, meta);
+      if (activity && params.phase === "start") {
+        this.emitAgentEvent({ stream: "item", data: activity });
       }
-      return;
+      this.emitAgentEvent(event);
+      if (activity && params.phase !== "start") {
+        this.emitAgentEvent({ stream: "item", data: activity });
+      }
     }
-    this.emitAgentEvent(event);
     if (params.phase === "result") {
       this.toolTranscript.emitAfterToolCallObservation(item);
       await this.onNativeToolResultRecorded?.();

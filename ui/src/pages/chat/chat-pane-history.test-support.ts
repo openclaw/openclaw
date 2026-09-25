@@ -45,7 +45,6 @@ export type TestChatPane = HTMLElement & {
   historyAutoLoadBlocked: boolean;
   historyObserverArmed: boolean;
   syncHistoryObserver: () => void;
-  prependUniqueNativeMessages: (messages: unknown[], current: unknown[]) => unknown[];
   prependUniqueCatalogMessages: (messages: unknown[]) => unknown[];
   loadOlderMessages: () => Promise<boolean>;
   stagedOlderPage: unknown;
@@ -130,6 +129,7 @@ export function createTestChatPane(params: {
     chatHasAutoScrolled: false,
     chatUserNearBottom: true,
     chatFollowLocked: false,
+    chatReadingHistory: false,
     chatNewMessagesBelow: false,
     handleChatScroll: vi.fn(),
     renderLifecycle: { afterCommit: () => () => {}, invalidate: () => {} },

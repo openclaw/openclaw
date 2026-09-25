@@ -1,5 +1,7 @@
 // Plugin blob store tests cover persistence, quotas, expiry, and copied bytes.
+import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
@@ -7,10 +9,12 @@ import {
   resetPluginBlobStoreForTests,
   type OpenBlobStoreOptions,
 } from "./plugin-blob-store.js";
+import { createPluginBlobKernelStore } from "./plugin-blob-store.test-helpers.js";
 import { PluginBlobStoreError } from "./plugin-blob-store.types.js";
 
-afterEach(() => {
+afterEach(async () => {
   vi.useRealTimers();
+  await closeOpenClawStateDatabaseAsync();
   resetPluginBlobStoreForTests();
 });
 
@@ -36,17 +40,24 @@ function createPluginBlobStore<TMetadata>(pluginId: string, testOptions: TestBlo
 }
 
 describe("plugin blob store", () => {
-  it("round-trips metadata and copies bytes on both sides", async () => {
+  it("round-trips VM realm metadata and copies bytes on both sides", async () => {
     await withOpenClawTestState({ label: "plugin-blob-roundtrip" }, async (state) => {
-      const store = createPluginBlobStore<{ kind: string }>("diffs", options(state.env));
-      const source = new Uint8Array([1, 2, 3]);
-      await store.register("viewer", source, { kind: "viewer" });
+      const store = createPluginBlobStore("diffs", options(state.env));
+      const backing = new Uint8Array([0, 1, 2, 3, 4]);
+      const source = backing.subarray(1, 4);
+      const metadata: unknown = runInNewContext(
+        '({ kind: "viewer", nested: [{ labels: ["retained", null] }] })',
+      );
+      const expectedMetadata = { kind: "viewer", nested: [{ labels: ["retained", null] }] };
+      const registered = store.register("viewer", source, metadata);
       source[0] = 9;
+      expect(backing.byteLength).toBe(5);
+      await registered;
 
       const first = await store.lookup("viewer");
       expect(first).toMatchObject({
         key: "viewer",
-        metadata: { kind: "viewer" },
+        metadata: expectedMetadata,
         sizeBytes: 3,
       });
       expect(first?.bytes).toEqual(new Uint8Array([1, 2, 3]));
@@ -54,10 +65,56 @@ describe("plugin blob store", () => {
       expect((await store.lookup("viewer"))?.bytes).toEqual(new Uint8Array([1, 2, 3]));
       const entries = await store.entries();
       expect(entries).toHaveLength(1);
-      expect(entries[0]).toMatchObject({ key: "viewer", metadata: { kind: "viewer" } });
+      expect(entries[0]).toMatchObject({ key: "viewer", metadata: expectedMetadata });
+      await closeOpenClawStateDatabaseAsync();
+      resetPluginBlobStoreForTests();
+      const reopened = createPluginBlobStore("diffs", options(state.env));
+      await expect(reopened.lookup("viewer")).resolves.toMatchObject({
+        metadata: expectedMetadata,
+        bytes: new Uint8Array([1, 2, 3]),
+      });
       expect("bytes" in entries[0]!).toBe(false);
     });
   });
+
+  it.each([
+    ["class instance", "new (class Entry { value = 1; })()"],
+    ["custom prototype", "Object.create({ inherited: true })"],
+    ["null prototype", "Object.create(null)"],
+    [
+      "forged root constructor",
+      "Object.create(Object.create(null, { constructor: { value: Object } }))",
+    ],
+    [
+      "constructor accessor",
+      "Object.create(Object.create(null, { constructor: { get() { onAccess(); return Object; } } }))",
+    ],
+    ["accessor", "({ get value() { onAccess(); return 1; } })"],
+    ["symbol key", "({ [Symbol('hidden')]: 1 })"],
+    ["non-enumerable key", "Object.defineProperty({}, 'hidden', { value: 1 })"],
+  ])(
+    "rejects nested VM realm %s without replacing blob metadata or invoking getters",
+    async (_shape, expression) => {
+      await withOpenClawTestState({ label: "plugin-blob-realm-shapes" }, async (state) => {
+        const store = createPluginBlobStore("diffs", options(state.env));
+        await store.register("retained", new Uint8Array([1]), null);
+        const onAccess = vi.fn();
+        const metadata: unknown = runInNewContext(`({ nested: [${expression}] })`, { onAccess });
+
+        await expect(
+          store.register("retained", new Uint8Array([2]), metadata),
+        ).rejects.toMatchObject({
+          code: "PLUGIN_BLOB_INVALID_INPUT",
+          operation: "register",
+        });
+        expect(onAccess).not.toHaveBeenCalled();
+        await expect(store.lookup("retained")).resolves.toMatchObject({
+          metadata: null,
+          bytes: new Uint8Array([1]),
+        });
+      });
+    },
+  );
 
   it("rejects quota overflow without disturbing existing rows", async () => {
     await withOpenClawTestState({ label: "plugin-blob-reject" }, async (state) => {
@@ -83,6 +140,33 @@ describe("plugin blob store", () => {
         bytes: new Uint8Array([8]),
         metadata: { order: 5 },
       });
+
+      const byteStore = createPluginBlobStore<{ order: number }>(
+        "diffs",
+        options(state.env, {
+          namespace: "byte-limit",
+          maxEntries: 3,
+          maxBytesPerEntry: 3,
+          maxBytesPerNamespace: 4,
+          overflowPolicy: "reject-new",
+        }),
+      );
+      await byteStore.register("one", new Uint8Array([1, 2]), { order: 1 });
+      await byteStore.register("two", new Uint8Array([3, 4]), { order: 2 });
+      await expect(
+        byteStore.register("one", new Uint8Array([5, 6, 7]), { order: 3 }),
+      ).rejects.toMatchObject({ code: "PLUGIN_BLOB_LIMIT_EXCEEDED" });
+      await expect(byteStore.lookup("one")).resolves.toMatchObject({
+        bytes: new Uint8Array([1, 2]),
+        metadata: { order: 1 },
+      });
+      await expect(byteStore.lookup("two")).resolves.toMatchObject({
+        bytes: new Uint8Array([3, 4]),
+      });
+      await expect(store.lookup("one")).resolves.toMatchObject({
+        bytes: new Uint8Array([8]),
+        metadata: { order: 5 },
+      });
     });
   });
 
@@ -90,7 +174,7 @@ describe("plugin blob store", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     await withOpenClawTestState({ label: "plugin-blob-evict" }, async (state) => {
-      const store = createPluginBlobStore<{ order: number }>(
+      const store = createPluginBlobKernelStore<{ order: number }>(
         "diffs",
         options(state.env, { maxEntries: 2 }),
       );
@@ -114,7 +198,7 @@ describe("plugin blob store", () => {
     vi.useFakeTimers();
     vi.setSystemTime(2_000);
     await withOpenClawTestState({ label: "plugin-blob-expiry" }, async (state) => {
-      const store = createPluginBlobStore<{ order: number }>("diffs", options(state.env));
+      const store = createPluginBlobKernelStore<{ order: number }>("diffs", options(state.env));
       await store.register("one", new Uint8Array([1]), { order: 1 }, { ttlMs: 10 });
       vi.setSystemTime(2_011);
       await store.register("two", new Uint8Array([2]), { order: 2 }, { ttlMs: 10 });
@@ -140,7 +224,7 @@ describe("plugin blob store", () => {
     vi.useFakeTimers();
     vi.setSystemTime(2_500);
     await withOpenClawTestState({ label: "plugin-blob-expired-quota" }, async (state) => {
-      const rejectingStore = createPluginBlobStore<{ path: string }>(
+      const rejectingStore = createPluginBlobKernelStore<{ path: string }>(
         "diffs",
         options(state.env, { maxEntries: 1, overflowPolicy: "reject-new" }),
       );
@@ -162,7 +246,7 @@ describe("plugin blob store", () => {
         rejectingStore.register("fresh", new Uint8Array([2]), { path: "reject-new" }),
       ).resolves.toBeUndefined();
 
-      const evictingStore = createPluginBlobStore<{ path: string }>(
+      const evictingStore = createPluginBlobKernelStore<{ path: string }>(
         "diffs",
         options(state.env, {
           namespace: "evicting",
@@ -185,7 +269,7 @@ describe("plugin blob store", () => {
         metadata: { path: "evict-old" },
       });
 
-      const replacingStore = createPluginBlobStore<{ path: string }>(
+      const replacingStore = createPluginBlobKernelStore<{ path: string }>(
         "diffs",
         options(state.env, {
           namespace: "replacing",
@@ -234,11 +318,11 @@ describe("plugin blob store", () => {
       vi.useFakeTimers();
       vi.setSystemTime(6_000);
       await withOpenClawTestState({ label: "plugin-blob-plugin-quota" }, async (state) => {
-        const store = createPluginBlobStore<{ owner: string }>(
+        const store = createPluginBlobKernelStore<{ owner: string }>(
           "diffs",
           options(state.env, { overflowPolicy }),
         );
-        const emptyNamespace = createPluginBlobStore<{ owner: string }>(
+        const emptyNamespace = createPluginBlobKernelStore<{ owner: string }>(
           "diffs",
           options(state.env, { namespace: "empty", overflowPolicy }),
         );
@@ -275,7 +359,7 @@ describe("plugin blob store", () => {
             .prepare("SELECT COUNT(*) AS count FROM plugin_blob_entries WHERE plugin_id = ?")
             .get("diffs"),
         ).toEqual({ count: 50_000 });
-        const sibling = createPluginBlobStore<{ owner: string }>(
+        const sibling = createPluginBlobKernelStore<{ owner: string }>(
           "diffs",
           options(state.env, { namespace: "sibling", overflowPolicy }),
         );
@@ -299,6 +383,7 @@ describe("plugin blob store", () => {
 
       await expect(otherPlugin.lookup("same")).resolves.toBeUndefined();
       await expect(otherNamespace.lookup("same")).resolves.toBeUndefined();
+      await closeOpenClawStateDatabaseAsync();
       resetPluginBlobStoreForTests();
 
       const reopened = createPluginBlobStore<{ owner: string }>("diffs", options(state.env));
@@ -329,7 +414,7 @@ describe("plugin blob store", () => {
     vi.useFakeTimers();
     vi.setSystemTime(4_000);
     await withOpenClawTestState({ label: "plugin-blob-expired-if-absent" }, async (state) => {
-      const store = createPluginBlobStore<{ path: string }>("diffs", options(state.env));
+      const store = createPluginBlobKernelStore<{ path: string }>("diffs", options(state.env));
       await expect(
         store.registerIfAbsent("stable", new Uint8Array([1]), { path: "old" }, { ttlMs: 10 }),
       ).resolves.toBe(true);
@@ -356,7 +441,7 @@ describe("plugin blob store", () => {
     vi.useFakeTimers();
     vi.setSystemTime(4_500);
     await withOpenClawTestState({ label: "plugin-blob-expired-overwrite" }, async (state) => {
-      const store = createPluginBlobStore<{ version: string }>("diffs", options(state.env));
+      const store = createPluginBlobKernelStore<{ version: string }>("diffs", options(state.env));
       await store.register("stable", new Uint8Array([1]), { version: "old" }, { ttlMs: 10 });
 
       vi.setSystemTime(4_511);
@@ -374,11 +459,11 @@ describe("plugin blob store", () => {
     vi.useFakeTimers();
     vi.setSystemTime(3_000);
     await withOpenClawTestState({ label: "plugin-blob-byte-evict" }, async (state) => {
-      const store = createPluginBlobStore<{ order: number }>(
+      const store = createPluginBlobKernelStore<{ order: number }>(
         "diffs",
         options(state.env, { maxBytesPerEntry: 3, maxBytesPerNamespace: 3 }),
       );
-      const sibling = createPluginBlobStore<{ order: number }>(
+      const sibling = createPluginBlobKernelStore<{ order: number }>(
         "diffs",
         options(state.env, {
           namespace: "sibling",
@@ -438,7 +523,7 @@ describe("plugin blob store", () => {
     vi.useFakeTimers();
     vi.setSystemTime(5_000);
     await withOpenClawTestState({ label: "plugin-blob-corrupt-expired" }, async (state) => {
-      const store = createPluginBlobStore<{ path: string }>("diffs", options(state.env));
+      const store = createPluginBlobKernelStore<{ path: string }>("diffs", options(state.env));
       await store.register("valid", new Uint8Array([1]), { path: "valid" }, { ttlMs: 10 });
       const { db } = openOpenClawStateDatabase({ env: state.env });
       db.prepare(
