@@ -110,9 +110,8 @@ import {
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "./operator-role-policy.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
+import type * as SessionLifecycle from "./session-create-service.types.js";
 import {
-  type PreparedGatewaySessionLifecycle,
-  type PrepareGatewaySessionLifecycle,
   rollbackGatewaySessionPreparation,
   settleGatewaySessionLifecycleCommit,
 } from "./session-lifecycle-preparation.js";
@@ -665,7 +664,7 @@ export async function performGatewaySessionReset(params: {
   /** Existing-row changes stay admin-gated across reset preparation and commit. */
   fastModeSelection?: { value: FastMode; allowExistingChange: boolean };
   /** Prepares session-owned resources while the target lifecycle fence is held. */
-  prepareLifecycle?: PrepareGatewaySessionLifecycle;
+  prepareLifecycle?: SessionLifecycle.PrepareGatewaySessionLifecycle;
   onLifecycleCleanupError?: (error: unknown) => void;
   /** Bind session exec to host=node with this node id; caller scope-checks. */
   execNode?: string;
@@ -892,7 +891,7 @@ export async function performGatewaySessionReset(params: {
   let admittedWorkReleased = true;
   let resetPreparationError: ReturnType<typeof errorShape> | undefined;
   let preparedResetSessionId: string | undefined;
-  let preparedLifecycle: PreparedGatewaySessionLifecycle | undefined;
+  let preparedLifecycle: SessionLifecycle.PreparedGatewaySessionLifecycle | undefined;
   let lifecyclePreparationCommitted = false;
   return await runExclusiveSessionLifecycleMutation({
     scope: resetTarget.storePath,

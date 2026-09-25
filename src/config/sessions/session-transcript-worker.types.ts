@@ -76,6 +76,12 @@ import type {
 import type { SessionTranscriptWorkerReadError } from "./session-transcript-worker-error.types.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 
+type SessionTranscriptMatchWorkerInput = {
+  kind: "transcript-match";
+  database: { agentId: string; path: string };
+  request: import("./session-transcript-match.js").SessionTranscriptEventMatchRequest;
+};
+
 type SessionTranscriptSearchWorkerInput = {
   kind: "transcript-search";
   database: { agentId: string; path: string };
@@ -133,6 +139,17 @@ export type SessionSqliteTargetWorkerInput = {
   defaultAgentId?: string;
   env: NodeJS.ProcessEnv;
   registeredDatabases: readonly Pick<OpenClawRegisteredAgentDatabase, "agentId" | "path">[];
+};
+
+export type SessionResetRecallWorkerInput = {
+  kind: "session-reset-recall";
+  scope: {
+    agentId: string;
+    sessionId: string;
+    sessionKey?: string;
+    storePath: string;
+  };
+  admission?: UserTurnTranscriptAdmissionReceipt;
 };
 
 export type SessionEntryWorkerInput = {
@@ -327,6 +344,7 @@ export type SessionExactEntriesWorkerResult = {
     source: { agentId: string; path: string };
     databaseIdentity: string;
     members: Array<{ sessionKey: string; identityIds: string[] }>;
+    placeholders: Array<{ sessionKey: string; sessionId: string }>;
   };
 };
 
@@ -415,13 +433,15 @@ export type SessionHistoryWorkerInput =
   | SessionTargetInventoryWorkerInput
   | SessionIdentityEvidenceWorkerInput
   | SessionUsageCacheWorkerInput
-  | SessionTranscriptSearchWorkerInput;
+  | SessionTranscriptSearchWorkerInput
+  | SessionTranscriptMatchWorkerInput;
 
 export type SessionTranscriptWorkerInput =
   | SessionSqliteTargetWorkerInput
   | SessionHistoryWorkerInput
   | SessionModelContextWorkerInput
   | SessionEntryWorkerInput
+  | SessionResetRecallWorkerInput
   | SessionBranchSummaryWorkerInput;
 
 type SessionHistoryDatabaseWorkerInput = Extract<SessionHistoryWorkerInput, { database: unknown }>;
@@ -440,6 +460,7 @@ export type SessionTranscriptWorkerValues = {
     result: PublishedSessionTranscriptArchive | null;
   };
   "transcript-search": SessionTranscriptSearchWorkerResult;
+  "transcript-match": { kind: "transcript-match"; result: { event: TranscriptEvent } | undefined };
   "cold-metadata": SessionColdMetadataWorkerResult;
   "transcript-hydration": SessionTranscriptHydrationWorkerResult;
   "current-turn-entry": SessionTranscriptCurrentTurnEntryRead;
@@ -467,6 +488,9 @@ export type SessionTranscriptWorkerValues = {
   "session-identity-evidence": SessionIdentityEvidenceWorkerResult;
   "usage-cache": SessionCostUsageCacheReadResult;
   "model-context": ReturnType<typeof readSessionTranscriptModelContext>;
+  "session-reset-recall": {
+    cutoff: import("../../../packages/memory-host-sdk/src/host/session-reset-recall.js").SessionResetRecallCutoff;
+  };
   "session-entry": {
     entry: SessionFileEntry | null;
     resetRecallCutoff: ReturnType<typeof readSessionEntryResetRecallCutoff>;
@@ -489,6 +513,9 @@ export type SessionTranscriptWorkerReply<Kind extends keyof SessionTranscriptWor
     };
 
 export type SessionHistoryWorkerDatabase = {
+  findTranscriptEvent: (
+    request: SessionTranscriptMatchWorkerInput["request"],
+  ) => Promise<{ event: TranscriptEvent } | undefined>;
   readHistoricalEvictionCandidates: (
     input: Omit<SessionHistoricalEvictionCandidatesWorkerInput, "kind" | "database">,
   ) => Promise<string[]>;

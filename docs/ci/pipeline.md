@@ -127,6 +127,9 @@ Bun. Those Node files still execute; they are not excluded from CI.
 TypeScript compiler analysis suites also stay on Node because the synchronous
 native compiler API requires Node child-process pipe handles. This includes
 compiler assertions in mixed runtime suites; their cases remain enabled.
+The Node Code Mode executor suite also stays on Node: its warm-worker cleanup
+requires diagnostics-channel delivery to preserve sibling subscribers when a
+callback unsubscribes during publication. Bun can skip the next subscriber.
 The complete fake-timer lane also supports Bun. Control UI retains two whole GC-sensitive
 files on Node (`chat-pane-retained-presentation.test.ts` and
 `usage-page-details.test.ts`) and runs the remaining files on Bun.
@@ -134,6 +137,12 @@ Other families retain Node until they pass on the pinned fork within their
 existing CI resource budgets. Precise PR targets use the existing
 test-project planner to find their owners. Mixed or ambiguous selections retain
 Node, and no tests are removed from the selected inventory.
+
+Worktree removal recovery (`src/agents/worktrees/service.removal-recovery.test.ts`)
+also supports Bun when it is the entire exact selection in `agents-support`.
+Mixed and broad PR selections retain their original Node invocation. Dual-runtime
+validation keeps that complete Node selection and adds only the qualified recovery
+file when the original include patterns select it.
 
 Pull requests and their release-gate fallback run compatible selections on Bun.
 Ordinary manual CI, including Full Release Validation's `normal_ci` child, runs
@@ -210,7 +219,7 @@ newest patch. Compare exact versions when measuring a toolchain change, and
 measure setup separately from the test body.
 
 Preflight's manifest bootstrap uses the exact `NODE_VERSION` pin in `ci.yml`
-(24.19.0). Unlike the repository helper, `actions/setup-node` can satisfy a
+(24.21.0). Unlike the repository helper, `actions/setup-node` can satisfy a
 `24.x` request from an older cached patch below OpenClaw's support floor.
 
 CI's execution version does not define the supported user runtime matrix.
@@ -437,11 +446,12 @@ old decision. This recovery applies only to commit-status publication; other
 uncertain writes, cancellation, and write request timeouts remain errors.
 
 Separately, read-only `GET` and `HEAD` requests retry HTTP `500`, `502`, `503`,
-and `504` responses and recognized transient connection failures before a
-response arrives. They share one retry budget of one, two, and four seconds,
-within the original 30-second request timeout. These retries exclude writes,
-caller cancellation, certificate errors, and unrecognized errors. HTTP and
-connection errors identify the request method and endpoint.
+and `504` responses and recognized transient connection failures before headers
+arrive or while reading a successful response body. They share one retry budget
+of one, two, and four seconds, within the original 30-second request timeout.
+These retries exclude writes, caller cancellation, certificate errors, invalid
+JSON, oversized responses, and unrecognized errors. HTTP, connection, and
+response-body errors identify the request method and endpoint.
 
 If a read-only request reaches its 30-second deadline, including while reading
 its response body, the script restarts the complete evaluation with fresh PR,

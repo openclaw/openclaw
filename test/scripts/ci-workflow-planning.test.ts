@@ -1392,15 +1392,7 @@ describe("ci workflow guards", () => {
       includeReleaseOnlyTests: false,
       uiRealGatewayShards: false,
     },
-    {
-      name: "frozen full release dispatches",
-      eventName: "workflow_dispatch" as const,
-      changedPaths: ["ui/src/components/app-sidebar.ts"],
-      includeReleaseOnlyTests: true,
-      frozenTarget: true,
-    },
   ])("forwards the UI release-tier selection for $name to all three test jobs", (scenario) => {
-    const frozenTarget = "frozenTarget" in scenario && scenario.frozenTarget;
     const uiRealGatewayShards =
       !("uiRealGatewayShards" in scenario) || scenario.uiRealGatewayShards;
     const manifest = runCiManifestFixture({
@@ -1412,7 +1404,7 @@ describe("ci workflow guards", () => {
       changedPaths: scenario.changedPaths,
       scopeEnv: {
         OPENCLAW_CI_RUN_UI_TESTS: "true",
-        OPENCLAW_CI_WORKFLOW_REVISION: (frozenTarget ? "b" : "a").repeat(40),
+        OPENCLAW_CI_WORKFLOW_REVISION: "a".repeat(40),
       },
     });
     expect(manifest.status, manifest.output).toBe(0);
@@ -1472,7 +1464,7 @@ describe("ci workflow guards", () => {
         test_groups_gzip_base64: string;
       }>;
     } = JSON.parse(packedMatrix);
-    const sharded = !frozenTarget && uiRealGatewayShards;
+    const sharded = uiRealGatewayShards;
     expect(matrix.include.map(({ test_groups_gzip_base64: _groups, ...row }) => row)).toEqual(
       sharded
         ? [
@@ -1994,6 +1986,8 @@ describe("ci workflow guards", () => {
       );
       expect(actual.filter((job) => job === "checks-node-core-test-nondist-shard")).toHaveLength(1);
       expect(actual).toContain("preflight");
+      expect(actual).not.toContain("ci-gate");
+      expect(actual).not.toContain("check-lint-hosted-core-shard");
       expect(Number(qualification.outputs.hybrid_hosted_base_rows)).toBe(
         Number(ordinary.outputs.hybrid_hosted_base_rows) + 2,
       );
@@ -2067,6 +2061,8 @@ describe("ci workflow guards", () => {
           "build-artifacts",
           "android",
           "check-test-types-hosted-core-shard",
+          "check-lint-hosted-core-shard",
+          "ci-gate",
         ]) {
           expect(hosted, name).not.toContain(name);
         }
@@ -2369,6 +2365,8 @@ describe("ci workflow guards", () => {
       expect(base.filter((name) => name === "macos-node")).toHaveLength(3);
       expect(base.filter((name) => name === "ios-screenshot-shard")).toHaveLength(2);
       expect(base.filter((name) => name === "ios-screenshot-evidence")).toHaveLength(1);
+      expect(base).not.toContain("ci-gate");
+      expect(base).not.toContain("check-lint-hosted-core-shard");
       expect(base.filter((name) => name === "check-lint-hosted-extension-shard")).toHaveLength(
         runnerProfile === "hybrid" ? 6 : 0,
       );
@@ -5104,8 +5102,22 @@ describe("ci workflow guards", () => {
       expect(run.if).toBeUndefined();
       expect(run.run).not.toContain("cache-hit");
       expect(restore.with?.path).toBe(".artifacts/tsgo-cache");
-      expect(restore.with?.key).toContain("pnpm-lock.yaml");
-      expect(restore.with?.key).toContain("test/tsconfig/*.json");
+      for (const cache of steps.filter(
+        (step) =>
+          step.uses?.startsWith("actions/cache/restore@") &&
+          step.with?.path === ".artifacts/tsgo-cache",
+      )) {
+        const key = cache.with?.key;
+        const restoreKeys = cache.with?.["restore-keys"];
+        if (typeof key !== "string" || typeof restoreKeys !== "string") {
+          throw new Error(`${jobId} compiler cache keys must be strings`);
+        }
+        expect(key).toContain("pnpm-lock.yaml");
+        expect(key).toContain("test/tsconfig/*.json");
+        const commitSuffix = "${{ github.sha }}";
+        expect(key.endsWith(commitSuffix)).toBe(true);
+        expect(restoreKeys.trim().split(/\s*\n\s*/u)).toEqual([key.slice(0, -commitSuffix.length)]);
+      }
       expect(restore.with?.key).toContain(
         jobId === "check-shard" ? "matrix.task" : "matrix.stripe",
       );
@@ -7289,6 +7301,20 @@ describe("ci workflow guards", () => {
     expect(frozenMissingCurrentCapabilities.outputs.run_protocol_event_coverage).toBe("false");
     expect(frozenMissingCurrentCapabilities.outputs.run_format_check).toBe("false");
 
+    const frozenUiPlannerWithoutGroupsCodec = runCiManifestFixture({
+      bundledPlanner: true,
+      historicalCompatibility: false,
+      nodeTestGroupsCodec: false,
+      uiReleaseTier: true,
+      scopeEnv: { OPENCLAW_CI_RUN_UI_TESTS: "true" },
+    });
+    expect(frozenUiPlannerWithoutGroupsCodec.status, frozenUiPlannerWithoutGroupsCodec.output).toBe(
+      0,
+    );
+    expect(frozenUiPlannerWithoutGroupsCodec.outputs.frozen_target).toBe("true");
+    expect(frozenUiPlannerWithoutGroupsCodec.outputs.ui_test_groups_gzip_base64).toBe("");
+    expect(frozenUiPlannerWithoutGroupsCodec.outputs.ui_e2e_test_groups_gzip_base64).toBe("");
+
     const releaseCandidateMissingSwiftWrappers = runCiManifestFixture({
       bundledPlanner: true,
       historicalCompatibility: false,
@@ -8952,23 +8978,6 @@ describe("ci workflow guards", () => {
     ]);
   });
 
-  it("fails a release-deferred CI gate by naming the release run", () => {
-    const deferred = runCiGateFixture(renderCiGateEnvironment({}, { preflight: "skipped" }), {
-      PREFLIGHT_RESULT: "skipped",
-      RELEASE_PRIORITY_RUN: "77",
-    });
-    expect(deferred.status).toBe(1);
-    expect(deferred.stdout).toContain("::error title=Deferred for release 77::");
-    expect(deferred.stdout).toContain("pnpm frv prioritize --restore");
-    // Without an active release, a skipped preflight is an ordinary gate failure.
-    const plain = runCiGateFixture(renderCiGateEnvironment({}, { preflight: "skipped" }), {
-      PREFLIGHT_RESULT: "skipped",
-      RELEASE_PRIORITY_RUN: "",
-    });
-    expect(plain.status).toBe(1);
-    expect(plain.stdout).not.toContain("Deferred for release");
-  });
-
   it("emits one final CI gate after every selected lane", () => {
     const workflow = readCiWorkflow();
     const gate = workflow.jobs["ci-gate"];
@@ -9020,11 +9029,6 @@ describe("ci workflow guards", () => {
     const verifyStep = gate.steps.find(
       (step: WorkflowStep) => step.name === "Verify selected CI lanes",
     );
-    expect(Object.keys(verifyStep.env)).toEqual([
-      "PREFLIGHT_RESULT",
-      "RELEASE_PRIORITY_RUN",
-      "JOB_RESULTS",
-    ]);
     const resultRows: string[] = verifyStep.env.JOB_RESULTS.trim().split("\n");
     expect(resultRows.slice(0, requiredJobs.length)).toEqual(
       requiredJobs.map((job) => `${job}=\${{ needs.${job}.result }}|true`),

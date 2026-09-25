@@ -398,7 +398,7 @@ describe("mock OpenAI response markers", () => {
               name: call.name,
               arguments: args,
             });
-            taskExpect(args.command).toBe("sleep 3 && echo openclaw-draft-proof");
+            taskExpect(args.command).toBe("sleep 2 && echo openclaw-draft-proof");
             let toolOutput = "openclaw-draft-proof\n";
             // The command is POSIX shell syntax; Windows still covers HTTP and native validation.
             if (process.platform !== "win32") {
@@ -412,7 +412,7 @@ describe("mock OpenAI response markers", () => {
               taskExpect(execution.child.exitCode, result.stderr).toBe(0);
               taskExpect(execution.child.signalCode).toBeNull();
               taskExpect(result.stdout).toBe(toolOutput);
-              taskExpect(performance.now() - startedAt).toBeGreaterThanOrEqual(2_900);
+              taskExpect(performance.now() - startedAt).toBeGreaterThanOrEqual(1_900);
               toolOutput = result.stdout;
             }
 

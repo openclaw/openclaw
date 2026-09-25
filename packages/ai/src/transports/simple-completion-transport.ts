@@ -6,7 +6,11 @@
 import { randomUUID } from "node:crypto";
 import type { Api, Model, StreamFn, StreamOptions } from "@openclaw/llm-core";
 import type { ApiRegistry } from "../api-registry.js";
-import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
+import {
+  getAiTransportHost,
+  resolveAiTransportHeaderSentinels,
+  type AiProviderStreamHookContext,
+} from "../host.js";
 import {
   buildTransportAwareSimpleStreamFn,
   createOpenClawTransportStreamFnForModel,
@@ -94,8 +98,16 @@ export function normalizeCodexResponsesBaseUrlForOpenAISdk(baseUrl?: string): st
   return path.endsWith("/codex") ? path : `${path}/codex`;
 }
 
-function resolveProviderSimpleCompletionApi(model: Model): Api {
+function resolveProviderSimpleCompletionApi(
+  model: Model,
+  auth?: AiProviderStreamHookContext["auth"],
+): Api {
   const parts = [model.provider, model.id, model.api, model.baseUrl || "default"];
+  // Registered wrappers retain their preparation context. A credential switch
+  // must select its own policy instead of reusing another grant's wrapper.
+  if (auth) {
+    parts.push(auth.mode, auth.authFlow ?? "");
+  }
   return `${PROVIDER_SIMPLE_COMPLETION_API_PREFIX}${parts
     .map((part) => encodeURIComponent(part))
     .join(":")}`;
@@ -111,6 +123,7 @@ function applyProviderSimpleCompletionWrapper(
   model: Model,
   cfg?: unknown,
   hookSourceApi: Api = model.api,
+  auth?: AiProviderStreamHookContext["auth"],
 ): Model {
   if (model.api.startsWith(PROVIDER_SIMPLE_COMPLETION_API_PREFIX)) {
     return model;
@@ -132,6 +145,7 @@ function applyProviderSimpleCompletionWrapper(
       modelId: model.id,
       model,
       sourceApi: hookSourceApi,
+      auth,
       streamFn: sourceStreamFn,
     },
   });
@@ -139,7 +153,7 @@ function applyProviderSimpleCompletionWrapper(
     return model;
   }
 
-  const api = resolveProviderSimpleCompletionApi(model);
+  const api = resolveProviderSimpleCompletionApi(model, auth);
   return registerCustomApi(registry, api, streamFn) ? projectModel(model, { api }) : model;
 }
 
@@ -249,23 +263,42 @@ export function prepareModelForSimpleCompletion<TApi extends Api>(params: {
   apiRegistry: ApiRegistry;
   model: Model<TApi>;
   cfg?: unknown;
+  auth?: AiProviderStreamHookContext["auth"];
 }): Model {
-  const { apiRegistry, model, cfg } = params;
+  const { apiRegistry, model, cfg, auth } = params;
   const providerStreamModel = prepareProviderStreamModel({ model, cfg, apiRegistry });
   if (providerStreamModel) {
-    return applyProviderSimpleCompletionWrapper(apiRegistry, providerStreamModel, cfg, model.api);
+    return applyProviderSimpleCompletionWrapper(
+      apiRegistry,
+      providerStreamModel,
+      cfg,
+      model.api,
+      auth,
+    );
   }
 
   const codexTransportModel = prepareCodexSimpleTransportModel(apiRegistry, model, cfg);
   if (codexTransportModel) {
-    return applyProviderSimpleCompletionWrapper(apiRegistry, codexTransportModel, cfg, model.api);
+    return applyProviderSimpleCompletionWrapper(
+      apiRegistry,
+      codexTransportModel,
+      cfg,
+      model.api,
+      auth,
+    );
   }
 
   const transportAwareModel = prepareTransportAwareSimpleModel(model, { cfg });
   if (transportAwareModel !== model) {
     const streamFn = buildTransportAwareSimpleStreamFn(model, { cfg });
     if (streamFn && registerCustomApi(apiRegistry, transportAwareModel.api, streamFn)) {
-      return applyProviderSimpleCompletionWrapper(apiRegistry, transportAwareModel, cfg, model.api);
+      return applyProviderSimpleCompletionWrapper(
+        apiRegistry,
+        transportAwareModel,
+        cfg,
+        model.api,
+        auth,
+      );
     }
   }
 
@@ -275,9 +308,15 @@ export function prepareModelForSimpleCompletion<TApi extends Api>(params: {
     const streamFn = host.plugin.createAnthropicVertexStream(model);
     if (registerCustomApi(apiRegistry, api, streamFn)) {
       const transportModel = projectModel(model, { api });
-      return applyProviderSimpleCompletionWrapper(apiRegistry, transportModel, cfg, model.api);
+      return applyProviderSimpleCompletionWrapper(
+        apiRegistry,
+        transportModel,
+        cfg,
+        model.api,
+        auth,
+      );
     }
   }
 
-  return applyProviderSimpleCompletionWrapper(apiRegistry, model, cfg);
+  return applyProviderSimpleCompletionWrapper(apiRegistry, model, cfg, model.api, auth);
 }

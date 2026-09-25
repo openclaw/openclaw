@@ -33,6 +33,7 @@ import {
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import type { CodexServerNotification } from "./protocol.js";
+import { CODEX_RESPONSES_OAUTH_PROVIDER } from "./responses-oauth.js";
 import { resolveCodexSessionBinding } from "./session-binding.js";
 import {
   clearCodexAppServerBindingForThread,
@@ -49,6 +50,8 @@ import { withCodexAppServerThreadMutation } from "./thread-ownership.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 let tempDir: string;
+
+const INCOGNITO_COMPACT_KEY = "agent:main:dashboard:incognito-compact-catalog";
 
 async function writeTestBinding(
   options: Partial<Parameters<typeof writeCodexAppServerBinding>[1]> = {},
@@ -228,6 +231,19 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(details.completed).toBe(true);
   });
 
+  it("explains manual subscription-sharing compaction without starting native inference", async () => {
+    const fake = createFakeCodexClient();
+    setCodexAppServerClientFactoryForTest(async () => fake.client);
+    const sessionFile = await writeTestBinding({ modelProvider: CODEX_RESPONSES_OAUTH_PROVIDER });
+
+    await expect(startCompaction(sessionFile)).resolves.toMatchObject({
+      ok: false,
+      compacted: false,
+      reason: expect.stringContaining("Automatic compaction runs during normal turns"),
+    });
+    expect(fake.request).not.toHaveBeenCalled();
+  });
+
   it("does not compact a thread created with restricted native authority", async () => {
     const fake = createFakeCodexClient();
     setCodexAppServerClientFactoryForTest(async () => fake.client);
@@ -381,6 +397,62 @@ describe("maybeCompactCodexAppServerSession", () => {
 
     expect(fake.request.mock.calls.map(([method]) => method)).toEqual(["thread/compact/start"]);
   });
+
+  it.each([
+    // The incognito key is the path that actually matters: it keeps its own live
+    // subscription, so compaction never claims and re-retains the thread.
+    { label: "an edited catalog", refreshed: "catalog B", sessionKey: INCOGNITO_COMPACT_KEY },
+    { label: "a withdrawn catalog", refreshed: undefined, sessionKey: INCOGNITO_COMPACT_KEY },
+    { label: "an edited catalog", refreshed: "catalog B", sessionKey: "agent:main:session-1" },
+    { label: "a withdrawn catalog", refreshed: undefined, sessionKey: "agent:main:session-1" },
+  ])(
+    "records $label as reverted after standalone compaction on $sessionKey",
+    async ({ refreshed, sessionKey }) => {
+      const fake = createFakeCodexClient();
+      setCodexAppServerClientFactoryForTest(async () => fake.client);
+      const sessionFile = await writeTestBinding({}, sessionKey);
+      // The live thread was created with catalog A and refreshed in place, so
+      // only the injected message carries the current catalog.
+      const ephemeralPolicy = {
+        developerInstructions: "generic policy",
+        skillsInstructions: refreshed,
+        nativeSkillsInstructions: "catalog A",
+      };
+      await retainCodexAppServerLiveThread(
+        fake.client,
+        "thread-1",
+        undefined,
+        "config-thread-1",
+        null,
+        ephemeralPolicy,
+      );
+
+      await expect(
+        maybeCompactCodexAppServerSession({
+          sessionId: "session-1",
+          sessionKey,
+          sessionFile,
+          workspaceDir: tempDir,
+          trigger: "manual",
+        }),
+      ).resolves.toMatchObject({ ok: true, compacted: true });
+
+      // Compaction discarded the injected refresh. Preserving the creation policy
+      // keeps the live thread from reading as policy drift, and the reverted
+      // catalog is what makes the next turn deliver the current one again.
+      await expect(
+        consumeCodexAppServerLiveThread(fake.client, "thread-1", "config-thread-1"),
+      ).resolves.toEqual(
+        expect.objectContaining({
+          ephemeralPolicy: {
+            developerInstructions: "generic policy",
+            skillsInstructions: "catalog A",
+            nativeSkillsInstructions: "catalog A",
+          },
+        }),
+      );
+    },
+  );
 
   it("uses the exact prepared Platform key for native compaction", async () => {
     const fake = createFakeCodexClient();

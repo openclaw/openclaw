@@ -1,18 +1,24 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, test, vi } from "vitest";
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { loadPublishedPreparedModelCatalogOwnerSnapshot } from "../../agents/prepared-model-catalog.js";
 import {
   markPreparedModelRuntimeSnapshotsStale,
   rejectPendingPreparedModelRuntimeReplacement,
 } from "../../agents/prepared-model-runtime.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../../agents/prepared-model-runtime.test-support.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import { makeProviderModelFixture } from "../../agents/test-helpers/provider-model-fixture.js";
+import { validateConfigObject, type OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   loadSessionEntry,
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import * as sessionReplacement from "../../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import {
   areDiagnosticsEnabledForProcess,
   setDiagnosticsEnabledForProcess,
@@ -22,12 +28,20 @@ import {
   getActiveDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
+import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import * as sessionLifecycle from "../../sessions/session-lifecycle-admission.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { getOpenIncognitoAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  resolveIncognitoOpenClawAgentSqlitePath,
+} from "../../state/openclaw-agent-db.js";
+import { ensureCanonicalUserProfileForEmail } from "../../state/user-profile-writes.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { loadGatewayModelCatalog as loadActualGatewayModelCatalog } from "../server-model-catalog.js";
+import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
 import { sessionLog } from "./sessions-shared.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -455,6 +469,7 @@ test("a multi-target agent group retains ordered label claims around catalog loa
 
 test("dispatched authorization rejects an instance replaced during catalog preparation", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const member = await ensureCanonicalUserProfileForEmail("member@example.com");
     const sessionKey = "agent:main:commit-bound-authorization";
     // A write-scoped model reset revalidates retained thinking. Admin scope would
     // bypass the session-instance authorization this request must exercise.
@@ -477,7 +492,7 @@ test("dispatched authorization rejects an instance replaced during catalog prepa
         connId: "catalog-authorization",
         authenticatedUserId: "member@example.com",
         authenticatedUserProfile: {
-          profileId: "member",
+          profileId: member.id,
           displayName: "Member",
           hasAvatar: false,
           updatedAt: 1,
@@ -600,6 +615,339 @@ test("patch timing covers preparation and lifecycle finalization before cleanup"
       log.mockRestore();
       clockSpy.mockRestore();
       setDiagnosticsEnabledForProcess(previousDiagnostics);
+    }
+  });
+});
+
+test("patchMany creates one shared physical store through original per-agent directory aliases", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const directory = state.statePath("patch-many-alias-birth");
+    const physical = path.join(directory, "physical");
+    const aliases = path.join(directory, "links");
+    await fs.mkdir(physical, { recursive: true });
+    await fs.mkdir(aliases);
+    const targets = ["main", "work"].map((agentId) => ({
+      agentId,
+      key: `agent:${agentId}:dashboard:shared-alias-birth`,
+    }));
+    for (const { agentId } of targets) {
+      await fs.symlink(
+        physical,
+        path.join(aliases, agentId),
+        process.platform === "win32" ? "junction" : "dir",
+      );
+    }
+    const physicalFile = path.join(await fs.realpath(physical), "shared.sqlite");
+    const model = makeProviderModelFixture<"openai-completions">({
+      provider: "openai",
+      id: "gpt-5.6-sol",
+      api: "openai-completions",
+      baseUrl: "https://fixture.invalid/v1",
+    });
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          openai: {
+            api: model.api,
+            baseUrl: model.baseUrl,
+            models: [model].map(({ provider: _provider, ...definition }) => definition),
+          },
+        },
+      },
+      agents: {
+        defaults: { model: "openai/gpt-5.6-sol" },
+        ownership: "explicit",
+        entries: { main: {}, work: {} },
+      },
+      session: { store: path.join(aliases, "{agentId}", "shared.sqlite") },
+    };
+    expect(validateConfigObject(cfg)).toMatchObject({ ok: true });
+    await state.writeConfig(cfg);
+    const context = patchContext(async () => [model], cfg);
+    const response = vi.fn();
+    const params = { targets, patch: { model: "openai/gpt-5.6-sol" } };
+    await expect(fs.stat(physicalFile)).rejects.toMatchObject({ code: "ENOENT" });
+    // The existing direct method harness uses null only for a trusted internal caller.
+    await sessionMutationHandlers["sessions.patchMany"]!({
+      req: { type: "req", id: "shared-alias-birth", method: "sessions.patchMany", params },
+      params,
+      respond: response,
+      context,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+    expect(response).toHaveBeenCalledExactlyOnceWith(
+      true,
+      { outcomes: targets.map(({ agentId, key }) => ({ agentId, key, ok: true })) },
+      undefined,
+    );
+    const instances = targets.map(({ agentId, key }) => {
+      const storePath = path.join(aliases, agentId, "shared.sqlite");
+      const entry = loadSessionEntry({ agentId, sessionKey: key, storePath });
+      expect(entry).toMatchObject({
+        providerOverride: "openai",
+        modelOverride: "gpt-5.6-sol",
+        sessionId: expect.any(String),
+      });
+      if (!entry) {
+        throw new Error("Successful alias patch did not persist its session");
+      }
+      return { agentId, key, storePath, expectedSessionId: entry.sessionId };
+    });
+    for (const { storePath } of instances) {
+      expect(await fs.realpath(storePath)).toBe(physicalFile);
+    }
+    const currentResponse = vi.fn();
+    const currentParams = {
+      targets: instances.map(({ agentId, key, expectedSessionId }) => ({
+        agentId,
+        key,
+        expectedSessionId,
+      })),
+      patch: { model: "openai/gpt-5.6-sol", pinned: true },
+    };
+    await sessionMutationHandlers["sessions.patchMany"]!({
+      req: {
+        type: "req",
+        id: "shared-alias-current",
+        method: "sessions.patchMany",
+        params: currentParams,
+      },
+      params: currentParams,
+      respond: currentResponse,
+      context,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+    expect(currentResponse).toHaveBeenCalledExactlyOnceWith(
+      true,
+      { outcomes: targets.map(({ agentId, key }) => ({ agentId, key, ok: true })) },
+      undefined,
+    );
+    for (const { agentId, key, storePath, expectedSessionId } of instances) {
+      expect(loadSessionEntry({ agentId, sessionKey: key, storePath })).toMatchObject({
+        sessionId: expectedSessionId,
+        providerOverride: "openai",
+        modelOverride: "gpt-5.6-sol",
+        pinnedAt: expect.any(Number),
+      });
+    }
+  });
+});
+
+test("patchMany retains original RAM facts while its cold durable sibling publishes registration", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const storePath = state.statePath("mixed-patch-cold.sqlite");
+    const model = makeProviderModelFixture<"openai-completions">({
+      provider: "openai",
+      id: "gpt-5.6-sol",
+      api: "openai-completions",
+      baseUrl: "https://fixture.invalid/v1",
+    });
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          openai: {
+            api: model.api,
+            baseUrl: model.baseUrl,
+            models: [model].map(({ provider: _provider, ...definition }) => definition),
+          },
+        },
+      },
+      agents: {
+        defaults: { model: "openai/gpt-5.6-sol" },
+        entries: { main: {} },
+      },
+      session: { store: storePath },
+    };
+    expect(validateConfigObject(cfg)).toMatchObject({ ok: true });
+    await state.writeConfig(cfg);
+    const ramKey = "agent:main:dashboard:incognito-mixed-patch";
+    const ramPath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
+    const ramScope = { agentId: "main", sessionKey: ramKey, storePath: ramPath };
+    const ramIdentity = {
+      sessionId: "original-mixed-ram",
+      lifecycleRevision: "original-mixed-ram-generation",
+      incognito: true as const,
+    };
+    await upsertSessionEntryCore(ramScope, { ...ramIdentity, updatedAt: 1 });
+    const originalRam = getOpenIncognitoAgentDatabase("main", ramPath);
+    if (!originalRam) {
+      throw new Error("Incognito fixture did not retain its original RAM database");
+    }
+    const fileKey = "agent:main:dashboard:mixed-file-patch";
+    const targets = [
+      { agentId: "main", key: ramKey, expectedSessionId: ramIdentity.sessionId },
+      { agentId: "main", key: fileKey },
+    ];
+    const params = { targets, patch: { model: "openai/gpt-5.6-sol" } };
+    const context = patchContext(async () => [model], cfg);
+    const response = vi.fn();
+    const ramLifetimesAtStoresPublication: boolean[] = [];
+    const stop = sessionChanges.subscribe((change) => {
+      if ("all" in change && change.scope === "stores") {
+        ramLifetimesAtStoresPublication.push(
+          getOpenIncognitoAgentDatabase("main", ramPath) === originalRam && originalRam.db.isOpen,
+        );
+      }
+    });
+    try {
+      await expect(fs.stat(storePath)).rejects.toMatchObject({ code: "ENOENT" });
+      await sessionMutationHandlers["sessions.patchMany"]!({
+        req: { type: "req", id: "mixed-file-ram-patch", method: "sessions.patchMany", params },
+        params,
+        respond: response,
+        context,
+        client: null,
+        isWebchatConnect: () => false,
+      });
+      expect(ramLifetimesAtStoresPublication.length).toBeGreaterThan(0);
+      expect(ramLifetimesAtStoresPublication.every(Boolean)).toBe(true);
+      expect(response).toHaveBeenCalledExactlyOnceWith(
+        true,
+        { outcomes: targets.map(({ agentId, key }) => ({ agentId, key, ok: true })) },
+        undefined,
+      );
+      expect(getOpenIncognitoAgentDatabase("main", ramPath)).toBe(originalRam);
+      expect(originalRam.db.isOpen).toBe(true);
+      expect(loadSessionEntry(ramScope)).toMatchObject({
+        ...ramIdentity,
+        providerOverride: "openai",
+        modelOverride: "gpt-5.6-sol",
+      });
+      expect(loadSessionEntry({ agentId: "main", sessionKey: fileKey, storePath })).toMatchObject({
+        sessionId: expect.any(String),
+        providerOverride: "openai",
+        modelOverride: "gpt-5.6-sol",
+      });
+      await expect(fs.stat(ramPath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      stop();
+    }
+  });
+});
+
+test("patchMany excludes a revoked cold-store promotion while its independent store commits", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const fixtureDirectory = state.statePath("independent-cold-patch");
+    await fs.mkdir(fixtureDirectory, { recursive: true });
+    const directory = await fs.realpath(fixtureDirectory);
+    const targets = ["main", "work"].map((agentId) => ({
+      agentId,
+      key: `agent:${agentId}:dashboard:cold-promotion`,
+    }));
+    const failed = targets[0]!;
+    const successful = targets[1]!;
+    const failedPath = path.join(directory, failed.agentId, "store.sqlite");
+    const successfulPath = path.join(directory, successful.agentId, "store.sqlite");
+    const model = makeProviderModelFixture<"openai-completions">({
+      provider: "openai",
+      id: "gpt-5.6-sol",
+      api: "openai-completions",
+      baseUrl: "https://fixture.invalid/v1",
+    });
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          openai: {
+            api: model.api,
+            baseUrl: model.baseUrl,
+            models: [model].map(({ provider: _provider, ...definition }) => definition),
+          },
+        },
+      },
+      agents: {
+        defaults: { model: "openai/gpt-5.6-sol" },
+        ownership: "explicit",
+        entries: { main: {}, work: {} },
+      },
+      session: { store: path.join(directory, "{agentId}", "store.sqlite") },
+    };
+    expect(validateConfigObject(cfg)).toMatchObject({ ok: true });
+    await state.writeConfig(cfg);
+    const context = patchContext(async () => [model], cfg);
+    const revoked = new SessionMutationAuthorizationChangedError(
+      errorShape(ErrorCodes.FORBIDDEN, "Original cold-store source was revoked"),
+    );
+    const source = new AbortController();
+    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+    let failedOpenAdmissions = 0;
+    const admissionObserver = vi
+      .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
+      .mockImplementation((admit, attachment) =>
+        createAdmission((request, grant) => {
+          if (
+            request.stage === "open" &&
+            isRecord(request.facts) &&
+            request.facts.databasePath === failedPath &&
+            isRecord(request.facts.creatingIdentity) &&
+            request.facts.creatingIdentity.key === `path:${failedPath}`
+          ) {
+            failedOpenAdmissions++;
+            source.abort(revoked);
+          }
+          admit(request, grant);
+        }, attachment),
+      );
+    const writers = vi.spyOn(sessionReplacement, "applySessionEntryCanonicalReplacements");
+    const respond = vi.fn();
+    const params = { targets, patch: { model: "openai/gpt-5.6-sol" } };
+    try {
+      await expect(fs.stat(failedPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.stat(successfulPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await sessionMutationHandlers["sessions.patchMany"]!({
+        req: {
+          type: "req",
+          id: "independent-cold-promotion",
+          method: "sessions.patchMany",
+          params,
+        },
+        params,
+        respond,
+        context,
+        client: null,
+        isWebchatConnect: () => false,
+        sessionMutationAuthorization: {
+          assertCurrent() {},
+          assertTargetCurrent({ sessionKey }) {
+            if (sessionKey === failed.key) {
+              source.signal.throwIfAborted();
+            }
+          },
+        },
+      });
+      expect(failedOpenAdmissions).toBe(1);
+      expect(source.signal.reason).toBe(revoked);
+      expect(respond).toHaveBeenCalledExactlyOnceWith(
+        true,
+        {
+          outcomes: [
+            { ...failed, ok: false, error: revoked.error },
+            { ...successful, ok: true },
+          ],
+        },
+        undefined,
+      );
+      // Failed preparation must not reenter the canonical writer through a fallback.
+      expect(writers.mock.calls.some(([request]) => request.storePath === failedPath)).toBe(false);
+      expect(writers.mock.calls.some(([request]) => request.storePath === successfulPath)).toBe(
+        true,
+      );
+      await expect(fs.stat(failedPath)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(
+        loadSessionEntry({
+          agentId: successful.agentId,
+          sessionKey: successful.key,
+          storePath: successfulPath,
+        }),
+      ).toMatchObject({
+        sessionId: expect.any(String),
+        providerOverride: "openai",
+        modelOverride: "gpt-5.6-sol",
+      });
+    } finally {
+      writers.mockRestore();
+      admissionObserver.mockRestore();
     }
   });
 });

@@ -547,6 +547,16 @@ export function collectModuleExportNames(
             namespaceImportsByLocalName,
           );
           if (aliasSource) {
+            if (ts.isIdentifier(constDeclaration.name) && aliasSource.importedName === name) {
+              // Const aliases keep runtime identity even when their declared type narrows.
+              // Retain the edge so real wrappers still resolve through this facade.
+              namedReExports.push({
+                exportedName: name,
+                importedName: aliasSource.importedName,
+                moduleSpecifier: aliasSource.moduleSpecifier,
+              });
+              continue;
+            }
             importedReferences.push(aliasSource);
           }
         }

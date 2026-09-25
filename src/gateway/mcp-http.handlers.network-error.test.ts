@@ -111,7 +111,7 @@ describe("Gateway MCP network execution error boundary", () => {
 
     expect(response.result.isError).toBe(true);
     const text = response.result.content[0]?.text ?? "";
-    expect(text).toContain("SECURITY NOTICE:");
+    expect(text).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
     expect(text).not.toContain("feedfeedfeedfeed");
     expect(text).not.toContain("<|im_start|>");
   });

@@ -8,6 +8,7 @@ import { normalizeMimeType } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { captureAmbientGatewayOperatorAuthority } from "../../gateway/operator-invocation-authority.js";
 import type { Context } from "../../llm/types.js";
 import { renderDocumentTruncationNotice } from "../../media/document-extraction-metadata.js";
 import {
@@ -442,15 +443,13 @@ export function createPdfTool(options?: {
   const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(options?.config);
 
   const executePdf = async (
-    args: unknown,
+    record: Record<string, unknown>,
     signal: AbortSignal | undefined,
     work: AsyncWorkScope,
     onAcquired: (resource: AsyncDisposable) => void,
     assertResourcesOpen: (() => void) | undefined,
     operatorAuthority: AdmittedRunOperatorAuthority | undefined,
   ): Promise<Awaited<ReturnType<AnyAgentTool["execute"]>>> => {
-    const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
-
     // MARK: - Normalize pdf + pdfs input
     const pdfInputs = resolvePdfInputs(record);
 
@@ -676,6 +675,10 @@ export function createPdfTool(options?: {
     description,
     parameters: PdfToolSchema,
     execute: async (_toolCallId, args, signal) => {
+      const record: Record<string, unknown> = args && typeof args === "object" ? { ...args } : {};
+      if (Array.isArray(record.pdfs)) {
+        record.pdfs = [...record.pdfs];
+      }
       const reported = createDeferredCore<Awaited<ReturnType<AnyAgentTool["execute"]>>>();
       const parentSignal = getAsyncWorkSignal();
       void trackAsyncWork(async () => {
@@ -689,9 +692,7 @@ export function createPdfTool(options?: {
         const runtimeResources = new AsyncDisposableStack();
         let releaseOperator: (() => void) | undefined;
         try {
-          const { captureAmbientGatewayOperatorAuthority } =
-            await import("../../gateway/operator-invocation-authority.js");
-          const capturedOperator = captureAmbientGatewayOperatorAuthority({
+          const capturedOperator = await captureAmbientGatewayOperatorAuthority({
             missingBindingError: () =>
               new Error("PDF analysis requires its current Gateway binding."),
             retainInherited: true,
@@ -714,7 +715,7 @@ export function createPdfTool(options?: {
           reported.resolve(
             await work.track(() =>
               executePdf(
-                args,
+                record,
                 executionSignal,
                 work,
                 (resource) => {

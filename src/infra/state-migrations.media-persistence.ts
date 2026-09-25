@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import {
   decodeSessionArchiveBytes,
   encodeSessionArchiveContent,
@@ -55,7 +56,6 @@ import {
   enableNodeSqliteKyselyStatementCache,
 } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
-import { replaceFileAtomicSync } from "./replace-file.js";
 import { repairDoctorSqliteIndexCorruption } from "./sqlite-index-recovery.js";
 import { repairCanonicalSqliteIndexes } from "./sqlite-index-schema.js";
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";

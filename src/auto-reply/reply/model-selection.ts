@@ -213,18 +213,21 @@ export async function createModelSelectionState(params: {
   // (discovery threw, static/empty fallback) must not destroy a pinned override.
   let catalogAuthoritative = true;
   let resetModelOverride = false;
-  // Set when this call decides to reset the stored override, independent of whether that write
-  // persisted. A lost compare-and-swap only means another writer touched the row, not that the
-  // refusal should be ignored, so the run's base selection must not stay on the refused ref.
+  // Refusing a pin for this run does not imply ownership of it or a successful persisted reset.
   let storedOverrideResetForRun = false;
   let resetModelOverrideRef: string | undefined;
   let resetModelOverrideReason: "disallowed" | "stale" | "temporarily-unavailable" | undefined;
-  const directStoredModelOverride = storedModelOverrides.resolveDirectStoredModelOverride({
+  const effectiveStoredModelOverride = storedModelOverrides.resolveStoredModelOverrideCore({
     sessionEntry,
+    sessionStore,
+    sessionKey,
+    parentSessionKey,
     defaultProvider,
     allowPluginNormalization: runtimeModelNormalization.allowPluginNormalization,
     manifestPlugins: runtimeModelNormalization.manifestPlugins,
   });
+  const directStoredModelOverride =
+    effectiveStoredModelOverride?.source === "session" ? effectiveStoredModelOverride : null;
   const primaryHarnessPolicy = resolveAgentHarnessPolicy({
     provider: primaryProvider,
     modelId: primaryModel,
@@ -232,10 +235,10 @@ export async function createModelSelectionState(params: {
     agentId: params.agentId,
     sessionKey,
   });
-  const directOverrideRef = directStoredModelOverride
+  const storedOverrideRef = effectiveStoredModelOverride
     ? {
-        provider: directStoredModelOverride.provider ?? defaultProvider,
-        model: directStoredModelOverride.model,
+        provider: effectiveStoredModelOverride.provider ?? defaultProvider,
+        model: effectiveStoredModelOverride.model,
       }
     : undefined;
   const isStaleStoredOverride = (
@@ -304,24 +307,32 @@ export async function createModelSelectionState(params: {
     sessionEntry &&
     sessionStore &&
     sessionKey &&
-    directOverrideRef &&
+    storedOverrideRef &&
+    (effectiveStoredModelOverride?.source === "session" ||
+      (!params.skipStoredModelOverride && !params.hasResolvedHeartbeatModelOverride)) &&
     !hasOneTurnModelOverride &&
     (!params.hasModelDirective || !operatorAuthority?.modelPolicy)
   ) {
-    const key = buildModelCatalogRef(directOverrideRef.provider, directOverrideRef.model);
+    const key = buildModelCatalogRef(storedOverrideRef.provider, storedOverrideRef.model);
     const overrideAllowed =
-      hasSessionAutoModelSelection(sessionEntry) || visibilityPolicy.allows(directOverrideRef);
+      (effectiveStoredModelOverride?.source === "session" &&
+        hasSessionAutoModelSelection(sessionEntry)) ||
+      visibilityPolicy.allows(storedOverrideRef);
     // A degraded catalog cannot prove a pin is disallowed. Preserve it while the turn falls back
     // to primary, then re-evaluate after discovery recovers; config-proven stale pins still reset.
     const shouldResetOverride =
       (staleDirectStoredOverride || !overrideAllowed) && !modelSelectionLocked;
     const overrideTemporarilyUnavailable =
       shouldResetOverride && !staleDirectStoredOverride && !catalogAuthoritative;
+    storedOverrideResetForRun = shouldResetOverride;
     if (overrideTemporarilyUnavailable) {
       resetModelOverrideRef = key;
       resetModelOverrideReason = "temporarily-unavailable";
+    } else if (shouldResetOverride && effectiveStoredModelOverride?.source === "parent") {
+      // The child's policy cannot clear the parent's choice.
+      resetModelOverrideRef = key;
+      resetModelOverrideReason = "disallowed";
     } else if (shouldResetOverride) {
-      storedOverrideResetForRun = true;
       const initialSessionEntry = { ...sessionEntry };
       const nextSessionEntry = { ...sessionEntry };
       const { updated } = applyModelOverrideToSessionEntry({
@@ -365,17 +376,12 @@ export async function createModelSelectionState(params: {
       }
     }
   }
-  // A refused direct override must not stay the run's base selection: `resolveSelection` would clip
-  // it to the first allowed catalog entry instead of the configured primary. `stale` has moved to the
-  // primary unconditionally since before the reset existed, so it keeps its own signal; a
-  // policy-rejected override is moved by the reset decision this owner just took, whether or not that
-  // write persisted, and `temporarily-unavailable` preserves the pin instead of resetting it and is
-  // deliberately excluded. The ref comparison keeps this to callers that seeded provider/model from
-  // the stored override; an inline directive or operator default is resolved afterwards and wins.
+  // Resolve refused pins from the primary, not catalog order, even when the pin must be preserved.
+  // Only replace a pin-seeded selection; explicit per-run choices keep their precedence.
   if (
     (storedOverrideResetForRun || staleDirectStoredOverride) &&
-    params.provider === directOverrideRef?.provider &&
-    params.model === directOverrideRef.model
+    params.provider === storedOverrideRef?.provider &&
+    params.model === storedOverrideRef.model
   ) {
     provider = primaryProvider;
     model = primaryModel;

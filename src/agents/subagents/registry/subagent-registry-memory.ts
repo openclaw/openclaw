@@ -76,7 +76,7 @@ type SubagentRetirementScope = {
 };
 
 type CompletionAuthority = NonNullable<
-  ReturnType<typeof captureOperatorToolGatewayContinuationContext>
+  Awaited<ReturnType<typeof captureOperatorToolGatewayContinuationContext>>
 >;
 type CompletionCustody = {
   authority: CompletionAuthority;
@@ -86,6 +86,7 @@ type CompletionCustody = {
 
 class SubagentRunMap extends Map<string, SubagentRunRecord> {
   private readonly retirementScopes = new Set<SubagentRetirementScope>();
+  private readonly registrationScopes = new Set<{ childSessionKey: string; current: boolean }>();
   private readonly completionAuthorities = new Map<SubagentRunRecord, CompletionCustody>();
   // A tombstone rejects stale callbacks without retaining closed Gateway/source contexts.
   private readonly operatorCompletionEntries = new WeakSet<SubagentRunRecord>();
@@ -242,10 +243,32 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     };
   }
 
+  /** A committed successor remains superseding even if it retires before preparation finishes. */
+  captureRegistrationOwnership(childSessionKey: string) {
+    const scope = { childSessionKey, current: true };
+    this.registrationScopes.add(scope);
+    return {
+      assertCurrent: () => {
+        if (!scope.current) {
+          throw new Error("Subagent registration owner changed during preparation");
+        }
+      },
+      release: () => {
+        scope.current = false;
+        this.registrationScopes.delete(scope);
+      },
+    };
+  }
+
   /** Publish only accepted ownership, after synchronous registration/replacement rollback decisions. */
   commitOwnership(entry: SubagentRunRecord): void {
     if (this.get(entry.runId) !== entry) {
       return;
+    }
+    for (const scope of this.registrationScopes) {
+      if (scope.childSessionKey === entry.childSessionKey) {
+        scope.current = false;
+      }
     }
     for (const scope of this.retirementScopes) {
       const previous = scope.observation.entry;
@@ -316,6 +339,10 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
   }
 
   override clear(): void {
+    for (const scope of this.registrationScopes) {
+      scope.current = false;
+    }
+    this.registrationScopes.clear();
     for (const entry of this.completionAuthorities.keys()) {
       this.releaseCompletionAuthority(entry);
     }

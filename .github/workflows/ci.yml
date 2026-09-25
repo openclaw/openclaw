@@ -105,7 +105,7 @@ env:
   IOS_SCREENSHOT_FASTLANE_VERSION: "2.240.1"
   IOS_SCREENSHOT_NODE_VERSION: "24.16.0"
   IOS_SCREENSHOT_XCODE_VERSION: "Xcode 27.0 Build version 27A266a"
-  NODE_VERSION: "24.19.0"
+  NODE_VERSION: "24.21.0"
 
 jobs:
   # Preflight: establish routing truth and job matrices once, then let real
@@ -117,9 +117,8 @@ jobs:
       contents: read
       actions: read
       pull-requests: read
-    # Release priority: hosted-runner work defers while OPENCLAW_RELEASE_PRIORITY_RUN names an active Full Release Validation.
     # Full main CI is hourly by default; security-fast still runs on every admitted push.
-    if: (github.event_name != 'push' || github.ref != 'refs/heads/main' || vars.OPENCLAW_CI_ON_PUSH == 'true') && (vars.OPENCLAW_RELEASE_PRIORITY_RUN == '' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/heads/release') || startsWith(github.base_ref, 'release')) && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    if: (github.event_name != 'push' || github.ref != 'refs/heads/main' || vars.OPENCLAW_CI_ON_PUSH == 'true') && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON((vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || (contains(fromJSON('["hybrid","runson"]'), vars.OPENCLAW_CI_RUNNER_BACKEND) && github.run_attempt != 1)) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && (contains(fromJSON('["hybrid","runson"]'), vars.OPENCLAW_CI_RUNNER_BACKEND) && 'blacksmith-16vcpu-ubuntu-2404' || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04')))) || ((vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || (contains(fromJSON('["hybrid","runson"]'), vars.OPENCLAW_CI_RUNNER_BACKEND) && github.run_attempt != 1)) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && (contains(fromJSON('["hybrid","runson"]'), vars.OPENCLAW_CI_RUNNER_BACKEND) && 'blacksmith-16vcpu-ubuntu-2404' || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04')) }}
     timeout-minutes: 20
     outputs:
@@ -1955,7 +1954,7 @@ jobs:
           // projected runner contract; older targets keep their flat fields or
           // projected legacy groups because their shard runner predates the codec.
           const nodeTestGroupsCodecPath = "./scripts/lib/ci-node-test-groups-codec.mts";
-          const uiTestGroups = runUiTests &&
+          const uiTestGroups = runUiTests && !frozenTarget &&
             typeof nodeTestPlan.createUiTestShardGroups === "function"
               ? nodeTestPlan.createUiTestShardGroups({
                   includeReleaseOnlyTests: includeReleaseOnlyUiTests,
@@ -2315,7 +2314,6 @@ jobs:
             // Qualification authenticates on hosted preflight before paid admission.
             hybridHostedBaseRows = Object.values({
               "preflight": count(ciQualification),
-              "ci-gate": 1,
               "control-ui-performance": count(manifest.run_control_ui_performance),
               "native-i18n": count(manifest.run_native_i18n),
               "control-ui-i18n": count(manifest.run_control_ui_i18n),
@@ -2325,7 +2323,6 @@ jobs:
               "checks-fast-channel-contracts-shard": count(manifest.run_channel_contracts_shards, manifest.channel_contracts_matrix.include.length),
               "checks-node-core-test-nondist-shard": count(manifest.run_checks_node_core_nondist, hostedNodeRows),
               "check-shard": count(manifest.run_check, 4),
-              "check-lint-hosted-core-shard": count(manifest.run_check && usesHostedRunnerProfile, runnerProfile === "hybrid" && !releaseGate ? 2 : 5),
               "check-lint-hosted-extension-shard": count(manifest.run_check && runnerProfile === "hybrid" && !releaseGate, 6),
               "check-additional-shard": count(manifest.run_check_additional, hostedAdditionalRows),
               "check-docs": count(manifest.run_check_docs),
@@ -2568,7 +2565,7 @@ jobs:
         run: node "$PRIVATE_KEY_SCANNER_PATH"
 
       - name: Install security scanners
-        run: python3 --version && python3 -m pip install --disable-pip-version-check pre-commit==4.6.2 zizmor==1.29.0
+        run: python3 --version && python3 -m pip install --disable-pip-version-check pre-commit==4.6.2 zizmor==1.30.1
 
       - name: Audit changed GitHub workflows with zizmor
         env:
@@ -4414,7 +4411,6 @@ jobs:
           key: ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-${{ matrix.task }}-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'test/tsconfig/*.json', 'scripts/run-tsgo*', 'scripts/lib/local-check-runtime.mts') }}-${{ github.sha }}
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-${{ matrix.task }}-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'test/tsconfig/*.json', 'scripts/run-tsgo*', 'scripts/lib/local-check-runtime.mts') }}-
-            ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-${{ matrix.task }}-
 
       # Full runs publish core state in five stripe caches. The changed-graph
       # queue needs that same state even when it runs inside the central row.
@@ -4426,7 +4422,6 @@ jobs:
           key: ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-1-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'test/tsconfig/*.json', 'scripts/run-tsgo*', 'scripts/lib/local-check-runtime.mts') }}-${{ github.sha }}
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-1-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'test/tsconfig/*.json', 'scripts/run-tsgo*', 'scripts/lib/local-check-runtime.mts') }}-
-            ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-1-
 
       - name: Restore changed core test-type stripe 2
         if: matrix.task == 'test-types' && needs.preflight.outputs.changed_core_test_paths_json != '' && needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.frozen_target != 'true'
@@ -4436,7 +4431,6 @@ jobs:
           key: ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-2-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'test/tsconfig/*.json', 'scripts/run-tsgo*', 'scripts/lib/local-check-runtime.mts') }}-${{ github.sha }}
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-2-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'test/tsconfig/*.json', 'scripts/run-tsgo*', 'scripts/lib/local-check-runtime.mts') }}-
-            ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-2-
 
       - name: Restore changed core test-type stripe 3
         if: matrix.task == 'test-types' && needs.preflight.outputs.changed_core_test_paths_json != '' && needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.frozen_target != 'true'
@@ -4446,7 +4440,6 @@ jobs:
           key: ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-3-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'test/tsconfig/*.json', 'scripts/run-tsgo*', 'scripts/lib/local-check-runtime.mts') }}-${{ github.sha }}
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-3-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'test/tsconfig/*.json', 'scripts/run-tsgo*', 'scripts/lib/local-check-runtime.mts') }}-
-            ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-3-
 
       - name: Restore changed core test-type stripe 4
         if: matrix.task == 'test-types' && needs.preflight.outputs.changed_core_test_paths_json != '' && needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.frozen_target != 'true'
@@ -4456,7 +4449,6 @@ jobs:
           key: ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-4-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'test/tsconfig/*.json', 'scripts/run-tsgo*', 'scripts/lib/local-check-runtime.mts') }}-${{ github.sha }}
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-4-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'test/tsconfig/*.json', 'scripts/run-tsgo*', 'scripts/lib/local-check-runtime.mts') }}-
-            ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-4-
 
       - name: Restore changed core test-type stripe 5
         if: matrix.task == 'test-types' && needs.preflight.outputs.changed_core_test_paths_json != '' && needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.frozen_target != 'true'
@@ -4466,7 +4458,6 @@ jobs:
           key: ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-5-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'test/tsconfig/*.json', 'scripts/run-tsgo*', 'scripts/lib/local-check-runtime.mts') }}-${{ github.sha }}
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-5-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'test/tsconfig/*.json', 'scripts/run-tsgo*', 'scripts/lib/local-check-runtime.mts') }}-
-            ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-5-
 
       - name: Compute extension boundary input fingerprint
         id: extension-boundary-inputs
@@ -4824,7 +4815,9 @@ jobs:
           key: ${{ steps.test-type-cache.outputs.cache-primary-key }}
 
   # Keep five core stripes; the runner isolates large targets into serial child processes.
-  # Ordinary hybrid runs serialize the stripes across two hosted jobs.
+  # Ordinary hybrid runs serialize the stripes across two jobs; use Blacksmith
+  # on trusted first attempts because hosted assignment put these on the critical path.
+  # The first packed row took 621s on the 8-class; retain four actual CPUs there.
   # GitHub, frozen and manual runs retain five jobs. All-Blacksmith keeps one lint job.
   check-lint-hosted-core-shard:
     permissions:
@@ -4832,7 +4825,7 @@ jobs:
     name: check-lint-core-${{ matrix.stripe }}
     needs: [preflight]
     if: ${{ needs.preflight.outputs.run_check == 'true' && (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && (needs.preflight.outputs.frozen_target != 'true' || needs.preflight.outputs.hosted_runner_profile_contract == 'true') }}
-    runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON(contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.qualification_runner_backend || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && (github.event_name != 'workflow_dispatch' || needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.node_runner_backend == 'runson') && needs.preflight.outputs.frozen_target != 'true' && (needs.preflight.outputs.runner_profile == 'hybrid' && matrix.stripe == 1 && 'blacksmith-16vcpu-ubuntu-2404' || 'blacksmith-8vcpu-ubuntu-2404') || 'ubuntu-24.04'))) || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.qualification_runner_backend || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && (github.event_name != 'workflow_dispatch' || needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.node_runner_backend == 'runson') && needs.preflight.outputs.frozen_target != 'true' && (needs.preflight.outputs.runner_profile == 'hybrid' && matrix.stripe == 1 && 'blacksmith-16vcpu-ubuntu-2404' || 'blacksmith-8vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -5000,7 +4993,6 @@ jobs:
           key: ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-${{ matrix.stripe }}-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'test/tsconfig/*.json', 'scripts/run-tsgo*', 'scripts/lib/local-check-runtime.mts') }}-${{ github.sha }}
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-${{ matrix.stripe }}-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'test/tsconfig/*.json', 'scripts/run-tsgo*', 'scripts/lib/local-check-runtime.mts') }}-
-            ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-${{ matrix.stripe }}-
 
       - name: Run hosted core test-types stripe
         env:
@@ -5398,7 +5390,7 @@ jobs:
     timeout-minutes: 60
     env:
       # Node 24.20 includes the Windows native scheduler shutdown fix (nodejs/node#61999).
-      NODE_VERSION: "24.20.0"
+      NODE_VERSION: "24.21.0"
       NODE_OPTIONS: --max-old-space-size=8192
       OPENCLAW_TEST_SKIP_FULL_EXTENSIONS_SHARD: 1
     defaults:
@@ -6360,16 +6352,16 @@ jobs:
         uses: ruby/setup-ruby@984c0c890880bbf811283d6f09c4607c62d210a4 # v1.323.0
         with:
           ruby-version: "3.4.10"
-          bundler: "2.6.9"
+          bundler: "4.0.21"
           bundler-cache: false
           working-directory: apps/ios
 
       - name: Install locked Fastlane bundle
         working-directory: apps/ios
         run: |
-          bundle _2.6.9_ install --jobs 4 --retry 3
-          bundle _2.6.9_ check
-          bundle _2.6.9_ exec fastlane --version
+          bundle _4.0.21_ install --jobs 4 --retry 3
+          bundle _4.0.21_ check
+          bundle _4.0.21_ exec fastlane --version
 
       - *select_xcode_step
 
@@ -7029,15 +7021,13 @@ jobs:
     # Report failed prerequisites, but let superseded runs release their slot
     # without waiting for an aggregate runner after workflow cancellation.
     if: ${{ (github.event_name != 'push' || github.ref != 'refs/heads/main' || vars.OPENCLAW_CI_ON_PUSH == 'true') && !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
-    # The gate only aggregates job results; keep it independent of Blacksmith capacity.
-    runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    # Hosted assignment delayed this two-second final dependency by 130–172 seconds.
+    runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON(contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.qualification_runner_backend || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && (github.event_name != 'workflow_dispatch' || needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.node_runner_backend == 'runson') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04'))) || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.qualification_runner_backend || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && (github.event_name != 'workflow_dispatch' || needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.node_runner_backend == 'runson') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 5
     steps:
       - name: Verify selected CI lanes
         shell: bash
         env:
-          PREFLIGHT_RESULT: ${{ needs.preflight.result }}
-          RELEASE_PRIORITY_RUN: ${{ vars.OPENCLAW_RELEASE_PRIORITY_RUN }}
           JOB_RESULTS: |
             preflight=${{ needs.preflight.result }}|true
             security-fast=${{ needs.security-fast.result }}|true
@@ -7073,12 +7063,6 @@ jobs:
             docker-seed-e2e=${{ needs.docker-seed-e2e.result }}|${{ needs.preflight.outputs.run_docker_seed_e2e }}
         run: |
           set -euo pipefail
-
-          # A deferred run must stay unmergeable: a skipped gate would satisfy branch protection.
-          if [[ -n "${RELEASE_PRIORITY_RUN:-}" && "${PREFLIGHT_RESULT:-}" == "skipped" ]]; then
-            echo "::error title=Deferred for release ${RELEASE_PRIORITY_RUN}::CI deferred while Full Release Validation ${RELEASE_PRIORITY_RUN} holds hosted-runner priority; pnpm frv prioritize --restore reruns it after the release seals."
-            exit 1
-          fi
 
           # Preserve raw fields: IFS splitting can erase malformed trailing
           # delimiters and turn invalid results or selection into accepted values.
