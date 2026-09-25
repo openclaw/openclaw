@@ -417,7 +417,7 @@ fs.writeFileSync('package-lock.json', JSON.stringify(lock));
       expect(locale.tabs).toHaveLength(englishTabs.length);
       for (const [index, tab] of englishTabs.entries()) {
         expect(collectPages(locale.tabs[index])).toEqual(collectPages(tab).map(localize));
-        expect(locale.tabs[index].groups?.map((group) => collectPages(group))).toEqual(
+        expect(locale.tabs[index]?.groups?.map((group) => collectPages(group))).toEqual(
           tab.groups?.map((group) => collectPages(group).map(localize)),
         );
       }
