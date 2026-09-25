@@ -348,6 +348,20 @@ async function verifyOverlappingRetainedWork(createRecoveryFixture: RecoveryFixt
     },
   });
   const old = fixture.previousRegistry;
+  const record = old.plugins.find((entry) => entry.id === "first");
+  assert(record);
+  const instance = getPluginInstance(record);
+  assert(instance);
+  const consumer = instance.retainConsumer();
+  const consumerDrainEntered = createDeferredCore();
+  const waitForWork = instance.waitForRetainedWork.bind(instance);
+  const observation = vi.spyOn(instance, "waitForRetainedWork").mockImplementation((...args) => {
+    const draining = waitForWork(...args);
+    if (args[1]) {
+      consumerDrainEntered.resolve();
+    }
+    return draining;
+  });
   const first = retainRuntimePluginWork([old]);
   const second = retainRuntimePluginWork([old]);
   const reloading = fixture.reload();
@@ -359,12 +373,17 @@ async function verifyOverlappingRetainedWork(createRecoveryFixture: RecoveryFixt
     expect(disposed).toEqual([]);
     expect(() => retainRuntimePluginWork([old])).toThrow("replacement is in progress");
     first();
-    const record = old.plugins.find((entry) => entry.id === "first");
-    assert(record);
-    expect(getPluginInstance(record)?.run(() => "old run finishes")).toBe("old run finishes");
+    expect(instance.run(() => "old run finishes")).toBe("old run finishes");
     expect(fixture.candidates).toHaveLength(0);
     second();
-    await expect(reloading).resolves.toMatchObject({ runtime: { pluginIds: ["first"] } });
+    await Promise.race([consumerDrainEntered.promise, reloading]);
+    expect(disposed).toEqual([]);
+    consumer.release();
+    const receipt = await reloading;
+    expect(receipt.runtime.pluginIds).toEqual(["first"]);
+    expect(
+      receipt.runtime.warnings?.filter((warning) => warning.includes("retained work")),
+    ).toEqual([expect.stringMatching(/waited for.*retained work.*finish/)]);
     expect(disposed).toEqual([1]);
     const next = fixture.registryOwner.registry;
     expect(next).not.toBe(old);
@@ -374,6 +393,8 @@ async function verifyOverlappingRetainedWork(createRecoveryFixture: RecoveryFixt
   } finally {
     first();
     second();
+    consumer.release();
+    observation.mockRestore();
     await reloading.catch(() => {});
   }
 }

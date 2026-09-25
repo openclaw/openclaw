@@ -1,7 +1,9 @@
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
   ensureSessionTranscriptArchiveSchema,
@@ -14,7 +16,8 @@ import type {
   TranscriptArchivePublishPlan,
   TranscriptArchivePublishResult,
 } from "./session-accessor.sqlite-archive-types.js";
-import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+
+type TranscriptArchiveDatabase = Pick<OpenClawAgentKyselyDatabase, "session_transcript_archives">;
 
 const PENDING_ARCHIVE_PUBLISH_BATCH_SIZE = 4;
 
@@ -45,7 +48,7 @@ export function hasPendingSessionTranscriptArchives(
     tableExists(database.db, SESSION_TRANSCRIPT_ARCHIVES_TABLE) &&
     executeSqliteQueryTakeFirstSync(
       database.db,
-      getSessionKysely(database.db)
+      getNodeSqliteKysely<TranscriptArchiveDatabase>(database.db)
         .selectFrom("session_transcript_archives")
         .select("session_id")
         .where("published_at", "is", null)
@@ -61,7 +64,7 @@ export function prepareSessionTranscriptArchivePublishPlans(
     requested: readonly Pick<TranscriptArchivePublishPlan, "sessionId" | "generation">[];
   },
 ): TranscriptArchivePublishPlan[] {
-  const db = getSessionKysely(database.db);
+  const db = getNodeSqliteKysely<TranscriptArchiveDatabase>(database.db);
   if (params.requested.length > 0) {
     ensureSessionTranscriptArchiveSchema(database.db);
   } else if (!tableExists(database.db, SESSION_TRANSCRIPT_ARCHIVES_TABLE)) {
@@ -130,7 +133,7 @@ export function recordSessionTranscriptArchivePublishResults(
   nowMs: number,
 ): void {
   ensureSessionTranscriptArchiveSchema(database.db);
-  const db = getSessionKysely(database.db);
+  const db = getNodeSqliteKysely<TranscriptArchiveDatabase>(database.db);
   for (const result of results) {
     executeSqliteQuerySync(
       database.db,
@@ -162,7 +165,7 @@ export function persistSessionTranscriptArchive(
     );
   }
   ensureSessionTranscriptArchiveSchema(database.db);
-  const db = getSessionKysely(database.db);
+  const db = getNodeSqliteKysely<TranscriptArchiveDatabase>(database.db);
   const inserted = executeSqliteQuerySync(
     database.db,
     db

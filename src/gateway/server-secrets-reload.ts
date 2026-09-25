@@ -29,7 +29,7 @@ import {
   type SharedGatewaySessionGenerationOwnership,
   type SharedGatewaySessionGenerationState,
 } from "./server-shared-auth-generation.js";
-import type { ActivateRuntimeSecrets } from "./server-startup-config.js";
+import type { ActivateRuntimeSecrets } from "./server-startup-config.types.js";
 
 type ReloadSecretsResult = { warningCount: number };
 type ReloadSecretsOptions = { forceColdRefKeys?: ReadonlySet<string>; joinInFlight?: boolean };

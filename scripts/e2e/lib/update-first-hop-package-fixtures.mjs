@@ -148,7 +148,7 @@ function updateFixtureContentInventory(paths, update) {
   writeJson(file, update(parsePackageDistContentInventory(content)));
 }
 
-export function removeLegacyUpdateCompatChunks(packageRoot) {
+export function removeLegacyUpdateCompatChunks(packageRoot, expectedMissingChunk = "") {
   const paths = resolveFixturePaths(packageRoot);
   const inventory = readJson(paths.inventory);
   if (!Array.isArray(inventory) || inventory.some((entry) => typeof entry !== "string")) {
@@ -173,17 +173,29 @@ export function removeLegacyUpdateCompatChunks(packageRoot) {
   ) {
     throw new Error("package fixture compatibility inventory has an invalid path");
   }
+  if (expectedMissingChunk) {
+    if (
+      path.isAbsolute(expectedMissingChunk) ||
+      expectedMissingChunk.includes("\\") ||
+      expectedMissingChunk.split("/").includes("..") ||
+      !/-[A-Za-z0-9_-]{8}\.m?js$/.test(expectedMissingChunk)
+    ) {
+      throw new Error("package fixture expected missing chunk has an invalid path");
+    }
+  }
   const chunks = new Set(
-    hasRecordedCompatibility
-      ? recordedChunks.filter((name) => {
-          if (!/-[A-Za-z0-9_-]{8}\.m?js$/.test(name)) {
-            return false;
-          }
-          return isUpdateCompatibilityChunk(
-            fs.readFileSync(path.join(paths.root, "dist", name), "utf8"),
-          );
-        })
-      : LEGACY_UPDATE_COMPAT_CHUNKS,
+    expectedMissingChunk
+      ? [expectedMissingChunk]
+      : hasRecordedCompatibility
+        ? recordedChunks.filter((name) => {
+            if (!/-[A-Za-z0-9_-]{8}\.m?js$/.test(name)) {
+              return false;
+            }
+            return isUpdateCompatibilityChunk(
+              fs.readFileSync(path.join(paths.root, "dist", name), "utf8"),
+            );
+          })
+        : LEGACY_UPDATE_COMPAT_CHUNKS,
   );
   const removed = [];
   for (const name of chunks) {
@@ -202,6 +214,7 @@ export function removeLegacyUpdateCompatChunks(packageRoot) {
   updateFixtureContentInventory(paths, (entries) =>
     entries.filter((entry) => !removed.includes(entry.path)),
   );
+  return removed;
 }
 
 function futureFixtureVersion(sequence) {
@@ -236,8 +249,14 @@ function stampFixtureVersion(packageRoot, version) {
 
 export function markFutureUpdateFixture(packageRoot, sequence = 0) {
   const version = futureFixtureVersion(sequence);
-  removeLegacyUpdateCompatChunks(packageRoot);
+  const removedCompatibilityChunks = removeLegacyUpdateCompatChunks(packageRoot);
   stampFixtureVersion(packageRoot, version);
+  return {
+    removedCompatibilityChunks,
+    retainedLegacyCompatibilityChunks: LEGACY_UPDATE_COMPAT_CHUNKS.filter((name) =>
+      fs.existsSync(path.join(packageRoot, "dist", name)),
+    ),
+  };
 }
 
 function packageMembers(root) {
@@ -274,7 +293,7 @@ function packTransformedFixture(candidateTarball, outputTarball, transform) {
     const packageRoot = path.join(root, "package");
     const sourceVersion = readJson(path.join(packageRoot, "package.json")).version;
     const before = packageMembers(packageRoot);
-    transform(packageRoot);
+    const details = transform(packageRoot);
     const after = packageMembers(packageRoot);
     execFileSync("tar", ["-czf", output, "-C", root, "package"], {
       env: { ...process.env, COPYFILE_DISABLE: "1" },
@@ -300,6 +319,7 @@ function packTransformedFixture(candidateTarball, outputTarball, transform) {
             after: after.get(name) ?? null,
           })),
       },
+      ...details,
     };
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
@@ -316,10 +336,12 @@ export function packFirstHopUpdateFixture(candidateTarball, outputTarball, seque
   };
 }
 
-function packNegativeUpdateFixture(candidateTarball, outputTarball) {
+function packNegativeUpdateFixture(candidateTarball, outputTarball, expectedMissingChunk = "") {
   return {
     method: "candidate-missing-compatibility-fixture",
-    ...packTransformedFixture(candidateTarball, outputTarball, removeLegacyUpdateCompatChunks),
+    ...packTransformedFixture(candidateTarball, outputTarball, (root) => ({
+      removedCompatibilityChunks: removeLegacyUpdateCompatChunks(root, expectedMissingChunk),
+    })),
   };
 }
 
@@ -327,7 +349,7 @@ export function packFutureUpdateFixture(candidateTarball, outputTarball, sequenc
   return {
     method: "candidate-same-schema-self-update-fixture",
     ...packTransformedFixture(candidateTarball, outputTarball, (root) => {
-      markFutureUpdateFixture(root, sequence);
+      return markFutureUpdateFixture(root, sequence);
     }),
   };
 }
@@ -412,8 +434,14 @@ function main() {
       "unsupported-admission-tarball": packUnsupportedAdmissionFixture,
       "future-runtime-tarball": packFutureRuntimeFixture,
     }[mode];
+    const fixtureArg =
+      mode === "negative-tarball"
+        ? (sequence ?? "")
+        : sequence === undefined
+          ? 0
+          : Number(sequence);
     process.stdout.write(
-      `${JSON.stringify(pack(packageRoot, outputTarball, sequence === undefined ? 0 : Number(sequence)), null, 2)}\n`,
+      `${JSON.stringify(pack(packageRoot, outputTarball, fixtureArg), null, 2)}\n`,
     );
     return;
   }

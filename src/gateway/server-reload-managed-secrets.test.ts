@@ -7,6 +7,7 @@ import {
 } from "../config/runtime-snapshot.js";
 import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { PluginRuntimeApplicationError } from "../plugins/lifecycle.js";
 import {
   activateSecretsRuntimeSnapshotStateIfCurrent,
   getActiveSecretsRuntimeSnapshotState,
@@ -21,13 +22,21 @@ import {
 } from "../secrets/runtime.js";
 import { buildGatewayReloadPlan } from "./config-reload-plan.js";
 import type { GatewayConfigReloadTransactionOwnership } from "./config-reload.js";
+import {
+  closeTestConfigReloaders,
+  createReloaderHarness,
+  makeSnapshot,
+  makeZeroDebounceHookWrite,
+} from "./config-reload.test-support.js";
+import { GatewayConfigReloadSupersededError } from "./server-reload-contracts.js";
 import { createManagedReloadSecretHandlers } from "./server-reload-managed-secrets.js";
 import { SharedGatewaySessionGenerationState } from "./server-shared-auth-generation.js";
 import { createRuntimeSecretsActivator } from "./server-startup-config.js";
 
 vi.mock("../agents/context.js", () => ({ refreshContextWindowCache: vi.fn() }));
 
-afterEach(() => {
+afterEach(async () => {
+  await closeTestConfigReloaders();
   clearSecretsRuntimeSnapshot();
   vi.restoreAllMocks();
 });
@@ -88,7 +97,11 @@ function expectAuthoredSource(source: OpenClawConfig) {
   ).toBe("none");
 }
 
-async function createReload(commit: () => Promise<void>, beforePublication?: () => Promise<void>) {
+async function createReload(
+  commit: () => Promise<void>,
+  beforePublication?: () => Promise<void>,
+  wrapPublicationError?: (error: unknown) => unknown,
+) {
   const initial = configPair("openclaw");
   activateSecretsRuntimeSnapshotWithSource(await prepare(initial.config), initial.source);
   expectAuthoredSource(initial.source);
@@ -115,13 +128,17 @@ async function createReload(commit: () => Promise<void>, beforePublication?: () 
     applyHotReload: async (_plan, _config, publication) => {
       await beforePublication?.();
       let committed = false;
-      await publication!.publish(
-        async () => {
-          await commit();
-          committed = true;
-        },
-        () => committed,
-      );
+      try {
+        await publication!.publish(
+          async () => {
+            await commit();
+            committed = true;
+          },
+          () => committed,
+        );
+      } catch (error) {
+        throw wrapPublicationError ? wrapPublicationError(error) : error;
+      }
       return "applied";
     },
   });
@@ -151,6 +168,82 @@ async function createReload(commit: () => Promise<void>, beforePublication?: () 
 }
 
 describe("managed reload authored source", () => {
+  it.each(["same-source", "newer-write"] as const)(
+    "rechecks config ownership after durable secrets publication preparation (%s)",
+    async (observation) => {
+      const initialConfig: OpenClawConfig = { gateway: { port: 18789 } };
+      const config: OpenClawConfig = { gateway: { port: 18790 } };
+      activateSecretsRuntimeSnapshot(await prepare(initialConfig));
+      const prepared = await prepare(config);
+      const revision = getActiveSecretsRuntimeSnapshotRevision();
+      const snapshot = makeSnapshot({ config, hash: "candidate" });
+      const published = vi.fn();
+      const policies: Array<OpenClawConfig | null> = [];
+      const activate = createRuntimeSecretsActivator({
+        ...activatorOptions(),
+        beforeSnapshotPublication: async (policy) => {
+          policies.push(policy);
+          if (policy !== prepared.config) {
+            return;
+          }
+          if (observation === "newer-write") {
+            harness.emitWrite({
+              ...makeZeroDebounceHookWrite("successor"),
+              snapshot: makeSnapshot({ config, hash: "successor" }),
+              sourceConfig: config,
+              runtimeConfig: config,
+            });
+          } else {
+            harness.watcher.emit("change");
+          }
+        },
+      });
+      const runtime = { operationId: "secret-publication", generation: 2, pluginIds: ["notes"] };
+      const harness = createReloaderHarness(async () => snapshot, {
+        initialConfig: config,
+        onHotReload: async (plan, nextConfig, ownership) => {
+          const activated = await activate.activatePreparedSnapshotIfCurrent(
+            prepared,
+            revision,
+            { reason: "reload", activate: true },
+            published,
+            ownership.isCurrent,
+            ownership.checkpoint,
+          );
+          if (!activated) {
+            throw new Error("Prepared secrets lost publication ownership");
+          }
+          ownership.markRuntimeCommitted(nextConfig, plan);
+          return { status: "applied", runtime };
+        },
+      });
+      await harness.reloader.ready;
+      try {
+        const operation = harness.reloader.applyPluginLifecycleChange({
+          config,
+          pluginIds: ["notes"],
+          reason: "reload",
+        });
+        if (observation === "same-source") {
+          await expect(operation).resolves.toBe(runtime);
+          expect(published).toHaveBeenCalledOnce();
+          expect(getActiveSecretsRuntimeSnapshotState()?.config).toEqual(prepared.config);
+          expect(policies).toEqual([prepared.config]);
+        } else {
+          await expect(operation).rejects.toMatchObject({
+            cause: expect.any(GatewayConfigReloadSupersededError),
+          });
+          expect(published).not.toHaveBeenCalled();
+          expect(getActiveSecretsRuntimeSnapshotState()?.config).toEqual(initialConfig);
+          expect(policies).toEqual([prepared.config, initialConfig]);
+        }
+      } finally {
+        await harness.reloader.stop();
+        clearSecretsRuntimeSnapshot();
+      }
+    },
+  );
+
   it.each([false, true])(
     "commits the exact target before publication (hook fails: %s)",
     async (fails) => {
@@ -343,6 +436,57 @@ describe("managed reload authored source", () => {
     expect(getActiveSecretsRuntimeSnapshotRevision()).toBe(revision);
     expectAuthoredSource(initial.source);
   });
+
+  it.each(["direct", "plugin restored", "plugin committed", "plugin cleanup failed"] as const)(
+    "retries stale secret publication only after safe recovery: %s",
+    async (recovery) => {
+      const refreshed = configPair("openclaw");
+      refreshed.source.models.providers.openai.models[0]!.name = "Refreshed model";
+      refreshed.config.models!.providers!.openai!.models[0]!.name = "Refreshed model";
+      const snapshot = await prepare(refreshed.config);
+      const commit = vi.fn(async () => {});
+      let publicationAttempts = 0;
+      const { next, run } = await createReload(
+        commit,
+        async () => {
+          if (publicationAttempts++ === 0) {
+            activateSecretsRuntimeSnapshotWithSource(snapshot, refreshed.source);
+          }
+        },
+        recovery === "direct"
+          ? undefined
+          : (error) => {
+              return new PluginRuntimeApplicationError(
+                "Plugin activation failed",
+                {
+                  operationId: "secret-publication",
+                  generation: 1,
+                  pluginIds: ["fixture"],
+                  phase: "activate",
+                  committed: recovery === "plugin committed",
+                },
+                {
+                  cause:
+                    recovery === "plugin cleanup failed"
+                      ? new AggregateError([error, new Error("Plugin cleanup failed")])
+                      : error,
+                },
+              );
+            },
+      );
+      if (recovery === "plugin cleanup failed" || recovery === "plugin committed") {
+        await expect(run()).rejects.toBeInstanceOf(PluginRuntimeApplicationError);
+        expect(commit).not.toHaveBeenCalled();
+        expect(publicationAttempts).toBe(1);
+        expectAuthoredSource(refreshed.source);
+      } else {
+        await expect(run()).resolves.toBe("applied");
+        expect(commit).toHaveBeenCalledOnce();
+        expect(publicationAttempts).toBe(2);
+        expectAuthoredSource(next.source);
+      }
+    },
+  );
 
   it("preserves generated model metadata across a successful hot reload", async () => {
     const { next, run } = await createReload(async () => {});

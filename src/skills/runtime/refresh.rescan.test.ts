@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
@@ -24,6 +25,8 @@ vi.mock("../loading/plugin-skills.js", () => ({
   resolvePluginSkillRootsFromMetadata: () => [],
 }));
 
+const { shouldUseNativeSkillsWatcher } = await import("./refresh-watch-transport.js");
+
 let refresh: typeof import("./refresh.js");
 describe("skills content rescan handoff", () => {
   const fixture = useSkillsWatcherFixture();
@@ -31,7 +34,9 @@ describe("skills content rescan handoff", () => {
     refresh = await import("./refresh.js");
   });
   beforeEach(() => {
-    vi.stubEnv("CHOKIDAR_USEPOLLING", "false");
+    // These cases prove certified recovery; pooled-native uncertainty is covered
+    // separately by the recovery ownership fixture and real ancestor integration.
+    vi.stubEnv("CHOKIDAR_USEPOLLING", String(!shouldUseNativeSkillsWatcher(false)));
     watchMock.mockClear();
     createdWatchers.length = 0;
   });
@@ -77,6 +82,9 @@ describe("skills content rescan handoff", () => {
       writeSkill({ dir: path.join(root, "ancestor-proof"), name: "ancestor-proof", description });
     await write("First preparation");
     initial.emit("ready");
+    await vi.waitFor(() =>
+      expect(watchForSkillRoot(root).watchRoot).toBe(root.replaceAll("\\", "/")),
+    );
     const content = watchForSkillRoot(root).watcher;
     const ancestorIndex = watchMock.mock.calls.findLastIndex(
       ([watched, options], index) =>
@@ -174,6 +182,7 @@ describe("skills content rescan handoff", () => {
     "reconciles only affected $scope sources after a $phase verification error",
     async ({ phase, scope }) => {
       const { resolveReusableWorkspaceSkillSnapshot } = await import("./session-snapshot.js");
+      const { pathWatchers } = await import("./refresh-watch-registry.js");
       const workspaceDir = fixture.workspaceDir;
       const healthyWorkspace = await fixture.createFixtureDirectory("healthy-workspace");
       const sharedRoot = await fixture.createFixtureDirectory("shared/skills");
@@ -302,8 +311,9 @@ describe("skills content rescan handoff", () => {
         // Acquire while shared coverage is failed, but leave this execution
         // root missing so its later readiness can expose a stale shared latch.
         await prepare(lateExecution);
+        const current = watchForSkillRoot(root).watcher;
         for (const watcher of createdWatchers) {
-          if (watcher !== active) {
+          if (watcher !== current) {
             watcher.emit("ready");
           }
         }
@@ -314,12 +324,24 @@ describe("skills content rescan handoff", () => {
           ? "shared/skills/recovered"
           : `${scope === "execution" ? "execution" : "workspace"}/skills/recovered`,
       );
+      const admissions = createdWatchers.length;
+      expect(active.closed).toBe(true);
       active.emit("all", "addDir", added);
+      expect(createdWatchers).toHaveLength(admissions);
       const recovery = watchForSkillRoot(root).watcher;
       recovery.emit("ready");
+      const verification = watchForSkillRoot(root).watcher;
+      expect(verification).not.toBe(recovery);
+      verification.emit("ready");
       expect(active.closed).toBe(true);
-      expect(recovery.closed).toBe(false);
+      expect(recovery.closed).toBe(true);
+      expect(verification.closed).toBe(false);
       await vi.advanceTimersByTimeAsync(500);
+      expect(pathWatchers.get(root.replaceAll("\\", "/"))).toMatchObject({
+        verified: true,
+        unavailable: false,
+      });
+      expect(refresh.reconcileSkillsWatcherCoverage(request)).toBe(true);
       const readyVersion = getSkillsSourceVersion(workspaceDir, request);
       await prepare(request);
       await prepare(request);
@@ -334,25 +356,62 @@ describe("skills content rescan handoff", () => {
       }
       if (lateExecution) {
         const otherRequest = { workspaceDir, config, executionWorkspaceDir: otherExecution };
-        const baseSnapshot = await prepare(request);
-        const otherSnapshot = await prepare(otherRequest);
         const baseVersion = getSkillsSourceVersion(workspaceDir);
         const otherVersion = getSkillsSourceVersion(workspaceDir, otherRequest);
         const executionRoot = path.join(lateExecution.executionWorkspaceDir, "skills");
+        const executionPath = executionRoot.replaceAll("\\", "/");
+        const companionPath = path.join(executionRoot, "skills").replaceAll("\\", "/");
+        const previous = pathWatchers.get(executionPath);
+        const unavailable = new Set(
+          [...pathWatchers].filter(([, state]) => state.unavailable).map(([target]) => target),
+        );
+        const outages: string[][] = [];
+        refresh.registerSkillsChangeListener((event) => {
+          if (event.workspaceDir === workspaceDir && event.reason === "watch-unavailable") {
+            const targets = [...pathWatchers]
+              .filter(([target, state]) => state.unavailable && !unavailable.has(target))
+              .map(([target]) => target);
+            outages.push(targets);
+            for (const target of targets) {
+              unavailable.add(target);
+            }
+          }
+        });
         const ancestor = watchForSkillRoot(executionRoot).watcher;
         const existingWatchers = new Set(createdWatchers);
         await fixture.createFixtureDirectory("late-execution/skills");
         ancestor.emit("all", "addDir", executionRoot);
-        for (const watcher of createdWatchers) {
-          if (!existingWatchers.has(watcher)) {
+        expect(outages).toEqual([[executionPath], [companionPath]]);
+        expect(getSkillsSourceVersion(workspaceDir)).toBe(baseVersion);
+        expect(getSkillsSourceVersion(workspaceDir, otherRequest)).toBe(otherVersion);
+        // Outage notifications invalidate the workspace snapshot once per target.
+        // Prime after that boundary so readiness alone must preserve these objects.
+        const baseSnapshot = await prepare(request);
+        const otherSnapshot = await prepare(otherRequest);
+        const snapshotVersion = getSkillsSnapshotVersion(workspaceDir);
+        await vi.waitFor(() => expect(pathWatchers.get(executionPath)).not.toBe(previous));
+        expect(pathWatchers.get(executionPath)?.verified).toBe(false);
+        for (const [index, [, options]] of watchMock.mock.calls.entries()) {
+          const watcher = expectDefined(createdWatchers[index], "created watcher");
+          if (!existingWatchers.has(watcher) && options.depth === 0) {
             watcher.emit("ready");
           }
         }
-        await Promise.resolve();
+        const observer = watchForSkillRoot(executionRoot).watcher;
+        observer.emit("ready");
+        const verifier = watchForSkillRoot(executionRoot).watcher;
+        expect(verifier).not.toBe(observer);
+        verifier.emit("ready");
+        expect(observer.closed).toBe(true);
+        expect(verifier.closed).toBe(false);
+        await vi.advanceTimersByTimeAsync(500);
+        expect(refresh.reconcileSkillsWatcherCoverage(lateExecution)).toBe(true);
         expect(getSkillsSourceVersion(workspaceDir)).toBe(baseVersion);
         expect(getSkillsSourceVersion(workspaceDir, otherRequest)).toBe(otherVersion);
         expect(await prepare(request)).toBe(baseSnapshot);
         expect(await prepare(otherRequest)).toBe(otherSnapshot);
+        expect(getSkillsSnapshotVersion(workspaceDir)).toBe(snapshotVersion);
+        expect(outages).toEqual([[executionPath], [companionPath]]);
       }
     },
   );
@@ -413,28 +472,15 @@ describe("skills content rescan handoff", () => {
     expect((await prepare(execution, executionSnapshot)).prompt).toContain("Before verification");
   });
 
-  it("retains scoped ancestor outage across replacement, release and overlapping reacquisition", async () => {
+  it("joins the affected owner before verifying restartless recovery", async () => {
     const { resolveReusableWorkspaceSkillSnapshot } = await import("./session-snapshot.js");
-    const {
-      root,
-      intermediate,
-      params,
-      write,
-      content,
-      ancestorWatcher: failedAncestor,
-    } = await acquirePromotedRoot("ancestor-gap");
-    const containedRoot = path.join(intermediate, "contained-skills");
-    const writeContained = (description: string) =>
-      writeSkill({
-        dir: path.join(containedRoot, "ancestor-proof"),
-        name: "ancestor-proof",
-        description,
-      });
-    await writeContained("First contained preparation");
-    const contained = {
+    const { loadWorkspaceSkills } = await import("../loading/workspace-skill-loader.js");
+    const { root, intermediate, params, write, ancestorWatcher } =
+      await acquirePromotedRoot("ancestor-gap");
+    const enclosing = {
       ...params,
-      workspaceDir: await fixture.createFixtureDirectory("contained-subscriber"),
-      config: { skills: { load: { extraDirs: [containedRoot] } } },
+      workspaceDir: await fixture.createFixtureDirectory("enclosing-subscriber"),
+      config: { skills: { load: { extraDirs: [intermediate] } } },
     };
     const overlap = {
       ...params,
@@ -445,98 +491,99 @@ describe("skills content rescan handoff", () => {
       workspaceDir: await fixture.createFixtureDirectory("healthy-sibling"),
       config: { skills: { load: { extraDirs: [] } } },
     };
-    const snapshots = new Map<string, SkillSnapshot>();
-    const prepare = async (request: typeof params) => {
-      const { snapshot } = await resolveReusableWorkspaceSkillSnapshot({
-        ...request,
-        existingSnapshot: snapshots.get(request.workspaceDir),
-      });
-      snapshots.set(request.workspaceDir, snapshot);
-      return snapshot;
-    };
-    for (const request of [params, contained, overlap, healthy]) {
-      await prepare(request);
+    for (const request of [params, enclosing, overlap, healthy]) {
+      await resolveReusableWorkspaceSkillSnapshot(request);
     }
     for (const watcher of createdWatchers) {
       watcher.emit("ready");
     }
-    await Promise.resolve();
-    const active = watchForSkillRoot(root).watcher;
-    expect(active).not.toBe(content);
-    const healthySnapshot = await prepare(healthy);
+    const healthySnapshot = (await resolveReusableWorkspaceSkillSnapshot(healthy)).snapshot;
     const healthyVersion = getSkillsSourceVersion(healthy.workspaceDir);
-    expect((await prepare(params)).prompt).toContain("First preparation");
-    expect((await prepare(contained)).prompt).toContain("First contained preparation");
+    const active = watchForSkillRoot(root).watcher;
+    const enclosingWatcher = watchForSkillRoot(intermediate).watcher;
+    const release = createDeferredCore();
+    const originalClose = active.close.getMockImplementation()!;
+    active.close.mockImplementationOnce(async () => {
+      const closed = originalClose();
+      await release.promise;
+      await closed;
+    });
     const changes = vi.fn();
     refresh.registerSkillsChangeListener(changes);
-    failedAncestor.emit("error", Object.assign(new Error("ancestor read failed"), { code: "EIO" }));
-    expect(
-      changes.mock.calls.some(
-        ([event]) =>
-          event.workspaceDir === contained.workspaceDir && event.reason === "watch-unavailable",
-      ),
-    ).toBe(true);
-    // Replace real paths while ancestor delivery is unavailable. Existing
-    // logical content watchers still represent the old directory inodes.
-    await fs.rename(intermediate, `${intermediate}-retired`);
-    await write("After ancestor replacement");
-    await writeContained("After contained replacement");
-    expect((await prepare(params)).prompt).toContain("After ancestor replacement");
-    expect((await prepare(contained)).prompt).toContain("After contained replacement");
-    failedAncestor.emit("ready");
-    const lateRoot = path.join(intermediate, "late-skills");
-    const late = {
-      ...params,
-      workspaceDir: await fixture.createFixtureDirectory("late-ancestor-subscriber"),
-      config: { skills: { load: { extraDirs: [lateRoot] } } },
-    };
-    await prepare(late);
-    const replacement = watchForSkillRoot(lateRoot).watcher;
-    expect(replacement).not.toBe(failedAncestor);
-    expect(failedAncestor.closed).toBe(true);
-    replacement.emit("ready");
-    for (const description of ["Second silent preparation", "Third silent preparation"]) {
-      await write(description);
-      await writeContained(description);
-      expect((await prepare(params)).prompt).toContain(description);
-      expect((await prepare(overlap)).prompt).toContain(description);
-      expect((await prepare(contained)).prompt).toContain(description);
-      expect(await prepare(healthy)).toBe(healthySnapshot);
+    const read = () =>
+      loadWorkspaceSkills(params.workspaceDir, params)
+        .filter((entry) => entry.skill.name === "ancestor-proof")
+        .map((entry) => entry.skill.description);
+    expect(read()).toEqual(["First preparation"]);
+    const contentAdmissions = () =>
+      watchMock.mock.calls.filter(
+        ([watched, options]) => options.depth > 0 && [root, intermediate].includes(watched),
+      ).length;
+    try {
+      ancestorWatcher.emit(
+        "error",
+        Object.assign(new Error("ancestor read failed"), { code: "EIO" }),
+      );
+      expect(active.closed).toBe(true);
+      expect(enclosingWatcher.closed).toBe(false);
+      expect(ancestorWatcher.closed).toBe(true);
+      const admitted = contentAdmissions();
+      await fs.rename(intermediate, `${intermediate}-retired`);
+      await write("Edited while retirement was held");
+      // Existing and late subscribers wait for their actual shared owner.
+      // The independent enclosing observer remains alive throughout recovery.
+      refresh.ensureSkillsWatcher(overlap);
+      const late = {
+        ...params,
+        workspaceDir: await fixture.createFixtureDirectory("late-subscriber"),
+      };
+      refresh.ensureSkillsWatcher(late);
+      expect(contentAdmissions()).toBe(admitted);
+      expect(changes.mock.calls.some(([event]) => event.reason === "watch-available")).toBe(false);
+      ancestorWatcher.emit("ready");
+      expect(contentAdmissions()).toBe(admitted);
+      release.resolve();
+      await vi.waitFor(() => expect(contentAdmissions()).toBeGreaterThan(admitted));
+      for (const watcher of createdWatchers) {
+        watcher.emit("ready");
+      }
+      expect(read()).toEqual(["Edited while retirement was held"]);
+      expect(
+        changes.mock.calls.some(
+          ([event]) =>
+            event.workspaceDir === params.workspaceDir && event.reason === "watch-available",
+        ),
+      ).toBe(true);
+      const replacement = watchForSkillRoot(root).watcher;
+      expect(replacement).not.toBe(active);
+      await write("Deep edit after verified recovery");
+      vi.useFakeTimers();
+      replacement.emit("all", "change", path.join(root, "ancestor-proof", "SKILL.md"));
+      await vi.advanceTimersByTimeAsync(250);
+      // This direct load has no preparation/ensure call to conceal a lost watch.
+      expect(read()).toEqual(["Deep edit after verified recovery"]);
       expect(getSkillsSourceVersion(healthy.workspaceDir)).toBe(healthyVersion);
+      expect(
+        (
+          await resolveReusableWorkspaceSkillSnapshot({
+            ...healthy,
+            existingSnapshot: healthySnapshot,
+          })
+        ).snapshot,
+      ).toBe(healthySnapshot);
+      refresh.ensureSkillsWatcher({ ...params, config: { skills: { load: { watch: false } } } });
+      expect(replacement.closed).toBe(false);
+      for (const request of [overlap, late]) {
+        refresh.ensureSkillsWatcher({ ...request, config: { skills: { load: { watch: false } } } });
+      }
+      expect(replacement.closed).toBe(false);
+      // The enclosing source also subscribes to its skills companion root.
+      refresh.ensureSkillsWatcher({ ...enclosing, config: { skills: { load: { watch: false } } } });
+      expect(replacement.closed).toBe(true);
+    } finally {
+      release.resolve();
+      await refresh.closeSkillsWatchers();
     }
-    await writeSkill({
-      dir: path.join(lateRoot, "ancestor-proof"),
-      name: "ancestor-proof",
-      description: "Late source",
-    });
-    replacement.emit("all", "addDir", lateRoot);
-    for (const watcher of createdWatchers) {
-      watcher.emit("ready");
-    }
-    expect((await prepare(late)).prompt).toContain("Late source");
-    await writeSkill({
-      dir: path.join(lateRoot, "ancestor-proof"),
-      name: "ancestor-proof",
-      description: "Late silent edit",
-    });
-    expect((await prepare(late)).prompt).toContain("Late silent edit");
-    refresh.ensureSkillsWatcher({ ...params, config: { skills: { load: { watch: false } } } });
-    expect(active.closed).toBe(false); // The overlapping workspace retains this handle.
-    await write("After overlapping reacquisition");
-    expect((await prepare(params)).prompt).toContain("After overlapping reacquisition");
-    for (const request of [params, overlap]) {
-      refresh.ensureSkillsWatcher({ ...request, config: { skills: { load: { watch: false } } } });
-    }
-    expect(active.closed).toBe(true);
-    await prepare(params);
-    for (const watcher of createdWatchers) {
-      watcher.emit("ready");
-    }
-    await prepare(params);
-    await write("After logical replacement readiness");
-    expect((await prepare(params)).prompt).toContain("After logical replacement readiness");
-    expect(await prepare(healthy)).toBe(healthySnapshot);
-    expect(getSkillsSourceVersion(healthy.workspaceDir)).toBe(healthyVersion);
   });
 
   it("publishes verified rescan content while an initial ancestor is still pending", async () => {
@@ -567,7 +614,7 @@ describe("skills content rescan handoff", () => {
     expect(active.closed).toBe(true);
   });
 
-  it("keeps a content error unavailable when a replacement ancestor becomes ready first", async () => {
+  it("keeps fallback until replacement ancestor and content coverage are both verified", async () => {
     const { resolveReusableWorkspaceSkillSnapshot } = await import("./session-snapshot.js");
     const { root, intermediate, params, write, content, ancestorWatcher } =
       await acquirePromotedRoot("crossed-errors");
@@ -596,8 +643,12 @@ describe("skills content rescan handoff", () => {
     });
     const replacement = watchForSkillRoot(otherRoot).watcher;
     expect(replacement).not.toBe(ancestorWatcher);
-    replacement.emit("ready");
-    expect(active.closed).toBe(false);
+    for (const [index, [, options]] of watchMock.mock.calls.entries()) {
+      if (options.depth === 0) {
+        expectDefined(createdWatchers[index], "created watcher").emit("ready");
+      }
+    }
+    expect(active.closed).toBe(true);
     expect(verifier.closed).toBe(true);
     for (const description of ["Second preparation", "Third preparation"]) {
       await write(description);
@@ -609,18 +660,26 @@ describe("skills content rescan handoff", () => {
     const recovered = await fixture.createFixtureDirectory(
       "crossed-errors/nested/skills/recovered",
     );
+    const count = createdWatchers.length;
     active.emit("all", "addDir", recovered);
+    expect(createdWatchers).toHaveLength(count);
     const recovery = watchForSkillRoot(root).watcher;
     recovery.emit("ready");
+    const verification = watchForSkillRoot(root).watcher;
+    expect(verification).not.toBe(recovery);
+    verification.emit("ready");
     expect(active.closed).toBe(true);
-    expect(recovery.closed).toBe(false);
+    expect(recovery.closed).toBe(true);
+    expect(verification.closed).toBe(false);
     await vi.advanceTimersByTimeAsync(500);
     await resolveReusableWorkspaceSkillSnapshot({ ...params, existingSnapshot: snapshot });
-    await write("Content verification cannot restore lost ancestor coverage");
+    await write("Content changed after complete coverage recovery");
+    verification.emit("all", "change", path.join(root, "ancestor-proof", "SKILL.md"));
+    await vi.advanceTimersByTimeAsync(250);
     snapshot = (
       await resolveReusableWorkspaceSkillSnapshot({ ...params, existingSnapshot: snapshot })
     ).snapshot;
-    expect(snapshot.prompt).toContain("Content verification cannot restore lost ancestor coverage");
+    expect(snapshot.prompt).toContain("Content changed after complete coverage recovery");
   });
 
   it.each([false, true])(
@@ -650,7 +709,10 @@ describe("skills content rescan handoff", () => {
       expect(healthy.closed).toBe(true);
       expect(verification.closed).toBe(false);
       expect(getSkillsSourceVersion(fixture.workspaceDir)).toBeGreaterThan(failed);
-      expect(changed).toHaveBeenCalledOnce();
+      expect(changed.mock.calls.map(([event]) => event.reason)).toEqual([
+        "watch",
+        "watch-available",
+      ]);
     },
   );
 

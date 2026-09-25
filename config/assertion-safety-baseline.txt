@@ -112,7 +112,7 @@ extensions/buzz/src/inbound.ts	1
 extensions/buzz/src/message-event.ts	2
 extensions/buzz/src/qa/adapter.runtime.ts	2
 extensions/buzz/src/room-membership.ts	2
-extensions/buzz/src/setup-verify.ts	5
+extensions/buzz/src/setup-verify.ts	2
 extensions/buzz/src/types.ts	2
 extensions/canvas/src/a2ui-jsonl.ts	1
 extensions/canvas/src/cli.ts	2
@@ -245,7 +245,7 @@ extensions/crabbox/src/crabbox-worker-inspect.ts	3
 extensions/cua-computer/src/commands.ts	2
 extensions/cua-computer/src/driver-artifact-verification.ts	2
 extensions/cua-computer/src/driver-artifacts.ts	1
-extensions/cua-computer/src/driver-client.ts	15
+extensions/cua-computer/src/driver-client.ts	10
 extensions/cua-computer/src/driver-result.ts	9
 extensions/cua-computer/src/mcp-driver-client.ts	4
 extensions/cua-computer/src/window-actions.ts	3
@@ -789,7 +789,7 @@ extensions/nextcloud-talk/src/setup-core.ts	10
 extensions/nextcloud-talk/src/setup-surface.ts	11
 extensions/nostr/index.ts	4
 extensions/nostr/src/channel.setup.ts	2
-extensions/nostr/src/gateway.ts	2
+extensions/nostr/src/gateway.ts	1
 extensions/nostr/src/metrics.ts	1
 extensions/nostr/src/nostr-bus.ts	7
 extensions/nostr/src/nostr-cursor.ts	2
@@ -799,7 +799,7 @@ extensions/nostr/src/nostr-profile-import.ts	1
 extensions/nostr/src/setup-surface.ts	2
 extensions/nostr/src/types.ts	3
 extensions/nvidia/provider-catalog.ts	2
-extensions/oc-path/src/oc-path/find.ts	13
+extensions/oc-path/src/oc-path/find.ts	12
 extensions/oc-path/src/oc-path/jsonc/parse.ts	1
 extensions/oc-path/src/oc-path/universal.ts	4
 extensions/oc-path/src/oc-path/yaml/edit.ts	2
@@ -1084,13 +1084,12 @@ extensions/sms/src/channel.ts	5
 extensions/sms/src/status.ts	1
 extensions/sms/src/twilio.ts	4
 extensions/synology-chat/src/accounts.ts	1
-extensions/synology-chat/src/channel.ts	1
 extensions/synology-chat/src/client.ts	1
 extensions/synology-chat/src/inbound-event.ts	1
 extensions/synology-chat/src/outbound-media.ts	1
 extensions/synology-chat/src/setup-surface.ts	3
 extensions/synology-chat/src/test-http-utils.ts	6
-extensions/synology-chat/src/webhook-handler.ts	2
+extensions/synology-chat/src/webhook-handler.ts	1
 extensions/talk-voice/index.ts	1
 extensions/tavily/src/config.ts	1
 extensions/teams-meetings/src/transports/teams-meetings-urls.ts	1
@@ -2682,7 +2681,6 @@ src/gateway/watch-node-http.ts	3
 src/gateway/worker-environments/bundle.ts	6
 src/gateway/worker-environments/inference-control.ts	1
 src/gateway/worker-environments/inference-runtime.ts	2
-src/gateway/worker-environments/inference-store.ts	1
 src/gateway/worker-environments/live-event-projection.ts	1
 src/gateway/worker-environments/node-worker-workspace-fallback.ts	2
 src/gateway/worker-environments/placement-state.ts	3

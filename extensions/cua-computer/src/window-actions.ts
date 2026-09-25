@@ -10,7 +10,7 @@ import {
 } from "./action-targets.js";
 import { normalizeModifiers, parseKeyChord } from "./actions.js";
 import { handleBrowserAct } from "./browser-actions.js";
-import { EscalationReason, type CuaDriverSession } from "./driver-client.js";
+import type { CuaDriverSession } from "./driver-client.js";
 import {
   actionEnvelope,
   callWindowTool,
@@ -208,8 +208,6 @@ async function handleTargetedAct(
   const result = await callWindowTool(driver, state, tool, args, signal);
   return JSON.stringify(actionEnvelope(result));
 }
-
-export type { CuaComputerActParams } from "./action-targets.js";
 
 /// Entry point for `computer.act` on the CUA driver. Owns every window- and
 /// element-scoped action (targeted input, discovery, app/window lifecycle) and
@@ -429,14 +427,7 @@ export async function handleWindowAct(
       return JSON.stringify(windowObservation(result, state, ref, { fromZoom: true }));
     }
     case "escalate_scope": {
-      const reason = {
-        ax_tree_pixel_mismatch: EscalationReason.AxTreePixelMismatch,
-        background_delivery_failed: EscalationReason.BackgroundDeliveryFailed,
-        foreground_ineffective: EscalationReason.ForegroundIneffective,
-        no_window_target: EscalationReason.NoWindowTarget,
-        other: EscalationReason.Other,
-      }[input.reason!];
-      const result = await driver.escalateScope(reason, signal);
+      const result = await driver.getSessionState(signal);
       adoptGeneration(state, driver.generation);
       return JSON.stringify({
         ok: true,

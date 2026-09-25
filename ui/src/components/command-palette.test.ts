@@ -508,19 +508,38 @@ describe("CommandPalette search", () => {
   });
 
   it.each([
-    ["Reviewer", "click", "agents", "/settings/agents/reviewer%2Eteam", "", true],
-    ["Reviewer", "keyboard", "agents", "/settings/agents/reviewer%2Eteam", "", true],
-    ["Workboard", "click", "plugin-settings", "/settings/plugins/workboard", "workboard", true],
-    ["Workboard", "keyboard", "plugin-settings", "/settings/plugins/w%2Eb", "w.b", true],
-    ["Workboard", "click", "plugins", "", "workboard", false],
-    ["Plugins", "click", "plugins", "", "", false],
+    ["Reviewer", "click", "agents", "/settings/agents/reviewer%2Eteam", "", true, ""],
+    ["Reviewer", "keyboard", "agents", "/settings/agents/reviewer%2Eteam", "", true, ""],
+    ["Workboard", "click", "plugin-settings", "/settings/plugins/workboard", "workboard", true, ""],
+    ["Workboard", "keyboard", "plugin-settings", "/settings/plugins/w%2Eb", "w.b", true, ""],
+    [
+      "Workboard",
+      "click",
+      "plugins",
+      "/plugins/ch_d29ya2JvYXJk",
+      "workboard",
+      false,
+      "ch_d29ya2JvYXJk",
+    ],
+    [
+      "Workboard",
+      "keyboard",
+      "plugins",
+      "/plugins/ch_d29ya2JvYXJk",
+      "workboard",
+      false,
+      "ch_d29ya2JvYXJk",
+    ],
+    ["Workboard", "click", "plugins", "", "workboard", false, ""],
+    ["Plugins", "click", "plugins", "", "", false, ""],
   ])(
     "opens the selected %s destination by %s",
-    async (label, method, route, pathname, pluginId, installed) => {
+    async (label, method, route, pathname, pluginId, installed, catalogId) => {
       const plugin = {
         id: pluginId,
         name: "Workboard",
         installed,
+        catalogId: catalogId || undefined,
         enabled: false,
         state: installed ? "disabled" : "not-installed",
       };

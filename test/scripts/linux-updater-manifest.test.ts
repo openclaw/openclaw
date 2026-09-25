@@ -354,7 +354,7 @@ process.stdout.write('${sourceSha}\\trefs/tags/v2026.9.4\\n');
         "bash",
         [
           "-c",
-          'source scripts/lib/release-publish-children.sh; result=0; dispatch_linux_release_assets || result=$?; exit "$result"',
+          'source scripts/lib/release-publish-children.sh; sleep() { :; }; result=0; dispatch_linux_release_assets || result=$?; exit "$result"',
         ],
         {
           cwd: resolve("."),

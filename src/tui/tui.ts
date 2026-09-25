@@ -1719,7 +1719,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     tui.requestRender();
   };
   editor.onCtrlL = () => {
-    void openModelSelector();
+    openModelSelector();
   };
   editor.onCtrlG = () => {
     void openAgentSelector();
