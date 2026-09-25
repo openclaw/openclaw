@@ -128,6 +128,43 @@ async function withWizardGateway(
 
 describe("gateway wizard cancellation lifecycle", () => {
   it(
+    "cancels a live wizard when wizard.cancel receives a padded sessionId",
+    { timeout: GATEWAY_E2E_TIMEOUT_MS },
+    async () => {
+      const runnerSettled = createDeferred();
+      await withWizardGateway(
+        async (_opts, _runtime, prompter) => {
+          prompter.progress("working");
+          await runnerSettled.promise;
+        },
+        () => {
+          runnerSettled.resolve();
+        },
+        async ({ connect }) => {
+          const client = await connect();
+          const start = await client.request<WizardStartResult>("wizard.start", { mode: "local" });
+          expect(start).toMatchObject({ done: false, status: "running" });
+          expect(start.sessionId).toBeTruthy();
+
+          const paddedSessionId = ` ${start.sessionId} `;
+          const status = await client.request<{ status: string }>("wizard.status", {
+            sessionId: paddedSessionId,
+          });
+          expect(status).toMatchObject({ status: "running" });
+
+          await expect(
+            client.request("wizard.cancel", { sessionId: paddedSessionId }),
+          ).resolves.toMatchObject({ status: "cancelled" });
+          console.log(
+            `[wizard sessionId trim Gateway client E2E] status_running=true cancelled=true padded=${JSON.stringify(paddedSessionId)} exact=${start.sessionId}`,
+          );
+          runnerSettled.resolve();
+        },
+      );
+    },
+  );
+
+  it(
     "keeps a cancelled wizard owner until settlement before allowing a replacement",
     { timeout: GATEWAY_E2E_TIMEOUT_MS },
     async () => {
