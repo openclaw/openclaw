@@ -318,14 +318,14 @@ describe("prepare gate changed-file plan", () => {
   });
 
   it("scans changed files without temporary input storage", () => {
-    const workDir = tempDirs.make("openclaw-pr-gates-no-tmp-");
-    mkdirSync(join(workDir, ".local"));
+    const { repoDir: workDir, headSha } = makeRetryRepo();
     writeFileSync(join(workDir, ".local", "pr-meta.env"), "PR_AUTHOR=steipete\n");
     const result = runGatesBash(
       [
         "enter_worktree() { :; }",
         "checkout_prep_branch() { :; }",
         "derive_prepare_gate_change_plan() {",
+        `  PREPARE_GATE_BASE_SHA=${headSha}`,
         "  PREPARE_GATE_CHANGED_FILES=$'CHANGELOG.md\\nchangelog/fragments/stale.md'",
         "  PREPARE_GATE_DOCS_ONLY=true",
         "  PREPARE_GATE_CHANGELOG_ONLY=false",
@@ -341,7 +341,9 @@ describe("prepare gate changed-file plan", () => {
     );
 
     expect(result.status).toBe(1);
-    expect(result.stdout).toContain("Unsupported changelog fragment files detected:");
+    expect(result.stdout, result.stderr).toContain(
+      "Unsupported changelog fragment files detected:",
+    );
     expect(result.stdout).toContain("changelog/fragments/stale.md");
     expect(result.stderr).not.toContain("cannot create temp file");
     expect(readFileSync(join(repoRoot, "scripts/pr-lib/gates.sh"), "utf8")).not.toMatch(
@@ -938,6 +940,7 @@ fi
 enter_worktree() { PR_MAIN_SHA=fixture-main; }
 checkout_prep_branch() { :; }
 derive_prepare_gate_change_plan() {
+  PREPARE_GATE_BASE_SHA=fixture-main
   PREPARE_GATE_CHANGED_FILES=src/subject.ts
   PREPARE_GATE_DOCS_ONLY=false
   PREPARE_GATE_CHANGELOG_ONLY=false
@@ -960,7 +963,7 @@ fi
       { cwd: dir, env: { OPENCLAW_TESTBOX: "1" } },
     );
     expect(result.status, result.stdout + result.stderr).toBe(1);
-    expect(result.stdout).toContain("fixture context declined");
+    expect(result.stdout, result.stderr).toContain("fixture context declined");
     expect(existsSync(join(dir, ".local", "gates.env"))).toBe(false);
   });
 
