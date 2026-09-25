@@ -226,6 +226,9 @@ export function shouldSkipLocalBackendSelfPairing(params: {
   sharedAuthOk: boolean;
   authMethod: GatewayAuthResult["method"];
 }): boolean {
+  if (params.connectParams.role === "node") {
+    return false;
+  }
   const isBackendClient =
     params.connectParams.client.id === GATEWAY_CLIENT_IDS.GATEWAY_CLIENT &&
     params.connectParams.client.mode === GATEWAY_CLIENT_MODES.BACKEND;
