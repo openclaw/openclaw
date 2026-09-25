@@ -422,10 +422,7 @@ function preToBlock(node: Extract<HtmlNode, { kind: "element" }>): InputRichBloc
     body = code.children;
     language = CODE_LANGUAGE_CLASS_RE.exec(parseHtmlAttrs(code.raw).get("class") ?? "")?.[1];
   }
-  // Drop the line breaks that only frame the content next to the tags.
-  const text = nodeText(body)
-    .replace(/^\r?\n/u, "")
-    .replace(/\r?\n$/u, "");
+  const text = nodeText(body);
   if (text.trim() === "") {
     return undefined;
   }
