@@ -1214,7 +1214,6 @@ extensions/volcengine/tts.ts	2
 extensions/voyage/embedding-batch.ts	1
 extensions/vydra/shared.ts	2
 extensions/web-readability/web-content-extractor.ts	2
-extensions/webhooks/src/http.ts	5
 extensions/whatsapp/src/account-config.ts	1
 extensions/whatsapp/src/agent-tools-call.ts	1
 extensions/whatsapp/src/agent-tools-login.ts	6

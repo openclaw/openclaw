@@ -1812,7 +1812,6 @@
                       "plugins/logbook",
                       "plugins/oc-path",
                       "plugins/session-share",
-                      "plugins/webhooks",
                       "plugins/workboard",
                       "plugins/zalouser"
                     ]

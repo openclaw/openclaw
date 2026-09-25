@@ -113,19 +113,20 @@ describe("doctor stale plugin config helpers", () => {
           "explicitly-disabled": { enabled: false },
           "disabled-with-settings": { enabled: false, config: { stale: true } },
           "google-antigravity-auth": { enabled: false },
+          webhooks: { enabled: false },
         },
       },
     } as OpenClawConfig);
 
     expect(result.changes).toEqual([
-      "- plugins.entries: removed 2 stale plugin entries (disabled-with-settings, google-antigravity-auth)",
+      "- plugins.entries: removed 3 stale plugin entries (disabled-with-settings, google-antigravity-auth, webhooks)",
     ]);
     expect(result.config.plugins?.entries).toEqual({
       "explicitly-disabled": { enabled: false },
     });
   });
 
-  it.each(["thread-ownership", "open-prose"])(
+  it.each(["thread-ownership", "open-prose", "webhooks"])(
     "removes retired %s config while retaining valid plugin ids",
     (retiredPluginId) => {
       const result = maybeRepairStalePluginConfig({

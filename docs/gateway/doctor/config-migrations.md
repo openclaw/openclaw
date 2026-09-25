@@ -66,6 +66,20 @@ While a migration is pending, explicit config edits that would change or remove
 its retained inputs are refused with the recovery command. Unrelated settings
 remain writable. Complete the plugin migration before editing those inputs.
 
+## Retired TaskFlow Webhooks plugin
+
+The bundled TaskFlow Webhooks plugin has been removed. Existing
+`plugins.entries.webhooks` settings are ignored with a `plugin removed: webhooks`
+warning so the Gateway can start after an update. Run `openclaw doctor --fix` to
+remove its stale entry and `plugins.allow` or `plugins.deny` references through
+the normal config backup and repair flow. This retirement does not change the
+database schema or delete stored Tasks or TaskFlows.
+
+Use [Gateway HTTP hooks](/automation/cron-jobs/webhooks) to wake an agent or submit
+an agent turn from an external service. Their `hooks.*` settings, internal event
+hooks, and the `openclaw webhooks gmail` commands remain available. TaskFlow
+record actions from the retired plugin have no equivalent HTTP endpoint.
+
 ## Schema publication during a 2026.9.2 update
 
 When OpenClaw 2026.9.2 drives an update that needs a newer shared-state schema,
