@@ -41,7 +41,11 @@ const MAX_GRAVATAR_BYTES = 1_000_000;
 const MAX_GRAVATAR_EMAIL_LOOKUPS = 8;
 const GRAVATAR_MIME_TYPES = new Set(["image/gif", "image/jpeg", "image/png", "image/webp"]);
 
-function resolveAvatarCorsOrigin(req: IncomingMessage, cfg: OpenClawConfig): string | undefined {
+function resolveAvatarCorsOrigin(
+  req: IncomingMessage,
+  cfg: OpenClawConfig,
+  publishedPort?: number,
+): string | undefined {
   const rawOrigin = typeof req.headers.origin === "string" ? req.headers.origin.trim() : "";
   if (!rawOrigin) {
     return undefined;
@@ -56,7 +60,7 @@ function resolveAvatarCorsOrigin(req: IncomingMessage, cfg: OpenClawConfig): str
   } catch {
     return undefined;
   }
-  const allowed = resolveControlUiAllowedOrigins(cfg);
+  const allowed = resolveControlUiAllowedOrigins(cfg, publishedPort);
   return allowed.some((candidate) => candidate.trim() === "*" || candidate.trim() === origin)
     ? origin
     : undefined;
@@ -66,11 +70,12 @@ function setAvatarCorsHeaders(
   req: IncomingMessage,
   res: ServerResponse,
   cfg: OpenClawConfig,
+  publishedPort?: number,
 ): boolean {
   if (!req.headers.origin) {
     return true;
   }
-  const origin = resolveAvatarCorsOrigin(req, cfg);
+  const origin = resolveAvatarCorsOrigin(req, cfg, publishedPort);
   if (!origin) {
     return false;
   }
@@ -295,7 +300,7 @@ export async function handleUserProfileAvatarHttpRequest(
   }
   const method = req.method;
   const cfg = opts.cfg ?? getRuntimeConfig();
-  const corsAllowed = setAvatarCorsHeaders(req, res, cfg);
+  const corsAllowed = setAvatarCorsHeaders(req, res, cfg, opts.publishedPort);
   if (method === "OPTIONS") {
     if (!corsAllowed) {
       sendJson(res, 403, { ok: false, error: { type: "origin_not_allowed" } });

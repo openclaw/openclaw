@@ -284,6 +284,7 @@ export async function prepareGatewayKernelState(params: {
     return resolveGatewayRuntimeConfig({
       cfg: cfgAtStart,
       port,
+      publishedPort: opts.publishedPort,
       bind: opts.bind,
       host: opts.host,
       controlUiEnabled: opts.controlUiEnabled,
@@ -471,6 +472,7 @@ export async function prepareGatewayKernelState(params: {
     getRuntimeConfig,
     bindHost,
     port,
+    publishedPort: opts.publishedPort,
     controlUiEnabled: opts.controlUiEnabled,
     controlUiBasePath,
     controlUiRoot: controlUiRootLifecycle.state,

@@ -80,6 +80,8 @@ services:
         "${OPENCLAW_GATEWAY_BIND:-lan}",
         "--port",
         "18789",
+        "--published-port",
+        "${OPENCLAW_GATEWAY_PORT:-18789}",
       ]
     healthcheck:
       test:

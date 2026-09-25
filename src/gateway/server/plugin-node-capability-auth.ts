@@ -23,6 +23,7 @@ import type { GatewayWsClient } from "./ws-types.js";
  */
 export async function authorizePluginNodeCapabilityRequest(params: {
   req: IncomingMessage;
+  publishedPort?: number;
   auth: ResolvedGatewayAuth;
   trustedProxies: string[];
   allowRealIpFallback: boolean;
@@ -71,7 +72,7 @@ export async function authorizePluginNodeCapabilityRequest(params: {
         // The capability is part of this request's terminal credential set. A
         // stale bearer must not poison the shared bucket when the fallback wins.
         deferRateLimitFailure: Boolean(capability),
-        browserOriginPolicy: resolveHttpBrowserOriginPolicy(req),
+        browserOriginPolicy: resolveHttpBrowserOriginPolicy(req, undefined, params.publishedPort),
       });
       if (authResult.ok) {
         return authResult;

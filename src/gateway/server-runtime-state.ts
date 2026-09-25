@@ -73,6 +73,7 @@ export async function createGatewayHttpTransport(params: {
   getRuntimeConfig?: () => import("../config/config.js").OpenClawConfig;
   bindHost: string;
   port: number;
+  publishedPort?: number;
   /** Test-instance listener held since allocation; caller closes it if construction fails. */
   testListener?: HttpServer;
   updateCanary?: boolean;
@@ -324,6 +325,7 @@ export async function createGatewayHttpTransport(params: {
   ): HttpServer => {
     const httpServer = createGatewayHttpServer({
       testListener,
+      publishedPort: params.publishedPort,
       clients: params.clients,
       controlUiEnabled: params.controlUiEnabled,
       controlUiBasePath: params.controlUiBasePath,
@@ -356,6 +358,7 @@ export async function createGatewayHttpTransport(params: {
       reportUnattributableProxy,
     });
     attachGatewayUpgradeHandler({
+      publishedPort: params.publishedPort,
       httpServer,
       wss,
       handlePluginUpgrade,

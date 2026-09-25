@@ -2,6 +2,8 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveAcceptedBrowserOrigin } from "../../plugin-sdk/webhook-request-guards.js";
 import { PluginInstance } from "../../plugins/plugin-instance.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -204,6 +206,45 @@ describe("createGatewayPluginRequestHandler", () => {
     expect(log.warn).toHaveBeenCalledWith(
       expect.stringContaining("Plugin identity-route was reloaded or disabled"),
     );
+  });
+
+  it("carries mapped origins through plugin dispatch without leaking them to other requests", async () => {
+    const cfg: OpenClawConfig = { gateway: { publicOrigin: "https://old.example.test" } };
+    let accepted: string | undefined;
+    const handler = createGatewayPluginRequestHandler({
+      registry: createGatewayTestRegistry({
+        httpRoutes: [
+          createRoute({
+            path: "/origin-proof",
+            handler: async (req) => {
+              await Promise.resolve();
+              accepted = resolveAcceptedBrowserOrigin({ req, cfg });
+              return true;
+            },
+          }),
+        ],
+      }),
+      log: createPluginLog(),
+    });
+    const request = async (origin: string, publishedPort?: number) => {
+      const req = {
+        url: "/origin-proof",
+        headers: { origin, host: "gateway.example.test:18789" },
+        socket: { remoteAddress: "198.51.100.4" },
+      } as IncomingMessage;
+      const { res } = makeMockHttpResponse();
+      expect(await handler(req, res, undefined, { publishedPort })).toBe(true);
+      return accepted;
+    };
+    const mappedOrigin = "http://localhost:25432";
+    expect(await request(mappedOrigin, 25432)).toBe(mappedOrigin);
+    expect(await request(mappedOrigin)).toBeUndefined();
+    cfg.gateway!.publicOrigin = "https://new.example.test";
+    expect(await request("https://old.example.test", 25432)).toBeUndefined();
+    expect(await request("https://new.example.test", 25432)).toBe("https://new.example.test");
+    expect(await request(mappedOrigin, 25432)).toBe(mappedOrigin);
+    cfg.gateway!.controlUi = { allowedOrigins: [] };
+    expect(await request(mappedOrigin, 25432)).toBeUndefined();
   });
 
   it("keeps unauthenticated plugin routes off operator runtime scopes", async () => {

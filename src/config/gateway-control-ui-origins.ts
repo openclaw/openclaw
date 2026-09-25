@@ -6,13 +6,27 @@ import type { OpenClawConfig } from "./types.openclaw.js";
 /** An authored list overrides the advertised origin, including an empty list. */
 export function resolveControlUiAllowedOrigins(
   config: Pick<OpenClawConfig, "gateway"> | undefined,
+  publishedPort?: number,
 ): string[] {
   const configured = config?.gateway?.controlUi?.allowedOrigins;
   if (configured !== undefined) {
     return configured;
   }
   const origin = resolveGatewayPublicOrigin(config);
-  return origin ? [origin] : [];
+  const origins = origin ? [origin] : [];
+  // Deployment metadata is supplied only by runtime callers, never config writers.
+  if (publishedPort === undefined) {
+    return origins;
+  }
+  if (!Number.isInteger(publishedPort) || publishedPort < 1 || publishedPort > 65535) {
+    throw new Error("Published Gateway port must be an integer between 1 and 65535.");
+  }
+  return [
+    ...new Set([
+      ...origins,
+      ...buildDefaultControlUiAllowedOrigins({ port: publishedPort, bind: "loopback" }),
+    ]),
+  ];
 }
 
 /** Non-loopback gateway bind modes that require explicit Control UI allowed origins. */

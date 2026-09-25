@@ -121,10 +121,8 @@ describe("fleet service", () => {
       mode: "local",
       bind: "lan",
       auth: { mode: "token" },
-      controlUi: {
-        allowedOrigins: ["http://localhost:19100", "http://127.0.0.1:19100"],
-      },
     });
+    expect(config.gateway?.controlUi).toBeUndefined();
     expect(config.gateway?.auth).not.toHaveProperty("token");
     const authSecretDir = cellAuthSecretDir(root, "acme");
     await expect(fs.stat(authSecretDir)).resolves.toBeDefined();

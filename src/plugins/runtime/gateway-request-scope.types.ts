@@ -9,6 +9,8 @@ import type { PluginRegistry } from "../registry-types.js";
 import type { OpenClawPluginNodeWorkspace } from "../types.node-host.js";
 
 export type PluginRuntimeGatewayRequestScope = {
+  /** Launch-owned host mapping for the Gateway serving this HTTP route. */
+  publishedPort?: number;
   /** Recheck the admitted HTTP device or cookie grant before effects/disclosure; rejection sends HTTP 401 and throws. */
   revalidate?: () => Promise<void>;
   /** Exact placement owner captured before the local harness begins. */

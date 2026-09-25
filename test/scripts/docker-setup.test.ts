@@ -163,36 +163,41 @@ describe("scripts/docker/setup.sh", () => {
     expect(result.stdout).not.toContain("test-token");
     expect(result.stdout).not.toContain("#token=");
     expect(log).toContain(
-      `run --rm --no-deps ${prestartContainerEnvFlags} --entrypoint node openclaw-gateway dist/index.js config set --batch-json [{"path":"gateway.mode","value":"local"},{"path":"gateway.bind","value":"lan"},{"path":"gateway.controlUi.allowedOrigins","value":["http://localhost:18789","http://127.0.0.1:18789"]}]`,
+      `run --rm --no-deps ${prestartContainerEnvFlags} --entrypoint node openclaw-gateway dist/index.js config set --batch-json [{"path":"gateway.mode","value":"local"},{"path":"gateway.bind","value":"lan"}]`,
     );
     expect(log).not.toContain("run --rm openclaw-cli onboard --mode local --no-install-daemon");
   });
 
-  it.each([undefined, "[]"])(
-    "keeps mapped-port origins alongside inherited public origin (%j)",
-    async (allowedOrigins) => {
-      const activeSandbox = requireSandbox(sandbox);
-      await resetDockerLog(activeSandbox);
-      const result = runDockerSetup(activeSandbox, {
-        DOCKER_STUB_CONTROL_UI_ORIGINS: allowedOrigins,
-        DOCKER_STUB_PUBLIC_ORIGIN: "https://TEAM.example.com:443/",
-      });
-      expect(result.status).toBe(0);
-      const writes = (await readDockerLogLines(activeSandbox)).filter((line) =>
-        line.includes("config set --batch-json"),
-      );
-      expect(writes).toHaveLength(1);
-      if (allowedOrigins === undefined) {
-        expect(writes[0]).toContain(
-          '"gateway.controlUi.allowedOrigins","value":["http://localhost:18789","http://127.0.0.1:18789","https://team.example.com"]',
-        );
-      } else {
-        expect(writes[0]).toContain(
-          '"gateway.controlUi.allowedOrigins","value":["http://localhost:18789","http://127.0.0.1:18789"]',
-        );
-      }
-    },
-  );
+  it.each([
+    { allowedOrigins: undefined },
+    { allowedOrigins: [] },
+    { allowedOrigins: ["https://admin.example.com", "http://localhost:18888"] },
+  ])("leaves omitted or explicit browser origins unchanged (%j)", async ({ allowedOrigins }) => {
+    const activeSandbox = requireSandbox(sandbox);
+    await resetDockerLog(activeSandbox);
+    const configDir = join(
+      activeSandbox.rootDir,
+      `config-origins-${allowedOrigins?.length ?? "omitted"}`,
+    );
+    await mkdir(configDir, { recursive: true });
+    const config = JSON.stringify({
+      gateway: { publicOrigin: "https://team.example.com", controlUi: { allowedOrigins } },
+    });
+    const configPath = join(configDir, "openclaw.json");
+    await writeFile(configPath, config);
+    const result = runDockerSetup(activeSandbox, {
+      OPENCLAW_CONFIG_DIR: configDir,
+      OPENCLAW_GATEWAY_PORT: "19123",
+    });
+    expect(result.status).toBe(0);
+    const writes = (await readDockerLogLines(activeSandbox)).filter((line) =>
+      line.includes("config set --batch-json"),
+    );
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).not.toContain("gateway.controlUi.allowedOrigins");
+    expect(writes[0]).not.toContain("gateway.publicOrigin");
+    expect(await readFile(configPath, "utf8")).toBe(config);
+  });
 
   it("allows ordinary spaces in host persistence paths and quotes generated mounts", async () => {
     const activeSandbox = requireSandbox(sandbox);
@@ -1031,6 +1036,10 @@ describe("scripts/docker/setup.sh", () => {
     const listenerPort = gateway.command[gateway.command.indexOf("--port") + 1];
     expect(listenerPort).toBe("18789");
     expect(gateway.ports).toContain(`\${OPENCLAW_GATEWAY_PORT:-18789}:${listenerPort}`);
+    expect(gateway.command[gateway.command.indexOf("--published-port") + 1]).toBe(
+      "${OPENCLAW_GATEWAY_PORT:-18789}",
+    );
+    expect(services["openclaw-cli"].command).toBeUndefined();
     for (const name of ["openclaw-gateway", "openclaw-cli"] as const) {
       expect(services[name].environment, name).toMatchObject({
         OPENCLAW_HOME: "/home/node",

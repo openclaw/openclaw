@@ -123,6 +123,7 @@ export function createGatewayHttpServer(opts: {
   clients: Set<GatewayWsClient>;
   controlUiEnabled?: boolean;
   controlUiBasePath: string;
+  publishedPort?: number;
   controlUiRoot?: ControlUiRootState;
   openAiChatCompletionsEnabled?: boolean;
   openResponsesEnabled?: boolean;
@@ -259,6 +260,7 @@ export function createGatewayHttpServer(opts: {
           rateLimiter,
           getReadiness,
           getStartup,
+          opts.publishedPort,
         );
         return;
       }
@@ -317,6 +319,7 @@ export function createGatewayHttpServer(opts: {
       const requestClientIp = ingressAttribution.clientIp;
       const resolvedAuthValue = getResolvedAuth();
       const routeAuth = {
+        publishedPort: opts.publishedPort,
         auth: resolvedAuthValue,
         cfg: configSnapshot,
         getRuntimeConfig: loadGatewayConfig,
@@ -380,6 +383,7 @@ export function createGatewayHttpServer(opts: {
             rateLimiter,
             getReadiness,
             getStartup,
+            opts.publishedPort,
           ),
       ];
       const addRequestStage = (
@@ -563,6 +567,7 @@ export function createGatewayHttpServer(opts: {
       addRequestStage(Boolean(nodeCapability), async () => {
         const { authorizePluginNodeCapabilityRequest } = await getPluginNodeCapabilityAuthModule();
         const ok = await authorizePluginNodeCapabilityRequest({
+          publishedPort: opts.publishedPort,
           req,
           auth: resolvedAuthValue,
           trustedProxies,
@@ -655,6 +660,7 @@ export function createGatewayHttpServer(opts: {
               gatewayRequestAuth: pluginGatewayRequestAuth,
               gatewayRequestOperatorScopes: pluginRequestOperatorScopes,
               gatewayRequestClientIp: requestClientIp,
+              publishedPort: opts.publishedPort,
             });
           },
         );

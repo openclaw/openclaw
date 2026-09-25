@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   checkBrowserOrigin,
   normalizeChromeExtensionOrigin,
-  resolveAcceptedBrowserOrigin,
+  resolveAcceptedBrowserOriginForGateway,
 } from "./origin-check.js";
 
 describe("checkBrowserOrigin", () => {
@@ -189,7 +189,7 @@ describe("checkBrowserOrigin", () => {
   });
 });
 
-describe("resolveAcceptedBrowserOrigin", () => {
+describe("resolveAcceptedBrowserOriginForGateway", () => {
   it.each([
     { allowedOrigins: undefined, origin: "https://gateway.example.com", accepted: true },
     { allowedOrigins: undefined, origin: "https://other.example.com", accepted: false },
@@ -210,7 +210,7 @@ describe("resolveAcceptedBrowserOrigin", () => {
       socket: { remoteAddress: "203.0.113.10" },
     } as IncomingMessage;
     expect(
-      resolveAcceptedBrowserOrigin({
+      resolveAcceptedBrowserOriginForGateway({
         req,
         cfg: {
           gateway: {
@@ -230,7 +230,7 @@ describe("resolveAcceptedBrowserOrigin", () => {
     } as IncomingMessage;
 
     expect(
-      resolveAcceptedBrowserOrigin({
+      resolveAcceptedBrowserOriginForGateway({
         req,
         cfg: {
           gateway: {
@@ -239,6 +239,6 @@ describe("resolveAcceptedBrowserOrigin", () => {
         },
       }),
     ).toBe(origin);
-    expect(resolveAcceptedBrowserOrigin({ req, cfg: {} })).toBeUndefined();
+    expect(resolveAcceptedBrowserOriginForGateway({ req, cfg: {} })).toBeUndefined();
   });
 });

@@ -38,6 +38,7 @@ export type WsOriginCheckMetrics = {
 type WsSendResult = { kind: "sent" | "unavailable" } | { kind: "serialization"; error: unknown };
 
 export type GatewayWsMessageHandlerParams = {
+  publishedPort?: number;
   socket: GatewayConnectionTransport;
   clients: GatewayClientRegistry;
   prepareAuthenticatedReceive: PrepareGatewayAuthenticatedReceive;

@@ -17,6 +17,7 @@ import { readOperatorRolePolicyRevision } from "./operator-role-policy.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 
 export type GatewayHttpRequestAuthOptions = {
+  publishedPort?: number;
   auth: ResolvedGatewayAuth;
   cfg?: OpenClawConfig;
   getRuntimeConfig?: () => OpenClawConfig;

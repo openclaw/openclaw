@@ -1,6 +1,9 @@
 // Covers gateway Control UI origin parsing and defaults.
 import { describe, expect, it } from "vitest";
-import { ensureControlUiAllowedOriginsForNonLoopbackBind } from "./gateway-control-ui-origins.js";
+import {
+  ensureControlUiAllowedOriginsForNonLoopbackBind,
+  resolveControlUiAllowedOrigins,
+} from "./gateway-control-ui-origins.js";
 
 describe("ensureControlUiAllowedOriginsForNonLoopbackBind", () => {
   it("seeds Fly-style runtime bind and port when config is empty", () => {
@@ -86,5 +89,46 @@ describe("ensureControlUiAllowedOriginsForNonLoopbackBind", () => {
     expect(result.config.gateway?.controlUi?.allowedOrigins).toEqual([
       "https://control.example.com",
     ]);
+  });
+});
+
+describe("runtime published-port origins", () => {
+  const publishedPort = 25432;
+  it("keeps launch-only loopback grants while the inherited public origin rotates", () => {
+    const config = { gateway: { publicOrigin: "https://old.example.test" } };
+    expect(resolveControlUiAllowedOrigins(config, publishedPort)).toEqual([
+      "https://old.example.test",
+      "http://localhost:25432",
+      "http://127.0.0.1:25432",
+    ]);
+    config.gateway.publicOrigin = "https://new.example.test";
+    expect(resolveControlUiAllowedOrigins(config, publishedPort)).toEqual([
+      "https://new.example.test",
+      "http://localhost:25432",
+      "http://127.0.0.1:25432",
+    ]);
+    expect(resolveControlUiAllowedOrigins(config)).toEqual(["https://new.example.test"]);
+    expect(config.gateway).not.toHaveProperty("controlUi");
+  });
+
+  it.each([[], ["https://explicit.example.test"]].map((allowedOrigins) => ({ allowedOrigins })))(
+    "preserves explicit list $allowedOrigins",
+    ({ allowedOrigins }) => {
+      expect(
+        resolveControlUiAllowedOrigins(
+          {
+            gateway: {
+              publicOrigin: "https://public.example.test",
+              controlUi: { allowedOrigins },
+            },
+          },
+          publishedPort,
+        ),
+      ).toEqual(allowedOrigins);
+    },
+  );
+
+  it.each([0, 65536, Number.NaN, 25432.5])("rejects invalid launch port %s", (port) => {
+    expect(() => resolveControlUiAllowedOrigins({}, port)).toThrow("Published Gateway port");
   });
 });

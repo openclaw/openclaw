@@ -134,7 +134,7 @@ For boot persistence on SSH/headless hosts, enable lingering for your current us
 sudo loginctl enable-linger "$(whoami)"
 ```
 
-The generated Quadlet service keeps a fixed, hardened default shape: `127.0.0.1` published ports (`18789` gateway, `18790` bridge), `--bind lan` inside the container, `keep-id` user namespace, `OPENCLAW_NO_RESPAWN=1`, `Restart=on-failure`, and `TimeoutStartSec=300`. It reads `~/.openclaw/.env` as a runtime `EnvironmentFile` for values such as `OPENCLAW_GATEWAY_TOKEN`, but does not consume the manual launcher's Podman-specific override allowlist. For custom publish ports, publish host, or other container-run flags, use the manual launcher instead, or edit `~/.config/containers/systemd/openclaw.container` directly and then reload and restart the service.
+The generated Quadlet service keeps a fixed, hardened default shape: `127.0.0.1` published ports (`18789` gateway, `18790` bridge), `--bind lan` inside the container, `keep-id` user namespace, `OPENCLAW_NO_RESPAWN=1`, `Restart=on-failure`, and `TimeoutStartSec=300`. It reads `~/.openclaw/.env` as a runtime `EnvironmentFile` for values such as `OPENCLAW_GATEWAY_TOKEN`, but does not consume the manual launcher's Podman-specific override allowlist. For custom publish ports, publish host, or other container-run flags, use the manual launcher instead, or edit `~/.config/containers/systemd/openclaw.container` directly and then reload and restart the service. If you edit the Gateway `PublishPort` directly, keep its generated `--published-port` launch argument equal to the mapped host port.
 
 ## Config, env, and storage
 
@@ -143,13 +143,15 @@ The generated Quadlet service keeps a fixed, hardened default shape: `127.0.0.1`
 - **Token file:** `~/.openclaw/.env`
 - **Launch helper:** `./scripts/run-openclaw-podman.sh`
 
-The launch script and Quadlet bind-mount host state into the container: `OPENCLAW_CONFIG_DIR` -> `/home/node/.openclaw`, `OPENCLAW_WORKSPACE_DIR` -> `/home/node/.openclaw/workspace`. By default those are host directories, not anonymous container state, so `openclaw.json`, shared and per-agent SQLite auth stores, channel/provider state, sessions, and workspace survive container replacement. Setup also seeds `gateway.controlUi.allowedOrigins` for `127.0.0.1` and `localhost` on the published gateway port so the local dashboard works with the container's non-loopback bind.
+The launch script and Quadlet bind-mount host state into the container: `OPENCLAW_CONFIG_DIR` -> `/home/node/.openclaw`, `OPENCLAW_WORKSPACE_DIR` -> `/home/node/.openclaw/workspace`. By default those are host directories, not anonymous container state, so `openclaw.json`, shared and per-agent SQLite auth stores, channel/provider state, sessions, and workspace survive container replacement.
 
-Container setup preserves the inherited `gateway.publicOrigin` when it creates
-`gateway.controlUi.allowedOrigins`, and adds `localhost` and `127.0.0.1` on the
-published Gateway port. An existing explicit list does not inherit the public
-origin. After setup has authored the list, update it explicitly if the public
-origin changes.
+Container launch supplies the published Gateway port automatically. When
+`gateway.controlUi.allowedOrigins` is omitted, the Gateway allows `localhost`
+and `127.0.0.1` on that port alongside the current `gateway.publicOrigin`.
+Changing the public origin updates the inherited origin without saving a copy
+in the allowlist. An explicit list, including `[]`, remains authoritative and
+is not changed by setup or launch; include any desired browser origins yourself.
+Previously saved lists also remain operator-owned.
 
 Useful env vars for the manual launcher (persist these in `~/.openclaw/.env`; the launcher reads that file before finalizing container/image defaults):
 

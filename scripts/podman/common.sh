@@ -160,3 +160,47 @@ upsert_env_var() {
   mv "$tmp" "$file"
   chmod 600 "$file" 2>/dev/null || true
 }
+
+# Keep local deployment mode initialization separate from operator-owned origins.
+ensure_local_gateway_mode() {
+  local file="$1"
+  local tmp=""
+  ensure_safe_write_file_path "config file" "$file"
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "Warning: python3 not found; unable to initialize gateway.mode in $file." >&2
+    return 0
+  fi
+  tmp="$(mktemp "$(dirname "$file")/.config.tmp.XXXXXX")"
+  if ! python3 - "$file" "$tmp" <<'PYTHON'
+import json
+import sys
+
+path, tmp = sys.argv[1:]
+try:
+    with open(path, "r", encoding="utf-8") as fh:
+        data = json.load(fh)
+except json.JSONDecodeError as exc:
+    print(f"Warning: unable to initialize gateway.mode in {path}: existing config is not strict JSON ({exc}). Leaving file unchanged.", file=sys.stderr)
+    raise SystemExit(1)
+if not isinstance(data, dict):
+    raise SystemExit(f"{path}: expected top-level object")
+gateway = data.setdefault("gateway", {})
+if not isinstance(gateway, dict):
+    raise SystemExit(f"{path}: expected gateway object")
+if "mode" not in gateway:
+    gateway["mode"] = "local"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2)
+        fh.write("\n")
+PYTHON
+  then
+    rm -f "$tmp"
+    return 0
+  fi
+  if [[ -s "$tmp" ]]; then
+    chmod 600 "$tmp"
+    mv -f "$tmp" "$file"
+  else
+    rm -f "$tmp"
+  fi
+}

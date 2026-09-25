@@ -93,18 +93,6 @@ if [[ "\${1:-}" == "compose" ]]; then
     exit 1
   fi
   echo "compose $*" >>"$log"
-  if [[ "$*" == *"--entrypoint node openclaw-gateway -e"* && "$*" == *"const origins = JSON.parse(process.argv[1])"* ]]; then
-    while [[ "$1" != "-e" ]]; do shift; done
-    exec node "$@"
-  fi
-  if [[ "$*" == *"config get gateway.controlUi.allowedOrigins"* ]]; then
-    printf '%s\n' "\${DOCKER_STUB_CONTROL_UI_ORIGINS:-}"
-    exit 0
-  fi
-  if [[ "$*" == *"config get gateway.publicOrigin"* ]]; then
-    printf '%s\n' "\${DOCKER_STUB_PUBLIC_ORIGIN:-}"
-    exit 0
-  fi
   if [[ "$*" == *"config get tools.sandbox.tools --json"* ]]; then
     if [[ -n "\${DOCKER_STUB_SANDBOX_TOOLS_JSON:-}" ]]; then
       printf '%s\n' "$DOCKER_STUB_SANDBOX_TOOLS_JSON"

@@ -6,8 +6,6 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 const { acquire } = vi.hoisted(() => ({ acquire: vi.fn() }));
 vi.mock("./registry.js", () => ({ withFleetCellOperationLease: acquire }));
 
-import { resolveControlUiAllowedOrigins } from "../config/gateway-control-ui-origins.js";
-import { checkBrowserOrigin } from "../gateway/origin-check.js";
 import { prepareCellConfig, withFleetCellOperation } from "./service-support.runtime.js";
 
 afterEach(() => {
@@ -19,12 +17,14 @@ describe("fleet operation lifecycle", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   it.each([
-    { allowedOrigins: undefined },
-    { allowedOrigins: [] },
-    { allowedOrigins: ["https://admin.example.com"] },
+    { controlUi: undefined },
+    { controlUi: {} },
+    { controlUi: { allowedOrigins: [] } },
+    { controlUi: { allowedOrigins: ["https://admin.example.com"] } },
+    { controlUi: { allowedOrigins: ["http://localhost:19100", "http://127.0.0.1:19100"] } },
   ])(
-    "admits published container origins and inherits public origin only when omitted (%j)",
-    async ({ allowedOrigins }) => {
+    "preserves authored origins and omission through cell preparation and public-origin rotation (%j)",
+    async ({ controlUi }) => {
       const dataDir = tempDirs.make("fleet-origin-");
       const configPath = path.join(dataDir, "openclaw.json");
       await fs.writeFile(
@@ -32,45 +32,34 @@ describe("fleet operation lifecycle", () => {
         JSON.stringify({
           gateway: {
             publicOrigin: "https://TEAM.example.com:443/",
-            controlUi: { allowedOrigins },
+            controlUi,
           },
         }),
       );
-      await prepareCellConfig({
+      const record = {
         tenantId: "team",
         createdAtMs: 1,
         image: "openclaw:test",
-        runtime: "docker",
+        runtime: "docker" as const,
         hostPort: 19100,
         containerName: "openclaw-cell-team",
         dataDir,
-      });
+      };
+      await prepareCellConfig(record);
       const config = JSON.parse(await fs.readFile(configPath, "utf8"));
       expect(config.gateway.publicOrigin).toBe("https://TEAM.example.com:443/");
-      expect(config.gateway.controlUi.allowedOrigins).toEqual(
-        allowedOrigins === undefined
-          ? ["https://team.example.com", "http://localhost:19100", "http://127.0.0.1:19100"]
-          : [...allowedOrigins, "http://localhost:19100", "http://127.0.0.1:19100"],
-      );
-      for (const origin of [
-        "http://localhost:19100",
-        "http://127.0.0.1:19100",
-        "https://team.example.com",
-        "https://unrelated.example.com",
-      ]) {
-        expect(
-          checkBrowserOrigin({
-            origin,
-            requestHost: "localhost:19100",
-            isLocalClient: false,
-            allowedOrigins: resolveControlUiAllowedOrigins(config),
-          }).ok,
-        ).toBe(
-          origin.startsWith("http://") ||
-            (origin === "https://team.example.com" && allowedOrigins === undefined),
-        );
-      }
+      expect(config.gateway.controlUi).toEqual(controlUi);
       expect(config.gateway.auth).toEqual({ mode: "token" });
+
+      config.gateway.publicOrigin = "https://rotated.example.com";
+      await fs.writeFile(configPath, JSON.stringify(config));
+      await prepareCellConfig({ ...record, hostPort: 19200 });
+      const rotatedBytes = await fs.readFile(configPath, "utf8");
+      const rotated = JSON.parse(rotatedBytes);
+      expect(rotated.gateway.publicOrigin).toBe("https://rotated.example.com");
+      expect(rotated.gateway.controlUi).toEqual(controlUi);
+      await prepareCellConfig({ ...record, hostPort: 19200 });
+      expect(await fs.readFile(configPath, "utf8")).toBe(rotatedBytes);
     },
   );
 

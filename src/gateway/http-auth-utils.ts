@@ -122,8 +122,9 @@ type ControlUiReadAuthParams = Omit<GatewayHttpRequestAuthParams, "auth"> & {
 export function resolveHttpBrowserOriginPolicy(
   req: IncomingMessage,
   cfg = getRuntimeConfig(),
+  publishedPort?: number,
 ): NonNullable<Parameters<typeof authorizeHttpGatewayConnect>[0]["browserOriginPolicy"]> {
-  return resolveBrowserOriginPolicy({ req, cfg });
+  return resolveBrowserOriginPolicy({ req, cfg, publishedPort });
 }
 
 function resolveControlUiReadAuthToken(
@@ -218,7 +219,11 @@ async function checkHttpOperatorCredentials(
       auth,
       connectAuth: token ? { token, password: token } : null,
       req: params.req,
-      browserOriginPolicy: resolveHttpBrowserOriginPolicy(params.req, params.cfg),
+      browserOriginPolicy: resolveHttpBrowserOriginPolicy(
+        params.req,
+        params.cfg,
+        params.publishedPort,
+      ),
       trustedProxies: params.trustedProxies,
       allowRealIpFallback: params.allowRealIpFallback,
       rateLimiter: params.rateLimiter,
@@ -324,6 +329,7 @@ export async function authorizeControlUiReadRequestOrReply(
     authResult,
     cfg,
     getRuntimeConfig: params.getRuntimeConfig,
+    publishedPort: params.publishedPort,
     req: params.req,
     res: params.res,
   });
@@ -520,7 +526,11 @@ export async function checkGatewayHttpRequestAuth(
           trustedProxies: params.trustedProxies,
           allowRealIpFallback: params.allowRealIpFallback,
           rateLimiter: params.rateLimiter,
-          browserOriginPolicy: resolveHttpBrowserOriginPolicy(params.req, cfg),
+          browserOriginPolicy: resolveHttpBrowserOriginPolicy(
+            params.req,
+            cfg,
+            params.publishedPort,
+          ),
         }),
       };
   if (!authResult.ok) {
@@ -533,6 +543,7 @@ export async function checkGatewayHttpRequestAuth(
     authResult,
     cfg,
     getRuntimeConfig: params.getRuntimeConfig,
+    publishedPort: params.publishedPort,
     req: params.req,
     res: params.res,
   });

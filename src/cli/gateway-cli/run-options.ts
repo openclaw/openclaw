@@ -4,6 +4,7 @@ import { inheritOptionFromParent } from "../command-options.js";
 
 export type GatewayRunOpts = {
   port?: unknown;
+  publishedPort?: unknown;
   bind?: unknown;
   token?: unknown;
   auth?: unknown;
@@ -33,6 +34,7 @@ export type GatewayRunOpts = {
 
 const GATEWAY_RUN_VALUE_KEYS = [
   "port",
+  "publishedPort",
   "bind",
   "token",
   "auth",

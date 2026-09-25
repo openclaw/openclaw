@@ -145,48 +145,10 @@ read_env_gateway_token() {
 }
 
 sync_gateway_config() {
-  local allowed_origin_json=""
-  local current_allowed_origins=""
-  local current_public_origin=""
   local batch_json=""
-
-  if [[ "${OPENCLAW_GATEWAY_BIND}" != "loopback" ]]; then
-    allowed_origin_json="$(printf '["http://localhost:%s","http://127.0.0.1:%s"]' "$OPENCLAW_GATEWAY_PORT" "$OPENCLAW_GATEWAY_PORT")"
-    current_allowed_origins="$(
-      run_prestart_cli config get gateway.controlUi.allowedOrigins 2>/dev/null || true
-    )"
-    current_allowed_origins="${current_allowed_origins//$'\r'/}"
-    if [[ -z "$current_allowed_origins" ]]; then
-      current_public_origin="$(run_prestart_cli config get gateway.publicOrigin 2>/dev/null || true)"
-      if [[ -n "${current_public_origin//[[:space:]]/}" ]]; then
-        # Materialize the inherited public origin before adding the published
-        # loopback routes: an explicit list otherwise replaces inheritance.
-        allowed_origin_json="$(run_prestart_gateway --entrypoint node openclaw-gateway -e '
-const origins = JSON.parse(process.argv[1]);
-origins.push(new URL(process.argv[2].trim()).origin);
-process.stdout.write(JSON.stringify([...new Set(origins)]));
-' "$allowed_origin_json" "$current_public_origin")"
-      fi
-    fi
-  fi
-
-  batch_json="$(printf '[{"path":"gateway.mode","value":"local"},{"path":"gateway.bind","value":"%s"}' "$OPENCLAW_GATEWAY_BIND")"
-  if [[ -n "$allowed_origin_json" ]]; then
-    if [[ -n "$current_allowed_origins" && "$current_allowed_origins" != "null" && "$current_allowed_origins" != "[]" ]]; then
-      echo "Control UI allowlist already configured; leaving gateway.controlUi.allowedOrigins unchanged."
-    else
-      batch_json+=",{\"path\":\"gateway.controlUi.allowedOrigins\",\"value\":$allowed_origin_json}"
-    fi
-  fi
-  batch_json+="]"
-
+  batch_json="$(printf '[{"path":"gateway.mode","value":"local"},{"path":"gateway.bind","value":"%s"}]' "$OPENCLAW_GATEWAY_BIND")"
   run_prestart_cli config set --batch-json "$batch_json" >/dev/null
   echo "Pinned gateway.mode=local and gateway.bind=$OPENCLAW_GATEWAY_BIND for Docker setup."
-  if [[ -n "$allowed_origin_json" ]]; then
-    if [[ -z "$current_allowed_origins" || "$current_allowed_origins" == "null" || "$current_allowed_origins" == "[]" ]]; then
-      echo "Set gateway.controlUi.allowedOrigins to $allowed_origin_json for non-loopback bind."
-    fi
-  fi
 }
 
 run_compose_one_off() {
