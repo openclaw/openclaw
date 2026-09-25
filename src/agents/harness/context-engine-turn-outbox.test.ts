@@ -21,6 +21,7 @@ import {
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
 import { drainPendingContextEngineTurnsBeforeRun } from "./context-engine-turn-attempt.js";
+import { openContextEngineTurnOutboxWorkerStore } from "./context-engine-turn-outbox-store.js";
 import {
   acceptContextEngineTurnIntent,
   drainContextEngineTurnOutbox,
@@ -115,7 +116,11 @@ describe("context-engine turn outbox", () => {
     } satisfies ContextEngine;
     const warn = vi.fn();
 
-    await drainContextEngineTurnOutbox({ database, engine, engineId: "test", warn });
+    const store = openContextEngineTurnOutboxWorkerStore({
+      agentId: database.agentId,
+      path: database.path,
+    });
+    await drainContextEngineTurnOutbox({ store, engine, engineId: "test", warn });
 
     expect(
       database.db
@@ -135,7 +140,7 @@ describe("context-engine turn outbox", () => {
     const onCommitted = vi.fn(() => {
       throw new Error("maintenance handoff failed");
     });
-    await drainContextEngineTurnOutbox({ database, engine, engineId: "test", onCommitted, warn });
+    await drainContextEngineTurnOutbox({ store, engine, engineId: "test", onCommitted, warn });
 
     expect(onCommitted).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ advancementKey: payload.boundary.admission.logicalTurnId }),
@@ -178,8 +183,12 @@ describe("context-engine turn outbox", () => {
       commitTurn,
     } satisfies ContextEngine;
 
+    const store = openContextEngineTurnOutboxWorkerStore({
+      agentId: database.agentId,
+      path: database.path,
+    });
     const result = await drainContextEngineTurnOutbox({
-      database,
+      store,
       engine,
       engineId: "test",
       warn: vi.fn(),
@@ -614,12 +623,11 @@ describe("context-engine turn outbox", () => {
     } satisfies ContextEngine;
     const warn = vi.fn();
 
-    await drainContextEngineTurnOutbox({
-      database,
-      engine,
-      engineId: "test",
-      warn,
+    const store = openContextEngineTurnOutboxWorkerStore({
+      agentId: database.agentId,
+      path: database.path,
     });
+    await drainContextEngineTurnOutbox({ store, engine, engineId: "test", warn });
 
     expect(commitTurn.mock.calls.map(([call]) => call.advancementKey)).toEqual([
       "session-a:z-first",
@@ -628,7 +636,7 @@ describe("context-engine turn outbox", () => {
     failFirstTurn = false;
 
     await drainContextEngineTurnOutbox({
-      database,
+      store,
       engine,
       engineId: "test",
       limit: 2,
@@ -643,7 +651,7 @@ describe("context-engine turn outbox", () => {
     ]);
 
     await drainContextEngineTurnOutbox({
-      database,
+      store,
       engine,
       engineId: "test",
       limit: 1,
@@ -719,7 +727,11 @@ describe("context-engine turn outbox", () => {
     } satisfies ContextEngineLogicalTurnLease;
     const warn = vi.fn();
 
-    await drainContextEngineTurnOutbox({ database, engine, engineId: "test", warn });
+    const store = openContextEngineTurnOutboxWorkerStore({
+      agentId: database.agentId,
+      path: database.path,
+    });
+    await drainContextEngineTurnOutbox({ store, engine, engineId: "test", warn });
     blocked = false;
     await drainPendingContextEngineTurnsBeforeRun({
       admission: payload.boundary.admission,

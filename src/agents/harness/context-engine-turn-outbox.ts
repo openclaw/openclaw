@@ -26,7 +26,7 @@ type ContextEngineTurnOutboxDatabase = Pick<
 >;
 
 /** Outbox kernels need only the connection; workers pass their borrowed one. */
-export type ContextEngineTurnOutboxConnection = Pick<OpenClawAgentDatabase, "db">;
+type ContextEngineTurnOutboxConnection = Pick<OpenClawAgentDatabase, "db">;
 
 type PendingContextEngineTurn = Readonly<{
   advancement_key: string;
@@ -420,11 +420,7 @@ type ContextEngineTurnOutboxFilter = Readonly<{
   ownerPluginId?: string;
 }>;
 
-/**
- * Durable outbox rows the drain reads and settles. Host callers pass the agent
- * database worker store; the direct store runs the same kernels on the caller's
- * connection for focused tests.
- */
+/** Durable outbox rows the drain reads and settles through the agent database worker. */
 export type ContextEngineTurnOutboxStore = Readonly<{
   listPendingSessions(
     filter: ContextEngineTurnOutboxFilter & { sessionId?: string; limit: number },
@@ -553,36 +549,18 @@ function prepareContextEngineTurnRun(params: {
   return { warnings, pending, admitted: true };
 }
 
-/** Runs the outbox kernels on the caller's own connection. */
-function createDirectContextEngineTurnOutboxStore(
-  database: ContextEngineTurnOutboxConnection,
-): ContextEngineTurnOutboxStore {
-  return {
-    listPendingSessions: async (filter) => listPendingContextEngineTurnSessions(database, filter),
-    readNextPending: async (filter) => readNextPendingContextEngineTurn(database, filter),
-    complete: async (advancementKey) => completeContextEngineTurn(database, advancementKey),
-    recordFailure: async (advancementKey, message, attemptedAt) =>
-      recordContextEngineTurnFailure(database, advancementKey, message, attemptedAt),
-    hasPending: async (filter) => hasPendingContextEngineTurn(database, filter),
-  };
-}
-
-export async function drainContextEngineTurnOutbox(
-  params: {
-    engine: ContextEngine;
-    engineId: string;
-    ownerPluginId?: string;
-    sessionId?: string;
-    limit?: number;
-    /** Observe acknowledged turns without changing durable advancement on observer failure. */
-    onCommitted?: (turn: Parameters<NonNullable<ContextEngine["commitTurn"]>>[0]) => void;
-    warn: (message: string) => void;
-  } & (
-    | { store: ContextEngineTurnOutboxStore; database?: never }
-    | { database: ContextEngineTurnOutboxConnection; store?: never }
-  ),
-): Promise<{ pending: boolean }> {
-  const store = params.store ?? createDirectContextEngineTurnOutboxStore(params.database);
+export async function drainContextEngineTurnOutbox(params: {
+  store: ContextEngineTurnOutboxStore;
+  engine: ContextEngine;
+  engineId: string;
+  ownerPluginId?: string;
+  sessionId?: string;
+  limit?: number;
+  /** Observe acknowledged turns without changing durable advancement on observer failure. */
+  onCommitted?: (turn: Parameters<NonNullable<ContextEngine["commitTurn"]>>[0]) => void;
+  warn: (message: string) => void;
+}): Promise<{ pending: boolean }> {
+  const { store } = params;
   const filter = { engineId: params.engineId, ownerPluginId: params.ownerPluginId };
   if (typeof params.engine.commitTurn !== "function") {
     return { pending: false };

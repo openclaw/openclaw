@@ -24,7 +24,7 @@ const sessionId = "attempt-prompt-admission-test";
 afterEach(() => clearEmbeddedSessionPromptStates([sessionId]));
 
 describe("embedded provider dispatch admission", () => {
-  it.each(["committed", "failed"] as const)(
+  it.each(["committed", "failed", "sync-failed"] as const)(
     "waits for fresh runtime admission before provider dispatch (%s)",
     async (outcome) => {
       await withOpenClawTestState({ label: "prompt-admission" }, async (state) => {
@@ -46,7 +46,12 @@ describe("embedded provider dispatch admission", () => {
           target: { ...target, sessionEntry: { sessionId, updatedAt: 1 } },
         });
         const admission = createDeferred();
-        recorder.setAdmissionHandler?.(() => admission.promise);
+        recorder.setAdmissionHandler?.(() => {
+          if (outcome === "sync-failed") {
+            throw new Error("durable admission failed");
+          }
+          return admission.promise;
+        });
         const dispatchBoundary = createDeferred();
         const waitForPersistence = recorder.waitForRuntimePersistence;
         vi.spyOn(recorder, "waitForRuntimePersistence").mockImplementation(() => {
@@ -99,7 +104,7 @@ describe("embedded provider dispatch admission", () => {
           }
           await submitting;
         }
-        if (outcome === "failed") {
+        if (outcome !== "committed") {
           expect(streamMocks.streamSimple).not.toHaveBeenCalled();
           expect(session.messages.at(-1)).toMatchObject({
             role: "assistant",

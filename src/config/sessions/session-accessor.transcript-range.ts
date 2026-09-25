@@ -10,12 +10,7 @@ import {
   SqliteJsonlReadBudgetExceededError,
 } from "../../infra/sqlite-jsonl-budget.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import {
-  getSessionKysely,
-  resolveSqliteTranscriptScope,
-  toDatabaseOptions,
-} from "./session-accessor.sqlite-scope.js";
+import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import type { TranscriptEntryAnchor, TranscriptTurnBoundary } from "./transcript-entry-anchor.js";
 import { transcriptEventJsonSql, transcriptEventNavigationSql } from "./transcript-payload.js";
 
@@ -137,29 +132,6 @@ function validateTerminalAncestry(params: {
   return ancestry.found === 1 ? "descendant" : "non-descendant";
 }
 
-/** Reads one bounded accepted transcript range from a single SQLite snapshot. */
-export function readClosedTranscriptTurn(params: {
-  boundary: TranscriptTurnBoundary;
-  maxEvents: number;
-  maxBytes: number;
-}): ClosedTranscriptTurnReadResult {
-  if (!anchorsShareTarget(params.boundary)) {
-    return { kind: "session-rebound" };
-  }
-  const target = params.boundary.admission;
-  const resolved = resolveSqliteTranscriptScope({
-    agentId: target.agentId,
-    sessionId: target.sessionId,
-    sessionKey: target.sessionKey,
-    storePath: target.storePath,
-  });
-  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-  return readClosedTranscriptTurnInDatabase(database.db, {
-    ...params,
-    databaseLabel: database.path,
-  });
-}
-
 /** Reads a closed turn through the caller's connection, such as an agent database worker's. */
 export function readClosedTranscriptTurnInDatabase(
   connection: DatabaseSync,
@@ -167,7 +139,6 @@ export function readClosedTranscriptTurnInDatabase(
     boundary: TranscriptTurnBoundary;
     maxEvents: number;
     maxBytes: number;
-    databaseLabel?: string;
   },
 ): ClosedTranscriptTurnReadResult {
   if (!anchorsShareTarget(params.boundary)) {
@@ -313,7 +284,7 @@ export function readClosedTranscriptTurnInDatabase(
       } as const;
     },
     {
-      databaseLabel: params.databaseLabel ?? target.storePath,
+      databaseLabel: target.storePath,
       operationLabel: "session transcript accepted turn read",
     },
   );

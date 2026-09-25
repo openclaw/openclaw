@@ -19,7 +19,9 @@ export function createUserTurnAdmissionWrite() {
      * detached, so it queues behind that lane instead of reentering it.
      */
     start(admission: UserTurnTranscriptAdmissionReceipt, detached: boolean): Promise<void> {
-      const run = () => Promise.resolve(handler?.(admission));
+      const run = async () => {
+        await handler?.(admission);
+      };
       const started = detached ? runInDetachedAsyncContext(run) : run();
       // Awaiting callers observe a failure; this only prevents an unobserved rejection.
       started.catch(() => undefined);

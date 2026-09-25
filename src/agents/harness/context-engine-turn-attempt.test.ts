@@ -6,9 +6,9 @@ import {
   appendTranscriptEvent,
   appendTranscriptMessage,
   readActiveTranscriptEntryAnchor,
-  readClosedTranscriptTurn,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { readClosedTranscriptTurnInDatabase } from "../../config/sessions/session-accessor.transcript-range.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -171,10 +171,18 @@ describe("accepted context-engine turn finalization", () => {
           "metadata-0",
         );
       expect(
-        readClosedTranscriptTurn({ boundary: facts.boundary, maxEvents: 2, maxBytes: 1024 }),
+        readClosedTranscriptTurnInDatabase(database.db, {
+          boundary: facts.boundary,
+          maxEvents: 2,
+          maxBytes: 1024,
+        }),
       ).toEqual({ kind: "too-large" });
       expect(
-        readClosedTranscriptTurn({ boundary: facts.boundary, maxEvents: 3, maxBytes: 1024 }),
+        readClosedTranscriptTurnInDatabase(database.db, {
+          boundary: facts.boundary,
+          maxEvents: 3,
+          maxBytes: 1024,
+        }),
       ).toEqual({ kind: "non-descendant" });
     },
   );
@@ -192,7 +200,11 @@ describe("accepted context-engine turn finalization", () => {
     );
     try {
       expect(
-        readClosedTranscriptTurn({ boundary: facts.boundary, maxEvents: 65, maxBytes: 1024 }),
+        readClosedTranscriptTurnInDatabase(database.db, {
+          boundary: facts.boundary,
+          maxEvents: 65,
+          maxBytes: 1024,
+        }),
       ).toMatchObject({
         kind: "ok",
         messages: [
@@ -205,7 +217,11 @@ describe("accepted context-engine turn finalization", () => {
       reads.restore();
     }
     expect(
-      readClosedTranscriptTurn({ boundary: facts.boundary, maxEvents: 64, maxBytes: 1024 }),
+      readClosedTranscriptTurnInDatabase(database.db, {
+        boundary: facts.boundary,
+        maxEvents: 64,
+        maxBytes: 1024,
+      }),
     ).toEqual({ kind: "too-large" });
     const { commitTurn, lease } = createDurableLease();
     await finalizeAcceptedContextEngineTurn({ facts, lease });
@@ -325,9 +341,13 @@ describe("accepted context-engine turn finalization", () => {
     if (!admitted?.anchor || !terminal?.anchor) {
       throw new Error("expected admitted turn transcript");
     }
+    const database = openOpenClawAgentDatabase({
+      agentId: target.agentId,
+      path: admitted.anchor.storePath,
+    });
 
     expect(
-      readClosedTranscriptTurn({
+      readClosedTranscriptTurnInDatabase(database.db, {
         boundary: {
           admission: {
             ...admitted.anchor,
@@ -353,10 +373,6 @@ describe("accepted context-engine turn finalization", () => {
       logicalTurnId: "logical-turn-1",
       role: "user" as const,
     };
-    const database = openOpenClawAgentDatabase({
-      agentId: target.agentId,
-      path: admission.storePath,
-    });
     enqueueContextEngineTurnIntent({
       admission,
       database,
