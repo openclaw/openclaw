@@ -54,6 +54,9 @@ export function buildGithubCopilotReplayPolicy(
     return undefined;
   }
   return buildStrictAnthropicReplayPolicy({
+    // Copilot removes thinking before replay, so it does not retain a signed
+    // prefix that would require runtime context to stay append-only.
+    appendOnlyRuntimeContext: false,
     // Unconditional: Copilot strips replayed thinking for every Claude model, so
     // it never owns signed-thinking replay. The shared by-model helper would
     // re-enable it for thinking-preserving Claude ids.
