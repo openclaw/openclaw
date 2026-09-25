@@ -647,7 +647,7 @@ it("honors cancellation after a schedule-only scope job is skipped", () => {
   const workflow = parse(
     readFileSync(".github/workflows/plugin-init-scaffold-validation.yml", "utf8"),
   ) as Workflow;
-  const guard = workflow.jobs["validate-provider-scaffold"].if!;
+  const guard = workflow.jobs["validate-provider-scaffold"]!.if!;
   const context = {
     github: pr(workflow, 100, "ready_for_review"),
     needs: { scope: { result: "skipped", outputs: {} } },

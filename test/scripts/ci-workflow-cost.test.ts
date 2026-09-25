@@ -217,7 +217,7 @@ describe("workflow cost admission", () => {
       });
       expect(output).toHaveBeenCalledExactlyOnceWith(
         "changed",
-        files[0].filename.startsWith(".github/"),
+        files[0]!.filename.startsWith(".github/"),
       );
     }
     for (const name of [
