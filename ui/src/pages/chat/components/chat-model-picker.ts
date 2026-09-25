@@ -89,6 +89,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
   const activeModelOption = params.modelOptions.find((option) =>
     isModelPickerOptionSelected(option, params.selectedModelValue, params.selectedAgentRuntime),
   );
+  const leadingModelOption = activeModelOption ?? defaultModelOption;
   const triggerModelValue = params.triggerModelValue;
   const triggerModelOption =
     triggerModelValue === undefined
@@ -131,7 +132,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
   for (const option of params.modelOptions) {
     const existing = providerGroups.get(option.provider);
     if (existing) {
-      if (option.isDefault) {
+      if (option === leadingModelOption) {
         existing.unshift(option);
       } else {
         existing.push(option);
@@ -141,13 +142,13 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
     }
   }
   const orderedProviderGroups = [...providerGroups];
-  const defaultProviderIndex = orderedProviderGroups.findIndex(
-    ([provider]) => provider === defaultModelOption?.provider,
+  const selectedProviderIndex = orderedProviderGroups.findIndex(
+    ([provider]) => provider === leadingModelOption?.provider,
   );
-  if (defaultProviderIndex > 0) {
-    const [defaultGroup] = orderedProviderGroups.splice(defaultProviderIndex, 1);
-    if (defaultGroup) {
-      orderedProviderGroups.unshift(defaultGroup);
+  if (selectedProviderIndex > 0) {
+    const [selectedGroup] = orderedProviderGroups.splice(selectedProviderIndex, 1);
+    if (selectedGroup) {
+      orderedProviderGroups.unshift(selectedGroup);
     }
   }
   const orderedOptions = orderedProviderGroups.flatMap(([, options]) => options);

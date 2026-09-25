@@ -42,7 +42,11 @@ export function renderModelPicker(params: ModelPickerParams) {
   }
   const currentIsKnown = params.options.some((option) => option.value === params.value);
   const options: Array<ModelPickerOption & { description?: string }> = [
-    ...params.options.map((option) => ({ ...option, description: option.detail })),
+    ...params.options
+      .map((option) => ({ ...option, description: option.detail }))
+      .sort(
+        (left, right) => Number(right.value === params.value) - Number(left.value === params.value),
+      ),
     ...(params.custom ? [{ value: customValue, label: params.custom.label }] : []),
   ];
   return html`
