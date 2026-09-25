@@ -18,13 +18,22 @@ import {
 } from "node:fs";
 import type { PathLike } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { delimiter, dirname, extname, isAbsolute, relative, resolve } from "node:path";
+import {
+  delimiter,
+  dirname,
+  extname,
+  isAbsolute,
+  join as joinPath,
+  relative,
+  resolve,
+} from "node:path";
 import { addAbortSignal } from "node:stream";
 import { buffer as consumeStream } from "node:stream/consumers";
 import { StringDecoder } from "node:string_decoder";
 import { setImmediate as yieldToSignals } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { gte as semverGte } from "semver";
 import {
   ensureManagedCrabboxBinary,
   findCrabboxBinary,
@@ -1174,7 +1183,19 @@ function userDisplayPath(path: string) {
 }
 
 function blacksmithTestboxPrivateKeyPath(id: string) {
-  return resolve(crabboxConfigDir(), "testboxes", id, "id_ed25519");
+  // Crabbox 0.58 moved explicit state-root keys; older supported clients use config.
+  const stateRoot = semverGte(version, "0.58.0") ? process.env.XDG_STATE_HOME : undefined;
+  if (
+    stateRoot &&
+    !(process.platform === "win32"
+      ? /^(?:[a-z]:[\\/]|[\\/]{2}|[\\/]\?\?[\\/][^\\/]+[\\/])/iu.test(stateRoot)
+      : isAbsolute(stateRoot))
+  ) {
+    console.error("[crabbox] XDG_STATE_HOME must be absolute for generated lease SSH material");
+    process.exit(2);
+  }
+  const root = stateRoot ? joinPath(stateRoot, "crabbox") : crabboxConfigDir();
+  return joinPath(root, "testboxes", id, "id_ed25519");
 }
 
 // Crabbox claims bind raw Testbox ids to one repo before remote execution.
@@ -1184,7 +1205,7 @@ function blacksmithTestboxClaimPath(id: string) {
 }
 
 function blacksmithTestboxClaimsDir() {
-  const configuredStateRoot = process.env.XDG_STATE_HOME?.trim();
+  const configuredStateRoot = process.env.XDG_STATE_HOME;
   const stateDir = configuredStateRoot
     ? resolve(configuredStateRoot, "crabbox")
     : resolve(crabboxConfigDir(), "state");

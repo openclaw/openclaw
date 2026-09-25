@@ -189,9 +189,9 @@ export function createTelegramMessageSessionRuntime({
   "accountId" | "resolveTelegramGroupConfig" | "telegramDeps"
 >) {
   const loadSessionEntry = telegramDeps.getSessionEntry ?? getSessionEntry;
-  const resolveTelegramSessionState = (
+  const resolveTelegramSessionState = async (
     params: ResolveTelegramSessionStateParams,
-  ): TelegramSessionState => {
+  ): Promise<TelegramSessionState> => {
     const dmThreadId = params.threadSpec.scope === "dm" ? params.threadSpec.id : undefined;
     const topicThreadId = params.threadSpec.id;
     const { topicConfig } = resolveTelegramGroupConfig(
@@ -199,7 +199,7 @@ export function createTelegramMessageSessionRuntime({
       topicThreadId,
       params.runtimeCfg,
     );
-    const { route } = resolveTelegramConversationRoute({
+    const { route } = await resolveTelegramConversationRoute({
       cfg: params.runtimeCfg,
       accountId,
       chatId: params.chatId,

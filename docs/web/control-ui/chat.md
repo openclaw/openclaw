@@ -169,6 +169,10 @@ and the Gateway still validates the model and account when starting a run.
 Repeated changes while a model lookup is pending are collected into one
 follow-up lookup for the latest choices.
 
+Loading chat history does not disable the model picker. In **Settings > Models**,
+the primary-model picker opens as soon as model rows are known; selecting a new
+default still waits for configuration readiness and mutation access.
+
 Catalog refreshes update the open conversation's model and context facts without
 reloading unrelated session lists. The shared session store applies lifecycle row snapshots to existing active
 members locally. Membership or configuration changes and events without a row

@@ -77,6 +77,29 @@ its parent Gateway process. Diagnosis preserves that refusal: it does not stop t
 Gateway, retry the update, or bypass safety checks. See
 [Update troubleshooting](/install/update-troubleshooting).
 
+### Retained updater runtime
+
+An update can retain its running code in an `openclaw-update-runtime-*` directory
+beside the installation or in the system temporary directory. The updater settles
+its workers and removes that directory after success, failure, an exception, or
+`SIGINT`/`SIGTERM`, including failures while reporting the outcome. If a worker
+cannot settle or removal fails, it records `Runtime retained at <path>: <reason>`
+and leaves cleanup available to Doctor. A cleanup warning does not replace the
+original update outcome.
+
+Retention copies plugin manifests and files inspected by plugin safety checks,
+so retaining the updater does not make the checkout's plugins fail hardlink
+validation. Other runtime files remain hardlinked when supported.
+
+These lifecycle and copying changes apply when the installed updater supports
+them; installing a newer candidate cannot change the updater already running.
+After that updater exits, run the newer `openclaw doctor --fix` from the original
+checkout to locate its sibling runtime directories. Doctor also checks known
+temporary directories, including the managed service's `TMPDIR`. Recognized
+runtime projections are disposable; Doctor removes them when no worker still
+uses them. If ownership or process liveness cannot be verified, Doctor preserves
+the directory and reports the reason.
+
 ## Candidate Doctor stack overflow
 
 Chat-triggered updates to 2026.9.6 can fail with `authority-check-failed: Maximum

@@ -7,6 +7,7 @@ import {
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { readSessionPendingInput } from "../../config/sessions/session-accessor.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
+import { prepareForwardedMessageCronJobNameResolver } from "../chat-display-projection.history.js";
 import {
   augmentChatHistoryWithCanvasBlocks,
   dropPreSessionStartAnnouncePairs,
@@ -112,7 +113,13 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
       respond(true, { ok: false, unavailableReason: "not_found" });
       return;
     }
-    const canReadSession = (current: typeof session): boolean => {
+    const canReadSession = (
+      current: typeof session = loadGatewaySessionEntryReadOnly(sessionKey, {
+        agentId: requestedAgentId,
+        clone: false,
+        projection: "list",
+      }),
+    ): boolean => {
       sessionMutationAuthorization?.assertCurrent();
       if (
         !current.entry ||
@@ -165,7 +172,19 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
         respond(true, { ok: false, unavailableReason: "not_found" });
         return;
       }
-      const message = projectPendingInputMessage(pending, effectiveMaxChars);
+      const resolveCronJobName = await prepareForwardedMessageCronJobNameResolver(
+        [pending.message],
+        context.cronStorePath,
+      );
+      if (!canReadSession()) {
+        return;
+      }
+      const message = projectPendingInputMessage(
+        pending,
+        effectiveMaxChars,
+        undefined,
+        resolveCronJobName,
+      );
       if (!message) {
         respond(true, { ok: false, unavailableReason: "not_visible" });
         return;
@@ -204,16 +223,8 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
         allowResetArchiveFallback: true,
       }));
     // Async transcript/archive reads cannot publish under a stale sharing or
-    // physical-session snapshot. Pending input reads above are synchronous.
-    if (
-      !canReadSession(
-        loadGatewaySessionEntryReadOnly(sessionKey, {
-          agentId: requestedAgentId,
-          clone: false,
-          projection: "list",
-        }),
-      )
-    ) {
+    // physical-session snapshot.
+    if (!canReadSession()) {
       return;
     }
     if (!visible) {
