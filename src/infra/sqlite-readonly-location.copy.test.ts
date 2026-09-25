@@ -744,3 +744,111 @@ describe("stable read-only snapshot copies", () => {
     expect(fs.readdirSync(fixture.sourceRoot)).toEqual(["source.sqlite"]);
   });
 });
+
+describe("sqlite read-only snapshot staging reuse", () => {
+  function createWalSourceFixture() {
+    const sourceRoot = tempDirs.make("openclaw-readonly-reuse-source-");
+    const sourcePath = path.join(sourceRoot, "source.sqlite");
+    const stagingRoot = tempDirs.make("openclaw-readonly-reuse-staging-");
+    const sqlite = requireNodeSqlite();
+    const database = new sqlite.DatabaseSync(sourcePath);
+    try {
+      database.exec("PRAGMA journal_mode = WAL;");
+      database.exec("CREATE TABLE probe (payload TEXT);");
+      database.exec("BEGIN");
+      const insert = database.prepare("INSERT INTO probe VALUES (?)");
+      for (let index = 0; index < 64; index += 1) {
+        insert.run(`row-${index}`);
+      }
+      database.exec("COMMIT");
+      database.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+    } finally {
+      database.close();
+    }
+    // Drop the WAL family so every attempt takes the same raw-copy branch.
+    fs.rmSync(`${sourcePath}-wal`, { force: true });
+    fs.rmSync(`${sourcePath}-shm`, { force: true });
+    return { sourcePath, sourceRoot, stagingRoot };
+  }
+
+  function countStagingAllocations(stagingRoot: string): string[] {
+    const allocated: string[] = [];
+    const mkdtemp = fs.mkdtempSync.bind(fs);
+    vi.spyOn(fs, "mkdtempSync").mockImplementation((prefix, options) => {
+      const directory = mkdtemp(prefix, options);
+      if (path.resolve(directory).startsWith(`${stagingRoot}${path.sep}`)) {
+        allocated.push(directory);
+      }
+      return directory;
+    });
+    return allocated;
+  }
+
+  /** Swap the source inode after its first copy so exactly one retry is forced. */
+  function replaceSourceAfterFirstCopy(sourcePath: string): void {
+    const fsync = fs.fsyncSync.bind(fs);
+    let replaced = false;
+    vi.spyOn(fs, "fsyncSync").mockImplementation((descriptor) => {
+      fsync(descriptor);
+      if (replaced) {
+        return;
+      }
+      replaced = true;
+      const replacement = `${sourcePath}.replacement`;
+      fs.copyFileSync(sourcePath, replacement);
+      fs.renameSync(replacement, sourcePath);
+    });
+  }
+
+  it("reuses one private staging directory when a changed source forces a retry", () => {
+    const fixture = createWalSourceFixture();
+    const allocated = countStagingAllocations(fixture.stagingRoot);
+    replaceSourceAfterFirstCopy(fixture.sourcePath);
+    let prepared: ReturnType<typeof prepareSqliteReadOnlyLocationSyncInProcess> | undefined;
+    try {
+      prepared = prepareSqliteReadOnlyLocationSyncInProcess(
+        fixture.sourcePath,
+        fixture.stagingRoot,
+      );
+      expect(allocated).toHaveLength(1);
+      const sqlite = requireNodeSqlite();
+      const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
+      try {
+        expect(snapshot.prepare("SELECT count(*) AS rows FROM probe").get()).toEqual({ rows: 64 });
+      } finally {
+        snapshot.close();
+      }
+    } finally {
+      if (prepared) {
+        expect(prepared.cleanup()).toBe(true);
+      }
+    }
+    expect(fs.readdirSync(fixture.stagingRoot)).toEqual([]);
+  });
+
+  it("reuses one private staging directory across asynchronous retries", async () => {
+    const fixture = createWalSourceFixture();
+    const allocated = countStagingAllocations(fixture.stagingRoot);
+    replaceSourceAfterFirstCopy(fixture.sourcePath);
+    let prepared: Awaited<ReturnType<typeof prepareSqliteReadOnlyLocationInProcess>> | undefined;
+    try {
+      prepared = await prepareSqliteReadOnlyLocationInProcess(
+        fixture.sourcePath,
+        fixture.stagingRoot,
+      );
+      expect(allocated).toHaveLength(1);
+      const sqlite = requireNodeSqlite();
+      const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
+      try {
+        expect(snapshot.prepare("SELECT count(*) AS rows FROM probe").get()).toEqual({ rows: 64 });
+      } finally {
+        snapshot.close();
+      }
+    } finally {
+      if (prepared) {
+        expect(await prepared.cleanupAsync()).toBe(true);
+      }
+    }
+    expect(fs.readdirSync(fixture.stagingRoot)).toEqual([]);
+  });
+});
