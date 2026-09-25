@@ -11,7 +11,6 @@ export const gatewayPluginTestFiles = [
 
 // Native database consumers retain lifecycle cleanup within each forked process.
 export const gatewayDatabaseWorkerTestFiles = [
-  "src/gateway/update-run-notice-target.test.ts",
   "src/gateway/agent-turn/agent-run-dispatch.execution-binding.test.ts",
   "src/gateway/agent-turn/agent-run-dispatch.sqlite.test.ts",
   "src/gateway/approval-fixture.test.ts",
@@ -200,6 +199,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/tools-invoke-authorization.test.ts",
   "src/gateway/tools-invoke-http.test.ts",
   "src/gateway/tui-session-description-wire.test.ts",
+  "src/gateway/update-run-notice-target.test.ts",
   "src/gateway/user-profiles-http.auth.test.ts",
   "src/gateway/watch-node-http.test.ts",
   "src/gateway/worker-environments/bundle.test.ts",

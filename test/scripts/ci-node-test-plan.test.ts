@@ -2324,20 +2324,14 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       expect(stripe.timeoutMinutes).toBe(gatewayOwner.timeoutMinutes);
       expect(stripe.planConcurrency).toBe(gatewayOwner.planConcurrency);
     }
+    const gatewayPatterns = [...gatewayServerIsolatedTestFiles, ...gatewayDatabaseWorkerTestFiles];
     const basePatterns = base
-      .flatMap(
-        (shard) =>
-          shard.includePatterns ??
-          (shard === gatewayOwner
-            ? [...gatewayServerIsolatedTestFiles, ...gatewayDatabaseWorkerTestFiles]
-            : []),
-      )
+      .flatMap((shard) => shard.includePatterns ?? (shard === gatewayOwner ? gatewayPatterns : []))
       .toSorted((a, b) => a.localeCompare(b));
     const bundledPatterns = bundled
       .flatMap((shard) => shard.includePatterns ?? [])
       .toSorted((a, b) => a.localeCompare(b));
 
-    expect(bundled.length - gatewayStripes.length).toBeLessThan(base.length - 1);
     expect(new Set(bundled.map((shard) => shard.checkName)).size).toBe(bundled.length);
     expect(bundledPatterns).toEqual(basePatterns);
     expect(

@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { ensureMemoryIndexSchema } from "../../packages/memory-host-sdk/src/host/memory-schema.js";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
+import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import {
   assertOpenClawAgentDatabaseForMaintenance,
   OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -269,6 +270,8 @@ CREATE INDEX IF NOT EXISTS idx_web_push_approval_deliveries_subscription
 
     const database = createGlobalDatabase();
     try {
+      // The pre-column specimen cannot retain an index on the missing column.
+      database.exec("DROP INDEX idx_user_profile_identities_authorization;");
       for (const {
         columnName,
         dataType,
@@ -287,6 +290,11 @@ CREATE INDEX IF NOT EXISTS idx_web_push_approval_deliveries_subscription
       }
 
       ensureAdditiveStateColumns(database, "runtime");
+      database.exec(
+        extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "user_profile_identities", {
+          endMarker: "ON user_profile_identities(authorization_id);",
+        }),
+      );
       expect(() =>
         assertOpenClawStateDatabaseForMaintenance(database, {
           pathname: "global.sqlite",

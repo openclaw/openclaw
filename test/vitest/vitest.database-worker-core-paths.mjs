@@ -25,6 +25,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/worker/worker.chat-abort.test.ts",
   "src/worker/worker.fault-injection.test.ts",
   "test/helpers/desktop-resize-real-fixture.test.ts",
+  "test/e2e/qa-lab/runtime/gateway-loopback-lan-access.test.ts",
   "src/agents/mcp-oauth-writes.test.ts",
   "src/infra/sqlite-worker-operation-attachment.test.ts",
   "src/state/openclaw-state-lease-async.test.ts",
