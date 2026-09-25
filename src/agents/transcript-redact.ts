@@ -334,6 +334,23 @@ function shouldPreserveOpaqueProviderPayload(
     // such as SIG-OPAQUE-ABC==; native Google routes require standard base64.
     return isStructurallyValidOpaqueReplayToken(item);
   }
+  const isOpaqueSignatureSlot =
+    (type === "text" && key === "textSignature") ||
+    (type === "thinking" &&
+      (key === "thinkingSignature" || key === "signature" || key === "thought_signature")) ||
+    (type === "redacted_thinking" &&
+      (key === "data" || key === "signature" || key === "thinkingSignature")) ||
+    (type === "toolCall" && key === "thoughtSignature");
+  if (!route?.api && isOpaqueSignatureSlot) {
+    // Route metadata is not always recoverable from a persisted entry (entries
+    // written without `api` resolve to an empty route). Without it every branch
+    // above fails open and the signature falls through to text redaction, which
+    // masks any `-`-delimited 40-char base64 run as an AWS secret and splices a
+    // "…" into the token. That corruption is silent, is persisted, and makes the
+    // session permanently unreplayable. Provider-owned signature blobs are never
+    // user secrets, so preserve structurally opaque values instead.
+    return isStructurallyValidOpaqueReplayToken(item);
+  }
   if (!isCustomProviderRoute(route) || !isCredentialSafeOpaqueReplayToken(item)) {
     return false;
   }
