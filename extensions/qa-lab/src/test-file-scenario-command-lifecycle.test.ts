@@ -88,14 +88,15 @@ describe.skipIf(process.platform === "win32")("qa scenario command real POSIX li
       const descendantScript = [
         "const { writeFileSync } = require('node:fs');",
         "process.on('SIGTERM', () => {});",
+        // Disconnect follows the leader's flushed write and exit, regardless of scheduling.
+        "process.once('disconnect', () => process.stdout.write('delayed descendant output\\n'));",
         `writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid));`,
-        "setTimeout(() => process.stdout.write('delayed descendant output\\n'), 40);",
         "setInterval(() => {}, 1000);",
       ].join(" ");
       const leaderScript = [
         "const { spawn } = require('node:child_process');",
         "const { existsSync } = require('node:fs');",
-        `spawn(process.execPath, ['-e', ${JSON.stringify(descendantScript)}], { stdio: ['ignore', 'inherit', 'inherit'] }).unref();`,
+        `spawn(process.execPath, ['-e', ${JSON.stringify(descendantScript)}], { stdio: ['ignore', 'inherit', 'inherit', 'ipc'] }).unref();`,
         `const ready = setInterval(() => { if (!existsSync(${JSON.stringify(descendantPidPath)})) return; clearInterval(ready); process.stdout.write('Docker scheduling finished\\n', () => process.exit(7)); }, 5);`,
       ].join("\n");
 
@@ -256,7 +257,9 @@ describe.skipIf(process.platform === "win32")("qa scenario command real POSIX li
         controller.kill("SIGKILL");
       }
       descendant?.destroy();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
       await rm(root, { force: true, recursive: true });
     }
   });
