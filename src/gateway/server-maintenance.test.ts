@@ -79,24 +79,25 @@ function staleRunTimestamp(): number {
 }
 
 function seedStaleRunBuffers(deps: MaintenanceTimerDeps, runId: string): void {
+  deps.chatRunState.updateBuffer(runId, { delta: "buffer" });
+  deps.chatRunState.takeBufferDelta(runId, "buffer");
   Object.assign(deps.chatRunState.getOrCreate(runId), {
     buffer: "buffer",
-    rawBuffer: "raw buffer",
+    rawBuffer: "buffer",
     bufferUpdatedAt: staleRunTimestamp(),
     deltaSentAt: staleRunTimestamp(),
     assistantScope: { itemId: "assistant-1", prefix: "", boundaryNewlines: 0, separatorLength: 0 },
-    deltaLastBroadcastText: "buffer",
   });
 }
 
 function expectStaleRunBuffersPresent(deps: MaintenanceTimerDeps, runId: string): void {
   expect(deps.chatRunState.runs.get(runId)).toMatchObject({
     buffer: "buffer",
-    rawBuffer: "raw buffer",
+    rawBuffer: "buffer",
     bufferUpdatedAt: expect.any(Number),
     deltaSentAt: expect.any(Number),
     assistantScope: { itemId: "assistant-1", prefix: "", boundaryNewlines: 0, separatorLength: 0 },
-    deltaLastBroadcastText: "buffer",
+    display: expect.any(Object),
   });
 }
 
@@ -107,7 +108,7 @@ function expectStaleRunBuffersSwept(deps: MaintenanceTimerDeps, runId: string): 
   expect(run?.bufferUpdatedAt).toBeUndefined();
   expect(run?.deltaSentAt).toBeUndefined();
   expect(run?.assistantScope).toBeUndefined();
-  expect(run?.deltaLastBroadcastText).toBeUndefined();
+  expect(run?.display).toBeUndefined();
 }
 
 function seedBufferedAgentEvent(deps: MaintenanceTimerDeps, runId: string): void {
@@ -925,7 +926,6 @@ describe("startGatewayMaintenanceTimers", () => {
     Object.assign(deps.chatRunState.getOrCreate(runId), {
       rawBuffer: "suppressed raw buffer",
       bufferUpdatedAt: staleRunTimestamp(),
-      deltaLastBroadcastText: "suppressed raw buffer",
     });
 
     const timers = startGatewayMaintenanceTimers(deps);

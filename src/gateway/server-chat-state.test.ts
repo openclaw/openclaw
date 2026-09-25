@@ -144,10 +144,10 @@ describe("createChatRunState", () => {
       planSnapshot: { steps: [{ step: "Inspect", status: "in_progress" }] },
       bufferUpdatedAt: 1,
       deltaSentAt: 2,
-      deltaLastBroadcastText: "projected",
       agentText: { assistant: { lastSentAt: 3 } },
       abortMarker: createChatAbortMarker(4),
     });
+    state.takeBufferDelta("run-1", "projected");
     state.recordProgressEvent("run-1", {
       runId: "run-1",
       seq: 1,

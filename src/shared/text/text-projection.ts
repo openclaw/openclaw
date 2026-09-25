@@ -2,7 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { escapeRegExp } from "../regexp.js";
 import { findCodeRegions } from "./code-regions.js";
 
-type TextProjection = { text: string; delta: string | null };
+export type TextProjection = { text: string; delta: string | null };
 type TextProjector = (input: TextProjection) => TextProjection;
 // Token absence must prove identity; activated syntax stays with the canonical transform.
 export type TextFilter = { transform: (text: string) => string } & (
@@ -10,25 +10,18 @@ export type TextFilter = { transform: (text: string) => string } & (
   | { create: () => TextProjector }
 );
 
-function createActivatedProjector(
-  filter: Extract<TextFilter, { activationTokens: readonly string[] }>,
+/** Preserve append provenance while a probe proves that the canonical transform is identity. */
+export function createConditionalTextProjector(
+  transform: (text: string) => string,
+  shouldTransform: (input: TextProjection) => boolean,
 ): TextProjector {
-  const activation = new RegExp(filter.activationTokens.map(escapeRegExp).join("|"), "i");
-  const overlap = Math.max(0, ...filter.activationTokens.map((token) => token.length - 1));
-  let tail = "";
-  let active = false;
   let previous = "";
   let identity = true;
   return (input) => {
     if (input.delta === "") {
       return identity ? input : { text: previous, delta: "" };
     }
-    if (!active) {
-      const appended = tail + (input.delta ?? input.text);
-      active = activation.test(appended);
-      tail = !active && overlap ? appended.slice(-overlap) : "";
-    }
-    const text = active ? filter.transform(input.text) : input.text;
+    const text = shouldTransform(input) ? transform(input.text) : input.text;
     const nextIdentity = text === input.text;
     const delta =
       input.delta === null
@@ -42,6 +35,23 @@ function createActivatedProjector(
     identity = nextIdentity;
     return nextIdentity && delta === input.delta ? input : { text, delta };
   };
+}
+
+export function createActivatedProjector(
+  filter: Extract<TextFilter, { activationTokens: readonly string[] }>,
+): TextProjector {
+  const activation = new RegExp(filter.activationTokens.map(escapeRegExp).join("|"), "i");
+  const overlap = Math.max(0, ...filter.activationTokens.map((token) => token.length - 1));
+  let tail = "";
+  let active = false;
+  return createConditionalTextProjector(filter.transform, (input) => {
+    if (!active) {
+      const appended = tail + (input.delta ?? input.text);
+      active = activation.test(appended);
+      tail = !active && overlap ? appended.slice(-overlap) : "";
+    }
+    return active;
+  });
 }
 
 export function applyTextFilters(input: string, filters: readonly TextFilter[]): string {

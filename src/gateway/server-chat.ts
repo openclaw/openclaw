@@ -40,14 +40,13 @@ import {
 } from "../sessions/session-key-utils.js";
 import { resolveAssistantEventPhase } from "../shared/chat-message-content.js";
 import { setSafeTimeout } from "../utils/timer-delay.js";
-import { mergeAssistantText, resolveAssistantTextInput } from "./agent-event-assistant-text.js";
+import { resolveAssistantTextInput } from "./agent-event-assistant-text.js";
 import {
   appendChatCanvasBlocks,
   appendChatCanvasBlocksToMessage,
   extractChatToolResultCanvasPreview,
 } from "./chat-display-projection.canvas.js";
 import {
-  capLiveAssistantText,
   projectLiveAssistantBufferedText,
   shouldSuppressAssistantEventForLiveChat,
 } from "./live-chat-projector.js";
@@ -61,11 +60,7 @@ import {
   resolveHeartbeatFlag,
   shouldHideHeartbeatChatOutput,
 } from "./server-chat-heartbeat.js";
-import {
-  mergeAgentTextPayload,
-  mergeChatTextPayload,
-  resolveBroadcastDelta,
-} from "./server-chat-live-text.js";
+import { mergeAgentTextPayload, mergeChatTextPayload } from "./server-chat-live-text.js";
 import { isChatAbortMarkerCurrent } from "./server-chat-state.js";
 import type {
   BufferedAgentEvent,
@@ -896,16 +891,12 @@ export function createAgentEventHandler({
   ) => {
     cancelPendingChatDeltaFlush(clientRunId);
     const run = chatRunState.getOrCreate(clientRunId);
-    const broadcastDelta = resolveBroadcastDelta({
-      text,
-      previousBroadcastText: run.deltaLastBroadcastText,
-    });
+    const broadcastDelta = chatRunState.takeBufferDelta(clientRunId, text);
     if (!broadcastDelta) {
       return;
     }
     const now = Date.now();
     run.deltaSentAt = now;
-    run.deltaLastBroadcastText = text;
     const spawnedBy = resolveSpawnedBy(sessionKey);
     const payload = {
       runId: clientRunId,
@@ -980,26 +971,12 @@ export function createAgentEventHandler({
     opts?: { controlUiVisible?: boolean; isCurrent?: () => boolean; isHeartbeat?: boolean },
   ) => {
     const run = chatRunState.getOrCreate(clientRunId);
-    if (input.managedMediaUrls?.length) {
-      const managedMediaUrls = (run.managedMediaUrls ??= new Set<string>());
-      for (const url of input.managedMediaUrls) {
-        managedMediaUrls.add(url);
-      }
-      delete run.bufferProjection;
-    }
     const previousRawText = run.rawBuffer ?? "";
-    const snapshot = mergeAssistantText(
-      { text: previousRawText, scope: run.assistantScope },
-      input,
-      "live",
-    );
-    run.assistantScope = snapshot.scope;
-    const mergedRawText = capLiveAssistantText(snapshot);
+    const mergedRawText = chatRunState.updateBuffer(clientRunId, input);
     if (!mergedRawText && !previousRawText) {
       return;
     }
     const now = Date.now();
-    run.rawBuffer = mergedRawText;
     run.bufferIsCurrent = opts?.isCurrent;
     run.bufferUpdatedAt = now;
     if (!mergedRawText) {
