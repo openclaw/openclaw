@@ -43,7 +43,7 @@ import {
 } from "./constants.js";
 import { resolveBrowserEngine } from "./engines/registry.js";
 import type { BrowserEngineId } from "./engines/types.js";
-import type { ResolvedBrowserProfile } from "./profile.types.js";
+import type { ManagedBrowserHeadlessSource, ResolvedBrowserProfile } from "./profile.types.js";
 export type { ResolvedBrowserProfile } from "./profile.types.js";
 
 export {
@@ -135,15 +135,6 @@ const EXTENSION_RELAY_PORT_OFFSET = 8;
 const EXTENSION_RELAY_CDP_USER = "openclaw-internal";
 /** Environment variable that overrides managed Chrome headless mode. */
 const BROWSER_HEADLESS_ENV_KEY = "OPENCLAW_BROWSER_HEADLESS";
-
-/** Source that determined managed Chrome headless mode. */
-export type ManagedBrowserHeadlessSource =
-  | "request"
-  | "env"
-  | "profile"
-  | "config"
-  | "linux-display-fallback"
-  | "default";
 
 type ManagedBrowserHeadlessMode = {
   headless: boolean;

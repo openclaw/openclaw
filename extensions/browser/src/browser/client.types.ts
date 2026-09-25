@@ -4,8 +4,8 @@
  * Shared by the browser control client, CLI, and Browser agent tool.
  */
 import type { lookup as dnsLookupCb } from "node:dns";
-import type { ManagedBrowserHeadlessSource } from "./config.js";
 import type { BrowserEngineDescriptor, BrowserEngineId } from "./engines/types.js";
+import type { ManagedBrowserHeadlessSource } from "./profile.types.js";
 
 type BrowserCdpLookup = typeof dnsLookupCb;
 
