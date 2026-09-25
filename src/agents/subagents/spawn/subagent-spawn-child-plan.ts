@@ -1,4 +1,3 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { inheritSessionCreationPolicy } from "../../../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../../../routing/session-key.js";
@@ -8,6 +7,7 @@ import { resolveSpawnSandboxError, mintSpawnSessionKey } from "../../spawn-plan.
 import { resolveRequesterOriginForChild } from "../../spawn-requester-origin.js";
 import {
   mapToolContextToSpawnedRunMetadata,
+  resolveExplicitSpawnedCwd,
   resolveSpawnedWorkspaceInheritance,
 } from "../../spawned-context.js";
 import type { SubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
@@ -56,8 +56,7 @@ export async function resolveSubagentChildPlan(params: {
    * status so durable-lineage key substitution does not weaken sandbox admission. */
   requesterSandboxed?: boolean;
 }) {
-  const requestedCwd = normalizeOptionalString(params.request.cwd);
-  const spawnedCwd = requestedCwd ? resolveUserPath(requestedCwd) : undefined;
+  const spawnedCwd = resolveExplicitSpawnedCwd(params.request.cwd);
   const toolSpawnMetadata = mapToolContextToSpawnedRunMetadata({
     agentGroupId: params.ctx.agentGroupId,
     agentGroupChannel: params.ctx.agentGroupChannel,
