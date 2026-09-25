@@ -155,6 +155,7 @@ describe("plugin runtime refresh admission", () => {
     }));
     const first = snapshots[0]!;
     const generation: PreparedModelRuntimePluginGeneration = {
+      remoteCatalog: null,
       configuredCatalogEntries: [],
       inlineProviderModels: [],
       pluginMetadataSnapshot: first.metadataSnapshot,

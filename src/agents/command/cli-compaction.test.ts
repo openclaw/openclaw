@@ -2,7 +2,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -23,7 +22,6 @@ import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { withEnv } from "../../test-utils/env.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
-import { createModelGenerationFixture } from "../embedded-agent-runner/model.generation-scope.test-support.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { cliCompactionBackendEntrypoints } from "./cli-compaction-runtime.test-support.js";
 import {
@@ -31,7 +29,7 @@ import {
   runCliTurnCompactionLifecycle,
   setCliCompactionTestDeps,
 } from "./cli-compaction.js";
-import { buildContextEngine } from "./cli-compaction.test-support.js";
+import { buildContextEngine, createPreparedRuntimeLease } from "./cli-compaction.test-support.js";
 import { recordCliCompactionInStore as recordCliCompactionInStoreImpl } from "./session-store.js";
 
 async function writeSessionFile(params: { sessionFile: string; sessionId: string }) {
@@ -85,33 +83,6 @@ const defaultPreemptiveCompaction = () => ({
   toolResultReducibleChars: 0,
   effectiveReserveTokens: 200,
 });
-
-function createPreparedRuntimeLease(input: {
-  config: OpenClawConfig;
-  agentDir: string;
-  agentId?: string;
-  workspaceDir?: string;
-}) {
-  const prepared = createModelGenerationFixture({
-    config: input.config,
-    label: "cli",
-    agentDir: input.agentDir,
-    workspaceDir: expectDefined(input.workspaceDir, "compaction fixture workspace"),
-  });
-  return {
-    snapshot: {
-      ...prepared.preparedModelRuntime,
-      ...(input.agentId ? { agentId: input.agentId } : {}),
-    },
-    pluginGeneration: {
-      configuredCatalogEntries: [],
-      inlineProviderModels: [],
-      pluginMetadataSnapshot: prepared.metadataSnapshot,
-      pluginRegistry: prepared.pluginRegistry,
-    },
-    [Symbol.asyncDispose]: vi.fn(async () => {}),
-  };
-}
 
 async function prepareCompactionScenario(params: {
   tmpDir: string;
@@ -760,6 +731,7 @@ describe("runCliTurnCompactionLifecycle", () => {
       workspaceDir: tmpDir,
     });
     const pluginGeneration = {
+      remoteCatalog: null,
       configuredCatalogEntries: [],
       inlineProviderModels: [],
       pluginMetadataSnapshot: preparedRuntimeLease.snapshot.metadataSnapshot,

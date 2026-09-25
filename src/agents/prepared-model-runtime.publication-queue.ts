@@ -1,3 +1,4 @@
+import { runOutsideRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import { capturePreparedModelRuntimeLifetime } from "./prepared-model-runtime.lifecycle.js";
 import type { PreparedModelRuntimeStartup } from "./prepared-model-runtime.startup.js";
@@ -6,17 +7,21 @@ import type { PreparedModelRuntimeRefreshOptions } from "./prepared-model-runtim
 /** Publication scheduling may finish before acquisition; shutdown joins both. */
 export class PreparedModelRuntimePublicationQueue {
   #tail: Promise<void> = Promise.resolve();
-  readonly #pending = new Set<Promise<void>>();
+  readonly #pending = new Set<Promise<unknown>>();
   #latestRefresh: { completion: Promise<void>; isCurrent: () => boolean } | undefined;
+
+  track<T>(work: Promise<T>): Promise<T> {
+    this.#pending.add(work);
+    const settled = () => {
+      this.#pending.delete(work);
+    };
+    void work.then(settled, settled);
+    return work;
+  }
 
   enqueue(task: () => Promise<void>, release?: Promise<void>): Promise<void> {
     const previous = this.#tail;
-    const publication = previous.then(task);
-    this.#pending.add(publication);
-    const settled = () => {
-      this.#pending.delete(publication);
-    };
-    void publication.then(settled, settled);
+    const publication = this.track(previous.then(() => runOutsideRemoteModelCatalogSnapshot(task)));
     this.#tail = (
       release ? previous.then(() => Promise.race([publication, release])) : publication
     ).then(

@@ -55,6 +55,7 @@ export function createCatalogAttemptReporter(
   source: PreparedModelCatalogAttempt["source"],
   isCurrent: () => boolean,
   beforeProviderFailure: () => void,
+  isPublished?: () => boolean,
 ): {
   setPending: (
     providers: readonly string[] | undefined,
@@ -110,11 +111,13 @@ export function createCatalogAttemptReporter(
       }
       pendingProviders[kind] = undefined;
       owner.catalogAttempt = attempt;
-      notifyPreparedModelRuntimePublication({
-        phase: "catalog-failed",
-        error: toStringifiedError(error),
-        modelFactsChanged: false,
-      });
+      if (isPublished?.() !== false) {
+        notifyPreparedModelRuntimePublication({
+          phase: "catalog-failed",
+          error: toStringifiedError(error),
+          modelFactsChanged: false,
+        });
+      }
     }
   };
   const hasFailedProviders = () =>
@@ -172,10 +175,13 @@ export function createCatalogAttemptReporter(
         attempt.failedProviders[acquisitionKind].clear();
       }
       owner.catalogAttempt = attempt;
-      notifyPreparedModelCatalogPublication(
-        publication?.(),
-        previouslyPendingCount !== pendingCount() || previouslyFailed !== hasFailedProviders(),
-      );
+      const change = publication?.();
+      if (isPublished?.() !== false) {
+        notifyPreparedModelCatalogPublication(
+          change,
+          previouslyPendingCount !== pendingCount() || previouslyFailed !== hasFailedProviders(),
+        );
+      }
     },
     failed,
   };

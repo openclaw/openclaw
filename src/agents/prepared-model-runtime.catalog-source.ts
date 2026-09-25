@@ -14,6 +14,8 @@ export function preparedProviderCatalogSource(
   const providerEntries = <T>(entries: Record<string, T> | undefined) =>
     Object.fromEntries(Object.entries(entries ?? {}).filter(([id]) => normalize(id) === provider));
   return fingerprintPreparedRuntimeFacts({
+    remoteCatalogSource: generation.remoteCatalog?.sourceUrl,
+    remoteCatalogRevision: generation.remoteCatalog?.revision,
     models: { ...config.models, providers: providerEntries(config.models?.providers) },
     auth: {
       profiles: Object.fromEntries(

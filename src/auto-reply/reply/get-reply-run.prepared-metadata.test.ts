@@ -45,6 +45,7 @@ describe("runPreparedReply prepared metadata", () => {
     } as never;
     const pluginRegistry = { registrations: [] } as never;
     const pluginGeneration = {
+      remoteCatalog: null,
       configuredCatalogEntries: [],
       inlineProviderModels: [],
       pluginMetadataSnapshot: metadataSnapshot,

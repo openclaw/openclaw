@@ -289,6 +289,7 @@ export function setup(
     return {
       snapshot: leased,
       pluginGeneration: {
+        remoteCatalog: null,
         configuredCatalogEntries: [],
         inlineProviderModels: [],
         pluginMetadataSnapshot: leased.metadataSnapshot,

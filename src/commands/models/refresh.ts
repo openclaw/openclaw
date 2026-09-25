@@ -24,6 +24,8 @@ export async function modelsRefreshCommand(
     `Remote catalog refresh: ${result.status} (${result.providers} providers, ${result.models} models; generated ${new Date(result.generatedAt).toISOString()})`,
   );
   if (result.status === "updated") {
-    runtime.log("A running Gateway applies the updated catalog after its next restart.");
+    runtime.log(
+      "A running Gateway applies the update on its next catalog check, without restarting.",
+    );
   }
 }

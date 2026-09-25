@@ -120,6 +120,15 @@ export class PreparedReplyDispatchPublicationOwner {
       : EMPTY_REPLY_DISPATCH_PUBLICATION;
   }
 
+  stage(owners: Iterable<PreparedModelRuntimeOwner>): () => void {
+    const publication = this.host.isGatewayLifecycleActive()
+      ? buildReplyDispatchPublication(owners)
+      : EMPTY_REPLY_DISPATCH_PUBLICATION;
+    return () => {
+      this.#publication = publication;
+    };
+  }
+
   remove(agentIds: ReadonlySet<string>): void {
     this.#publication = removeReplyDispatchRuntimeProjections(this.#publication, agentIds);
   }

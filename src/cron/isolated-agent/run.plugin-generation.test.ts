@@ -54,6 +54,7 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
       manifestRegistry: { plugins: [], diagnostics: [] },
     });
     const pluginGeneration = {
+      remoteCatalog: null,
       configuredCatalogEntries: [],
       inlineProviderModels: [],
       pluginMetadataSnapshot: metadataSnapshot,
@@ -145,6 +146,7 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
       manifestRegistry: { plugins: [], diagnostics: [] },
     });
     const pluginGeneration = {
+      remoteCatalog: null,
       configuredCatalogEntries: [],
       inlineProviderModels: [],
       pluginMetadataSnapshot: metadataSnapshot,
@@ -200,6 +202,7 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
       manifestRegistry: { plugins: [], diagnostics: [] },
     });
     const generationA = {
+      remoteCatalog: null,
       configuredCatalogEntries: [],
       inlineProviderModels: [],
       pluginMetadataSnapshot: metadataSnapshot,
@@ -272,11 +275,13 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
       manifestRegistry: { plugins: [], diagnostics: [] },
     });
     const generationA = {
+      remoteCatalog: null,
       configuredCatalogEntries: [],
       inlineProviderModels: [],
       pluginMetadataSnapshot: metadataSnapshot,
     } satisfies PreparedModelRuntimePluginGeneration;
     const generationB = {
+      remoteCatalog: null,
       configuredCatalogEntries: [],
       inlineProviderModels: [],
       pluginMetadataSnapshot: metadataSnapshot,
@@ -345,11 +350,13 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
       manifestRegistry: { plugins: [], diagnostics: [] },
     });
     const generationA = {
+      remoteCatalog: null,
       configuredCatalogEntries: [],
       inlineProviderModels: [],
       pluginMetadataSnapshot: metadataSnapshot,
     } satisfies PreparedModelRuntimePluginGeneration;
     const generationB = {
+      remoteCatalog: null,
       configuredCatalogEntries: [],
       inlineProviderModels: [],
       pluginMetadataSnapshot: metadataSnapshot,
@@ -413,11 +420,13 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
       manifestRegistry: { plugins: [], diagnostics: [] },
     });
     const generationA = {
+      remoteCatalog: null,
       configuredCatalogEntries: [],
       inlineProviderModels: [],
       pluginMetadataSnapshot: metadataSnapshot,
     } satisfies PreparedModelRuntimePluginGeneration;
     const generationB = {
+      remoteCatalog: null,
       configuredCatalogEntries: [],
       inlineProviderModels: [],
       pluginMetadataSnapshot: metadataSnapshot,
@@ -530,6 +539,7 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
       },
       pluginGeneration: {
         pluginMetadataSnapshot: selected,
+        remoteCatalog: null,
         configuredCatalogEntries: [],
         inlineProviderModels: [],
       },

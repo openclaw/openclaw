@@ -134,6 +134,7 @@ describe("prepared model runtime plugin metadata ownership", () => {
       workspaceDir: `/tmp/${name}-workspace`,
     }));
     const pluginGeneration = {
+      remoteCatalog: null,
       configuredCatalogEntries: [],
       inlineProviderModels: [],
       pluginMetadataSnapshot: gatewaySnapshot,

@@ -164,6 +164,15 @@ const runtimeConsumers = [
     dir: "",
   },
   {
+    file: "src/gateway/server-methods/models-list.remote-catalog.integration.test.ts",
+    configs: [
+      "test/vitest/vitest.gateway-database-workers.config.ts",
+      "test/vitest/vitest.gateway.config.ts",
+    ],
+    mode: "runtime",
+    dir: "",
+  },
+  {
     file: "src/gateway/server-methods/models-list.worker-recovery.integration.test.ts",
     configs: [
       "test/vitest/vitest.gateway-database-workers.config.ts",

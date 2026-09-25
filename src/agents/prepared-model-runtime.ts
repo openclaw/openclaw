@@ -14,7 +14,12 @@ import {
   configuredOwnersAreRequestVisible,
   registerPreparedRuntimeAuthMaterializationPublisher,
 } from "./prepared-model-runtime-materializations.js";
-import { refreshPreparedModelRuntimeSnapshotsNow } from "./prepared-model-runtime.configured-refresh.js";
+import {
+  advancePreparedModelRuntimeConfigNow,
+  applyRemoteModelCatalogUpdateNow,
+  refreshPreparedModelRuntimeSnapshotsNow,
+  type PreparedModelRuntimeCatalogPublicationHost,
+} from "./prepared-model-runtime.configured-refresh.js";
 import {
   capturePreparedModelRuntimeLifetime,
   closePreparedModelRuntimeSnapshots,
@@ -25,7 +30,6 @@ import {
 import {
   PreparedModelRuntimeOwnerNotPublishedError,
   PreparedModelRuntimePublicationSupersededError,
-  advancePreparedModelRuntimeOwnerConfig,
   hasSameLifecycleInput,
   normalizeOptionalDir,
   normalizePreparedModelRuntimeInput,
@@ -119,6 +123,25 @@ const replyDispatchPublication = new PreparedReplyDispatchPublicationOwner({
   getPendingReplacement: () => getBlockingReplacement()?.promise,
 });
 export const loadPublishedGatewayReplyDispatchRuntime = replyDispatchPublication.load;
+const remoteCatalogPublication: PreparedModelRuntimeCatalogPublicationHost = {
+  owners,
+  agentBuildCompletions,
+  publicationQueue,
+  replyDispatchPublication,
+  captureLifetime: captureModelRuntimeLifetime,
+  getEpoch: () => refreshRequestEpoch,
+  getCancellationSignal: () => refreshCancellation.signal,
+  getPendingReplacement: () => pendingModelRuntimeReplacement?.promise,
+  getBuildTimeoutMs: () => modelRuntimeBuildTimeoutMs,
+};
+export const applyRemoteModelCatalogUpdate = applyRemoteModelCatalogUpdateNow.bind(
+  null,
+  remoteCatalogPublication,
+);
+export const advancePreparedModelRuntimeConfig = advancePreparedModelRuntimeConfigNow.bind(
+  null,
+  remoteCatalogPublication,
+);
 
 let releaseProcessLifetime: (() => void) | undefined;
 function captureModelRuntimeLifetime(): () => void {
@@ -129,6 +152,8 @@ function captureModelRuntimeLifetime(): () => void {
 
 async function closeModelRuntime(error: Error): Promise<void> {
   refreshRequestEpoch += 1;
+  remoteCatalogPublication.pending?.controller.abort(error);
+  remoteCatalogPublication.pending = undefined;
   authPublication.reset(error);
   pendingModelRuntimeReplacement?.reject(error);
   pendingModelRuntimeReplacement = undefined;
@@ -157,18 +182,6 @@ async function closeModelRuntime(error: Error): Promise<void> {
   if (failures.length) {
     throw new AggregateError(failures, "Prepared model work failed to close");
   }
-}
-
-/** Advances model-neutral config identity without rebuilding prepared generation artifacts. */
-export function advancePreparedModelRuntimeConfig(config: OpenClawConfig): void {
-  for (const owner of owners.values()) {
-    // Read-only owners include the config hash in their map key and remain bound to their lease.
-    if (owner.input.readOnly) {
-      continue;
-    }
-    advancePreparedModelRuntimeOwnerConfig(owner, config);
-  }
-  replyDispatchPublication.advanceConfig(config);
 }
 
 /** Resolves a published owner or activates a standalone lifecycle owner. */

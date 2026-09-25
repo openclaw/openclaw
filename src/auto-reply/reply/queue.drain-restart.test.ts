@@ -50,6 +50,7 @@ describe("followup queue drain restart after idle window", () => {
     let activeRootCountDuringDrain: number | undefined;
     let generationDuringDrain: unknown;
     const predecessorGeneration = {
+      remoteCatalog: null,
       configuredCatalogEntries: [],
       inlineProviderModels: [],
       pluginMetadataSnapshot: {} as never,

@@ -1,3 +1,4 @@
+import { captureRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
 import { registryContainsRuntimePluginIds } from "../plugins/active-runtime-registry.js";
 import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
@@ -144,6 +145,7 @@ export function createPreparedPluginGeneration(params: {
     return derived;
   }
   const generation = Object.freeze({
+    remoteCatalog: captureRemoteModelCatalogSnapshot(),
     pluginMetadataSnapshot: params.pluginMetadataSnapshot,
     inlineProviderModels: Object.freeze([...params.inlineProviderModels]),
     configuredCatalogEntries: Object.freeze([...params.configuredCatalogEntries]),

@@ -10,6 +10,7 @@ import {
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { serveWorkerTasks } from "../infra/worker-task-server.js";
 import type { Model } from "../llm/types.js";
+import { withRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
 import { restorePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -22,6 +23,7 @@ import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import {
   resolveAgentCredentialMapFromStore,
   resolveUsableAgentCredentialModes,
@@ -180,6 +182,7 @@ async function prepareWorkerGeneration(
   );
   const pluginGeneration = Object.freeze({
     ...(previous?.pluginGeneration ?? prepareConfiguredModelFacts(value.input.config, metadata)),
+    remoteCatalog: value.remoteCatalog,
     pluginMetadataSnapshot: metadata,
     pluginRegistry,
     preparedStaticProviderCatalog: undefined,
@@ -520,41 +523,43 @@ if (parentPort) {
     if (!isRecord(value) || !isWorkerRequest(request)) {
       throw new Error("invalid prepared model catalog worker request");
     }
-    return withPluginSourceCaptureDirectory(
-      data.sourceCaptureDirectory,
-      async () => {
-        let previous = current;
-        const fingerprint = fingerprintPreparedModelCatalogPluginContext(value);
-        let attempted: WorkerGeneration | undefined;
-        try {
-          const work = new AsyncWorkScope();
-          const result = await withClawInstallSchemaVersionFacts(
-            request.clawInstallSchemaVersions,
-            () =>
-              work.run(() =>
-                runCatalogRequest(value, request, work, async () => {
-                  if (previous?.fingerprint === fingerprint) {
-                    return previous.prepared;
-                  }
-                  return (attempted = await prepareWorkerGeneration(value));
-                }),
-              ),
-          );
-          if (attempted && result.status === "ok") {
-            current = { fingerprint, prepared: attempted };
-            attempted = undefined;
-            // Acquire the replacement before releasing shared source registrations.
-            await previous?.prepared.release();
-            // Registry custody can retain this request's async context until retirement.
-            // Drop the settled predecessor instead of retaining its callbacks through that scope.
-            previous = undefined;
+    return withRemoteModelCatalogSnapshot(freezeJsonSnapshot(value.remoteCatalog), () =>
+      withPluginSourceCaptureDirectory(
+        data.sourceCaptureDirectory,
+        async () => {
+          let previous = current;
+          const fingerprint = fingerprintPreparedModelCatalogPluginContext(value);
+          let attempted: WorkerGeneration | undefined;
+          try {
+            const work = new AsyncWorkScope();
+            const result = await withClawInstallSchemaVersionFacts(
+              request.clawInstallSchemaVersions,
+              () =>
+                work.run(() =>
+                  runCatalogRequest(value, request, work, async () => {
+                    if (previous?.fingerprint === fingerprint) {
+                      return previous.prepared;
+                    }
+                    return (attempted = await prepareWorkerGeneration(value));
+                  }),
+                ),
+            );
+            if (attempted && result.status === "ok") {
+              current = { fingerprint, prepared: attempted };
+              attempted = undefined;
+              // Acquire the replacement before releasing shared source registrations.
+              await previous?.prepared.release();
+              // Registry custody can retain this request's async context until retirement.
+              // Drop the settled predecessor instead of retaining its callbacks through that scope.
+              previous = undefined;
+            }
+            return result;
+          } finally {
+            await attempted?.release();
           }
-          return result;
-        } finally {
-          await attempted?.release();
-        }
-      },
-      data.sourceCaptureManagedRoot,
+        },
+        data.sourceCaptureManagedRoot,
+      ),
     );
   });
 }

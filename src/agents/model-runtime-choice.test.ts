@@ -90,6 +90,7 @@ function renderPublishedAliases(owner: PreparedModelRuntimeSnapshot) {
       pluginMetadataSnapshot: owner.metadataSnapshot,
       pluginRegistry: owner.pluginRegistry,
       inlineProviderModels: [],
+      remoteCatalog: null,
       configuredCatalogEntries: owner.modelCatalog.entries,
     },
     modelRegistry,

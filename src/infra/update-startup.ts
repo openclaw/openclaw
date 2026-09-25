@@ -11,8 +11,7 @@ import type {
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveRemoteCatalogUrl } from "../model-catalog/remote-config.js";
-import { checkRemoteModelCatalogUpdate } from "../model-catalog/remote-overlay.js";
+import type { RemoteCatalogPublicationResult } from "../model-catalog/remote-overlay.js";
 import {
   refreshRemoteModelCatalog,
   REMOTE_MODEL_CATALOG_TTL_MS,
@@ -839,6 +838,7 @@ async function runGatewayUpdateCheckOwned(
 export function createGatewayUpdateCheck(params: {
   lifecycle?: UpdateCheckLifecycle;
   getConfig: () => OpenClawConfig;
+  applyRemoteCatalogUpdate: (signal: AbortSignal) => Promise<RemoteCatalogPublicationResult>;
   log: { info: (msg: string, meta?: Record<string, unknown>) => void };
   isNixMode: boolean;
   onUpdateAvailableChange?: (updateAvailable: UpdateAvailable | null) => void;
@@ -853,7 +853,6 @@ export function createGatewayUpdateCheck(params: {
   const lifecycle = params.lifecycle ?? createGatewayUpdateLifecycle();
   lifecycle.campaign = gatewayUpdateCampaign;
   let started = false;
-  let observedCatalog: { sourceUrl: string; generatedAt: number } | undefined;
   return {
     initialize: lifecycle.initialize,
     stop: lifecycle.stop,
@@ -874,7 +873,6 @@ export function createGatewayUpdateCheck(params: {
         let nextCheckInMs = REMOTE_MODEL_CATALOG_TTL_MS;
         try {
           const config = params.getConfig();
-          const sourceUrl = resolveRemoteCatalogUrl(config);
           const result = await refreshRemoteModelCatalog({
             config,
             signal: lifecycle.signal,
@@ -886,22 +884,10 @@ export function createGatewayUpdateCheck(params: {
             result.status === "fresh" ? result.nextCheckInMs : REMOTE_MODEL_CATALOG_TTL_MS;
           if (result.status === "error") {
             params.log.info("remote model catalog refresh failed", { error: result.error });
-          } else if (
-            result.status !== "disabled" &&
-            (observedCatalog?.sourceUrl !== sourceUrl ||
-              observedCatalog.generatedAt !== result.generatedAt)
-          ) {
-            const expected = { sourceUrl, generatedAt: result.generatedAt };
-            const state = checkRemoteModelCatalogUpdate(params.getConfig(), expected);
-            if (state !== "superseded") {
-              observedCatalog = expected;
-            }
-            if (state === "restart-required") {
-              params.log.info("remote model catalog downloaded; restart the Gateway to apply it", {
-                providers: result.providers,
-                models: result.models,
-                generatedAt: result.generatedAt,
-              });
+          } else if (result.status !== "disabled") {
+            const state = await params.applyRemoteCatalogUpdate(lifecycle.signal);
+            if (state === "published") {
+              params.log.info("remote model catalog applied");
             } else if (state === "superseded") {
               params.log.info("remote model catalog check superseded; deferred to the next check");
             }

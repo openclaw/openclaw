@@ -661,6 +661,11 @@ describe("prepared harness source delivery", () => {
     mockedAcquireAgentRunPreparedModelRuntime.mockClear();
     mockedAcquireAgentRunPreparedModelRuntime.mockResolvedValueOnce({
       ...baseLease,
+      pluginGeneration: {
+        ...baseLease.pluginGeneration,
+        pluginMetadataSnapshot: metadataSnapshot,
+        pluginRegistry,
+      },
       snapshot: {
         ...baseLease.snapshot,
         metadataSnapshot,
@@ -680,6 +685,7 @@ describe("prepared harness source delivery", () => {
       pluginGeneration: {
         pluginMetadataSnapshot: metadataSnapshot,
         pluginRegistry,
+        remoteCatalog: null,
         configuredCatalogEntries: [],
         inlineProviderModels: [],
       },
@@ -763,6 +769,7 @@ describe("prepared harness source delivery", () => {
     const workspaceDir = state.workspaceDir;
     const pluginRegistry = createEmptyPluginRegistry();
     const baseLease = await mockedAcquireAgentRunPreparedModelRuntime({
+      config,
       agentId: "main",
       agentDir: state.agentDir(),
       workspaceDir,
@@ -773,6 +780,7 @@ describe("prepared harness source delivery", () => {
       workspaceDir,
     };
     const admittedGeneration: PreparedModelRuntimePluginGeneration = {
+      remoteCatalog: null,
       configuredCatalogEntries: [],
       inlineProviderModels: [],
       pluginMetadataSnapshot: admittedMetadataSnapshot,
@@ -813,6 +821,7 @@ describe("prepared harness source delivery", () => {
         servedMetadataSnapshot = borrowed.metadataSnapshot;
         return {
           ...baseLease,
+          pluginGeneration: admittedGeneration,
           snapshot: borrowed as typeof baseLease.snapshot,
           [Symbol.asyncDispose]: release,
         };
@@ -854,11 +863,13 @@ describe("prepared harness source delivery", () => {
       const config = {};
       const workspaceDir = state.workspaceDir;
       const baseLease = await mockedAcquireAgentRunPreparedModelRuntime({
+        config,
         agentId: "openclaw",
         agentDir: state.agentDir("openclaw"),
         workspaceDir,
       });
       const admittedGeneration: PreparedModelRuntimePluginGeneration = {
+        remoteCatalog: null,
         configuredCatalogEntries: [],
         inlineProviderModels: [],
         pluginMetadataSnapshot: {
@@ -889,6 +900,10 @@ describe("prepared harness source delivery", () => {
           signal?.throwIfAborted();
           return {
             ...baseLease,
+            pluginGeneration: {
+              ...baseLease.pluginGeneration,
+              pluginMetadataSnapshot: isolatedMetadataSnapshot,
+            },
             snapshot: {
               ...baseLease.snapshot,
               config,
