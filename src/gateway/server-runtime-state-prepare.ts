@@ -392,7 +392,7 @@ export async function prepareGatewayKernelState(params: {
     loadGatewayTlsServerRuntime(cfgAtStart.gateway?.tls, log.child("tls")),
   );
   const serverStartedAt = Date.now();
-  const readinessEventLoopHealth = createGatewayEventLoopHealthMonitor();
+  const readinessEventLoopHealth = createGatewayEventLoopHealthMonitor({ scheduler });
   const startupState = {
     sidecarsReady: minimalTestGateway,
     pendingReason: "startup-sidecars",
