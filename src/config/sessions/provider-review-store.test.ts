@@ -201,13 +201,13 @@ it("rolls back a clear when current authority is revoked at commit", async () =>
     let current = true;
     const admitted = vi
       .spyOn(admission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((callback) =>
+      .mockImplementation((callback, attachment) =>
         createAdmission((request, grant) => {
           if (request.stage === "commit") {
             current = false;
           }
           return callback(request, grant);
-        }),
+        }, attachment),
       );
     try {
       await expect(

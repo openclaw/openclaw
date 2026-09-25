@@ -1,4 +1,4 @@
-import { realpathSync } from "node:fs";
+import { closeSync, readSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { isPathInside } from "../infra/path-guards.js";
@@ -7,13 +7,15 @@ import { NativeRuntimeConfigSchema } from "./native-runtime-config.js";
 
 /** Private node-to-worker startup carrier, never part of a Gateway turn envelope. */
 export const WORKER_NATIVE_INFERENCE_STARTUP_ENV = "OPENCLAW_WORKER_NATIVE_INFERENCE_STARTUP";
+export const WORKER_NATIVE_INFERENCE_STARTUP_FD = 3;
+export const WORKER_NATIVE_INFERENCE_STARTUP_MAX_BYTES = 2 * 1024 * 1024;
 export const NativeInferenceStartupSchema = z.strictObject({
   config: NativeRuntimeConfigSchema,
   credentials: z.record(z.string(), z.string()),
 });
 export type NativeInferenceStartup = z.infer<typeof NativeInferenceStartupSchema>;
 
-/** Consume before running tools; no model credentials remain in child-process environments. */
+/** Drain the private pipe before the start gate, then close it before any tools can run. */
 export function takeNativeInferenceStartup(
   env: NodeJS.ProcessEnv = process.env,
 ): NativeInferenceStartup | undefined {
@@ -23,7 +25,33 @@ export function takeNativeInferenceStartup(
     return undefined;
   }
   try {
-    return NativeInferenceStartupSchema.parse(JSON.parse(value));
+    // The environment carries only this reserved descriptor, never JSON or an arbitrary fd.
+    if (value !== String(WORKER_NATIVE_INFERENCE_STARTUP_FD)) {
+      throw new Error("Invalid startup descriptor");
+    }
+    const data = Buffer.alloc(WORKER_NATIVE_INFERENCE_STARTUP_MAX_BYTES + 1);
+    try {
+      let length = 0;
+      for (;;) {
+        const count = readSync(
+          WORKER_NATIVE_INFERENCE_STARTUP_FD,
+          data,
+          length,
+          data.length - length,
+          null,
+        );
+        length += count;
+        if (length > WORKER_NATIVE_INFERENCE_STARTUP_MAX_BYTES) {
+          throw new Error("Startup payload exceeds limit");
+        }
+        if (count === 0) {
+          return NativeInferenceStartupSchema.parse(JSON.parse(data.toString("utf8", 0, length)));
+        }
+      }
+    } finally {
+      data.fill(0);
+      closeSync(WORKER_NATIVE_INFERENCE_STARTUP_FD);
+    }
   } catch {
     throw new Error("Invalid node-local inference startup configuration");
   }

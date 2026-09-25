@@ -1,6 +1,11 @@
 import { html, noChange, nothing } from "lit";
 import type { GatewayAgentRow } from "../api/types.ts";
-import { pathForAgentPanel, type RouteId } from "../app-route-paths.ts";
+import {
+  pathForAgentPanel,
+  pathForPluginCatalogEntry,
+  pathForPluginSettings,
+  type RouteId,
+} from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
 import { registerCommandPaletteEnglish } from "../i18n/locales/en-command-palette.ts";
@@ -19,6 +24,7 @@ import type {
 } from "../pages/chat/components/chat-composer-mention-menu.ts";
 import { renderSelectedHumanMentions } from "../pages/chat/components/chat-composer-selected-mentions.ts";
 import type { PaletteSessionDraft } from "../pages/new-session/palette-session-draft.ts";
+import "../styles/command-palette.css";
 import {
   commandPaletteCategoryLabel,
   filterCommandPaletteItems,
@@ -57,6 +63,7 @@ type CommandPaletteProps = {
   defaultAgentId: string;
   sessionItems: readonly PaletteItem[];
   catalogItems: readonly PaletteItem[];
+  primaryModelSearch: boolean;
   modelSearchError: string | null;
   sessionSearchPending: boolean;
   catalogSearchPending: boolean;
@@ -78,6 +85,8 @@ type CommandPaletteProps = {
   onNavigate?: ApplicationContext["navigate"];
   onSelectSession?: (sessionKey: string) => void;
   onSlashCommand?: (command: string) => void;
+  pluginIconUrls: Readonly<Record<string, string>>;
+  onPluginIconError: (pluginId: string) => void;
   desktopAvailable: boolean;
   custodianAvailable: boolean;
   onInputRef: (element: Element | undefined) => void;
@@ -107,6 +116,14 @@ function selectItem(item: PaletteItem, props: CommandPaletteProps) {
     if (item.agentId) {
       props.onNavigate?.(routeId, {
         pathname: pathForAgentPanel(item.agentId, null, props.basePath),
+      });
+    } else if (item.catalogId) {
+      props.onNavigate?.(routeId, {
+        pathname: pathForPluginCatalogEntry(item.catalogId, props.basePath),
+      });
+    } else if (item.pluginId && routeId === "plugin-settings") {
+      props.onNavigate?.(routeId, {
+        pathname: pathForPluginSettings(item.pluginId, props.basePath),
       });
     } else if (item.search || item.hash) {
       props.onNavigate?.(routeId, { search: item.search, hash: item.hash });
@@ -327,7 +344,6 @@ export function renderCommandPalette(readProps: () => CommandPaletteProps) {
                 ? props.mentionMenu.activeId(props.mentionHost.paneId)
                 : null) ?? undefined)
             : activeOptionId,
-          expanded: mentionsOpen ? true : undefined,
           describedBy: mentionsOpen
             ? mentionAnnouncementId
             : hideSearch
@@ -413,6 +429,7 @@ export function renderCommandPalette(readProps: () => CommandPaletteProps) {
                       class="cmd-palette__results"
                       ?hidden=${items.length === 0}
                       role="listbox"
+                      aria-label=${paletteLabel}
                       aria-busy=${props.searchDebouncing || props.sessionSearchPending || props.catalogSearchPending ? "true" : "false"}
                     >
                       ${grouped.map(
@@ -445,7 +462,7 @@ export function renderCommandPalette(readProps: () => CommandPaletteProps) {
                                 }}
                                 @mouseenter=${() => props.onActiveIdChange(item.id)}
                               >
-                                ${renderCommandPaletteResult(item, props.searchQuery, agent, props.agentIdentity?.get(agentId))}
+                                ${renderCommandPaletteResult(item, props.searchQuery, agent, props.agentIdentity?.get(agentId), props.pluginIconUrls, props.onPluginIconError)}
                               </div>
                             `;
                           })}

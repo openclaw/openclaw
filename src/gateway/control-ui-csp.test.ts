@@ -8,7 +8,7 @@ describe("buildControlUiCspHeader", () => {
   it("blocks inline scripts while allowing inline styles", () => {
     const csp = buildControlUiCspHeader();
     expect(csp).toContain("frame-ancestors 'none'");
-    expect(csp).toContain("frame-src 'self' http: https:");
+    expect(csp).toContain("frame-src 'self' blob: http: https:");
     expect(csp).toContain("script-src 'self'");
     expect(csp).not.toContain("script-src 'self' 'unsafe-inline'");
     expect(csp).toContain("style-src 'self' 'unsafe-inline' https://fonts.googleapis.com");
@@ -20,7 +20,7 @@ describe("buildControlUiCspHeader", () => {
     expect(csp).toContain("font-src 'self' https://fonts.gstatic.com");
   });
 
-  it("allows OpenAI realtime and tweakcn theme import requests without allowing all HTTPS", () => {
+  it("allows local asset reads and known remote connections without allowing all HTTPS", () => {
     const csp = buildControlUiCspHeader();
     const connectSrc = csp.split("; ").find((directive) => directive.startsWith("connect-src "));
     expect(connectSrc?.split(" ")).toEqual([
@@ -29,6 +29,7 @@ describe("buildControlUiCspHeader", () => {
       "ws:",
       "wss:",
       "data:",
+      "blob:",
       "https://api.openai.com",
       "https://tweakcn.com",
     ]);

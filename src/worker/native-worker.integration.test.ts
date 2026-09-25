@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import {
   createServer,
@@ -9,14 +9,17 @@ import {
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { WorkerLiveEventParams } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { resolveRuntimeWorkerUrl, resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
 import { createCompiledSdkHost } from "../plugins/compiled-sdk-host.test-support.js";
+import { prepareSecretInputStdio, type SpawnStdioEntry } from "../process/spawn-secret-input.js";
 import type { WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import {
   WORKER_NATIVE_INFERENCE_STARTUP_ENV,
+  WORKER_NATIVE_INFERENCE_STARTUP_FD,
   type NativeInferenceStartup,
 } from "./native-inference-startup.js";
 import { nativeWorkerTestEntrypoint } from "./native-worker-entrypoints.test-support.js";
@@ -31,7 +34,7 @@ const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 const fixtureEntry = resolveRuntimeWorkerUrl(nativeWorkerTestEntrypoint);
 const LOCAL_KEY = "synthetic-native-worker-provider-key";
 const MODEL = { provider: "openai", model: "local-worker-model" };
-const children: Array<{ child: ChildProcessWithoutNullStreams; exited: Promise<ProcessExit> }> = [];
+const children: Array<{ child: ChildProcess; exited: Promise<ProcessExit> }> = [];
 const servers: Server[] = [];
 let gateway: ComposedGatewayHarness | undefined;
 type ProcessExit = { code: number | null; stdout: string; stderr: string };
@@ -132,6 +135,16 @@ async function launch(descriptor: WorkerLaunchDescriptor, startup?: NativeInfere
   const home = tempDirs.make("oc-native-child-");
   const temp = path.join(home, "tmp");
   await mkdir(temp);
+  const stdio: ["pipe", "pipe", "pipe", ...SpawnStdioEntry[]] = ["pipe", "pipe", "pipe"];
+  using secretDelivery = prepareSecretInputStdio(
+    stdio,
+    startup
+      ? {
+          fd: WORKER_NATIVE_INFERENCE_STARTUP_FD,
+          createData: () => Buffer.from(JSON.stringify(startup)),
+        }
+      : undefined,
+  );
   const child = spawn(
     process.execPath,
     ["--unhandled-rejections=strict", ...resolveRuntimeWorkerArgv(fixtureEntry)],
@@ -156,17 +169,24 @@ async function launch(descriptor: WorkerLaunchDescriptor, startup?: NativeInfere
               OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(repoRoot, "extensions"),
             }
           : {}),
-        ...(startup ? { [WORKER_NATIVE_INFERENCE_STARTUP_ENV]: JSON.stringify(startup) } : {}),
+        ...(startup
+          ? { [WORKER_NATIVE_INFERENCE_STARTUP_ENV]: String(WORKER_NATIVE_INFERENCE_STARTUP_FD) }
+          : {}),
       },
-      stdio: ["pipe", "pipe", "pipe"],
+      stdio,
     },
   );
+  const { stdin, stdout: childOutput, stderr: childError } = child;
+  if (!stdin || !childOutput || !childError) {
+    child.kill("SIGKILL");
+    throw new Error("Native worker fixture requires all three control/output pipes");
+  }
   let stdout = "";
   let stderr = "";
-  child.stdout.on("data", (chunk: Buffer) => {
+  childOutput.on("data", (chunk: Buffer) => {
     stdout += chunk.toString();
   });
-  child.stderr.on("data", (chunk: Buffer) => {
+  childError.on("data", (chunk: Buffer) => {
     stderr += chunk.toString();
   });
   const exited = new Promise<ProcessExit>((resolve, reject) => {
@@ -176,7 +196,8 @@ async function launch(descriptor: WorkerLaunchDescriptor, startup?: NativeInfere
   // A spawn failure must remain observed even when a provider-readiness assertion fails first.
   void exited.catch(() => undefined);
   children.push({ child, exited });
-  child.stdin.write(
+  await secretDelivery?.deliverTo(child);
+  stdin.write(
     serializeWorkerProcessInput({
       type: "turn",
       turnId: descriptor.assignment.turnId,
@@ -187,7 +208,7 @@ async function launch(descriptor: WorkerLaunchDescriptor, startup?: NativeInfere
     child,
     exited,
     cancel: () =>
-      child.stdin.write(
+      stdin.write(
         serializeWorkerProcessInput({ type: "cancel", turnId: descriptor.assignment.turnId }),
       ),
     finish: async () => {
@@ -279,7 +300,9 @@ async function providerFixture(mode: "tools" | "pending" = "tools") {
         const command =
           JSON.stringify(process.execPath) +
           " " +
-          JSON.stringify(path.join(owner().root, "tool-proof.mjs"));
+          JSON.stringify(path.join(owner().root, "tool-proof.mjs")) +
+          " " +
+          children.at(-1)!.child.pid;
         frame(response, {
           role: "assistant",
           tool_calls: [
@@ -365,7 +388,10 @@ describe.skipIf(process.platform === "win32")(
         'import { readFileSync, writeFileSync } from "node:fs";\n' +
           "const ancestors = []; let pid = process.ppid;\n" +
           'if (process.platform === "linux") { while (pid > 1 && ancestors.length < 20) { ancestors.push(pid); const stat = readFileSync("/proc/" + pid + "/stat", "utf8"); pid = Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1]); } }\n' +
-          'const proof = { pid: process.pid, ancestors, startupPresent: "OPENCLAW_WORKER_NATIVE_INFERENCE_STARTUP" in process.env, credentialPresent: "WORKER_TEST_PROVIDER_KEY" in process.env };\n' +
+          "const workerPid = Number(process.argv[2]);\n" +
+          'if (!Number.isSafeInteger(workerPid) || workerPid <= 1) throw new Error("Missing owned worker PID");\n' +
+          'const initialStartup = process.platform === "linux" ? readFileSync("/proc/" + workerPid + "/environ", "utf8").split(String.fromCharCode(0)).find((entry) => entry.startsWith("OPENCLAW_WORKER_NATIVE_INFERENCE_STARTUP=")) : undefined;\n' +
+          'const proof = { pid: process.pid, ancestors, startupPresent: "OPENCLAW_WORKER_NATIVE_INFERENCE_STARTUP" in process.env, credentialPresent: "WORKER_TEST_PROVIDER_KEY" in process.env, initialCarrierHasCredentials: initialStartup?.includes("credentials") ?? false };\n' +
           'writeFileSync(new URL("./tool-proof.json", import.meta.url), JSON.stringify(proof)); console.log("worker tool wrote proof");\n',
       );
       const worker = await launch(descriptor, startupFor(descriptor, provider.baseUrl));
@@ -377,7 +403,11 @@ describe.skipIf(process.platform === "win32")(
       });
       expect(worker.child.pid).not.toBe(process.pid);
       const proof = JSON.parse(await readFile(path.join(owner().root, "tool-proof.json"), "utf8"));
-      expect(proof).toMatchObject({ startupPresent: false, credentialPresent: false });
+      expect(proof).toMatchObject({
+        startupPresent: false,
+        credentialPresent: false,
+        initialCarrierHasCredentials: false,
+      });
       expect(proof.pid).not.toBe(process.pid);
       expect(proof.pid).not.toBe(worker.child.pid);
       if (process.platform === "linux") {
@@ -479,17 +509,33 @@ describe.skipIf(process.platform === "win32")(
       expectNoProxyInference();
     }, 40_000);
 
-    it("cancels pending worker-local HTTP through the managed command and persists the aborted turn", async () => {
+    it("cancels pending native HTTP and settles without submitting new transcript messages", async () => {
       const provider = await providerFixture("pending");
       const descriptor = await localDescriptor();
       const worker = await launch(descriptor, startupFor(descriptor, provider.baseUrl));
       await withTestTimeout(provider.entered, 30_000, "local provider was not reached");
+      const before = messages();
+      const commitsBefore = owner().requestParams("worker.transcript.commit").length;
+      expect(before.map((message) => message.role)).toEqual(["user"]);
       worker.cancel();
       const outcome = result(await worker.finish());
       expect(outcome.result).toMatchObject({ status: "failed", reason: "turn-failed" });
       await withTestTimeout(provider.disconnected, 5_000, "cancel did not close provider HTTP");
       expect(provider.requests).toHaveLength(1);
-      expect(messages().at(-1)).toMatchObject({ role: "assistant", stopReason: "aborted" });
+      expect(messages()).toEqual(before);
+      expect(owner().requestParams("worker.transcript.commit")).toHaveLength(commitsBefore);
+      const finishing = owner()
+        .requestParams("worker.live-event")
+        .map((request) => request as WorkerLiveEventParams)
+        .filter(({ event }) => event.kind === "lifecycle" && event.payload.phase === "finishing");
+      expect(finishing).toHaveLength(1);
+      expect(finishing[0]?.event).toMatchObject({
+        kind: "lifecycle",
+        payload: { phase: "finishing", aborted: true, stopReason: "aborted" },
+      });
+      expect(owner().placementStore.get(SESSION_ID)?.lastLiveEventAckCursor).toBe(
+        finishing[0]!.seq,
+      );
       expectNoProxyInference();
     }, 40_000);
 
@@ -530,6 +576,7 @@ describe.skipIf(process.platform === "win32")(
       const worker = await launch(descriptor, startupFor(descriptor, provider.baseUrl));
       await withTestTimeout(provider.entered, 30_000, "local provider was not reached");
       const before = messages();
+      const admitted = owner().admissions.length;
       const epoch = await owner().reclaimWithCredential(
         "synthetic-replacement-credential",
         "replacement-run",
@@ -537,9 +584,10 @@ describe.skipIf(process.platform === "win32")(
       expect(epoch).toBeGreaterThan(descriptor.admission.ownerEpoch);
       owner().partition();
       const outcome = await worker.finish();
-      // Native authority ends on transport loss, before readmission can reject the stale credential.
+      // Terminal flush can race rejected readmission; neither may revive provider authority.
       expect(outcome.code).toBe(1);
-      expect(outcome.stderr).toContain("Runtime-local inference lost Gateway admission");
+      expect(owner().admissions).toHaveLength(admitted);
+      expect(provider.requests).toHaveLength(1);
       expect(outcome.stdout).toBe("");
       await withTestTimeout(provider.disconnected, 5_000, "fenced producer retained provider HTTP");
       provider.release();

@@ -1,4 +1,3 @@
-// File Transfer plugin module implements dir list tool behavior.
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { wrapExternalContent } from "openclaw/plugin-sdk/security-runtime";

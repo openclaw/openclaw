@@ -22,7 +22,13 @@ export function createSessionRowRelationReads(owner: {
   return {
     readSourceEntry(this: void, row: records.Row, key: string, residentOnly = false) {
       const source = owner.referenced(
-        records.parentReference(owner.config(), key, row.agentId, row.storeTarget.storePath),
+        records.parentReference(
+          owner.config(),
+          key,
+          row.agentId,
+          row.storeTarget.storePath,
+          owner.referenced,
+        ),
       );
       return (
         source &&
@@ -74,6 +80,7 @@ function readSessionRowAncestors<T extends records.Row>(
               key,
               agentId,
               agentId === child.agentId ? child.storeTarget.storePath : undefined,
+              owner.referenced,
             ),
           );
         }
@@ -110,6 +117,7 @@ export function createSessionRowAncestorReads(owner: {
   referenced: (reference: string) => records.Row | undefined;
   lookup: (query: records.Lookup) => records.Row | undefined;
   prepareExactRows: (queries: readonly records.Lookup[]) => Promise<void> | undefined;
+  retainExactPreparation: () => () => void;
   assertExactRowsPrepared: (queries: readonly records.Lookup[]) => void;
   retainArchiveRows: () => { update: (ids: readonly string[]) => void; release: () => void };
   describe: SessionRowReadView["describe"];
@@ -169,6 +177,8 @@ export function createSessionRowAncestorReads(owner: {
           }
         : queries;
       const archivedRows = owner.retainArchiveRows();
+      // Reserve priority before topology can release both this request and a bulk drain.
+      const releaseExactPreparation = owner.retainExactPreparation();
       const membershipPending = Symbol("session-membership-pending");
       try {
         while (owner.isActive()) {
@@ -205,11 +215,11 @@ export function createSessionRowAncestorReads(owner: {
               }
               return owner.prepareExactRows(targets);
             },
-            (read) => {
-              if (owner.membership.needsPreparation(selected)) {
+            (read, targets) => {
+              if (owner.membership.needsPreparation(() => targets)) {
                 return membershipPending;
               }
-              owner.assertExactRowsPrepared(selected(read.state.cfg));
+              owner.assertExactRowsPrepared(targets);
               return consume(read);
             },
           );
@@ -222,6 +232,7 @@ export function createSessionRowAncestorReads(owner: {
         }
         throw new Error("Session row projection is no longer active");
       } finally {
+        releaseExactPreparation();
         archivedRows.release();
       }
     },

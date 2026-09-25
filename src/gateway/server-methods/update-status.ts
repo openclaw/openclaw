@@ -19,6 +19,7 @@ import {
   listUpdateRunsAsync,
   reconcileAbandonedUpdateRunsAsync,
 } from "../../infra/update-run-ledger.js";
+import { toPublicUpdateRun } from "../../infra/update-run-record.js";
 import {
   getUpdateEffectiveChannel,
   refreshGatewayUpdateStatus,
@@ -74,8 +75,7 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
         }
       }
       mark("identity");
-      const schedule = getUpdateSchedule();
-      let effectiveChannel = configChannel ?? normalizeUpdateChannel(schedule?.channel);
+      let effectiveChannel = configChannel ?? normalizeUpdateChannel(getUpdateSchedule()?.channel);
       if (!effectiveChannel) {
         try {
           effectiveChannel = await getUpdateEffectiveChannel();
@@ -95,11 +95,25 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
       }
       mark("history");
       const { activeRun, lastRun } = await getUpdateRunStatusAsync();
+      const campaignRunId = gatewayUpdateCampaign.getRunId();
+      const campaignRun =
+        !campaignRunId || lastRun?.runId === campaignRunId
+          ? lastRun
+          : activeRun?.runId === campaignRunId
+            ? activeRun
+            : await getUpdateRunAsync(campaignRunId).catch((error: unknown) => {
+                context?.logGateway?.warn(
+                  `update.status campaign run lookup failed: ${formatErrorMessage(error)}`,
+                );
+                return undefined;
+              });
+      gatewayUpdateCampaign.reconcileRun(campaignRun);
+      const schedule = getUpdateSchedule();
       mark("response");
       const result = {
         sentinel,
-        ...(activeRun ? { activeRun } : {}),
-        ...(lastRun ? { lastRun } : {}),
+        ...(activeRun ? { activeRun: toPublicUpdateRun(activeRun) } : {}),
+        ...(lastRun ? { lastRun: toPublicUpdateRun(lastRun) } : {}),
         updateAvailable: getUpdateAvailable(),
         ...(effectiveChannel ? { effectiveChannel } : {}),
         ...(schedule ? { schedule } : {}),
@@ -188,7 +202,8 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
       }
       // Only committed drain is one-way: a reversible signal could roll back
       // while this unrooted read awaits the database worker.
-      respond(true, { run: (await getUpdateRunAsync(params.runId)) ?? null });
+      const run = await getUpdateRunAsync(params.runId);
+      respond(true, { run: run ? toPublicUpdateRun(run) : null });
       return;
     }
     try {
@@ -198,7 +213,7 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
       if (reconciliationError) {
         context?.logGateway?.warn(`update.runs.get reconciliation failed: ${reconciliationError}`);
       }
-      respond(true, { run: run ?? null });
+      respond(true, { run: run ? toPublicUpdateRun(run) : null });
     } finally {
       admission.release();
     }
@@ -207,6 +222,6 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateUpdateRunsListParams, "update.runs.list", respond)) {
       return;
     }
-    respond(true, { runs: await listUpdateRunsAsync(params) });
+    respond(true, { runs: (await listUpdateRunsAsync(params)).map(toPublicUpdateRun) });
   },
 };

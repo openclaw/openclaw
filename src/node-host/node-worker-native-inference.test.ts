@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { WORKER_LINEAGE_START_PROTOCOL_FEATURE } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
@@ -49,8 +50,28 @@ afterEach(() => {
   resetSecretRedactionRegistryForTest();
 });
 
+function nativeWorkerSource(source = TEST_WORKER_SOURCE) {
+  return source.replace(
+    "await start;",
+    `const startupCarrier = process.env.OPENCLAW_WORKER_NATIVE_INFERENCE_STARTUP;
+delete process.env.OPENCLAW_WORKER_NATIVE_INFERENCE_STARTUP;
+let nativeStartup;
+let startupClosed = false;
+if (startupCarrier !== undefined) {
+  if (startupCarrier !== "3") throw new Error("Invalid private startup descriptor");
+  try { nativeStartup = JSON.parse(fs.readFileSync(3, "utf8")); }
+  finally { fs.closeSync(3); startupClosed = true; }
+}
+await start;`,
+  );
+}
+
 function createFixture() {
   const fixture = writeNodeWorkerFixture(tempDirs.make("node-native-inference-"));
+  fs.writeFileSync(
+    path.join(fixture.bundleRoot, "gateway-1", "bundles", "a".repeat(64), "worker.mjs"),
+    nativeWorkerSource(),
+  );
   const configPath = path.join(fixture.root, "native.json");
   const config = {
     models: [
@@ -312,13 +333,27 @@ describe("node-local native inference startup custody", () => {
     expect(nodeWorkerEnvironmentBinding(input)).not.toEqual(proxied);
   });
 
-  it.each([false, true])(
-    "delivers the carrier only to native children (native=%s)",
-    async (native) => {
+  it.each([
+    { native: false, lineage: false },
+    { native: true, lineage: false },
+    ...(process.platform === "linux" || process.platform === "darwin"
+      ? [{ native: true, lineage: true }]
+      : []),
+  ])(
+    "delivers private startup before the journal gate (native=$native, lineage=$lineage)",
+    async ({ native, lineage }) => {
       const f = createFixture();
-      const source = TEST_WORKER_SOURCE.replace(
+      // Exceed an anonymous pipe buffer: awaiting the start gate before draining deadlocks.
+      f.env.NATIVE_TEST_KEY = credential.repeat(16 * 1024);
+      const source = nativeWorkerSource().replace(
         "const mode = descriptor.assignment.prompt;",
-        `writeArtifact(descriptor, "carrier", { present: process.env.OPENCLAW_WORKER_NATIVE_INFERENCE_STARTUP !== undefined, namedKey: process.env.NATIVE_TEST_KEY !== undefined });
+        `writeArtifact(descriptor, "carrier", {
+  present: nativeStartup !== undefined,
+  markerOnly: startupCarrier === undefined || startupCarrier === "3",
+  closed: startupClosed,
+  removed: process.env.OPENCLAW_WORKER_NATIVE_INFERENCE_STARTUP === undefined,
+  namedKey: process.env.NATIVE_TEST_KEY !== undefined,
+});
 const mode = descriptor.assignment.prompt;`,
       );
       fs.writeFileSync(
@@ -333,6 +368,21 @@ const mode = descriptor.assignment.prompt;`,
       const input = native
         ? nativeInput(f.workspaceDir)
         : testWorkerLaunchInput(f.workspaceDir, "native-turn");
+      if (!lineage) {
+        input.descriptor.admission.handshake.protocolFeatures =
+          input.descriptor.admission.handshake.protocolFeatures.filter(
+            (feature) => feature !== WORKER_LINEAGE_START_PROTOCOL_FEATURE,
+          );
+      }
+      const markRunning = NodeWorkerLaunchStore.prototype.markRunning;
+      vi.spyOn(NodeWorkerLaunchStore.prototype, "markRunning").mockImplementation(async function (
+        this: NodeWorkerLaunchStore,
+        params,
+      ) {
+        expect(fs.existsSync(path.join(f.workspaceDir, "native-turn.started.json"))).toBe(false);
+        expect(params.cleanupMode).toBe(lineage ? "owned-anchor" : "process-group");
+        return await markRunning.call(this, params);
+      });
       try {
         await supervisor.launch(input, TEST_WORKER_ENDPOINT);
         expect((await waitForNodeWorkerTerminal(supervisor, input.launchId)).state).toBe(
@@ -342,7 +392,13 @@ const mode = descriptor.assignment.prompt;`,
           JSON.parse(
             fs.readFileSync(path.join(f.workspaceDir, "native-turn.carrier.json"), "utf8"),
           ),
-        ).toEqual({ present: native, namedKey: false });
+        ).toEqual({
+          present: native,
+          markerOnly: true,
+          closed: native,
+          removed: true,
+          namedKey: false,
+        });
       } finally {
         await supervisor.close();
       }
@@ -351,10 +407,9 @@ const mode = descriptor.assignment.prompt;`,
 
   it("scrubs captured keys and headers on initial and retained turns without global registry help", async () => {
     const f = createFixture();
-    const source = TEST_WORKER_SOURCE.replace(
+    const source = nativeWorkerSource().replace(
       "const mode = descriptor.assignment.prompt;",
-      `const nativeStartup = JSON.parse(process.env.OPENCLAW_WORKER_NATIVE_INFERENCE_STARTUP);
-const mode = descriptor.assignment.prompt;
+      `const mode = descriptor.assignment.prompt;
 if (mode === "native-secret-fail") { fs.writeSync(2, nativeStartup.credentials.NATIVE_TEST_KEY + " " + nativeStartup.config.models[0].headers["x-private"]); exitWorker(7); return; }`,
     );
     fs.writeFileSync(

@@ -2,8 +2,6 @@
 // Catalog storage and member updates live on the gateway (sessions.groups.*);
 // the SessionCapability mirrors the catalog into state.groups.
 
-import { moveArrayEntry } from "../array-order.ts";
-
 const BUILT_IN_SESSION_SECTION_IDS = new Set(["ungrouped", "groups", "work"]);
 
 export type SessionGroupSettings = {
@@ -36,6 +34,7 @@ export function readSessionCustomGroups(payload: unknown): SessionGroupSettings[
   });
 }
 
+/** Replace defaults from a complete snapshot, retaining only catalog names and positions. */
 export function mergeSessionGroupDefaults(
   groups: readonly SessionGroupSettings[],
   payload: unknown,
@@ -56,7 +55,7 @@ export function mergeSessionGroupDefaults(
       });
     }
   }
-  return groups.map((group) => ({ ...group, ...defaults.get(group.name) }));
+  return groups.map(({ name, position }) => ({ name, position, ...defaults.get(name) }));
 }
 
 export function readSidebarSectionOrder(payload: unknown): string[] {
@@ -102,14 +101,4 @@ export function normalizeSessionSectionOrderTokens(value: unknown): string[] | n
     }
   }
   return normalized;
-}
-
-/** Move one entry relative to another while preserving every other entry. */
-export function moveSessionOrderEntry(
-  order: readonly string[],
-  source: string,
-  target: string,
-  position: "before" | "after",
-): string[] {
-  return moveArrayEntry(order, source, target, position);
 }

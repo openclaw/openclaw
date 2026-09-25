@@ -268,7 +268,7 @@ describe("resident sessions.list", () => {
 
       const first = await listSessions({ client, context, request });
       expect(first.sessions.find((session) => session.agentId === "main")?.thinkingOptions).toEqual(
-        ["off"],
+        ["off", "ultra"],
       );
       expect((await listSessions({ client, context, request })).sessions).toEqual(first.sessions);
 
@@ -288,7 +288,7 @@ describe("resident sessions.list", () => {
       const refreshed = await listSessions({ client, context, request });
       expect(
         refreshed.sessions.find((session) => session.agentId === "main")?.thinkingOptions,
-      ).toEqual(expect.arrayContaining(["off", "low", "high", "max"]));
+      ).toEqual(expect.arrayContaining(["off", "low", "high", "max", "ultra"]));
     });
   });
 

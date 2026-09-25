@@ -2,17 +2,13 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loggingState } from "../logging/state.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import type { CliPluginRegistryScope } from "./command-catalog.js";
+import type { CliPluginRegistryScope } from "./command-catalog-types.js";
 import { measureCliCommandStartup } from "./command-startup-timing.js";
 
 const pluginRegistryModuleLoader = createLazyImportLoader(() => import("./plugin-registry.js"));
 const sandboxRegistryModuleLoader = createLazyImportLoader(
   () => import("../agents/sandbox/registry.js"),
 );
-
-function loadPluginRegistryModule() {
-  return pluginRegistryModuleLoader.load();
-}
 
 async function readPersistedSandboxBackendIds(): Promise<string[]> {
   // Management must activate each recorded owner before lifecycle code can
@@ -35,7 +31,7 @@ export async function ensureCliPluginRegistryLoaded(params: {
       : undefined;
   const { ensurePluginRegistryLoaded } = await measureCliCommandStartup(
     "plugin-registry-module-import",
-    loadPluginRegistryModule,
+    pluginRegistryModuleLoader.load,
   );
   await measureCliCommandStartup("plugin-registry-runtime-load", () => {
     const previousForceStderr = loggingState.forceConsoleToStderr;

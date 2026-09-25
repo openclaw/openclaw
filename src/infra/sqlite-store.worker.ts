@@ -12,6 +12,8 @@ import { withSqliteReaderOwner } from "./sqlite-reader-lifecycle.js";
 import {
   SQLITE_WORKER_MAX_RESULT_BYTES,
   SQLITE_WORKER_PREPARE_COMMAND,
+  SQLITE_WORKER_CLOSE_RECEIPT,
+  type SqliteWorkerCloseReceipt,
   type SqliteWorkerPreparedBackend,
   type SqliteWorkerCommand,
   type SqliteWorkerOperations,
@@ -126,6 +128,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
   let openNotEntered = false;
   try {
     let value: unknown;
+    let closeReceipt: SqliteWorkerCloseReceipt | undefined;
     if (request.type !== "result-next" && request.type !== "execute-frame") {
       if (request.lifecyclePreparation) {
         const databasePath = request.stateDatabasePath ?? actorPaths.get(request.actor);
@@ -480,6 +483,9 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
         (SQLITE_WORKER_PREPARE_COMMAND in backend &&
           backend[SQLITE_WORKER_PREPARE_COMMAND] !== undefined &&
           typeof backend[SQLITE_WORKER_PREPARE_COMMAND] !== "function") ||
+        (SQLITE_WORKER_CLOSE_RECEIPT in backend &&
+          backend[SQLITE_WORKER_CLOSE_RECEIPT] !== undefined &&
+          typeof backend[SQLITE_WORKER_CLOSE_RECEIPT] !== "function") ||
         (backend.assertSettled !== undefined && typeof backend.assertSettled !== "function") ||
         (backend.prepare !== undefined && typeof backend.prepare !== "function")
       ) {
@@ -496,6 +502,9 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
       const coordinator = await prepareLifecycle();
       try {
         await runInActorContext(request.actor, () => backend.close());
+        closeReceipt = runInActorContext(request.actor, () =>
+          backend[SQLITE_WORKER_CLOSE_RECEIPT]?.(),
+        );
       } catch (error) {
         retire = true;
         throw error;
@@ -525,6 +534,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
         id: request.id,
         ok: true,
         value: serialized,
+        ...(closeReceipt ? { closeReceipt } : {}),
         ...(request.type === "result-next" ? { transfer: "frame" } : {}),
         ...(inputNext ? { input: "next" } : {}),
       };
@@ -545,6 +555,11 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
     pendingInput = undefined;
     const refusedOpen = request.type === "open" && error instanceof SqliteWorkerOpenRefusedError;
     const originalError = refusedOpen ? error.originalError : error;
+    const admissionRefused =
+      request.type === "open" &&
+      operationAdmission?.actor === request.actor &&
+      operationAdmission.context.refusal !== undefined &&
+      operationAdmission.context.refusal === originalError;
     const failure =
       originalError instanceof Error ? originalError : new Error(String(originalError));
     const code = executed ? "outcome-unknown" : "code" in failure ? failure.code : undefined;
@@ -559,6 +574,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
       ...(retire || (nativeCleanupFailure && executed) ? { retire: true } : {}),
       ...(refusedOpen ? { openOutcome: "refused-before-agent-open" } : {}),
       ...(openNotEntered ? { openNotEntered: true } : {}),
+      ...(admissionRefused ? { admissionRefused: true } : {}),
       error: {
         name: executed ? "SqliteWorkerError" : failure.name,
         message: failure.message,

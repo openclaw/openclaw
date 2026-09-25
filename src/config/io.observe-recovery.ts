@@ -1,8 +1,8 @@
 import type fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { replaceFileAtomic, replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import { root } from "../infra/fs-safe.js";
-import { replaceFileAtomic, replaceFileAtomicSync } from "../infra/replace-file.js";
 import { appendConfigAuditRecord, appendConfigAuditRecordSync } from "./io.audit.js";
 import {
   persistBoundedClobberedConfigSnapshot,
@@ -31,10 +31,10 @@ import {
 } from "./io.observe-state.js";
 import { resolveConfigReadRecoveryContext } from "./io.observe-suspicious.js";
 import { hashConfigRaw, resolveGatewayMode } from "./io.read-helpers.js";
+import type { NormalizedConfigIoDeps } from "./io.read.types.js";
 import type {
   ConfigRecoveryCandidate,
   ConfigRecoveryCandidatePreparation,
-  NormalizedConfigIoDeps,
   PrepareConfigRecoveryCandidate,
 } from "./io.types.js";
 import { chmodConfigBestEffort, chmodConfigBestEffortSync } from "./io.write-safety.js";

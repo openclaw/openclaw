@@ -42,6 +42,11 @@ export async function runLegacyPluginSourceCapturesHealth(
   await noteLegacyPluginSourceCaptures(ctx.env ?? process.env, ctx.prompter.shouldRepair);
 }
 
+export async function runRetainedUpdateRuntimesHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { noteRetainedUpdateRuntimes } = await import("../commands/doctor-retained-runtime.js");
+  await noteRetainedUpdateRuntimes(ctx.env ?? process.env, ctx.prompter.shouldRepair);
+}
+
 export async function runReleaseConfiguredPluginInstallsHealth(
   ctx: DoctorHealthFlowContext,
 ): Promise<void> {
@@ -203,7 +208,6 @@ export async function runSessionSnapshotsHealth(ctx: DoctorHealthFlowContext): P
   await noteSessionSnapshotHealth({
     cfg: ctx.cfg,
     env: ctx.env ?? process.env,
-    shouldRepair: ctx.prompter.shouldRepair,
   });
 }
 

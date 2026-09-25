@@ -425,7 +425,6 @@ export function createMSTeamsReplyDispatcher(params: {
     ...replyPipeline,
     humanDelay: resolveHumanDelayConfig(params.cfg, params.agentId),
     onReplyStart: async () => {
-      await streamController.onReplyStart();
       // Always start the typing keepalive loop when typing is enabled and
       // supported by this conversation type. The sendTypingIndicator gate
       // skips actual sends while the stream card is visually active, so

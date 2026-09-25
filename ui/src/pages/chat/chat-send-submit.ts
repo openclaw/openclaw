@@ -8,6 +8,7 @@ import {
 import { normalizeChatFollowUpModeOverride } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatGoalsEnglish } from "../../i18n/locales/en-chat-goals.ts";
+import { registerMcpEnglish } from "../../i18n/locales/en-mcp.ts";
 import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
 import { canSubmitBeforeChatHistory, parseSlashCommand } from "../../lib/chat/commands.ts";
 import { extractCompanionCommandQuestion } from "../../lib/chat/companion-question.ts";
@@ -25,12 +26,11 @@ import {
 } from "./chat-commands.ts";
 import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { chatProviderReviewRow } from "./chat-provider-review.ts";
 import {
   admitQueuedMessageForSession,
-  admitQueuedMessageForSessionResult,
   enqueueChatMessage,
-  removeQueuedMessageWithoutReleasing,
   readQueuedMessageById,
 } from "./chat-queue.ts";
 import {
@@ -62,7 +62,7 @@ import {
   prependReplyQuote,
 } from "./chat-send-support.ts";
 import { recordChatSendTiming } from "./chat-send-timing.ts";
-import { getPendingChatPickerPatch } from "./chat-session.ts";
+import { getPendingChatPickerPatch } from "./chat-settings-patches.ts";
 import { withChatSubmitGuard, withChatSubmitHandoff } from "./chat-submit-guard.ts";
 import {
   recordNonTranscriptInputHistory,
@@ -86,6 +86,7 @@ import {
 import { scheduleChatScroll } from "./scroll.ts";
 
 registerChatGoalsEnglish();
+registerMcpEnglish();
 
 export type ChatSendSubmitOptions = {
   asyncQuestionItemId?: string;
@@ -363,7 +364,7 @@ export async function handleSendChat(
           }
           queued.sendState = reconnectSafeQueuedSendState(host);
           if (!admitQueuedMessageForSession(host, admission, queued)) {
-            removeQueuedMessageWithoutReleasing(host, queued.id);
+            chatOutboxOwner(host).remove(host, queued.id);
             if (messageOverride == null) {
               host.chatMessage = previousDraft;
               host.chatMentions = previousMentions ?? [];
@@ -635,8 +636,8 @@ export async function handleSendChat(
       recordNonTranscriptInputHistory(host, userMessage);
     }
 
-    publishPendingSendMessage(host, queued);
-    const admissionResult = admitQueuedMessageForSessionResult(
+    queued = publishPendingSendMessage(host, queued);
+    const admissionResult = chatOutboxOwner(host).admit(
       host,
       submission.admission,
       queued,

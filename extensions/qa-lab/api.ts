@@ -61,6 +61,7 @@ export {
 } from "./src/qa-agent-bootstrap.js";
 export { seedQaAgentWorkspace } from "./src/qa-agent-workspace.js";
 export { createQaChannelTransport } from "./src/qa-channel-transport.js";
+export { createQaCrablineTransportAdapter } from "./src/crabline-transport.js";
 export { createStaticSshWorkerProvider } from "./src/static-ssh-worker-provider.js";
 export {
   buildQaGatewayConfig,

@@ -22,7 +22,11 @@ import { resolveChannelMessageSourceReplyDeliveryMode } from "openclaw/plugin-sd
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
 import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
 import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-surface";
-import { ensureConfiguredBindingRouteReady } from "openclaw/plugin-sdk/conversation-runtime";
+import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
+import {
+  ensureConfiguredBindingRouteReady,
+  resolveConversationLabel,
+} from "openclaw/plugin-sdk/conversation-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   buildHistoryContextFromEntries,
@@ -33,11 +37,13 @@ import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
+import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   asOptionalRecord as asRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeStringEntriesLower } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveSlackReplyToMode } from "../../account-reply-mode.js";
@@ -45,11 +51,11 @@ import type { ResolvedSlackAccount } from "../../accounts.js";
 import { reactSlackMessage } from "../../actions.js";
 import { normalizeSlackAppContextEntities, isSlackAppContext } from "../../agent-context.js";
 import { formatSlackError } from "../../errors.js";
-import type { SlackSendIdentity } from "../../send.js";
+import { sendMessageSlack, type SlackSendIdentity } from "../../send.js";
 import { hasSlackThreadParticipationWithPersistence } from "../../sent-thread-cache.js";
 import { formatSlackTarget } from "../../target-parsing.js";
 import type { SlackFile, SlackMessageEvent } from "../../types.js";
-import { normalizeAllowListLower, normalizeSlackAllowOwnerEntry } from "../allow-list.js";
+import { normalizeSlackAllowOwnerEntry } from "../allow-list.js";
 import { readSlackAssistantThreadContext } from "../assistant-thread-context.js";
 import {
   authorizeSlackBotRoomMessage,
@@ -59,24 +65,17 @@ import {
 import { resolveSlackChannelConfig } from "../channel-config.js";
 import { stripSlackMentionsForCommandDetection } from "../commands.js";
 import {
-  getSessionEntry,
-  resolveChannelContextVisibilityMode,
-  resolveStorePath,
-} from "../config.runtime.js";
-import {
   buildSlackAssistantThreadMetadata,
   normalizeSlackChannelType,
   resolveSlackChatType,
   type SlackAssistantThreadContext,
   type SlackMonitorContext,
 } from "../context.js";
-import { resolveConversationLabel } from "../conversation.runtime.js";
 import { authorizeSlackDirectMessage } from "../dm-auth.js";
 import type { SlackEventScope } from "../event-scope.js";
 import type { SlackMediaResult } from "../media-types.js";
 import { escapeSlackMrkdwn } from "../mrkdwn.js";
 import { resolveSlackRoomContextHints } from "../room-context.js";
-import { sendMessageSlack } from "../send.runtime.js";
 import { resolveSlackThreadStarter, type SlackThreadStarter } from "../thread.js";
 import { qualifySlackRoutePeerId } from "../workspace-routing.js";
 import {
@@ -117,21 +116,6 @@ function resolveSlackGroupSessionSubject(params: {
   return `Slack Channel (Workspace ID: ${params.workspaceId}, Channel ID: ${params.channelId})`;
 }
 
-function recordString(
-  record: Record<string, unknown> | undefined,
-  key: string,
-): string | undefined {
-  return normalizeOptionalString(record?.[key]);
-}
-
-function recordNullableString(
-  record: Record<string, unknown> | undefined,
-  key: string,
-): string | null | undefined {
-  const value = record?.[key];
-  return value === null ? null : normalizeOptionalString(value);
-}
-
 function mergeSlackAssistantThreadContext(
   primary: Omit<SlackAssistantThreadContext, "updatedAt"> | undefined,
   fallback: Omit<SlackAssistantThreadContext, "updatedAt"> | undefined,
@@ -166,18 +150,19 @@ function resolveSlackMessageAssistantThreadContext(
     return undefined;
   }
   const context = asRecord(thread.context);
-  const assistantChannelId = recordString(thread, "channel_id") ?? message.channel;
-  const threadTs = recordString(thread, "thread_ts") ?? message.thread_ts ?? message.ts;
+  const assistantChannelId = normalizeOptionalString(thread.channel_id) ?? message.channel;
+  const threadTs = normalizeOptionalString(thread.thread_ts) ?? message.thread_ts ?? message.ts;
   if (!assistantChannelId || !threadTs) {
     return undefined;
   }
   return {
     assistantChannelId,
     threadTs,
-    userId: recordString(thread, "user_id") ?? message.user,
-    channelId: recordString(context, "channel_id"),
-    teamId: recordString(context, "team_id"),
-    enterpriseId: recordNullableString(context, "enterprise_id"),
+    userId: normalizeOptionalString(thread.user_id) ?? message.user,
+    channelId: normalizeOptionalString(context?.channel_id),
+    teamId: normalizeOptionalString(context?.team_id),
+    enterpriseId:
+      context?.enterprise_id === null ? null : normalizeOptionalString(context?.enterprise_id),
   };
 }
 
@@ -377,16 +362,11 @@ async function resolveSlackConversationContext(params: {
   const { ctx, account, message } = params;
   const cfg = ctx.cfg;
 
-  let channelInfo: {
-    name?: string;
-    type?: SlackMessageEvent["channel_type"];
-    topic?: string;
-    purpose?: string;
-  } = {};
+  let channelInfo: SlackConversationContext["channelInfo"] = {};
   let resolvedChannelType = normalizeSlackChannelType(message.channel_type, message.channel);
   // D-prefixed channels are always direct messages. Skip channel lookups in
   // that common path to avoid an unnecessary API round-trip.
-  if (resolvedChannelType !== "im" && (!message.channel_type || message.channel_type !== "im")) {
+  if (resolvedChannelType !== "im" && message.channel_type !== "im") {
     channelInfo = await ctx.resolveChannelName(message.channel, params.eventScope);
     resolvedChannelType = normalizeSlackChannelType(
       message.channel_type ??
@@ -413,10 +393,7 @@ async function resolveSlackConversationContext(params: {
       })
     : null;
   const allowBotsSetting =
-    channelConfig?.allowBots ??
-    account.config?.allowBots ??
-    cfg.channels?.slack?.allowBots ??
-    false;
+    channelConfig?.allowBots ?? account.config?.allowBots ?? cfg.channels?.slack?.allowBots ?? true;
   const allowBotsMode: "off" | "all" | "mentions" =
     allowBotsSetting === "mentions" ? "mentions" : allowBotsSetting ? "all" : "off";
 
@@ -449,7 +426,10 @@ async function authorizeSlackInboundMessage(params: {
     conversation;
 
   if (isBotMessage) {
-    if (message.user && ctx.botUserId && message.user === ctx.botUserId) {
+    if (
+      (ctx.botUserId && message.user === ctx.botUserId) ||
+      (ctx.botId && message.bot_id === ctx.botId)
+    ) {
       return null;
     }
     if (allowBotsMode === "off") {
@@ -692,11 +672,7 @@ export async function prepareSlackMessage(params: {
   // the root lands on the channel session while later thread replies land on
   // a fresh `:thread:<root_ts>` session, breaking continuity.
   const channelRequireMention = channelConfig?.requireMention ?? ctx.defaultRequireMention ?? true;
-  const channelChatType: "direct" | "group" | "channel" = isDirectMessage
-    ? "direct"
-    : isGroupDm
-      ? "group"
-      : "channel";
+  const chatType = resolveSlackChatType(conversation.resolvedChannelType);
   const restoredAssistantThreadContext = await restoredAssistantThreadContextPromise;
   const assistantThreadContext = mergeSlackAssistantThreadContext(
     messageAssistantThreadContext,
@@ -713,19 +689,14 @@ export async function prepareSlackMessage(params: {
   // Assistant View can emit the same shape, so its resolved context wins.
   // Enterprise Grid remains on its documented V1 message path; org-wide
   // manifests do not enable Agent View, so scoped events stay out of this mode.
-  const hasAgentViewMessageSignal =
-    isDirectMessage &&
-    !opts.eventScope &&
-    !assistantThreadContext &&
-    isSlackAppContext(message.app_context);
+  const canUseManagedView = isDirectMessage && !opts.eventScope && !assistantThreadContext;
+  const hasAgentViewMessageSignal = canUseManagedView && isSlackAppContext(message.app_context);
   if (hasAgentViewMessageSignal) {
     await ctx.recordSlackAgentView();
   }
   const managedViewThreadTs = message.thread_ts;
   const isManagedViewRoot =
-    isDirectMessage &&
-    !opts.eventScope &&
-    !assistantThreadContext &&
+    canUseManagedView &&
     !message.parent_user_id &&
     Boolean(managedViewThreadTs && message.ts && managedViewThreadTs === message.ts);
   if (isManagedViewRoot && managedViewThreadTs) {
@@ -734,17 +705,13 @@ export async function prepareSlackMessage(params: {
     await ctx.recordSlackManagedViewThread(message.channel, managedViewThreadTs);
   }
   const hasManagedViewThread =
-    isDirectMessage &&
-    !opts.eventScope &&
-    !assistantThreadContext &&
+    canUseManagedView &&
     Boolean(
       managedViewThreadTs &&
       (await ctx.isSlackManagedViewThread(message.channel, managedViewThreadTs)),
     );
   const isAgentViewMessage =
-    isDirectMessage &&
-    !opts.eventScope &&
-    !assistantThreadContext &&
+    canUseManagedView &&
     // Slack selects Agent View for the whole app, not individual messages.
     // The durable marker is keyed by apiAppId so an app replacement cannot
     // make ordinary DMs on the replacement inherit the old app's experience.
@@ -754,7 +721,7 @@ export async function prepareSlackMessage(params: {
       (await ctx.isSlackAgentView()));
   const agentViewThreadTs = isAgentViewMessage ? (message.thread_ts ?? message.ts) : undefined;
   const channelReplyToMode =
-    channelConfig?.replyToMode ?? resolveSlackReplyToMode(account, channelChatType);
+    channelConfig?.replyToMode ?? resolveSlackReplyToMode(account, chatType);
   const willImplicitlyThreadReply =
     isRoom && !channelRequireMention && channelReplyToMode !== "off";
   const seedTopLevelRoomThreadBySource =
@@ -1016,7 +983,7 @@ export async function prepareSlackMessage(params: {
 
   const threadContextAllowFromLower = isRoom
     ? channelUsersAllowlistConfigured
-      ? normalizeAllowListLower(channelConfig?.users)
+      ? normalizeStringEntriesLower(channelConfig?.users)
       : []
     : isDirectMessage
       ? allowFromLower
@@ -1204,7 +1171,6 @@ export async function prepareSlackMessage(params: {
     return drop("missing-mention");
   }
 
-  const chatType = resolveSlackChatType(conversation.resolvedChannelType);
   const inboundEventKind = classifyChannelInboundEvent({
     conversation: { kind: chatType },
     unmentionedGroupPolicy: resolveUnmentionedGroupInboundPolicy({
@@ -1240,24 +1206,23 @@ export async function prepareSlackMessage(params: {
     }) === "message_tool_only";
   const statusReactionsExplicitlyEnabled = cfg.messages?.statusReactions?.enabled === true;
   const isRoomEvent = inboundEventKind === "room_event";
-  const shouldAckReaction = () =>
-    Boolean(
-      ackReaction &&
-      shouldAckReactionGate({
-        scope: cfg.messages?.ackReactionScope,
-        inboundEventKind,
-        isDirect: isDirectMessage,
-        isGroup: isRoomish,
-        isMentionableGroup: isRoom,
-        canDetectMention,
-        effectiveWasMentioned,
-        shouldBypassMention,
-      }),
-    );
+  const shouldAckReaction = Boolean(
+    ackReaction &&
+    shouldAckReactionGate({
+      scope: cfg.messages?.ackReactionScope,
+      inboundEventKind,
+      isDirect: isDirectMessage,
+      isGroup: isRoomish,
+      isMentionableGroup: isRoom,
+      canDetectMention,
+      effectiveWasMentioned,
+      shouldBypassMention,
+    }),
+  );
 
   const ackReactionMessageTs = message.ts;
   const shouldSendAckReaction =
-    shouldAckReaction() &&
+    shouldAckReaction &&
     (!sourceRepliesAreToolOnly || effectiveWasMentioned || shouldBypassMention || isRoomEvent);
   const statusReactionsWillHandle =
     Boolean(ackReactionMessageTs) &&
@@ -1454,26 +1419,24 @@ export async function prepareSlackMessage(params: {
   if (
     isRoomish &&
     ctx.historyLimit > 0 &&
-    (!threadScopedHistory || !shouldSeedInitialThreadContext)
+    (!threadScopedHistory || !shouldSeedInitialThreadContext) &&
+    // A reset tombstone has no active generation to recover into.
+    sessionEntry?.updatedAt !== 0
   ) {
-    // A reset tombstone has no active generation to recover into. Old explicit
-    // thread seeding keeps its established human-context behavior above.
-    if (sessionEntry?.updatedAt !== 0) {
-      roomHistory = await resolveSlackRoomHistory({
-        ctx,
-        message,
-        threadTs: threadScopedHistory ? threadTs : undefined,
-        oldest: sessionEntry?.sessionStartedAt
-          ? (sessionEntry.sessionStartedAt / 1_000).toFixed(6)
-          : undefined,
-        excludedMessageIds,
-        allowFromLower: threadContextAllowFromLower,
-        contextVisibilityMode,
-        eventScope: opts.eventScope,
-        assertCurrent: assertHistoryCurrent,
-        abortSignal: opts.abortSignal,
-      });
-    }
+    roomHistory = await resolveSlackRoomHistory({
+      ctx,
+      message,
+      threadTs: threadScopedHistory ? threadTs : undefined,
+      oldest: sessionEntry?.sessionStartedAt
+        ? (sessionEntry.sessionStartedAt / 1_000).toFixed(6)
+        : undefined,
+      excludedMessageIds,
+      allowFromLower: threadContextAllowFromLower,
+      contextVisibilityMode,
+      eventScope: opts.eventScope,
+      assertCurrent: assertHistoryCurrent,
+      abortSignal: opts.abortSignal,
+    });
   }
 
   // Use direct media (including forwarded attachment media) if available, else thread starter media

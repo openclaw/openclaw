@@ -12,7 +12,6 @@ import {
   listSubagentRunsForRequester,
   markRequesterTurnYielded,
   registerSubagentRun,
-  resetSubagentRegistryForTests,
   settleRequesterAfterSessionSpawns,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import {
@@ -29,6 +28,7 @@ import { resetTaskRegistryForTests } from "../../tasks/task-registry.test-suppor
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { waitForAgentJob } from "../agent-turn/agent-job.js";
+import { withPluginSubagentTestState } from "./agent-task-tracking.test-helpers.js";
 import { observeCronContinuationLifetime } from "./agent.cron-continuation-lifetime.test-support.js";
 import {
   backendGatewayClient,
@@ -306,11 +306,10 @@ export function registerYieldedRequesterSettlementCase(
   mockSpawnedChildSessionEntry: (sessionKey: string, root: string) => void,
 ) {
   it("keeps one task when a completed child wakes its requester before the yielded lifecycle ends", async () => {
-    await withTestDir({ prefix: "openclaw-gateway-yield-settlement-race-" }, async (root) => {
-      useTestStateDir(root);
+    await withPluginSubagentTestState("openclaw-gateway-yield-settlement-race-", async (state) => {
+      const root = state.stateDir;
       // Adoption commits the registry and its canonical task together in SQLite.
       resetTaskRegistryForTests({ persist: false });
-      resetSubagentRegistryForTests({ persist: false });
       const requesterSessionKey = "agent:main:main";
       const childSessionKey = "agent:main:subagent:settlement-orchestrator";
       const workerSessionKey = "agent:main:subagent:settlement-worker";
@@ -375,7 +374,7 @@ export function registerYieldedRequesterSettlementCase(
             ? previousWait.promise
             : completion.promise),
       );
-      registerSubagentRun({
+      await registerSubagentRun({
         runId: previousRunId,
         childSessionKey,
         requesterSessionKey,

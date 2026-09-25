@@ -6,10 +6,13 @@ import {
 } from "../process/supervisor/adapters/child.js";
 import { supportsNodeWorkerProcessOwner } from "../process/supervisor/service-child-protocol.js";
 import { createServiceChildRelayAdapter } from "../process/supervisor/service-child-relay-host.js";
+import type { SpawnSecretInput } from "../process/supervisor/types.js";
 import type { WorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
 import {
   projectNativeInferenceStartup,
   WORKER_NATIVE_INFERENCE_STARTUP_ENV,
+  WORKER_NATIVE_INFERENCE_STARTUP_FD,
+  WORKER_NATIVE_INFERENCE_STARTUP_MAX_BYTES,
 } from "../worker/native-inference-startup.js";
 import type { NativeInferenceStartup } from "../worker/native-inference-startup.js";
 import { parseNodeWorkerConnectionFailureMessage } from "../worker/node-supervisor-protocol.js";
@@ -76,6 +79,7 @@ export async function prepareNodeWorkerLaunchTransport(
   // caller-provided carrier, including to ordinary proxied children.
   const workerEnv = { ...options.workerEnv };
   delete workerEnv[WORKER_NATIVE_INFERENCE_STARTUP_ENV];
+  let secretInput: SpawnSecretInput | undefined;
   if (options.descriptor.assignment.inference === "runtime-local") {
     if (options.containerEngine) {
       throw new Error(
@@ -89,7 +93,15 @@ export async function prepareNodeWorkerLaunchTransport(
       options.nativeInferenceStartup,
       options.descriptor,
     );
-    workerEnv[WORKER_NATIVE_INFERENCE_STARTUP_ENV] = JSON.stringify(startup);
+    const encoded = JSON.stringify(startup);
+    if (Buffer.byteLength(encoded) > WORKER_NATIVE_INFERENCE_STARTUP_MAX_BYTES) {
+      throw new Error("Node worker native inference startup configuration exceeds the size limit");
+    }
+    workerEnv[WORKER_NATIVE_INFERENCE_STARTUP_ENV] = String(WORKER_NATIVE_INFERENCE_STARTUP_FD);
+    secretInput = {
+      fd: WORKER_NATIVE_INFERENCE_STARTUP_FD,
+      createData: () => Buffer.from(encoded),
+    };
   }
   const entry = resolveNodeWorkerEntry({
     bundleRoot: options.bundleRoot,
@@ -100,6 +112,7 @@ export async function prepareNodeWorkerLaunchTransport(
     const args = [entry, "--internal-worker-ipc", "--internal-worker-session"];
     const workerOptions = {
       env: workerEnv,
+      secretInput,
       ownedWorker: true,
       stdinMode: "pipe-open",
       stdoutConsumption: "awaited",

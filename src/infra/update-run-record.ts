@@ -1,9 +1,10 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { z } from "zod";
+import type { UpdateRunRecord as PublicUpdateRunRecord } from "../../packages/gateway-protocol/src/schema/update-runs.js";
 import { LEGACY_UPDATE_RUN_EXPIRED_REASON } from "./update-run-legacy-expiry.js";
 import type { UpdateRunRecoveryState } from "./update-run-recovery-state.js";
 import type { UpdateRunRecordSchema } from "./update-run-schema.js";
-import type { UpdateStepResult } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 export function updateStepDiagnostics(
   step: Pick<UpdateStepResult, "failureFacts" | "stdoutTail" | "stderrTail">,
@@ -94,6 +95,13 @@ export function summarizeUpdateStepFailure(
 }
 
 export type UpdateRunRecord = z.infer<typeof UpdateRunRecordSchema>;
+
+/** Operational capture receipts stay in the private ledger, not status or diagnostic exports. */
+export function toPublicUpdateRun(record: UpdateRunRecord): PublicUpdateRunRecord {
+  const origin = { ...record.origin };
+  delete origin.updateRecoveryCapture;
+  return { ...record, origin };
+}
 export type UpdateRunPhase = UpdateRunRecord["phase"];
 export type UpdateRunStep = UpdateRunRecord["steps"][number];
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chatModelUnavailableBanner, requiresChatModelSetup } from "./chat-model-setup.ts";
+import { resolveChatModelSetup, requiresChatModelSetup } from "./chat-model-setup.ts";
 
 describe("requiresChatModelSetup", () => {
   it("requires setup after the selected agent loads without a model route", () => {
@@ -56,22 +56,55 @@ describe("worker inference credential banner", () => {
     "ignores only Gateway provider credentials for a current worker placement (%s)",
     (unavailableReason) => {
       const catalog = [
-        { id: "gpt-4.1-mini", provider: "openai", available: false, unavailableReason },
+        {
+          id: "gpt-4.1-mini",
+          name: "GPT-4.1 mini",
+          provider: "openai",
+          available: false,
+          unavailableReason,
+        },
       ];
       const banner = (
         placement?:
-          | typeof active
+          | (Omit<typeof active, "inference"> & { inference?: "worker" })
           | (Omit<typeof active, "state"> & { state: "reclaimed" | "local" }),
+        overrides: Partial<Parameters<typeof resolveChatModelSetup>[0]> = {},
       ) =>
-        chatModelUnavailableBanner("gpt-4.1-mini", "openai", catalog, () => undefined, placement);
+        resolveChatModelSetup({
+          catalog: false,
+          connected: true,
+          agentsLoaded: true,
+          selectedAgentFound: true,
+          agentModel: "openai/gpt-4.1-mini",
+          chatModelCatalog: catalog,
+          modelOverrides: {},
+          sessionKey: "agent:main:worker-test",
+          sessionsResult: null,
+          catalogError: null,
+          onSetup: () => undefined,
+          activeSession: {
+            key: "agent:main:worker-test",
+            kind: "direct",
+            updatedAt: 1,
+            model: "gpt-4.1-mini",
+            modelProvider: "openai",
+            placement,
+          },
+          ...overrides,
+        }).modelUnavailableBanner;
       expect(banner()).toBeDefined();
       expect(banner(active)).toBeUndefined();
+      expect(banner(active, { catalogRetired: true })).toBeDefined();
+      expect(
+        banner(active, {
+          modelSelectionPolicy: { restricted: true, defaultModel: null },
+          chatModelCatalog: [],
+        }),
+      ).toBeDefined();
       expect(banner({ ...active, state: "reclaimed" })).toBeDefined();
       expect(banner({ ...active, state: "local" })).toBeDefined();
       const { inference: _inference, ...proxied } = active;
-      expect(
-        chatModelUnavailableBanner("gpt-4.1-mini", "openai", catalog, () => undefined, proxied),
-      ).toBeDefined();
+      expect(banner(proxied)).toBeDefined();
     },
   );
 });

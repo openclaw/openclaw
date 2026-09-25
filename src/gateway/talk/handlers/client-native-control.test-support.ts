@@ -484,15 +484,25 @@ export async function withParkedNativeTask(
                   thinkLevel: "off",
                   fastMode: undefined,
                 },
-                activeSession: embeddedSession,
-                hookRunner: null,
+                agentSession: {
+                  activeSession: embeddedSession,
+                  hookRunner: null,
+                  clientToolCallSlots: [],
+                  hasDeliveredSourceReply: () => false,
+                  markSourceReplyDelivered: () => {},
+                  builtinToolNames: new Set(),
+                  coreBuiltinToolNames: new Set(),
+                  replaySafeToolNames: new Set(),
+                  codeModeExecToolNames: new Set(),
+                  sideEffectToolOwners: new Map(),
+                  trustedLocalMediaToolNames: new Set(),
+                },
                 hookAgentId: AGENT_ID,
                 diagnosticTrace: createDiagnosticTraceContext(),
                 diagnosticOwner: createDiagnosticEmbeddedRunOwner({
                   sessionId: params.sessionId,
                   runId: params.runId,
                 }),
-                clientToolCallSlots: [],
                 nestedToolActivities: [],
                 isReplaySafeTool: () => false,
                 runAbortController,
@@ -504,14 +514,8 @@ export async function withParkedNativeTask(
                   timedOut: false,
                   yieldDetected: false,
                 }),
-                hasDeliveredSourceReply: () => false,
-                markSourceReplyDelivered: () => {},
                 onBlockReply: undefined,
                 onBlockReplyFlush: undefined,
-                sandboxSessionKey: SESSION_KEY,
-                builtinToolNames: new Set(),
-                replaySafeToolNames: new Set(),
-                trustedLocalMediaToolNames: new Set(),
               });
             }
             const handle =
@@ -584,30 +588,48 @@ export async function withParkedNativeTask(
     await nextEventLoopTurn();
   };
   await withNativePlugin(async (fixture) => {
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    let stopObservingCompletion: (() => void) | undefined;
+    const timeoutMs = 1000;
     const prepare = embeddedRuns.prepareEmbeddedAgentRunCompletionClaim;
     const observeRegistration = vi
       .spyOn(embeddedRuns, "prepareEmbeddedAgentRunCompletionClaim")
       .mockImplementation((sessionId, runId) => {
         const claim = prepare(sessionId, runId);
-        if (sessionId === SESSION_ID) {
+        if (sessionId === SESSION_ID && deadline === undefined) {
+          // Workspace and session preparation precede the registration owner's lifetime.
+          phase = "waiting for embedded registration";
+          deadline = setTimeout(() => {
+            failed.reject(
+              new Error(
+                `registration readiness not observed within ${timeoutMs} ms; last phase: ${phase}`,
+              ),
+            );
+          }, timeoutMs);
           registered.resolve(claim.registered);
         }
         return claim;
       });
-    let deadline: ReturnType<typeof setTimeout> | undefined;
     try {
       const session = await connectNativeSession(fixture);
       const readiness = Promise.race([registered.promise, failed.promise]);
-      const timeoutMs = 1000;
-      deadline = setTimeout(() => {
-        failed.reject(
-          new Error(
-            `registration readiness not observed within ${timeoutMs} ms; last phase: ${phase}`,
-          ),
-        );
-      }, timeoutMs);
+      const send = session.socket.send.bind(session.socket);
+      const observeCompletion = vi.spyOn(session.socket, "send").mockImplementation((payload) => {
+        send(payload);
+        const event: unknown = JSON.parse(payload);
+        if (
+          isRecord(event) &&
+          event.type === "delegation.context.append" &&
+          event.delegation_item_id === "original-task"
+        ) {
+          failed.reject(new Error("Native delegation completed before backend registration"));
+        }
+      });
+      stopObservingCompletion = () => observeCompletion.mockRestore();
       session.socket.serverEvent(nativeDelegation("original-task", prompt));
       const registration = await readiness;
+      stopObservingCompletion();
+      stopObservingCompletion = undefined;
       clearTimeout(deadline);
       if (!registration) {
         throw new Error(`registration closed before readiness; last phase: ${phase}`);
@@ -629,6 +651,7 @@ export async function withParkedNativeTask(
         settleBackend,
       });
     } finally {
+      stopObservingCompletion?.();
       clearTimeout(deadline);
       // Setup can fail before the callback that would otherwise release this stream.
       try {

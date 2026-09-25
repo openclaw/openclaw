@@ -1,9 +1,6 @@
 import { getSupportedThinkingLevels } from "@openclaw/ai/internal/runtime";
 import type { SkillResourceDelivery } from "../../packages/gateway-protocol/src/schema/skill-resources.js";
-import type {
-  WorkerLiveEvent,
-  WorkerTranscriptMessage,
-} from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type { WorkerTranscriptMessage } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type {
   WorkerInferenceContext,
   WorkerInferenceModelRef,
@@ -38,10 +35,11 @@ import type { AssistantMessage, AssistantMessageEventStreamLike } from "../llm/t
 import { materializeSkillResources } from "../skills/runtime/resources.js";
 import { createWorkerBrowserToolRuntime, type WorkerBrowserRuntime } from "./browser-runtime.js";
 import { createWorkerComputerTool } from "./computer-runtime.js";
-import { createWorkerLiveRuntime } from "./embedded-agent-live.runtime.js";
+import { createWorkerLiveRuntime, type WorkerLiveClient } from "./embedded-agent-live.runtime.js";
 import {
   createWorkerTranscriptRuntime,
   toWorkerInferenceContext,
+  type WorkerTranscriptClient,
 } from "./embedded-agent-transcript.runtime.js";
 import type { WorkerBrowserLaunchDescriptor, WorkerLaunchPlan } from "./launch-descriptor.js";
 import { createNativeInferenceStreamGuard } from "./native-inference-stream.js";
@@ -74,15 +72,6 @@ type WorkerEmbeddedInferenceClient = {
   ) => AssistantMessageEventStreamLike | Promise<AssistantMessageEventStreamLike>;
 };
 
-type WorkerEmbeddedTranscriptClient = {
-  commit: (messages: WorkerTranscriptMessage[]) => Promise<void>;
-};
-
-type WorkerEmbeddedLiveClient = {
-  enqueuePreview: (event: WorkerLiveEvent) => boolean;
-  emitTerminal: (event: WorkerLiveEvent) => Promise<void>;
-};
-
 type RunWorkerEmbeddedTurnParams = {
   skillResources?: SkillResourceDelivery;
   skillAuthoring?: import("../../packages/gateway-protocol/src/schema/worker-skill-workshop.js").WorkerSkillWorkshopBinding;
@@ -100,8 +89,8 @@ type RunWorkerEmbeddedTurnParams = {
   modelRef: WorkerInferenceModelRef;
   inference: WorkerEmbeddedInferenceClient;
   nativeInference?: NativeRuntimeResolved;
-  transcript: WorkerEmbeddedTranscriptClient;
-  live: WorkerEmbeddedLiveClient;
+  transcript: WorkerTranscriptClient;
+  live: WorkerLiveClient;
   sessions?: Parameters<typeof createWorkerSessionTools>[0];
   initialMessages?: WorkerTranscriptMessage[];
   suppressPromptTranscript?: boolean;
@@ -215,7 +204,7 @@ async function runWorkerEmbeddedTurnWithResources(
     baseSessionManager.appendMessage(structuredClone(message));
   }
 
-  const transcriptRuntime = createWorkerTranscriptRuntime(params.transcript);
+  const transcriptRuntime = createWorkerTranscriptRuntime(params.transcript, params.signal);
   const sessionManager = guardSessionManager(baseSessionManager, {
     suppressNextUserMessagePersistence: params.suppressPromptTranscript,
     onMessagePersisted: transcriptRuntime.onMessagePersisted,

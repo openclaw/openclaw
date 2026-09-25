@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import type { GatewayAgentRow } from "../api/types.ts";
 import {
   controlUiSessionPath,
   createNewSessionPageE2eSuite,
@@ -17,7 +18,7 @@ suite.define(() => {
         cloudPlacementSupported: true,
         cloudPlacementExecutionMode: "worker-turn",
         devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
-      };
+      } satisfies NonNullable<GatewayAgentRow["agentRuntime"]>;
       const placement = {
         state: "active",
         generation: 1,

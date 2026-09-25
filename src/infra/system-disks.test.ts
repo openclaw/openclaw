@@ -189,7 +189,9 @@ describe("system disk snapshots", () => {
       "1 0 8:1 / / rw - ext4 /dev/sda1 rw\n2 1 8:2 / /data rw - xfs /dev/sdb1 rw",
     );
     expect(await readSystemDisks()).toHaveLength(1);
-    vi.advanceTimersByTime(10_001);
+    vi.advanceTimersByTime(29_999);
+    expect(await readSystemDisks()).toHaveLength(1);
+    vi.advanceTimersByTime(1);
     expect(await readSystemDisks()).toHaveLength(2);
   });
 
@@ -199,7 +201,7 @@ describe("system disk snapshots", () => {
     const { readSystemDisks } = await import("./system-disks.js");
     expect(await readSystemDisks()).toBeUndefined();
     mocks.readFile.mockResolvedValue("1 0 8:1 / / rw - ext4 /dev/sda1 rw");
-    vi.advanceTimersByTime(10_001);
+    vi.advanceTimersByTime(30_001);
     expect(await readSystemDisks()).toHaveLength(1);
   });
 
@@ -260,7 +262,7 @@ describe("system disk snapshots", () => {
     expect(await pending).toEqual([
       { path: "/", totalBytes: 2_048_000, availableBytes: 1_024_000 },
     ]);
-    await vi.advanceTimersByTimeAsync(10_001);
+    await vi.advanceTimersByTimeAsync(30_001);
     expect(await readSystemDisks()).toBeUndefined();
     expect(mocks.statfs).toHaveBeenCalledTimes(2);
   });
@@ -300,7 +302,7 @@ describe("system disk snapshots", () => {
       await vi.advanceTimersByTimeAsync(3000);
       expect(await pending).toBeUndefined();
       expect(mocks.statfs).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(10_001);
+      await vi.advanceTimersByTimeAsync(30_001);
     }
     blocked.resolve({ blocks: 2000n, frsize: 1024n, bavail: 1000n });
     await vi.advanceTimersByTimeAsync(0);

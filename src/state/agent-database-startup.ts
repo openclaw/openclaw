@@ -17,7 +17,7 @@ import {
   preparePendingAgentDatabase,
   type AgentDatabaseAdmissionRefusal,
 } from "./agent-database-admission.js";
-import { readAgentDeletionJournal } from "./agent-deletion-journal.js";
+import { readAgentDeletionJournalStatusInWorker } from "./agent-deletion-journal.read.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import type { OpenClawDatabaseSchemaPreflight } from "./openclaw-database-preflight.types.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
@@ -240,14 +240,23 @@ class AgentDatabaseStartupAdmission {
             if (!activation.isCurrent() || this.pending.get(agentId) !== refusal) {
               throw new Error(`Gateway no longer owns preparation for agent ${agentId}`);
             }
-            if (readAgentDeletionJournal(agentId, { env })) {
-              throw new Error(`Agent ${agentId} was deleted during startup inspection`);
-            }
             for (const witness of witnesses) {
               if (!witness.identity) {
                 throw witness.error;
               }
               readSqliteIntegrityFileIdentity(witness.pathname, witness.identity);
+            }
+          };
+          const assertNotDeleted = async () => {
+            assertCurrent();
+            const deletion = await readAgentDeletionJournalStatusInWorker(
+              agentId,
+              { env },
+              this.signal,
+            );
+            assertCurrent();
+            if (deletion !== "absent") {
+              throw new Error(`Agent ${agentId} was deleted during startup inspection`);
             }
           };
           try {
@@ -271,16 +280,19 @@ class AgentDatabaseStartupAdmission {
               }
             }
             await withSqliteReadOnlyWorkerScope(
-              () =>
-                preparePendingAgentDatabase(refusal, { env, assertCurrent }, () =>
-                  activation.prepareAgent({
+              async () => {
+                await assertNotDeleted();
+                await preparePendingAgentDatabase(refusal, { env, assertCurrent }, async () => {
+                  await activation.prepareAgent({
                     agentId,
                     paths,
                     env,
                     signal: this.signal,
                     assertCurrent,
-                  }),
-                ),
+                  });
+                  await assertNotDeleted();
+                });
+              },
               { signal: this.signal, deadlineOwnedByCaller: true },
             );
             log.info("agent database recovered after background inspection and preparation", {

@@ -4,7 +4,12 @@ import path from "node:path";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { sameFileMutationFingerprint } from "./file-descriptor.js";
 import { hasNodeErrorCode, isPathInside } from "./path-guards.js";
-import { relocateRuntimePath } from "./update-runtime-relocation.js";
+import {
+  captureUpdateCandidatePluginCodeLink,
+  type UpdateCandidatePluginCodeLink,
+} from "./update-candidate-plugin-code-links.js";
+import { createRuntimePathLookup } from "./update-runtime-path-index.js";
+import { prepareRuntimeRelocations, relocateRuntimePath } from "./update-runtime-relocation.js";
 
 export type UpdateCandidatePluginTreeEntry = {
   path: string;
@@ -73,8 +78,10 @@ export function resolveUpdateCandidatePluginTreeTargets(
   if (candidateRoot !== plan.candidateRoot) {
     throw new Error("Plugin files changed during update preparation; rerun the update");
   }
-  const rebase = (file: string) =>
-    relocateRuntimePath(file, [{ sourceRoot: plan.privateRoot, destinationRoot: privateRoot }]);
+  const rebasing = prepareRuntimeRelocations([
+    { sourceRoot: plan.privateRoot, destinationRoot: privateRoot },
+  ]);
+  const rebase = (file: string) => relocateRuntimePath(file, rebasing);
   const copies = plan.copies.map<[string, string]>(([source, target]) => [source, rebase(target)]);
   for (const [, target] of copies) {
     const destination = resolvePathViaExistingAncestorSync(target);
@@ -87,8 +94,9 @@ export function resolveUpdateCandidatePluginTreeTargets(
       }
     }
   }
+  const copyOwner = createRuntimePathLookup(copies.map((copy) => [copy[0], copy] as const));
   const destinationFor = (source: string) => {
-    const owner = copies.find(([root]) => isPathInside(root, source));
+    const owner = copyOwner(source);
     if (!owner) {
       throw new Error("Inventoried plugin entry has no copy owner");
     }
@@ -118,10 +126,12 @@ export function resolveUpdateCandidatePluginTreeTargets(
     candidateRoot,
     copies,
     hostLinks: new Set(plan.hostLinks.map(rebase)),
-    relocations: plan.relocations.map(({ sourceRoot, destinationRoot }) => ({
-      sourceRoot,
-      destinationRoot: rebase(destinationRoot),
-    })),
+    relocations: prepareRuntimeRelocations(
+      plan.relocations.map(({ sourceRoot, destinationRoot }) => ({
+        sourceRoot,
+        destinationRoot: rebase(destinationRoot),
+      })),
+    ),
     aliases: plan.aliases.map<[string, string]>(([alias, target]) => [
       rebase(alias),
       rebase(target),
@@ -203,26 +213,30 @@ export function assertUpdateCandidatePluginLinkTarget(
 
 export async function verifyUpdateCandidatePluginTree(
   file: string,
-  params: { privateRoot: string; candidateRoot: string; hostLinks: Set<string> },
+  params: {
+    privateRoot: string;
+    candidateRoot: string;
+    hostLinks: Set<string>;
+    onCodeLink?: (fact: UpdateCandidatePluginCodeLink) => void;
+  },
 ): Promise<void> {
-  const stat = await fs.lstat(file);
+  const stat = await fs.lstat(file, { bigint: true });
+  const link = stat.isSymbolicLink() ? await fs.readlink(file) : undefined;
   if (params.hostLinks.has(file)) {
     if (
       !stat.isSymbolicLink() ||
-      path.resolve(path.dirname(file), await fs.readlink(file)) !== params.candidateRoot
+      path.resolve(path.dirname(file), link!) !== params.candidateRoot
     ) {
       throw new Error("Copied plugin host link does not target the update");
     }
+    params.onCodeLink?.(captureUpdateCandidatePluginCodeLink(file, stat, link!));
     return;
   }
   // Inspect the entry before traversal, including standalone module aliases;
   // following a copied root link can otherwise accept an entirely live tree.
   if (stat.isSymbolicLink()) {
-    assertUpdateCandidatePluginLinkTarget(
-      file,
-      path.resolve(path.dirname(file), await fs.readlink(file)),
-      params,
-    );
+    assertUpdateCandidatePluginLinkTarget(file, path.resolve(path.dirname(file), link!), params);
+    params.onCodeLink?.(captureUpdateCandidatePluginCodeLink(file, stat, link!));
     return;
   }
   if (stat.isDirectory()) {

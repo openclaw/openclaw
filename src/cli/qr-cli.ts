@@ -36,16 +36,8 @@ type QrCliOptions = {
 const LIMITED_TRANSPORT_WARNING =
   "This Gateway URL uses plaintext ws://, so the setup code was limited for safety. Use wss:// or Tailscale Serve, then generate a new code for full access.";
 
-function renderQrAscii(data: string): Promise<string> {
-  return renderQrTerminal(data, { small: true });
-}
 function readDevicePairPublicUrlFromConfig(cfg: OpenClawConfig): string | undefined {
-  const value = cfg.plugins?.entries?.["device-pair"]?.config?.["publicUrl"];
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
+  return trimToUndefined(cfg.plugins?.entries?.["device-pair"]?.config?.["publicUrl"]);
 }
 
 function shouldResolveLocalGatewayPasswordSecret(
@@ -203,12 +195,7 @@ export function registerQrCli(program: Command) {
           await resolveLocalGatewayPasswordSecretIfNeeded(cfg);
         }
 
-        const explicitUrl =
-          typeof opts.url === "string" && opts.url.trim()
-            ? opts.url.trim()
-            : typeof opts.publicUrl === "string" && opts.publicUrl.trim()
-              ? opts.publicUrl.trim()
-              : undefined;
+        const explicitUrl = trimToUndefined(opts.url) ?? trimToUndefined(opts.publicUrl);
         const publicUrl =
           explicitUrl ?? (wantsRemote ? undefined : readDevicePairPublicUrlFromConfig(cfg));
 
@@ -264,7 +251,7 @@ export function registerQrCli(program: Command) {
         ];
 
         if (opts.ascii !== false) {
-          const qrAscii = await renderQrAscii(setupCode);
+          const qrAscii = await renderQrTerminal(setupCode, { small: true });
           lines.push(qrAscii.trimEnd(), "");
         }
 

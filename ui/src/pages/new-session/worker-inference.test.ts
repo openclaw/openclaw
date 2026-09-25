@@ -138,6 +138,15 @@ describe("worker inference New Session scope", () => {
     expect(flow.submitBlock()?.gate).toBe("model-unavailable");
   });
 
+  it("still waits for current agent defaults on a worker-inference profile", async () => {
+    const { flow, place, context } = await fixture();
+    place.selectCloudProfile("direct");
+    context.agents.state.agentsListCached = true;
+    expect(flow.submitBlock()?.gate).toBe("agents");
+    context.agents.state.agentsListCached = false;
+    expect(flow.canSubmit()).toBe(true);
+  });
+
   it("does not relax Gateway permission checks for worker inference", async () => {
     const { flow, place, context } = await fixture();
     place.selectCloudProfile("direct");

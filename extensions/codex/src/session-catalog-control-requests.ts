@@ -47,7 +47,7 @@ export type CodexSessionCatalogRequestSnapshot = {
   archiveThread(threadId: string, assertCurrent?: () => void): Promise<void>;
 };
 
-export type CodexCatalogRequestMethod =
+type CodexCatalogRequestMethod =
   | typeof CODEX_CONTROL_METHODS.archiveThread
   | typeof CODEX_CONTROL_METHODS.forkThread
   | typeof CODEX_CONTROL_METHODS.listThreads
@@ -167,16 +167,13 @@ export function createCodexSessionCatalogControlFromRequests(params: {
     },
     async listDescendantPage(listParams) {
       const requests = params.createRequestSnapshot();
-      const response = await requests.listThreads(listParams, requests.requestTimeoutMs);
-      return response;
+      return await requests.listThreads(listParams, requests.requestTimeoutMs);
     },
     async readThread(threadId, includeTurns = false) {
-      const thread = await params.createRequestSnapshot().readThread(threadId, includeTurns);
-      return thread;
+      return await params.createRequestSnapshot().readThread(threadId, includeTurns);
     },
     async listTurnPage(listParams) {
-      const response = await params.createRequestSnapshot().listThreadTurns(listParams);
-      return response;
+      return await params.createRequestSnapshot().listThreadTurns(listParams);
     },
     listItemPage: (listParams) => params.createRequestSnapshot().listThreadItems(listParams),
     async forkThread(forkParams, assertCurrent) {

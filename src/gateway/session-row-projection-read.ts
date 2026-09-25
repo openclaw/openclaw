@@ -21,7 +21,6 @@ import {
   type PreparedSessionRowDatabaseFacts,
   type Row,
 } from "./session-row-projection-record.js";
-import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 
 /** Retain each selected store until its prepared facts have entered the resident row owner. */
 export async function withSessionRowDatabaseFacts(
@@ -53,7 +52,20 @@ export async function withSessionRowDatabaseFacts(
   if (consume.refreshPending(ids)) {
     return;
   }
+  const retained = new Map<string, PreparedSessionRowDatabaseFacts>();
+  for (const id of ids) {
+    const facts = owner.rows.get(id)?.retainedDatabaseFacts;
+    if (facts) {
+      retained.set(id, facts);
+    }
+  }
+  if (retained.size > 0) {
+    // Related-row changes retain stored facts but still need current lineage.
+    consume.accept([...retained.keys()], retained);
+    return;
+  }
   const rows = ids.flatMap((id) => owner.rows.get(id) ?? []);
+  const rowRevisions = new Map(rows.map((row) => [identity(row), row.databaseFactsRevision]));
   const env = cloneEnvWithPlatformSemantics(process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const groups = new Map<
@@ -152,11 +164,7 @@ export async function withSessionRowDatabaseFacts(
           cfg: owner.cfg,
           entries: acpRows.map(({ row, entry }) => ({
             agentId: row.agentId,
-            sessionKey: resolveStoredSessionKeyForAgentStore({
-              cfg: owner.cfg,
-              agentId: row.agentId,
-              sessionKey: row.key,
-            }),
+            sessionKey: row.key,
             entry,
           })),
         });
@@ -178,7 +186,9 @@ export async function withSessionRowDatabaseFacts(
                 (owner.dirty.has(identity(row)) ||
                   (owner.selected?.has(identity(row)) &&
                     isColdArchivedSessionRow(owner.rows.get(identity(row)) ?? row))) &&
-                isCurrentGeneration(row, owner.rows.get(identity(row))),
+                isCurrentGeneration(row, owner.rows.get(identity(row))) &&
+                owner.rows.get(identity(row))?.databaseFactsRevision ===
+                  rowRevisions.get(identity(row)),
             )
             .map(identity);
           consume.accept(currentIds, facts);

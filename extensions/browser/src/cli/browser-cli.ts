@@ -5,21 +5,17 @@ import type { Command } from "commander";
 import {
   registerCommandGroups,
   shouldEagerRegisterSubcommands,
-  type CommandGroupEntry,
   type CommandGroupPlaceholder,
+  formatCliCommand,
+  formatHelpExamples,
+  theme,
 } from "openclaw/plugin-sdk/cli-runtime";
+import { addGatewayClientOptions } from "openclaw/plugin-sdk/gateway-runtime";
+import { danger, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
+import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { resolveBrowserLazySubcommand } from "../../cli-output-mode.js";
 import { browserActionExamples, browserCoreExamples } from "./browser-cli-examples.js";
 import type { BrowserParentOpts } from "./browser-cli-shared.js";
-import {
-  addGatewayClientOptions,
-  danger,
-  defaultRuntime,
-  formatCliCommand,
-  formatDocsLink,
-  formatHelpExamples,
-  theme,
-} from "./core-api.js";
 
 type BrowserCommandRegistrar = (args: {
   browser: Command;
@@ -109,7 +105,7 @@ const browserCommandGroupDefinitions: readonly BrowserCommandGroupDefinition[] =
       command("batch", "Run a batch of browser actions in one call"),
     ],
     register: async (args) => {
-      const module = await import("./browser-cli-actions-input.js");
+      const module = await import("./browser-cli-actions-input/register.js");
       module.registerBrowserActionInputCommands(args.browser, args.parentOpts);
     },
   },
@@ -156,31 +152,6 @@ const browserCommandGroupDefinitions: readonly BrowserCommandGroupDefinition[] =
   },
 ];
 
-function buildBrowserCommandGroups(params: {
-  browser: Command;
-  parentOpts: (cmd: Command) => BrowserParentOpts;
-  pluginRoot?: string;
-}): CommandGroupEntry[] {
-  return browserCommandGroupDefinitions.map((entry) => ({
-    placeholders: entry.placeholders,
-    register: async () => await entry.register(params),
-  }));
-}
-
-function registerLazyBrowserCommands(
-  browser: Command,
-  parentOpts: (cmd: Command) => BrowserParentOpts,
-  argv: string[],
-  pluginRoot?: string,
-) {
-  const subcommand = resolveBrowserLazySubcommand(argv);
-  registerCommandGroups(browser, buildBrowserCommandGroups({ browser, parentOpts, pluginRoot }), {
-    eager: shouldEagerRegisterSubcommands(),
-    primary: subcommand,
-    registerPrimaryOnly: subcommand !== null,
-  });
-}
-
 /** Registers the Browser CLI command and its lazy-loaded subcommand groups. */
 export function registerBrowserCli(
   program: Command,
@@ -215,5 +186,17 @@ export function registerBrowserCli(
 
   const parentOpts = () => browser.opts<BrowserParentOpts>();
 
-  registerLazyBrowserCommands(browser, parentOpts, argv, pluginRoot);
+  const subcommand = resolveBrowserLazySubcommand(argv);
+  registerCommandGroups(
+    browser,
+    browserCommandGroupDefinitions.map((entry) => ({
+      placeholders: entry.placeholders,
+      register: async () => await entry.register({ browser, parentOpts, pluginRoot }),
+    })),
+    {
+      eager: shouldEagerRegisterSubcommands(),
+      primary: subcommand,
+      registerPrimaryOnly: subcommand !== null,
+    },
+  );
 }

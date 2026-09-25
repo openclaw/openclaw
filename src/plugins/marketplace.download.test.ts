@@ -1,7 +1,9 @@
+import { constants } from "node:fs";
 // Covers streamed marketplace archive downloads through the installer boundary.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { configureFsSafeNative, getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import {
@@ -255,13 +257,21 @@ describe("marketplace archive downloads", () => {
         finalUrl: "https://cdn.example.com/releases/12345",
         release,
       });
-      installPluginFromPathMock.mockResolvedValue({
-        ok: true,
-        pluginId: "frontend-design",
-        targetDir: "/tmp/frontend-design",
-        version: "0.1.0",
-        extensions: ["index.ts"],
-      });
+      installPluginFromPathMock.mockImplementation(
+        async ({ path: archivePath }: { path: string }) => {
+          expect(await fs.readFile(archivePath, "utf8")).toBe("tgz-bytes");
+          if (process.platform !== "win32") {
+            expect((await fs.stat(archivePath)).mode & 0o777).toBe(0o666 & ~process.umask());
+          }
+          return {
+            ok: true,
+            pluginId: "frontend-design",
+            targetDir: "/tmp/frontend-design",
+            version: "0.1.0",
+            extensions: ["index.ts"],
+          };
+        },
+      );
       const manifestPath = await writeArchiveMarketplaceManifest(rootDir);
 
       const result = await installPluginFromMarketplace({
@@ -331,9 +341,7 @@ describe("marketplace archive downloads", () => {
           .fn()
           .mockResolvedValueOnce({
             done: false,
-            value: {
-              length: 256 * 1024 * 1024 + 1,
-            } as Uint8Array,
+            value: new Uint8Array(256 * 1024 * 1024 + 1),
           })
           .mockResolvedValueOnce({ done: true, value: undefined }),
         cancel: vi.fn(async () => undefined),
@@ -345,6 +353,7 @@ describe("marketplace archive downloads", () => {
           status: 200,
           body: {
             getReader: () => reader,
+            cancel: vi.fn(async () => undefined),
           } as unknown as Response["body"],
           headers: new Headers(),
           arrayBuffer,
@@ -363,7 +372,7 @@ describe("marketplace archive downloads", () => {
         ok: false,
         error:
           "failed to download https://example.com/frontend-design.tgz: " +
-          "download too large: 268435457 bytes (limit: 268435456 bytes)",
+          "file exceeds limit of 268435456 bytes (got at least 268435457)",
       });
       expect(arrayBuffer).not.toHaveBeenCalled();
       expect(reader.cancel).toHaveBeenCalledTimes(1);
@@ -458,10 +467,11 @@ describe("marketplace archive downloads", () => {
     await withTempDir("openclaw-marketplace-test-", async (rootDir) => {
       const beforeTempDirs = await listMarketplaceDownloadTempDirs();
       const reader = {
-        read: vi.fn(async () => ({
-          done: false,
-          value: { length: 268_435_457 },
-        })),
+        read: vi
+          .fn()
+          .mockResolvedValueOnce({ done: false, value: Buffer.from("partial archive") })
+          .mockRejectedValueOnce(new Error("archive stream failed")),
+        cancel: vi.fn(async () => undefined),
         releaseLock: vi.fn(),
       };
       fetchWithSsrFGuardMock.mockResolvedValueOnce({
@@ -470,6 +480,7 @@ describe("marketplace archive downloads", () => {
           status: 200,
           body: {
             getReader: () => reader,
+            cancel: vi.fn(async () => undefined),
           } as unknown as Response["body"],
           headers: new Headers(),
         } as unknown as Response,
@@ -485,70 +496,91 @@ describe("marketplace archive downloads", () => {
 
       expect(result).toEqual({
         ok: false,
-        error:
-          "failed to download https://example.com/frontend-design.tgz: " +
-          "download too large: 268435457 bytes (limit: 268435456 bytes)",
+        error: "failed to download https://example.com/frontend-design.tgz: archive stream failed",
       });
-      expect(reader.read).toHaveBeenCalledTimes(1);
+      expect(reader.read).toHaveBeenCalledTimes(2);
+      expect(reader.cancel).toHaveBeenCalledTimes(1);
       expect(reader.releaseLock).toHaveBeenCalledTimes(1);
       expect(await listMarketplaceDownloadTempDirs()).toEqual(beforeTempDirs);
       expect(installPluginFromPathMock).not.toHaveBeenCalled();
     });
   });
 
-  it("cancels and removes a download when its file write makes no progress", async () => {
-    await withTempDir("openclaw-marketplace-test-", async (rootDir) => {
-      const manifestPath = await writeArchiveMarketplaceManifest(rootDir);
-      const cancel = vi.fn();
-      const response = new Response(
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.enqueue(Buffer.from("archive fixture"));
-          },
-          cancel,
-        }),
-      );
-      const release = vi.fn(async () => undefined);
-      fetchWithSsrFGuardMock.mockResolvedValueOnce({
-        response,
-        finalUrl: "https://example.com/frontend-design.tgz",
-        release,
-      });
-      const open = fs.open.bind(fs);
-      const downloads: { pathname: string; handle: Awaited<ReturnType<typeof fs.open>> }[] = [];
-      vi.spyOn(fs, "open").mockImplementation(async (pathname, flags, mode) => {
-        const handle = await open(pathname, flags, mode);
-        if (flags === "wx" && path.basename(String(pathname)) === "frontend-design.tgz") {
-          downloads.push({ pathname: String(pathname), handle });
-          vi.spyOn(handle, "write").mockImplementation(async (buffer) => ({
-            bytesWritten: 0,
-            buffer,
-          }));
+  it.each(["open fails", "write makes no progress"])(
+    "cancels and removes a download when its file %s",
+    async (failure) => {
+      const nativeMode = getFsSafeNativeConfig().mode;
+      configureFsSafeNative({ mode: "off" });
+      await withTempDir("openclaw-marketplace-test-", async (rootDir) => {
+        const manifestPath = await writeArchiveMarketplaceManifest(rootDir);
+        const cancel = vi.fn();
+        const response = new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(Buffer.from("archive fixture"));
+            },
+            cancel,
+          }),
+        );
+        const release = vi.fn(async () => undefined);
+        fetchWithSsrFGuardMock.mockResolvedValueOnce({
+          response,
+          finalUrl: "https://example.com/frontend-design.tgz",
+          release,
+        });
+        const open = fs.open.bind(fs);
+        const attemptedPaths: string[] = [];
+        const downloads: { pathname: string; handle: Awaited<ReturnType<typeof fs.open>> }[] = [];
+        vi.spyOn(fs, "open").mockImplementation(async (pathname, flags, mode) => {
+          const isDownload =
+            String(pathname).includes("openclaw-marketplace-download-") &&
+            (flags === "wx" || (typeof flags === "number" && (flags & constants.O_WRONLY) !== 0));
+          if (isDownload) {
+            attemptedPaths.push(String(pathname));
+            if (failure === "open fails") {
+              throw Object.assign(new Error("download destination unavailable"), {
+                code: "EACCES",
+              });
+            }
+          }
+          const handle = await open(pathname, flags, mode);
+          if (isDownload) {
+            downloads.push({ pathname: String(pathname), handle });
+            vi.spyOn(handle, "write").mockImplementation(async (buffer) => ({
+              bytesWritten: 0,
+              buffer,
+            }));
+          }
+          return handle;
+        });
+
+        const result = await installPluginFromMarketplace({
+          marketplace: manifestPath,
+          plugin: "frontend-design",
+        });
+
+        expect(result).toEqual({
+          ok: false,
+          error: expect.stringContaining(
+            failure === "open fails"
+              ? "download destination unavailable"
+              : "file write made no progress",
+          ),
+        });
+        expect(attemptedPaths).toHaveLength(1);
+        for (const download of downloads) {
+          await expect(download.handle.stat()).rejects.toMatchObject({ code: "EBADF" });
         }
-        return handle;
-      });
-
-      const result = await installPluginFromMarketplace({
-        marketplace: manifestPath,
-        plugin: "frontend-design",
-      });
-
-      expect(result).toEqual({
-        ok: false,
-        error:
-          "failed to download https://example.com/frontend-design.tgz: file write made no progress",
-      });
-      expect(downloads).toHaveLength(1);
-      await expect(downloads[0]!.handle.stat()).rejects.toMatchObject({ code: "EBADF" });
-      await expect(fs.stat(path.dirname(downloads[0]!.pathname))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
-      expect(cancel).toHaveBeenCalledTimes(1);
-      expect(response.body?.locked).toBe(false);
-      expect(release).toHaveBeenCalledTimes(1);
-      expect(installPluginFromPathMock).not.toHaveBeenCalled();
-    });
-  });
+        await expect(fs.stat(path.dirname(attemptedPaths[0]!))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        expect(cancel).toHaveBeenCalledTimes(1);
+        expect(response.body?.locked).toBe(false);
+        expect(release).toHaveBeenCalledTimes(1);
+        expect(installPluginFromPathMock).not.toHaveBeenCalled();
+      }).finally(() => configureFsSafeNative({ mode: nativeMode }));
+    },
+  );
 
   it("sanitizes archive download errors before returning them", async () => {
     await withTempDir("openclaw-marketplace-test-", async (rootDir) => {

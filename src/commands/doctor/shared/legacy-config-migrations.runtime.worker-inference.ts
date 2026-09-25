@@ -1,8 +1,8 @@
 import { defineLegacyConfigMigration, getRecord } from "../../../config/legacy.shared.js";
 
 function legacyDeviceInferenceProfiles(value: unknown) {
-  return Object.entries(getRecord(value) ?? {}).flatMap(([id, value]) => {
-    const profile = getRecord(value);
+  return Object.entries(getRecord(value) ?? {}).flatMap(([id, profileValue]) => {
+    const profile = getRecord(profileValue);
     const settings = getRecord(profile?.settings);
     return typeof profile?.provider === "string" &&
       profile.provider.trim() === "device" &&

@@ -5,82 +5,41 @@
  */
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import type { Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
-import type {
-  ChannelIngressEvents,
-  DB as OpenClawStateKyselyDatabase,
-} from "../../state/openclaw-state-db.generated.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
   openExistingOpenClawStateDatabaseReadOnly,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import {
+  FAILED_NULL_PAYLOAD_SENTINEL,
+  parseFailedPayload,
+  baseRecord,
+  decodeClaimColumns,
+  claimedRecord,
+  corruptClaimRecord,
+  completedRecord,
+} from "./ingress-queue.codec.js";
+import type {
+  ChannelIngressQueueClaim,
+  ChannelIngressQueueClaimRef,
+  ChannelIngressQueueCompletedRecord,
+  ChannelIngressQueueCorruptClaim,
+  ChannelIngressQueueRecord,
+  ChannelIngressRow,
+} from "./ingress-queue.types.js";
 
-/** Pending or retryable inbound channel event stored in the durable ingress queue. */
-export type ChannelIngressQueueRecord<TPayload, TMetadata = unknown> = {
-  id: string;
-  channelId: string;
-  accountId: string;
-  queueName: string;
-  payload: TPayload;
-  metadata?: TMetadata;
-  receivedAt: number;
-  updatedAt: number;
-  laneKey?: string;
-  attempts: number;
-  lastAttemptAt?: number;
-  lastError?: string;
-};
-
-/** Pending ingress event currently claimed by a worker. */
-export type ChannelIngressQueueClaim<TPayload, TMetadata = unknown> = ChannelIngressQueueRecord<
-  TPayload,
-  TMetadata
-> & {
-  claim: {
-    token: string;
-    ownerId: string;
-    claimedAt: number;
-  };
-};
-
-/** Minimal claim reference used to guard completion/release/failure with a claim token. */
-export type ChannelIngressQueueClaimRef = {
-  id: string;
-  claim: {
-    token: string;
-  };
-};
-
-/** Claim identity available when a stale row's payload cannot be decoded. */
-export type ChannelIngressQueueCorruptClaim = {
-  id: string;
-  channelId: string;
-  accountId: string;
-  queueName: string;
-  laneKey?: string;
-  reason: "corrupt_payload";
-  claim: {
-    token: string;
-    ownerId: string;
-    claimedAt: number;
-  };
-};
-
-/** Completed ingress event tombstone retained for duplicate detection. */
-type ChannelIngressQueueCompletedRecord<TCompletedMetadata = unknown> = {
-  id: string;
-  channelId: string;
-  accountId: string;
-  queueName: string;
-  completedAt: number;
-  metadata?: TCompletedMetadata;
-};
+export type {
+  ChannelIngressQueueClaim,
+  ChannelIngressQueueClaimRef,
+  ChannelIngressQueueCorruptClaim,
+  ChannelIngressQueueRecord,
+} from "./ingress-queue.types.js";
 
 /** Failed ingress event tombstone retained for duplicate detection. */
 type ChannelIngressQueueFailedRecord = {
@@ -262,11 +221,6 @@ export type CreateChannelIngressQueueOptions = {
 };
 
 type ChannelIngressDatabase = Pick<OpenClawStateKyselyDatabase, "channel_ingress_events">;
-type ChannelIngressRow = Selectable<ChannelIngressEvents>;
-
-// Failed rows need to distinguish a retained JSON null payload from the "null"
-// scrub marker written by older versions. Invalid JSON cannot collide with enqueue output.
-const FAILED_NULL_PAYLOAD_SENTINEL = "OPENCLAW_CHANNEL_INGRESS_FAILED_NULL_V1";
 
 function normalizePart(value: string | undefined, fallback: string): string {
   const normalized = value?.trim();
@@ -334,90 +288,6 @@ function parseJson(value: string): ParseJsonResult {
   } catch {
     return { ok: false };
   }
-}
-
-function parseFailedPayload(value: string): ParseJsonResult {
-  return value === FAILED_NULL_PAYLOAD_SENTINEL ? { ok: true, value: null } : parseJson(value);
-}
-
-function baseRecord<TPayload, TMetadata>(
-  row: ChannelIngressRow,
-): ChannelIngressQueueRecord<TPayload, TMetadata> | null {
-  const payloadResult = parseJson(row.payload_json);
-  if (!payloadResult.ok) {
-    return null;
-  }
-  const metaResult = row.metadata_json === null ? null : parseJson(row.metadata_json);
-  return {
-    id: row.event_id,
-    channelId: row.channel_id,
-    accountId: row.account_id,
-    queueName: row.queue_name,
-    payload: payloadResult.value as TPayload,
-    ...(metaResult === null || !metaResult.ok ? {} : { metadata: metaResult.value as TMetadata }),
-    receivedAt: row.received_at,
-    updatedAt: row.updated_at,
-    ...(row.lane_key === null ? {} : { laneKey: row.lane_key }),
-    attempts: row.attempts,
-    ...(row.last_attempt_at === null ? {} : { lastAttemptAt: row.last_attempt_at }),
-    ...(row.last_error === null ? {} : { lastError: row.last_error }),
-  };
-}
-
-type ChannelIngressClaimColumns = { token: string; ownerId: string; claimedAt: number };
-
-// A claimant writes token/owner/claimed_at in one UPDATE, and complete/release/
-// refresh all match on claim_token. A claimed row missing any of the three has
-// no reachable owner and could never be released; reject it instead of minting
-// sentinel claim identity that release/liveness checks silently fail against.
-function decodeClaimColumns(row: ChannelIngressRow): ChannelIngressClaimColumns | null {
-  if (!row.claim_token || !row.claim_owner || row.claimed_at === null) {
-    return null;
-  }
-  return { token: row.claim_token, ownerId: row.claim_owner, claimedAt: row.claimed_at };
-}
-
-function claimedRecord<TPayload, TMetadata>(
-  row: ChannelIngressRow,
-): ChannelIngressQueueClaim<TPayload, TMetadata> | null {
-  const claim = decodeClaimColumns(row);
-  const base = claim === null ? null : baseRecord<TPayload, TMetadata>(row);
-  if (claim === null || base === null) {
-    return null;
-  }
-  return { ...base, claim };
-}
-
-function corruptClaimRecord(
-  row: ChannelIngressRow,
-  claim: ChannelIngressClaimColumns,
-): ChannelIngressQueueCorruptClaim {
-  return {
-    id: row.event_id,
-    channelId: row.channel_id,
-    accountId: row.account_id,
-    queueName: row.queue_name,
-    ...(row.lane_key === null ? {} : { laneKey: row.lane_key }),
-    reason: "corrupt_payload",
-    claim,
-  };
-}
-
-function completedRecord<TCompletedMetadata>(
-  row: ChannelIngressRow,
-): ChannelIngressQueueCompletedRecord<TCompletedMetadata> {
-  const metaResult =
-    row.completed_metadata_json === null ? null : parseJson(row.completed_metadata_json);
-  return {
-    id: row.event_id,
-    channelId: row.channel_id,
-    accountId: row.account_id,
-    queueName: row.queue_name,
-    completedAt: row.completed_at ?? row.updated_at,
-    ...(metaResult === null || !metaResult.ok
-      ? {}
-      : { metadata: metaResult.value as TCompletedMetadata }),
-  };
 }
 
 function failedRecord<TPayload, TMetadata>(

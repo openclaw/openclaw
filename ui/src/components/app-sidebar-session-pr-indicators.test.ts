@@ -14,10 +14,16 @@ import type { SessionCapability } from "../lib/sessions/index.ts";
 import { SessionPullRequestIndicatorsController } from "./app-sidebar-session-pr-indicators.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 
+const testHosts = new Set<TestHost>();
+
 class TestHost implements ReactiveControllerHost {
   readonly controllers: ReactiveController[] = [];
   readonly requestUpdate = vi.fn();
   readonly updateComplete = Promise.resolve(true);
+
+  constructor() {
+    testHosts.add(this);
+  }
 
   addController(controller: ReactiveController): void {
     this.controllers.push(controller);
@@ -120,6 +126,12 @@ function createGatewayHarness() {
 }
 
 afterEach(() => {
+  for (const host of testHosts) {
+    for (const controller of host.controllers) {
+      controller.hostDisconnected?.();
+    }
+  }
+  testHosts.clear();
   document.querySelectorAll(LIFECYCLE_HOST_TAG).forEach((host) => host.remove());
   vi.useRealTimers();
 });
@@ -168,9 +180,13 @@ describe("SessionPullRequestIndicatorsController", () => {
       controller.hostUpdated();
       await vi.advanceTimersByTimeAsync(0);
       await Promise.resolve();
-      expect(harness.request).toHaveBeenCalledWith(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
-        sessionKeys: [row.key],
-      });
+      expect(harness.request).toHaveBeenCalledWith(
+        SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+        {
+          sessionKeys: [row.key],
+        },
+        { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
+      );
       expect(getRows).toHaveBeenCalledOnce();
 
       harness.emit({
@@ -335,6 +351,7 @@ describe("SessionPullRequestIndicatorsController Lit lifecycle", () => {
     expect(harness.request).toHaveBeenCalledExactlyOnceWith(
       SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
       { sessionKeys: [row.key] },
+      { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
     );
   });
 
@@ -415,26 +432,38 @@ describe("SessionPullRequestIndicatorsController Lit lifecycle", () => {
     const host = mountLifecycleHost(harness.gateway, () => [row]);
     await host.updateComplete;
     await vi.advanceTimersByTimeAsync(0);
-    expect(harness.request).toHaveBeenLastCalledWith(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
-      sessionKeys: [row.key],
-    });
+    expect(harness.request).toHaveBeenLastCalledWith(
+      SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+      {
+        sessionKeys: [row.key],
+      },
+      { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
+    );
 
     host.requestUpdate();
     host.remove();
     await host.updateComplete;
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(harness.request).toHaveBeenLastCalledWith(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
-      sessionKeys: [],
-    });
+    expect(harness.request).toHaveBeenLastCalledWith(
+      SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+      {
+        sessionKeys: [],
+      },
+      { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
+    );
 
     document.body.append(host);
     host.requestUpdate();
     await host.updateComplete;
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(harness.request).toHaveBeenLastCalledWith(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
-      sessionKeys: [row.key],
-    });
+    expect(harness.request).toHaveBeenLastCalledWith(
+      SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+      {
+        sessionKeys: [row.key],
+      },
+      { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
+    );
   });
 });

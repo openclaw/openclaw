@@ -11,6 +11,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -343,14 +344,8 @@ describe("asynchronous registry restoration", () => {
         },
       },
     });
-    const native = requireNodeSqlite();
-    const counters = [
-      vi.spyOn(native.DatabaseSync.prototype, "prepare"),
-      vi.spyOn(native.DatabaseSync.prototype, "exec"),
-      ...(["iterate", "get", "all", "run"] as const).map((method) =>
-        vi.spyOn(native.StatementSync.prototype, method),
-      ),
-    ];
+    requireNodeSqlite();
+    const sql = observeMainThreadSql();
     await ensureTaskRuntimeStateReady();
     expect(restored).toEqual(["retained:flow-a"]);
     expect(getTaskDeliveryState("retained")?.lastNotifiedEventAt).toBe(50);
@@ -377,7 +372,7 @@ describe("asynchronous registry restoration", () => {
       }
     }
     await closeOpenClawStateDatabaseAsync();
-    expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+    sql.expectIdle();
   });
 
   it("preserves flow preparation failure when task publication loses admission", async () => {

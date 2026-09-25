@@ -47,7 +47,10 @@ import {
   runVitestCli,
   type exitVitestBySignal,
 } from "./lib/vitest-process.mts";
-import { resolveVitestRuntimeCliSelections } from "./lib/vitest-runtime-selection.mts";
+import {
+  resolveVitestRuntimeCliSelections,
+  shouldPrepareVitestCoreWorkers,
+} from "./lib/vitest-runtime-selection.mts";
 import { resolveVitestTestCommand } from "./lib/vitest-test-runtime.mts";
 import {
   createVitestUnhandledErrorDetector,
@@ -989,14 +992,14 @@ export async function runVitest(
       : env;
   // Canonical configs have known project scopes. Custom roots/projects keep
   // their own setup; never infer their runtime selection from a config name.
-  if (
+  const canonicalSelection =
     execution &&
     config &&
     !hasAlternateVitestRootArg(vitestArgs) &&
     !hasExplicitVitestProjectArg(vitestArgs) &&
     !hasNonRunVitestSubcommand(vitestArgs) &&
-    !hasExplicitDisabledRunFlag(vitestArgs)
-  ) {
+    !hasExplicitDisabledRunFlag(vitestArgs);
+  if (canonicalSelection) {
     const code = await prepareVitestRuntime(
       invocations.flatMap((cliArgs) =>
         resolveVitestRuntimeCliSelections(relativeConfig, cliArgs, invocationEnv),
@@ -1015,14 +1018,36 @@ export async function runVitest(
     : createVitestWorkerRun(resolveVitestProcessEnv(invocationEnv));
   const withCacheSlot = createVitestCacheSlots();
   let interrupted: NodeJS.Signals | undefined;
+  let preparingWorkers = false;
   const onSignal = (signal: NodeJS.Signals) => {
     interrupted ??= signal;
+    if (preparingWorkers) {
+      // No borrower can finish admission yet; cancel through the existing owner.
+      void workers?.dispose().catch(() => {});
+    }
   };
   // The invocation outlives child-scoped handlers when admission or final
   // verification is still reading. Retain signal ownership through disposal.
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
   try {
+    if (
+      workers &&
+      canonicalSelection &&
+      invocations.some((args) =>
+        shouldPrepareVitestCoreWorkers(relativeConfig, args, invocationEnv),
+      )
+    ) {
+      preparingWorkers = true;
+      try {
+        await workers.prepare();
+      } finally {
+        preparingWorkers = false;
+      }
+    }
+    if (interrupted) {
+      return;
+    }
     let failedExitCode = 0;
     for (const [index, invocation] of invocations.entries()) {
       const guardedVitestArgs = await resolveExplicitTestFileNoPassArgs(invocation);

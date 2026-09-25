@@ -429,6 +429,7 @@ async function runDoctorConfigPreflightOperation(
         }
       }
     }
+    let postConvergenceStateConfig: OpenClawConfig | undefined;
     if (
       (gatewayStartupCheckpointRequired || stateDirMigrations) &&
       stateMigrationsAllowed &&
@@ -472,9 +473,16 @@ async function runDoctorConfigPreflightOperation(
         snapshot = refreshed.snapshot;
         baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
         automaticConfigRepair = planAdmittedConfigRepair(snapshot);
+        // Keep source locators for plugin migrations while core migrations use
+        // the complete runtime config validated after package convergence.
+        postConvergenceStateConfig = automaticConfigRepair?.snapshot.config;
       }
     }
-    const stateMigrationInput = resolveStateMigrationConfigInput({ snapshot, baseConfig });
+    const stateMigrationInput = resolveStateMigrationConfigInput({
+      snapshot,
+      baseConfig,
+      postConvergenceConfig: postConvergenceStateConfig,
+    });
     if (migrationCheckpoint) {
       migrationCheckpointIdentity = checkpointIdentityForSnapshot(
         { ...configSnapshotRead, snapshot },
@@ -522,13 +530,6 @@ async function runDoctorConfigPreflightOperation(
           }),
         );
       }
-      const { autoMigrateLegacyTaskStateSidecars } = stateDirMigrations;
-      const migrateTaskStateSidecars = async () =>
-        noteStartupStateMigrationResult(
-          await measurePreflightStep("task-sidecar-migrations", () =>
-            autoMigrateLegacyTaskStateSidecars({ env: process.env, log: migrationLog }),
-          ),
-        );
       if (stateMigrationInput) {
         // Retired cron.store selects a persisted SQLite partition. Preserve it in machine state
         // before config repair removes the only custom-partition evidence.
@@ -609,10 +610,7 @@ async function runDoctorConfigPreflightOperation(
             report: noteStartupStateMigrationResult,
           });
           await pluginMigrations.migrate(pluginDoctorConfig);
-          await migrateTaskStateSidecars();
         }
-      } else {
-        await migrateTaskStateSidecars();
       }
     }
     if (

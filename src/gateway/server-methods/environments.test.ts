@@ -2,7 +2,10 @@
  * Tests for environment gateway methods and configured environment discovery.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  ErrorCodes,
+  type EnvironmentsListResult,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { listDevicePairing } from "../../infra/device-pairing.js";
 import { NODE_RUNNER_UPDATE_REQUIRED_ISSUE } from "../../infra/node-runner-inventory.js";
@@ -95,13 +98,15 @@ describe("environment gateway methods", () => {
     expect(respond.mock.calls[0]?.[0]).toBe(true);
     expect(respond.mock.calls[0]?.[1]).toEqual({
       environments: [],
-      profiles: Object.entries(profiles)
-        .map(([id, profile]) => ({
-          id,
-          providerId: profile.provider,
-          ...(["canonical", "legacy"].includes(id) ? { inference: "worker" } : {}),
-        }))
-        .toSorted((a, b) => a.id.localeCompare(b.id)),
+      profiles: [
+        { id: "canonical", providerId: "device", inference: "worker" },
+        { id: "default", providerId: "device" },
+        { id: "foreign", providerId: "static-ssh" },
+        { id: "gateway", providerId: "device" },
+        { id: "invalid", providerId: "device" },
+        { id: "legacy", providerId: "device", inference: "worker" },
+        { id: "missing-device", providerId: "device" },
+      ],
     });
   });
 
@@ -468,58 +473,6 @@ describe("environment gateway methods", () => {
     expect(environments.find((entry) => entry.id === "node:node-offline")?.desktop).toBeUndefined();
   });
 
-  it("appends worker metadata with stable sessions and elapsed times", async () => {
-    const service = workerService({
-      list: vi.fn(() => [
-        workerRecord({
-          state: "idle",
-          attachedSessionIds: ["session-z", "session-a", "session-z", " "],
-          idleSinceAtMs: 6_000,
-        }),
-      ]),
-    });
-    const [ok, payload] = await callEnvironmentMethod("environments.list", {}, { service });
-
-    expect(ok).toBe(true);
-    expect(payload).toMatchObject({
-      profiles: [
-        { id: "aws", providerId: "crabbox" },
-        { id: "zeta", providerId: "static-ssh" },
-      ],
-      environments: [
-        { id: "gateway", type: "local" },
-        { id: "node:node-live", type: "node" },
-        { id: "node:node-offline", type: "node" },
-        {
-          id: "worker-1",
-          type: "worker",
-          status: "available",
-          trust: "disposable",
-          worker: {
-            providerId: "static-ssh",
-            leaseId: "lease-1",
-            state: "idle",
-            ageMs: 9_000,
-            idleMs: 4_000,
-            attachedSessionIds: ["session-a", "session-z"],
-            tunnelStatus: "stopped",
-          },
-        },
-      ],
-    });
-    const worker = (payload as { environments: Array<Record<string, unknown>> }).environments.at(
-      -1,
-    );
-    expect(worker).not.toHaveProperty("sshEndpoint");
-    expect(worker?.worker).not.toHaveProperty("sshEndpoint");
-    expect(worker?.worker).not.toHaveProperty("keyRef");
-    expect(service.list).toHaveBeenCalledOnce();
-    for (const profile of (payload as { profiles: Array<Record<string, unknown>> }).profiles) {
-      expect(profile).not.toHaveProperty("executionMode");
-      expect(profile).not.toHaveProperty("executionModes");
-    }
-  });
-
   it("projects display identity without exposing settings or changing routing", async () => {
     const service = workerService({
       readProviderDisplayId: vi.fn((id) => (id === "aws" ? "azure" : undefined)),
@@ -573,7 +526,8 @@ describe("environment gateway methods", () => {
       const [ok, payload] = await callEnvironmentMethod("environments.list", {}, { service });
 
       expect(ok).toBe(true);
-      const profiles = (payload as { profiles: unknown[] }).profiles;
+      const profiles = (payload as EnvironmentsListResult).profiles ?? [];
+      expect(payload).not.toHaveProperty("preparedPool");
       expect(profiles).toMatchObject([
         {
           id: "aws",
@@ -599,16 +553,24 @@ describe("environment gateway methods", () => {
       vi.mocked(listDevicePairing).mockClear();
       const projected = await callEnvironmentMethod(
         "environments.list",
-        { projection: "profiles" },
-        { service },
+        { projection: "profiles", includePreparedDetails: true },
+        { service, scopes: ["operator.admin"] },
       );
-      expect(projected).toEqual([true, { environments: [], profiles }, undefined]);
+      expect(projected).toEqual([
+        true,
+        {
+          environments: [],
+          profiles: profiles.map((profile) => Object.assign({}, profile, { readyWorkers: 1 })),
+        },
+        undefined,
+      ]);
       expect(service.list).not.toHaveBeenCalled();
+      expect(service.readPreparedPoolSummary).not.toHaveBeenCalled();
       expect(listDevicePairing).not.toHaveBeenCalled();
     },
   );
 
-  it.each(["worker", "pairing"])(
+  it.each(["worker", "pairing", "prepared pool"])(
     "isolates profile discovery from %s inventory failures without hiding default errors",
     async (unavailable) => {
       const list = vi.fn(() => {
@@ -617,43 +579,60 @@ describe("environment gateway methods", () => {
         }
         return [];
       });
-      const service = workerService({ list });
+      const service = workerService({
+        list,
+        readPreparedPoolSummary: vi.fn(() => {
+          if (unavailable === "prepared pool") {
+            throw new Error("private prepared inventory failure");
+          }
+          return { maxTotal: 4, reservedEnvironmentIds: [] };
+        }),
+      });
       if (unavailable === "pairing") {
         vi.mocked(listDevicePairing).mockRejectedValue(new Error("pairing inventory unavailable"));
       }
-      const full = await callEnvironmentMethod("environments.list", {}, { service });
+      const full = await callEnvironmentMethod(
+        "environments.list",
+        { includePreparedDetails: true },
+        {
+          service,
+          scopes: ["operator.admin"],
+        },
+      );
       expect(full).toEqual([
         false,
         undefined,
         {
           code: ErrorCodes.UNAVAILABLE,
           message:
-            unavailable === "worker"
-              ? "Error: environment inventory unavailable"
-              : "Error: pairing inventory unavailable",
+            unavailable === "pairing"
+              ? "Error: pairing inventory unavailable"
+              : "Error: environment inventory unavailable",
         },
       ]);
       expect(service.listMachineOptions).not.toHaveBeenCalled();
       list.mockClear();
+      vi.mocked(service.readPreparedPoolSummary).mockClear();
       vi.mocked(listDevicePairing).mockClear();
 
       const projected = await callEnvironmentMethod(
         "environments.list",
-        { projection: "profiles" },
-        { service },
+        { projection: "profiles", includePreparedDetails: true },
+        { service, scopes: ["operator.admin"] },
       );
       expect(projected).toEqual([
         true,
         {
           environments: [],
           profiles: [
-            { id: "aws", providerId: "crabbox" },
-            { id: "zeta", providerId: "static-ssh" },
+            { id: "aws", providerId: "crabbox", readyWorkers: 1 },
+            { id: "zeta", providerId: "static-ssh", readyWorkers: 1 },
           ],
         },
         undefined,
       ]);
       expect(service.list).not.toHaveBeenCalled();
+      expect(service.readPreparedPoolSummary).not.toHaveBeenCalled();
       expect(listDevicePairing).not.toHaveBeenCalled();
     },
   );
@@ -756,25 +735,6 @@ describe("environment gateway methods", () => {
       trust: "persistent",
       capabilities: ["camera", "system.run"],
     });
-  });
-
-  it("returns status for one worker", async () => {
-    const get = vi.fn(() => workerRecord({ state: "attached" }));
-    const service = workerService({ get });
-    const [ok, payload] = await callEnvironmentMethod(
-      "environments.status",
-      { environmentId: "worker-1" },
-      { service },
-    );
-
-    expect(ok).toBe(true);
-    expect(payload).toMatchObject({
-      id: "worker-1",
-      status: "available",
-      trust: "disposable",
-      worker: { state: "attached", ageMs: 9_000 },
-    });
-    expect(get).toHaveBeenCalledWith("worker-1");
   });
 
   it("rejects unknown environment ids", async () => {

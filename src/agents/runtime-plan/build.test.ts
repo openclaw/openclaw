@@ -112,6 +112,12 @@ describe("AgentRuntimePlan", () => {
       workspaceDir: "/tmp/openclaw-runtime-plan",
       model: gpt54Model,
       providerRuntimeHandle,
+      preparedAuthPlan: {
+        providerForAuth: "openai",
+        authProfileProviderForAuth: "openai",
+        selectedAuthMode: "oauth",
+        selectedAuthFlow: "test-subscription",
+      },
     });
 
     expect(prepareProviderExtraParamsMock).not.toHaveBeenCalled();
@@ -120,6 +126,9 @@ describe("AgentRuntimePlan", () => {
       textVerbosity: "low",
     });
     expect(prepareProviderExtraParamsMock).toHaveBeenCalledTimes(1);
+    expect(prepareProviderExtraParamsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ auth: { mode: "oauth", authFlow: "test-subscription" } }),
+    );
     void plan.transport.extraParams;
     expect(prepareProviderExtraParamsMock).toHaveBeenCalledTimes(1);
   });

@@ -85,37 +85,33 @@ function handleComposerKeydown(
   slashMenuHost: SlashMenuHost,
   mentionMenuHost: HumanMentionMenuHost,
 ) {
-  if (options.dictationActive || options.submitting || options.messageLocked) {
-    return;
-  }
-  if (options.textareaController.composing || event.isComposing || event.keyCode === 229) {
-    return;
-  }
   if (
-    options.textareaController.emojiMenu.handleKeydown(event, "new-session", options.requestUpdate)
+    options.dictationActive ||
+    options.submitting ||
+    options.messageLocked ||
+    options.textareaController.composing ||
+    event.isComposing ||
+    event.keyCode === 229
   ) {
     return;
   }
   if (
+    options.textareaController.emojiMenu.handleKeydown(
+      event,
+      "new-session",
+      options.requestUpdate,
+    ) ||
     options.textareaController.mentionMenu.handleKeydown(
       event,
       mentionMenuHost,
       options.requestUpdate,
-    )
-  ) {
-    return;
-  }
-  if (
+    ) ||
     handleSkillMenuKeydown(
       event,
       options.textareaController.skillMenuState,
       skillMenuHost,
       options.requestUpdate,
-    )
-  ) {
-    return;
-  }
-  if (
+    ) ||
     handleSlashMenuKeydown(
       event,
       options.textareaController.slashMenuState,
@@ -183,14 +179,10 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
     refreshCommands: options.refreshCommands,
   };
   const slashMenuHost: SlashMenuHost = {
-    paneId: skillMenuHost.paneId,
-    getDraft: skillMenuHost.getDraft,
-    commitDraft: skillMenuHost.commitDraft,
-    getTextarea: skillMenuHost.getTextarea,
+    ...skillMenuHost,
     resolveArgOptions: (command) => command.argOptions ?? [],
     runCommand: () => submitNewSession(options),
     canRun: (inline) => !inline,
-    refreshCommands: options.refreshCommands,
     commandFilter: (command) => command.executeLocal !== true,
   };
   const mentionMenuHost: HumanMentionMenuHost = {
@@ -225,11 +217,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
       skillMenuHost,
       options.requestUpdate,
     );
-    if (
-      event?.inputType === "insertFromPaste" ||
-      event?.inputType === "insertFromDrop" ||
-      event?.isComposing
-    ) {
+    if (event?.inputType === "insertFromPaste" || event?.inputType === "insertFromDrop") {
       mentionMenu.close();
     } else {
       mentionMenu.update(
@@ -391,7 +379,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
               .value=${guard([visibleMessage], () => live(visibleMessage))}
               aria-autocomplete="list"
               aria-controls=${ifDefined(menuVisible ? menuListboxId : undefined)}
-              aria-expanded=${ifDefined(menuVisible ? "true" : undefined)}
+              aria-haspopup=${ifDefined(menuVisible ? "listbox" : undefined)}
               aria-activedescendant=${ifDefined(activeMenuOptionId ?? undefined)}
               aria-describedby=${menuAnnouncementId}
               @input=${(event: InputEvent) => {

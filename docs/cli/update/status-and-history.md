@@ -17,6 +17,14 @@ While an update is active, the table shows its phase instead of advertising anot
 update, and the final line points to `openclaw update status`. JSON still includes
 registry/Git `availability` separately from `activeRun`.
 
+Git availability checks, including the Gateway's background check after startup,
+refresh only the selected upstream. They do not import other remote branches or
+tags, prune existing refs, or change shallow-history boundaries. A fresh detached
+Dev checkout can discover its configured `main` upstream without first fetching
+the remote's full ref inventory. Local upstreams need no fetch; an unknown upstream
+stays unknown. The selected upstream's own missing history may still be downloaded.
+Ahead/behind counts remain unavailable when shallow history has no merge base.
+
 If an update hands work to a background helper, the command has not finished the
 update. Follow its final `openclaw update status` command to check progress and the
 outcome. `openclaw gateway status --deep` checks Gateway health, not update progress.
@@ -98,6 +106,11 @@ the updated Gateway; older runs cannot recover a cause that was never recorded.
 
 An admitted `openclaw update --json` includes `runId` and the `run` record. `openclaw update status --json`
 includes `activeRun` when a run is active and `lastRun` when history exists.
+An automatic-update campaign stops showing as applying when its own admitted run
+finishes, including when a managed handoff fails before restarting the Gateway.
+The Gateway reconciles the exact campaign run, so newer unrelated runs do not
+keep a finished campaign busy or clear a different active campaign.
+
 Retained dry-run previews remain available through history queries but do not
 replace `lastRun`, so a preview cannot hide the last real update failure.
 If history cannot be read or classified, status still shows update availability
@@ -166,6 +179,12 @@ user text, and show config key families instead of operator-defined names. Only
 catalog-confirmed public check and plugin IDs are included; unknown IDs and codes
 remain complete locally and are redacted publicly. Older runs cannot recover facts that their updater did not record. Existing history
 and report size limits still apply.
+
+npm failure records keep the first five sanitized error lines in order. Lines over
+200 UTF-8 bytes retain a prefix followed by a space and an explicit `…[truncated]`
+marker within that budget. A failed package baseline scan records
+`baseline-scan-failed` with the scan's original cause, including when its identity
+fallback also fails. A timeout with a successful fallback remains a warning.
 
 When a managed-service handoff cannot start or transfer ownership, the Gateway
 records the refusal on the failed `requested` step. Status includes the recorded

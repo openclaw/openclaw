@@ -9,6 +9,7 @@ import { describePeriod } from "./periods.js";
 import { completion, type Complete } from "./reports.fixtures.js";
 import type { ReportSourceFactory, ResolvedTeamReportsConfig } from "./run.js";
 import { TeamReportsScheduler } from "./scheduler.js";
+import { createDiscordSource, createGithubSource } from "./sources/index.js";
 import { teamReportsSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
 import { createTeamReportsStore, type TeamReportsStore } from "./store.js";
 import type { DiscordSource, GithubSource, SourceRuntime, SourceStatus } from "./types.js";
@@ -717,6 +718,159 @@ describe("Team Reports scheduler lifecycle", () => {
     expect((await scheduler.health()).warnings).toBe(1);
   });
 
+  it("names failed activity sources in run errors, logs, and service health", async () => {
+    const { scheduler, nextRun, store, github, discord, context } = await setup({
+      discord: true,
+      caughtUp: false,
+      schedule: { weekly: true, monthly: true },
+    });
+    github.collect.mockResolvedValueOnce({
+      items: [],
+      status: { ...healthy, ok: false, warnings: ["GitHub access unavailable"] },
+    });
+    discord.collect.mockResolvedValueOnce({
+      messages: [],
+      status: { ...healthy, ok: false, warnings: ["Discord access unavailable"] },
+    });
+    await scheduler.start();
+    const id = await scheduler.generate();
+    await nextRun();
+
+    const run = (await store.listRuns()).find((candidate) => candidate.id === id);
+    expect(run?.status).toBe("error");
+    expect(run?.error).toContain("day/2026-08-19/github");
+    expect(run?.error).toContain("day/2026-08-19/discord");
+    expect(context.logger.error).toHaveBeenCalledWith(`team-reports: ${run?.error}`);
+    expect(context.serviceHealth.reportFailure).toHaveBeenCalledWith(
+      expect.objectContaining({ message: run?.error }),
+    );
+    expect(await store.listPeriods()).toEqual([]);
+    expect(context.serviceHealth.clearFailure).not.toHaveBeenCalled();
+    // A failed first collection must not satisfy the pending closed-day catch-up.
+    await vi.advanceTimersByTimeAsync(60_000);
+    await nextRun();
+    expect(github.collect).toHaveBeenCalledTimes(3);
+    expect((await store.getPeriod("day", "2026-08-19"))?.report.totals.github.total).toBe(1);
+    expect((await store.getPeriod("week", "2026-W34"))?.report.totals.github.total).toBe(2);
+    expect((await store.getPeriod("month", "2026-08"))?.report.totals.github.total).toBe(2);
+    expect(context.serviceHealth.clearFailure).toHaveBeenCalledOnce();
+  });
+
+  it.each(["github", "discord"] as const)(
+    "preserves accepted activity after a %s subrequest fails and accepts healthy zero activity",
+    async (source) => {
+      const { scheduler, nextRun, store, github, discord, context, runtimes } = await setup({
+        discord: true,
+        schedule: { weekly: true, monthly: true },
+      });
+      await scheduler.start();
+      await scheduler.generate();
+      await nextRun();
+      const previous = await store.getPeriod("day", "2026-08-19");
+      const previousDays = await store.listPersonDays("alex");
+      const previousWeek = await store.getPeriod("week", "2026-W34");
+      const previousMonth = await store.getPeriod("month", "2026-08");
+      expect(previous?.report.totals.github.total).toBe(1);
+      expect(previous?.report.totals.discord.messages).toBe(1);
+      expect(previousWeek?.report.totals.github.total).toBe(1);
+      expect(previousMonth?.report.totals.discord.messages).toBe(1);
+
+      const fetchImpl: NonNullable<SourceRuntime["fetchImpl"]> = async (input) => {
+        const url = new URL(input);
+        if (url.pathname.endsWith("/commits") || url.pathname.endsWith("/messages")) {
+          return new Response("{}", { status: 403 });
+        }
+        const body = url.pathname.endsWith("/repos")
+          ? [{ full_name: "sample/widgets", archived: false }]
+          : url.pathname === "/search/issues"
+            ? { total_count: 0, items: [] }
+            : url.pathname.endsWith("/channels")
+              ? [{ id: "200", name: "engineering" }]
+              : url.pathname.includes("/threads/")
+                ? { threads: [], has_more: false }
+                : [];
+        return new Response(JSON.stringify(body));
+      };
+      const runtime = () => ({ ...runtimes.at(-1), logger: context.logger, fetchImpl });
+      if (source === "github") {
+        github.collect.mockImplementationOnce((...args) =>
+          createGithubSource(runtime()).collect(...args),
+        );
+      } else {
+        discord.collect.mockImplementationOnce((...args) =>
+          createDiscordSource(runtime()).collect(...args),
+        );
+      }
+      vi.setSystemTime(Date.now() + 1_000);
+      const failed = await scheduler.generate();
+      await nextRun();
+      expect((await store.listRuns()).find((run) => run.id === failed)).toMatchObject({
+        status: "error",
+        stats: { [`day/2026-08-19/${source}`]: { ok: false, stale: true } },
+      });
+      expect(await store.getPeriod("day", "2026-08-19")).toEqual(previous);
+      expect(await store.listPersonDays("alex")).toEqual(previousDays);
+      expect(await store.getPeriod("week", "2026-W34")).toEqual(previousWeek);
+      expect(await store.getPeriod("month", "2026-08")).toEqual(previousMonth);
+      expect(context.serviceHealth.reportFailure).toHaveBeenCalledOnce();
+      expect(context.serviceHealth.clearFailure).toHaveBeenCalledOnce();
+
+      github.collect.mockResolvedValueOnce({ items: [], status: healthy });
+      discord.collect.mockResolvedValueOnce({ messages: [], status: healthy });
+      const recovered = await scheduler.generate();
+      await nextRun();
+      expect((await store.listRuns()).find((run) => run.id === recovered)?.status).toBe("ok");
+      const current = await store.getPeriod("day", "2026-08-19");
+      expect(current?.report.totals.github.total).toBe(0);
+      expect(current?.report.totals.discord.messages).toBe(0);
+      for (const [period, key] of [
+        ["week", "2026-W34"],
+        ["month", "2026-08"],
+      ] as const) {
+        const rollup = await store.getPeriod(period, key);
+        expect(rollup?.report.totals.github.total).toBe(0);
+        expect(rollup?.report.totals.discord.messages).toBe(0);
+      }
+      expect(context.serviceHealth.clearFailure).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("publishes healthy empty-repository activity alongside the other source", async () => {
+    const { scheduler, nextRun, store, github, context, runtimes } = await setup({
+      discord: true,
+    });
+    github.collect.mockImplementationOnce((...args) =>
+      createGithubSource({
+        ...runtimes.at(-1),
+        logger: context.logger,
+        fetchImpl: async (input) => {
+          const url = new URL(input);
+          if (url.pathname.endsWith("/commits")) {
+            return new Response(JSON.stringify({ message: "Git Repository is empty." }), {
+              status: 409,
+            });
+          }
+          const body = url.pathname.endsWith("/repos")
+            ? [{ full_name: "sample/widgets", archived: false }]
+            : url.pathname === "/search/issues"
+              ? { total_count: 0, items: [] }
+              : [];
+          return new Response(JSON.stringify(body));
+        },
+      }).collect(...args),
+    );
+    await scheduler.start();
+    const id = await scheduler.generate();
+    await nextRun();
+    expect((await store.listRuns()).find((run) => run.id === id)?.status).toBe("ok");
+    const current = await store.getPeriod("day", "2026-08-19");
+    expect(current?.report.totals.github.total).toBe(0);
+    expect(current?.report.totals.discord.messages).toBe(1);
+    expect(current?.report.sources.github).toMatchObject({ ok: true, warnings: [] });
+    expect(context.serviceHealth.clearFailure).toHaveBeenCalledOnce();
+    expect(context.serviceHealth.reportFailure).not.toHaveBeenCalled();
+  });
+
   it("reports source failures with redacted errors and clears health on the next successful run", async () => {
     const { scheduler, nextRun, store, github, context } = await setup();
     github.collect.mockRejectedValueOnce(new Error("Access failed for fixture-github-token"));
@@ -774,5 +928,36 @@ describe("Team Reports scheduler lifecycle", () => {
     );
     expect((await store.getPeriod("week", "2026-W22"))?.report.totals.github.total).toBe(1);
     expect((await store.getPeriod("month", "2026-06"))?.report.totals.github.total).toBe(1);
+  });
+
+  it("preserves only rollups overlapping a rejected day at month rollover", async () => {
+    vi.setSystemTime(new Date("2026-09-01T12:00:00Z"));
+    const { scheduler, store, github, nextRun } = await setup({
+      caughtUp: false,
+      schedule: { weekly: true, monthly: true },
+    });
+    github.collect.mockResolvedValueOnce({
+      items: [],
+      status: { ...healthy, ok: false, warnings: ["GitHub access unavailable"] },
+    });
+    await scheduler.start();
+    await vi.advanceTimersByTimeAsync(60_000);
+    await nextRun();
+    expect(github.collect).toHaveBeenCalledTimes(2);
+    expect(await store.getPeriod("day", "2026-08-31")).toBeUndefined();
+    expect(await store.getPeriod("week", "2026-W36")).toBeUndefined();
+    expect(await store.getPeriod("month", "2026-08")).toBeUndefined();
+    expect((await store.getPeriod("day", "2026-09-01"))?.report.totals.github.total).toBe(1);
+    const september = await store.getPeriod("month", "2026-09");
+    expect(september?.report.totals.github.total).toBe(1);
+    expect((await store.listRuns())[0]?.status).toBe("error");
+
+    const recovered = await scheduler.generate({ date: "2026-08-31" });
+    await nextRun();
+    expect((await store.getPeriod("day", "2026-08-31"))?.report.totals.github.total).toBe(1);
+    expect((await store.getPeriod("week", "2026-W36"))?.report.totals.github.total).toBe(2);
+    expect((await store.getPeriod("month", "2026-08"))?.report.totals.github.total).toBe(1);
+    expect(await store.getPeriod("month", "2026-09")).toEqual(september);
+    expect((await store.listRuns()).find((run) => run.id === recovered)?.status).toBe("ok");
   });
 });

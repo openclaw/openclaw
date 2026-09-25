@@ -67,13 +67,19 @@ Bundled plugins and explicitly enabled installed plugins with matching
 manifest contracts can attach runtime-neutral tool-result middleware through
 `api.registerAgentToolResultMiddleware(...)` when their manifest declares the
 targeted runtime ids in `contracts.agentToolResultMiddleware`. This trusted
-seam is for async tool-result transforms that must run before OpenClaw or
-Codex feeds tool output back into the model.
+seam is for async tool-result transforms that must run before the selected
+harness feeds tool output back into the model. Supported runtime ids are
+`agentsapi`, `codex`, and `openclaw`.
 
 Middleware options may combine `runtimes` with a `matcher` tool-name list.
 Each registration keeps that pair intact, so registering the same handler for
 different runtimes does not broaden either matcher. Matchers use non-empty
 canonical OpenClaw tool ids; omit `matcher` to match all tools.
+
+Omitting `runtimes` uses every supported runtime declared in the plugin's
+`contracts.agentToolResultMiddleware`, including `agentsapi` when declared.
+Supply `runtimes` only to select a subset of that declaration. Registration
+rejects an empty runtime list or any targeted runtime missing from the manifest.
 
 Legacy bundled plugins can still use
 `api.registerCodexAppServerExtensionFactory(...)` for Codex app-server-only
@@ -85,6 +91,12 @@ Retain `details.messageDelivery.sourceReplyDelivered` from the host message tool
 before middleware transforms its result, and carry it into the attempt result.
 This confirms a final external source reply and does not depend on destination
 arguments or transcript mirrors.
+
+Use `extractMessagingToolSourceReplyPayload(result)` from the same runtime
+subpath to retain internal source-reply payloads through presentation changes.
+For a confirmed messaging delivery, `collectMessagingMediaUrlsFromRecord(args)`
+collects its attachment references for delivery deduplication. Neither helper
+establishes delivery or grants local-file trust.
 
 ## Reply attachments from a remote workspace
 
@@ -113,6 +125,14 @@ When the capability is absent, this remote attachment preparation is unavailable
 
 ## Shared attempt mechanics
 
+Official native harnesses use `buildCurrentInboundPrompt` from the private
+`openclaw/plugin-sdk/agent-harness-attempt-runtime` to combine the prepared
+`currentInboundContext` with the current prompt using the channel's joiner.
+Submit this context with each message, including resumed sessions. Steering
+receives its own `options.currentInboundContext`; do not reuse the initial
+turn's context. Keep context out of the original user transcript and pending
+question answer text. Conversation fields are model context, not tool authority.
+
 Official harnesses use the JavaScript-only private
 `openclaw/plugin-sdk/agent-harness-attempt-runtime` for deadlines, cancellation,
 and lifecycle/event publication; it is not a third-party Plugin SDK contract.
@@ -132,6 +152,41 @@ execution promises and argument/start snapshots through
 `createAgentHarnessToolExecutionBoundaryRegistry`. Consumed snapshots cannot be
 republished by late completion. Core tool guards and `observeToolTerminal`
 remain authoritative; native decoding and result encoding stay with the harness.
+
+## Shared host-tool result facts
+
+Official harnesses use the private JavaScript-only
+`openclaw/plugin-sdk/agent-harness-tool-runtime` to execute host tools and record portable tool facts.
+`runAgentHarnessToolInvocation` owns argument preparation, validation at the
+existing execution boundary, monotonic execution snapshots, middleware, and
+cleanup. Its result and failure callbacks carry those facts to native adapters
+without taking over their receipt or timeout owner.
+`recordAgentHarnessToolResultTelemetry` collects host-tool delivery, media, TTS,
+cron, and heartbeat facts using the caller's prepared source-reply projection.
+The invocation preserves execution failures when presentation middleware
+rewrites a result. `recordAgentHarnessMessagingDelivery`
+records an already-confirmed messaging delivery, and
+`recordAgentHarnessToolResultMedia` collects and trust-filters presented media.
+Callers retain their native receipt, routing, cancellation, and result-encoding
+contracts; these helpers do not establish delivery or grant execution authority.
+
+## Final tool-argument validation
+
+Official native harness adapters can call
+`runWithToolExecutionValidation(callId, validate, execute)` from
+the private `openclaw/plugin-sdk/agent-harness-tool-runtime` around the host-bound tool's
+`execute` call. The validator receives the final arguments after policy and
+before-call hooks have adjusted them, at the existing tool execution boundary.
+Use the shared schema validation helpers for the declared tool schema. Do not
+copy private validation markers or run a second before-call hook. Validation is
+scoped to the tool call and remains isolated from concurrent calls.
+
+Retain accepted background work before middleware: `isAsyncStartedToolResult`
+and `readAsyncStartedTaskIds` from `openclaw/plugin-sdk/agent-harness-tool-runtime`
+expose its task metadata. `normalizeAcceptedSessionSpawnResult` from
+`openclaw/plugin-sdk/agent-harness-tool-runtime` preserves a child session's
+completion ownership. Carry their recorded facts into the attempt result so
+recovery cannot replay accepted work.
 
 ## Terminal outcome classification
 

@@ -13,6 +13,7 @@ import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surface
 import { importLegacySkillProposal } from "../skills/workshop/store.js";
 import {
   openOpenClawStateDatabase,
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
 import {
@@ -48,6 +49,7 @@ describe("workspace state during an update rehearsal", () => {
     state = await createOpenClawTestState({ label: "workspace-rehearsal" });
   });
   afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await state.cleanup();
   });
@@ -95,7 +97,7 @@ describe("workspace state during an update rehearsal", () => {
     };
     await fs.mkdir(record.target.skillDir, { recursive: true });
     await fs.writeFile(record.target.skillFile, content);
-    importLegacySkillProposal({ record, ownerAgentId: "main", store: { env: state.env } });
+    await importLegacySkillProposal({ record, ownerAgentId: "main", store: { env: state.env } });
     const before = await fileHashes(historical);
     const rehearsal = await prepareUpdateCandidateRehearsal({
       config,
@@ -130,6 +132,7 @@ describe("workspace state during an update rehearsal", () => {
           .get(record.id),
       ).toEqual({ status: "applied" });
     } finally {
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       await rehearsal.cleanup();
     }

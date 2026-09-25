@@ -9,7 +9,6 @@ import {
   buildCodexTurnStartFailureResult,
   isInvalidCodexImagePayloadError,
 } from "./attempt-results.js";
-import { isCodexContextRestartSelectionChangedError } from "./attempt-startup.js";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { emitCodexAppServerEvent, runCodexAgentEndHook } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptNotificationController } from "./run-attempt-notification-controller.js";
@@ -25,6 +24,7 @@ import type {
 } from "./run-attempt-turn-request.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import { assertCodexBindingMayBeReplaced } from "./session-binding.js";
+import { isCodexContextRestartSelectionChangedError } from "./thread-lifecycle-errors.js";
 import { buildCodexUserPromptMessage } from "./transcript-mirror.js";
 import {
   CodexUsageLimitPromptError,
@@ -40,12 +40,10 @@ export async function startCodexAttemptTurn(
 ): Promise<{ result: EmbeddedRunAttemptResult } | CodexStartedTurn> {
   const { prompt, state: resourceState, trajectoryRecorder, markTrajectoryEndRecorded } = resources;
   const { context, turnState, systemPromptReport } = prompt;
-  const { runtime, historyState, hookContext, hookContextWindowFields, hookRunner } = context;
-  const { connection, runtimeParams, effectiveRuntimeProviderId, effectiveRuntimeModelId } =
-    runtime;
+  const { runtime, historyState, hookContext, hookRunner } = context;
+  const { connection, runtimeParams } = runtime;
   const {
     params,
-    usesSupervisionConnection,
     runAbortController,
     activeContextEngine,
     bindingStore,
@@ -56,7 +54,8 @@ export async function startCodexAttemptTurn(
   } = connection;
   const { state, turnIdRef } = turnRuntime;
   const { waitForActiveNativeTurnCompletion } = notifications;
-  const { codexModelCallDiagnostics, startCodexTurn, buildLlmInputEvent } = requestRuntime;
+  const { codexModelCallDiagnostics, startCodexTurn, buildLlmInputEvent, buildLlmOutputEvent } =
+    requestRuntime;
   let started: CodexStartedTurn | undefined;
   // From this point, failure may include an accepted native write. Never return
   // the warm claim idle merely because active-turn setup did not complete.
@@ -187,22 +186,7 @@ export async function startCodexAttemptTurn(
       markTrajectoryEndRecorded();
       runAgentHarnessLlmOutputHook({
         event: {
-          runId: params.runId,
-          sessionId: params.sessionId,
-          provider: usesSupervisionConnection
-            ? (resourceState.thread.modelProvider ?? effectiveRuntimeProviderId)
-            : params.provider,
-          model: usesSupervisionConnection
-            ? (resourceState.thread.model ?? effectiveRuntimeModelId)
-            : params.modelId,
-          ...hookContextWindowFields,
-          resolvedRef: usesSupervisionConnection
-            ? `${resourceState.thread.modelProvider ?? effectiveRuntimeProviderId}/${resourceState.thread.model ?? effectiveRuntimeModelId}`
-            : (params.runtimePlan?.observability.resolvedRef ??
-              `${params.provider}/${params.modelId}`),
-          ...(!usesSupervisionConnection && params.runtimePlan?.observability.harnessId
-            ? { harnessId: params.runtimePlan.observability.harnessId }
-            : {}),
+          ...buildLlmOutputEvent(),
           assistantTexts: [],
         },
         ctx: hookContext,
@@ -281,6 +265,5 @@ export async function startCodexAttemptTurn(
     };
   }
   turnIdRef.current = started.turn.turn.id;
-  resourceState.nativeSubagentMonitor?.bindTurn(started.turn.turn.id);
   return started;
 }

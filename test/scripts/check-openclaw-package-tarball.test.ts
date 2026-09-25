@@ -16,7 +16,6 @@ import { WORKSPACE_TEMPLATE_PACK_PATHS } from "../../scripts/lib/workspace-boots
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   CODE_MODE_WORKER_PATH,
-  FIRST_CODE_MODE_WORKER_VERSION,
   listFilesRecursively,
   withTarball,
 } from "./package-tarball-fixture.js";
@@ -104,7 +103,6 @@ type TarballCheck = {
   strict?: boolean;
   status: 0 | "nonzero";
   stderr?: string[];
-  notStderr?: string[];
   successText?: boolean;
 };
 
@@ -118,7 +116,6 @@ function checkTarball({
   strict = false,
   status,
   stderr = [],
-  notStderr = [],
   successText = false,
 }: TarballCheck) {
   withTarball(
@@ -137,9 +134,6 @@ function checkTarball({
       }
       for (const text of stderr) {
         expect(result.stderr).toContain(text);
-      }
-      for (const text of notStderr) {
-        expect(result.stderr).not.toContain(text);
       }
       if (successText) {
         expect(result.stdout).toContain("OpenClaw package tarball integrity passed.");
@@ -191,13 +185,35 @@ describe("check-openclaw-package-tarball", () => {
     );
   });
 
-  it("accepts a real pnpm-produced package with the same npm inventory", () => {
+  it("accepts a real pnpm-produced package without booting npm for version diagnostics", () => {
     withTarball(
       ["dist/index.js"],
       { "dist/index.js": "export {};\n" },
-      (tarball) => {
+      (tarball, root) => {
+        const preload = join(root, "reject-npm-version.mjs");
+        writeFileSync(
+          preload,
+          `
+import childProcess from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
+const originalSpawnSync = childProcess.spawnSync;
+childProcess.spawnSync = function (...callArgs) {
+  if (callArgs[1]?.includes("--version")) {
+    throw new Error("npm version subprocess unavailable");
+  }
+  return originalSpawnSync.apply(this, callArgs);
+};
+syncBuiltinESMExports();
+`,
+        );
         const result = spawnSync(process.execPath, [resolve(CHECK_SCRIPT), tarball], {
           encoding: "utf8",
+          env: {
+            ...process.env,
+            NODE_OPTIONS: [process.env.NODE_OPTIONS, `--import=${pathToFileURL(preload).href}`]
+              .filter(Boolean)
+              .join(" "),
+          },
         });
 
         expect(result.status, result.stderr).toBe(0);
@@ -517,27 +533,14 @@ syncBuiltinESMExports();
     checkCraftedTarball(entries, error);
   });
 
-  const legacyInventoryCases: NamedTarballCheck[] = [
-    {
-      name: "allows legacy private QA inventory entries omitted from shipped tarballs through 2026.4.25",
+  it("rejects private QA inventory entries omitted from package tarballs", () => {
+    checkTarball({
       inventory: ["dist/index.js", "dist/extensions/qa-channel/runtime-api.js"],
       version: "2026.4.25-beta.10",
-      status: 0,
-      successText: true,
-      stderr: ["legacy inventory references omitted private QA"],
-    },
-    {
-      name: "rejects legacy private QA inventory omissions for newer packages",
-      inventory: ["dist/index.js", "dist/extensions/qa-channel/runtime-api.js"],
-      version: "2026.4.26",
       status: "nonzero",
       stderr: ["inventory references missing tar entry dist/extensions/qa-channel/runtime-api.js"],
-      notStderr: ["legacy inventory references omitted private QA"],
-    },
-  ];
-  for (const testCase of legacyInventoryCases) {
-    it(testCase.name, () => checkTarball(testCase));
-  }
+    });
+  });
 
   it("requires package lifecycle state outside the dist inventory", () => {
     checkTarball({
@@ -878,14 +881,8 @@ syncBuiltinESMExports();
       ],
     },
     {
-      name: "accepts historical packages published before the Code Mode worker existed",
-      version: "2026.5.14-beta.1",
-      status: 0,
-      successText: true,
-    },
-    {
       name: "rejects Code Mode packages that omit the dynamically loaded worker",
-      version: FIRST_CODE_MODE_WORKER_VERSION,
+      version: "2026.5.14-beta.1",
       options: { includeCodeModeWorker: false },
       status: "nonzero",
       stderr: [`missing required tar entry ${CODE_MODE_WORKER_PATH}`],
@@ -929,7 +926,6 @@ syncBuiltinESMExports();
     },
     {
       name: "rejects Code Mode workers that postinstall would remove",
-      version: FIRST_CODE_MODE_WORKER_VERSION,
       options: { includeCodeModeWorkerInInventory: false, postinstall: true },
       status: "nonzero",
       stderr: [`postinstall inventory omits packaged dist file ${CODE_MODE_WORKER_PATH}`],
@@ -938,7 +934,6 @@ syncBuiltinESMExports();
       name: "rejects dist files that import missing relative chunks",
       inventory: ["dist/cli/run-main.js"],
       files: { "dist/cli/run-main.js": 'await import("../memory-state-old.js");\n' },
-      version: "2026.4.27",
       status: "nonzero",
       stderr: ["dist/cli/run-main.js imports missing dist/memory-state-old.js"],
     },
@@ -960,7 +955,6 @@ syncBuiltinESMExports();
         "dist/cli/run-main.js": 'await import("../memory-state-current.js");\n',
         "dist/memory-state-current.js": "export {};\n",
       },
-      version: "2026.4.27",
       status: 0,
       successText: true,
     },
@@ -971,7 +965,6 @@ syncBuiltinESMExports();
         "dist/cli/run-main.js": 'await import("../memory-state-current.js");\n',
         "dist/memory-state-current.js": "export {};\n",
       },
-      version: "2026.4.27",
       options: { postinstall: true },
       status: "nonzero",
       stderr: ["postinstall inventory omits packaged dist file dist/memory-state-current.js"],
@@ -982,7 +975,6 @@ syncBuiltinESMExports();
         "dist/index.js": 'import { value } from "./chunk.js";\nexport { value };\n',
         "dist/chunk.js": "export const value = 42;\n",
       },
-      version: "2026.4.27",
       options: { postinstall: true },
       status: "nonzero",
       stderr: ["postinstall inventory omits packaged dist file dist/chunk.js"],
@@ -994,7 +986,6 @@ syncBuiltinESMExports();
         "dist/index.cjs": 'module.exports = require("./chunk.cjs");\n',
         "dist/chunk.cjs": "module.exports = {};\n",
       },
-      version: "2026.4.27",
       options: { postinstall: true },
       status: "nonzero",
       stderr: ["postinstall inventory omits packaged dist file dist/chunk.cjs"],
@@ -1002,7 +993,6 @@ syncBuiltinESMExports();
     {
       name: "rejects dist files with missing import.meta.url URL dependencies",
       files: { "dist/index.js": 'const worker = new URL("./worker.js", import.meta.url);\n' },
-      version: "2026.4.27",
       status: "nonzero",
       stderr: ["dist/index.js imports missing dist/worker.js"],
     },
@@ -1017,7 +1007,6 @@ syncBuiltinESMExports();
           "",
         ].join("\n"),
       },
-      version: "2026.4.27",
       status: "nonzero",
       stderr: ["dist/index.js imports missing dist/worker.js"],
     },
@@ -1027,7 +1016,6 @@ syncBuiltinESMExports();
         "dist/index.js": 'const worker = new URL("./worker.js", import.meta.url);\n',
         "dist/worker.js": "export {};\n",
       },
-      version: "2026.4.27",
       options: { postinstall: true },
       status: "nonzero",
       stderr: ["postinstall inventory omits packaged dist file dist/worker.js"],
@@ -1035,13 +1023,11 @@ syncBuiltinESMExports();
     {
       name: "allows import.meta.url package-root probes",
       files: { "dist/index.js": 'const root = new URL("../..", import.meta.url);\n' },
-      version: "2026.4.27",
       status: 0,
       successText: true,
     },
     {
       name: "rejects missing Control UI assets",
-      version: "2026.4.27",
       options: { includeControlUi: false },
       status: "nonzero",
       stderr: [
@@ -1060,7 +1046,6 @@ syncBuiltinESMExports();
     },
     {
       name: "allows package tarballs without npm lockfiles",
-      version: "2026.5.20",
       options: { includeShrinkwrap: false },
       status: 0,
       successText: true,
@@ -1068,7 +1053,6 @@ syncBuiltinESMExports();
     {
       name: "rejects package-lock.json in package tarballs",
       files: { "dist/index.js": "export {};\n", "package-lock.json": "{}\n" },
-      version: "2026.4.27",
       status: "nonzero",
       stderr: ["package tarball contains npm-excluded entries: package-lock.json"],
     },
@@ -1411,26 +1395,11 @@ syncBuiltinESMExports();
         "dist/index.js": "export {};\n",
         ...Object.fromEntries(LOCAL_BUILD_METADATA_DIST_PATHS.map((entry) => [entry, "{}\n"])),
       },
-      version: "2026.4.27",
+      version: "2026.4.26",
       status: "nonzero",
       stderr: [
         'npm package must not include local build metadata "dist/.buildstamp".',
         'npm package must not include local build metadata "dist/.runtime-postbuildstamp".',
-      ],
-    },
-    {
-      name: "allows local build metadata in already published legacy packages through 2026.4.26",
-      inventory: ["dist/index.js", ...LOCAL_BUILD_METADATA_DIST_PATHS],
-      files: {
-        "dist/index.js": "export {};\n",
-        ...Object.fromEntries(LOCAL_BUILD_METADATA_DIST_PATHS.map((entry) => [entry, "{}\n"])),
-      },
-      version: "2026.4.26",
-      status: 0,
-      successText: true,
-      stderr: [
-        "legacy package includes local build metadata tar entry dist/.buildstamp",
-        "legacy package includes local build metadata tar entry dist/.runtime-postbuildstamp",
       ],
     },
   ];

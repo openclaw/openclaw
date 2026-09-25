@@ -1,6 +1,8 @@
+import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createManagedHandoffTestBinding } from "../../test/helpers/managed-handoff-isolation.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { applyCliProfileEnv } from "../cli/profile.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
@@ -11,6 +13,7 @@ import { createMockGatewayService, mockSystemAccountHome } from "../daemon/servi
 import { readLoadedSystemdServiceRuntime } from "../daemon/systemd-loaded-runtime.js";
 import { writeDoctorGatewayConfig } from "../flows/doctor-health-contribution-runners.gateway.js";
 import * as sqliteSnapshotSource from "../infra/sqlite-snapshot-source.js";
+import { resolveManagedUpdateLeaseDatabasePath } from "../infra/update-managed-service-handoff-lease.js";
 import { readUpdateRunDriver } from "../infra/update-run-driver.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
@@ -23,7 +26,10 @@ import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { maybeRepairGatewayServiceConfig } from "./doctor-gateway-services.js";
 import { prepareWriterContext } from "./doctor-gateway-services.writer-order.test-support.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
-import { stoppedSystemdBinding } from "./doctor-maintenance.test-support.js";
+import {
+  stoppedSystemdBinding,
+  useDoctorMaintenanceRuntimeDirectory,
+} from "./doctor-maintenance.test-support.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
 
 const mocks = vi.hoisted(() => ({
@@ -113,37 +119,21 @@ vi.mock("../cli/daemon-cli/restart-health.js", async (importOriginal) => ({
   waitForGatewayHealthyRestart: mocks.health,
 }));
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: mocks.note }));
-vi.mock("../infra/state-database-coordinator.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/state-database-coordinator.js")>();
-  return {
-    ...actual,
-    acquireGatewayLifecycleCoordinator: (
-      params: Parameters<typeof actual.acquireGatewayLifecycleCoordinator>[0],
-    ) =>
-      actual.acquireGatewayLifecycleCoordinator({
-        ...params,
-        runtimeDirectory: mocks.runtimeDirectory,
-      }),
-    acquireGatewayMaintenanceCoordinator: (
-      params: Parameters<typeof actual.acquireGatewayMaintenanceCoordinator>[0],
-    ) =>
-      actual.acquireGatewayMaintenanceCoordinator({
-        ...params,
-        runtimeDirectory: mocks.runtimeDirectory,
-      }),
-    acquireStateDatabaseCoordinator: (
-      params: Parameters<typeof actual.acquireStateDatabaseCoordinator>[0],
-    ) =>
-      actual.acquireStateDatabaseCoordinator({
-        ...params,
-        runtimeDirectory: mocks.runtimeDirectory,
-      }),
-  };
-});
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let handoffBinding: ReturnType<typeof createManagedHandoffTestBinding>;
+useDoctorMaintenanceRuntimeDirectory(() => {
+  mocks.runtimeDirectory = realpathSync(tempDirs.make("openclaw-doctor-installation-runtime-"));
+  handoffBinding = createManagedHandoffTestBinding(mocks.runtimeDirectory);
+  vi.stubEnv(
+    "NODE_OPTIONS",
+    `${process.env.NODE_OPTIONS ?? ""} ${handoffBinding.nodeOption}`.trim(),
+  );
+  return mocks.runtimeDirectory;
+});
 const originalStdinIsTTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
 beforeEach(() => {
+  handoffBinding.assertPath(resolveManagedUpdateLeaseDatabasePath());
   vi.clearAllMocks();
   mocks.resident.mockReset();
   mocks.audit.mockResolvedValue({ ok: true, issues: [] });
@@ -219,7 +209,6 @@ async function runInstallationCase(params: {
   mockProcessPlatform(params.platform);
   mockSystemAccountHome();
   const home = await fs.realpath(tempDirs.make("openclaw-doctor-installation-"));
-  mocks.runtimeDirectory = home;
   mocks.runtimePath =
     params.consent?.mixed === "version-managed-runtime"
       ? path.join(home, ".nvm", "versions", "node", "v26.8.1", "bin", "node")
@@ -459,6 +448,18 @@ async function runInstallationCase(params: {
       });
       if (params.inspectionScenario) {
         vi.spyOn(performance, "now").mockImplementation(() => inspectionClock);
+        // Charge both fresh byte validation and fallback snapshots: reusing decoded
+        // rows does not remove the fresh read at each native authority boundary.
+        const readVersion = sqliteSnapshotSource.readSqliteSourceContentVersionSync;
+        vi.spyOn(sqliteSnapshotSource, "readSqliteSourceContentVersionSync").mockImplementation(
+          (pathname) => {
+            const version = readVersion(pathname);
+            if (inspectingRuntime) {
+              inspectionClock += 100;
+            }
+            return version;
+          },
+        );
         const prepareSnapshot = sqliteSnapshotSource.prepareSqliteReadOnlyLocationSync;
         vi.spyOn(sqliteSnapshotSource, "prepareSqliteReadOnlyLocationSync").mockImplementation(
           (pathname) => {
@@ -527,7 +528,7 @@ async function runInstallationCase(params: {
         if (params.inspectionScenario === "competing-update") {
           expect(competingUpdateStarted).toBe(true);
           expect(finishError).toMatchObject({
-            message: expect.stringContaining("is still in progress"),
+            message: expect.stringContaining("remains recorded as running"),
           });
           expect(events).toEqual(["stop", "repair-state"]);
           expect(running).toBe(false);

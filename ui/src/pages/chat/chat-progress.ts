@@ -12,8 +12,6 @@ type WorkingProgress = {
   startedAt: number;
 };
 
-type WorkingProgressCache = WorkingProgress;
-
 const CONTEXT_COMPACTION_CUSTOM_TYPE = "openclaw.context-compaction";
 
 export function isContextCompactionMessage(message: unknown): boolean {
@@ -32,66 +30,58 @@ export function matchesCompactionOperation(message: unknown, status: CompactionS
   );
 }
 
-const workingProgressBySession = new Map<string, WorkingProgressCache>();
+const workingProgressBySession = new Map<string, WorkingProgress>();
 let anonymousWorkingProgressId = 0;
 
 export function buildGuardianNoticeItem(
   notice: ChatGuardianNotice,
 ): Extract<ChatItem, { kind: "notice" }> {
   const action = notice.command ?? t("chat.systemNotice.guardian.requestedAction");
+  const item = {
+    kind: "notice" as const,
+    key: notice.key,
+    icon: "shieldCheck" as const,
+    timestamp: notice.timestamp,
+  };
   if (notice.source === "system") {
     return {
-      kind: "notice",
-      key: notice.key,
+      ...item,
       icon: "cpu",
       label: t("common.system"),
       text: notice.message ?? "",
-      timestamp: notice.timestamp,
     };
   }
   if (notice.kind === "approved") {
     return {
-      kind: "notice",
-      key: notice.key,
-      icon: "shieldCheck",
+      ...item,
       label: t("chat.systemNotice.guardian.approvedSummary", { action }),
       text: "",
-      timestamp: notice.timestamp,
     };
   }
   if (notice.kind === "warning") {
     return {
-      kind: "notice",
-      key: notice.key,
-      icon: "shieldCheck",
+      ...item,
       label: t("chat.systemNotice.guardian.warningLabel"),
       text: notice.message ?? t("chat.systemNotice.guardian.warningFallback"),
-      timestamp: notice.timestamp,
       tone: "danger",
     };
   }
   if (notice.kind === "reviewing" || notice.kind === "strict-review-required") {
     return {
-      kind: "notice",
-      key: notice.key,
-      icon: "shieldCheck",
+      ...item,
       label: t("chat.systemNotice.guardian.strictReviewRequiredLabel"),
       text: t("chat.systemNotice.guardian.strictReviewRequiredSummary"),
-      timestamp: notice.timestamp,
       tone: "danger",
     };
   }
   return {
-    kind: "notice",
-    key: notice.key,
-    icon: "shieldCheck",
+    ...item,
     label: t("chat.systemNotice.guardian.deniedLabel"),
     text: t("chat.systemNotice.guardian.deniedSummary", {
       action,
       risk: notice.riskLevel ?? t("chat.systemNotice.guardian.unknownRisk"),
       rationale: notice.rationale ?? t("chat.systemNotice.guardian.noRationale"),
     }),
-    timestamp: notice.timestamp,
     tone: "danger",
   };
 }
@@ -129,11 +119,6 @@ export function buildCompactionDividerItem(
             count: formatCompactTokenCount(tokensSaved),
           }),
         }),
-    ...(phase === "complete" && marker.kind === "compaction"
-      ? {
-          description: t("chat.compaction.description"),
-        }
-      : {}),
     timestamp,
   };
 }

@@ -3,14 +3,23 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
+import { configureAiTransportHost, getAiTransportHost } from "@openclaw/ai";
+import { isAnthropicOAuthApiKey } from "@openclaw/ai/internal/anthropic";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  anthropicModel,
+  context as anthropicContext,
+  anthropicEvents,
+  createAnthropicResponse,
+} from "../../../../packages/ai/src/provider-transport-parity.test-support.js";
 import {
   resolveProviderContext,
   type ProviderStreamOptions,
 } from "../../../../packages/ai/src/provider-types.js";
 import { createPluginMetadataSnapshot } from "../../../config/plugin-auto-enable.test-helpers.js";
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
+import { emitAgentEvent } from "../../../infra/agent-events.js";
 import { bindStreamLlmRuntime } from "../../../llm/model-runtime-binding.js";
 import { createCodexNativeWebSearchWrapper } from "../../../llm/providers/stream-wrappers/openai.js";
 import { createAssistantMessageEventStream } from "../../../llm/utils/event-stream.js";
@@ -19,7 +28,12 @@ import { withPluginRuntimeGenerationScope } from "../../../plugins/runtime/gener
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWorkerWrite } from "../../../state/openclaw-agent-write-admission.js";
+import { closeOpenClawStateDatabaseAsync } from "../../../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
+import { prepareTaskRegistryRead } from "../../../tasks/task-registry-read.js";
+import { createTaskFixture } from "../../../tasks/task-registry.test-support.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { holdStateDatabaseCoordinator } from "../../../test-utils/state-database-contention.js";
 import { createOperationalRunInstanceRef } from "../../admitted-run-context.js";
 import type { StreamFn } from "../../runtime/index.js";
 import {
@@ -32,7 +46,10 @@ import {
 import { SessionManager } from "../../sessions/index.js";
 import { castAgentMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { readLastCacheTtlTimestamp } from "../cache-ttl.js";
-import { testing as extraParamsTesting } from "../extra-params.test-support.js";
+import {
+  testing as extraParamsTesting,
+  type WrapProviderStreamFnParams,
+} from "../extra-params.test-support.js";
 import { log } from "../logger.js";
 import {
   clearEmbeddedSessionPromptStates,
@@ -127,24 +144,99 @@ describe("settleEmbeddedAttemptStream liveness", () => {
     vi.useRealTimers();
   });
 
-  it("settles past a block-reply flush that never resolves", async () => {
+  it.each([
+    { withMetadata: true, timedOut: false },
+    { withMetadata: false, timedOut: false },
+    { withMetadata: true, timedOut: true },
+  ])(
+    "settles cancellation while task persistence is held, metadata=$withMetadata timeout=$timedOut",
+    async ({ withMetadata, timedOut }) => {
+      await withOpenClawTestState({ layout: "split" }, async (state) => {
+        const sessionKey = "agent:main:cron:settle:run:private-cancel";
+        const task = createTaskFixture("subagent", {
+          runId: "private-stream-cancel",
+          task: "Private stream cancellation proof",
+          ownerKey: sessionKey,
+          requesterSessionKey: sessionKey,
+          taskKind: "image_generation",
+          childSessionKey: "agent:main:subagent:private-stream-cancel",
+          notifyPolicy: "silent",
+          deliveryStatus: "not_applicable",
+        });
+        await prepareTaskRegistryRead();
+        const context = captureOpenClawStateWorkerContext();
+        expect(context.admission.databasePath.startsWith(state.stateDir)).toBe(true);
+        const holder = holdStateDatabaseCoordinator(
+          context.admission.databasePath,
+          context.coordinatorRuntime,
+          300,
+        );
+        const controller = new AbortController();
+        const input = createSettleFixture({
+          runAbortSignal: controller.signal,
+          readLifecycleState: () => ({
+            aborted: controller.signal.aborted,
+            timedOut: timedOut && controller.signal.aborted,
+            timedOutDuringCompaction: false,
+          }),
+        });
+        input.attempt.sessionKey = sessionKey;
+        input.subscription.toolMetas = withMetadata
+          ? [{ toolName: "image_generate", asyncStarted: true, asyncTaskRunId: task.runId }]
+          : [];
+        let settlement: ReturnType<typeof settleEmbeddedAttemptStream> | undefined;
+        try {
+          await holder.ready;
+          emitAgentEvent({
+            runId: task.runId!,
+            stream: "lifecycle",
+            data: { phase: "end", endedAt: task.createdAt + 1 },
+          });
+          settlement = settleEmbeddedAttemptStream(input);
+          await setImmediate();
+          controller.abort();
+          const result = await settlement;
+          expect(result.promptError).toBeNull();
+          expect(result.sessionIdUsed).toBe("sess-settle-1");
+          expect(
+            Atomics.load(holder.released, 0),
+            "full cancellation settlement must finish before coordinator release",
+          ).toBe(0);
+          holder.release();
+          const read = await prepareTaskRegistryRead();
+          expect(read?.getTaskById(task.taskId)).toMatchObject({ status: "succeeded" });
+        } finally {
+          holder.release();
+          await holder.joined;
+          await Promise.allSettled([settlement]);
+          await closeOpenClawStateDatabaseAsync();
+        }
+      });
+    },
+  );
+
+  it("settles past a held block-reply flush", async () => {
     vi.useFakeTimers();
     // A wedged delivery lane (including the supported blockReplyTimeoutMs: 0
     // path) previously parked settlement until the 48h run budget.
-    const input = createSettleFixture({
-      onBlockReplyFlush: () => new Promise<never>(() => {}),
-    } as Partial<SettleInput>);
+    const release = createDeferredCore();
+    const input = createSettleFixture({ onBlockReplyFlush: () => release.promise });
 
-    const settle = settleEmbeddedAttemptStream(input);
     let settled = false;
-    void settle.then(() => {
+    const settle = settleEmbeddedAttemptStream(input).then((result) => {
       settled = true;
+      return result;
     });
-    await vi.advanceTimersByTimeAsync(RUN_LIVENESS_JOIN_TIMEOUT_MS - 1);
-    expect(settled).toBe(false);
-    await vi.advanceTimersByTimeAsync(1);
-    const result = await settle;
-    expect(result.sessionIdUsed).toBe("sess-settle-1");
+    try {
+      await vi.advanceTimersByTimeAsync(RUN_LIVENESS_JOIN_TIMEOUT_MS - 1);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      const result = await settle;
+      expect(result.sessionIdUsed).toBe("sess-settle-1");
+    } finally {
+      release.resolve();
+      await settle;
+    }
   });
 
   it("keeps the last request observation separate from billing totals", async () => {
@@ -576,6 +668,43 @@ describe("prepareEmbeddedAttemptTransport", () => {
     registerProviderStreamForModel.mockReset();
   });
 
+  it.each([undefined, "test-subscription"])(
+    "lets the provider select transport from the prepared auth flow %s",
+    async (authFlow) => {
+      const { input, session, streamFn } = createTransportFixture({
+        compaction: false,
+        pruning: false,
+        apiKey: "test-access-token",
+      });
+      streamFn.mockReturnValue(createAssistantMessageEventStream());
+      registerProviderStreamForModel.mockReturnValue(streamFn);
+      input.attempt.runtimePlan!.auth.selectedAuthMode = "oauth";
+      input.attempt.runtimePlan!.auth.selectedAuthFlow = authFlow;
+      extraParamsTesting.setProviderRuntimeDepsForTest({
+        wrapProviderStreamFn: ({ context }) => {
+          const base = context.streamFn;
+          if (!base) {
+            throw new Error("Expected prepared base stream");
+          }
+          return (model, messages, options) =>
+            base(model, messages, {
+              ...options,
+              transport: context.auth?.authFlow === "test-subscription" ? "sse" : "auto",
+            });
+        },
+      });
+
+      await prepareEmbeddedAttemptTransport(input);
+      await session.agent.streamFn(input.attempt.model, { messages: [] }, {});
+
+      expect(streamFn).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({ transport: authFlow ? "sse" : "auto" }),
+      );
+    },
+  );
+
   it.each([
     {
       compaction: true,
@@ -622,6 +751,101 @@ describe("prepareEmbeddedAttemptTransport", () => {
     expect(session.agent.transport).toBe("sse");
     expect(result.compactionReplayEnabled).toBe(testCase.replayEnabled);
     expect(result.serverToolClearingEnabled).toBe(testCase.clearing);
+  });
+
+  it.each([
+    { source: "stored profile", resolvedApiKey: undefined },
+    { source: "resolved run", resolvedApiKey: "sk-ant-oat01-synthetic-run" },
+  ])(
+    "gives provider wrappers the $source credential the Anthropic transport sends",
+    async ({ resolvedApiKey }) => {
+      await import("../../ai-transport-runtime-host.js");
+      const previousHost = getAiTransportHost();
+      const requests: Array<{ headers: Headers; payload: Record<string, unknown> }> = [];
+      configureAiTransportHost({
+        ...previousHost,
+        buildModelFetch: () => async (_input, init) => {
+          if (typeof init?.body !== "string") {
+            throw new Error("expected a JSON Anthropic request body");
+          }
+          requests.push({
+            headers: new Headers(init.headers),
+            payload: JSON.parse(init.body) as Record<string, unknown>,
+          });
+          return createAnthropicResponse(anthropicEvents);
+        },
+      });
+      const wrapperApiKeys: unknown[] = [];
+      // Stands in for the Anthropic plugin, which publishes installed Claude CLI
+      // evidence only after classifying the request credential as OAuth.
+      const wrapProviderStreamFn = vi.fn(({ context }: WrapProviderStreamFnParams) => {
+        const streamFn = context.streamFn;
+        if (!streamFn) {
+          throw new Error("expected a provider stream to wrap");
+        }
+        return ((model, streamContext, options) => {
+          wrapperApiKeys.push(options?.apiKey);
+          return streamFn(
+            model,
+            streamContext,
+            isAnthropicOAuthApiKey(options?.apiKey)
+              ? { ...options, headers: { ...options?.headers, "user-agent": "claude-cli/2.1.400" } }
+              : options,
+          );
+        }) satisfies StreamFn;
+      });
+      extraParamsTesting.setProviderRuntimeDepsForTest({ wrapProviderStreamFn });
+      const { input, session } = createTransportFixture({
+        compaction: false,
+        pruning: false,
+        apiKey: "sk-ant-oat01-synthetic-profile",
+      });
+      input.attempt.model = anthropicModel;
+      input.attempt.resolvedApiKey = resolvedApiKey;
+      const expectedApiKey = resolvedApiKey ?? "sk-ant-oat01-synthetic-profile";
+
+      try {
+        await prepareEmbeddedAttemptTransport(input);
+        // Agent turns send no credential; the attempt owns it.
+        const stream = await session.agent.streamFn(anthropicModel, anthropicContext, {});
+        expect((await stream.result()).stopReason).toBe("stop");
+      } finally {
+        configureAiTransportHost(previousHost);
+      }
+
+      expect(wrapProviderStreamFn).toHaveBeenCalledOnce();
+      expect(wrapperApiKeys).toEqual([expectedApiKey]);
+      expect(requests).toHaveLength(1);
+      expect(requests[0]?.headers.get("authorization")).toBe(`Bearer ${expectedApiKey}`);
+      expect(requests[0]?.headers.get("user-agent")).toBe("claude-cli/2.1.400");
+      expect(requests[0]?.payload.system).toContainEqual({
+        type: "text",
+        text: "x-anthropic-billing-header: cc_version=2.1.400; cc_entrypoint=sdk-cli;",
+      });
+    },
+  );
+
+  it("keeps the run credential out of session-owned fallback streams", async () => {
+    // Session-owned streams resolve their own auth; the run credential is not theirs.
+    const sessionStream = vi.fn<StreamFn>(() => createAssistantMessageEventStream());
+    bindStreamLlmRuntime(sessionStream, {
+      streamSimple: vi.fn<StreamFn>(),
+      registry: { getApiProvider: () => undefined },
+    } as never);
+    const { input, session } = createTransportFixture({
+      compaction: false,
+      pruning: false,
+      apiKey: "stored-profile-key",
+    });
+    session.agent.streamFn = sessionStream;
+    input.attempt.model = { ...input.attempt.model, api: "test-api" };
+
+    const result = await prepareEmbeddedAttemptTransport(input);
+    await session.agent.streamFn(input.attempt.model, { messages: [] }, {});
+
+    expect(result.streamStrategy).toBe("session-custom");
+    expect(sessionStream).toHaveBeenCalledOnce();
+    expect(sessionStream.mock.calls[0]?.[2]?.apiKey).toBeUndefined();
   });
 
   describe.each([false, true])("with code mode enabled: %s", (codeModeControlsEnabled) => {

@@ -3,7 +3,6 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { withTempHome as withTempHomeBase } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
 // Register shared mocks before imports bind their production exports.
 import "./agent-command.test-mocks.js";
@@ -53,6 +52,7 @@ import { getBootEchoContextForSession } from "../gateway/boot-echo-guard.js";
 import { runBootOnce } from "../gateway/boot.js";
 import { emitAgentEvent, onAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 import { buildOutboundBaseSessionKey } from "../infra/outbound/base-session-key.js";
+import { withTempHomeCore as withTempHomeBase } from "../plugin-sdk/test-helpers/temp-home.js";
 import { loadEnabledClaudeBundleCommands } from "../plugins/bundle-commands.js";
 import { resolveProviderPolicySurface } from "../plugins/provider-public-artifacts.js";
 import type { PluginProviderRegistration } from "../plugins/registry.test-fixtures.js";
@@ -390,7 +390,8 @@ async function runAgentWithSessionKey(sessionKey: string): Promise<void> {
 }
 
 function mockModelCatalogOnce(entries: ReturnType<typeof loadManifestModelCatalog>): void {
-  vi.mocked(loadManifestModelCatalog).mockReturnValueOnce(entries);
+  // Startup ranking and turn selection share the captured manifest snapshot.
+  vi.mocked(loadManifestModelCatalog).mockReturnValue(entries);
   vi.mocked(readPreparedModelCatalog).mockResolvedValueOnce(entries);
 }
 
@@ -845,16 +846,15 @@ describe("agentCommand", () => {
         {
           message: "inspect this repo",
           sessionKey,
+          workspaceDir: worktree.path,
           allowModelOverride: false,
         },
         runtime,
       );
 
-      expect(resolveReusableWorkspaceSkillSnapshot).toHaveBeenCalledWith(
-        expect.objectContaining({
-          executionWorkspaceDir: canonicalWorkspace,
-        }),
-      );
+      const skillRoots = vi.mocked(resolveReusableWorkspaceSkillSnapshot).mock.calls.at(-1)?.[0];
+      expect(skillRoots?.workspaceDir).toBe(path.join(home, "openclaw"));
+      expect(skillRoots?.executionWorkspaceDir).toBe(canonicalWorkspace);
     });
   });
 

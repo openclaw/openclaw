@@ -341,6 +341,7 @@ suite.define(() => {
       await suite.withPage(
         { locale: "en-US", serviceWorkers: "block", viewport },
         async ({ page }) => {
+          await page.clock.install();
           await page.addInitScript(() => {
             const observed = window as Window & { completedHeadFrames?: number };
             const originalFetch = window.fetch;
@@ -397,7 +398,7 @@ suite.define(() => {
             .toBe(true);
           // A generic automatic retry used to wake one second after this
           // first settled frame. Close must remain authoritative beyond it.
-          await page.waitForTimeout(1_500);
+          await page.clock.runFor(1_500);
           if (documentRequests > 1) {
             await reloaded;
           }

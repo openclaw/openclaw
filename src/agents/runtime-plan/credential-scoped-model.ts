@@ -2,9 +2,9 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { shouldPreferProviderRuntimeResolvedModel } from "../../plugins/provider-runtime.js";
 import { getOrCreatePromise } from "../../shared/lazy-promise.js";
+import { resolveProviderModelAuthPolicy } from "../model-auth-policy.js";
 import {
   resolveProviderModelMaterializationAuthMode,
-  resolveProviderModelRouteAuthRequirement,
   type ProviderModelRouteMaterializationAuthMode,
 } from "../provider-model-route-auth.js";
 import { materializePreparedRuntimeModel } from "./materialize-model.js";
@@ -100,22 +100,6 @@ function shouldForceCredentialScopedModelResolve(
   );
 }
 
-/** Re-resolves metadata whenever the prepared credential can change provider limits. */
-function shouldMaterializeAuthPlanModel(
-  plan: Pick<AgentRuntimeAuthPlan, "forwardedAuthProfileId" | "modelRoute" | "selectedAuthMode">,
-  requestedProfileId?: string,
-  providerUsesProfileScopedModelMetadata = false,
-): boolean {
-  return Boolean(
-    plan.modelRoute ||
-    shouldForceCredentialScopedModelResolve(
-      plan,
-      requestedProfileId,
-      providerUsesProfileScopedModelMetadata,
-    ),
-  );
-}
-
 export function resolveCredentialScopedAuthAttemptModelDecision(params: {
   attempt: PreparedAgentRuntimeAuthAttempt;
   priorProfileAttempted: boolean;
@@ -124,18 +108,24 @@ export function resolveCredentialScopedAuthAttemptModelDecision(params: {
 }) {
   const forceResolve = shouldForceDirectAuthFallbackModelResolve(params);
   const shouldMaterialize =
-    shouldMaterializeAuthPlanModel(
+    Boolean(params.attempt.plan.modelRoute) ||
+    shouldForceCredentialScopedModelResolve(
       params.attempt.plan,
       params.requestedProfileId,
       params.providerUsesProfileScopedModelMetadata,
-    ) || forceResolve;
+    ) ||
+    forceResolve;
   return {
     forceResolve,
     shouldMaterialize,
     authRequirement:
       params.attempt.plan.modelRoute?.authRequirement ??
       (shouldMaterialize && params.providerUsesProfileScopedModelMetadata
-        ? resolveProviderModelRouteAuthRequirement(params.attempt.plan.selectedAuthMode)
+        ? (resolveProviderModelAuthPolicy({
+            provider: params.attempt.plan.providerForAuth,
+            mode: params.attempt.plan.selectedAuthMode,
+            authFlow: params.attempt.plan.selectedAuthFlow,
+          }).authRequirement ?? undefined)
         : undefined),
   };
 }
@@ -171,6 +161,7 @@ function routeModelMemoKey(
     params.modelId,
     plan.forwardedAuthProfileId ?? "",
     plan.selectedAuthMode ?? "",
+    plan.selectedAuthFlow ?? "",
     route?.api ?? "",
     route?.baseUrl ?? "",
     route?.authRequirement ?? "",

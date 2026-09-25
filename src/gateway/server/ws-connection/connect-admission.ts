@@ -168,7 +168,7 @@ export function rejectGatewayConnectOrigin(
   reason: string,
 ): void {
   const message =
-    "origin not allowed (open the Control UI from the gateway host or allow it in gateway.controlUi.allowedOrigins)";
+    "origin not allowed (use gateway.publicOrigin with allowedOrigins omitted, or allow this origin in gateway.controlUi.allowedOrigins)";
   context.markHandshakeFailure("origin-mismatch", {
     origin: context.handler.requestOrigin ?? "n/a",
     host: context.handler.requestHost ?? "n/a",
