@@ -48,6 +48,8 @@ export type PluginCatalogResultsProps = {
   query: string;
   iconUrls: Readonly<Record<string, string>>;
   pluginIconUrls: Readonly<Record<string, string>>;
+  iconLoading?: (url: string) => boolean;
+  pluginIconLoading?: (pluginId: string) => boolean;
   canInstall: boolean;
   busy?: Readonly<Record<string, PluginMutationAction>>;
   installProgress?: ReadonlyMap<string, PluginInstallProgress>;
@@ -145,11 +147,13 @@ function renderCatalogIcon(
     },
     props,
   );
-  return renderArtTile(
-    plugin.local.pluginId ?? plugin.id,
-    plugin.catalog.name,
-    iconUrl ?? undefined,
-  );
+  return renderArtTile(plugin.local.pluginId ?? plugin.id, plugin.catalog.name, {
+    iconUrl: iconUrl ?? undefined,
+    loading: Boolean(
+      (plugin.local.pluginId && props.pluginIconLoading?.(plugin.local.pluginId)) ||
+      (plugin.catalog.imageUrl && props.iconLoading?.(plugin.catalog.imageUrl)),
+    ),
+  });
 }
 
 export function formatCompactCount(value: number): string {

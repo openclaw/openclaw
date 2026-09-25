@@ -1,3 +1,4 @@
+import { isChannelIngressReadCommand } from "../channels/message/ingress-queue-read-contract.js";
 import { ensureSqliteLibrarySelected } from "../infra/bun-sqlite-library.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
@@ -86,6 +87,9 @@ function readPool(): ReadPool {
 }
 
 function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCommand {
+  if (command.type === "channelIngress.failedHealth") {
+    return { type: command.type };
+  }
   if (command.type === "cron.jobNames") {
     return { ...command, jobIds: [...command.jobIds] };
   }
@@ -226,6 +230,9 @@ function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCom
 
 function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   let bytes = Buffer.byteLength(command.type, "utf8");
+  if (isChannelIngressReadCommand(command)) {
+    return bytes + Buffer.byteLength(JSON.stringify(command.input ?? null), "utf8");
+  }
   if (command.type === "cron.jobNames") {
     return command.jobIds.reduce(
       (sum, id) => sum + Buffer.byteLength(id, "utf8"),
