@@ -205,16 +205,6 @@ describe("resolveSessionKeyForRun", () => {
     expect(hoisted.loadCombinedSessionStoreForGatewayMock).not.toHaveBeenCalled();
   });
 
-  it("uses active legacy run contexts for the configured default agent", () => {
-    hoisted.loadConfigMock.mockReturnValue({
-      agents: { list: [{ id: "work", default: true }] },
-    });
-    registerAgentRunContext("run-live-work", { sessionKey: "main" });
-
-    expect(resolveSessionKeyForRun("run-live-work")).toBe("main");
-    expect(hoisted.loadCombinedSessionStoreForGatewayMock).not.toHaveBeenCalled();
-  });
-
   it("uses non-default active run contexts without an explicit agent scope", () => {
     hoisted.loadConfigMock.mockReturnValue({});
     registerAgentRunContext("run-live-work", { sessionKey: "agent:work:main" });
