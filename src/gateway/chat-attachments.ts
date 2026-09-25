@@ -288,11 +288,7 @@ function assertSavedMedia(
   return { id, mediaRef: buildManagedInboundMediaRef(id), path };
 }
 
-function normalizeAttachment(
-  att: ChatAttachment,
-  idx: number,
-  opts: { stripDataUrlPrefix: boolean; requireImageMime: boolean },
-): NormalizedAttachment {
+function normalizeAttachment(att: ChatAttachment, idx: number): NormalizedAttachment {
   const mime = att.mimeType ?? "";
   const content = att.content;
   const label = att.fileName || att.type || `attachment-${idx + 1}`;
@@ -300,17 +296,11 @@ function normalizeAttachment(
   if (typeof content !== "string") {
     throw new Error(`attachment ${label}: content must be base64 string`);
   }
-  if (opts.requireImageMime && !mime.startsWith("image/")) {
-    throw new Error(`attachment ${label}: only image/* supported`);
-  }
-
   let base64 = content.trim();
-  if (opts.stripDataUrlPrefix) {
-    // Inspect metadata only; never capture a multi-megabyte payload in a regex.
-    const commaIndex = base64.indexOf(",");
-    if (commaIndex >= 0 && /^data:[^;,]+;base64$/.test(base64.slice(0, commaIndex))) {
-      base64 = base64.slice(commaIndex + 1);
-    }
+  // Inspect metadata only; never capture a multi-megabyte payload in a regex.
+  const commaIndex = base64.indexOf(",");
+  if (commaIndex >= 0 && /^data:[^;,]+;base64$/.test(base64.slice(0, commaIndex))) {
+    base64 = base64.slice(commaIndex + 1);
   }
   return { label, mime, base64 };
 }
@@ -367,12 +357,7 @@ export async function parseMessageWithAttachments(
         continue;
       }
 
-      const normalized = normalizeAttachment(att, idx, {
-        stripDataUrlPrefix: true,
-        requireImageMime: false,
-      });
-
-      const { base64: b64, label, mime } = normalized;
+      const { base64: b64, label, mime } = normalizeAttachment(att, idx);
 
       if (b64.length === 0) {
         throw new UnsupportedAttachmentError("empty-payload", `attachment ${label}: empty payload`);

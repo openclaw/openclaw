@@ -63,6 +63,7 @@ vi.mock("node:worker_threads", async (importOriginal) => {
   return {
     parentPort: { on: edge.on, postMessage: edge.publishReply },
     isMainThread: false,
+    workerData: null,
     threadId: 1,
     isMarkedAsUntransferable: actual.isMarkedAsUntransferable,
     Worker: edge.forbidden,

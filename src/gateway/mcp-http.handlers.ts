@@ -78,6 +78,8 @@ export async function handleMcpJsonRpc(params: {
   onToolCallPrepared?: (call: { toolName: string; args: Record<string, unknown> }) => void;
 }): Promise<object | null> {
   const { id, method, params: methodParams } = params.message;
+  const toolError = (text: string) =>
+    jsonRpcResult(id, { content: [{ type: "text", text }], isError: true });
 
   switch (method) {
     case "initialize": {
@@ -123,10 +125,7 @@ export async function handleMcpJsonRpc(params: {
           ? params.tools.find((candidate) => readMcpLoopbackToolName(candidate) === toolName)
           : undefined;
       if (!tool) {
-        return jsonRpcResult(id, {
-          content: [{ type: "text", text: `Tool not available: ${toolName || "unknown"}` }],
-          isError: true,
-        });
+        return toolError(`Tool not available: ${toolName || "unknown"}`);
       }
       const toolCallId = `mcp-${crypto.randomUUID()}`;
       const startedAt = Date.now();
@@ -190,10 +189,7 @@ export async function handleMcpJsonRpc(params: {
             hookResult.reason,
             hookResult.reason,
           );
-          return jsonRpcResult(id, {
-            content: [{ type: "text", text: hookResult.reason }],
-            isError: true,
-          });
+          return toolError(hookResult.reason);
         }
         const finalizedToolArgs =
           tool.finalizeBeforeToolCallParams?.(hookResult.params, preparedToolArgs) ??
@@ -210,10 +206,7 @@ export async function handleMcpJsonRpc(params: {
             undefined,
             "Tool call authorization expired",
           );
-          return jsonRpcResult(id, {
-            content: [{ type: "text", text: "Tool call authorization expired" }],
-            isError: true,
-          });
+          return toolError("Tool call authorization expired");
         }
         let result: Awaited<ReturnType<typeof tool.execute>>;
         try {
@@ -250,10 +243,7 @@ export async function handleMcpJsonRpc(params: {
           error,
           message,
         );
-        return jsonRpcResult(id, {
-          content: [{ type: "text", text: message || "tool execution failed" }],
-          isError: true,
-        });
+        return toolError(message || "tool execution failed");
       }
     }
     default:
