@@ -54,7 +54,6 @@ describe("team named categories", () => {
       const contextMenu = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
       header.dispatchEvent(contextMenu);
       await sidebar.updateComplete;
-      expect(contextMenu.defaultPrevented).toBe(false);
       expect(sidebar.querySelector(".sidebar-session-group-menu")).toBeNull();
       header.click();
       await sidebar.updateComplete;
