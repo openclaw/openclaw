@@ -124,6 +124,7 @@ export async function createGuestQuestionFixture(deliver: (frame: unknown) => Pr
         scopes: guestQuestionScopes,
         signal: source.signal,
         assertCurrent: () => source.signal.throwIfAborted(),
+        readCurrentRoleAssignment: () => profile.role ?? null,
       }),
       agentRuntimeIdentity: {
         kind: "agentRuntime",

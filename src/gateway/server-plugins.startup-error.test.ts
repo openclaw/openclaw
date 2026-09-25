@@ -121,6 +121,7 @@ it.each(["module-load", "entry-open"] as const)(
     const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
     const port = portClaim.port;
     const server = await startTestGatewayServer(portClaim, {
+      bind: "loopback",
       auth: { mode: "none" },
       controlUiEnabled: false,
       sidecarStartup: "start",
@@ -187,6 +188,11 @@ it.each(["module-load", "entry-open"] as const)(
       });
       expect(rejected.error?.message).toContain("new candidate failure");
       expect(rejected.error?.message).not.toContain("startup-broken");
+      await expect
+        .poll(async () => (await rpcReq(connected, INSTANCE_BINDING_PROBE_METHOD, {})).payload, {
+          timeout: 30_000,
+        })
+        .toMatchObject({ reloadSettled: true });
       const recovered = getActivePluginRegistry();
       expect(recovered).not.toBe(current);
       expect(recovered?.plugins.find((record) => record.id === "startup-broken")).toBe(broken);
