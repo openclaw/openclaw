@@ -33,3 +33,8 @@ export type CronRunReceiptHandle = Pick<
   | "storeKey"
 >;
 export type CronRunReceiptRecoveryCandidate = CronRunReceiptHandle;
+
+export type CronRunReceiptOwnerObservation = Pick<
+  CronRunReceipt,
+  "receiptId" | "ownerPid" | "ownerStartTime" | "startedAtMs"
+>;

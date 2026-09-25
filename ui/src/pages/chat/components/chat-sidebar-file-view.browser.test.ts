@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { canReloadControlUiDocument } from "../../../app/document-reload-guard.ts";
-import { readFileDraft } from "./chat-file-drafts.ts";
+import { readFileDraft, setFileDraft } from "./chat-file-drafts.ts";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
 import "../../../styles/chat/side-panel.css";
@@ -47,8 +47,11 @@ type DetailPanel = HTMLElement & {
 };
 
 const mounted: HTMLElement[] = [];
+const files: FileSidebarContent[] = [];
 
 async function mountFile(content: FileSidebarContent, width?: number): Promise<DetailPanel> {
+  content.draftKey ??= crypto.randomUUID();
+  files.push(content);
   const panel = document.createElement("openclaw-chat-detail-panel") as DetailPanel;
   panel.content = content;
   if (width === undefined) {
@@ -82,6 +85,9 @@ function button(panel: DetailPanel, label: string): HTMLButtonElement {
 afterEach(() => {
   for (const panel of mounted.splice(0)) {
     panel.remove();
+  }
+  for (const file of files.splice(0)) {
+    setFileDraft(file, null);
   }
 });
 
@@ -157,7 +163,7 @@ describe.runIf(browserMode)("chat file editor", () => {
     { name: "LF", content: "first\nneedle\nlast\nneedle\n", matchLines: [1, 3] },
     { name: "CRLF", content: "first\r\nneedle\r\nlast\r\nneedle\r\n", matchLines: [1, 3] },
     { name: "CR", content: "first\rneedle\rlast\rneedle\r", matchLines: [1, 3] },
-    { name: "mixed CRLF first", content: "first\r\nneedle\rlast\r\nneedle", matchLines: [1, 2] },
+    { name: "mixed CRLF first", content: "first\r\nneedle\rlast\r\nneedle", matchLines: [1, 3] },
     { name: "mixed LF first", content: "first\nneedle\rlast\r\nneedle", matchLines: [1, 3] },
     {
       name: "editable mixed LF first",
@@ -188,6 +194,7 @@ describe.runIf(browserMode)("chat file editor", () => {
     await userEvent.click(button(panel, "Previous match"));
     await expect.poll(() => lineIndexes(".file-view__line--current")).toEqual([matchLines[0]]);
     expect(readFileDraft(panel.content)).toBeUndefined();
+    expect(canReloadControlUiDocument()).toBe(true);
     panel.remove();
     expect(canReloadControlUiDocument()).toBe(true);
   });
@@ -306,7 +313,7 @@ describe.runIf(browserMode)("chat file editor", () => {
   });
 
   it.each(["\n", "\r\n", "\r"])(
-    "round-trips %j line endings through an edit and save",
+    "round-trips %j line endings through typing, paste, and replacement",
     async (separator) => {
       const save = vi.fn().mockResolvedValue({ ok: true, hash: "hash-2" });
       const panel = await mountFile({
@@ -328,6 +335,32 @@ describe.runIf(browserMode)("chat file editor", () => {
         content: string;
       };
       expect(saved.content).toBe(`xalpha${separator}beta`);
+
+      await userEvent.click(editor!);
+      await userEvent.keyboard(
+        navigator.platform === "MacIntel" ? "{Meta>}a{/Meta}" : "{Control>}a{/Control}",
+      );
+      const clipboardData = new DataTransfer();
+      clipboardData.setData("text/plain", "first\r\nsecond\nthird\rfourth 🦞\n");
+      editor!.dispatchEvent(
+        new ClipboardEvent("paste", { clipboardData, bubbles: true, cancelable: true }),
+      );
+      await userEvent.click(button(panel, "Save"));
+      await expect.poll(() => save.mock.calls.length).toBe(2);
+      expect(save.mock.calls[1]?.[0]).toEqual({
+        content: ["first", "second", "third", "fourth 🦞", ""].join(separator),
+        expectedHash: "hash-2",
+      });
+      expect(panel.querySelectorAll(".cm-line")).toHaveLength(5);
+
+      await userEvent.fill(editor!, "replacement\nlast 🦞\n");
+      await userEvent.click(button(panel, "Save"));
+      await expect.poll(() => save.mock.calls.length).toBe(3);
+      expect(save.mock.calls[2]?.[0]).toEqual({
+        content: ["replacement", "last 🦞", ""].join(separator),
+        expectedHash: "hash-2",
+      });
+      expect(panel.querySelectorAll(".cm-line")).toHaveLength(3);
     },
   );
 
@@ -495,6 +528,7 @@ describe.runIf(browserMode)("chat file editor", () => {
         ),
       ).toBe(false);
       expect(readFileDraft(panel.content)).toBeUndefined();
+      expect(canReloadControlUiDocument()).toBe(true);
       panel.remove();
       expect(canReloadControlUiDocument()).toBe(true);
     },

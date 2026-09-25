@@ -108,7 +108,7 @@ describe("prepared worker expiry during admitted work", () => {
         registerPreparedWorkspace,
         credentialBroker: createWorkerCredentialBroker({
           ...shared,
-          cancelInferenceEnvironment: () => {},
+          cancelInferenceEnvironment: async () => {},
         }),
         callProvider: async (_environmentId, run) => await run(),
         callBootstrap: async (_installation, run) => await run(fixture.abort.signal),
@@ -144,15 +144,20 @@ describe("prepared worker expiry during admitted work", () => {
           entered.resolve();
           await releaseWork.promise;
         } else {
+          const preparedWorkspace = {
+            workspaceDir: `/worker/.openclaw-worker/prepared/gateway/${"9".repeat(64)}/workspace`,
+            homeDir: `/worker/.openclaw-worker/prepared/gateway/${"9".repeat(64)}/home`,
+            sourceManifestRef: `sha256:${"1".repeat(64)}`,
+            preparedManifestRef: `sha256:${"2".repeat(64)}`,
+          };
           await options!.project!.prepare({
             runScript: async () =>
               JSON.stringify({
                 ready: true,
-                preparedWorkspace: {
-                  workspaceDir: `/worker/.openclaw-worker/prepared/gateway/${"9".repeat(64)}/workspace`,
-                  homeDir: `/worker/.openclaw-worker/prepared/gateway/${"9".repeat(64)}/home`,
-                  sourceManifestRef: `sha256:${"1".repeat(64)}`,
-                  preparedManifestRef: `sha256:${"2".repeat(64)}`,
+                preparedWorkspace,
+                retainedWorkspace: {
+                  ...preparedWorkspace,
+                  baseCommit: options?.project?.baseCommit,
                 },
               }),
             runScriptWithBudget: async () => {

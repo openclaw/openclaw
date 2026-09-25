@@ -107,7 +107,7 @@ export type TelegramMessageContext = {
   isForum: boolean;
   historyKey?: string;
   historyLimit: BuildTelegramMessageContextParams["historyLimit"];
-  route: ReturnType<typeof resolveTelegramConversationRoute>["route"];
+  route: Awaited<ReturnType<typeof resolveTelegramConversationRoute>>["route"];
   skillFilter: TelegramMessageContextPayload["skillFilter"];
   sendTyping: () => Promise<void>;
   sendRecordVoice: () => Promise<void>;
@@ -244,7 +244,7 @@ export const buildTelegramMessageContext = async ({
     groupConfig,
     dmPolicy,
   });
-  const conversationRoute = resolveTelegramConversationRoute({
+  const conversationRoute = await resolveTelegramConversationRoute({
     cfg,
     accountId: account.accountId,
     chatId,
@@ -256,7 +256,7 @@ export const buildTelegramMessageContext = async ({
   const { bindingMode } = conversationRoute;
   let { route } = conversationRoute;
   const requiresExplicitAccountBinding = (
-    candidate: ReturnType<typeof resolveTelegramConversationRoute>["route"],
+    candidate: Awaited<ReturnType<typeof resolveTelegramConversationRoute>>["route"],
   ): boolean =>
     normalizeAccountId(candidate.accountId) !==
       normalizeAccountId(resolveDefaultTelegramAccountId(cfg)) && candidate.matchedBy === "default";

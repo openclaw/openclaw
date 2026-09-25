@@ -8,7 +8,6 @@ import type { ChatAttachment, ChatGoalDraftMode, HumanMention } from "../../lib/
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 
-export type ChatPageContext = ApplicationContext;
 export type PaneSessionChangeOptions = { replace?: boolean };
 export type PaneSessionHandoff = {
   goalMode?: ChatGoalDraftMode;
@@ -188,12 +187,12 @@ export function catalogRawResult(raw: unknown): string | null {
 }
 
 export type ChatPaneConnectionScope = {
-  context: ChatPageContext;
+  context: ApplicationContext;
   state: ChatPageHost;
   client: GatewayBrowserClient;
   generation: number;
   headerOutcomeOwner: string;
-  sessions: ChatPageContext["sessions"];
+  sessions: ApplicationContext["sessions"];
 };
 const CHAT_OPEN_DETAILS_SELECTOR =
   ".chat-controls__inline-select[open], .context-usage details[open], .agent-chat__attach-menu[open], .chat-pr__checks[open]";

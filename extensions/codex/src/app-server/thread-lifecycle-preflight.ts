@@ -60,6 +60,7 @@ import {
   CODEX_RING_ZERO_BASE_INSTRUCTIONS,
   readCodexInheritedMcpServerNames,
 } from "./thread-requests.js";
+import { mergeCodexNativeShellEnvironment } from "./thread-shell-environment.js";
 import { resolveCodexWebSearchPlan } from "./web-search.js";
 
 function assertCodexThreadInferenceAuthority(
@@ -106,6 +107,7 @@ export async function prepareCodexThreadRequestContext(
   },
 ): Promise<CodexThreadRequestContext> {
   const startModelSelection = resolveCodexAppServerThreadModelSelection({
+    homeScope: params.appServer.start.homeScope,
     provider: params.params.provider,
     model: params.runtimeModelId ?? params.params.modelId,
     binding: options.selectionBinding,
@@ -323,6 +325,12 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
     );
   }
   params.config = mergeCodexNativeProjectDocThreadConfig(params.config, effectiveConfig);
+  if (params.shellEnvironment) {
+    params.config = mergeCodexNativeShellEnvironment(
+      params.config,
+      effectiveConfig.config.shell_environment_policy,
+    );
+  }
   const restrictedToolSurfaceInheritedMcpServerNames = restrictedToolSurface
     ? await lifecycleTiming.measure("restricted-tool-surface-mcp-policy", () =>
         readCodexInheritedMcpServerNames(params.client, params.cwd, params.signal, effectiveConfig),

@@ -16,7 +16,7 @@ it("bootstraps the patched browser distribution without treating optional vendor
   const { root, packageRoot, provider, options, sourcePackage } = await fixture();
   await write(packageRoot, "package.json", {
     ...sourcePackage,
-    dependencies: { ...sourcePackage.dependencies, "chrome-devtools-mcp": "1.8.0" },
+    dependencies: { ...sourcePackage.dependencies, "chrome-devtools-mcp": "1.9.0" },
     bundleDependencies: ["chrome-devtools-mcp"],
   });
   const bundled = path.join(packageRoot, "node_modules/chrome-devtools-mcp");
@@ -37,7 +37,7 @@ it("bootstraps the patched browser distribution without treating optional vendor
       },
     },
   );
-  expect(stdout.trim()).toBe("1.8.0");
+  expect(stdout.trim()).toBe("1.9.0");
   for (const file of [
     "build/src/TextSnapshot.js",
     "build/src/McpPage.js",

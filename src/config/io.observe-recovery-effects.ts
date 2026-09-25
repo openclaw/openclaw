@@ -1,9 +1,9 @@
 import type fs from "node:fs";
 import path from "node:path";
+import { replaceFileAtomic, replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import { hasErrnoCode } from "../infra/errno.js";
-import { replaceFileAtomic, replaceFileAtomicSync } from "../infra/replace-file.js";
 import type { captureConfigHealthStateStore } from "./io.health-state.js";
-import type { NormalizedConfigIoDeps } from "./io.types.js";
+import type { NormalizedConfigIoDeps } from "./io.read.types.js";
 
 export type ConfigRecoveryEffect<T> = {
   sync: () => T;

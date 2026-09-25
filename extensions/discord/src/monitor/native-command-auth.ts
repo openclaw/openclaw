@@ -73,9 +73,7 @@ export function createDiscordNativeCommandAuthority(params: {
         resolveCommandAuthorization({ ...params, cfg }).senderIsOwner);
     const commands = resolveDiscordNativeCommandAllowlistAccess({
       cfg,
-      accountId: params.accountId,
       sender: params.sender,
-      chatType: params.ctx.ChatType === "direct" ? "direct" : "channel",
       guildId: params.guildId,
     });
     return {
@@ -118,10 +116,7 @@ export function createDiscordNativeCommandAuthority(params: {
 
 function resolveDiscordNativeCommandAllowlistAccess(params: {
   cfg: OpenClawConfig;
-  accountId?: string | null;
   sender: { id: string; name?: string; tag?: string };
-  chatType: "direct" | "group" | "thread" | "channel";
-  conversationId?: string;
   guildId?: string | null;
 }) {
   const commandsAllowFrom = params.cfg.commands?.allowFrom;
@@ -162,9 +157,7 @@ function resolveDiscordNativeCommandAllowlistAccess(params: {
 export function resolveDiscordNativeCommandChannelAccessContext(params: {
   cfg: OpenClawConfig;
   discordConfig: DiscordConfig;
-  accountId: string;
   sender: { id: string; name?: string; tag?: string };
-  isDirectMessage: boolean;
   isThreadChannel: boolean;
   guild?: Guild<true> | Guild | null;
   rawChannelId: string;
@@ -177,16 +170,7 @@ export function resolveDiscordNativeCommandChannelAccessContext(params: {
   const guild = params.guild ?? null;
   const commandsAllowFromAccess = resolveDiscordNativeCommandAllowlistAccess({
     cfg: params.cfg,
-    accountId: params.accountId,
     sender: params.sender,
-    chatType: params.isDirectMessage
-      ? "direct"
-      : params.isThreadChannel
-        ? "thread"
-        : guild
-          ? "channel"
-          : "group",
-    conversationId: params.rawChannelId || undefined,
     guildId: guild?.id,
   });
   const guildInfo = resolveDiscordGuildEntry({
@@ -211,9 +195,7 @@ export function resolveDiscordNativeCommandChannelAccessContext(params: {
 
 export async function resolveDiscordGuildNativeCommandAuthorized(params: {
   cfg: OpenClawConfig;
-  accountId: string;
   discordConfig: DiscordConfig;
-  useAccessGroups: boolean;
   commandsAllowFromAccess: ReturnType<typeof resolveDiscordNativeCommandAllowlistAccess>;
   guildInfo?: ReturnType<typeof resolveDiscordGuildEntry> | null;
   channelConfig?: ReturnType<typeof resolveDiscordChannelConfigWithFallback> | null;
@@ -243,10 +225,6 @@ export async function resolveDiscordGuildNativeCommandAuthorized(params: {
     sender: params.sender,
     allowNameMatching: params.allowNameMatching,
   });
-  const commandAllowlistAuthorizer = {
-    configured: params.commandsAllowFromAccess.configured,
-    allowed: params.commandsAllowFromAccess.allowed,
-  };
   const ownerAuthorizer = {
     configured: params.ownerAllowListConfigured,
     allowed: params.ownerAllowed,
@@ -262,10 +240,10 @@ export async function resolveDiscordGuildNativeCommandAuthorized(params: {
   };
   const fallbackAuthorizers = [policyFallbackAuthorizer, ownerAuthorizer, memberAuthorizer];
   const authorizers = params.commandsAllowFromAccess.configured
-    ? [commandAllowlistAuthorizer]
+    ? [params.commandsAllowFromAccess]
     : fallbackAuthorizers;
   return resolveCommandAuthorizedFromAuthorizers({
-    useAccessGroups: params.useAccessGroups,
+    useAccessGroups: true,
     authorizers,
     modeWhenAccessGroupsOff: "configured",
   });
@@ -329,8 +307,6 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
     channelSlug,
     rawChannelId,
     threadParentId,
-    threadParentName,
-    threadParentSlug,
   } = channelContext;
   if (params.isPolicyCurrent?.() === false) {
     return false;
@@ -339,7 +315,6 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
     ? interaction.rawData.member.roles.map((roleId: string) => roleId)
     : [];
   const allowNameMatching = isDangerousNameMatchingEnabled(discordConfig);
-  const useAccessGroups = true;
   const configuredDmAllowFrom =
     resolveDiscordAccountAllowFrom({
       cfg,
@@ -347,28 +322,16 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
     }) ?? [];
   const { ownerAllowList, ownerAllowed: ownerOk } = resolveDiscordOwnerAccess({
     allowFrom: configuredDmAllowFrom,
-    sender: {
-      id: sender.id,
-      name: sender.name,
-      tag: sender.tag,
-    },
+    sender,
     allowNameMatching,
   });
   const { commandsAllowFromAccess, guildInfo, channelConfig } =
     resolveDiscordNativeCommandChannelAccessContext({
       cfg,
       discordConfig,
-      accountId,
       sender,
-      isDirectMessage,
-      isThreadChannel,
+      ...channelContext,
       guild: interaction.guild ?? null,
-      rawChannelId,
-      channelName,
-      channelSlug,
-      threadParentId,
-      threadParentName,
-      threadParentSlug,
     });
   if (channelConfig?.enabled === false) {
     return false;
@@ -376,7 +339,7 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
   if (interaction.guild && channelConfig?.allowed === false) {
     return false;
   }
-  if (useAccessGroups && interaction.guild) {
+  if (interaction.guild) {
     const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
       providerConfigPresent: cfg.channels?.discord !== undefined,
       groupPolicy: discordConfig?.groupPolicy,
@@ -401,11 +364,7 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
       accountId,
       dmPolicy,
       configuredAllowFrom: configuredDmAllowFrom,
-      sender: {
-        id: sender.id,
-        name: sender.name,
-        tag: sender.tag,
-      },
+      sender,
       allowNameMatching,
       cfg,
       rest: interaction.client.rest,
@@ -428,9 +387,7 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
   if (!isDirectMessage) {
     const authorized = await resolveDiscordGuildNativeCommandAuthorized({
       cfg,
-      accountId,
       discordConfig,
-      useAccessGroups,
       commandsAllowFromAccess,
       guildInfo,
       channelConfig,

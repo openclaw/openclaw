@@ -249,6 +249,89 @@ describe("Codex native configuration lifecycle", () => {
   );
 
   it.each([
+    {
+      homeScope: "user" as const,
+      provider: "openai",
+      requestProvider: undefined,
+      nativeProvider: "native-proxy",
+    },
+    {
+      homeScope: "agent" as const,
+      provider: "openai",
+      requestProvider: "openai",
+      nativeProvider: "openai",
+    },
+    {
+      homeScope: "user" as const,
+      provider: "other-provider",
+      requestProvider: "other-provider",
+      nativeProvider: "other-provider",
+    },
+  ])(
+    "keeps provider ownership through start and resume ($homeScope, $provider)",
+    async ({ homeScope, provider, requestProvider, nativeProvider }) => {
+      const sessionFile = path.join(tempDir, "native-provider-session.jsonl");
+      const workspaceDir = path.join(tempDir, "native-provider-workspace");
+      registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
+      const native = {
+        ...threadStartResult("native-provider-thread", { cwd: workspaceDir }),
+        modelProvider: nativeProvider,
+      };
+      const fixture = await createLeasedCodexLifecycleHarness({
+        agentDir: path.join(tempDir, "agent"),
+        respond: async (method) => {
+          if (method === "config/read") {
+            return { config: { model_provider: nativeProvider }, origins: {}, layers: [] };
+          }
+          if (method === "configRequirements/read") {
+            return { requirements: null };
+          }
+          if (method === "thread/start" || method === "thread/resume") {
+            return native;
+          }
+          throw new Error(`unexpected method: ${method}`);
+        },
+      });
+      const params = createParams(sessionFile, workspaceDir);
+      params.provider = provider;
+      params.config = undefined;
+      const appServer = createAppServerOptions();
+      const common = {
+        client: fixture.client,
+        params,
+        cwd: workspaceDir,
+        dynamicTools: [],
+        appServer: {
+          ...appServer,
+          start: {
+            ...appServer.start,
+            transport: "unix" as const,
+            homeScope,
+            url: "unix:///tmp/synthetic-codex.sock",
+          },
+        },
+        userMcpServersEnabled: false,
+      };
+      await startOrResumeThread(common);
+      fixture.seed(native, { loaded: false, subscribed: false });
+      await startOrResumeThread(common);
+      for (const method of ["thread/start", "thread/resume"]) {
+        const call = fixture.request.mock.calls.find(([name]) => name === method);
+        expect(call, method).toBeDefined();
+        if (requestProvider === undefined) {
+          expect(call?.[1]).not.toHaveProperty("modelProvider");
+        } else {
+          expect(call?.[1]).toHaveProperty("modelProvider", requestProvider);
+        }
+        expect(call?.[1]).toHaveProperty("model", params.modelId);
+      }
+      await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+        modelProvider: nativeProvider,
+      });
+    },
+  );
+
+  it.each([
     { nativeModel: false, changeModel: false },
     { nativeModel: true, changeModel: true },
     { nativeModel: true, changeModel: false },

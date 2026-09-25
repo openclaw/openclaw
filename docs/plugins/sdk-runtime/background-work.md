@@ -290,8 +290,10 @@ turn or message injection is accepted. Work already accepted keeps its own
 lifecycle and can finish after the source retires. Use `signal` when the caller
 also intends to cancel accepted work.
 
-For detached native work, call `captureAgentHarnessCompletionCustody(scope)`
-during the admitting parent registration. Each accepted child assignment retains
+For detached native work, await `captureAgentHarnessCompletionCustody(scope)`
+during the admitting parent registration, before publishing the registration or
+starting native child work. Preparation retains the original requester lifecycle
+and rejects replacement or revocation before returning custody. Each accepted child assignment retains
 its own hold with `retain()` and passes it as `completionCustody` when delivering
 its result. Release each hold when its registration or assignment ends. The hold
 preserves the original operator ceiling and requester lifecycle; it does not
@@ -308,6 +310,8 @@ later mutations, events, and delivery; never adopt it from a fresh task lookup.
 Before admitting exact-assignment work, call the scoped task runtime's
 `assertTaskAssignmentSupported()` on each registration, including reused runtimes.
 This checks the original runtime owner without rebinding it to a replacement.
+Local agent commands use their scoped plugin registry without requiring Gateway
+activation. Retiring or replacing that owner still invalidates retained runtimes.
 Custom detached runtimes must implement the optional `transitionTaskAssignment`
 operation for these guarded mutations. Check its `expectedTask` against the current
 record and call `assertCurrent()` immediately before persistence. An adapter without

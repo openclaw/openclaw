@@ -20,13 +20,17 @@ import {
   startSessionTranscriptIndexReconcile,
   waitForSessionTranscriptIndexReconcile,
 } from "../config/sessions/session-transcript-reconcile.js";
+import * as historyWorkers from "../config/sessions/session-transcript-worker-runtime.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import { getGatewayContextResolver } from "../plugins/runtime/gateway-context-binding.js";
 import {
   getActiveGatewayRootWorkCount,
   retainGatewayRootWorkAdmissionContinuationScope,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
+import * as agentDatabaseLifecycle from "../state/openclaw-agent-db-lifecycle.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import {
   closeOpenClawAgentDatabaseByPath,
@@ -45,6 +49,8 @@ import {
   closeOpenClawStateDatabaseByPathAsync,
   isOpenClawStateDatabaseOpen,
 } from "../state/openclaw-state-db.js";
+import { getGatewayRecoveryRuntime } from "./server-recovery-runtime-context.js";
+import { getSessionRowProjection } from "./session-row-projection-access.js";
 import {
   releaseSessionTestDirectories,
   removeSessionTestDirectories,
@@ -87,6 +93,85 @@ async function retainGatewayEvent() {
 }
 
 describe("Gateway RPC fixture session writes", () => {
+  test("joins the suite projection before revoking a released store's history reader", async () => {
+    const dir = tempDirs.make("openclaw-gw-projection-release-");
+    const storePath = path.join(dir, "openclaw-agent.sqlite");
+    testState.sessionStorePath = storePath;
+    await writeSessionStore({
+      entries: { main: { sessionId: "projection-release", updatedAt: 1 } },
+    });
+    expect((await rpcReq(ws, "chat.history", { sessionKey: "main" })).ok).toBe(true);
+    const runtime = getGatewayRecoveryRuntime();
+    const projection = getSessionRowProjection(runtime && getGatewayContextResolver(runtime)?.());
+    if (!projection) {
+      throw new Error("Suite Gateway projection is missing");
+    }
+    await projection.ensureMaterialized();
+    const entered = createDeferred();
+    const release = createDeferred();
+    const boundary = createDeferred();
+    const runRead = historyWorkers.withSessionHistoryWorkerDatabases;
+    let held = false;
+    const reads = vi
+      .spyOn(historyWorkers, "withSessionHistoryWorkerDatabases")
+      .mockImplementation((targets, consume, lane) =>
+        runRead(
+          targets,
+          async (owners) => {
+            const result = await consume(owners);
+            if (!held && targets.some((target) => target.path === storePath)) {
+              held = true;
+              entered.resolve();
+              await release.promise;
+            }
+            return result;
+          },
+          lane,
+        ),
+      );
+    sessionChanges.emit({ all: true, scope: { storePath }, factsInvalidated: true });
+    const preparing = projection.ensureMaterialized();
+    void preparing.catch(() => {});
+    const ensure = projection.ensureMaterialized;
+    const join = vi.spyOn(projection, "ensureMaterialized").mockImplementation(() => {
+      boundary.resolve();
+      return ensure();
+    });
+    const close = agentDatabaseLifecycle.closeOpenClawAgentDatabasesAsync;
+    const closing = vi
+      .spyOn(agentDatabaseLifecycle, "closeOpenClawAgentDatabasesAsync")
+      .mockImplementation((root) => {
+        if (root === dir) {
+          boundary.resolve();
+        }
+        return close(root);
+      });
+    let releasing: Promise<void> | undefined;
+    try {
+      await Promise.race([
+        entered.promise,
+        preparing.then(() => {
+          throw new Error("Projection completed without retaining the fixture history read");
+        }),
+      ]);
+      releasing = releaseGatewaySessionStoreFixture(dir);
+      void releasing.catch(() => {});
+      await boundary.promise;
+      release.resolve();
+      await expect(preparing).resolves.toBeUndefined();
+      await releasing;
+      expect(
+        listOpenClawAgentDatabasesForTest().some((database) => database.path === storePath),
+      ).toBe(false);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([preparing, releasing]);
+      reads.mockRestore();
+      join.mockRestore();
+      closing.mockRestore();
+    }
+  });
+
   test.each(["complete", "timeout"] as const)(
     "joins client identity database closure before removal (%s)",
     async (outcome) => {

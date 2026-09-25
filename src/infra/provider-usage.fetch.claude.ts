@@ -3,10 +3,10 @@ import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
-import { cancelUnreadResponseBody } from "./http-body.js";
 import {
   buildUsageHttpErrorSnapshot,
   fetchJson,
+  fetchUsageJson,
   parseUsageResetAt,
   readUsageJson,
 } from "./provider-usage.fetch.shared.js";
@@ -34,24 +34,12 @@ function readClaudeWindow(
 // valid sibling windows or billing in either OAuth or web usage responses.
 function parseClaudeUsage(value: unknown) {
   const usage = isRecord(value) ? value : {};
-  const windows: UsageWindow[] = [];
-
-  const fiveHour = readClaudeWindow(usage.five_hour, "5h", true);
-  if (fiveHour) {
-    windows.push(fiveHour);
-  }
-
-  const sevenDay = readClaudeWindow(usage.seven_day, "Week", true);
-  if (sevenDay) {
-    windows.push(sevenDay);
-  }
-
-  const modelWindow =
+  const windows = [
+    readClaudeWindow(usage.five_hour, "5h", true),
+    readClaudeWindow(usage.seven_day, "Week", true),
     readClaudeWindow(usage.seven_day_sonnet, "Sonnet") ??
-    readClaudeWindow(usage.seven_day_opus, "Opus");
-  if (modelWindow) {
-    windows.push(modelWindow);
-  }
+      readClaudeWindow(usage.seven_day_opus, "Opus"),
+  ].filter((window) => window !== undefined);
 
   const knownLabels = new Set(windows.map((window) => window.label.toLowerCase()));
   for (const limit of Array.isArray(usage.limits) ? usage.limits : []) {
@@ -140,18 +128,13 @@ async function fetchClaudeWebUsage(
     Accept: "application/json",
   };
 
-  const orgRes = await fetchJson(
-    "https://claude.ai/api/organizations",
-    { headers },
+  const parsedOrgs = await fetchUsageJson({
+    provider: "anthropic",
+    url: "https://claude.ai/api/organizations",
+    init: { headers },
     timeoutMs,
     fetchFn,
-  );
-  if (!orgRes.ok) {
-    await cancelUnreadResponseBody(orgRes);
-    return null;
-  }
-
-  const parsedOrgs = await readUsageJson("anthropic", orgRes);
+  });
   if (!parsedOrgs.ok) {
     return null;
   }
@@ -161,18 +144,13 @@ async function fetchClaudeWebUsage(
     return null;
   }
 
-  const usageRes = await fetchJson(
-    `https://claude.ai/api/organizations/${orgId}/usage`,
-    { headers },
+  const parsedUsage = await fetchUsageJson({
+    provider: "anthropic",
+    url: `https://claude.ai/api/organizations/${orgId}/usage`,
+    init: { headers },
     timeoutMs,
     fetchFn,
-  );
-  if (!usageRes.ok) {
-    await cancelUnreadResponseBody(usageRes);
-    return null;
-  }
-
-  const parsedUsage = await readUsageJson("anthropic", usageRes);
+  });
   if (!parsedUsage.ok) {
     return null;
   }

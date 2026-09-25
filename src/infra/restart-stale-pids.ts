@@ -3,16 +3,21 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { resolveGatewayPort } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { readUnixProcessGroupMembers, signalProcessTree } from "../process/kill-tree.js";
-import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../shared/pid-alive.js";
+import {
+  collectProcessAncestorPids,
+  getFileLockProcessStartTime,
+  isPidDefinitelyDead,
+  MAX_ANCESTOR_WALK_DEPTH,
+} from "../shared/pid-alive.js";
 import { sleep } from "../utils/sleep.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
+import { readGatewayLockProcessCmdline } from "./gateway-lock-process.js";
 import { readGatewayOwnerLease } from "./gateway-owner-lease.js";
-import { isGatewayArgv, parseProcCmdline } from "./gateway-process-argv.js";
+import { classifyOpenClawArgv } from "./gateway-process-argv.js";
 import { resolveLsofCommandSync } from "./ports-lsof.js";
 import { resolveDiagnosticProcessEnv } from "./process-env.js";
 import { spawnPsSync } from "./spawn-ps.js";
@@ -48,14 +53,6 @@ const STALE_SIGKILL_WAIT_MS = 400;
 const PORT_FREE_POLL_INTERVAL_MS = 50;
 const PORT_FREE_TIMEOUT_MS = 2000;
 const POLL_SPAWN_TIMEOUT_MS = 400;
-
-/**
- * Upper bound on the ancestor-PID walk. A real-world chain is shallow
- * (pid1 → systemd → gateway → plugin-host → sidecar ≈ 5); 32 generously covers
- * nested-supervisor setups (k8s pod → containerd-shim → runc → …) while still
- * providing a hard stop against corrupted process tables or ppid cycles.
- */
-const MAX_ANCESTOR_WALK_DEPTH = 32;
 
 const restartLog = createSubsystemLogger("restart");
 
@@ -238,20 +235,7 @@ export function getSelfAndAncestorPidsSync(
   if (!readTransitiveParent) {
     return pids;
   }
-  // Transitive ancestor walk. Each hop's validity (positive pid, not already
-  // seen) is enforced by the per-iteration `parent` check below; the entry
-  // invariant `current > 0` is established above and preserved by `current =
-  // parent` after the same check, so no separate top-of-loop guard is needed.
-  let current = immediateParent;
-  for (let depth = 0; depth < MAX_ANCESTOR_WALK_DEPTH; depth++) {
-    const parent = readTransitiveParent(current);
-    if (parent == null || parent <= 0 || pids.has(parent)) {
-      break;
-    }
-    pids.add(parent);
-    current = parent;
-  }
-  return pids;
+  return collectProcessAncestorPids(immediateParent, readTransitiveParent);
 }
 
 function getExcludedGatewayPidsSync(spawnTimeoutMs: number, protectedPid?: number): Set<number> {
@@ -272,29 +256,6 @@ function getExcludedGatewayPidsSync(spawnTimeoutMs: number, protectedPid?: numbe
  * in try/catch and degrades silently. On macOS the lookup shells out to `ps`
  * with the process-inspection timeout.
  */
-function parseLsofEntries(stdout: string): Array<{ pid: number; cmd?: string }> {
-  const entries: Array<{ pid: number; cmd?: string }> = [];
-  let currentPid: number | undefined;
-  let currentCmd: string | undefined;
-  const flush = () => {
-    if (currentPid != null) {
-      entries.push({ pid: currentPid, ...(currentCmd ? { cmd: currentCmd } : {}) });
-    }
-  };
-  for (const line of stdout.split(/\r?\n/).filter(Boolean)) {
-    if (line.startsWith("p")) {
-      flush();
-      const parsed = parseStrictPositiveInteger(line.slice(1));
-      currentPid = parsed ?? undefined;
-      currentCmd = undefined;
-    } else if (line.startsWith("c")) {
-      currentCmd = line.slice(1);
-    }
-  }
-  flush();
-  return entries;
-}
-
 function parsePsCommandLine(raw: string): string[] {
   const args: string[] = [];
   for (const match of raw.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)) {
@@ -307,15 +268,9 @@ function parsePsCommandLine(raw: string): string[] {
 }
 
 function readUnixProcessArgsSync(pid: number, spawnTimeoutMs: number): string[] | null {
-  if (process.platform === "linux") {
-    try {
-      const args = parseProcCmdline(readFileSync(`/proc/${pid}/cmdline`, "utf8"));
-      if (args.length > 0) {
-        return args;
-      }
-    } catch {
-      // Fall back to ps below; /proc may be unavailable or restricted.
-    }
+  const args = readGatewayLockProcessCmdline(pid, process.platform, spawnTimeoutMs);
+  if (args?.length || process.platform === "darwin") {
+    return args;
   }
   const res = spawnPsSync(["-ww", "-p", String(pid), "-o", "command="], spawnTimeoutMs);
   if (res.error || res.status !== 0 || !res.stdout.trim()) {
@@ -326,7 +281,9 @@ function readUnixProcessArgsSync(pid: number, spawnTimeoutMs: number): string[] 
 
 function verifyGatewayPidByArgvSync(pid: number, spawnTimeoutMs: number): boolean {
   const args = readUnixProcessArgsSync(pid, spawnTimeoutMs);
-  return args != null && isGatewayArgv(args, { allowGatewayBinary: true });
+  return (
+    args != null && classifyOpenClawArgv(args, { command: "gateway", pid }).kind === "openclaw"
+  );
 }
 
 function parsePidsFromLsofOutput(
@@ -340,35 +297,35 @@ function parsePidsFromLsofOutput(
   // caller via the supervisor, recreating the #68451 restart loop.
   const excluded = getExcludedGatewayPidsSync(spawnTimeoutMs, protectedPid);
   const pids: number[] = [];
-  for (const entry of parseLsofEntries(stdout)) {
-    if (excluded.has(entry.pid)) {
+  for (const line of stdout.split(/\r?\n/)) {
+    const pid = line.startsWith("p") ? parseStrictPositiveInteger(line.slice(1)) : undefined;
+    if (!pid || excluded.has(pid)) {
       continue;
     }
-    if (entry.cmd && normalizeLowercaseStringOrEmpty(entry.cmd).includes("openclaw")) {
-      pids.push(entry.pid);
-      continue;
-    }
-    if (verifyGatewayPidByArgvSync(entry.pid, spawnTimeoutMs)) {
-      pids.push(entry.pid);
+    if (verifyGatewayPidByArgvSync(pid, spawnTimeoutMs)) {
+      pids.push(pid);
     }
   }
   return uniqueValues(pids);
 }
 
-/**
- * Windows: find listening PIDs on the port, then verify each is an openclaw
- * gateway process via command-line inspection. Excludes the current process
- * and its ancestors (same invariant as the lsof path — see
- * `getSelfAndAncestorPidsSync`).
- */
+// Recorded owners are never stale targets; unverifiable argv must stay explicit.
+function verifyWindowsGatewayArgv(pid: number, args: string[] | null): boolean {
+  if (!args) {
+    return false;
+  }
+  const identity = classifyOpenClawArgv(args, { command: "gateway", pid });
+  if (identity.kind === "unclassified") {
+    restartLog.warn(`Could not classify PID ${pid}: ${identity.reason}; leaving listener running.`);
+  }
+  return identity.kind === "openclaw";
+}
+
 function filterVerifiedWindowsGatewayPids(rawPids: number[], protectedPid?: number): number[] {
   const excluded = getExcludedGatewayPidsSync(PROCESS_INSPECTION_TIMEOUT_MS, protectedPid);
   return uniqueValues(rawPids)
     .filter((pid) => Number.isFinite(pid) && pid > 0 && !excluded.has(pid))
-    .filter((pid) => {
-      const args = readWindowsProcessArgsSync(pid);
-      return args != null && isGatewayArgv(args, { allowGatewayBinary: true });
-    });
+    .filter((pid) => verifyWindowsGatewayArgv(pid, readWindowsProcessArgsSync(pid)));
 }
 
 function filterVerifiedWindowsGatewayPidsResult(
@@ -386,7 +343,7 @@ function filterVerifiedWindowsGatewayPidsResult(
     if (!argsResult.ok) {
       return { ok: false, permanent: argsResult.permanent };
     }
-    if (argsResult.args != null && isGatewayArgv(argsResult.args, { allowGatewayBinary: true })) {
+    if (verifyWindowsGatewayArgv(pid, argsResult.args)) {
       verified.push(pid);
     }
   }

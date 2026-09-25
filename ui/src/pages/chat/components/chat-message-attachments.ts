@@ -1,5 +1,4 @@
 import { html, nothing } from "lit";
-import { normalizeBasePath } from "../../../app-route-paths.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatBytes } from "../../../lib/agents/display.ts";
 import type { MessageContentItem } from "../../../lib/chat/chat-types.ts";
@@ -33,6 +32,7 @@ import {
 } from "./chat-message-attachment-status.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
 import {
+  applyResourceBasePath,
   buildAssistantAttachmentUrl,
   isLocalAssistantAttachmentSource,
 } from "./chat-message-local-media.ts";
@@ -111,23 +111,6 @@ function retryManagedAttachment(
     refreshAfter: now + ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS * 2 ** refreshAttempts,
     refreshAttempts: refreshAttempts + 1,
   };
-}
-
-function applyResourceBasePath(source: string, resourceBasePath: string | undefined): string {
-  if (!source.startsWith("/") || source.startsWith("//")) {
-    return source;
-  }
-  try {
-    const parsed = new URL(source, window.location.origin);
-    const basePath = normalizeBasePath(resourceBasePath ?? "");
-    const pathname =
-      basePath && parsed.pathname !== basePath && !parsed.pathname.startsWith(`${basePath}/`)
-        ? `${basePath}${parsed.pathname}`
-        : parsed.pathname;
-    return `${pathname}${parsed.search}${parsed.hash}`;
-  } catch {
-    return source;
-  }
 }
 
 function setManagedAttachmentAvailability(
@@ -379,6 +362,7 @@ function resolveAttachmentSource(
         resourceBasePath,
         assistantAvailability.mediaTicket,
         options,
+        attachment.label,
       )
     : isManagedOutgoingMediaSource(attachment.url)
       ? applyResourceBasePath(managedAvailability.url, resourceBasePath)

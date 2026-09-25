@@ -16,6 +16,8 @@ import { resolveThinkingDefault } from "../agents/model-thinking-default.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ensureSqliteLibrarySelected } from "../infra/bun-sqlite-library.js";
+import { getTrackedWorkerLifecycleSnapshot } from "../infra/worker-cpu.js";
+import { getWorkerComputeCapacity } from "../infra/worker-task-capacity.js";
 import { getResolvedLoggerSettings } from "../logging.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { collectEnabledInsecureOrDangerousFlagsFromCurrentSnapshot } from "../security/dangerous-config-flags-current.js";
@@ -59,6 +61,25 @@ export async function logGatewayStartup(params: {
   );
   params.log.info(`log file: ${getResolvedLoggerSettings().file}`);
   const sqliteLibrary = ensureSqliteLibrarySelected();
+  params.log.info(
+    `native runtime: ${JSON.stringify({
+      pid: process.pid,
+      platform: process.platform,
+      arch: process.arch,
+      node: process.versions.node,
+      bun: process.versions.bun,
+      v8: process.versions.v8,
+      uv: process.versions.uv,
+      openssl: process.versions.openssl,
+      sqlite: sqliteLibrary.source === "runtime" ? process.versions.sqlite : sqliteLibrary.version,
+    })}`,
+  );
+  params.log.info(
+    `worker startup state: ${JSON.stringify({
+      ...getTrackedWorkerLifecycleSnapshot(),
+      compute: getWorkerComputeCapacity().getSnapshot(),
+    })}`,
+  );
   if (sqliteLibrary.source !== "runtime") {
     params.log.info(
       `SQLite: using ${sanitizeForLog(sqliteLibrary.path)} (${sqliteLibrary.version}, extension loading enabled)`,

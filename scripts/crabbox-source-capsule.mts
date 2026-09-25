@@ -1,6 +1,5 @@
 import { isUtf8 } from "node:buffer";
 import { execFileSync, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import {
   chmodSync,
   closeSync,
@@ -18,6 +17,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { sha256FileSync } from "@openclaw/fs-safe/durability";
 import { z } from "zod";
 import { captureSourceWitness } from "./crabbox-staging-witness.mts";
 import { createStaging, type StagingHandle } from "./crabbox-staging.mts";
@@ -751,7 +751,13 @@ export function prepareCrabboxSourceCapsule(options: {
       ...privateEnv,
       GIT_SHALLOW_FILE: shallow,
     });
-    const digest = createHash("sha256").update(readFileSync(bundlePath)).digest("hex");
+    const descriptor = openSync(bundlePath, "r");
+    let digest: string;
+    try {
+      digest = sha256FileSync(descriptor).digest;
+    } finally {
+      closeSync(descriptor);
+    }
     const bundleHash = capsuleObjectId(
       git(directory, ["hash-object", "-w", "--no-filters", bundlePath], privateEnv),
     );

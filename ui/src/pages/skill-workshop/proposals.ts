@@ -1,3 +1,7 @@
+import type {
+  SkillsProposalInspectResult,
+  SkillsProposalsListResult,
+} from "@openclaw/gateway-protocol";
 import { stripFrontmatterBlock } from "../../../../packages/markdown-core/src/frontmatter.js";
 import type { AgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationGateway } from "../../app/context.ts";
@@ -15,20 +19,9 @@ import {
   type SkillWorkshopInstalledSelection,
   type SkillWorkshopProposal,
 } from "../../lib/skill-workshop/index.ts";
-import {
-  parseDateMs,
-  proposalFromInspect,
-  proposalFromManifest,
-  type SkillProposalInspectResult,
-  type SkillProposalManifest,
-} from "./proposal-records.ts";
+import { parseDateMs, proposalFromInspect, proposalFromManifest } from "./proposal-records.ts";
 import type { SkillWorkshopState } from "./state.ts";
-export {
-  createSkillWorkshopState,
-  skillWorkshopRouteData,
-  type SkillWorkshopRouteData,
-  type SkillWorkshopState,
-} from "./state.ts";
+export { createSkillWorkshopState, type SkillWorkshopState } from "./state.ts";
 
 export type SkillWorkshopLoadOptions = {
   force?: boolean;
@@ -56,21 +49,15 @@ export type SkillWorkshopContext = {
   agentSelection: Pick<AgentSelectionCapability, "state">;
 };
 
-function skillWorkshopAgentParams(context: SkillWorkshopContext): { agentId: string } {
+export function resolveSkillWorkshopAgentId(context: SkillWorkshopContext): string {
   const snapshot = context.gateway.snapshot;
   const sessionAgentId = parseAgentSessionKey(snapshot.sessionKey)?.agentId;
   const selectedAgentId = context.agentSelection.state.selectedId;
-  return {
-    agentId: selectedAgentId
-      ? normalizeAgentId(selectedAgentId)
-      : sessionAgentId
-        ? normalizeAgentId(sessionAgentId)
-        : resolveUiSelectedGlobalAgentId(snapshot),
-  };
-}
-
-export function resolveSkillWorkshopAgentId(context: SkillWorkshopContext): string {
-  return skillWorkshopAgentParams(context).agentId;
+  return selectedAgentId
+    ? normalizeAgentId(selectedAgentId)
+    : sessionAgentId
+      ? normalizeAgentId(sessionAgentId)
+      : resolveUiSelectedGlobalAgentId(snapshot);
 }
 
 export function loadedSkillWorkshopAgentParams(
@@ -78,7 +65,7 @@ export function loadedSkillWorkshopAgentParams(
   context: SkillWorkshopContext,
 ): { agentId: string } {
   return {
-    agentId: state.skillWorkshopAgentId ?? skillWorkshopAgentParams(context).agentId,
+    agentId: state.skillWorkshopAgentId ?? resolveSkillWorkshopAgentId(context),
   };
 }
 
@@ -152,7 +139,7 @@ async function loadInstalledSkill(
     state.skillWorkshopInstalledSkills.includes(skill) &&
     skill.read === loading &&
     state.skillWorkshopAgentId === agentId &&
-    skillWorkshopAgentParams(context).agentId === agentId &&
+    resolveSkillWorkshopAgentId(context) === agentId &&
     context.gateway.snapshot.client === client;
   const read = await readSkillWorkshopInstalledSkill(
     client,
@@ -188,7 +175,7 @@ async function readSkillWorkshopInstalledSkill(
       proposals
         .filter((proposal) => proposal.status === "applied" && proposal.slug === result.skillKey)
         .map(async (proposal) => {
-          const { record, content } = await client.request<SkillProposalInspectResult>(
+          const { record, content } = await client.request<SkillsProposalInspectResult>(
             "skills.proposals.inspect",
             {
               agentId,
@@ -249,7 +236,7 @@ export async function loadSkillWorkshopProposals(
   if (!client || snapshot.phase !== "connected" || options?.isCurrent?.() === false) {
     return;
   }
-  const requestAgentId = skillWorkshopAgentParams(context).agentId;
+  const requestAgentId = resolveSkillWorkshopAgentId(context);
   if (state.skillWorkshopAgentId !== requestAgentId) {
     resetSkillWorkshopAgentScope(state, requestAgentId);
   }
@@ -264,11 +251,11 @@ export async function loadSkillWorkshopProposals(
     readGeneration(state) === generation &&
     options?.isCurrent?.() !== false &&
     context.gateway.snapshot.client === client &&
-    skillWorkshopAgentParams(context).agentId === requestAgentId;
+    resolveSkillWorkshopAgentId(context) === requestAgentId;
   state.skillWorkshopLoading = true;
   state.skillWorkshopError = null;
   try {
-    const result = await client.request<SkillProposalManifest>("skills.proposals.list", {
+    const result = await client.request<SkillsProposalsListResult>("skills.proposals.list", {
       agentId: requestAgentId,
     });
     if (!isCurrentRead()) {
@@ -335,7 +322,7 @@ export async function loadSkillWorkshopProposals(
       if (
         options?.isCurrent?.() !== false &&
         context.gateway.snapshot.client === client &&
-        skillWorkshopAgentParams(context).agentId !== requestAgentId
+        resolveSkillWorkshopAgentId(context) !== requestAgentId
       ) {
         void loadSkillWorkshopProposals(state, context, { ...options, force: true });
       }
@@ -388,12 +375,12 @@ async function inspectSkillWorkshopProposal(
     options?.isCurrent?.() !== false &&
     context.gateway.snapshot.client === client &&
     state.skillWorkshopAgentId === requestAgentId &&
-    skillWorkshopAgentParams(context).agentId === requestAgentId;
+    resolveSkillWorkshopAgentId(context) === requestAgentId;
   state.skillWorkshopInspectingKey = proposalId;
   state.skillWorkshopError = null;
   try {
     const requestParams = { agentId: requestAgentId, proposalId };
-    const result = await client.request<SkillProposalInspectResult>(
+    const result = await client.request<SkillsProposalInspectResult>(
       "skills.proposals.inspect",
       requestParams,
     );

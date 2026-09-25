@@ -11,6 +11,7 @@ import { terminateAcceptedCollectorRun } from "../../agents/subagents/spawn/suba
 import { resolveSessionWorkStartError, type SessionEntry } from "../../config/sessions.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
+import { invalidSessionRequest } from "../session-request-error.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import {
   loadSessionEntry,
@@ -39,10 +40,7 @@ async function createAgentMainSessionForSend(
 > {
   const agentId = parseAgentSessionKey(canonicalKey)?.agentId;
   if (!agentId) {
-    return {
-      ok: false,
-      error: errorShape(ErrorCodes.INVALID_REQUEST, `session not found: ${canonicalKey}`),
-    };
+    return invalidSessionRequest(`session not found: ${canonicalKey}`);
   }
 
   let createResult:

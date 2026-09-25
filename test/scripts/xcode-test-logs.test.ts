@@ -78,7 +78,9 @@ it("routes each iOS simulator test through workflow-owned log capture and retain
     >;
   };
   const job = workflow.jobs["ios-build"];
-  if (!job) throw new Error("The workflow must include the iOS build job");
+  if (!job) {
+    throw new Error("The workflow must include the iOS build job");
+  }
   const steps = job.steps;
   for (const [name, logPaths] of [
     ["Run focused iOS voice cleanup simulator tests", ["OpenClawVoiceCleanupTests.log"]],
@@ -97,12 +99,16 @@ it("routes each iOS simulator test through workflow-owned log capture and retain
     expect(run?.match(/\brun_apple_command_logged [^\n]+ xcodebuild \\/gu), name).toHaveLength(
       logPaths.length,
     );
-    for (const logPath of logPaths) expect(run, name).toContain(logPath);
+    for (const logPath of logPaths) {
+      expect(run, name).toContain(logPath);
+    }
     // The Watch product-path query must keep its JSON output contract.
     expect(run?.match(/^\s*xcodebuild /gmu) ?? [], name).toHaveLength(
       name.includes("Apple Watch") ? 1 : 0,
     );
-    if (name.includes("Apple Watch")) expect(run).toContain("-showBuildSettings -json |");
+    if (name.includes("Apple Watch")) {
+      expect(run).toContain("-showBuildSettings -json |");
+    }
   }
 
   const attachments = steps.find(

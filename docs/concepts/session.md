@@ -279,6 +279,11 @@ Ordinary entry writes also arm background maintenance at the next age boundary,
 with a periodic recheck every 30 minutes while the store remains open. This lets
 eligible sessions age out without further traffic. Writes that cannot change
 age or count maintenance outcomes skip candidate scans.
+If writes invalidate an automatic maintenance plan, its replacement waits for
+a quiet window after the last write (one second, then two seconds). Three
+consecutive invalidations pause automatic retries and log the cause; a new
+entry write can schedule another attempt. `warn` mode captures the maintenance
+age fact without constructing or dispatching automatic reclamation.
 
 `maxEntries` defaults to 5000 unarchived session rows. Archived rows do not consume
 the cap. Existing explicit limits remain unchanged.

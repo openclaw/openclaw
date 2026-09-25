@@ -7,6 +7,7 @@ import {
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { readSessionPendingInput } from "../../config/sessions/session-accessor.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
+import { prepareForwardedMessageCronJobNameResolver } from "../chat-display-projection.history.js";
 import {
   augmentChatHistoryWithCanvasBlocks,
   dropPreSessionStartAnnouncePairs,
@@ -14,6 +15,7 @@ import {
   projectChatDisplayMessage,
 } from "../chat-display-projection.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
+import { projectOperatorModelRead } from "../operator-model-presentation.js";
 import { MAX_PAYLOAD_BYTES } from "../server-constants.js";
 import { readChatHistoryMessageId } from "../session-history-tail.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
@@ -85,7 +87,13 @@ async function isChatMessageIdVisibleAfterHistoryFilters(params: {
 }
 
 export const chatMessageGetHandlers: GatewayRequestHandlers = {
-  "chat.message.get": async ({ params, respond, context, client }) => {
+  "chat.message.get": async ({
+    params,
+    respond,
+    context,
+    client,
+    sessionMutationAuthorization,
+  }) => {
     if (!assertValidParams(params, validateChatMessageGetParams, "chat.message.get", respond)) {
       return;
     }
@@ -105,7 +113,14 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
       respond(true, { ok: false, unavailableReason: "not_found" });
       return;
     }
-    const canReadSession = (current: typeof session): boolean => {
+    const canReadSession = (
+      current: typeof session = loadGatewaySessionEntryReadOnly(sessionKey, {
+        agentId: requestedAgentId,
+        clone: false,
+        projection: "list",
+      }),
+    ): boolean => {
+      sessionMutationAuthorization?.assertCurrent();
       if (
         !current.entry ||
         current.agentId !== session.agentId ||
@@ -125,7 +140,10 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
         );
         return false;
       }
-      const entryFilter = createSessionListEntryFilter({ client, cfg: current.cfg });
+      const entryFilter = createSessionListEntryFilter({
+        client,
+        cfg: context.getCommittedRuntimeConfig?.() ?? current.cfg,
+      });
       if (entryFilter?.(current.canonicalKey, current.entry) === false) {
         respond(false, undefined, hiddenSessionNotFound(canonicalKey));
         return false;
@@ -154,7 +172,19 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
         respond(true, { ok: false, unavailableReason: "not_found" });
         return;
       }
-      const message = projectPendingInputMessage(pending, effectiveMaxChars);
+      const resolveCronJobName = await prepareForwardedMessageCronJobNameResolver(
+        [pending.message],
+        context.cronStorePath,
+      );
+      if (!canReadSession()) {
+        return;
+      }
+      const message = projectPendingInputMessage(
+        pending,
+        effectiveMaxChars,
+        undefined,
+        resolveCronJobName,
+      );
       if (!message) {
         respond(true, { ok: false, unavailableReason: "not_visible" });
         return;
@@ -193,16 +223,8 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
         allowResetArchiveFallback: true,
       }));
     // Async transcript/archive reads cannot publish under a stale sharing or
-    // physical-session snapshot. Pending input reads above are synchronous.
-    if (
-      !canReadSession(
-        loadGatewaySessionEntryReadOnly(sessionKey, {
-          agentId: requestedAgentId,
-          clone: false,
-          projection: "list",
-        }),
-      )
-    ) {
+    // physical-session snapshot.
+    if (!canReadSession()) {
       return;
     }
     if (!visible) {
@@ -234,7 +256,10 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
       true,
       jsonUtf8Bytes(projected) > MAX_PAYLOAD_BYTES - 1024
         ? { ok: false, unavailableReason: "oversized" }
-        : { ok: true, message: projected },
+        : projectOperatorModelRead(
+            { context, client, agentId: sessionAgentId },
+            { ok: true, message: projected },
+          ),
     );
   },
 };

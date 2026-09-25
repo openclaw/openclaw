@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { tryReadJson } from "@openclaw/fs-safe/json";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { readJsonFileWithFallback } from "openclaw/plugin-sdk/json-store";
 import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { MatrixConfig } from "../../types.js";
@@ -98,7 +98,7 @@ function buildStartupVerificationImportKey(params: {
   auth: MatrixAuth;
   legacyFilePath: string;
 }): string {
-  const accountId = params.auth.accountId.trim() || "default";
+  const accountId = buildStartupVerificationKey(params.auth);
   const digest = createHash("sha256")
     .update(accountId)
     .update("\0")
@@ -110,10 +110,7 @@ function buildStartupVerificationImportKey(params: {
 async function readLegacyStartupVerificationState(
   filePath: string,
 ): Promise<MatrixStartupVerificationState | null> {
-  const { value } = await readJsonFileWithFallback<MatrixStartupVerificationState | null>(
-    filePath,
-    null,
-  );
+  const value = await tryReadJson<MatrixStartupVerificationState>(filePath);
   return value && typeof value === "object" ? value : null;
 }
 

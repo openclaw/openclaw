@@ -55,6 +55,7 @@ import { captureAgentJobSession } from "./agent-job.js";
 import { readAgentRunDispatchExecutionIdentity } from "./agent-run-dispatch-execution-identity.js";
 import { createGatewayTaskExecutionBinding } from "./agent-run-task-binding.js";
 import type { GatewayAgentDispatchTaskTracking } from "./agent-run-task-tracking.js";
+import { bindGatewayAgentTerminalProducer } from "./agent-run-terminal-producer.js";
 import type { AgentTurnContext, AgentTurnIo } from "./types.js";
 
 function resolveResolvedAgentTimeoutStopReason(
@@ -123,15 +124,6 @@ function projectRejectedGatewayStatus(outcome: AgentRunTerminalOutcome): "error"
 
 export function resolveAbortedAgentStopReason(entry?: ChatAbortControllerEntry): string {
   return entry?.abortStopReason?.trim() || "rpc";
-}
-
-export function deleteGatewayDedupeEntries(params: {
-  dedupe: AgentTurnContext["dedupe"];
-  keys: readonly string[];
-}) {
-  for (const key of params.keys) {
-    params.dedupe.delete(key);
-  }
 }
 
 type TaskSettlementAdmission =
@@ -347,8 +339,16 @@ export function dispatchAgentRunFromGateway(
   if (cronCreatorAuthorityCapability) {
     params.cronCreatorAuthority?.bindRunScope?.(cronCreatorAuthorityCapability);
   }
+  const terminalProducer = bindGatewayAgentTerminalProducer({
+    runId: params.runId,
+    entry: registeredRunEntry,
+    controller: params.abortController,
+    ingressOpts: params.ingressOpts,
+    chatAbortControllers: params.context.chatAbortControllers,
+    isOwnerReleased: () => runOwnerCleanedUp,
+  });
   const ingressOptsWithSpawnFacts = withAgentCommandExecutionIdentitySpawnFacts(
-    params.ingressOpts,
+    { ...params.ingressOpts, beforeTerminalDelivery: terminalProducer.complete },
     readAgentRunDispatchExecutionIdentity(params),
   );
   const activateAgent = () => {
@@ -431,13 +431,15 @@ export function dispatchAgentRunFromGateway(
       return Promise.reject(failure);
     }
   };
-  const agentRun = cronCreatorAuthorityCapability
+  const agentExecution = cronCreatorAuthorityCapability
     ? runWithCronCreatorAuthorityCapability(
         cronCreatorAuthorityCapability,
         runAgent,
         params.abortController.signal,
       )
     : runAgent();
+  // Startup failures may never enter command finalization; delivery already joined this boundary.
+  const agentRun = terminalProducer.settle(agentExecution);
   let inputCompletionWriteFailed = false;
   const runCompletion = agentRun
     .then(async (result) => {

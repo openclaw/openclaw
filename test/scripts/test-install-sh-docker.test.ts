@@ -888,6 +888,251 @@ describe("test-install-sh-docker", () => {
     expect(result.stdout).toContain("==> Sanity: CLI runs");
   });
 
+  it("keeps release-harness npm lookups outside caller freshness policy", () => {
+    const root = tempDirs.make("openclaw-install-npm-policy-");
+    const binDir = join(root, "bin");
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(
+      join(binDir, "npm"),
+      `#!${process.execPath}\nprocess.stdout.write(JSON.stringify({ args: process.argv.slice(2), policy: Object.fromEntries(Object.entries(process.env).filter(([key]) => ["npm_config_before", "npm_config_min_release_age", "npm_config_min-release-age"].includes(key.toLowerCase()))) }));\n`,
+      { mode: 0o755 },
+    );
+
+    const noPolicyResult = spawnSync(
+      "bash",
+      [
+        "-c",
+        "set -euo pipefail; source scripts/docker/install-sh-common/version-parse.sh; run_npm_without_freshness_policy bash -c 'printf ok'",
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: Object.fromEntries(
+          Object.entries(process.env).filter(
+            ([key]) =>
+              ![
+                "npm_config_before",
+                "npm_config_globalconfig",
+                "npm_config_min_release_age",
+                "npm_config_min-release-age",
+                "npm_config_userconfig",
+              ].includes(key.toLowerCase()),
+          ),
+        ),
+      },
+    );
+    expect(noPolicyResult.status, noPolicyResult.stderr).toBe(0);
+    expect(noPolicyResult.stdout).toBe("ok");
+
+    const noHomeResult = spawnSync(
+      "bash",
+      [
+        "-c",
+        "unset HOME; source scripts/docker/install-sh-common/version-parse.sh; resolve_npm_config_path_value '~/.npmrc'",
+      ],
+      { cwd: process.cwd(), encoding: "utf8", env: process.env },
+    );
+    expect(noHomeResult.status, noHomeResult.stderr).toBe(0);
+    const nativeHomeResult = spawnSync(
+      process.execPath,
+      ["-e", "delete process.env.HOME; process.stdout.write(require('node:os').homedir())"],
+      { encoding: "utf8", env: process.env },
+    );
+    expect(nativeHomeResult.status, nativeHomeResult.stderr).toBe(0);
+    expect(noHomeResult.stdout).toBe(join(nativeHomeResult.stdout, ".npmrc"));
+
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        "source scripts/docker/install-sh-common/version-parse.sh; quiet_npm view openclaw@2026.8.32 version",
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          NPM_CONFIG_BEFORE: "2026-09-17T23:07:28.000Z",
+          NPM_CONFIG_GLOBALCONFIG: join(root, "missing-global.npmrc"),
+          NPM_CONFIG_before: "2026-09-17T23:07:28.000Z",
+          "NPM_CONFIG_MIN-RELEASE-AGE": "10080",
+          NPM_CONFIG_MIN_RELEASE_AGE: "10080",
+          Npm_Config_Min_Release_Age: "10080",
+          PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+          npm_config_before: "2026-09-17T23:07:28.000Z",
+          npm_config_min_release_age: "10080",
+          "npm_config_min-release-age": "10080",
+        },
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    const invocation = JSON.parse(result.stdout) as {
+      args: string[];
+      policy: Record<string, string>;
+    };
+    expect(invocation.args.slice(0, 3)).toEqual([
+      expect.stringMatching(/^--prefix=\/.+/u),
+      expect.stringMatching(/^--userconfig=\/dev\/fd\/\d+$/u),
+      expect.stringMatching(/^--globalconfig=\/dev\/fd\/\d+$/u),
+    ]);
+    expect(invocation).toEqual({
+      args: [
+        ...invocation.args.slice(0, 3),
+        "--loglevel=error",
+        "--logs-max=0",
+        "--no-update-notifier",
+        "--no-fund",
+        "--no-audit",
+        "--no-progress",
+        "view",
+        "openclaw@2026.8.32",
+        "version",
+      ],
+      policy: {},
+    });
+
+    const projectDir = join(root, "project");
+    const workspaceDir = join(projectDir, "packages", "fixture");
+    const nestedProjectDir = join(workspaceDir, "nested");
+    mkdirSync(nestedProjectDir, { recursive: true });
+    writeFileSync(
+      join(projectDir, "package.json"),
+      '{"name":"npm-policy-root","workspaces":["!packages/private","./packages/*/"]}\n',
+    );
+    writeFileSync(join(workspaceDir, "package.json"), '{"name":"npm-policy-fixture"}\n');
+    const globalConfigPath = join(root, "global.npmrc");
+    const projectGlobalConfigPath = join(root, "project-global.npmrc");
+    const selectedUserConfigPath = join(root, "project-user.npmrc");
+    writeFileSync(globalConfigPath, "min-release-age=7\nfetch-retries=23\n");
+    writeFileSync(projectGlobalConfigPath, "min-release-age=7\nfetch-retries=17\n");
+    writeFileSync(
+      join(root, ".npmrc"),
+      [
+        "before=2026-09-17T23:07:28.000Z",
+        "globalconfig=${HOME}/global.npmrc",
+        "registry=https://user-registry.example.test/",
+        "ca[]=user-ca",
+      ].join("\n"),
+    );
+    writeFileSync(
+      selectedUserConfigPath,
+      "globalconfig=${HOME}/global.npmrc\nregistry=https://selected-user-registry.example.test/\n",
+    );
+    writeFileSync(
+      join(projectDir, ".npmrc"),
+      "before=2026-09-17T23:07:28.000Z\nuserconfig=${HOME}/project-user.npmrc # selected user config\nglobalconfig=${HOME}/project-global.npmrc # selected global config\nregistry=https://project-registry.example.test/\nca[]=project-ca\ncafile=./certs/ca.pem\n",
+    );
+    writeFileSync(join(nestedProjectDir, ".npmrc"), "registry=https://nested.example.test/\n");
+    writeFileSync(join(workspaceDir, ".npmrc"), "registry=https://workspace.example.test/\n");
+    const projectResult = spawnSync(
+      "bash",
+      [
+        "-c",
+        'source "$1"; quiet_npm config get before; quiet_npm config get registry; quiet_npm config get fetch-retries; quiet_npm config get ca --json; quiet_npm config get cafile',
+        "bash",
+        join(process.cwd(), "scripts/docker/install-sh-common/version-parse.sh"),
+      ],
+      {
+        cwd: nestedProjectDir,
+        encoding: "utf8",
+        env: { ...process.env, HOME: root },
+      },
+    );
+    expect(projectResult.status, projectResult.stderr).toBe(0);
+    expect(projectResult.stdout.trim().split("\n")).toEqual([
+      "null",
+      "https://project-registry.example.test/",
+      "17",
+      "project-ca",
+      join(nestedProjectDir, "certs", "ca.pem"),
+    ]);
+
+    const globalResult = spawnSync(
+      "bash",
+      [
+        "-c",
+        'source "$1"; quiet_npm config get registry --location global',
+        "bash",
+        join(process.cwd(), "scripts/docker/install-sh-common/version-parse.sh"),
+      ],
+      {
+        cwd: nestedProjectDir,
+        encoding: "utf8",
+        env: { ...process.env, HOME: root },
+      },
+    );
+    expect(globalResult.status, globalResult.stderr).toBe(0);
+    expect(globalResult.stdout.trim()).toBe("https://user-registry.example.test/");
+
+    const excludedWorkspaceDir = join(projectDir, "packages", "private");
+    const excludedNestedDir = join(excludedWorkspaceDir, "nested");
+    mkdirSync(excludedNestedDir, { recursive: true });
+    writeFileSync(join(excludedWorkspaceDir, "package.json"), '{"name":"npm-policy-private"}\n');
+    writeFileSync(
+      join(excludedWorkspaceDir, ".npmrc"),
+      "registry=https://private-registry.example.test/\n",
+    );
+    const excludedResult = spawnSync(
+      "bash",
+      [
+        "-c",
+        'source "$1"; quiet_npm config get registry',
+        "bash",
+        join(process.cwd(), "scripts/docker/install-sh-common/version-parse.sh"),
+      ],
+      {
+        cwd: excludedNestedDir,
+        encoding: "utf8",
+        env: { ...process.env, HOME: root },
+      },
+    );
+    expect(excludedResult.status, excludedResult.stderr).toBe(0);
+    expect(excludedResult.stdout.trim()).toBe("https://private-registry.example.test/");
+
+    const lowercaseUserConfigPath = join(root, "lowercase#user.npmrc");
+    writeFileSync(lowercaseUserConfigPath, "fetch-timeout=1234\n");
+    const configPathNeutralEnv = Object.fromEntries(
+      Object.entries(process.env).filter(
+        ([key]) =>
+          !["npm_config_globalconfig", "npm_config_userconfig"].includes(key.toLowerCase()),
+      ),
+    );
+    for (const configEnv of [
+      {
+        NPM_CONFIG_GLOBALCONFIG: join(root, "missing-global.npmrc"),
+        NPM_CONFIG_USERCONFIG: join(root, "missing-user.npmrc"),
+        npm_config_globalconfig: "~/project-global.npmrc",
+        npm_config_userconfig: "${HOME}/lowercase#user.npmrc",
+      },
+      {
+        Npm_Config_Globalconfig: "~/project-global.npmrc",
+        Npm_Config_Userconfig: "${HOME}/lowercase#user.npmrc",
+      },
+    ]) {
+      const configEnvResult = spawnSync(
+        "bash",
+        [
+          "-c",
+          'source "$1"; quiet_npm config get fetch-timeout; quiet_npm config get fetch-retries; quiet_npm config get globalconfig',
+          "bash",
+          join(process.cwd(), "scripts/docker/install-sh-common/version-parse.sh"),
+        ],
+        {
+          cwd: nestedProjectDir,
+          encoding: "utf8",
+          env: { ...configPathNeutralEnv, HOME: root, ...configEnv },
+        },
+      );
+      expect(configEnvResult.status, configEnvResult.stderr).toBe(0);
+      expect(configEnvResult.stdout.trim().split("\n")).toEqual([
+        "1234",
+        "17",
+        expect.stringMatching(/^\/dev\/fd\/\d+$/u),
+      ]);
+    }
+  });
+
   it("can reuse dist from the already-built root Docker smoke image", () => {
     const script = readFileSync(SCRIPT_PATH, "utf8");
     const packageHelper = readFileSync(DOCKER_E2E_PACKAGE_HELPER_PATH, "utf8");
@@ -2019,7 +2264,7 @@ run_update_smoke
     expect(script).toContain("==> Still running");
     expect(script).toContain("print_install_audit");
     expect(script).toContain('install -g "$@"');
-    expect(script).toContain("openclaw update --tag");
+    expect(script).toContain('openclaw update --channel stable --tag "$UPDATE_TAG_URL"');
     expect(script).toContain("is_self_swapped_package_process_exit");
     expect(script).toContain("legacy updater process exited after self-swap");
     expect(script).toContain("parseFirstJsonObject");
@@ -2952,7 +3197,7 @@ node -e 'const fs=require("node:fs");const p=process.argv[1];const value=JSON.pa
     expect(workflow).toContain("bun_global_install_smoke:");
     expect(workflow).toContain("Setup trusted release harness for Bun smoke");
     expect(workflow).toContain("uses: ./.release-harness/.github/actions/setup-release-harness");
-    expect(workflow).toContain("npm install -g bun@1.4.0");
+    expect(workflow).toContain("npm install -g bun@1.4.2");
     expect(workflow).toContain('install-bun: "false"');
     expect(workflow).toContain("Run Bun global install candidate-payload smoke");
     expect(workflow).toContain("working-directory: .release-harness");

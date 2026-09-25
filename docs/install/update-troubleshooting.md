@@ -117,6 +117,15 @@ authorizes concurrent repair or discards recovery backups. Active migration
 writes, unreadable state, incomplete migrations, and unconfirmed subprocess
 cleanup retain their failure and recovery guidance.
 
+On Windows, `windows-task-inspection-failed` means OpenClaw could not query
+Task Scheduler to verify service absence. Check Task Scheduler availability and
+the service account's query permissions, then run `openclaw gateway status --deep`
+before retrying. Install failures and update reports include the safe failure
+category and, when available, a numeric errno, hexadecimal HRESULT, exit code, or timeout
+budget. These facts appear before the recovery guidance so bounded reports retain
+them. Preserve those facts when reporting the problem; task definitions and raw
+native output are excluded.
+
 ## Node and global install permissions
 
 For `node-runtime-preflight`, upgrade the runtime named in the message to a
@@ -185,6 +194,38 @@ rollback and service-recovery constraints still apply if activation had begun.
 Inside a container, the same next action also directs you to pull or build the
 target OpenClaw image and redeploy with the same state/config mounts. Package
 changes inside a running container are not durable.
+
+### System-scope systemd services
+
+A system-scope Gateway service does not prevent a package update when the
+invoking account can write the installation. Both `openclaw update --yes` and
+the Gateway update action update the package and record a warning with the
+exact operator restart command, such as `sudo systemctl restart
+openclaw-gateway.service`. The updater does not stop or restart the system
+service and never invokes `sudo`. The running Gateway can exit when it detects
+that its installation has been replaced; restart the unit after the update.
+Use the unit name printed in your result, including any instance name, then
+check `openclaw gateway status --deep`.
+
+The restart remains operator-managed even when the updater runs as root:
+managed update handoffs own user-scope service supervision and recovery, not
+the system service's lifecycle. Pending Doctor or plugin maintenance is recorded
+as a warning when it cannot safely run alongside the current Gateway. Run
+`openclaw update repair` after resolving the reported maintenance condition.
+
+If the installation is not writable, the update stops before package mutation
+with `managed-service-handoff-failed` and prints the exact package-update and
+restart commands. Have the installation's owning account run those commands
+while preserving the Gateway's service account, state, and configuration.
+Do not run the whole updater under a different home or recursively change
+ownership of a shared system prefix.
+
+An installed updater that reports `Managed update handoff requires a user-scope
+systemd unit` refuses before loading the candidate. A candidate cannot repair
+that admission decision. Use the [manual package-manager
+procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun)
+once, then restart the named system unit; subsequent updates can use the fixed
+updater.
 
 ## Published 2026.9.4 on large agent fleets
 
@@ -299,6 +340,23 @@ Older releases can reject enable, uninstall, and reinstall while trying to copy
 that same missing capture. Restart the Gateway through its service owner before
 retrying, or upgrade the host. See [plugin source lifetime](/plugins/architecture#runtime-instance-and-source-lifetime).
 
+### Snapshot parse errors from 2026.9.5 and 2026.9.6
+
+An update started from 2026.9.5 or 2026.9.6 can stop with a message such as
+`Update state snapshot failed (exit): Assigning to rvalue (308:4)`. The installed
+updater could not parse valid JavaScript that assigns to `import.meta.url` in a
+plugin's dependency, for example `@jsquash/png` or `@jsquash/avif`. The fix is in
+the target release, but the installed updater runs this check before the target
+starts. Disable the plugin for this one update:
+
+```bash
+openclaw plugins disable <id>
+openclaw update
+openclaw plugins enable <id>
+```
+
+Updates from the fixed release onward inspect these plugins normally.
+
 ### Large model-catalog temporary directories
 
 Older releases can retain several complete plugin copies inside
@@ -308,11 +366,20 @@ workers reuse the selected runtime capture for provider discovery and remove
 their scratch tree when its owner retires.
 
 Upgrade the host, then run `openclaw doctor` to inspect legacy captures.
-`openclaw doctor --fix` removes whole legacy catalog trees only during maintenance
+On Linux and macOS, `openclaw doctor --fix` removes whole legacy catalog trees only during maintenance
 when no other OpenClaw process is running. Do not delete captures based on their
 age or absence from open-file or memory-map lists: an idle owner can still need
 them. Modern captures use SQLite custody to prove retirement. See
 [plugin source lifetime](/plugins/architecture#runtime-instance-and-source-lifetime).
+
+Unrelated Node services running `node dist/index.js` do not count as OpenClaw
+owners. Doctor resolves generic entrypoints against their installation's package
+identity and honors OpenClaw service markers. If a live PID cannot be classified,
+Doctor preserves the captures and reports that PID and the inspection failure
+(including a missing or unreadable package manifest);
+this remains a maintenance warning and does not fail the update. Retry
+`openclaw doctor --fix` after resolving the reported inspection problem.
+Windows host-wide capture cleanup remains report-only.
 
 ## Reason codes
 

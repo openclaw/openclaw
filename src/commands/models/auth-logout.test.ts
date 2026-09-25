@@ -179,9 +179,12 @@ function storeWith(profileIds: string[]): AuthProfileStore {
 }
 
 /** Runs the config mutator captured by the mocked updateConfig. */
-function applyCapturedConfigUpdate(cfg: OpenClawConfig): OpenClawConfig {
+async function applyCapturedConfigUpdate(cfg: OpenClawConfig): Promise<OpenClawConfig> {
   const mutator = mocks.updateConfig.mock.calls[0]?.[0] as
-    | ((current: OpenClawConfig, context: { runtimeConfig: OpenClawConfig }) => OpenClawConfig)
+    | ((
+        current: OpenClawConfig,
+        context: { runtimeConfig: OpenClawConfig },
+      ) => OpenClawConfig | Promise<OpenClawConfig>)
     | undefined;
   if (!mutator) {
     throw new Error("expected updateConfig to be called");
@@ -240,7 +243,7 @@ describe("models auth logout", () => {
     expect(runtime.logs.some((line) => line.includes("No auth profiles remain for openai"))).toBe(
       true,
     );
-    expect(applyCapturedConfigUpdate({})).toEqual({});
+    expect(await applyCapturedConfigUpdate({})).toEqual({});
   });
 
   it("drops config auth.profiles and auth.order references to the removed profile", async () => {
@@ -262,7 +265,7 @@ describe("models auth logout", () => {
     await modelsAuthLogoutCommand({ profileId: "openai:manual", yes: true }, createRuntime());
 
     expect(mocks.updateConfig).toHaveBeenCalledTimes(1);
-    expect(applyCapturedConfigUpdate(cfg).auth).toEqual({
+    expect((await applyCapturedConfigUpdate(cfg)).auth).toEqual({
       profiles: {
         "openai:backup": { provider: "openai", mode: "api_key" },
         "anthropic:manual": { provider: "anthropic", mode: "oauth" },
@@ -288,7 +291,7 @@ describe("models auth logout", () => {
 
     // `anthropic: []` is an authored "select no profiles" instruction for an
     // unrelated provider; only the order this removal emptied may go.
-    expect(applyCapturedConfigUpdate(cfg).auth).toEqual({
+    expect((await applyCapturedConfigUpdate(cfg)).auth).toEqual({
       profiles: {},
       order: { anthropic: [] },
     });
@@ -348,7 +351,7 @@ describe("models auth logout", () => {
     };
     mocks.loadModelsConfig.mockResolvedValue(cfg);
     await modelsAuthLogoutCommand({ profileId: "openai:manual", yes: true }, createRuntime());
-    const updated = applyCapturedConfigUpdate(cfg);
+    const updated = await applyCapturedConfigUpdate(cfg);
     expect(updated.models?.providers?.openai?.apiKey).toBeUndefined();
     expect(updated.agents).toEqual(cfg.agents);
     expect(mocks.removeAuthProfilesAcrossOwnerStores).toHaveBeenCalledOnce();

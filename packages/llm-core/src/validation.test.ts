@@ -197,14 +197,19 @@ describe("validateToolArguments", () => {
   });
 
   it("rejects non-decimal numeric strings for plain JSON schemas", () => {
-    expect(() =>
-      validateToolArguments(decimalTool, {
-        type: "toolCall",
-        id: "call-1",
-        name: "decimal-tool",
-        arguments: { amount: "0x10", count: "0b10" },
-      }),
-    ).toThrow(/Validation failed for tool "decimal-tool"/);
+    for (const input of [
+      { amount: "0x10", count: 3 },
+      { amount: 16, count: "0b10" },
+    ]) {
+      expect(() =>
+        validateToolArguments(decimalTool, {
+          type: "toolCall",
+          id: "call-1",
+          name: "decimal-tool",
+          arguments: input,
+        }),
+      ).toThrow(/Validation failed for tool "decimal-tool"/);
+    }
   });
 
   it("coerces additional properties without changing declared string fields", () => {
@@ -321,48 +326,40 @@ const objectTool = {
 } as Tool;
 
 describe("validateToolArguments — stringified JSON coercion", () => {
-  it("coerces stringified JSON array to array for plain JSON schemas", () => {
+  it.each([
+    { label: "serialized", input: '["test","debug"]', expected: ["test", "debug"] },
+    { label: "native", input: ["already", "array"], expected: ["already", "array"] },
+  ])("validates $label array arguments for plain JSON schemas", ({ input, expected }) => {
     expect(
       validateToolArguments(arrayTool, {
         type: "toolCall",
         id: "call-2",
         name: "array-tool",
-        arguments: { tags: '["test","debug"]' },
+        arguments: { tags: input },
       }),
-    ).toEqual({ tags: ["test", "debug"] });
+    ).toEqual({ tags: expected });
   });
 
-  it("coerces stringified JSON object to object for plain JSON schemas", () => {
+  it.each([
+    {
+      label: "serialized",
+      input: '{"enabled":true,"retries":3}',
+      expected: { enabled: true, retries: 3 },
+    },
+    {
+      label: "native",
+      input: { enabled: false, retries: 1 },
+      expected: { enabled: false, retries: 1 },
+    },
+  ])("validates $label object arguments for plain JSON schemas", ({ input, expected }) => {
     expect(
       validateToolArguments(objectTool, {
         type: "toolCall",
         id: "call-3",
         name: "object-tool",
-        arguments: { config: '{"enabled":true,"retries":3}' },
+        arguments: { config: input },
       }),
-    ).toEqual({ config: { enabled: true, retries: 3 } });
-  });
-
-  it("passes through valid arrays unchanged", () => {
-    expect(
-      validateToolArguments(arrayTool, {
-        type: "toolCall",
-        id: "call-4",
-        name: "array-tool",
-        arguments: { tags: ["already", "array"] },
-      }),
-    ).toEqual({ tags: ["already", "array"] });
-  });
-
-  it("passes through valid objects unchanged", () => {
-    expect(
-      validateToolArguments(objectTool, {
-        type: "toolCall",
-        id: "call-5",
-        name: "object-tool",
-        arguments: { config: { enabled: false, retries: 1 } },
-      }),
-    ).toEqual({ config: { enabled: false, retries: 1 } });
+    ).toEqual({ config: expected });
   });
 
   it("rejects invalid JSON string for array param", () => {

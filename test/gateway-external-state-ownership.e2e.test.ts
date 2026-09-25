@@ -204,7 +204,18 @@ describe("Gateway external shared-state ownership", () => {
         status: "ok",
         mode: "repair",
         restart: false,
-        reconciledRuns: [],
+        reconciledRuns: [runId],
+      });
+      const repaired = database
+        .prepare("SELECT steps_json FROM update_runs WHERE run_id = ?")
+        .get(runId);
+      expect(JSON.parse(String(repaired?.steps_json))).toContainEqual(
+        expect.objectContaining({ step: "reconcile:acknowledged", status: "completed" }),
+      );
+      expect(readUpdateOutcome(database, runId)).toMatchObject({
+        status: "failed",
+        phase: "finished",
+        reason: "abandoned",
       });
       await expectGatewayStillServing(instance, child);
       expectGatewayOwnsState(instance, databasePath);
@@ -239,7 +250,15 @@ describe("Gateway external shared-state ownership", () => {
       }
       const refused = await instance.cli(["update", "repair", "--json"]);
       expect(refused.code).not.toBe(0);
-      expect(`${refused.stderr}\n${refused.stdout}`).toMatch(/still in progress/u);
+      expect(JSON.parse(refused.stdout)).toMatchObject({
+        ok: false,
+        error: {
+          type: "cli_error",
+          message: expect.stringContaining(
+            `Update ${recent.runId} remains recorded as running (requested); driver PID and host not recorded, liveness: not observed;`,
+          ),
+        },
+      });
       for (const run of [inactive, live, recent]) {
         expect(readUpdateOutcome(observer, run.runId)).toMatchObject({
           status: "running",

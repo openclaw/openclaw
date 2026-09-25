@@ -15,7 +15,8 @@ import {
   canResolveRegistryVersionForPackageTarget,
   verifyPackageUpdateRecovery,
 } from "../../infra/update-global.js";
-import { recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
+import { updateInstallRootsMatch } from "../../infra/update-install-root.js";
+import { recordUpdateRunPhase, recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import { isFailedUpdateStep } from "../../infra/update-run-step.js";
 import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
@@ -26,6 +27,7 @@ import {
   type OpenClawSchemaVersions,
 } from "../../state/openclaw-schema-versions.js";
 import { formatCliCommand } from "../command-format.js";
+import { isCandidateAdmissionContextCovered } from "./schema-preflight.js";
 import {
   normalizeTag,
   readPackageVersion,
@@ -82,6 +84,11 @@ export async function executeMutableUpdate(
   params: MutableUpdateExecutionParams,
 ): Promise<MutableUpdateExecutionResult | null> {
   const { opts, updateStepTimeoutMs } = params;
+  const candidateAdmissionChecks =
+    params.updateInstallKind === "package" ? opts.run?.candidateAdmissionChecks : undefined;
+  const configValidation = candidateAdmissionChecks?.includes("config")
+    ? ("candidate" as const)
+    : undefined;
   const inspectContexts = (roots: string[]) =>
     inspectUpdateDatabaseContexts({
       ...params,
@@ -90,6 +97,7 @@ export async function executeMutableUpdate(
       updateInstallKind: params.updateInstallKind === "git" ? "git" : "package",
       jsonMode: Boolean(opts.json),
       timeoutMs: updateStepTimeoutMs,
+      candidateAdmissionChecks,
     });
   const originalRun = opts.run;
   const requesterAuthority = originalRun?.requesterAuthority;
@@ -136,6 +144,7 @@ export async function executeMutableUpdate(
         updateInstallKind: params.updateInstallKind === "git" ? "git" : "package",
         jsonMode: Boolean(opts.json),
         timeoutMs: updateStepTimeoutMs,
+        candidateAdmissionChecks,
       },
       admission,
       versions,
@@ -144,9 +153,15 @@ export async function executeMutableUpdate(
   };
   const preflightPlugins = async (targetVersion: string | null) => {
     await recheckSchemas(admittedTargetSchemaVersions);
+    const context = admission!.foreground ? admission!.contexts[0]! : admission!.contexts.at(-1)!;
+    if (
+      candidateAdmissionChecks?.includes("plugin-availability") &&
+      isCandidateAdmissionContextCovered(context.env)
+    ) {
+      return;
+    }
     const { preflightConfiguredNpmPluginTargets } =
       await import("./update-command-plugin-preflight.js");
-    const context = admission!.foreground ? admission!.contexts[0]! : admission!.contexts.at(-1)!;
     const warnings = await preflightConfiguredNpmPluginTargets({
       config: context.configSnapshot.sourceConfig,
       env: context.env,
@@ -414,7 +429,8 @@ export async function executeMutableUpdate(
         }
       }
       const snapshot =
-        validatedConfigSnapshot ?? (await readUpdateCandidateSource(env, params.legacyConfigPlan));
+        validatedConfigSnapshot ??
+        (await readUpdateCandidateSource(env, params.legacyConfigPlan, { configValidation }));
       const validation = await validateUpdateCandidateCanary({
         root,
         config: snapshot.config,
@@ -423,6 +439,15 @@ export async function executeMutableUpdate(
         assertCurrent: assertExecutionCurrent,
         nodeRunner: params.packageUpdateNodeRunner,
         timeoutMs: params.timeoutMs,
+        onProgress: (step) => {
+          assertExecutionCurrent();
+          if (originalRun) {
+            recordUpdateRunStep(originalRun.runId, step, { env: originalRun.env });
+          }
+          defaultRuntime[opts.json ? "error" : "log"](
+            `${step.step}: ${step.detail ?? step.status}`,
+          );
+        },
         onStep: (step) => params.progress?.onStepComplete?.({ ...step, index: 0, total: 0 }),
       });
       assertExecutionCurrent();
@@ -451,7 +476,9 @@ export async function executeMutableUpdate(
   const beforeActivate = async (roots: readonly string[] = [params.root]) => {
     assertExecutionCurrent();
     const env = ownedManagedUpdateContext?.env ?? opts.run?.env ?? process.env;
-    const snapshot = await readUpdateCandidateSource(env, params.legacyConfigPlan);
+    const snapshot = await readUpdateCandidateSource(env, params.legacyConfigPlan, {
+      configValidation,
+    });
     if (
       validatedConfigSnapshot?.hash !== undefined &&
       snapshot.hash !== validatedConfigSnapshot.hash
@@ -522,6 +549,20 @@ export async function executeMutableUpdate(
     await stopManagedServiceBeforeMutableUpdate(roots);
     await recheckSchemas(admittedTargetSchemaVersions);
     assertExecutionCurrent();
+    const serving = preManagedServiceStop;
+    const servingVerdict = serving?.serviceUpdateVerdict;
+    if (
+      params.updateInstallKind === "git" &&
+      serving?.running &&
+      !serving.stopped &&
+      servingVerdict?.kind === "owned" &&
+      roots.some((root) => updateInstallRootsMatch(root, servingVerdict.root))
+    ) {
+      throw new UpdatePreMutationError(
+        "runtime-artifact-publication",
+        `Cannot replace Git runtime artifacts in ${servingVerdict.root}: its Gateway${serving.servicePid === undefined ? "" : ` (PID ${serving.servicePid})`} is still running and this update did not stop it. Stop that Gateway through its service manager, then rerun \`${formatCliCommand("openclaw update", serving.serviceEnv)}\` without \`--no-restart\`. The serving runtime was left unchanged.`,
+      );
+    }
     // Both install paths enter mutation only after the post-stop schema/authority fence.
     preManagedServiceStop?.windowsTaskAutoStartRecovery?.beginMutation();
     mutationStarted = true;
@@ -548,6 +589,7 @@ export async function executeMutableUpdate(
         tag: params.tag,
         installSpec: params.packageInstallSpec ?? undefined,
         timeoutMs: updateStepTimeoutMs,
+        workTimeoutMs: params.timeoutMs ?? null,
         startedAt: params.startedAt,
         progress: params.progress,
         invocationCwd: params.invocationCwd,

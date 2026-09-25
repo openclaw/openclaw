@@ -18,8 +18,8 @@ const mocks = vi.hoisted(() => ({
   stage: vi.fn<(request: { body: unknown }) => Promise<{ body: unknown }>>(),
   close: vi.fn<typeof closeTrackedCdpTarget>(async () => ({ status: "closed" })),
 }));
-vi.mock("../sdk-config.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../sdk-config.js")>()),
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
   getRuntimeConfig: () => mocks.config,
   getRuntimeConfigSourceSnapshot: () => mocks.config,
 }));

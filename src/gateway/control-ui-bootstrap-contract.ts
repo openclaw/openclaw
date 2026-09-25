@@ -64,6 +64,8 @@ export type ControlUiBootstrapConfig = {
   environment?: ControlUiEnvironment;
   /** Whether this Gateway's served UI may show the Discord community invitation. */
   communityInvite?: boolean;
+  /** Fresh-draft model, runtime and reasoning preference policy; never a selection restriction. */
+  newSessionModelDefaults?: "last-used" | "configured";
   /**
    * Whether the operator terminal surface is enabled (`gateway.terminal.enabled`).
    * The Control UI hides the terminal entirely when false so a disabled kill

@@ -87,6 +87,8 @@ export function renderAgentFiles(params: {
   const tabFiles = files.filter((file) => !isCreatable(file));
   const creatableFiles = files.filter(isCreatable);
   const activeEntry = active ? (files.find((file) => file.name === active) ?? null) : null;
+  const conflictName = active && params.agentFileConflict === active ? active : null;
+  const showMissing = activeEntry?.missing && !conflictName;
   const hasContent = active ? hasAgentFileContent(params, active) : false;
   const hasBase = active ? Object.hasOwn(params.agentFileContents, active) : false;
   const baseContent = active ? (params.agentFileContents[active] ?? "") : "";
@@ -102,26 +104,26 @@ export function renderAgentFiles(params: {
     ? formatWorkspaceRelativePath(activeEntry.path, list?.workspace)
     : "";
   const previewTitleId = activeEntry ? `agent-file-preview-title-${toDomId(activeEntry.name)}` : "";
-  const previewStatusLabel = activeEntry?.missing
+  const previewStatusLabel = showMissing
     ? t("agents.files.willCreateOnSave")
-    : isDirty
+    : isDirty || conflictName
       ? t("agents.files.liveDraftPreview")
       : t("agents.files.savedPreview");
-  const previewStatusClass = activeEntry?.missing
+  const previewStatusClass = showMissing
     ? "is-missing"
-    : isDirty
+    : isDirty || conflictName
       ? "is-dirty"
       : "is-synced";
   const previewUpdatedLabel = activeEntry?.updatedAtMs
     ? t("agents.files.updated", { time: formatRelativeTimestamp(activeEntry.updatedAtMs) })
-    : activeEntry?.missing
+    : showMissing
       ? t("agents.files.notCreatedYet")
       : t("agents.files.updatedUnknown");
 
   return html`
     ${renderAgentFileError({
       error: params.agentFilesError,
-      conflictName: active && params.agentFileConflict === active ? active : null,
+      conflictName,
       busy: params.agentFilesLoading || params.agentFileSaving,
       canWrite: params.canWrite,
       onReload: params.onFileReload,
@@ -158,7 +160,7 @@ export function renderAgentFiles(params: {
                       value: file.name,
                       label: file.name.replace(/\.md$/i, ""),
                       badge:
-                        file.missing && file.expectedAbsent !== true
+                        file.missing && file.expectedAbsent !== true && file.name !== conflictName
                           ? t("agents.files.missing")
                           : undefined,
                       // File reads are serialized; changing the active tab mid-read would
@@ -249,7 +251,7 @@ export function renderAgentFiles(params: {
                             </div>
                           </div>
                           ${
-                            activeEntry.missing
+                            showMissing
                               ? html`<div class="callout info">
                                   ${
                                     activeEntry.expectedAbsent === true

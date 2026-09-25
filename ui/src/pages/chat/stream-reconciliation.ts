@@ -34,7 +34,7 @@ import {
   resolveLiveToolStreamRefs,
   resolveMatchingLiveToolIdentity,
 } from "./tool-stream-identity.ts";
-import { resetToolStream, resetToolStreamRun } from "./tool-stream-state.ts";
+import { canResetToolStream, resetToolStream, resetToolStreamRun } from "./tool-stream-state.ts";
 
 type StreamReconciliationState = StreamCausalBoundaryState & {
   chatStream: string | null;
@@ -71,18 +71,6 @@ type MaterializeVisibleStreamOptions = {
   isHiddenStreamText: StreamVisibility;
 };
 
-function resettableToolStreamHost(
-  state: StreamReconciliationState,
-): Parameters<typeof resetToolStream>[0] | null {
-  const toolHost = state as ToolStreamHost & Partial<Parameters<typeof resetToolStream>[0]>;
-  return toolHost.toolStreamById instanceof Map &&
-    Array.isArray(toolHost.toolStreamOrder) &&
-    Array.isArray(toolHost.chatToolMessages) &&
-    Array.isArray(toolHost.chatStreamSegments)
-    ? (toolHost as Parameters<typeof resetToolStream>[0])
-    : null;
-}
-
 export function currentLiveToolCallIds(state: StreamReconciliationState): string[] {
   const toolHost = state as ToolStreamHost;
   return Array.isArray(toolHost.toolStreamOrder)
@@ -108,23 +96,21 @@ export function maybeResetToolStream(
   state: StreamReconciliationState,
   opts?: { preserveStreamSegments?: boolean },
 ) {
-  const toolHost = resettableToolStreamHost(state);
-  if (!toolHost) {
+  if (!canResetToolStream(state)) {
     return;
   }
   const preservedStreamSegments = opts?.preserveStreamSegments
-    ? [...toolHost.chatStreamSegments]
+    ? [...state.chatStreamSegments]
     : null;
-  resetToolStream(toolHost);
+  resetToolStream(state);
   if (preservedStreamSegments) {
-    toolHost.chatStreamSegments = preservedStreamSegments;
+    state.chatStreamSegments = preservedStreamSegments;
   }
 }
 
 export function maybeResetToolStreamRun(state: StreamReconciliationState, runId: string) {
-  const toolHost = resettableToolStreamHost(state);
-  if (toolHost) {
-    resetToolStreamRun(toolHost, runId);
+  if (canResetToolStream(state)) {
+    resetToolStreamRun(state, runId);
   }
 }
 
@@ -161,8 +147,7 @@ function buildAssistantStreamMessage(
 }
 
 function streamFallbackMetadata(message: unknown): Record<string, unknown> | null {
-  const metadata = asNullableRecord(asNullableRecord(message)?.openclawStreamFallback);
-  return metadata;
+  return asNullableRecord(asNullableRecord(message)?.openclawStreamFallback);
 }
 
 function unkeyedStreamFallbackMetadata(message: unknown): Record<string, unknown> | null {

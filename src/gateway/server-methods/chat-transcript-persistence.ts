@@ -2,7 +2,6 @@
 import { asOptionalRecord as transcriptEventRecord } from "@openclaw/normalization-core/record-coerce";
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import {
-  findTranscriptEvent,
   loadTranscriptEventRowsAfterSeqSync,
   patchSessionEntryCore,
   publishTranscriptUpdate,
@@ -13,6 +12,7 @@ import {
   type SessionTranscriptWriteScope,
   type TranscriptEvent,
 } from "../../config/sessions/session-accessor.js";
+import { findTranscriptEvent } from "../../config/sessions/session-transcript-match.js";
 import type { SessionLifecycleRevisionExpectation } from "../../config/sessions/session-transcript-turn-lifecycle.types.js";
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
@@ -28,6 +28,7 @@ import {
   readAssistantTextBlocksForPhase,
 } from "../../shared/chat-message-content.js";
 import {
+  ABORTED_PARTIAL_PERSISTENCE_WARNING,
   abortedPartialPersistenceError,
   type AbortedPartialSnapshot,
   type ChatAbortOrigin,
@@ -354,7 +355,7 @@ async function transcriptExists(scope: SessionTranscriptWriteScope): Promise<boo
   }
   // Existence probe: the newest-first matcher returns on the first record, so
   // this reads one transcript line instead of materializing the whole file.
-  const found = await findTranscriptEvent({ ...scope, sessionId }, () => true).catch(
+  const found = await findTranscriptEvent({ ...scope, sessionId }, { kind: "latest" }).catch(
     () => undefined,
   );
   return found !== undefined;
@@ -378,6 +379,7 @@ export async function appendAssistantTranscriptMessage(params: {
     aborted: true;
     origin: ChatAbortOrigin;
     runId: string;
+    producerSettled?: true;
   };
   ttsSupplement?: GatewayInjectedTtsSupplementMarker;
   contextFreeCommand?: true;
@@ -416,24 +418,43 @@ export async function persistAbortedPartials(params: {
 }): Promise<string | undefined> {
   let warning: string | undefined;
   for (const snapshot of params.snapshots) {
-    if (!snapshot.ok) {
-      throw abortedPartialPersistenceError(snapshot.error, warning);
-    }
-    const appended = await appendAssistantTranscriptMessage(snapshot.value);
-    if (appended.skipped) {
+    if (snapshot.ok && snapshot.settlement.deferred) {
       continue;
     }
-    if (!appended.ok) {
-      const error = `chat.abort transcript append failed: ${appended.error ?? "unknown error"}`;
-      params.context.logGateway.warn(error);
-      if (snapshot.abortOrigin === "placement-abandon") {
-        throw new Error(error);
-      }
-      warning =
-        "Stopped, but a reply could not be saved to history. Copy any visible text before leaving this chat.";
+    try {
+      warning = (await persistAbortedPartial({ context: params.context, snapshot })) ?? warning;
+    } catch (error) {
+      throw abortedPartialPersistenceError(error, warning);
     }
   }
   return warning;
+}
+
+export async function persistAbortedPartial(params: {
+  context: { logGateway: { warn: (message: string) => void } };
+  snapshot: AbortedPartialSnapshot;
+  producerSettled?: true;
+}): Promise<string | undefined> {
+  const { snapshot } = params;
+  if (!snapshot.ok) {
+    throw snapshot.error;
+  }
+  const appended = await appendAssistantTranscriptMessage({
+    ...snapshot.value,
+    abortMeta: {
+      ...snapshot.value.abortMeta,
+      ...(params.producerSettled ? { producerSettled: true } : {}),
+    },
+  });
+  if (appended.skipped || appended.ok) {
+    return undefined;
+  }
+  const error = `chat.abort transcript append failed: ${appended.error ?? "unknown error"}`;
+  params.context.logGateway.warn(error);
+  if (snapshot.abortOrigin === "placement-abandon") {
+    throw new Error(error);
+  }
+  return ABORTED_PARTIAL_PERSISTENCE_WARNING;
 }
 
 async function touchAssistantTranscriptSessionEntry(

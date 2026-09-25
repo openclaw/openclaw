@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { validateSessionsDescribeParams } from "../../../packages/gateway-protocol/src/index.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import { projectOperatorModelRead } from "../operator-model-presentation.js";
 import { hasOperatorBoundary } from "../operator-role-policy.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { withReadySessionRows } from "../session-row-prepared-read.js";
@@ -11,12 +12,19 @@ import {
   createSessionListEntryFilter,
 } from "../session-sharing.js";
 import { readRecentSessionMessagesWithStatsAsync } from "../session-transcript-readers.js";
+import { createVisibleActiveSessionRunProjector } from "./session-active-runs.js";
 import { requireSessionKey } from "./sessions-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
-  "sessions.describe": async ({ params, respond, context, client }) => {
+  "sessions.describe": async ({
+    params,
+    respond,
+    context,
+    client,
+    sessionMutationAuthorization,
+  }) => {
     if (!assertValidParams(params, validateSessionsDescribeParams, "sessions.describe", respond)) {
       return;
     }
@@ -40,6 +48,7 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
           return agent.ok && !denied ? [{ key, agentId: agent.agentId }] : [];
         },
         (read) => {
+          sessionMutationAuthorization?.assertCurrent();
           const requestedAgent = resolveRequestedSessionAgentId(
             read.state.cfg,
             key,
@@ -50,7 +59,15 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
             return;
           }
           const query = { key, agentId: requestedAgent.agentId };
-          const presentation = prepareProjectedSessionPresentation(read, client);
+          const presentation = prepareProjectedSessionPresentation(
+            read,
+            client,
+            Date.now(),
+            createVisibleActiveSessionRunProjector(
+              context,
+              read.state.rowContext.projectedAgentRuns,
+            ),
+          );
           const denied = presentation.authorizeDescription(query);
           if (denied) {
             respond(false, undefined, denied);
@@ -59,7 +76,7 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
           const record = read.describe(query);
           if (
             !record ||
-            (presentation.sharing.sessionCap !== undefined &&
+            (hasOperatorBoundary(client, read.state.policyConfig) &&
               presentation.sharing.entryFilter?.(record.key, record.entry) === false)
           ) {
             respond(true, { session: null });
@@ -76,7 +93,14 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
       await certifySessionCanonicalValidationPending(prepared.database);
     }
   },
-  "sessions.get": async ({ params, respond, context, client, signal }) => {
+  "sessions.get": async ({
+    params,
+    respond,
+    context,
+    client,
+    signal,
+    sessionMutationAuthorization,
+  }) => {
     // SAFETY: Gateway dispatch supplies object params; each optional field is narrowed before use.
     const p = params as {
       key?: unknown;
@@ -108,15 +132,16 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
       return requested.ok ? [{ key, agentId: requested.agentId }] : [];
     };
     const selected = await withReadySessionRows(projection, queries, (read) => {
+      sessionMutationAuthorization?.assertCurrent();
       const requested = requestedAgent();
       if (!requested.ok) {
         respond(false, undefined, requested.error);
         return undefined;
       }
       const record = read.describe({ key, agentId: requested.agentId });
-      const cfg = context.getRuntimeConfig();
-      const boundaryFilter = hasOperatorBoundary(client, cfg)
-        ? createSessionListEntryFilter({ client, cfg })
+      const policyConfig = read.state.policyConfig;
+      const boundaryFilter = hasOperatorBoundary(client, policyConfig)
+        ? createSessionListEntryFilter({ client, cfg: policyConfig })
         : undefined;
       if (!record?.entry.sessionId || boundaryFilter?.(record.key, record.entry) === false) {
         respond(true, { messages: [] }, undefined);
@@ -149,13 +174,14 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
             signal,
           );
     await withReadySessionRows(projection, queries, (read) => {
+      sessionMutationAuthorization?.assertCurrent();
       const requested = requestedAgent();
       const current = requested.ok
         ? read.describe({ key, agentId: requested.agentId }, selected)
         : undefined;
-      const cfg = context.getRuntimeConfig();
-      const boundaryFilter = hasOperatorBoundary(client, cfg)
-        ? createSessionListEntryFilter({ client, cfg })
+      const policyConfig = read.state.policyConfig;
+      const boundaryFilter = hasOperatorBoundary(client, policyConfig)
+        ? createSessionListEntryFilter({ client, cfg: policyConfig })
         : undefined;
       if (
         !current ||
@@ -168,7 +194,11 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
         respond(true, { messages: [] }, undefined);
         return;
       }
-      respond(true, { messages }, undefined);
+      respond(
+        true,
+        projectOperatorModelRead({ context, client, agentId: current.agentId }, { messages }),
+        undefined,
+      );
     });
   },
 };

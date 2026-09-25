@@ -7,10 +7,10 @@ import {
 } from "./io.observe-recovery-effects.js";
 import { createConfigHealthFingerprint } from "./io.observe-state.js";
 import { hashConfigRaw } from "./io.read-helpers.js";
+import type { NormalizedConfigIoDeps } from "./io.read.types.js";
 import type {
   ConfigRecoveryCandidate,
   ConfigRecoveryCandidatePreparation,
-  NormalizedConfigIoDeps,
   PrepareConfigRecoveryCandidate,
 } from "./io.types.js";
 

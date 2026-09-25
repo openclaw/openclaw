@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
 import type { ConnectionOptions } from "node:tls";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
+import { readFileHandleBounded } from "openclaw/plugin-sdk/file-access-runtime";
 import { parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
 import {
@@ -49,32 +51,23 @@ const GOOGLE_CLIENT_CERTS_URL_PREFIX = "https://www.googleapis.com/robot/v1/meta
 const MAX_GOOGLE_AUTH_RESPONSE_BYTES = 1024 * 1024;
 let googleAuthRuntimePromise: Promise<GoogleAuthRuntime> | null = null;
 
-function normalizeGoogleAuthPreparedRequestHeaders<T extends RequestInit & { headers?: unknown }>(
-  config: T,
+function normalizeGoogleAuthHeaders<T extends { headers?: unknown }>(
+  value: T,
 ): T & { headers: Headers } {
-  if (!(config.headers instanceof Headers)) {
-    config.headers = new Headers(config.headers as HeadersInit | undefined);
+  if (!(value.headers instanceof Headers)) {
+    value.headers = new Headers(value.headers as HeadersInit | undefined);
   }
-  return config as T & { headers: Headers };
-}
-
-function normalizeGoogleAuthResponseHeaders<T extends { headers?: unknown }>(
-  response: T,
-): T & { headers: Headers } {
-  if (!(response.headers instanceof Headers)) {
-    response.headers = new Headers(response.headers as HeadersInit | undefined);
-  }
-  return response as T & { headers: Headers };
+  return value as T & { headers: Headers };
 }
 
 function installGoogleAuthHeaderCompatibilityInterceptor(
   transport: GoogleAuthTransport,
 ): GoogleAuthTransport {
   transport.interceptors.request.add({
-    resolved: async (config) => normalizeGoogleAuthPreparedRequestHeaders(config),
+    resolved: async (config) => normalizeGoogleAuthHeaders(config),
   });
   transport.interceptors.response.add({
-    resolved: async (response) => normalizeGoogleAuthResponseHeaders(response),
+    resolved: async (response) => normalizeGoogleAuthHeaders(response),
   });
   return transport;
 }
@@ -283,6 +276,15 @@ function validateGoogleChatServiceAccountCredentials(
   };
 }
 
+function sanitizeCredentialFileReadError(error: unknown): Error {
+  // Filesystem messages and causes can contain the private credential path.
+  return new Error(
+    extractErrorCode(error) === "too-large"
+      ? `Google Chat service account file exceeds ${MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES} bytes.`
+      : "Failed to load Google Chat service account file.",
+  );
+}
+
 async function readCredentialsFile(filePath: string): Promise<Record<string, unknown>> {
   const resolvedPath = resolveUserPath(filePath);
   if (!resolvedPath) {
@@ -292,8 +294,8 @@ async function readCredentialsFile(filePath: string): Promise<Record<string, unk
   let handle: Awaited<ReturnType<typeof fs.open>> | null;
   try {
     handle = await fs.open(resolvedPath, "r");
-  } catch {
-    throw new Error("Failed to load Google Chat service account file.");
+  } catch (error) {
+    throw sanitizeCredentialFileReadError(error);
   }
 
   try {
@@ -301,22 +303,13 @@ async function readCredentialsFile(filePath: string): Promise<Record<string, unk
     if (!stat.isFile()) {
       throw new Error("Google Chat service account file must be a regular file.");
     }
-    if (stat.size > MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES) {
-      throw new Error(
-        `Google Chat service account file exceeds ${MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES} bytes.`,
-      );
-    }
-
     let raw: string;
     try {
-      raw = await handle.readFile({ encoding: "utf8" });
-    } catch {
-      throw new Error("Failed to load Google Chat service account file.");
-    }
-    if (Buffer.byteLength(raw, "utf8") > MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES) {
-      throw new Error(
-        `Google Chat service account file exceeds ${MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES} bytes.`,
-      );
+      raw = (
+        await readFileHandleBounded(handle, MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES)
+      ).toString("utf8");
+    } catch (error) {
+      throw sanitizeCredentialFileReadError(error);
     }
 
     let parsed: unknown;

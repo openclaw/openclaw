@@ -30,7 +30,9 @@ const getUpdateEffectiveChannelMock = vi.hoisted(() =>
 );
 const getUpdateScheduleMock = vi.hoisted(() => vi.fn<() => TestUpdateSchedule>(() => null));
 const refreshGatewayUpdateStatusMock = vi.hoisted(() =>
-  vi.fn<typeof import("../../infra/update-startup.js").refreshGatewayUpdateStatus>(async () => {}),
+  vi.fn<typeof import("../../infra/update-status-schedule.js").refreshGatewayUpdateStatus>(
+    async () => {},
+  ),
 );
 const getLatestUpdateRestartSentinelMock = vi.hoisted(() =>
   vi.fn<() => TestUpdateSentinel>(() => null),
@@ -46,6 +48,10 @@ vi.mock("../../infra/update-status-state.js", () => ({
 
 vi.mock("../../infra/update-startup.js", () => ({
   getUpdateEffectiveChannel: getUpdateEffectiveChannelMock,
+}));
+
+vi.mock("../../infra/update-status-schedule.js", () => ({
+  getGatewayUpdateSchedule: () => getUpdateScheduleMock(),
   refreshGatewayUpdateStatus: refreshGatewayUpdateStatusMock,
 }));
 
@@ -104,7 +110,7 @@ describe("update.status effective channel", () => {
   });
 
   it("prefers the current config channel over the startup schedule", async () => {
-    getUpdateScheduleMock.mockReturnValueOnce({ channel: "beta", autoEnabled: true });
+    getUpdateScheduleMock.mockReturnValue({ channel: "beta", autoEnabled: true });
     const { updateHandlers } = await import("./update.js");
     const respond = vi.fn();
     const handler = updateHandlers["update.status"];
@@ -192,7 +198,7 @@ describe("update.status effective channel", () => {
       ts: 2,
       stats: { after: { version: "2.0.0" } },
     });
-    getUpdateScheduleMock.mockReturnValueOnce({ channel: "beta", autoEnabled: true });
+    getUpdateScheduleMock.mockReturnValue({ channel: "beta", autoEnabled: true });
     const { updateHandlers } = await import("./update.js");
     const respond = vi.fn();
 
@@ -319,6 +325,6 @@ it("attributes a failed status history read to its phase and preserves the error
   expect(warn).toHaveBeenCalledExactlyOnceWith("update.status: slow request", {
     operation: "update.status",
     elapsedMs: 40_000,
-    phaseDurationsMs: { sentinel: 0, checkout: 0, identity: 0, reconciliation: 0, history: 40_000 },
+    phaseDurationsMs: { sentinel: 0, checkout: 0, reconciliation: 0, history: 40_000 },
   });
 });

@@ -2,8 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { SessionCompanionAskError } from "./session-companion-ask.js";
 import type { SessionCompanionContextReader } from "./session-companion-context.js";
+import { SessionCompanionAskError } from "./session-companion-errors.js";
 import { trimSessionCompanionExchanges } from "./session-companion-state.js";
 import { createSessionCompanion } from "./session-companion.js";
 import type { SessionObserverCompanionSnapshot } from "./session-observer-contract.js";
@@ -408,11 +408,13 @@ describe("session companion asks", () => {
       const harness = createHarness();
       const selected = { agentId: "work", sessionKey };
       const other = { agentId: "main", sessionKey: "global" };
+      const databaseIdentity = Symbol("session-companion-database");
       await harness.service.ask({ ...selected, question: "Work?", connId: "conn-work" });
       await harness.service.ask({ ...other, question: "Main?", connId: "conn-main" });
 
       emitSessionIdentityMutation({
         agentId: sessionKey === "global" ? "work" : "main",
+        databaseIdentity,
         kind: "delete",
         previous: { sessionId: "session-1", sessionKeys: [sessionKey] },
       });

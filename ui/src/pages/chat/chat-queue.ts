@@ -10,7 +10,6 @@ import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import type { StoredChatQueueReplacement } from "./composer-persistence-state.ts";
 import {
-  type ChatQueueAdmissionResult,
   listStoredChatOutboxes,
   storedChatOutboxScopeKey,
   type ChatComposerScope,
@@ -41,15 +40,6 @@ export function steerableQueuedMessage(queue: readonly ChatQueueItem[]): ChatQue
   return queue.toSorted(compareChatQueueOrder).find(isSteerableQueuedMessage);
 }
 
-export function isVolatileQueuedMessage(host: ChatQueueScopedSessionHost, id: string): boolean {
-  return chatOutboxOwner(host).hasVolatile(host, id);
-}
-
-/** True while the row has a stored copy that would survive a reload. */
-export function isDurableQueuedMessage(host: ChatQueueScopedSessionHost, id: string): boolean {
-  return chatOutboxOwner(host).durable(host, id) !== undefined;
-}
-
 /**
  * Every pane sharing an outbox also shares its drain, and any of them can own the
  * drain lane. A fact one pane records about a row — a delivery hold, say — has to
@@ -69,23 +59,9 @@ export function keepVolatileQueuedMessage(
   item: ChatQueueItem,
   agentId?: string,
   options: { retryable?: boolean } = {},
-): void {
+): ChatQueueItem {
   const scope = resolveUiConversationIdentity(host, sessionKey, agentId ?? item.agentId);
-  chatOutboxOwner(host).keep(host, scope, item, options.retryable);
-}
-
-export function syncVisibleChatQueueProjection(
-  host: ChatQueueScopedSessionHost,
-  options: { requestUpdate?: boolean } = {},
-): void {
-  chatOutboxOwner(host).syncHost(host, options);
-}
-
-export function subscribeChatOutboxProjection(
-  host: ChatQueueScopedSessionHost,
-  onDiscard?: (item: ChatQueueItem) => void,
-): () => void {
-  return chatOutboxOwner(host).subscribe(host, onDiscard);
+  return chatOutboxOwner(host).keep(host, scope, item, options.retryable);
 }
 
 export function enqueueChatMessage(
@@ -110,8 +86,7 @@ export function enqueueChatMessage(
     agentId: scopedAgentIdForSession(host, host.sessionKey),
     ...(sender ? { sender } : {}),
   };
-  keepVolatileQueuedMessage(host, host.sessionKey, item, item.agentId);
-  return item;
+  return keepVolatileQueuedMessage(host, host.sessionKey, item, item.agentId);
 }
 
 export function enqueuePendingRunMessage(
@@ -150,15 +125,6 @@ export function readQueuedMessageById(
   id: string,
 ): ChatQueueItem | null {
   return chatOutboxOwner(host).locate(host, id)?.item ?? null;
-}
-
-export function updateVolatileQueuedMessage(
-  host: ChatQueueScopedSessionHost,
-  id: string,
-  update: (item: ChatQueueItem) => ChatQueueItem,
-  options: { retryable?: boolean } = {},
-): ChatQueueItem | null {
-  return chatOutboxOwner(host).change(host, id, update, options.retryable);
 }
 
 export function updateQueuedMessage(
@@ -200,13 +166,6 @@ export function confirmQueuedMessageCustody(
   );
 }
 
-export function updateQueuedMessagesForSession(
-  host: ChatQueueScopedSessionHost,
-  updates: readonly { id: string; update: (item: ChatQueueItem) => ChatQueueItem }[],
-): boolean {
-  return chatOutboxOwner(host).update(host, updates) !== null;
-}
-
 /**
  * `replaces` admits the item as the stored replacement for another row, which
  * retires the source in the same write. A rejected write changes nothing, so an
@@ -218,23 +177,7 @@ export function admitQueuedMessageForSession(
   item: ChatQueueItem,
   replaces?: StoredChatQueueReplacement,
 ): boolean {
-  return admitQueuedMessageForSessionResult(host, captured, item, replaces) === "admitted";
-}
-
-export function admitQueuedMessageForSessionResult(
-  host: ChatQueueScopedSessionHost,
-  captured: ReturnType<typeof captureChatOutboxAdmission>,
-  item: ChatQueueItem,
-  replaces?: StoredChatQueueReplacement,
-): ChatQueueAdmissionResult {
-  return chatOutboxOwner(host).admit(host, captured, item, replaces);
-}
-
-export function removeQueuedMessageWithoutReleasing(
-  host: ChatQueueScopedSessionHost,
-  id: string,
-): ChatQueueItem | null {
-  return chatOutboxOwner(host).remove(host, id);
+  return chatOutboxOwner(host).admit(host, captured, item, replaces) === "admitted";
 }
 
 export function excludeComposerAttachments(
@@ -270,7 +213,7 @@ export function removeDeliveredQueuedChatSendForRun(
   if (!match) {
     return null;
   }
-  const removed = removeQueuedMessageWithoutReleasing(host, match.item.id);
+  const removed = chatOutboxOwner(host).remove(host, match.item.id);
   if (!removed) {
     return null;
   }

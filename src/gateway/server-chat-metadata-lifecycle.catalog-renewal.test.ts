@@ -125,6 +125,21 @@ async function createRenewalLifecycle() {
 }
 
 describe("catalog renewal metadata broadcasts", () => {
+  it("observes expired published inventory without starting provider discovery", async () => {
+    const harness = await createRenewalLifecycle();
+    const inventoryOwner = resolvePreparedModelRuntimeOwnerBySnapshot(owner)!;
+    inventoryOwner.catalogInventory!.providers.get("custom")!.expiresAt = 0;
+    const acquisitions = mocks.runPreparedModelCatalogWorker.mock.calls.length;
+    try {
+      await harness.lifecycle.refresh();
+      const metadata = await harness.lifecycle.read({ agentId: "main" });
+      expect(metadata.models).toMatchObject(harness.inventory.entries);
+      expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(acquisitions);
+    } finally {
+      await harness.stop();
+    }
+  });
+
   it.each(["identical", "usage", "auth", "added", "removed", "outcome", "failed"] as const)(
     "publishes only settled visible changes for a renewal (%s)",
     async (change) => {
@@ -177,7 +192,7 @@ describe("catalog renewal metadata broadcasts", () => {
       });
       const inventoryOwner = resolvePreparedModelRuntimeOwnerBySnapshot(owner)!;
       inventoryOwner.catalogInventory!.providers.get("custom")!.expiresAt = 0;
-      owner.readFullModelCatalog!();
+      owner.refreshExpiredModelCatalog!();
       let renewal: Promise<unknown> | undefined;
       try {
         await entered.promise;
@@ -212,7 +227,14 @@ describe("catalog renewal metadata broadcasts", () => {
               ],
         );
         expect(harness.broadcast.mock.calls).toEqual([
-          ["chat.metadata.changed", {}, { dropIfSlow: true }],
+          [
+            "chat.metadata.changed",
+            {
+              modelCatalogChanged: true,
+              authChanged: change !== "identical" && change !== "usage" && change !== "failed",
+            },
+            { dropIfSlow: true },
+          ],
         ]);
         expect(harness.observedCatalogs).toHaveLength(1);
         const observedCatalog = harness.observedCatalogs[0];

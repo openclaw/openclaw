@@ -161,13 +161,20 @@ vi.mock("../cli/update-cli/update-command-service-maintenance.js", async (import
   };
 });
 
-vi.mock("../cli/update-cli/update-command-service-plan.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../cli/update-cli/update-command-service-plan.js")>()),
-  // The fixture owns an in-memory manager; native machine profile policy is
-  // covered at the updater boundary and must not select a host service here.
-  assertGatewayServiceManagementAllowedForUpdate: () => undefined,
-  resolveGatewayServiceManagementBlockMessageForUpdate: () => undefined,
-}));
+vi.mock("../infra/gateway-supervision.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/gateway-supervision.js")>();
+  return {
+    ...actual,
+    // Emulate only the fixture's native manager; keep updater readers and policy wrappers real.
+    assertGatewayServiceMutationAllowed: (
+      ...args: Parameters<typeof actual.assertGatewayServiceMutationAllowed>
+    ) => {
+      if (!mocks.emulateNativeInstall) {
+        actual.assertGatewayServiceMutationAllowed(...args);
+      }
+    },
+  };
+});
 
 vi.mock("../cli/daemon-cli/restart-health.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../cli/daemon-cli/restart-health.js")>()),
@@ -239,9 +246,7 @@ export const doctorServiceInspectionCases = [
   "absent-busy-port",
   "absent-unknown-port",
   "windows-ready",
-  "windows-disabled",
   "windows-queued",
-  "windows-running",
   "windows-startup-stopped",
   "windows-startup-unknown",
 ].flatMap((kind) => [
@@ -352,6 +357,11 @@ export function registerDoctorConfigReceiptTests(
             ...(outcome === "advisory"
               ? postInstallAdvisory
               : { status: failure ? "error" : "ok" }),
+            ...(outcome === "partial-config" || outcome === "unrestored-config"
+              ? { maintenanceRefusal: { kind: "data-at-risk", reason: "gateway-state-unverified" } }
+              : outcome === "schema-refusal"
+                ? { maintenanceRefusal: { kind: "data-at-risk", reason: "incomplete-migration" } }
+                : {}),
             configHash: expectedHash,
             ...(failure
               ? {

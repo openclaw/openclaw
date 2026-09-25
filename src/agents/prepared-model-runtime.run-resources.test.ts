@@ -302,17 +302,29 @@ it("keeps overlapping RUN callers on one registration and closes only after the 
     expect(first.snapshot === second.snapshot).toBe(true);
     expect(registrations.length).toBe(count);
     expect(original().mode).toBe("discovery");
-    expect(() => original().instance.reserveReplacement()).toThrow("active retained work");
-    await first[Symbol.asyncDispose]();
-    await nextTurn();
-    expect(readAnswer(original())).toBe(42);
-    expect(original().disposals).toBe(0);
-    expect(() => original().instance.reserveReplacement()).toThrow("active retained work");
-    await second[Symbol.asyncDispose]();
-    await expect.poll(() => original().disposals).toBe(1);
-    expect(original().database.isOpen).toBe(false);
-    original().instance.reserveReplacement()();
-    expectReopened(original());
+    const instance = original().instance;
+    const releaseReplacement = instance.reserveReplacement();
+    let drained = false;
+    const settlement = instance.waitForRetainedWork(new AbortController().signal).then(() => {
+      drained = true;
+    });
+    try {
+      expect(instance.retainedWorkCount).toBeGreaterThan(0);
+      await first[Symbol.asyncDispose]();
+      await nextTurn();
+      expect(readAnswer(original())).toBe(42);
+      expect(original().disposals).toBe(0);
+      expect(instance.retainedWorkCount).toBeGreaterThan(0);
+      expect(drained).toBe(false);
+      await second[Symbol.asyncDispose]();
+      await settlement;
+      expect(instance.retainedWorkCount).toBe(0);
+      expect(original().disposals).toBe(1);
+      expect(original().database.isOpen).toBe(false);
+      expectReopened(original());
+    } finally {
+      releaseReplacement();
+    }
   });
 });
 
@@ -352,6 +364,7 @@ it("preserves the direct one-entry idle retention policy across RUN eviction", a
     expect(readAnswer(original())).toBe(42);
     // Idle publication keeps physical custody without blocking explicit replacement.
     original().instance.reserveReplacement()();
+    expect(original().instance.retainedWorkCount).toBe(0);
     const warm = await acquire({ retainIdleRunOwner: true });
     expect(warm.snapshot === first.snapshot).toBe(true);
     const next = await acquire({ retainIdleRunOwner: true }, `${input.workspaceDir}/next`);
@@ -416,13 +429,14 @@ it("process close waits for admitted registration disposal and rejects new RUN a
         ]);
         expect(readAnswer(original())).toBe(42);
         expect(closed).toBe(false);
-        expect(() => original().instance.reserveReplacement()).toThrow("active retained work");
+        original().instance.reserveReplacement()();
+        expect(original().instance.retainedWorkCount).toBeGreaterThan(0);
       } finally {
         finishDisposal.resolve();
         await Promise.all([closing, leaseReleased]);
       }
       expect(original().disposals).toBe(1);
-      original().instance.reserveReplacement()();
+      expect(original().instance.retainedWorkCount).toBe(0);
       expectReopened(original());
     },
   );
@@ -536,13 +550,14 @@ it.each(["hold", "reject"] as const)(
             }),
           ]);
           expect(readAnswer(original())).toBe(42);
-          expect(() => original().instance.reserveReplacement()).toThrow("active retained work");
+          original().instance.reserveReplacement()();
+          expect(original().instance.retainedWorkCount).toBeGreaterThan(0);
           if (catalog === "hold") {
             abort.abort(new Error("fixture admission cancelled"));
             await expect(pending.then(() => undefined)).rejects.toThrow("aborted");
             expect(getPreparedModelRuntimeSnapshot(input) === undefined).toBe(true);
             expect(original().disposals).toBe(0);
-            expect(() => original().instance.reserveReplacement()).toThrow("active retained work");
+            expect(original().instance.retainedWorkCount).toBeGreaterThan(0);
           }
           finishCatalog.resolve();
           if (catalog === "reject") {
@@ -552,6 +567,7 @@ it.each(["hold", "reject"] as const)(
           }
           await closePreparedModelRuntimeSnapshots();
           expect(original().disposals).toBe(1);
+          expect(original().instance.retainedWorkCount).toBe(0);
           expectReopened(original());
         } finally {
           finishCatalog.resolve();

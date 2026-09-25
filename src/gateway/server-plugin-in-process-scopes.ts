@@ -17,6 +17,7 @@ export function resolveInProcessGatewaySyntheticScopes(params: {
   operatorScopes?: readonly string[];
   scopedClientScopes?: readonly string[];
   registeredScope?: string;
+  allowOwnSessionScope?: boolean;
 }): string[] | undefined {
   const { operatorScopes, syntheticScopeMode } = params;
   const requestedSyntheticScopes = (
@@ -54,6 +55,7 @@ export function resolveInProcessGatewaySyntheticScopes(params: {
           requestParams: params.requestParams,
           requestedScopes: requestedSyntheticScopes,
           allowedScopes: operatorScopes,
+          ...(params.allowOwnSessionScope ? { sessionScope: SESSION_WRITE_SCOPE } : {}),
           ...(isOperatorScope(params.registeredScope)
             ? { requiredScope: params.registeredScope }
             : {}),
