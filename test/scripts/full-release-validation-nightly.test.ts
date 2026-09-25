@@ -12,10 +12,7 @@ const sha = "a".repeat(40);
 const envelope =
   '{"publicationSelection":null,"trustedWorkflow":null,"validationPurpose":"main-qualification"}';
 
-async function runDispatcher(
-  runs: { status: string; conclusion?: string; html_url?: string }[] = [],
-) {
-  const listWorkflowRuns = vi.fn().mockResolvedValue({ data: { workflow_runs: runs } });
+async function runDispatcher() {
   const dispatch = vi.fn().mockResolvedValue(undefined);
   const summary = {
     addHeading: vi.fn().mockReturnThis(),
@@ -24,11 +21,11 @@ async function runDispatcher(
   };
   const script = nightly.jobs.dispatch.steps[0].with.script;
   await runInNewContext(`(async () => { ${script} })()`, {
-    github: { rest: { actions: { listWorkflowRuns, createWorkflowDispatch: dispatch } } },
+    github: { rest: { actions: { createWorkflowDispatch: dispatch } } },
     context: { repo: { owner: "openclaw", repo: "openclaw" }, sha },
     core: { summary },
   });
-  return { listWorkflowRuns, dispatch, summary };
+  return { dispatch, summary };
 }
 
 describe("nightly Full Release Validation", () => {
@@ -59,29 +56,21 @@ describe("nightly Full Release Validation", () => {
   );
 
   it("dispatches exact-SHA main qualification using declared FRV inputs", async () => {
-    const { listWorkflowRuns, dispatch, summary } = await runDispatcher();
-    expect(listWorkflowRuns).toHaveBeenCalledExactlyOnceWith({
-      owner: "openclaw",
-      repo: "openclaw",
-      workflow_id: "full-release-validation.yml",
-      branch: "main",
-      event: "workflow_dispatch",
-      head_sha: sha,
-      per_page: 30,
-    });
+    const { dispatch, summary } = await runDispatcher();
     expect(dispatch).toHaveBeenCalledExactlyOnceWith({
       owner: "openclaw",
       repo: "openclaw",
       workflow_id: "full-release-validation.yml",
       ref: "main",
       inputs: {
-        ref: "main",
+        ref: sha,
         expected_sha: sha,
         trusted_workflow_json: envelope,
         release_profile: "stable",
         run_release_soak: "true",
         reuse_evidence: "true",
         rerun_group: "all",
+        allow_unreleased_changelog: "true",
         provider: "openai",
         mode: "both",
         fail_fast: "false",
@@ -113,31 +102,6 @@ describe("nightly Full Release Validation", () => {
     );
     expect(summary.write).toHaveBeenCalledOnce();
   });
-
-  it.each([
-    { status: "queued" },
-    { status: "in_progress" },
-    { status: "waiting" },
-    { status: "pending" },
-    { status: "requested" },
-  ])("skips a covered SHA for $status / $conclusion", async (run) => {
-    const html_url = "https://github.com/openclaw/openclaw/actions/runs/123";
-    const { dispatch, summary } = await runDispatcher([{ ...run, html_url }]);
-    expect(dispatch).not.toHaveBeenCalled();
-    expect(summary.addHeading).toHaveBeenCalledWith(
-      "Nightly Full Release Validation already covered",
-    );
-    expect(summary.addRaw).toHaveBeenCalledWith(html_url);
-    expect(summary.write).toHaveBeenCalledOnce();
-  });
-
-  it.each(["success", "failure"])(
-    "dispatches again after a completed %s parent",
-    async (conclusion) => {
-      const { dispatch } = await runDispatcher([{ status: "completed", conclusion }]);
-      expect(dispatch).toHaveBeenCalledOnce();
-    },
-  );
 
   it.each([true, false])(
     "honors child evidence reuse=%s for the nightly shape",

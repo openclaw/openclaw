@@ -105,9 +105,11 @@ interval is claimed.
 `Full Release Validation Nightly` (`full-release-validation-nightly.yml`) runs at
 04:00 UTC with the `stable` profile, soak and blocking performance,
 `reuse_evidence=true`, `rerun_group=all`, and `main-qualification` purpose.
-The target is pinned to the scheduler's main SHA. An active Full Release
-Validation parent for that SHA skips dispatch; a completed one is dispatched
-again and adopts its own exact-target evidence through reuse. The parent automatically
+Both `ref` and `expected_sha` carry the scheduler's exact main SHA, so a main
+push after the event cannot move the target. A still-active parent for the same
+SHA shares the SHA-specific Full Release Validation concurrency group and queues
+this dispatch; a completed one is validated again and adopts its own
+exact-target evidence through reuse. The parent automatically
 uses `OPENCLAW_RELEASE_RUNNER_GROUP` when configured; the five-minute dispatcher
 stays on ordinary `ubuntu-24.04` runners.
 

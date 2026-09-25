@@ -24,44 +24,28 @@ jobs:
       actions: write
       contents: read
     steps:
-      # expected_sha pins the target to the scheduler's main SHA so tooling and target match
-      # and the Full Release Validation concurrency group is SHA-specific.
+      # Both ref and expected_sha carry the scheduler's exact main SHA: a main push
+      # between this event and target resolution cannot move the target, and the
+      # Full Release Validation concurrency group is SHA-specific, so a still-active
+      # parent for the same SHA queues this dispatch instead of duplicating it.
       - name: Dispatch Full Release Validation for main
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             const sha = context.sha;
-            const { data: { workflow_runs: runs } } = await github.rest.actions.listWorkflowRuns({
-              ...context.repo,
-              workflow_id: "full-release-validation.yml",
-              branch: "main",
-              event: "workflow_dispatch",
-              head_sha: sha,
-              per_page: 30,
-            });
-            // A completed parent is re-dispatched: exact-target evidence reuse adopts it cheaply.
-            const covered = runs.find((run) =>
-              ["queued", "in_progress", "waiting", "pending", "requested"].includes(run.status),
-            );
-            if (covered) {
-              await core.summary
-                .addHeading("Nightly Full Release Validation already covered")
-                .addRaw(covered.html_url)
-                .write();
-              return;
-            }
             await github.rest.actions.createWorkflowDispatch({
               ...context.repo,
               workflow_id: "full-release-validation.yml",
               ref: "main",
               inputs: {
-                ref: "main",
+                ref: sha,
                 expected_sha: sha,
                 trusted_workflow_json: '{"publicationSelection":null,"trustedWorkflow":null,"validationPurpose":"main-qualification"}',
                 release_profile: "stable",
                 run_release_soak: "true",
                 reuse_evidence: "true",
                 rerun_group: "all",
+                allow_unreleased_changelog: "true",
                 provider: "openai",
                 mode: "both",
                 fail_fast: "false",
