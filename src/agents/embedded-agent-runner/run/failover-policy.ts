@@ -89,6 +89,11 @@ function isConcreteNonTimeoutAssistantFailure(params: AssistantDecisionParams): 
 }
 
 function shouldRotateAssistant(params: AssistantDecisionParams): boolean {
+  // Missing-model errors are model-identity failures. Another credential on the
+  // same provider still cannot serve the requested id, so skip profile rotation.
+  if (params.failoverFailure && params.failoverReason === "model_not_found") {
+    return false;
+  }
   if (params.terminal.kind === "timeout" && params.terminal.source === "run_budget") {
     return false;
   }
@@ -205,15 +210,18 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
       reason: params.failoverReason,
     };
   }
-  if (params.failoverFailure && params.failoverReason === "tls_certificate") {
+  if (
+    params.failoverFailure &&
+    (params.failoverReason === "tls_certificate" || params.failoverReason === "model_not_found")
+  ) {
     return params.fallbackConfigured
       ? {
           action: "fallback_model",
-          reason: "tls_certificate",
+          reason: params.failoverReason,
         }
       : {
           action: "surface_error",
-          reason: "tls_certificate",
+          reason: params.failoverReason,
         };
   }
   const assistantShouldRotate = shouldRotateAssistant(params);
