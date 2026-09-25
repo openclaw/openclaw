@@ -173,8 +173,6 @@ function shouldMirrorAgentEventToHiddenSessionMessages(evt: AgentEventPayload): 
 
 const LIVE_TEXT_PACING_MS = 75;
 
-export type ChatEventBroadcast = GatewayBroadcastFn;
-
 export type NodeSendToSession = (sessionKey: string, event: string, payload: unknown) => void;
 
 // Derived from ChatErrorEventSchema.errorKind (gateway-protocol); keep set in sync.
@@ -256,7 +254,7 @@ function excludeConnIds(
 }
 
 export type AgentEventHandlerOptions = {
-  broadcast: ChatEventBroadcast;
+  broadcast: GatewayBroadcastFn;
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
   nodeSendToSession: NodeSendToSession;
   nodeHasSessionSubscribers: (sessionKey: string) => boolean;
