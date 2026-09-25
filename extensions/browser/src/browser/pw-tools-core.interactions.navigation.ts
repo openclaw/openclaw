@@ -6,6 +6,7 @@ import {
   type BrowserNavigationPolicyOptions,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
+import type { BrowserCdpConnectionOptions } from "./pw-session-contracts.js";
 import {
   assertPageNavigationCompletedSafely,
   getPageForTargetId,
@@ -19,7 +20,7 @@ import {
 } from "./pw-session.js";
 import { toAIFriendlyError } from "./pw-tools-core.shared.js";
 
-export type InteractionTargetOptions = {
+export type InteractionTargetOptions = BrowserCdpConnectionOptions & {
   cdpUrl: string;
   browserFilesystemLocal?: boolean;
   targetId?: string;

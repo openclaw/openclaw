@@ -225,6 +225,7 @@ main model can read the screenshot directly.
 <Accordion title="Profile behavior">
 
 - `attachOnly: true` means never launch a local browser; only attach if one is already running.
+- `resetDefaultDownloadBehaviorOnAttach: true` is an explicit recovery opt-in for an attach-only Chromium profile using the OpenClaw Playwright CDP driver. It is rejected for `existing-session`, extension, Chrome MCP (`mcpCommand`/`mcpArgs`), and Lightpanda profiles because those drivers do not use this recovery path. A fresh CDP attach resets the default browser context's download policy to Chrome's configured behavior; this can replace a policy another CDP client set, so leave it unset unless the browser owner wants that recovery. Normal attach-only connections preserve the external policy.
 - `headless` can be set globally or per local managed profile. Per-profile values override `browser.headless`, so one locally launched profile can stay headless while another remains visible.
 - `POST /start?headless=true` and `openclaw browser start --headless` request a
   one-shot headless launch for local managed profiles without rewriting

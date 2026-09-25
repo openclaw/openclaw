@@ -94,11 +94,14 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
 
 vi.mock("./agent.shared.js", () => ({
   browserNavigationPolicyForProfile: vi.fn(() => ({})),
+  getPwAiModule: vi.fn(async () => null),
+  getPwAiModuleForProfile: vi.fn(async () => null),
   handleRouteError: vi.fn((_ctx, _res, err) => {
     throw err;
   }),
   readBody: vi.fn((req: { body?: unknown }) => req.body ?? {}),
   requirePwAi: vi.fn(async () => (pwMocks.connected ? pwMocks : null)),
+  requirePwAiForProfile: vi.fn(async () => (pwMocks.connected ? pwMocks : null)),
   resolveProfileContext: vi.fn(() => profileContext),
   withPlaywrightRouteContext: vi.fn(),
   withRouteTabContext: vi.fn(

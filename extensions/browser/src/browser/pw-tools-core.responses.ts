@@ -13,6 +13,8 @@ import { matchBrowserUrlPattern } from "./url-pattern.js";
 export async function responseBodyViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  noDefaults?: boolean;
+  resetDefaultDownloadBehaviorOnAttach?: boolean;
   url: string;
   timeoutMs?: number;
   maxChars?: number;

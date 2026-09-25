@@ -461,6 +461,23 @@ describe("pw-session connection scoping", () => {
     });
   });
 
+  it.each([
+    { noDefaults: true, expected: { noDefaults: true } },
+    { noDefaults: false, expected: {} },
+  ])("forwards the profile's CDP default-context policy (%o)", async ({ noDefaults, expected }) => {
+    const browser = makeBrowser("A", "https://example.com");
+    connectOverCdpSpy.mockResolvedValue(browser.browser);
+    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+
+    await listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222", noDefaults });
+
+    expect(connectOverCdpSpy).toHaveBeenCalledWith("http://127.0.0.1:9222", {
+      timeout: 5000,
+      headers: {},
+      ...expected,
+    });
+  });
+
   it("does not share in-flight connectOverCDP promises across different cdpUrls", async () => {
     const browserA = makeBrowser("A", "https://a.example");
     const browserB = makeBrowser("B", "https://b.example");

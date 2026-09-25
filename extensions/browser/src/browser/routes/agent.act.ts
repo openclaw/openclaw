@@ -386,7 +386,12 @@ export function registerBrowserAgentActRoutes(
               });
             }
 
-            const pw = await requirePwAi(res, `act:${kind}`);
+            const pw = await requirePwAi(
+              res,
+              `act:${kind}`,
+              profileCtx.profile.noDefaults,
+              profileCtx.profile.resetDefaultDownloadBehaviorOnAttach,
+            );
             if (!pw) {
               return;
             }
@@ -484,13 +489,21 @@ export function registerBrowserAgentActRoutes(
         if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
           return jsonError(res, 501, EXISTING_SESSION_LIMITS.responseBody);
         }
-        const pw = await requirePwAi(res, "response body");
+        const pw = await requirePwAi(
+          res,
+          "response body",
+          profileCtx.profile.noDefaults,
+          profileCtx.profile.resetDefaultDownloadBehaviorOnAttach,
+        );
         if (!pw) {
           return;
         }
         const result = await pw.responseBodyViaPlaywright({
           cdpUrl,
           targetId: tab.targetId,
+          noDefaults: profileCtx.profile.noDefaults,
+          resetDefaultDownloadBehaviorOnAttach:
+            profileCtx.profile.resetDefaultDownloadBehaviorOnAttach,
           signal,
           url,
           timeoutMs: timeoutMs ?? undefined,
@@ -557,13 +570,21 @@ export function registerBrowserAgentActRoutes(
           });
           return await jsonOk();
         }
-        const pw = await requirePwAi(res, "highlight");
+        const pw = await requirePwAi(
+          res,
+          "highlight",
+          profileCtx.profile.noDefaults,
+          profileCtx.profile.resetDefaultDownloadBehaviorOnAttach,
+        );
         if (!pw) {
           return;
         }
         await pw.highlightViaPlaywright({
           cdpUrl,
           targetId: tab.targetId,
+          noDefaults: profileCtx.profile.noDefaults,
+          resetDefaultDownloadBehaviorOnAttach:
+            profileCtx.profile.resetDefaultDownloadBehaviorOnAttach,
           ref,
         });
         await jsonOk();

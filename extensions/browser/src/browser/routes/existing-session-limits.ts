@@ -45,6 +45,8 @@ export const EXISTING_SESSION_LIMITS = {
   download: {
     waitUnsupported: "download waiting is not supported for existing-session profiles yet.",
     downloadUnsupported: "downloads are not supported for existing-session profiles yet.",
+    externalCaptureUnsupported:
+      "Playwright download capture is disabled for this externally owned attach-only profile to preserve the browser's download policy.",
   },
   snapshot: {
     pdfUnsupported:

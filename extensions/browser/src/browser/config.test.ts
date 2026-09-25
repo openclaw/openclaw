@@ -34,6 +34,59 @@ function withProfile(
 }
 
 describe("browser config", () => {
+  it("keeps external download-policy recovery opt-in and Chromium attach-only scoped", () => {
+    const profile = resolveRequiredProfile(
+      withProfile("user", {
+        driver: "openclaw",
+        cdpUrl: "http://127.0.0.1:9222",
+        attachOnly: true,
+        resetDefaultDownloadBehaviorOnAttach: true,
+      }),
+      "user",
+    );
+    expect(profile.resetDefaultDownloadBehaviorOnAttach).toBe(true);
+
+    expect(() =>
+      resolveRequiredProfile(
+        withProfile("managed", {
+          cdpPort: 18801,
+          attachOnly: false,
+          resetDefaultDownloadBehaviorOnAttach: true,
+        }),
+        "managed",
+      ),
+    ).toThrow(/requires an OpenClaw Chromium profile using the Playwright CDP driver/);
+  });
+
+  it.each([
+    ["existing-session", "existing-session"],
+    ["implicit user", undefined],
+    ["extension", "extension"],
+  ])("rejects recovery when %s does not use the Playwright CDP driver", (_name, driver) => {
+    const profile: BrowserProfileConfig = {
+      ...(driver ? { driver: driver as "existing-session" | "extension" } : {}),
+      cdpUrl: "http://127.0.0.1:9222",
+      attachOnly: true,
+      resetDefaultDownloadBehaviorOnAttach: true,
+    };
+    expect(() => resolveRequiredProfile(withProfile("user", profile), "user")).toThrow(
+      /requires an OpenClaw Chromium profile using the Playwright CDP driver/,
+    );
+  });
+
+  it("allows explicit download recovery for the legacy OpenClaw CDP driver alias", () => {
+    const profile = resolveRequiredProfile(
+      withProfile("legacy", {
+        driver: "clawd",
+        cdpUrl: "http://127.0.0.1:9222",
+        attachOnly: true,
+        resetDefaultDownloadBehaviorOnAttach: true,
+      }),
+      "legacy",
+    );
+    expect(profile.resetDefaultDownloadBehaviorOnAttach).toBe(true);
+  });
+
   it.each(["chromium", "lightpanda"] as const)(
     "rejects Lightpanda endpoint aliases in unvalidated runtime config (%s)",
     (engine) => {
@@ -866,6 +919,7 @@ describe("browser config", () => {
         executablePath: undefined,
         headless: false,
         headlessSource: "default",
+        noDefaults: true,
         mcpArgs: undefined,
         mcpCommand: undefined,
         userDataDir: undefined,

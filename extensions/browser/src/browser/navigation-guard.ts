@@ -57,6 +57,8 @@ export function parseBrowserNavigationUrl(url: string): URL {
 export type BrowserNavigationPolicyOptions = {
   ssrfPolicy?: SsrFPolicy;
   browserProxyMode?: BrowserNavigationProxyMode;
+  /** Preserve the browser owner's default context when the action attaches over CDP. */
+  noDefaults?: boolean;
 };
 
 /** Describes whether the browser itself is routing page traffic through a proxy. */
@@ -71,13 +73,14 @@ type BrowserNavigationRequestLike = {
 /** Build a navigation-policy object while omitting default direct proxy mode. */
 export function withBrowserNavigationPolicy(
   ssrfPolicy?: SsrFPolicy,
-  opts?: { browserProxyMode?: BrowserNavigationProxyMode },
+  opts?: { browserProxyMode?: BrowserNavigationProxyMode; noDefaults?: boolean },
 ): BrowserNavigationPolicyOptions {
   return {
     ...(ssrfPolicy ? { ssrfPolicy } : {}),
     ...(opts?.browserProxyMode && opts.browserProxyMode !== "direct"
       ? { browserProxyMode: opts.browserProxyMode }
       : {}),
+    ...(opts?.noDefaults ? { noDefaults: true } : {}),
   };
 }
 

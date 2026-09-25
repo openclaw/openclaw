@@ -36,6 +36,8 @@ function contextlessTargetParams(
 type CdpTransportOptions = {
   timeout: number;
   headers: Record<string, string>;
+  noDefaults?: boolean;
+  resetDefaultDownloadBehaviorOnAttach?: boolean;
   lookup?: CdpSocketLookup;
   resolveWebSocketUrl?: () => Promise<string | undefined>;
   preparedTransport?: ConnectOverCDPTransport;
@@ -257,7 +259,32 @@ export async function connectOverCdpTransport(
       onclose: (reason?: string) =>
         scheduleTransportClosed(closingReason ?? reason ?? "CDP socket closed"),
     });
-    return await getPlaywrightCore().chromium.connectOverCDP(transport, { timeout: opts.timeout });
+    const browser = await getPlaywrightCore().chromium.connectOverCDP(transport, {
+      timeout: opts.timeout,
+      ...(opts.noDefaults ? { noDefaults: true } : {}),
+    });
+    if (
+      opts.resetDefaultDownloadBehaviorOnAttach &&
+      resolveBrowserEngine(opts.engine).descriptor.id === "chromium"
+    ) {
+      // A previous Playwright attach may have left allowAndName pointing at a
+      // temporary artifacts directory. Restore Chrome's default behavior so
+      // native downloads recover without requiring a browser restart.
+      let session: Awaited<ReturnType<typeof browser.newBrowserCDPSession>> | undefined;
+      try {
+        session = await browser.newBrowserCDPSession();
+        await session.send("Browser.setDownloadBehavior", { behavior: "default" });
+      } catch (error) {
+        const message = formatErrorMessage(error);
+        throw new Error(
+          `Requested browser download-policy recovery failed: ${message}. Disable resetDefaultDownloadBehaviorOnAttach for this profile or use a Chromium endpoint that supports Browser.setDownloadBehavior.`,
+          { cause: error },
+        );
+      } finally {
+        await session?.detach().catch(() => {});
+      }
+    }
+    return browser;
   } catch (error) {
     normalizer?.clear();
     wire.close();

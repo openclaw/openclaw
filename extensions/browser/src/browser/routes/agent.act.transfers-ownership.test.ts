@@ -72,8 +72,8 @@ installPwToolsCoreTestHooks();
 const sessionKey = "agent:main:dashboard-transfer-proof";
 const request = { sessionKey, agentId: "main", name: "service" };
 
-function transferRoutes(tab: BrowserTab) {
-  const profile = makeBrowserProfile();
+function transferRoutes(tab: BrowserTab, profileOverrides: Partial<ResolvedBrowserProfile> = {}) {
+  const profile = makeBrowserProfile(profileOverrides);
   const unused = async (): Promise<never> => {
     throw new Error("Unexpected profile operation");
   };
@@ -253,4 +253,43 @@ describe("dashboard transfer authority", () => {
       }
     },
   );
+
+  it.each([
+    ["/download", { ref: "1", path: "/tmp/download.txt" }],
+    ["/wait/download", { path: "/tmp/download.txt" }],
+  ] as const)("keeps extension-relay download capture enabled at %s", async (path, body) => {
+    const tab: BrowserTab = {
+      targetId: "extension-tab",
+      type: "page",
+      title: "Extension",
+      url: "https://example.com/",
+    };
+    const routes = transferRoutes(tab, {
+      driver: "extension",
+      noDefaults: undefined,
+      attachOnly: true,
+    });
+    const download = {
+      url: "https://example.com/file.bin",
+      path: "/tmp/download.txt",
+      suggestedFilename: "download.txt",
+    };
+    setPwToolsCoreDownloadCapture({
+      armed: true,
+      promise: Promise.resolve(download),
+      cancel: vi.fn(),
+    });
+    setPwToolsCoreCurrentPage({
+      url: () => tab.url,
+      isClosed: () => false,
+      waitForEvent: vi.fn(async () => ({})),
+    });
+    setPwToolsCoreCurrentRefLocator({ click: vi.fn(async () => {}) });
+
+    const response = createBrowserRouteResponse();
+    await routes.get(path)!({ params: {}, query: {}, body }, response.res);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({ ok: true });
+  });
 });

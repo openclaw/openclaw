@@ -144,6 +144,10 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
         await assertCdpEndpointAllowed(profile.cdpUrl, ssrfPolicy);
         const pages = await listPagesViaPlaywright({
           cdpUrl: profile.cdpUrl,
+          ...(profile.noDefaults ? { noDefaults: true } : {}),
+          ...(profile.resetDefaultDownloadBehaviorOnAttach
+            ? { resetDefaultDownloadBehaviorOnAttach: true }
+            : {}),
           ...(profile.engine ? { engine: profile.engine } : {}),
           ssrfPolicy,
           timeoutMs,
@@ -363,6 +367,10 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
         if (typeof createPageViaPlaywright === "function") {
           const page = await createPageViaPlaywright({
             cdpUrl: profile.cdpUrl,
+            ...(profile.noDefaults ? { noDefaults: true } : {}),
+            ...(profile.resetDefaultDownloadBehaviorOnAttach
+              ? { resetDefaultDownloadBehaviorOnAttach: true }
+              : {}),
             ...(profile.engine ? { engine: profile.engine } : {}),
             url,
             cdpPolicy,

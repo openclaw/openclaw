@@ -79,7 +79,12 @@ export function registerBrowserAgentActHookRoutes(
           return res.json({ ok: true });
         }
 
-        const pw = await requirePwAi(res, "file chooser hook");
+        const pw = await requirePwAi(
+          res,
+          "file chooser hook",
+          profileCtx.profile.noDefaults,
+          profileCtx.profile.resetDefaultDownloadBehaviorOnAttach,
+        );
         if (!pw) {
           return;
         }
@@ -89,6 +94,9 @@ export function registerBrowserAgentActHookRoutes(
         }
         const target = {
           cdpUrl,
+          noDefaults: profileCtx.profile.noDefaults,
+          resetDefaultDownloadBehaviorOnAttach:
+            profileCtx.profile.resetDefaultDownloadBehaviorOnAttach,
           browserFilesystemLocal: capabilities.browserFilesystemLocal,
           targetId: tab.targetId,
           paths: resolvedPaths,
@@ -191,7 +199,12 @@ export function registerBrowserAgentActHookRoutes(
           });
           return res.json({ ok: true });
         }
-        const pw = await requirePwAi(res, "dialog hook");
+        const pw = await requirePwAi(
+          res,
+          "dialog hook",
+          profileCtx.profile.noDefaults,
+          profileCtx.profile.resetDefaultDownloadBehaviorOnAttach,
+        );
         if (!pw) {
           return;
         }
@@ -202,6 +215,9 @@ export function registerBrowserAgentActHookRoutes(
           accept,
           promptText,
           timeoutMs: timeoutMs ?? undefined,
+          noDefaults: profileCtx.profile.noDefaults,
+          resetDefaultDownloadBehaviorOnAttach:
+            profileCtx.profile.resetDefaultDownloadBehaviorOnAttach,
           ...(assertCurrent ? { assertCurrent } : {}),
         });
         res.json({ ok: true });

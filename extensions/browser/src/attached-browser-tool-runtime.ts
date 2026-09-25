@@ -1,8 +1,8 @@
 /**
- * Attach-only Browser tool runtime for a caller-owned loopback Chrome process.
+ * Attach-only Browser tool runtime for a worker-launched loopback Chrome process.
  *
- * The bridge owns only authenticated Browser HTTP ingress. Chrome remains owned
- * by the caller and survives bridge disposal.
+ * The worker launches Chrome before attaching. The bridge owns only authenticated
+ * Browser HTTP ingress; Chrome remains owned by the worker and survives disposal.
  */
 import { randomBytes } from "node:crypto";
 import { chmod, copyFile } from "node:fs/promises";
@@ -103,6 +103,7 @@ export async function createAttachedBrowserToolRuntime(
       cdpUrl,
     },
   };
+  resolved.openClawLaunchedProfileNames = [ATTACHED_PROFILE_NAME];
   resolved.extensionRelayPorts = {};
   resolved.extensionRelayInternalTokens = {};
 

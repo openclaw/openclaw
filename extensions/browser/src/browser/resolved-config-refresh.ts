@@ -48,6 +48,12 @@ function changedProfileInvariants(
   if (current.attachOnly !== next.attachOnly) {
     changed.push("attachOnly");
   }
+  if (
+    (current.resetDefaultDownloadBehaviorOnAttach ?? false) !==
+    (next.resetDefaultDownloadBehaviorOnAttach ?? false)
+  ) {
+    changed.push("resetDefaultDownloadBehaviorOnAttach");
+  }
   if (current.cdpIsLoopback !== next.cdpIsLoopback) {
     changed.push("cdpIsLoopback");
   }

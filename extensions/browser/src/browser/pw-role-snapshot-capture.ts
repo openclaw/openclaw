@@ -71,6 +71,8 @@ async function finalizeRoleSnapshotViaPlaywright(params: {
 /** Captures a role-ref snapshot used by model-facing browser interaction tools. */
 export async function snapshotRoleViaPlaywright(opts: {
   cdpUrl: string;
+  noDefaults?: boolean;
+  resetDefaultDownloadBehaviorOnAttach?: boolean;
   targetId?: string;
   selector?: string;
   frameSelector?: string;
@@ -93,6 +95,8 @@ export async function snapshotRoleViaPlaywright(opts: {
     cdpUrl: opts.cdpUrl,
     targetId: opts.targetId,
     ssrfPolicy: opts.ssrfPolicy,
+    noDefaults: opts.noDefaults,
+    resetDefaultDownloadBehaviorOnAttach: opts.resetDefaultDownloadBehaviorOnAttach,
   });
 
   const ariaSnapshotTimeout = resolveSnapshotTimeoutMs(opts.timeoutMs);

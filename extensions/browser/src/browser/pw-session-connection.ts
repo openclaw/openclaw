@@ -410,14 +410,17 @@ export async function connectBrowser(
   ssrfPolicy?: SsrFPolicy,
   relayReference?: RelayOperationReference,
   engine?: BrowserEngineId,
+  requestedNoDefaults?: boolean,
+  resetDefaultDownloadBehaviorOnAttach?: boolean,
 ): Promise<ConnectedBrowser> {
+  const noDefaults = requestedNoDefaults || resetDefaultDownloadBehaviorOnAttach === true;
   const normalized = normalizeCdpUrl(cdpUrl);
   const relay = getBorrowedRelayCdpAccess(normalized);
   if (relayReference) {
     if (!relay) {
       throw new Error("Captured relay connection is unavailable");
     }
-    const browser = await connectRelayBrowser(relay, normalized, relayReference);
+    const browser = await connectRelayBrowser(relay, normalized, relayReference, noDefaults);
     observeBrowser(browser);
     return { browser, cdpUrl: normalized };
   }
@@ -426,6 +429,16 @@ export async function connectBrowser(
     if (engine && (cached.engine ?? "chromium") !== engine) {
       throw new Error("Browser engine changed; stop this profile before connecting again.");
     }
+    if (
+      (noDefaults !== undefined && (cached.noDefaults ?? false) !== noDefaults) ||
+      (resetDefaultDownloadBehaviorOnAttach !== undefined &&
+        (cached.resetDefaultDownloadBehaviorOnAttach ?? false) !==
+          resetDefaultDownloadBehaviorOnAttach)
+    ) {
+      throw new Error(
+        "Browser CDP connection policy changed; stop this profile before reconnecting.",
+      );
+    }
     return cached;
   }
   // Run SSRF policy check only on cache miss so transient DNS failures
@@ -433,10 +446,31 @@ export async function connectBrowser(
   const configuredPin = await assertCdpEndpointAllowed(normalized, ssrfPolicy);
   const connectedDuringPolicyCheck = cachedByCdpUrl.get(normalized);
   if (connectedDuringPolicyCheck) {
+    if (
+      (noDefaults !== undefined &&
+        (connectedDuringPolicyCheck.noDefaults ?? false) !== noDefaults) ||
+      (resetDefaultDownloadBehaviorOnAttach !== undefined &&
+        (connectedDuringPolicyCheck.resetDefaultDownloadBehaviorOnAttach ?? false) !==
+          resetDefaultDownloadBehaviorOnAttach)
+    ) {
+      throw new Error(
+        "Browser CDP connection policy changed; stop this profile before reconnecting.",
+      );
+    }
     return connectedDuringPolicyCheck;
   }
   const connecting = connectingByCdpUrl.get(normalized);
   if (connecting) {
+    if (
+      (noDefaults !== undefined && (connecting.noDefaults ?? false) !== noDefaults) ||
+      (resetDefaultDownloadBehaviorOnAttach !== undefined &&
+        (connecting.resetDefaultDownloadBehaviorOnAttach ?? false) !==
+          resetDefaultDownloadBehaviorOnAttach)
+    ) {
+      throw new Error(
+        "Browser CDP connection policy changed; stop this profile before reconnecting.",
+      );
+    }
     return await connecting.promise;
   }
 
@@ -496,6 +530,10 @@ export async function connectBrowser(
                 headers,
                 lookup,
                 resolveWebSocketUrl,
+                ...(noDefaults ? { noDefaults: true } : {}),
+                ...(resetDefaultDownloadBehaviorOnAttach
+                  ? { resetDefaultDownloadBehaviorOnAttach: true }
+                  : {}),
                 ...(engine ? { engine } : {}),
               });
             }),
@@ -504,7 +542,7 @@ export async function connectBrowser(
         let browser: Browser;
         try {
           browser = relay
-            ? await connectRelayBrowser(relay, normalized)
+            ? await connectRelayBrowser(relay, normalized, undefined, noDefaults)
             : await connectEndpoint(endpointUrl, endpointLookup);
           if (relay && getBorrowedRelayCdpAccess(normalized) !== relay) {
             await browser.close();
@@ -530,7 +568,14 @@ export async function connectBrowser(
         if (resolveBrowserEngine(engine).descriptor.sessionScope === "connection") {
           markConnectionScopedBrowser(browser);
         }
-        const connected: ConnectedBrowser = { browser, cdpUrl: normalized, onDisconnected, engine };
+        const connected: ConnectedBrowser = {
+          browser,
+          cdpUrl: normalized,
+          onDisconnected,
+          engine,
+          noDefaults: noDefaults ?? false,
+          resetDefaultDownloadBehaviorOnAttach: resetDefaultDownloadBehaviorOnAttach ?? false,
+        };
         cachedByCdpUrl.set(normalized, connected);
         browser.on("disconnected", onDisconnected);
         observeBrowser(browser);
@@ -561,7 +606,12 @@ export async function connectBrowser(
       connectingByCdpUrl.delete(normalized);
     }
   });
-  connectingByCdpUrl.set(normalized, { attempt: connectionAttempt, promise: pending });
+  connectingByCdpUrl.set(normalized, {
+    attempt: connectionAttempt,
+    promise: pending,
+    noDefaults: noDefaults ?? false,
+    resetDefaultDownloadBehaviorOnAttach: resetDefaultDownloadBehaviorOnAttach ?? false,
+  });
 
   return await pending;
 }
@@ -616,11 +666,20 @@ async function getPageForTargetIdOnce(opts: {
   targetId?: string;
   ssrfPolicy?: SsrFPolicy;
   relayReference?: RelayOperationReference;
+  noDefaults?: boolean;
+  resetDefaultDownloadBehaviorOnAttach?: boolean;
 }): Promise<Page> {
   if (opts.targetId && isBlockedTarget(opts.cdpUrl, opts.targetId)) {
     throw new BlockedBrowserTargetError();
   }
-  const { browser } = await connectBrowser(opts.cdpUrl, opts.ssrfPolicy, opts.relayReference);
+  const { browser } = await connectBrowser(
+    opts.cdpUrl,
+    opts.ssrfPolicy,
+    opts.relayReference,
+    undefined,
+    opts.noDefaults,
+    opts.resetDefaultDownloadBehaviorOnAttach,
+  );
   const pages = await getAllPages(browser);
   if (!pages.length) {
     throw new Error("No pages available in the connected browser.");
@@ -655,6 +714,8 @@ export async function getPageForTargetId(opts: {
   targetId?: string;
   ssrfPolicy?: SsrFPolicy;
   relayReference?: RelayOperationReference;
+  noDefaults?: boolean;
+  resetDefaultDownloadBehaviorOnAttach?: boolean;
 }): Promise<Page> {
   const cachedBrowser = cachedByCdpUrl.get(normalizeCdpUrl(opts.cdpUrl))?.browser;
   if (isConnectionScopedTargetId(opts.targetId) && !cachedBrowser) {

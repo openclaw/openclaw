@@ -18,7 +18,7 @@ export const chromiumEngine: BrowserEngineAdapter = {
     const localManaged = !usesChromeMcp && !usesExtension && !isRemote;
     return {
       supportsBatchActions: profile.driver !== "existing-session",
-      supportsDownloads: profile.driver !== "existing-session",
+      supportsDownloads: profile.driver !== "existing-session" && profile.noDefaults !== true,
       supportsPdf: profile.driver !== "existing-session",
       supportsRequests: profile.driver !== "existing-session",
       supportsErrors: profile.driver !== "existing-session",

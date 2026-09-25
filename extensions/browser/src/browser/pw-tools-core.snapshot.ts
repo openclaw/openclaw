@@ -104,6 +104,8 @@ function buildStoredAriaRefs(nodes: AriaSnapshotNode[]): Record<string, StoredSn
 /** Publish raw or finalized snapshot refs into the Playwright action cache. */
 export async function storeSnapshotRefsViaPlaywright(opts: {
   cdpUrl: string;
+  noDefaults?: boolean;
+  resetDefaultDownloadBehaviorOnAttach?: boolean;
   targetId?: string;
   page?: Page;
   nodes?: AriaSnapshotNode[];
@@ -119,6 +121,8 @@ export async function storeSnapshotRefsViaPlaywright(opts: {
     (await getPageForTargetId({
       cdpUrl: opts.cdpUrl,
       targetId: opts.targetId,
+      noDefaults: opts.noDefaults,
+      resetDefaultDownloadBehaviorOnAttach: opts.resetDefaultDownloadBehaviorOnAttach,
     }));
   ensurePageState(page);
   const backendRefs: { ref: string; backendDOMNodeId: number }[] = [];
@@ -168,6 +172,8 @@ export async function storeSnapshotRefsViaPlaywright(opts: {
 /** Captures a raw accessibility tree snapshot and stores matching role refs. */
 export async function snapshotAriaViaPlaywright(opts: {
   cdpUrl: string;
+  noDefaults?: boolean;
+  resetDefaultDownloadBehaviorOnAttach?: boolean;
   targetId?: string;
   limit?: number;
   timeoutMs?: number;
@@ -179,6 +185,8 @@ export async function snapshotAriaViaPlaywright(opts: {
     cdpUrl: opts.cdpUrl,
     targetId: opts.targetId,
     ssrfPolicy: opts.ssrfPolicy,
+    noDefaults: opts.noDefaults,
+    resetDefaultDownloadBehaviorOnAttach: opts.resetDefaultDownloadBehaviorOnAttach,
   });
   const ariaTimeoutMs = resolveSnapshotTimeoutMs(opts.timeoutMs);
   return await withSnapshotFrameGuard({
@@ -201,6 +209,8 @@ export async function snapshotAriaViaPlaywright(opts: {
       await storeSnapshotRefsViaPlaywright({
         cdpUrl: opts.cdpUrl,
         targetId: opts.targetId,
+        noDefaults: opts.noDefaults,
+        resetDefaultDownloadBehaviorOnAttach: opts.resetDefaultDownloadBehaviorOnAttach,
         nodes: formatted,
         page,
         signal: opts.signal,
@@ -214,6 +224,8 @@ export async function snapshotAriaViaPlaywright(opts: {
 /** Navigates the target page while enforcing browser SSRF policy before and after load. */
 export async function navigateViaPlaywright(opts: {
   cdpUrl: string;
+  noDefaults?: boolean;
+  resetDefaultDownloadBehaviorOnAttach?: boolean;
   targetId?: string;
   assertCurrent?: InteractionTargetOptions["assertCurrent"];
   resolveOperationTarget?: () => string | undefined | Promise<string | undefined>;
@@ -299,6 +311,13 @@ export async function navigateViaPlaywright(opts: {
         downloadCapture.cancel();
         throw err;
       }
+      if (opts.noDefaults) {
+        downloadCapture.cancel();
+        throw new Error(
+          "Navigation started a download, but this attached browser profile cannot capture downloads through OpenClaw. The file remains subject to the browser's existing download policy.",
+          { cause: err },
+        );
+      }
       try {
         return { response: null, download: await downloadCapture.promise };
       } catch (downloadErr) {
@@ -341,7 +360,18 @@ export async function navigateViaPlaywright(opts: {
     }
     if (opts.resolveOperationTarget) {
       // Auto-attach completes during reconnect; only then can the same tab owner prove its new ID.
-      await connectBrowser(opts.cdpUrl, opts.ssrfPolicy, opts.relayReference);
+      if (opts.noDefaults) {
+        await connectBrowser(
+          opts.cdpUrl,
+          opts.ssrfPolicy,
+          opts.relayReference,
+          undefined,
+          true,
+          opts.resetDefaultDownloadBehaviorOnAttach,
+        );
+      } else {
+        await connectBrowser(opts.cdpUrl, opts.ssrfPolicy, opts.relayReference);
+      }
       const replacementTargetId = await opts.resolveOperationTarget();
       if (!replacementTargetId) {
         throw new BrowserTabNotFoundError({ input: currentTargetId });
@@ -430,6 +460,8 @@ export async function closePageViaPlaywright(opts: InteractionTargetOptions): Pr
 export async function pdfViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  noDefaults?: boolean;
+  resetDefaultDownloadBehaviorOnAttach?: boolean;
 }): Promise<{ buffer: Buffer }> {
   const page = await getPageForTargetId(opts);
   const buffer = await page.pdf({ printBackground: true });

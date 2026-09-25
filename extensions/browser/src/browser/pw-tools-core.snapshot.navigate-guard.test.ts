@@ -297,6 +297,35 @@ describe("pw-tools-core.snapshot navigate guard", () => {
     expect(downloadCapture.cancel).toHaveBeenCalledTimes(1);
   });
 
+  it("fails promptly when an external download cannot be captured", async () => {
+    const downloadCapture = {
+      armed: true,
+      promise: new Promise<never>(() => {}),
+      cancel: vi.fn(),
+    };
+    setPwToolsCoreDownloadCapture(downloadCapture);
+    setPwToolsCoreCurrentPage({
+      goto: vi.fn(async () => {
+        throw new Error("page.goto: Download is starting");
+      }),
+      url: vi.fn(() => "https://example.com/start"),
+    });
+
+    await expect(
+      mod.navigateViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "tab-1",
+        noDefaults: true,
+        url: "https://example.com/export.csv",
+        ssrfPolicy: { allowPrivateNetwork: true },
+      }),
+    ).rejects.toThrow(
+      "Navigation started a download, but this attached browser profile cannot capture downloads through OpenClaw. The file remains subject to the browser's existing download policy.",
+    );
+
+    expect(downloadCapture.cancel).toHaveBeenCalledOnce();
+  });
+
   it("reconnects and retries once when navigation detaches frame", async () => {
     const goto = vi
       .fn<(...args: unknown[]) => Promise<void>>()

@@ -460,6 +460,12 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
           200,
         );
         expect(playwrightTabsResponse.body).toMatchObject({ running: true });
+        const earlyPlaywrightTarget = (
+          playwrightTabsResponse.body as { tabs?: Array<{ targetId?: string; url?: string }> }
+        ).tabs?.find((tab) => tab.url === controlled.url())?.targetId;
+        if (!earlyPlaywrightTarget) {
+          throw new Error("Initial Playwright inventory did not contain the controlled target");
+        }
         const matchingDoctor = await dispatcher.dispatch({
           method: "GET",
           path: "/doctor",
@@ -497,12 +503,6 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
           proofName: "existing-session-offscreen-labeled-ref.png",
         });
 
-        const earlyPlaywrightTarget = (
-          playwrightTabsResponse.body as { tabs?: Array<{ targetId?: string; url?: string }> }
-        ).tabs?.find((tab) => tab.url === controlled.url())?.targetId;
-        if (!earlyPlaywrightTarget) {
-          throw new Error("Initial Playwright inventory did not contain the controlled target");
-        }
         await controlled.evaluate(() => {
           document.body.dataset.relayWaitStartedAt = String(Date.now());
         });

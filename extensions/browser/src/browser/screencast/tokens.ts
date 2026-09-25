@@ -5,6 +5,8 @@ export type BrowserScreencastTokenParams = {
   profileName: string;
   targetId: string;
   cdpUrl: string;
+  noDefaults?: boolean;
+  resetDefaultDownloadBehaviorOnAttach?: boolean;
   ssrfPolicy?: SsrFPolicy;
   maxWidth: number;
   maxHeight: number;

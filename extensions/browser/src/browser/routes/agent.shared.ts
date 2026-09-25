@@ -7,7 +7,8 @@ import {
   withBrowserNavigationPolicy,
 } from "../navigation-guard.js";
 import type { PwAiModule } from "../pw-ai-module.js";
-import { getPwAiModule } from "../pw-ai-module.js";
+import { getPwAiModule as getPwAiModuleBase } from "../pw-ai-module.js";
+import type { BrowserCdpConnectionOptions } from "../pw-session-contracts.js";
 import type { InteractionTargetOptions } from "../pw-tools-core.interactions.navigation.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import { isProfileRestartRequiredError } from "../server-context.lifecycle.js";
@@ -70,15 +71,45 @@ export function browserNavigationPolicyForProfile(
       resolved: ctx.state().resolved,
       profile: profileCtx.profile,
     }),
+    ...(profileCtx.profile.noDefaults ? { noDefaults: true } : {}),
   });
+}
+
+/** Load the optional Playwright bridge module in soft-fail mode. */
+async function getPwAiModule(opts?: {
+  noDefaults?: boolean;
+  resetDefaultDownloadBehaviorOnAttach?: boolean;
+}): Promise<PwAiModule | null> {
+  return await getPwAiModuleBase({
+    mode: "soft",
+    noDefaults: opts?.noDefaults,
+    resetDefaultDownloadBehaviorOnAttach: opts?.resetDefaultDownloadBehaviorOnAttach,
+  });
+}
+
+function profileCdpConnectionOptions(
+  profile: ProfileContext["profile"],
+): BrowserCdpConnectionOptions {
+  return {
+    ...(profile.noDefaults ? { noDefaults: true } : {}),
+    ...(profile.resetDefaultDownloadBehaviorOnAttach
+      ? { resetDefaultDownloadBehaviorOnAttach: true }
+      : {}),
+  };
+}
+
+export async function getPwAiModuleForProfile(profile: ProfileContext["profile"]) {
+  return await getPwAiModule(profileCdpConnectionOptions(profile));
 }
 
 /** Require Playwright support for a route feature, returning a 501 when absent. */
 export async function requirePwAi(
   res: BrowserResponse,
   feature: string,
+  noDefaults = false,
+  resetDefaultDownloadBehaviorOnAttach = false,
 ): Promise<PwAiModule | null> {
-  const mod = await getPwAiModule({ mode: "soft" });
+  const mod = await getPwAiModule({ noDefaults, resetDefaultDownloadBehaviorOnAttach });
   if (mod) {
     return mod;
   }
@@ -94,10 +125,24 @@ export async function requirePwAi(
   return null;
 }
 
+export async function requirePwAiForProfile(
+  res: BrowserResponse,
+  feature: string,
+  profile: ProfileContext["profile"],
+) {
+  return await requirePwAi(
+    res,
+    feature,
+    profile.noDefaults,
+    profile.resetDefaultDownloadBehaviorOnAttach,
+  );
+}
+
 type RouteTabContext = {
   profileCtx: ProfileContext;
   tab: Awaited<ReturnType<ProfileContext["ensureTabAvailable"]>>;
   cdpUrl: string;
+  browserCdpConnection: BrowserCdpConnectionOptions;
   signal: AbortSignal;
   assertCurrent?: InteractionTargetOptions["assertCurrent"];
   resolveTabUrl: (fallbackUrl?: string) => Promise<string | undefined>;
@@ -158,6 +203,7 @@ export async function withRouteTabContext<T>(
           profileCtx,
           tab,
           cdpUrl: profileCtx.profile.cdpUrl,
+          browserCdpConnection: profileCdpConnectionOptions(profileCtx.profile),
           signal,
           ...(assertCurrent ? { assertCurrent } : {}),
           resolveTabUrl: (fallbackUrl?: string) =>
@@ -227,7 +273,12 @@ export async function withPlaywrightRouteContext<T>(
   return await withRouteTabContext({
     ...tabParams,
     run: async (routeCtx) => {
-      const pw = await requirePwAi(params.res, feature);
+      const pw = await requirePwAi(
+        params.res,
+        feature,
+        routeCtx.profileCtx.profile.noDefaults,
+        routeCtx.profileCtx.profile.resetDefaultDownloadBehaviorOnAttach,
+      );
       if (!pw) {
         return undefined;
       }

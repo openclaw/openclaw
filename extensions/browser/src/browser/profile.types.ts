@@ -27,4 +27,7 @@ export type ResolvedBrowserProfile = {
   headless: boolean;
   headlessSource?: "profile" | "config" | "default";
   attachOnly: boolean;
+  /** True when this Chromium CDP attachment must preserve the external browser's defaults. */
+  noDefaults?: boolean;
+  resetDefaultDownloadBehaviorOnAttach?: boolean;
 };

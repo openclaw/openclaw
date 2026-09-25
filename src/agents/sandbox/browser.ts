@@ -128,7 +128,7 @@ function buildSandboxBrowserResolvedConfig(params: {
   headless: boolean;
   evaluateEnabled: boolean;
   ssrfPolicy?: SsrFPolicy;
-}): ResolvedBrowserConfig {
+}): ResolvedBrowserConfig & { openClawLaunchedProfileNames: string[] } {
   const cdpHost = "127.0.0.1";
   const cdpPortRange = deriveDefaultBrowserCdpPortRange(params.controlPort);
   return {
@@ -151,6 +151,7 @@ function buildSandboxBrowserResolvedConfig(params: {
     noSandbox: false,
     attachOnly: true,
     defaultProfile: DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
+    openClawLaunchedProfileNames: [DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME],
     extraArgs: [],
     tabCleanup: {
       enabled: true,

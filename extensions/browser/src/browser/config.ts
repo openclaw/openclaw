@@ -90,6 +90,8 @@ export type ResolvedBrowserConfig = {
   attachOnly: boolean;
   defaultProfile: string;
   profiles: Record<string, BrowserProfileConfig>;
+  /** Runtime-only provenance for profiles whose CDP endpoint OpenClaw launches and owns. */
+  openClawLaunchedProfileNames?: string[];
   tabCleanup: ResolvedBrowserTabCleanupConfig;
   ssrfPolicy?: SsrFPolicy;
   extraArgs: string[];
@@ -434,6 +436,25 @@ export function resolveProfile(
     return null;
   }
 
+  const profileDriver =
+    profile.driver === "clawd"
+      ? "openclaw"
+      : (profile.driver ?? (profileName === "user" ? "existing-session" : "openclaw"));
+  const attachOnly = profile.attachOnly ?? resolved.attachOnly;
+  const openClawLaunched = resolved.openClawLaunchedProfileNames?.includes(profileName) === true;
+  if (
+    profile.resetDefaultDownloadBehaviorOnAttach === true &&
+    (profileDriver !== "openclaw" ||
+      !attachOnly ||
+      profile.engine === "lightpanda" ||
+      profile.mcpCommand !== undefined ||
+      profile.mcpArgs !== undefined)
+  ) {
+    throw new Error(
+      `browser.profiles.${profileName}.resetDefaultDownloadBehaviorOnAttach requires an OpenClaw Chromium profile using the Playwright CDP driver.`,
+    );
+  }
+
   const adapter = resolveBrowserEngine(profile.engine);
   const engine = adapter.descriptor.id;
   if (adapter.resolveExternalProfile) {
@@ -506,6 +527,7 @@ export function resolveProfile(
       headless,
       headlessSource,
       attachOnly: true,
+      noDefaults: true,
     };
   }
 
@@ -554,7 +576,18 @@ export function resolveProfile(
     executablePath,
     headless,
     headlessSource,
-    attachOnly: profile.attachOnly ?? resolved.attachOnly,
+    attachOnly,
+    ...(engine === "chromium" &&
+    attachOnly &&
+    (!openClawLaunched || profile.resetDefaultDownloadBehaviorOnAttach === true) &&
+    profileDriver === "openclaw"
+      ? { noDefaults: true }
+      : {}),
+    ...(profile.resetDefaultDownloadBehaviorOnAttach === true &&
+    (profile.attachOnly ?? resolved.attachOnly) &&
+    engine === "chromium"
+      ? { resetDefaultDownloadBehaviorOnAttach: true }
+      : {}),
   };
 }
 

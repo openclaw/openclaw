@@ -69,7 +69,8 @@ export function registerBrowserAgentActDownloadRoutes(
         targetId,
         enforceCurrentUrlAllowed: true,
         run: async ({ profileCtx, cdpUrl, tab, signal, assertCurrent }) => {
-          if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
+          const capabilities = getBrowserProfileCapabilities(profileCtx.profile);
+          if (capabilities.usesChromeMcp) {
             return jsonError(
               res,
               501,
@@ -78,7 +79,15 @@ export function registerBrowserAgentActDownloadRoutes(
                 : EXISTING_SESSION_LIMITS.download.downloadUnsupported,
             );
           }
-          const pw = await requirePwAi(res, mode === "wait" ? "wait for download" : "download");
+          if (!capabilities.supportsDownloads) {
+            return jsonError(res, 501, EXISTING_SESSION_LIMITS.download.externalCaptureUnsupported);
+          }
+          const pw = await requirePwAi(
+            res,
+            mode === "wait" ? "wait for download" : "download",
+            profileCtx.profile.noDefaults,
+            profileCtx.profile.resetDefaultDownloadBehaviorOnAttach,
+          );
           if (!pw) {
             return;
           }
@@ -98,6 +107,9 @@ export function registerBrowserAgentActDownloadRoutes(
           }
           const target = {
             cdpUrl,
+            noDefaults: profileCtx.profile.noDefaults,
+            resetDefaultDownloadBehaviorOnAttach:
+              profileCtx.profile.resetDefaultDownloadBehaviorOnAttach,
             targetId: tab.targetId,
             timeoutMs,
             ...browserNavigationPolicyForProfile(ctx, profileCtx),

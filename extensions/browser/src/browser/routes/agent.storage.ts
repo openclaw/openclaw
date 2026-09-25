@@ -170,6 +170,7 @@ export function registerBrowserAgentStorageRoutes(
               ...(context.assertCurrent ? { assertCurrent: context.assertCurrent } : {}),
               cdpUrl: context.cdpUrl,
               targetId: context.tab.targetId,
+              ...context.browserCdpConnection,
             },
             context.signal,
           );
@@ -189,10 +190,11 @@ export function registerBrowserAgentStorageRoutes(
       targetId,
       feature: "cookies",
       enforceCurrentUrlAllowed: true,
-      run: async ({ cdpUrl, tab, pw, signal }) => {
+      run: async ({ cdpUrl, tab, pw, signal, browserCdpConnection }) => {
         const result = await pw.cookiesGetViaPlaywright({
           cdpUrl,
           targetId: tab.targetId,
+          ...browserCdpConnection,
         });
         signal.throwIfAborted();
         res.json({ ok: true, targetId: tab.targetId, ...result });
@@ -252,10 +254,11 @@ export function registerBrowserAgentStorageRoutes(
       targetId,
       feature: "storage get",
       enforceCurrentUrlAllowed: true,
-      run: async ({ cdpUrl, tab, pw, signal }) => {
+      run: async ({ cdpUrl, tab, pw, signal, browserCdpConnection }) => {
         const result = await pw.storageGetViaPlaywright({
           cdpUrl,
           targetId: tab.targetId,
+          ...browserCdpConnection,
           kind,
           key,
         });

@@ -93,6 +93,8 @@ vi.mock("./agent.shared.js", () => ({
   browserNavigationPolicyForProfile: vi.fn(() => ({
     ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
   })),
+  getPwAiModule: vi.fn(async () => pwState.module),
+  getPwAiModuleForProfile: vi.fn(async () => pwState.module),
   handleRouteError: vi.fn(
     (
       _ctx: unknown,
@@ -106,6 +108,7 @@ vi.mock("./agent.shared.js", () => ({
   ),
   readBody: vi.fn((req: BrowserRequest) => req.body ?? {}),
   requirePwAi: vi.fn(async () => null),
+  requirePwAiForProfile: vi.fn(async () => pwState.module),
   resolveProfileContext: vi.fn(() => routeState.profileCtx),
   withPlaywrightRouteContext: vi.fn(),
   withRouteTabContext: vi.fn(),

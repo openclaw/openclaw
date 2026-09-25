@@ -24,6 +24,8 @@ vi.mock("./browser/pw-session.js", () => ({
 }));
 
 import { createAttachedBrowserToolRuntime } from "./attached-browser-tool-runtime.js";
+import { resolveProfile } from "./browser/config.js";
+import { getBrowserProfileCapabilities } from "./browser/profile-capabilities.js";
 
 describe("attached Browser tool runtime", () => {
   beforeEach(() => {
@@ -58,6 +60,7 @@ describe("attached Browser tool runtime", () => {
         enabled: true,
         attachOnly: true,
         defaultProfile: "worker",
+        openClawLaunchedProfileNames: ["worker"],
         profiles: {
           worker: {
             driver: "openclaw",
@@ -70,6 +73,11 @@ describe("attached Browser tool runtime", () => {
       },
     });
     expect(Object.keys(bridgeParams.resolved.profiles)).toEqual(["worker"]);
+    const workerProfile = resolveProfile(bridgeParams.resolved, "worker");
+    expect(workerProfile?.noDefaults).toBeUndefined();
+    expect(workerProfile && getBrowserProfileCapabilities(workerProfile).supportsDownloads).toBe(
+      true,
+    );
 
     await bridgeParams.onEnsureAttachTarget();
     expect(ensureAttachTarget).toHaveBeenCalledOnce();

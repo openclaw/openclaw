@@ -49,12 +49,89 @@ describe("browser engine config", () => {
     const browser = {
       profiles: {
         managed: { cdpPort: 18800, headless: true },
-        remote: { engine: "chromium", cdpUrl: "https://browser.example", attachOnly: true },
+        remote: {
+          engine: "chromium",
+          cdpUrl: "https://browser.example",
+          attachOnly: true,
+          resetDefaultDownloadBehaviorOnAttach: true,
+        },
+        legacy: {
+          driver: "clawd",
+          cdpUrl: "https://legacy-browser.example",
+          attachOnly: true,
+          resetDefaultDownloadBehaviorOnAttach: true,
+        },
         user: { driver: "existing-session" },
         chrome: { driver: "extension" },
       },
     };
     expect(OpenClawSchemaShape.browser.parse(browser)).toEqual(browser);
+  });
+
+  it.each([
+    {
+      name: "existing-session",
+      profile: { driver: "existing-session", cdpUrl: "http://127.0.0.1:9222" },
+    },
+    { name: "extension", profile: { driver: "extension" } },
+    { name: "implicit user", profile: { cdpUrl: "http://127.0.0.1:9222" } },
+    {
+      name: "Lightpanda",
+      profile: { engine: "lightpanda", cdpUrl: "ws://127.0.0.1:9222", attachOnly: true },
+    },
+  ])("rejects download recovery on the unsupported $name driver", ({ profile }) => {
+    const result = OpenClawSchemaShape.browser.safeParse({
+      profiles: { user: { ...profile, resetDefaultDownloadBehaviorOnAttach: true } },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.map((issue) => issue.path.join("."))).toContain(
+        "profiles.user.resetDefaultDownloadBehaviorOnAttach",
+      );
+    }
+  });
+
+  it.each(["mcpCommand", "mcpArgs"] as const)(
+    "rejects download recovery when Chrome MCP is configured through %s",
+    (key) => {
+      const result = OpenClawSchemaShape.browser.safeParse({
+        profiles: {
+          remote: {
+            driver: "openclaw",
+            cdpUrl: "https://browser.example",
+            attachOnly: true,
+            resetDefaultDownloadBehaviorOnAttach: true,
+            ...(key === "mcpCommand" ? { mcpCommand: "chrome-devtools-mcp" } : { mcpArgs: [] }),
+          },
+        },
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.map((issue) => issue.path.join("."))).toContain(
+          "profiles.remote.resetDefaultDownloadBehaviorOnAttach",
+        );
+      }
+    },
+  );
+
+  it("rejects download recovery when the profile is managed instead of attach-only", () => {
+    const result = OpenClawSchemaShape.browser.safeParse({
+      attachOnly: false,
+      profiles: {
+        managed: {
+          driver: "openclaw",
+          cdpPort: 9222,
+          attachOnly: false,
+          resetDefaultDownloadBehaviorOnAttach: true,
+        },
+      },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.map((issue) => issue.path.join("."))).toContain(
+        "profiles.managed.resetDefaultDownloadBehaviorOnAttach",
+      );
+    }
   });
 
   it.each(["chromium", "lightpanda"])("rejects a shared Lightpanda endpoint with %s", (engine) => {

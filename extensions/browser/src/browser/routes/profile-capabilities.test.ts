@@ -6,16 +6,20 @@ import { withBrowserProfileCapabilities } from "./profile-capabilities.js";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 import type { BrowserRequest } from "./types.js";
 
-function setup(engine: "chromium" | "lightpanda" = "lightpanda") {
+function setup(engine: "chromium" | "lightpanda" = "lightpanda", noDefaults = false) {
   const profile = makeBrowserProfile({
     name: "selected",
     engine,
     cdpUrl: "ws://127.0.0.1:9222/",
     attachOnly: true,
+    noDefaults,
   });
-  const ensureTabAvailable = vi.fn(async () => {
-    throw new Error("The unsupported operation reached the browser adapter");
-  });
+  const ensureTabAvailable = vi.fn(async () => ({
+    targetId: "tab-1",
+    url: "https://example.com/",
+    title: "Example",
+    type: "page",
+  }));
   const profileCtx = { profile, ensureTabAvailable } as unknown as ProfileContext;
   const ctx = {
     forProfile: vi.fn(() => profileCtx),
@@ -92,6 +96,29 @@ describe("browser engine route admission", () => {
     expect(response.statusCode).toBe(200);
     expect(adapter).toHaveBeenCalledOnce();
   });
+
+  it.each([
+    ["/download", { ref: "download-link", path: "file.bin" }],
+    ["/wait/download", {}],
+  ] as const)(
+    "reports downloads unsupported for external attach-only profiles at %s",
+    async (path, body) => {
+      const { ctx, ensureTabAvailable } = setup("chromium", true);
+      const routes = createBrowserRouteApp();
+      registerBrowserRoutes(routes.app, ctx);
+      const response = createBrowserRouteResponse();
+      await routes.postHandlers.get(path)?.(
+        { params: { kind: "local" }, query: { profile: "selected" }, body },
+        response.res,
+      );
+      expect(response.statusCode).toBe(501);
+      expect(response.body).toMatchObject({
+        error:
+          "Playwright download capture is disabled for this externally owned attach-only profile to preserve the browser's download policy.",
+      });
+      expect(ensureTabAvailable).toHaveBeenCalledOnce();
+    },
+  );
 
   it.each([true, "true", "1", "yes", " TRUE "])(
     "rejects labeled snapshots (%s) before adapter admission",

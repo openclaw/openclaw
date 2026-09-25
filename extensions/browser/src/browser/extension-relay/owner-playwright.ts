@@ -24,6 +24,7 @@ export async function connectRelayBrowser(
   relay: BorrowedRelayAccess,
   cdpUrl: string,
   reference?: RelayOperationReference,
+  noDefaults = false,
 ): Promise<Browser> {
   const existing = reference && operationConnections.get(reference);
   if (existing) {
@@ -39,6 +40,7 @@ export async function connectRelayBrowser(
     const browser = await connectOverCdpTransport(cdpUrl, {
       timeout: 5_000,
       headers: {},
+      ...(noDefaults ? { noDefaults: true } : {}),
       preparedTransport: transport,
     });
     try {

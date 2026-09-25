@@ -18,6 +18,8 @@ import {
 /** Returns visible page text without evaluating caller-provided JavaScript. */
 export async function getPageTextViaPlaywright(opts: {
   cdpUrl: string;
+  noDefaults?: boolean;
+  resetDefaultDownloadBehaviorOnAttach?: boolean;
   targetId?: string;
   selector?: string;
   maxChars?: number;
@@ -73,6 +75,8 @@ export async function getPageTextViaPlaywright(opts: {
 /** Returns captured page errors, optionally clearing the per-page buffer. */
 export async function getPageErrorsViaPlaywright(opts: {
   cdpUrl: string;
+  noDefaults?: boolean;
+  resetDefaultDownloadBehaviorOnAttach?: boolean;
   targetId?: string;
   clear?: boolean;
 }): Promise<{ errors: BrowserPageError[] }> {
@@ -88,6 +92,8 @@ export async function getPageErrorsViaPlaywright(opts: {
 /** Returns captured requests, optionally filtering URLs/resource types and clearing. */
 export async function getNetworkRequestsViaPlaywright(opts: {
   cdpUrl: string;
+  noDefaults?: boolean;
+  resetDefaultDownloadBehaviorOnAttach?: boolean;
   targetId?: string;
   filter?: string;
   clear?: boolean;
@@ -126,6 +132,8 @@ function consolePriority(level: string) {
 /** Returns captured console messages at or above the requested priority level. */
 export async function getConsoleMessagesViaPlaywright(opts: {
   cdpUrl: string;
+  noDefaults?: boolean;
+  resetDefaultDownloadBehaviorOnAttach?: boolean;
   targetId?: string;
   level?: string;
 }): Promise<BrowserConsoleMessage[]> {

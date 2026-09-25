@@ -354,6 +354,17 @@ describe("ensureSandboxBrowser create args", () => {
     });
   });
 
+  it("marks the sandbox browser profile as OpenClaw-launched", async () => {
+    await ensureTestSandboxBrowser({
+      scopeKey: "session:test",
+      workspaceDir: harness.testWorkspaceDir,
+      agentWorkspaceDir: harness.testWorkspaceDir,
+      cfg: buildConfig(false),
+    });
+
+    expect(latestBridgeResolved().openClawLaunchedProfileNames).toEqual(["openclaw"]);
+  });
+
   it("recreates a cached bridge when the SSRF policy changes", async () => {
     const existingBridge = {
       server: { listening: true } as never,

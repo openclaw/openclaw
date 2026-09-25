@@ -12,6 +12,8 @@ type PlaywrightCookieInput = Parameters<BrowserContext["addCookies"]>[0][number]
 export async function cookiesGetViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  noDefaults?: boolean;
+  resetDefaultDownloadBehaviorOnAttach?: boolean;
 }): Promise<{ cookies: unknown[] }> {
   const page = await getPageForTargetId(opts);
   const cookies = await page.context().cookies();
@@ -105,6 +107,8 @@ type StorageKind = "local" | "session";
 export async function storageGetViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  noDefaults?: boolean;
+  resetDefaultDownloadBehaviorOnAttach?: boolean;
   kind: StorageKind;
   key?: string;
 }): Promise<{ values: Record<string, string> }> {

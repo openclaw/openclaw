@@ -32,7 +32,7 @@ import {
   shouldUsePlaywrightForAriaSnapshot,
   shouldUsePlaywrightForScreenshot,
 } from "../profile-capabilities.js";
-import { getLoadedPwAiModule, getPwAiModule } from "../pw-ai-module.js";
+import { getLoadedPwAiModule } from "../pw-ai-module.js";
 import { finalizeRoleSnapshot, type RoleRefMap } from "../pw-role-snapshot.js";
 import type { BrowserObservedState } from "../pw-session-contracts.js";
 import type { AnnotationItem } from "../screenshot-annotate.js";
@@ -52,9 +52,10 @@ import { appendSnapshotUrls } from "../snapshot-urls.js";
 import { normalizeBrowserTimerDelayMs } from "../timer-delay.js";
 import {
   browserNavigationPolicyForProfile,
+  getPwAiModuleForProfile,
   handleRouteError,
   readBody,
-  requirePwAi,
+  requirePwAiForProfile,
   resolveProfileContext,
   withPlaywrightRouteContext,
   withRouteTabContext,
@@ -174,7 +175,7 @@ export function registerBrowserAgentSnapshotRoutes(
           await assertBrowserNavigationResultAllowed({ url: result.url, ...ssrfPolicyOpts });
           return res.json({ ok: true, targetId: tab.targetId, ...result });
         }
-        const pw = await requirePwAi(res, "navigate");
+        const pw = await requirePwAiForProfile(res, "navigate", profileCtx.profile);
         if (!pw) {
           return;
         }
@@ -342,7 +343,7 @@ export function registerBrowserAgentSnapshotRoutes(
             element,
           });
         if (shouldUsePlaywright) {
-          const pw = await requirePwAi(res, "screenshot");
+          const pw = await requirePwAiForProfile(res, "screenshot", profileCtx.profile);
           if (!pw) {
             return;
           }
@@ -397,7 +398,7 @@ export function registerBrowserAgentSnapshotRoutes(
       return;
     }
     const targetId = typeof req.query.targetId === "string" ? req.query.targetId.trim() : "";
-    const pwModule = await getPwAiModule({ mode: "soft" });
+    const pwModule = await getPwAiModuleForProfile(profileCtx.profile);
     const hasPlaywright = Boolean(pwModule);
     const plan = resolveSnapshotPlan({
       profile: profileCtx.profile,
@@ -682,7 +683,7 @@ export function registerBrowserAgentSnapshotRoutes(
                   })
                 : await cdpRoleSnapshot();
             if (!snap) {
-              await requirePwAi(res, "ai snapshot");
+              await requirePwAiForProfile(res, "ai snapshot", profileCtx.profile);
               return;
             }
             if (usedCdpRoleSnapshot && pw && "refs" in snap) {
@@ -729,7 +730,7 @@ export function registerBrowserAgentSnapshotRoutes(
           });
           let resolved: Awaited<ReturnType<typeof snapshotAria>>;
           if (usePlaywrightAriaSnapshot) {
-            const pw = await requirePwAi(res, "aria snapshot");
+            const pw = await requirePwAiForProfile(res, "aria snapshot", profileCtx.profile);
             if (!pw) {
               return;
             }

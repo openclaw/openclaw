@@ -43,6 +43,8 @@ export function createExistingSessionAgentSharedModule() {
     browserNavigationPolicyForProfile: vi.fn((ctx: BrowserRouteContext) =>
       withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy),
     ),
+    getPwAiModule: vi.fn(async () => null),
+    getPwAiModuleForProfile: vi.fn(async () => null),
     handleRouteError: vi.fn((_ctx: BrowserRouteContext, res: BrowserResponse, err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);
       res.status(400);
@@ -50,6 +52,9 @@ export function createExistingSessionAgentSharedModule() {
     }),
     readBody: vi.fn((req: BrowserRequest) => req.body ?? {}),
     requirePwAi: vi.fn(async () => {
+      throw new Error("Playwright should not be used for existing-session tests");
+    }),
+    requirePwAiForProfile: vi.fn(async () => {
       throw new Error("Playwright should not be used for existing-session tests");
     }),
     resolveProfileContext: vi.fn(() => existingSessionRouteState.profileCtx),
