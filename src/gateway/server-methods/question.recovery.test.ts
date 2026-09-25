@@ -18,10 +18,8 @@ import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../../agents/tools/gateway-caller-context.js";
-import {
-  createReplyOperation,
-  isReplyRunEvidenceStale,
-} from "../../auto-reply/reply/reply-run-registry.js";
+import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
+import { isReplyRunEvidenceStale } from "../../auto-reply/reply/reply-run-registry.state.js";
 import { admitReplyTurn } from "../../auto-reply/reply/reply-turn-admission.js";
 import {
   claimAgentRunDelegatedAuthority,

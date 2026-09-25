@@ -347,6 +347,78 @@ describe("strict default and operator fast path", () => {
     ).toMatchObject({ status: "FAIL" });
   });
 
+  it.each(["stableSoakWaiver", "laneWaiver"] as const)(
+    "accepts only the matching publish-accepted %s at closeout",
+    (key) => {
+      for (const consumer of ["stable-closeout", "publisher", "core-npm"] as const) {
+        for (const accepted of ["ship it", " \nship it\t", "2026.9.6 something else"]) {
+          const gates = evaluateReleasePublishGates({
+            consumer,
+            manifest: betaEvidence,
+            releaseTag: "v2026.9.6",
+            npmDistTag: "latest",
+            stableSoakWaiver: "2026.9.6 soak waived",
+            [key]: " ship it ",
+            publishAcceptedWaivers: { [key]: accepted },
+          });
+          const targetGate = gates.find((gate) => gate.id === `${consumer}.waiver-target`);
+          if (consumer === "stable-closeout" && accepted.trim() === "ship it") {
+            expect(targetGate).toBeUndefined();
+            expect(gates.filter((gate) => gate.status === "FAIL")).toEqual([]);
+          } else {
+            expect(targetGate).toMatchObject({ status: "FAIL" });
+          }
+        }
+      }
+    },
+  );
+
+  it.each([
+    { consumer: "stable-closeout", published: true, exitCode: 0 },
+    { consumer: "stable-closeout", published: false, exitCode: 1 },
+    { consumer: "publisher", published: true, exitCode: 1 },
+    { consumer: "core-npm", published: true, exitCode: 1 },
+  ])(
+    "scopes published waiver environment inputs to $consumer (published=$published)",
+    ({ consumer, published, exitCode }) => {
+      const root = tempRoots.make("release-publish-gates-accepted-");
+      const manifestPath = join(root, "manifest.json");
+      const waiver = "Operator-approved by Peter for 2026.9.6: soak-only";
+      writeFileSync(manifestPath, JSON.stringify(betaEvidence));
+      const result = spawnSync(
+        process.execPath,
+        [
+          resolve("scripts/lib/release-publish-gates.mts"),
+          "--consumer",
+          consumer,
+          "--manifest",
+          manifestPath,
+        ],
+        {
+          cwd: root,
+          encoding: "utf8",
+          env: {
+            PATH: process.env.PATH,
+            RELEASE_TAG: "v2026.9.6",
+            RELEASE_NPM_DIST_TAG: "latest",
+            EXPECTED_SHA: targetSha,
+            EXPECTED_RELEASE_PROFILE: "from-validation",
+            STABLE_SOAK_WAIVER: waiver,
+            ...(published ? { PUBLISHED_STABLE_SOAK_WAIVER: waiver } : {}),
+          },
+        },
+      );
+      expect(result.status, result.stderr).toBe(exitCode);
+      if (exitCode === 0) {
+        expect(result.stdout).toContain("::warning::");
+      } else {
+        expect(result.stderr).toContain(
+          "Waiver reasons must start with the target version 2026.9.6",
+        );
+      }
+    },
+  );
+
   it("requires lane_waiver to publish a stable with a failed non-proof lane", () => {
     const withFailure = {
       ...manifest,

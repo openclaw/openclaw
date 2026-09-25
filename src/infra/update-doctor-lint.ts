@@ -7,7 +7,7 @@ import {
   type UpdateDoctorLintFinding,
 } from "./update-doctor-lint-schema.js";
 import { normalizeUpdateFailureFacts } from "./update-failure-facts.js";
-import type { UpdateStepResult } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 export const UPDATE_DOCTOR_DISPOSAL_WARNING_PREFIX = "[warning] Doctor disposal";
 

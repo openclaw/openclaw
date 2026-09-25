@@ -30,27 +30,17 @@ export function deriveSessionTitle(
     return undefined;
   }
 
-  const label = normalizeOptionalString(entry.label);
-  if (label) {
-    return label;
-  }
-
-  const displayName =
-    normalizeOptionalString(externalDisplayName) ?? normalizeOptionalString(entry.displayName);
-  if (displayName) {
-    return displayName;
-  }
-
-  const subject = normalizeOptionalString(entry.subject);
-  if (subject) {
-    return subject;
-  }
-
   // When no model label was persisted, prefer a task-bearing sentence over a
   // raw first-bubble truncation so Control UI and gateway clients stay readable.
   // Derived titles are human content only; UI/TUI/ACP own key-based fallbacks,
   // which an id prefix here would mask.
-  return deriveGoalSessionTitle(firstUserMessage) || undefined;
+  return (
+    normalizeOptionalString(entry.label) ??
+    normalizeOptionalString(externalDisplayName) ??
+    normalizeOptionalString(entry.displayName) ??
+    normalizeOptionalString(entry.subject) ??
+    (deriveGoalSessionTitle(firstUserMessage) || undefined)
+  );
 }
 
 export function prepareSessionTitleRead(

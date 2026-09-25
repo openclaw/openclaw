@@ -472,14 +472,16 @@ async function handleTelegramModelCallback(params: {
     }
     const agentId =
       paginationMatch[2]?.trim() ||
-      messageRuntime.resolveTelegramSessionState({
-        chatId,
-        isGroup,
-        threadSpec,
-        botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(ctx.me),
-        senderId,
-        runtimeCfg,
-      }).agentId;
+      (
+        await messageRuntime.resolveTelegramSessionState({
+          chatId,
+          isGroup,
+          threadSpec,
+          botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(ctx.me),
+          senderId,
+          runtimeCfg,
+        })
+      ).agentId;
     const result = await retryModelAction(async () => {
       const skillCommands = telegramDeps.listSkillCommandsForAgents({
         cfg: runtimeCfg,
@@ -519,7 +521,7 @@ async function handleTelegramModelCallback(params: {
   }
 
   const { sessionState, modelData } = await retryModelAction(async () => {
-    const session = messageRuntime.resolveTelegramSessionState({
+    const session = await messageRuntime.resolveTelegramSessionState({
       chatId,
       isGroup,
       threadSpec,

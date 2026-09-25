@@ -386,7 +386,7 @@ describe("worker environment service", () => {
       workerService.pushLiveEvent(identity, support.assistantEvent(identity, "stale")),
     ).resolves.toEqual({ ok: false, closeReason: "placement-mismatch" });
     expect(
-      workerService.startInference(identity, support.inferenceRequest(identity), {
+      await workerService.startInference(identity, support.inferenceRequest(identity), {
         connectionId: "inherited-claim",
         send: vi.fn(),
       }),
@@ -543,7 +543,7 @@ describe("worker environment service", () => {
       return admitted.identity;
     };
     const firstIdentity = await admitClaim(first);
-    const started = workerService.startInference(
+    const started = await workerService.startInference(
       firstIdentity,
       support.inferenceRequest(firstIdentity),
       {
@@ -580,7 +580,7 @@ describe("worker environment service", () => {
       owner: { kind: "worker", environmentId, ownerEpoch: environmentIdentity.ownerEpoch },
     });
     const secondIdentity = await admitClaim(second);
-    const replacement = workerService.startInference(
+    const replacement = await workerService.startInference(
       secondIdentity,
       { ...support.inferenceRequest(secondIdentity), turnId: "turn-replacement" },
       { connectionId: "claim-inference-b", send: vi.fn() },
@@ -590,7 +590,7 @@ describe("worker environment service", () => {
     }
     replacement.launch();
     await support.waitForFast(() => expect(signals).toHaveLength(2));
-    expect(originalCancellation?.cancel()).toEqual([]);
+    expect(await originalCancellation?.cancel()).toEqual([]);
     expect(signals[1]?.aborted).toBe(false);
     expect(
       captureWorkerInferenceCancellation(workerService, sessionId, first.runId)?.runIds,
@@ -850,12 +850,14 @@ describe("worker environment service", () => {
     expect(liveApply).toHaveBeenCalledTimes(2);
 
     expect(
-      workerService.startInference(identity, support.inferenceRequest(identity), {
+      await workerService.startInference(identity, support.inferenceRequest(identity), {
         connectionId: "connection-terminal-fence",
         send: vi.fn(),
       }),
     ).toEqual({ ok: false, closeReason: "placement-mismatch" });
-    expect(workerService.cancelInference(identity, support.inferenceRequest(identity))).toEqual({
+    expect(
+      await workerService.cancelInference(identity, support.inferenceRequest(identity)),
+    ).toEqual({
       ok: false,
       closeReason: "placement-mismatch",
     });
@@ -917,14 +919,14 @@ describe("worker environment service", () => {
     );
     const request = support.inferenceRequest(identity);
     expect(
-      workerService.startInference(
+      await workerService.startInference(
         identity,
         { ...request, sessionId: "session-other" },
         { connectionId: "connection-a", send: vi.fn() },
       ),
     ).toEqual({ ok: false, reason: "session-not-attached" });
     expect(
-      workerService.startInference(
+      await workerService.startInference(
         identity,
         { ...request, runEpoch: request.runEpoch + 1 },
         { connectionId: "connection-b", send: vi.fn() },
@@ -932,7 +934,7 @@ describe("worker environment service", () => {
     ).toEqual({ ok: false, reason: "epoch-mismatch" });
 
     const send = vi.fn();
-    const started = workerService.startInference(identity, request, {
+    const started = await workerService.startInference(identity, request, {
       connectionId: "connection-c",
       send,
     });
@@ -982,10 +984,14 @@ describe("worker environment service", () => {
       ok: false,
       details: { reason: "epoch-mismatch" },
     });
-    const started = workerService.startInference(identity, support.inferenceRequest(identity), {
-      connectionId: "connection-rotation",
-      send: vi.fn(),
-    });
+    const started = await workerService.startInference(
+      identity,
+      support.inferenceRequest(identity),
+      {
+        connectionId: "connection-rotation",
+        send: vi.fn(),
+      },
+    );
     if (!started.ok) {
       throw new Error("inference fixture failed to start");
     }

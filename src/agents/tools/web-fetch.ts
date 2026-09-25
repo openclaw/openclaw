@@ -344,35 +344,30 @@ function wrapWebFetchContent(value: string, maxChars: number): WebFetchWrappedCo
   if (maxChars <= 0) {
     return { text: "", truncated: true, rawLength: value.length, length: 0 };
   }
-  const includeWarning = maxChars >= WEB_FETCH_WRAPPER_WITH_WARNING_OVERHEAD;
+  // Keep framing from outweighing source content in truncated previews. Short
+  // sources can still retain the warning when both fit in full.
+  const includeWarning =
+    maxChars >=
+    WEB_FETCH_WRAPPER_WITH_WARNING_OVERHEAD +
+      Math.min(value.length, WEB_FETCH_WRAPPER_WITH_WARNING_OVERHEAD);
   const wrapperOverhead = includeWarning
     ? WEB_FETCH_WRAPPER_WITH_WARNING_OVERHEAD
     : WEB_FETCH_WRAPPER_NO_WARNING_OVERHEAD;
-  if (wrapperOverhead > maxChars) {
-    const minimal = includeWarning
-      ? wrapWebContent("", "web_fetch")
-      : wrapExternalContent("", { source: "web_fetch", includeWarning: false });
-    const truncatedWrapper = truncateWebFetchText(minimal, maxChars);
-    return {
-      text: truncatedWrapper.text,
-      truncated: true,
-      rawLength: value.length,
-      length: truncatedWrapper.text.length,
-    };
-  }
   const maxInner = Math.max(0, maxChars - wrapperOverhead);
   // Charge sanitizer expansion before wrapping; clipping a later marker can
   // increase output size, so a second raw-length adjustment is not sufficient.
   const truncated = truncateSanitizedExternalContent(value, maxInner);
-  const wrappedText = includeWarning
-    ? wrapWebContent(truncated.text, "web_fetch")
-    : wrapExternalContent(truncated.text, { source: "web_fetch", includeWarning: false });
+  // Tiny budgets may be shorter than the boundary markers themselves.
+  const wrapped = truncateWebFetchText(
+    wrapExternalContent(truncated.text, { source: "web_fetch", includeWarning }),
+    maxChars,
+  );
 
   return {
-    text: wrappedText,
-    truncated: truncated.truncated,
+    text: wrapped.text,
+    truncated: truncated.truncated || wrapped.truncated,
     rawLength: value.length,
-    length: wrappedText.length,
+    length: wrapped.text.length,
   };
 }
 

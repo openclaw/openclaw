@@ -120,6 +120,69 @@ export const TSGO_CORE_GRAPHS = [
   })),
 ];
 
+export const TSGO_CI_ADDITIONAL_GRAPHS = [
+  { name: "extensions", config: "tsconfig.extensions.json" },
+  { name: "extensions-test", config: "test/tsconfig/tsconfig.extensions.test.json" },
+  { name: "scripts", config: "tsconfig.scripts.json" },
+  { name: "test-root", config: "test/tsconfig/tsconfig.test.root.json" },
+] as const;
+
+export const TSGO_CI_GRAPHS = [...TSGO_CORE_GRAPHS, ...TSGO_CI_ADDITIONAL_GRAPHS];
+
+/** Manifest rows may request canonical graphs, never arbitrary compiler arguments. */
+export function resolveCiTsgoGraphs(names: readonly string[]) {
+  if (names.length === 0) {
+    throw new Error("CI type graph names must be nonempty, unique, and canonical");
+  }
+  const selected = new Set<string>();
+  return names.map((name) => {
+    const graph = TSGO_CI_GRAPHS.find((candidate) => candidate.name === name);
+    if (!graph || selected.has(name)) {
+      throw new Error("CI type graph names must be nonempty, unique, and canonical");
+    }
+    selected.add(name);
+    return graph;
+  });
+}
+
+/** Configuration, ambient declarations and unclassified inputs retain every graph. */
+function isChangedCiTsgoInput(file: string): boolean {
+  return (
+    /^(?:src|ui|packages|extensions|scripts|test)\/.+\.[cm]?[jt]sx?$/u.test(file) &&
+    !/\.d\.[cm]?ts$/u.test(file)
+  );
+}
+
+/** Compiler inventories include erased type imports and cross-family consumers. */
+export function selectChangedCiTsgoGraphs(
+  paths: readonly string[],
+  graphs: readonly { config: string; files: readonly string[] }[],
+): readonly { name: string; config: string }[] | undefined {
+  // Documentation and UI styles cannot change compiler inputs. Keep data and
+  // configuration paths for the conservative admission below.
+  const compilerPaths = paths.filter(
+    (file) => !/\.mdx?$/u.test(file) && !/^ui\/.+\.css$/u.test(file),
+  );
+  if (
+    compilerPaths.length === 0 ||
+    !compilerPaths.every(isChangedCiTsgoInput) ||
+    graphs.length !== TSGO_CI_GRAPHS.length ||
+    TSGO_CI_GRAPHS.some(
+      (expected) => graphs.filter((graph) => graph.config === expected.config).length !== 1,
+    ) ||
+    compilerPaths.some((file) => !graphs.some((graph) => graph.files.includes(file)))
+  ) {
+    return undefined;
+  }
+  return TSGO_CI_GRAPHS.filter((expected) =>
+    graphs.some(
+      (graph) =>
+        graph.config === expected.config &&
+        compilerPaths.some((file) => graph.files.includes(file)),
+    ),
+  );
+}
+
 export type TsgoCoreTestShard = (typeof TSGO_CORE_TEST_SHARDS)[number];
 
 export const TSGO_TARGETED_TEST_SHARED_SHARDS = [

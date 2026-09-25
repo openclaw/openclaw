@@ -50,13 +50,6 @@ export function parseTimeoutMsWithFallback(
         ? String(raw)
         : null;
 
-  if (value === null) {
-    if (options.invalidType === "error") {
-      throw invalidTimeout(flagName);
-    }
-    return fallbackMs;
-  }
-
   if (!value) {
     if (options.invalidType === "error") {
       throw invalidTimeout(flagName);

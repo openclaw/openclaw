@@ -41,12 +41,14 @@ import { createAcpTaskBackingDetailForTest } from "../../../../src/tasks/task-ba
 import { createRunningTaskRunCore } from "../../../../src/tasks/task-executor.js";
 import { getTaskFlowById } from "../../../../src/tasks/task-flow-registry.js";
 import { findTaskByRunId, listTasksForFlowId } from "../../../../src/tasks/task-registry.js";
+import { stopTaskRegistryMaintenance } from "../../../../src/tasks/task-registry.maintenance.js";
 import {
   resetTaskFlowRegistryForTests,
   resetTaskRegistryForTests,
 } from "../../../../src/tasks/task-runtime.test-helpers.js";
 import { withEnvAsync } from "../../../../src/test-utils/env.js";
 import { createDeferred } from "../../../helpers/promise.js";
+import { runQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 
 const TOKEN = "webhooks-taskflow-e2e-token";
@@ -241,6 +243,8 @@ describe("webhooks TaskFlow child cancellation authority", () => {
           sidecarStartup: "defer",
         });
         await server.startupSettled;
+        // This manual cancellation fixture retains its unbound sessions between turns.
+        await stopTaskRegistryMaintenance();
         const registry = getActivePluginRegistry();
         if (!registry) {
           throw new Error("gateway did not publish an active plugin registry");
@@ -308,7 +312,9 @@ describe("webhooks TaskFlow child cancellation authority", () => {
           }),
         );
 
-        try {
+        const pendingAcpWork: Promise<unknown>[] = [];
+        const releaseQueuedSuccessor = createDeferred();
+        const run = async () => {
           const origin = `http://127.0.0.1:${port}`;
 
           const allowedRunId = "run-webhook-owned";
@@ -459,20 +465,25 @@ describe("webhooks TaskFlow child cancellation authority", () => {
           const acpChild = "agent:main:acp:webhook-replacement";
           const reusedAcpRunId = "run-webhook-acp-reused";
           const acpManager = getAcpSessionManager();
-          async function runAcpTurn(input: Omit<AcpRunTurnInput, "admittedRunContext">) {
-            const admission = prepareSystemAgentRunAdmission(
-              config,
-              input.requestId,
-              "main",
-              "webhooks-taskflow-fixture",
-            );
-            try {
-              const admittedRunContext = await admission.admit("acp");
-              await acpManager.runTurn({ ...input, admittedRunContext });
-              return admittedRunContext;
-            } finally {
-              admission.close();
-            }
+          function runAcpTurn(input: Omit<AcpRunTurnInput, "admittedRunContext">) {
+            const turn = (async () => {
+              const admission = prepareSystemAgentRunAdmission(
+                config,
+                input.requestId,
+                "main",
+                "webhooks-taskflow-fixture",
+              );
+              try {
+                const admittedRunContext = await admission.admit("acp");
+                await acpManager.runTurn({ ...input, admittedRunContext });
+                return admittedRunContext;
+              } finally {
+                admission.close();
+              }
+            })();
+            pendingAcpWork.push(turn);
+            void turn.catch(() => {});
+            return turn;
           }
           replaceSessionEntrySync(
             {
@@ -549,7 +560,12 @@ describe("webhooks TaskFlow child cancellation authority", () => {
           let acpReplacement: WebhookResponse | undefined;
           let acpxMethodsBeforeRelease: string[] = [];
           try {
-            await elicitationEntered.promise;
+            await Promise.race([
+              elicitationEntered.promise,
+              replacementAcpTurn.then(() => {
+                throw new Error("ACP replacement finished before requesting input");
+              }),
+            ]);
             acpReplacement = await postWebhook(origin, {
               action: "cancel_flow",
               flowId: acpReplacementFlowId,
@@ -626,7 +642,12 @@ describe("webhooks TaskFlow child cancellation authority", () => {
               }
             },
           });
-          await Promise.all([queuedTargetEntered.promise, queuedTargetSubmitted.promise]);
+          await Promise.race([
+            Promise.all([queuedTargetEntered.promise, queuedTargetSubmitted.promise]),
+            queuedTargetTurn.then(() => {
+              throw new Error("ACP target finished before input and submission were observed");
+            }),
+          ]);
           const targetTurnStart = (await readAcpTrace(acpxTracePath)).findLast(
             (entry) => entry.method === "turn/start",
           );
@@ -646,7 +667,6 @@ describe("webhooks TaskFlow child cancellation authority", () => {
             (entry) => entry.method === "turn/interrupt",
           ).length;
           const queuedSuccessorEntered = createDeferred();
-          const releaseQueuedSuccessor = createDeferred();
           const queuedSuccessorEvents: AcpRuntimeEvent[] = [];
           const queuedSuccessorTurn = runAcpTurn({
             cfg: config,
@@ -669,6 +689,8 @@ describe("webhooks TaskFlow child cancellation authority", () => {
             action: "cancel_flow",
             flowId: queuedFlowId,
           });
+          pendingAcpWork.push(queuedCancelPromise);
+          void queuedCancelPromise.catch(() => {});
           await vi.waitFor(
             async () => {
               const interruptCount = (await readAcpTrace(acpxTracePath)).filter(
@@ -696,7 +718,12 @@ describe("webhooks TaskFlow child cancellation authority", () => {
             status: "cancelled",
             stopReason: "cancelled",
           });
-          await queuedSuccessorEntered.promise;
+          await Promise.race([
+            queuedSuccessorEntered.promise,
+            queuedSuccessorTurn.then(() => {
+              throw new Error("ACP successor finished before requesting input");
+            }),
+          ]);
           expect(queuedTurnOrder).toEqual(["target-cancelled", "successor-entered"]);
           const successorTurnStart = (await readAcpTrace(acpxTracePath)).findLast(
             (entry) => entry.method === "turn/start",
@@ -772,13 +799,27 @@ describe("webhooks TaskFlow child cancellation authority", () => {
               },
             }),
           );
-        } finally {
-          for (const cleanup of routeCleanups.toReversed()) {
-            cleanup();
-          }
-          await acpxService.stop?.(acpxServiceContext);
-          await server.close();
-        }
+        };
+        await runQaGatewayFixture(
+          run,
+          () => {
+            releaseQueuedSuccessor.resolve();
+            for (const cleanup of routeCleanups.toReversed()) {
+              cleanup();
+            }
+          },
+          () => server.close(),
+          async () => {
+            const settled = await Promise.allSettled(pendingAcpWork);
+            const failures = settled.flatMap((result) =>
+              result.status === "rejected" ? [result.reason] : [],
+            );
+            if (failures.length > 0) {
+              throw new AggregateError(failures, "ACP fixture work did not settle successfully");
+            }
+          },
+          () => acpxService.stop?.(acpxServiceContext),
+        );
       },
     );
   }, 90_000);

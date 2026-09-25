@@ -7,8 +7,8 @@ import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store.ts";
 import { showToast } from "../../lib/toast.ts";
 import { disposeSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { getChatPendingInputs } from "./chat-pending-inputs.ts";
-import { subscribeChatOutboxProjection } from "./chat-queue.ts";
 import { stopChatRealtimeTalk } from "./chat-realtime.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { invalidateImageLightbox } from "./chat-state-page.ts";
@@ -149,7 +149,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     const renderLifecycle = state.renderLifecycle;
     state.requestUpdate = () => renderLifecycle.invalidate();
     this.cleanups.push(
-      subscribeChatOutboxProjection(state, (item) => {
+      chatOutboxOwner(state).subscribe(state, (item) => {
         if (this.stateValue === state) {
           this.onQueuedMessageDiscarded?.(item);
         }

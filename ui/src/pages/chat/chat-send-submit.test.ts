@@ -19,7 +19,7 @@ import {
   findChatSendPayload,
   makeChatHost,
 } from "./chat-host.test-support.ts";
-import { syncVisibleChatQueueProjection } from "./chat-queue.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { retryQueuedChatMessage, resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
@@ -777,7 +777,7 @@ describe("handleSendChat session ownership", () => {
         );
         expect(host.chatQueue).toEqual([]);
         readiness.mockReturnValue(true);
-        syncVisibleChatQueueProjection(host);
+        chatOutboxOwner(host).syncHost(host);
       }
       expect(host.chatQueue).toMatchObject([
         { id: original.id, text: "later turn", sendAttempts: 0, sendState },

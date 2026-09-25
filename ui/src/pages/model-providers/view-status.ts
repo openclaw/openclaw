@@ -7,20 +7,15 @@ import type { ModelProviderAuthKind, ModelProviderCard } from "./data.ts";
 
 registerModelControlsEnglish();
 
-const AUTH_KIND_I18N: Record<ModelProviderAuthKind, string> = {
-  ok: "modelProviders.status.ok",
-  expiring: "modelProviders.status.expiring",
-  expired: "modelProviders.status.expired",
-  missing: "modelProviders.status.missing",
-  "api-key": "modelProviders.status.apiKey",
-};
-
-const AUTH_KIND_STATUS: Record<ModelProviderAuthKind, "ok" | "warn" | "danger" | "muted"> = {
-  ok: "ok",
-  expiring: "warn",
-  expired: "danger",
-  missing: "danger",
-  "api-key": "muted",
+const AUTH_STATUS: Record<
+  ModelProviderAuthKind,
+  { kind: "ok" | "warn" | "danger" | "muted"; labelKey: string }
+> = {
+  ok: { kind: "ok", labelKey: "modelProviders.status.ok" },
+  expiring: { kind: "warn", labelKey: "modelProviders.status.expiring" },
+  expired: { kind: "danger", labelKey: "modelProviders.status.expired" },
+  missing: { kind: "danger", labelKey: "modelProviders.status.missing" },
+  "api-key": { kind: "muted", labelKey: "modelProviders.status.apiKey" },
 };
 
 function renderAuthStatus(card: ModelProviderCard) {
@@ -28,14 +23,13 @@ function renderAuthStatus(card: ModelProviderCard) {
   if (!auth) {
     return nothing;
   }
-  const label = t(AUTH_KIND_I18N[auth.kind]);
+  const status = AUTH_STATUS[auth.kind];
+  const label = t(status.labelKey);
   const detail = auth.expiryLabel
     ? t("modelProviders.expiresIn", { time: auth.expiryLabel })
     : undefined;
   return html`
-    <span title=${detail ?? label}>
-      ${renderSettingsStatus({ kind: AUTH_KIND_STATUS[auth.kind], label })}
-    </span>
+    <span title=${detail ?? label}> ${renderSettingsStatus({ kind: status.kind, label })} </span>
   `;
 }
 
@@ -78,21 +72,18 @@ export function renderProviderStatus(card: ModelProviderCard) {
   if (!hasProviderCredentials(card)) {
     return renderAuthStatus(card);
   }
-  if (hasVerifiedProvider(card) && card.availableModelCount > 0) {
-    return renderSettingsStatus({
-      kind: "ok",
-      label: t("modelProviders.status.ready"),
-    });
-  }
-  return hasVerifiedProvider(card)
-    ? renderSettingsStatus({
-        kind: "muted",
-        label: t("modelProviders.status.ok"),
-      })
-    : renderSettingsStatus({
-        kind: "muted",
-        label: t("modelProviders.status.configured"),
-      });
+  const verified = hasVerifiedProvider(card);
+  const ready = verified && card.availableModelCount > 0;
+  return renderSettingsStatus({
+    kind: ready ? "ok" : "muted",
+    label: t(
+      ready
+        ? "modelProviders.status.ready"
+        : verified
+          ? "modelProviders.status.ok"
+          : "modelProviders.status.configured",
+    ),
+  });
 }
 
 export function renderMutationMessage(message: ModelProviderRowMessage | undefined) {

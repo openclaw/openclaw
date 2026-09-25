@@ -79,7 +79,7 @@ it.each(
         { message: { role: "user", content: "child conversation " + id } },
       );
       childTranscripts.set(id, await loadTranscriptEvents({ storePath, sessionId: id }));
-      registerSubagentRun({
+      await registerSubagentRun({
         runId: id,
         childSessionKey: childKey(id),
         requesterSessionKey,
@@ -195,7 +195,7 @@ it.each(["chat", "rpc", "chat-rebind"] as const)(
       sessionKey: childKey("draining"),
       defaultSessionId: "draining",
     });
-    registerSubagentRun({
+    await registerSubagentRun({
       runId: "draining",
       childSessionKey: childKey("draining"),
       requesterSessionKey: parentKey,
@@ -323,7 +323,7 @@ it("lifecycle requester cleanup respects agent ownership without granting ordina
       sessionKey: "agent:" + agentId + ":subagent:global-child",
       defaultSessionId: agentId,
     });
-    registerSubagentRun({
+    await registerSubagentRun({
       runId: agentId,
       childSessionKey: "agent:" + agentId + ":subagent:global-child",
       requesterSessionKey: "global",
@@ -399,7 +399,7 @@ it.each(["sessionId", "lifecycleRevision"] as const)(
         sessionKey: childKey("replacement-child"),
         defaultSessionId: "replacement-child",
       });
-      registerSubagentRun({
+      await registerSubagentRun({
         runId: "replacement-child",
         childSessionKey: childKey("replacement-child"),
         requesterSessionKey: "agent:main:other-requester",

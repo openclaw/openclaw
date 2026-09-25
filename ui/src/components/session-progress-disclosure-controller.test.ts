@@ -3,6 +3,7 @@
 import type { ProgressCard } from "@openclaw/gateway-protocol";
 import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { publishTranscriptScroll } from "../pages/chat/components/chat-transcript-scroll-events.ts";
 import { observeTranscript } from "./session-progress-card.test-support.ts";
 import { renderSessionProgressCard } from "./session-progress-card.ts";
 import type { ComposerProgressDisclosureContext } from "./session-progress-disclosure-controller.ts";
@@ -113,7 +114,15 @@ describe("elastic progress disclosure controller", () => {
     },
   );
 
-  it.each(["history", "header"] as const)(
+  it.each([
+    "history",
+    "delayed history",
+    "keyboard replacement",
+    "pointer replacement",
+    "programmatic replacement",
+    "scope replacement",
+    "header",
+  ] as const)(
     "retains a %s collapse through revisions, completion, and remount",
     async (choice) => {
       const container = createContainer();
@@ -121,10 +130,41 @@ describe("elastic progress disclosure controller", () => {
       renderTranscriptCard(container, context);
       let card = container.querySelector("details")!;
       const summary = card.querySelector("summary")!;
-      if (choice === "history") {
+      if (choice !== "header") {
         const transcript = observeTranscript(container, transcriptCleanups);
         await Promise.resolve();
-        transcript.wheel(200);
+        if (choice !== "history") {
+          transcript.thread.dispatchEvent(new WheelEvent("wheel", { deltaY: -200, bubbles: true }));
+          vi.advanceTimersByTime(301);
+          expect(card.open).toBe(true);
+          if (choice === "keyboard replacement") {
+            transcript.thread.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp" }));
+          } else if (choice === "pointer replacement") {
+            transcript.thread.dispatchEvent(new PointerEvent("pointerdown"));
+          } else if (choice === "programmatic replacement") {
+            publishTranscriptScroll(transcript.thread, {
+              type: "offset",
+              delta: 0,
+              scrolling: false,
+              touching: false,
+              programmatic: true,
+            });
+          } else if (choice === "scope replacement") {
+            context.gatewayScope = {};
+            renderTranscriptCard(container, context);
+            await Promise.resolve();
+          }
+          transcript.scroll(200);
+          if (choice !== "delayed history") {
+            vi.advanceTimersByTime(301);
+            expect(card.open).toBe(true);
+            transcript.wheel(200);
+            vi.advanceTimersByTime(301);
+            expect(card.open).toBe(true);
+          }
+        } else {
+          transcript.wheel(200);
+        }
         vi.advanceTimersByTime(201);
         transcript.wheel(200);
         vi.advanceTimersByTime(301);
