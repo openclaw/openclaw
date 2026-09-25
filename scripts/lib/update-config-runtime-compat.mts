@@ -62,10 +62,12 @@ import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 const target = new URL(${target}, import.meta.url).href;
 const readerEntry = new URL(import.meta.url);
-readerEntry.searchParams.set("openclaw-config-read", "1");
 const root = fileURLToPath(new URL("../", import.meta.url));
 const worker = ${JSON.stringify(worker)};
-const updating = process.env.OPENCLAW_UPDATE_IN_PROGRESS === "1" && new URL(import.meta.url).searchParams.get("openclaw-config-read") !== "1";
+// Bun 1.4.2 drops the query of a dynamically imported module, so the reader is identified by an env
+// marker its parent sets. A query-derived marker re-evaluates this guard as the driver and forks
+// another reader, which is the unbounded chain behind #158339.
+const updating = process.env.OPENCLAW_UPDATE_IN_PROGRESS === "1" && process.env.OPENCLAW_CONFIG_READ_CHILD !== "1";
 const runtime = updating ? undefined : await import(target);
 const spawnOptions = {
     cwd: root,
@@ -77,7 +79,7 @@ const spawnOptions = {
 };
 function childEnv(operation, args, options) {
   const selected = options?.env ?? (operation === "readCurrentConfigForPolicyCheck" ? args[0]?.env : undefined) ?? process.env;
-  return { ...selected, NODE_DISABLE_COMPILE_CACHE: "1" };
+  return { ...selected, NODE_DISABLE_COMPILE_CACHE: "1", OPENCLAW_CONFIG_READ_CHILD: "1" };
 }
 function input(operation, args, options, factory) {
   // A rollback replaces the alias too; never retain the removed candidate's hashed target.
