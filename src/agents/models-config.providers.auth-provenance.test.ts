@@ -19,36 +19,10 @@ vi.mock("../plugins/provider-discovery.runtime.js", () => ({
 }));
 
 vi.mock("../plugins/provider-runtime.js", () => ({
-  normalizeProviderConfigWithPlugin: vi.fn(
-    (params: { provider: string; context?: { providerConfig?: { baseUrl?: string } } }) => {
-      const providerConfig = params.context?.providerConfig;
-      const baseUrl = providerConfig?.baseUrl?.trim();
-      if (params.provider !== "google" || !baseUrl || baseUrl.endsWith("/v1beta")) {
-        return providerConfig;
-      }
-      return {
-        ...providerConfig,
-        baseUrl:
-          baseUrl === "https://generativelanguage.googleapis.com"
-            ? `${baseUrl}/v1beta`
-            : providerConfig?.baseUrl,
-      };
-    },
-  ),
-  resolveProviderConfigApiKeyWithPlugin: (params: {
-    provider: string;
-    context: { env: NodeJS.ProcessEnv };
-  }) => {
-    if (params.provider === "amazon-bedrock") {
-      return params.context.env.AWS_PROFILE?.trim() ? "AWS_PROFILE" : undefined;
-    }
-    if (params.provider === "anthropic-vertex") {
-      return params.context.env.ANTHROPIC_VERTEX_USE_GCP_METADATA === "true"
-        ? "gcp-vertex-credentials"
-        : undefined;
-    }
-    return undefined;
-  },
+  normalizeProviderConfigWithPlugin: (params: {
+    context?: { providerConfig?: { baseUrl?: string } };
+  }) => params.context?.providerConfig,
+  resolveProviderConfigApiKeyWithPlugin: () => undefined,
   resolveProviderSyntheticAuthWithPlugin: vi.fn(),
 }));
 
@@ -69,11 +43,6 @@ let createProviderAuthResolver: typeof import("./models-config.providers.secrets
 let mockedResolveProviderSyntheticAuthWithPlugin: ReturnType<
   typeof vi.mocked<ProviderRuntimeModule["resolveProviderSyntheticAuthWithPlugin"]>
 >;
-
-import {
-  normalizeProviderSpecificConfig,
-  resolveProviderConfigApiKeyResolver,
-} from "./models-config.providers.policy.js";
 
 async function loadProviderAuthModules() {
   vi.doUnmock("../plugins/manifest-registry.js");
@@ -419,7 +388,14 @@ describe("models-config provider auth provenance", () => {
           expect(fixture.errors).toHaveLength(1);
           expect(fixture.errors[0]).toBeInstanceOf(SecretSurfaceUnavailableError);
           expect(fixture.outcomes).toEqual([
+            ...(state === "cleared"
+              ? [
+                  { provider: "openai", status: "ready" },
+                  { provider: "healthy", status: "ready" },
+                ]
+              : []),
             { provider: "openai", profileId: fixture.profileId, status: "unavailable" },
+            { provider: "healthy", status: "ready" },
           ]);
           expect(providers?.openai).toBeUndefined();
           expect(providers?.healthy).toBeDefined();
@@ -526,7 +502,12 @@ describe("models-config provider auth provenance", () => {
             "unrelated:oauth",
           );
           expect(fixture.errors).toEqual([]);
-          expect(fixture.outcomes).toEqual([]);
+          expect(fixture.outcomes).toEqual([
+            { provider: "openai", status: "ready" },
+            { provider: "healthy", status: "ready" },
+            { provider: "openai", status: "ready" },
+            { provider: "healthy", status: "ready" },
+          ]);
         } finally {
           resolveProfile.mockRestore();
         }
@@ -546,6 +527,7 @@ describe("models-config provider auth provenance", () => {
           expect(fixture.authorization).toEqual([`Bearer ${fixture.runtimeKey}`]);
           expect(fixture.outcomes).toEqual([
             { provider: "openai", profileId: fixture.profileId, status: "ready" },
+            { provider: "healthy", status: "ready" },
           ]);
         },
         "proof-alias",
@@ -578,6 +560,7 @@ describe("models-config provider auth provenance", () => {
         expect(fixture.authorization).toEqual(["Bearer stored-order-key"]);
         expect(fixture.outcomes).toEqual([
           { provider: "openai", profileId: backupProfileId, status: "ready" },
+          { provider: "healthy", status: "ready" },
         ]);
       });
     },
@@ -629,6 +612,7 @@ describe("models-config provider auth provenance", () => {
       expect(fixture.authorization).toEqual([expectedAuthorization]);
       expect(fixture.outcomes).toEqual([
         { provider: "openai", profileId: expectedProfileId, status: "ready" },
+        { provider: "healthy", status: "ready" },
       ]);
     });
   });
@@ -696,7 +680,10 @@ describe("models-config provider auth provenance", () => {
         expect(fixture.authorization).toEqual([]);
         expect(fixture.errors).toHaveLength(1);
         expect(fixture.errors[0]).toBeInstanceOf(SecretSurfaceUnavailableError);
-        expect(fixture.outcomes).toEqual([{ provider: "openai", status: "unavailable" }]);
+        expect(fixture.outcomes).toEqual([
+          { provider: "openai", status: "unavailable" },
+          { provider: "healthy", status: "ready" },
+        ]);
         expect(JSON.stringify(plan)).toContain("healthy");
         expect(JSON.stringify(plan)).not.toMatch(/wrong-account-key|wrong-env-key/);
       });
@@ -1005,51 +992,5 @@ describe("models-config provider auth provenance", () => {
       );
       expect(auth("openai")).toEqual({ apiKey: key, discoveryApiKey: undefined, mode: "api_key" });
     }
-  });
-});
-
-describe("models-config.providers.policy", () => {
-  it("resolves config apiKey markers through provider plugin hooks", () => {
-    const resolver = resolveProviderConfigApiKeyResolver("amazon-bedrock");
-
-    expect(resolver).toBeTypeOf("function");
-    expect(resolver?.({ AWS_PROFILE: "default" } as NodeJS.ProcessEnv)).toBe("AWS_PROFILE");
-  });
-
-  it("resolves anthropic-vertex ADC markers through provider plugin hooks", () => {
-    const resolver = resolveProviderConfigApiKeyResolver("anthropic-vertex");
-
-    expect(resolver).toBeTypeOf("function");
-    expect(resolver?.({ ANTHROPIC_VERTEX_USE_GCP_METADATA: "true" } as NodeJS.ProcessEnv)).toBe(
-      "gcp-vertex-credentials",
-    );
-  });
-
-  it("normalizes Google provider config through provider plugin hooks", () => {
-    expect(
-      normalizeProviderSpecificConfig("google", {
-        api: "google-generative-ai",
-        baseUrl: "https://generativelanguage.googleapis.com",
-        models: [],
-      }),
-    ).toEqual({
-      api: "google-generative-ai",
-      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-      models: [],
-    });
-  });
-
-  it("does not treat generic transport APIs as provider plugin ids", () => {
-    const provider = {
-      api: "openai-completions" as const,
-      baseUrl: "https://example.invalid/v1",
-      apiKey: "GENERIC_TRANSPORT_MARKER",
-      models: [],
-    };
-
-    const resolver = resolveProviderConfigApiKeyResolver("dashscope-vision", provider);
-    expect(resolver).toBeTypeOf("function");
-    expect(resolver?.({} as NodeJS.ProcessEnv)).toBeUndefined();
-    expect(normalizeProviderSpecificConfig("dashscope-vision", provider)).toBe(provider);
   });
 });

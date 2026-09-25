@@ -73,11 +73,23 @@ export function copyProviderCatalogResultProjection(
   return providers.length > 0 ? { kind: "providers", providers } : { kind: "empty" };
 }
 
-/** Copies valid, secret-free provider outcomes out of a catalog hook result. */
+/** Undefined preserves a legacy result; an explicit or unreadable outcome list stays explicit. */
 export function copyProviderCatalogOutcomes(
   result: { outcomes?: readonly ProviderCatalogOutcome[] } | null | undefined,
-): ProviderCatalogOutcome[] {
-  return copyArrayEntries(readRecordValue(result, "outcomes")).flatMap((entry) => {
+): ProviderCatalogOutcome[] | undefined {
+  if (!isRecordWithoutThrowing(result)) {
+    return [];
+  }
+  let outcomes: readonly ProviderCatalogOutcome[] | undefined;
+  try {
+    outcomes = result.outcomes;
+  } catch {
+    return [];
+  }
+  if (outcomes === undefined) {
+    return undefined;
+  }
+  return copyArrayEntries(outcomes).flatMap((entry) => {
     if (!isRecordWithoutThrowing(entry)) {
       return [];
     }

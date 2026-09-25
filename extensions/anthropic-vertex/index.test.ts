@@ -1,6 +1,6 @@
 // Anthropic Vertex tests cover index plugin behavior.
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
 const { hasAnthropicVertexAvailableAuthMock } = vi.hoisted(() => ({
   hasAnthropicVertexAvailableAuthMock: vi.fn(),
@@ -45,6 +45,8 @@ describe("anthropic-vertex provider plugin", () => {
   });
 
   it("returns raw discovery for the host to merge with explicit provider overrides", async () => {
+    const fetch = vi.spyOn(globalThis, "fetch");
+    onTestFinished(() => fetch.mockRestore());
     const provider = await registerSingleProviderPlugin(anthropicVertexPlugin);
 
     const result = await provider.catalog?.run({
@@ -74,6 +76,8 @@ describe("anthropic-vertex provider plugin", () => {
     if (!result || !("provider" in result)) {
       throw new Error("expected single provider catalog result");
     }
+    expect(result.outcomes).toEqual([]);
+    expect(fetch).not.toHaveBeenCalled();
     expect(result.provider.api).toBe("anthropic-messages");
     expect(result.provider.apiKey).toBe("gcp-vertex-credentials");
     expect(result.provider.baseUrl).toBe("https://us-east5-aiplatform.googleapis.com");

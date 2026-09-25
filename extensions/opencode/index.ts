@@ -130,6 +130,7 @@ export default defineSingleProviderPluginEntry({
         if (!auth.discoveryApiKey) {
           return {
             provider: buildStaticOpencodeZenProviderConfig(auth.apiKey),
+            outcomes: [],
           };
         }
         return await runLiveProviderCatalog({
