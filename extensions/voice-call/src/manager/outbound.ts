@@ -432,9 +432,19 @@ export async function speakInitialMessage(
   }
   ctx.initialMessageInFlight.add(call.callId);
 
+  const listenAfterInitialTwilioSayFallback =
+    mode === "conversation" &&
+    ctx.provider?.name === "twilio" &&
+    shouldStartListeningAfterInitialMessage(ctx);
+
   try {
     console.log(`[voice-call] Speaking initial message for call ${call.callId} (mode: ${mode})`);
-    const result = await speak(ctx, call.callId, initialMessage);
+    const result = await speak(
+      ctx,
+      call.callId,
+      initialMessage,
+      listenAfterInitialTwilioSayFallback ? { listenAfterPlayback: true } : undefined,
+    );
     if (!result.success) {
       console.warn(`[voice-call] Failed to speak initial message: ${result.error}`);
       return;
@@ -497,6 +507,9 @@ export async function speakInitialMessage(
         !(await updateCall(ctx, call, (next) => transitionState(next, "listening"))) ||
         !isCurrentCall(ctx, call)
       ) {
+        return;
+      }
+      if (listenAfterInitialTwilioSayFallback) {
         return;
       }
       if (ctx.isStopping()) {
