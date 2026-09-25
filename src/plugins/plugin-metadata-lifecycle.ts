@@ -1,5 +1,4 @@
 /** Coordinates plugin metadata snapshot and process memo cache lifecycle resets. */
-import { writeSync } from "node:fs";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   clearCurrentPluginMetadataSnapshot,
@@ -29,12 +28,6 @@ import {
 import { PluginRuntimeCloseRetainedError } from "./runtime-close-error.js";
 
 const pluginMetadataProcessMemoClears = new Map<() => void, "process" | "operation">();
-function traceShutdown(phase: string) {
-  if (!process.env.VITEST || process.env.OPENCLAW_GATEWAY_RESTART_TRACE !== "1") {
-    return;
-  }
-  writeSync(2, `${JSON.stringify({ phase, pid: process.pid, time: Date.now() })}\n`);
-}
 type GatewayMetadataOwner = {
   cache?: PluginCache;
   phase: "booting" | "active" | "closing";
@@ -240,9 +233,7 @@ export function retainGatewayPluginMetadata() {
           if (final) {
             clearPluginMetadataCaches();
           }
-          traceShutdown("metadata.source-captures.enter");
           await sourceCaptures.releaseAsync();
-          traceShutdown("metadata.source-captures.exit");
           gatewayMetadataOwners.delete(owner);
           releaseReaders();
           return cleanup;

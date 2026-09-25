@@ -1,4 +1,3 @@
-import { writeSync } from "node:fs";
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { onAgentEvent } from "../infra/agent-events.js";
@@ -51,12 +50,6 @@ import { getPluginRegistryForContext } from "./runtime/gateway-request-scope.js"
 export { getPluginRegistryForContext } from "./runtime/gateway-request-scope.js";
 
 const log = createSubsystemLogger("plugins/runtime");
-function traceShutdown(phase: string) {
-  if (!process.env.VITEST || process.env.OPENCLAW_GATEWAY_RESTART_TRACE !== "1") {
-    return;
-  }
-  writeSync(2, `${JSON.stringify({ phase, pid: process.pid, time: Date.now() })}\n`);
-}
 const retirements = resolveGlobalSingleton(
   Symbol.for("openclaw.pluginRegistryRetirements"),
   () => new WeakMap<PluginRegistry, PluginHostRegistryRetirement>(),
@@ -485,9 +478,7 @@ export function createPluginRegistryOwner(registry: PluginRegistry, workspaceDir
             if (previous.memoryCapabilities.some(({ capability }) => capability.runtime)) {
               const { prepareMemoryRuntimeReload } = await loadMemoryRuntime();
               const memory = prepareMemoryRuntimeReload(previous, retainedMemory());
-              traceShutdown("registry.memory-close.enter");
               memoryErrors = (await memory.close()).errors;
-              traceShutdown("registry.memory-close.exit");
               memory.commit(retainedMemory());
             }
           } catch (error) {
@@ -515,9 +506,7 @@ export function createPluginRegistryOwner(registry: PluginRegistry, workspaceDir
                 }
               }
               if (registryOwners.size === 0 && state.activeRegistry === null) {
-                traceShutdown("registry.clear-active.enter");
                 await clearActivePluginRegistry(previous);
-                traceShutdown("registry.clear-active.exit");
               } else {
                 const retainedRegistry = survivor?.activeRegistry ?? null;
                 retirePluginRegistryIfUnused(previous, () => retainedRegistry);

@@ -1,4 +1,3 @@
-import { writeSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
@@ -394,13 +393,6 @@ export function retirePluginCacheInstance(
   return completion;
 }
 
-function traceShutdown(phase: string, count: number) {
-  if (!process.env.VITEST || process.env.OPENCLAW_GATEWAY_RESTART_TRACE !== "1") {
-    return;
-  }
-  writeSync(2, `${JSON.stringify({ phase, count, pid: process.pid, time: Date.now() })}\n`);
-}
-
 /** Stop new setup calls immediately; the owner awaits in-flight calls and graph cleanup. */
 export function retirePluginCache(
   cache: PluginCache,
@@ -412,7 +404,6 @@ export function retirePluginCache(
   }
   const completion = createDeferredCore<PluginHostCleanupResult>();
   retained.retirement = completion.promise;
-  traceShutdown("cache.retirement.requested", retained.references.size);
   const trackRetirement: typeof trackAsyncWork = async (run) => {
     const work = new AsyncWorkScope();
     try {
@@ -468,14 +459,10 @@ function beginPluginCacheRetirement(
       resource.quiesce();
     }
     // Registry teardown owns host hooks before instance disposal; then join remaining cleanup.
-    traceShutdown("cache.registry-loads.enter", resources.size);
     const [registry] = await Promise.allSettled([registries]);
-    traceShutdown("cache.registry-loads.exit", resources.size);
-    traceShutdown("cache.resource-disposal.enter", resources.size);
     const outcomes = await Promise.allSettled(
       [...resources].map(async (resource) => ({ resource, result: await resource.dispose() })),
     );
-    traceShutdown("cache.resource-disposal.exit", resources.size);
     cache.setupModules.clear();
     for (const instance of cache.instances) {
       releasePluginCacheInstance(instance, cache);
