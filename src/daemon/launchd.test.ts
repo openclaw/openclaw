@@ -998,246 +998,146 @@ describe("launchctl list detection", () => {
     },
   );
 
-  it.runIf(process.platform === "darwin")(
-    "disables the current legacy updater launchd job",
-    async () => {
-      await expect(
-        disableCurrentOpenClawUpdateLaunchdJob({
-          LAUNCH_JOB_LABEL: "ai.openclaw.update.2026.5.12",
-        }),
-      ).resolves.toBe(true);
-
-      const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
-      expect(state.launchctlCalls).toContainEqual([
-        "disable",
-        `${domain}/ai.openclaw.update.2026.5.12`,
-      ]);
-      expect(launchctlCommandNames()).not.toContain("remove");
+  for (const { name, env, disabledLabel, plist } of [
+    {
+      name: "disables the current legacy updater launchd job",
+      env: { LAUNCH_JOB_LABEL: "ai.openclaw.update.2026.5.12" },
+      disabledLabel: "ai.openclaw.update.2026.5.12",
     },
-  );
-
-  it.runIf(process.platform === "darwin")(
-    "disables the current manual updater launchd job",
-    async () => {
-      await expect(
-        disableCurrentOpenClawUpdateLaunchdJob({
-          LAUNCH_JOB_LABEL: "ai.openclaw.manual-update.1717168800",
-        }),
-      ).resolves.toBe(true);
-
-      const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
-      expect(state.launchctlCalls).toContainEqual([
-        "disable",
-        `${domain}/ai.openclaw.manual-update.1717168800`,
-      ]);
-      expect(launchctlCommandNames()).not.toContain("remove");
+    {
+      name: "disables the current manual updater launchd job",
+      env: { LAUNCH_JOB_LABEL: "ai.openclaw.manual-update.1717168800" },
+      disabledLabel: "ai.openclaw.manual-update.1717168800",
     },
-  );
-
-  it.runIf(process.platform === "darwin")(
-    "disables the current legacy updater launchd job from OpenClaw label env",
-    async () => {
-      await expect(
-        disableCurrentOpenClawUpdateLaunchdJob({
-          OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.update.2026.5.12",
-        }),
-      ).resolves.toBe(true);
-
-      const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
-      expect(state.launchctlCalls).toContainEqual([
-        "disable",
-        `${domain}/ai.openclaw.update.2026.5.12`,
-      ]);
+    {
+      name: "disables the current legacy updater launchd job from OpenClaw label env",
+      env: { OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.update.2026.5.12" },
+      disabledLabel: "ai.openclaw.update.2026.5.12",
     },
-  );
-
-  it.runIf(process.platform === "darwin")(
-    "does not let non-update launchd markers mask the OpenClaw update label",
-    async () => {
-      await expect(
-        disableCurrentOpenClawUpdateLaunchdJob({
-          XPC_SERVICE_NAME: "0",
-          OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.update.2026.5.12",
-        }),
-      ).resolves.toBe(true);
-
-      const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
-      expect(state.launchctlCalls).toContainEqual([
-        "disable",
-        `${domain}/ai.openclaw.update.2026.5.12`,
-      ]);
+    {
+      name: "does not let non-update launchd markers mask the OpenClaw update label",
+      env: { XPC_SERVICE_NAME: "0", OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.update.2026.5.12" },
+      disabledLabel: "ai.openclaw.update.2026.5.12",
     },
-  );
-
-  it.runIf(process.platform === "darwin")(
-    "does not disable the current gateway launchd job",
-    async () => {
-      await expect(
-        disableCurrentOpenClawUpdateLaunchdJob({
-          LAUNCH_JOB_LABEL: "ai.openclaw.gateway",
-        }),
-      ).resolves.toBe(false);
-
-      expect(state.launchctlCalls).toEqual([]);
+    {
+      name: "does not disable the current gateway launchd job",
+      env: { LAUNCH_JOB_LABEL: "ai.openclaw.gateway" },
+      disabledLabel: null,
     },
-  );
-
-  it.runIf(process.platform === "darwin")(
-    "does not disable profile-specific gateway launchd jobs that look like updater labels",
-    async () => {
-      await expect(
-        disableCurrentOpenClawUpdateLaunchdJob({
-          LAUNCH_JOB_LABEL: "ai.openclaw.update.2026.5.12",
-          OPENCLAW_PROFILE: "update.2026.5.12",
-        }),
-      ).resolves.toBe(false);
-
-      expect(state.launchctlCalls).toEqual([]);
+    {
+      name: "does not disable profile-specific gateway launchd jobs that look like updater labels",
+      env: {
+        LAUNCH_JOB_LABEL: "ai.openclaw.update.2026.5.12",
+        OPENCLAW_PROFILE: "update.2026.5.12",
+      },
+      disabledLabel: null,
     },
-  );
-
-  it.runIf(process.platform === "darwin")(
-    "does not disable profile-specific gateway launchd jobs that look like manual updater labels",
-    async () => {
-      await expect(
-        disableCurrentOpenClawUpdateLaunchdJob({
-          LAUNCH_JOB_LABEL: "ai.openclaw.manual-update.1717168800",
-          OPENCLAW_PROFILE: "manual-update.1717168800",
-        }),
-      ).resolves.toBe(false);
-
-      expect(state.launchctlCalls).toEqual([]);
+    {
+      name: "does not disable profile-specific gateway launchd jobs that look like manual updater labels",
+      env: {
+        LAUNCH_JOB_LABEL: "ai.openclaw.manual-update.1717168800",
+        OPENCLAW_PROFILE: "manual-update.1717168800",
+      },
+      disabledLabel: null,
     },
-  );
-
-  it.runIf(process.platform === "darwin")(
-    "disables current profile-scoped updater launchd jobs only after metadata confirmation",
-    async () => {
-      const env = createDefaultLaunchdEnv();
-      const label = "ai.openclaw.tayoun.update.20260625T201026-0400";
-      setLaunchAgentPlist(env, label, [
-        "/usr/local/bin/node",
-        "/opt/openclaw/openclaw.mjs",
-        "update",
-        "--yes",
-      ]);
-
-      await expect(
-        disableCurrentOpenClawUpdateLaunchdJob({
-          ...env,
-          LAUNCH_JOB_LABEL: label,
-        }),
-      ).resolves.toBe(true);
-
-      const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
-      expect(state.launchctlCalls).toContainEqual(["disable", `${domain}/${label}`]);
+    {
+      name: "disables current profile-scoped updater launchd jobs only after metadata confirmation",
+      env: {
+        ...createDefaultLaunchdEnv(),
+        LAUNCH_JOB_LABEL: "ai.openclaw.tayoun.update.20260625T201026-0400",
+      },
+      disabledLabel: "ai.openclaw.tayoun.update.20260625T201026-0400",
+      plist: [
+        "ai.openclaw.tayoun.update.20260625T201026-0400",
+        ["/usr/local/bin/node", "/opt/openclaw/openclaw.mjs", "update", "--yes"],
+      ],
     },
-  );
-
-  it.runIf(process.platform === "darwin")(
-    "lets a profile-scoped updater self-disarm from launchd runtime metadata",
-    async () => {
-      const env = createDefaultLaunchdEnv();
-      const label = "ai.openclaw.tayoun.update.20260625T201026-0400";
-
-      await expect(
-        disableCurrentOpenClawUpdateLaunchdJob({
-          ...env,
-          LAUNCH_JOB_LABEL: label,
-          OPENCLAW_UPDATE_RUN_HANDOFF: "1",
-        }),
-      ).resolves.toBe(true);
-
-      const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
-      expect(state.launchctlCalls).toContainEqual(["disable", `${domain}/${label}`]);
+    {
+      name: "lets a profile-scoped updater self-disarm from launchd runtime metadata",
+      env: {
+        ...createDefaultLaunchdEnv(),
+        LAUNCH_JOB_LABEL: "ai.openclaw.tayoun.update.20260625T201026-0400",
+        OPENCLAW_UPDATE_RUN_HANDOFF: "1",
+      },
+      disabledLabel: "ai.openclaw.tayoun.update.20260625T201026-0400",
     },
-  );
-
-  it.runIf(process.platform === "darwin")(
-    "requires plist proof for a configured label preserved by an update handoff",
-    async () => {
-      const env = createDefaultLaunchdEnv();
-      const label = "ai.openclaw.dev.team.update.20260625T201026-0400";
-      setLaunchAgentPlist(env, label, ["/opt/homebrew/bin/openclaw", "gateway", "run"]);
-
-      await expect(
-        disableCurrentOpenClawUpdateLaunchdJob({
-          ...env,
-          OPENCLAW_LAUNCHD_LABEL: label,
-          OPENCLAW_UPDATE_RUN_HANDOFF: "1",
-        }),
-      ).resolves.toBe(false);
-
-      expect(state.launchctlCalls).toEqual([]);
+    {
+      name: "requires plist proof for a configured label preserved by an update handoff",
+      env: {
+        ...createDefaultLaunchdEnv(),
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.dev.team.update.20260625T201026-0400",
+        OPENCLAW_UPDATE_RUN_HANDOFF: "1",
+      },
+      disabledLabel: null,
+      plist: [
+        "ai.openclaw.dev.team.update.20260625T201026-0400",
+        ["/opt/homebrew/bin/openclaw", "gateway", "run"],
+      ],
     },
-  );
-
-  it.runIf(process.platform === "darwin")(
-    "disables a configured profile-scoped updater only with confirming plist metadata",
-    async () => {
-      const env = createDefaultLaunchdEnv();
-      const label = "ai.openclaw.tayoun.update.20260625T201026-0400";
-      setLaunchAgentPlist(env, label, ["/opt/homebrew/bin/openclaw", "update", "--yes"]);
-
-      await expect(
-        disableCurrentOpenClawUpdateLaunchdJob({
-          ...env,
-          OPENCLAW_LAUNCHD_LABEL: label,
-          OPENCLAW_UPDATE_RUN_HANDOFF: "1",
-        }),
-      ).resolves.toBe(true);
-
-      const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
-      expect(state.launchctlCalls).toContainEqual(["disable", `${domain}/${label}`]);
+    {
+      name: "disables a configured profile-scoped updater only with confirming plist metadata",
+      env: {
+        ...createDefaultLaunchdEnv(),
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.tayoun.update.20260625T201026-0400",
+        OPENCLAW_UPDATE_RUN_HANDOFF: "1",
+      },
+      disabledLabel: "ai.openclaw.tayoun.update.20260625T201026-0400",
+      plist: [
+        "ai.openclaw.tayoun.update.20260625T201026-0400",
+        ["/opt/homebrew/bin/openclaw", "update", "--yes"],
+      ],
     },
-  );
-
-  it.runIf(process.platform === "darwin")(
-    "does not disable profile-scoped gateway labels without updater metadata",
-    async () => {
-      const env = createDefaultLaunchdEnv();
-      const label = "ai.openclaw.tayoun.update.20260625T201026-0400";
-      setLaunchAgentPlist(env, label, ["/opt/homebrew/bin/openclaw", "gateway", "run"]);
-
-      await expect(
-        disableCurrentOpenClawUpdateLaunchdJob({
-          ...env,
-          LAUNCH_JOB_LABEL: label,
-        }),
-      ).resolves.toBe(false);
-
-      expect(state.launchctlCalls).toEqual([]);
+    {
+      name: "does not disable profile-scoped gateway labels without updater metadata",
+      env: {
+        ...createDefaultLaunchdEnv(),
+        LAUNCH_JOB_LABEL: "ai.openclaw.tayoun.update.20260625T201026-0400",
+      },
+      disabledLabel: null,
+      plist: [
+        "ai.openclaw.tayoun.update.20260625T201026-0400",
+        ["/opt/homebrew/bin/openclaw", "gateway", "run"],
+      ],
     },
-  );
-
-  it.runIf(process.platform === "darwin")(
-    "does not disable custom gateway launchd labels under the manual-update prefix",
-    async () => {
-      await expect(
-        disableCurrentOpenClawUpdateLaunchdJob({
-          LAUNCH_JOB_LABEL: "ai.openclaw.manual-update.gateway",
-        }),
-      ).resolves.toBe(false);
-
-      expect(state.launchctlCalls).toEqual([]);
+    {
+      name: "does not disable custom gateway launchd labels under the manual-update prefix",
+      env: { LAUNCH_JOB_LABEL: "ai.openclaw.manual-update.gateway" },
+      disabledLabel: null,
     },
-  );
-
-  it.runIf(process.platform === "darwin")(
-    "does not disable custom gateway launchd labels that look like updater labels",
-    async () => {
-      await expect(
-        disableCurrentOpenClawUpdateLaunchdJob({
-          LAUNCH_JOB_LABEL: "ai.openclaw.update.2026.5.12",
-          OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.update.2026.5.12",
-          OPENCLAW_SERVICE_MARKER: "openclaw",
-          OPENCLAW_SERVICE_KIND: "gateway",
-        }),
-      ).resolves.toBe(false);
-
-      expect(state.launchctlCalls).toEqual([]);
+    {
+      name: "does not disable custom gateway launchd labels that look like updater labels",
+      env: {
+        LAUNCH_JOB_LABEL: "ai.openclaw.update.2026.5.12",
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.update.2026.5.12",
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+      },
+      disabledLabel: null,
     },
-  );
+  ] satisfies Array<{
+    name: string;
+    env: Record<string, string | undefined>;
+    disabledLabel: string | null;
+    plist?: [label: string, programArguments: string[]];
+  }>) {
+    it.runIf(process.platform === "darwin")(name, async () => {
+      if (plist) {
+        setLaunchAgentPlist(env, ...plist);
+      }
+
+      await expect(disableCurrentOpenClawUpdateLaunchdJob(env)).resolves.toBe(
+        disabledLabel !== null,
+      );
+
+      if (disabledLabel === null) {
+        expect(state.launchctlCalls).toEqual([]);
+      } else {
+        const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+        expect(state.launchctlCalls).toContainEqual(["disable", `${domain}/${disabledLabel}`]);
+        expect(launchctlCommandNames()).not.toContain("remove");
+      }
+    });
+  }
 
   it.runIf(process.platform === "darwin")("disables explicit legacy updater jobs", async () => {
     await expect(disableOpenClawUpdateLaunchdJob("ai.openclaw.update.2026.5.12")).resolves.toBe(
