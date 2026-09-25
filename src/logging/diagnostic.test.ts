@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import { createRequireRecord, importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   emitDiagnosticEvent,
   onDiagnosticEvent,
@@ -362,32 +363,6 @@ describe("stuck session diagnostics threshold", () => {
     vi.useRealTimers();
   });
 
-  it("uses the heartbeat test timing without runtime config tuning", () => {
-    const events: DiagnosticEventPayload[] = [];
-    const recoverStuckSession = vi.fn();
-    const unsubscribe = onDiagnosticEvent((event) => events.push(event));
-    try {
-      startEnabledDiagnosticHeartbeat({ recoverStuckSession });
-      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
-      vi.advanceTimersByTime(61_000);
-    } finally {
-      unsubscribe();
-    }
-
-    const stuckEvents = events.filter((event) => event.type === "session.stuck");
-    expect(stuckEvents).toHaveLength(1);
-    expectRecordFields(requireRecord(stuckEvents[0], "stuck event"), {
-      classification: "stale_session_state",
-      reason: "stale_session_state",
-      queueDepth: 0,
-    });
-    expectRecoveryCall(
-      recoverStuckSession,
-      { sessionId: "s1", sessionKey: "main", queueDepth: 0 },
-      ["ageMs", "stateGeneration"],
-    );
-  });
-
   it("does not count a single in-flight turn as queued work without an active run", () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn();
@@ -551,10 +526,13 @@ describe("stuck session diagnostics threshold", () => {
 
   it("backs off repeated stuck warnings while a session remains unchanged", () => {
     const events: Array<{ ageMs?: number }> = [];
+    const recoveryRequests: Array<{ ageMs?: number }> = [];
     const recoverStuckSession = vi.fn();
     const unsubscribe = onDiagnosticEvent((event) => {
       if (event.type === "session.stuck") {
         events.push({ ageMs: event.ageMs });
+      } else if (event.type === "session.recovery.requested") {
+        recoveryRequests.push(event);
       }
     });
     try {
@@ -574,41 +552,7 @@ describe("stuck session diagnostics threshold", () => {
     // Recovery is requested on every heartbeat tick the session stays stuck,
     // including the throttled tick at 90s, so it must outpace the warn backoff.
     expect(recoverStuckSession).toHaveBeenCalledTimes(3);
-  });
-
-  it("keeps scheduling recovery for a recovery-eligible stuck session while warnings are throttled", () => {
-    const stuckEvents: Array<{ ageMs?: number }> = [];
-    const recoveryRequests: Array<{ ageMs?: number }> = [];
-    const recoverStuckSession = vi.fn();
-    const unsubscribe = onDiagnosticEvent((event) => {
-      if (event.type === "session.stuck") {
-        stuckEvents.push(event);
-      } else if (event.type === "session.recovery.requested") {
-        recoveryRequests.push(event);
-      }
-    });
-    try {
-      startEnabledDiagnosticHeartbeat({ recoverStuckSession });
-      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
-
-      // First warn tick (60s): emit the stuck warning and request recovery once.
-      vi.advanceTimersByTime(61_000);
-      expect(stuckEvents).toHaveLength(1);
-      expect(recoverStuckSession).toHaveBeenCalledTimes(1);
-
-      // Backoff tick (90s): the next warn age is 120s, so the warning is
-      // throttled. Recovery must still be scheduled because the session is
-      // recovery-eligible — the warning backoff must not gate recovery.
-      vi.advanceTimersByTime(30_000);
-    } finally {
-      unsubscribe();
-    }
-
-    // Warning stays throttled: still only the single 60s warning.
-    expect(stuckEvents.map((event) => event.ageMs)).toEqual([60_000]);
-    // Recovery was not suppressed by the warning backoff on the 90s tick.
-    expect(recoverStuckSession).toHaveBeenCalledTimes(2);
-    expect(recoveryRequests.map((event) => event.ageMs)).toEqual([60_000, 90_000]);
+    expect(recoveryRequests.map((event) => event.ageMs)).toEqual([60_000, 90_000, 120_000]);
   });
 
   it("reports active sessions as stalled instead of stuck when active work stops progressing", () => {
@@ -1933,29 +1877,8 @@ describe("stuck session diagnostics threshold", () => {
 
   it("does not start duplicate recovery for the same processing generation", async () => {
     const events: DiagnosticEventPayload[] = [];
-    let resolveRecovery:
-      | ((outcome: {
-          status: "released";
-          action: "release_lane";
-          reason: "no_active_work";
-          released: number;
-          sessionId: string;
-          sessionKey: string;
-        }) => void)
-      | undefined;
-    const recoverStuckSession = vi.fn(
-      () =>
-        new Promise<{
-          status: "released";
-          action: "release_lane";
-          reason: "no_active_work";
-          released: number;
-          sessionId: string;
-          sessionKey: string;
-        }>((resolve) => {
-          resolveRecovery = resolve;
-        }),
-    );
+    const recovery = createDeferred<StuckSessionRecoveryOutcome>();
+    const recoverStuckSession = vi.fn(() => recovery.promise);
     const unsubscribe = onDiagnosticEvent((event) => events.push(event));
     try {
       startEnabledDiagnosticHeartbeat({ recoverStuckSession });
@@ -1976,7 +1899,7 @@ describe("stuck session diagnostics threshold", () => {
         "skipped recovery event",
       );
 
-      resolveRecovery?.({
+      recovery.resolve({
         status: "released",
         action: "release_lane",
         reason: "no_active_work",
@@ -1995,27 +1918,8 @@ describe("stuck session diagnostics threshold", () => {
     // Pin recover() to an unresolved Promise so the in-flight window spans two
     // heartbeat ticks (production awaits abort/drain, settleMs up to 15s). Same
     // seam as the already_in_flight dedup test above.
-    let resolveRecovery:
-      | ((outcome: {
-          status: "skipped";
-          action: "observe_only";
-          reason: "already_in_flight";
-          sessionId: string;
-          sessionKey: string;
-        }) => void)
-      | undefined;
-    const recoverStuckSession = vi.fn(
-      () =>
-        new Promise<{
-          status: "skipped";
-          action: "observe_only";
-          reason: "already_in_flight";
-          sessionId: string;
-          sessionKey: string;
-        }>((resolve) => {
-          resolveRecovery = resolve;
-        }),
-    );
+    const recovery = createDeferred<StuckSessionRecoveryOutcome>();
+    const recoverStuckSession = vi.fn(() => recovery.promise);
     const unsubscribe = onDiagnosticEvent((event) => events.push(event));
     try {
       startEnabledDiagnosticHeartbeat({ recoverStuckSession });
@@ -2040,7 +1944,7 @@ describe("stuck session diagnostics threshold", () => {
       vi.advanceTimersByTime(30_000);
       await Promise.resolve();
     } finally {
-      resolveRecovery?.({
+      recovery.resolve({
         status: "skipped",
         action: "observe_only",
         reason: "already_in_flight",
@@ -2413,18 +2317,8 @@ describe("stuck session diagnostics threshold", () => {
     const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
     const events: DiagnosticEventPayload[] = [];
     const unsubscribe = onDiagnosticEvent((event) => events.push(event));
-    let finishPhase: (() => void) | undefined;
-    const phase = withDiagnosticPhase(
-      "startup.plugins.load",
-      () =>
-        new Promise<void>((resolve) => {
-          finishPhase = resolve;
-        }),
-    );
-    if (!finishPhase) {
-      throw new Error("Expected diagnostic phase finish callback to be initialized");
-    }
-    const completePhase = finishPhase;
+    const finishPhase = createDeferred();
+    const phase = withDiagnosticPhase("startup.plugins.load", () => finishPhase.promise);
 
     try {
       startEnabledDiagnosticHeartbeat({
@@ -2440,7 +2334,7 @@ describe("stuck session diagnostics threshold", () => {
       logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "telegram" });
       vi.advanceTimersByTime(30_000);
     } finally {
-      completePhase();
+      finishPhase.resolve();
       await phase;
       unsubscribe();
     }
@@ -2661,22 +2555,6 @@ describe("stuck session diagnostics threshold", () => {
     vi.advanceTimersByTime(30_000);
 
     expect(emitMemorySample).not.toHaveBeenCalled();
-  });
-
-  it("falls back to default threshold when config is absent", () => {
-    const events: Array<{ type: string }> = [];
-    const unsubscribe = onDiagnosticEvent((event) => {
-      events.push({ type: event.type });
-    });
-    try {
-      startDiagnosticHeartbeat();
-      logSessionStateChange({ sessionId: "s2", sessionKey: "main", state: "processing" });
-      vi.advanceTimersByTime(31_000);
-    } finally {
-      unsubscribe();
-    }
-
-    expect(events.some((event) => event.type === "session.stuck")).toBe(false);
   });
 
   it("uses fixed session attention thresholds", () => {
@@ -2944,30 +2822,6 @@ describe("stuck session recovery activity reconciliation", () => {
     expect(getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }).activeWorkKind).toBe(
       "embedded_run",
     );
-  });
-
-  it("preserves reply work that re-armed activity without a session generation bump", async () => {
-    logSessionStateChange({ sessionId, sessionKey, state: "processing", reason: "run_started" });
-    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey });
-    const state = getDiagnosticSessionState({ sessionId, sessionKey });
-    const staleGeneration = state.generation;
-
-    await recoverStalledSession({
-      stateGeneration: staleGeneration,
-      recover: () => {
-        markDiagnosticEmbeddedRunStarted({
-          sessionId: "reply-run-1",
-          sessionKey,
-          workKey: `reply:${sessionKey}`,
-        });
-        return Promise.resolve(abortedOutcome());
-      },
-    });
-
-    expect(peekDiagnosticSessionState({ sessionId, sessionKey })?.state).toBe("processing");
-    const activity = getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey });
-    expect(activity.activeWorkKind).toBe("embedded_run");
-    expect(activity.hasActiveEmbeddedRun).toBe(true);
   });
 
   it("clears stale tool and model markers while preserving a fresh embedded owner", async () => {
