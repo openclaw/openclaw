@@ -112,7 +112,7 @@ describe("release runner reservation", () => {
     ["plugin-clawhub-release", "approve_plugins_clawhub_release"],
     ["docker-release", "publish"],
   ])("classifies %s/%s as credentialed", (name, jobName) => {
-    expect(credentialed(name, workflows.get(name)!.jobs[jobName])).toBe(true);
+    expect(credentialed(name, workflows.get(name)!.jobs[jobName]!)).toBe(true);
   });
 
   it.each([...shared, ...mixed])("keeps unrelated %s callers outside the release group", (name) => {
