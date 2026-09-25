@@ -5,6 +5,7 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
+import { parseOpenClawProcessTitle } from "../infra/openclaw-installation-id.js";
 import type { StatusSummary } from "../status/summary.js";
 
 type LocalTuiProcess = {
@@ -26,7 +27,8 @@ function normalizeExecutableName(value: string | undefined): string {
 
 function isLocalTuiCommand(command: string): boolean {
   const argv = tokenizeCommandLine(command);
-  const executable = normalizeExecutableName(argv[0]);
+  const executable =
+    parseOpenClawProcessTitle(argv[0] ?? "")?.name ?? normalizeExecutableName(argv[0]);
   if (executable === "openclaw-tui") {
     return true;
   }

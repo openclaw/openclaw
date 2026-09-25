@@ -1445,10 +1445,10 @@ async function runCliWithPreparedOutputMode(
           process.exitCode = 1;
           return;
         }
-        const { runTui } = await import("../tui/tui.js");
+        const { runTuiAfterUpdateGate } = await import("../tui/tui-update-gate.js");
         // This TUI now shares the CLI process, so keep its final exit fallback armed
         // in case imported runtime handles survive the normal teardown.
-        await runTui({
+        await runTuiAfterUpdateGate({
           ...(bareRootLaunchTarget.local
             ? { deliver: false, local: true }
             : {

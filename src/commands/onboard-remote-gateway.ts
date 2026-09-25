@@ -479,7 +479,8 @@ export async function runRemoteGatewayInferenceOnboarding(
 
       // Keep resolved credentials in-process; child argv is observable to
       // other local users and must never carry the Gateway secret.
-      const runTui = deps.runTui ?? (await import("../tui/tui.js")).runTui;
+      const runTui =
+        deps.runTui ?? (await import("../tui/tui-update-gate.js")).runTuiAfterUpdateGate;
       await runTui({
         config: boundConfig,
         deliver: false,

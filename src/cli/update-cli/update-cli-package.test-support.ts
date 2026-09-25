@@ -8,6 +8,10 @@ import type { runCommandWithTimeout as RunCommandWithTimeout } from "../../proce
 import { createCommandResult as commandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { quoteCliArg } from "../quote-cli-arg.js";
 
+vi.mock("./update-command-local-tui.js", () => ({
+  acquireUpdateLocalTuiGate: async () => async () => {},
+}));
+
 function requireValue<T>(value: T | undefined, label: string): T {
   if (value === undefined) {
     throw new Error(`expected ${label}`);

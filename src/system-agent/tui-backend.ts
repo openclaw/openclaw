@@ -509,7 +509,8 @@ export async function runSystemAgentTui(
     // an agent handoff uses the normal repair-oriented startup message.
     welcomeVariant = undefined;
     const backend = new SystemAgentTuiBackend(boundOpts, welcome, engine, route);
-    const runTui = boundOpts.runTui ?? (await import("../tui/tui.js")).runTui;
+    const runTui =
+      boundOpts.runTui ?? (await import("../tui/tui-update-gate.js")).runNestedTuiAfterUpdateGate;
     try {
       await runTui({
         local: true,

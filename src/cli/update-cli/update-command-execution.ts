@@ -50,6 +50,7 @@ import {
   handoffUpdateFromGateway,
   parkForegroundUpdateForActivation,
 } from "./update-command-handoff.js";
+import { acquireUpdateLocalTuiGate } from "./update-command-local-tui.js";
 import {
   captureOwnedManagedUpdateContext,
   readUpdateCandidateSource,
@@ -366,6 +367,7 @@ export async function executeMutableUpdate(
   let result: UpdateRunResult;
   let failure: MutableUpdateExecutionResult["failure"];
   let mutationStarted = false;
+  let releaseLocalTuiGate: (() => Promise<void>) | undefined;
   const validateCandidate = async (root: string) => {
     assertUpdateCommandRecovery(opts);
     const env = ownedManagedUpdateContext?.env ?? opts.run?.env ?? process.env;
@@ -536,6 +538,14 @@ export async function executeMutableUpdate(
     assertExecutionCurrent();
     if (opts.run) {
       recordUpdateRunPhase(opts.run.runId, "activating", undefined, { env: opts.run.env });
+    }
+    if (!releaseLocalTuiGate) {
+      releaseLocalTuiGate = await acquireUpdateLocalTuiGate(
+        roots,
+        Boolean(opts.json),
+        assertExecutionCurrent,
+      );
+      params.onLocalTuiGateAcquired(releaseLocalTuiGate);
     }
     await stopManagedServiceBeforeMutableUpdate(roots);
     await recheckSchemas(admittedTargetSchemaVersions);

@@ -235,8 +235,8 @@ export async function runResumeCommand(query: string | undefined, opts: ResumeCl
   if (!sessionKey) {
     return;
   }
-  const { runTui } = await import("../tui/tui.js");
-  await runTui({
+  const { runTuiAfterUpdateGate } = await import("../tui/tui-update-gate.js");
+  await runTuiAfterUpdateGate({
     boundGateway: {
       url: handoff?.gatewayUrl ?? connection.url,
       ...(connection.token ? { token: connection.token } : {}),

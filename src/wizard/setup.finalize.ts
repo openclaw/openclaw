@@ -1,7 +1,6 @@
 // Setup finalize helpers write onboarding output and follow-up state.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { restoreTerminalState } from "../../packages/terminal-core/src/restore.js";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { describeCodexNativeWebSearch } from "../agents/codex-native-web-search.shared.js";
 import { PreparedModelCatalogConfigReplacedError } from "../agents/prepared-model-catalog.errors.js";
@@ -45,17 +44,12 @@ import {
 import { formatWindowsGatewayFirewallGuidance } from "../infra/windows-gateway-firewall-diagnostics.js";
 import { ExitError, type RuntimeEnv } from "../runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import {
-  cancelProcessExitAfterTuiReturn,
-  resolveTuiShutdownHardExitMs,
-  runTui,
-  scheduleProcessExitAfterTuiReturn,
-} from "../tui/tui.js";
 import { resolveUserPath } from "../utils.js";
 import { listConfiguredWebSearchProviders } from "../web-search/runtime.js";
 import { t } from "./i18n/index.js";
 import type { WizardPrompter } from "./prompts.js";
 import { setupWizardShellCompletion } from "./setup.completion.js";
+import { runSetupTui } from "./setup.finalize-tui.js";
 import { resolveSetupSecretInputString } from "./setup.secret-input.js";
 import { resolveOnboardingGatewayRuntime } from "./setup.service-runtime.js";
 import type { GatewayWizardSettings, WizardFlow } from "./setup.types.js";
@@ -71,8 +65,6 @@ type FinalizeOnboardingOptions = {
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
 };
-
-const HATCH_TUI_TIMEOUT_MS = 5 * 60 * 1000;
 
 function buildSessionGatewayAuthOverride(params: {
   nextConfig: OpenClawConfig;
@@ -999,52 +991,28 @@ export async function finalizeSetupWizard(
     );
 
     if (shouldLaunchTui) {
-      restoreTerminalState("pre-setup tui", { resumeStdinIfPaused: false });
+      const sessionGatewayHandle = { current: sessionGateway };
       try {
-        await runTui({
-          ...(gatewayProbe.ok
-            ? {
-                config: nextConfig,
-                boundGateway: {
-                  url: displayLinks.wsUrl,
-                  ...(settings.authMode === "token" && settings.gatewayToken
-                    ? { token: settings.gatewayToken }
-                    : {}),
-                  ...(settings.authMode === "password" && resolvedGatewayPassword
-                    ? { password: resolvedGatewayPassword }
-                    : {}),
-                },
-              }
-            : { local: true }),
-          deliver: false,
+        await runSetupTui({
+          config: nextConfig,
+          gatewayReachable: gatewayProbe.ok,
+          gatewayUrl: displayLinks.wsUrl,
+          gatewayToken: settings.authMode === "token" ? settings.gatewayToken : undefined,
+          gatewayPassword: settings.authMode === "password" ? resolvedGatewayPassword : undefined,
           message: shouldSeedBootstrapHatch
             ? t("wizard.finalize.bootstrapHatchMessage")
             : undefined,
-          initialMessageTimeoutMs: HATCH_TUI_TIMEOUT_MS,
-        });
-      } finally {
-        restoreTerminalState("post-setup tui", { resumeStdinIfPaused: false });
-        if (sessionGateway) {
-          // The temporary Gateway can own the same provider and child-process teardown as
-          // local TUI mode. Reuse that longer budget while keeping shutdown bounded.
-          const cleanupExitTimer = scheduleProcessExitAfterTuiReturn({
-            delayMs: resolveTuiShutdownHardExitMs({ localMode: true }),
-          });
-          try {
+          sessionGateway: sessionGatewayHandle,
+          closeSessionGateway: async (activeSessionGateway) =>
             await closeSessionGatewayForOnboarding({
-              sessionGateway,
+              sessionGateway: activeSessionGateway,
               runtime,
               reason: "onboarding tui exited",
-            });
-            sessionGateway = undefined;
-          } finally {
-            cancelProcessExitAfterTuiReturn(cleanupExitTimer);
-          }
-        }
+            }),
+        });
+      } finally {
+        sessionGateway = sessionGatewayHandle.current;
       }
-      // Setup owns the temporary Gateway, so its cleanup must finish before
-      // the in-process TUI fallback is allowed to terminate the process.
-      scheduleProcessExitAfterTuiReturn();
       launchedTui = true;
     }
 

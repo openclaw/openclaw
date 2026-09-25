@@ -236,6 +236,28 @@ describe("registerPreActionHooks", () => {
     processTitleSetSpy.mockRestore();
   });
 
+  it("keeps update commands on the ordinary CLI title before activation", async () => {
+    observedProcessTitle = "openclaw-cli@0123456789abcdef";
+
+    await runPreAction({
+      parseArgv: ["update", "status"],
+      processArgv: ["node", "openclaw", "update", "status"],
+    });
+
+    expect(observedProcessTitle).toBe("openclaw");
+  });
+
+  it("preserves installation-scoped TUI identity", async () => {
+    observedProcessTitle = "openclaw-tui@0123456789abcdef";
+
+    await runPreAction({
+      parseArgv: ["tui"],
+      processArgv: ["node", "openclaw", "tui"],
+    });
+
+    expect(observedProcessTitle).toBe("openclaw-tui@0123456789abcdef");
+  });
+
   it.each([
     ["approvals", "pending"],
     ["skills"],
