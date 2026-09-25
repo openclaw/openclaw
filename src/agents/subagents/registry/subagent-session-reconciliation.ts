@@ -26,8 +26,9 @@ import {
 } from "./subagent-lifecycle-events.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { hasSubagentSessionOwnerInDatabase } from "./subagent-registry.store.sqlite.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 import { isStaleUnendedSubagentRun } from "./subagent-run-liveness.js";
+import { isSubagentChildStopUnconfirmed } from "./subagent-session-metrics.js";
 
 export type SubagentRunOrphanReason =
   | "missing-session-entry"
@@ -99,6 +100,7 @@ export function resolveSubagentRunOrphanReason(params: {
   // Execution, recovery, and completion obligations outlive individual turns.
   // Missing session metadata must not steal those owners or manufacture success.
   if (
+    isSubagentChildStopUnconfirmed(entry) ||
     entry.execution.outcome ||
     entry.collectorCompletion ||
     entry.requesterSettleWake ||
@@ -202,6 +204,67 @@ export function resolveSubagentSessionCompletion(params: {
     params.fallbackEndedAt,
     { notBeforeMs: params.notBeforeMs },
   );
+}
+
+/**
+ * Settle a registry row from its persisted child session entry.
+ *
+ * This is the only liveness re-observation available without a live agent run
+ * context: the session store is written by the child itself, so a terminal
+ * status there is stop evidence. A nonterminal status does not establish
+ * liveness, but leaves the stop unconfirmed. Callers relying on that
+ * must not first overwrite the entry with their own derived status.
+ *
+ * Returns what the child's own record says:
+ * - `settled` — terminal there, so the stop is observed and this completion has
+ *   been submitted through the ordinary lifecycle path.
+ * - `live` — the entry carries no fresh terminal evidence. Terminal effects must not
+ *   run against it.
+ * - `absent` — no usable session entry, so there is nothing to reconcile from.
+ *   This is the absence of evidence, not evidence of a stop: the entry is
+ *   best-effort and also reads absent when the store is unreadable or has not
+ *   been written yet. Callers deciding whether a child may still be alive must
+ *   fail closed on it rather than treat it as `settled`.
+ */
+export async function settleSubagentRunFromSessionStore(
+  completeSubagentRunWithRecovery: (
+    completion: SubagentCompletionRequest,
+    source: string,
+  ) => Promise<void>,
+  args: {
+    runId: string;
+    entry: SubagentRunRecord;
+    now: number;
+    source: string;
+  },
+): Promise<"settled" | "live" | "absent"> {
+  const sessionEntry = loadSubagentSessionEntry({
+    childSessionKey: args.entry.childSessionKey,
+  });
+  if (!sessionEntry) {
+    return "absent";
+  }
+  const completion = resolveCompletionFromSessionEntry(sessionEntry, args.now, {
+    notBeforeMs: args.entry.execution.startedAt ?? args.entry.createdAt,
+  });
+  if (!completion) {
+    return "live";
+  }
+  await completeSubagentRunWithRecovery(
+    {
+      runId: args.runId,
+      expectedEntry: args.entry,
+      startedAt: completion.startedAt,
+      endedAt: completion.endedAt,
+      outcome: completion.outcome,
+      reason: completion.reason,
+      sendFarewell: true,
+      accountId: args.entry.requesterOrigin?.accountId,
+      triggerCleanup: true,
+    },
+    args.source,
+  );
+  return "settled";
 }
 
 /** Resolve a fresh child session start time for lifecycle reconciliation. */

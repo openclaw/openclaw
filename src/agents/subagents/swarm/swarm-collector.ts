@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { consumeSwarmStructuredOutput } from "../../tools/structured-output-tool.js";
 import { ensureCompletionState } from "../registry/subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
+import { shouldDeferTerminalCleanupForUnconfirmedChild } from "../registry/subagent-registry-cleanup.js";
 import { updateSubagentArchiveAtMs } from "../registry/subagent-registry-helpers.js";
 import type { SwarmCollectorStatus } from "../registry/subagent-registry-read.types.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
@@ -56,6 +57,14 @@ export function updateSwarmCollectorCompletion(
   }
   const clearedPendingLaunch = entry.swarmLaunchPending === true;
   entry.swarmLaunchPending = false;
+  if (shouldDeferTerminalCleanupForUnconfirmedChild(entry)) {
+    const clearedCompletion = entry.collectorCompletion !== undefined;
+    if (clearedCompletion) {
+      delete entry.collectorCompletion;
+    }
+    const clearedArchiveDeadline = updateSubagentArchiveAtMs(entry, cfg);
+    return clearedPendingLaunch || clearedCompletion || clearedArchiveDeadline;
+  }
   const completion = ensureCompletionState(entry);
   const capturedAtAdded = completion.capturedAt === undefined;
   completion.capturedAt ??= Date.now();

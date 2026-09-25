@@ -1,4 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import fsSync from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions.js";
 import {
@@ -18,6 +21,7 @@ import {
 } from "../../../process/gateway-work-admission.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
+import { resolveSubagentAttachmentDir } from "../subagent-attachment-paths.js";
 import { reconcileDurableSubagentKillIntent } from "./subagent-registry-sweep-kill.js";
 import { retireSupersededSubagentRun } from "./subagent-registry-sweeper-retire.js";
 import {
@@ -711,6 +715,80 @@ describe("subagent registry recovery scheduling", () => {
     expect(completeCleanupBookkeeping).toHaveBeenCalledWith(
       expect.objectContaining({ runId: entry.runId, entry }),
     );
+  });
+
+  it("defers suspended-delivery expiry cleanup while the child stop is unconfirmed", async () => {
+    // The suspended-delivery branch runs at sweep phase 1, ahead of the
+    // unconfirmed-child reconciliation branch, so a `child-unconfirmed` row
+    // reaches seven-day retention expiry without ever passing the provisional
+    // guard. A retention clock is not stop evidence: the expiry may abandon the
+    // stale delivery, but nothing here may retire child-owned resources.
+    const runtime = { current: {} as GatewayRecoveryRuntime };
+    const { entry, completeCleanupBookkeeping, sweeper } = createHarness(runtime);
+    const attachmentId = "9b1e4c2a-7d3f-4a2e-8b5c-6f0d1a2b3c4d";
+    const stateDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-suspended-expiry-"));
+    const attachmentsDir = resolveSubagentAttachmentDir("main", entry.childSessionKey, attachmentId, {
+      ...process.env,
+      OPENCLAW_STATE_DIR: stateDir,
+    });
+    fsSync.mkdirSync(attachmentsDir, { recursive: true });
+    const artifactPath = path.join(attachmentsDir, "child-output.txt");
+    fsSync.writeFileSync(artifactPath, "written by a child that may still be running");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    entry.cleanup = "delete";
+    entry.attachmentId = attachmentId;
+    entry.expectsCompletionMessage = true;
+    entry.execution = {
+      status: "terminal",
+      startedAt: Date.now() - 60_000,
+      endedAt: Date.now() - 55_000,
+      outcome: { status: "timeout", timeoutDisposition: "child-unconfirmed" },
+    };
+    entry.delivery = {
+      status: "suspended",
+      suspendedAt: Date.now() - 8 * 24 * 60 * 60_000,
+      suspendedReason: "expiry",
+      payload: {
+        requesterSessionKey: entry.requesterSessionKey,
+        requesterDisplayKey: entry.requesterDisplayKey,
+        childSessionKey: entry.childSessionKey,
+        childRunId: entry.runId,
+        task: entry.task,
+      },
+    };
+
+    try {
+      await sweeper.sweepOnce();
+
+      // Terminal cleanup deferred. `cleanup: "keep"` is the load-bearing value:
+      // in the real bookkeeping, `"delete"` with `skipRequesterSettleWake` takes
+      // the `retireAfterSettle` path and calls `runs.delete(runId)`, and a
+      // retired row can never be promoted by a later observed stop at all.
+      expect(completeCleanupBookkeeping).toHaveBeenCalledWith(
+        expect.objectContaining({ runId: entry.runId, entry, cleanup: "keep" }),
+      );
+      expect(fsSync.existsSync(artifactPath)).toBe(true);
+
+      // Anti-vacuity control: the same expired suspended row, once the child's
+      // stop has actually been observed, does reach the deletion. Without this
+      // half the assertions above could pass on an unreachable code path.
+      completeCleanupBookkeeping.mockClear();
+      entry.execution = {
+        ...entry.execution,
+        outcome: { status: "timeout", timeoutDisposition: "child-stopped" },
+      };
+      entry.cleanupCompletedAt = undefined;
+
+      await sweeper.sweepOnce();
+
+      expect(completeCleanupBookkeeping).toHaveBeenCalledWith(
+        expect.objectContaining({ runId: entry.runId, entry, cleanup: "delete" }),
+      );
+      expect(fsSync.existsSync(attachmentsDir)).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+      fsSync.rmSync(stateDir, { recursive: true, force: true });
+    }
   });
 
   it("archives a retired recovery row without deleting its newer child session", async () => {

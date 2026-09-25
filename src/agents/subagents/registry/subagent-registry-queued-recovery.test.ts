@@ -126,6 +126,7 @@ function createRegistrationFixture() {
     notifyContextEngineSubagentEnded: async () => {},
     completeCleanupBookkeeping: () => {},
     completeSubagentRun: async () => {},
+    reportSubagentWaitExpiry: async () => {},
     resolveSubagentTask: () => ({ lookup: "unavailable" }),
   };
   const manager = createSubagentRunManager(options);

@@ -1,6 +1,7 @@
 /** Canonical ordering and visibility for numbered subagent lists and targets. */
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isRetainedUnendedSubagentRun } from "./subagent-run-liveness.js";
+import { isSubagentChildStopUnconfirmed } from "./subagent-session-metrics.js";
 
 function sortSubagentRuns(runs: readonly SubagentRunRecord[]): SubagentRunRecord[] {
   return runs.toSorted((a, b) => {
@@ -32,6 +33,10 @@ export function buildSubagentRunView(params: {
     latest.push(entry);
     if (
       isRetainedUnendedSubagentRun(entry, now) ||
+      // Legacy expiry rows may carry provisional endedAt; newer observations
+      // may outlive the unended liveness window. Neither proves a child stop.
+      // Keep them visible for re-observation, not alongside confirmed endings.
+      isSubagentChildStopUnconfirmed(entry) ||
       (entry.pauseReason === "sessions_yield" &&
         !entry.killReconciliation &&
         !entry.killIntent &&

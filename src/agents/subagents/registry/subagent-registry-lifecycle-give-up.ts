@@ -5,6 +5,8 @@ import {
 } from "./subagent-delivery-state.js";
 import {
   resolveCleanupCompletionReason,
+  resolveEffectiveCleanupMode,
+  shouldDeleteSubagentAttachments,
   shouldSuspendPendingFinalDelivery,
 } from "./subagent-registry-cleanup.js";
 import { logAnnounceGiveUp, safeRemoveAttachmentsDir } from "./subagent-registry-helpers.js";
@@ -65,7 +67,7 @@ export const finalizeResumedAnnounceGiveUp = async (
   const completion = ensureCompletionState(entry);
   completion.fallbackResultText = undefined;
   completion.fallbackCapturedAt = undefined;
-  if ((cleanup ?? entry.cleanup) === "delete" || !entry.retainAttachmentsOnKeep) {
+  if (shouldDeleteSubagentAttachments(entry, cleanup)) {
     await safeRemoveAttachmentsDir(entry);
   }
   if (
@@ -82,7 +84,7 @@ export const finalizeResumedAnnounceGiveUp = async (
   context.completeCleanupBookkeeping({
     runId,
     entry,
-    cleanup: cleanup ?? entry.cleanup,
+    cleanup: resolveEffectiveCleanupMode(entry, cleanup),
     completedAt: completedAt ?? Date.now(),
   });
   if (!context.shouldSuppressSessionEffects(entry)) {

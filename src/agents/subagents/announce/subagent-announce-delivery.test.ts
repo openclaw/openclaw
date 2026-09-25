@@ -2029,6 +2029,63 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 
+  // Wait expiry observes only the waiter, not failure of its child. Exercise
+  // the actual DM fallback after the requester supplies no delivered update.
+  it.each([
+    { response: "silent", disposition: "still-running", failedChild: false },
+    { response: "synthesis error", disposition: "still-running", failedChild: false },
+    { response: "silent", disposition: "exited", failedChild: true },
+    { response: "synthesis error", disposition: "exited", failedChild: true },
+  ] as const)(
+    "distinguishes provisional expiry from terminal failure for $response / $disposition",
+    async ({ response, disposition, failedChild }) => {
+      const requesterError = "requester synthesis unavailable";
+      const callGateway = createGatewayMock({ result: { payloads: [{ text: "NO_REPLY" }] } });
+      if (response === "synthesis error") {
+        vi.mocked(callGateway).mockRejectedValue(new Error(requesterError));
+      }
+      const sendMessage = createSendMessageMock();
+      const childSessionKey = "agent:worker:subagent:provisional-expiry";
+      const result = await deliverDiscordDirectMessageCompletion({
+        callGateway,
+        sendMessage,
+        sourceTool: "subagent_announce",
+        sourceSessionKey: childSessionKey,
+        internalEvents: taskCompletionEvents({
+          childSessionKey,
+          childSessionId: "provisional-expiry-session",
+          status: "timeout",
+          statusLabel: failedChild ? "timed out" : "wait expired; child stop NOT observed",
+          disposition,
+          result: failedChild
+            ? "(no output)"
+            : "(no output observed before this wait expired; the child may still be working — re-check before acting on this)",
+          noVisibleResult: true,
+        }),
+      });
+
+      expect(callGateway).toHaveBeenCalledOnce();
+      if (failedChild) {
+        expect(sendMessage).toHaveBeenCalledOnce();
+        expect(mockCallArg(sendMessage, 0, 0).content).toBe(
+          "A delegated task failed before it could report a result. Please retry the task.",
+        );
+        expectRecordFields(result, { delivered: true, path: "direct" });
+      } else {
+        expect(sendMessage).not.toHaveBeenCalled();
+        // An unobserved stop is neither a failed child nor a delivery receipt.
+        expectRecordFields(result, { delivered: false, path: "direct" });
+        expect(result.requesterVisibleFinalDelivered).toBeUndefined();
+        if (response === "synthesis error") {
+          expect(result.disposition).toBe("retryable");
+          expect(result.error).toContain(requesterError);
+        } else {
+          expect(result.reason).toBe("message_tool_delivery_missing");
+        }
+      }
+    },
+  );
+
   it("delivers a generic notice for failed subagent placeholder output", async () => {
     const callGateway = createPayloadGatewayMock();
     const sendMessage = createSendMessageMock();
@@ -2667,6 +2724,56 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       to: undefined,
       bestEffortDeliver: true,
     });
+  });
+
+  // A wait-expiry publication describes the waiter, not the run. It is
+  // provisional and owes no terminal visible result, so an intentionally silent
+  // requester turn settles it; the announce owner used to map the missing reply
+  // to `retryable` and the wait manager scheduled another attempt.
+  it.each([
+    {
+      name: "a terminal completion still owes a visible reply",
+      disposition: "exited" as const,
+      expected: {
+        delivered: false,
+        path: "direct",
+        reason: "visible_reply_missing",
+        error: "completion agent did not produce a visible reply",
+      },
+    },
+    {
+      name: "a provisional still-running expiry notification settles silently",
+      disposition: "still-running" as const,
+      expected: { delivered: true, path: "direct" },
+    },
+  ])("%s", async ({ disposition, expected }) => {
+    const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
+      result: { payloads: [{ text: "NO_REPLY" }] },
+    });
+    testing.setDepsForTest({
+      dispatchGatewayMethodInProcess,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session-local",
+        isActive: false,
+      }),
+      getRuntimeConfig: () => ({}) as never,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:main:local-session",
+      targetRequesterSessionKey: "agent:main:local-session",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterIsSubagent: false,
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+      directIdempotencyKey: `announce-local-subagent-silent-${disposition}`,
+      sourceTool: "subagent_announce",
+      sourceSessionKey: "agent:worker:subagent:child",
+      internalEvents: taskCompletionEvents({ disposition, noVisibleResult: true }),
+    });
+
+    expectRecordFields(result, expected);
   });
 
   it.each([

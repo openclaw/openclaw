@@ -111,6 +111,7 @@ vi.mock("./subagent-announce-delivery.js", () => ({
     };
     requesterSessionOrigin?: { provider?: string; channel?: string };
     bestEffortDeliver?: boolean;
+    completionTarget?: "parent";
     directIdempotencyKey?: string;
     internalEvents?: unknown;
   }) => {
@@ -125,7 +126,9 @@ vi.mock("./subagent-announce-delivery.js", () => ({
         message: params.triggerMessage,
         deliver: !params.requesterIsSubagent,
         bestEffortDeliver: params.bestEffortDeliver,
+        completionTarget: params.completionTarget,
         internalEvents: params.internalEvents,
+        idempotencyKey: params.directIdempotencyKey,
         ...(params.requesterIsSubagent
           ? {}
           : {
@@ -307,6 +310,23 @@ describe("subagent announce timeout config", () => {
       (call) => call.method === "agent" && call.expectFinal === true,
     );
     expect(directAgentCall?.timeoutMs).toBe(120_000);
+  });
+
+  it("gives a provisional wait-expiry wake a distinct delivery identity", async () => {
+    await runAnnounceFlowForTest("run-phased-delivery", {
+      outcome: { status: "timeout", disposition: "still-running" },
+      deliveryPhase: "wait-expiry",
+    });
+    const provisionalKey = findFinalDirectAgentCall()?.params?.idempotencyKey;
+
+    gatewayCalls.length = 0;
+    await runAnnounceFlowForTest("run-phased-delivery");
+    const terminalKey = findFinalDirectAgentCall()?.params?.idempotencyKey;
+
+    expect(provisionalKey).toBe(
+      "announce:v1:agent:main:subagent:worker:run-phased-delivery:wait-expiry",
+    );
+    expect(terminalKey).toBe("announce:v1:agent:main:subagent:worker:run-phased-delivery");
   });
 
   it("honors configured announce timeout for direct announce agent call", async () => {
@@ -560,6 +580,97 @@ describe("subagent announce timeout config", () => {
     expect(gatewayCalls.some((call) => call.method === "chat.history")).toBe(false);
   });
 
+  // Regression: openclaw-kkv1. A wait that expired without observing the child
+  // stop was announced identically to a child that really died ("timed out",
+  // "(no output)"), so a parent read it as death and spawned a successor into
+  // the still-live child's git worktree. These pin the two apart.
+  it("announces an unobserved child stop as an expired wait, not as a death", async () => {
+    await runAnnounceFlowForTest("run-timeout-wait-expiry", {
+      outcome: { status: "timeout", timeoutDisposition: "child-unconfirmed" },
+      roundOneReply: undefined,
+    });
+
+    const directAgentCall = findFinalDirectAgentCall();
+    const internalEvents =
+      (directAgentCall?.params?.internalEvents as Array<{
+        status?: string;
+        statusLabel?: string;
+        result?: string;
+        replyInstruction?: string;
+      }>) ?? [];
+    const event = internalEvents[0];
+    expect(event?.status).toBe("timeout");
+    expect(event?.statusLabel).toContain("wait expired");
+    expect(event?.statusLabel).toContain("may still be running");
+    // The old wording is what read as death; it must not survive here.
+    expect(event?.statusLabel).not.toBe("timed out");
+    expect(event?.result).not.toBe("(no output)");
+    expect(event?.result).toContain("may still be working");
+    // The successor-spawn is the damaging move, so the instruction says so.
+    expect(event?.replyInstruction).toContain("successor");
+    expect(event?.replyInstruction).not.toContain("A completed");
+  });
+
+  it("still announces an observed child run timeout as terminal", async () => {
+    await runAnnounceFlowForTest("run-timeout-child-stopped", {
+      outcome: { status: "timeout", timeoutDisposition: "child-stopped" },
+      roundOneReply: undefined,
+    });
+
+    const directAgentCall = findFinalDirectAgentCall();
+    const internalEvents =
+      (directAgentCall?.params?.internalEvents as Array<{
+        status?: string;
+        statusLabel?: string;
+        result?: string;
+        replyInstruction?: string;
+      }>) ?? [];
+    const event = internalEvents[0];
+    expect(event?.status).toBe("timeout");
+    expect(event?.statusLabel).toBe("timed out");
+    expect(event?.result).toBe("(no output)");
+    expect(event?.replyInstruction).not.toContain("successor");
+  });
+
+  it("keeps a real child reply as the result when only the wait expired", async () => {
+    await runAnnounceFlowForTest("run-timeout-wait-expiry-with-output", {
+      outcome: { status: "timeout", timeoutDisposition: "child-unconfirmed" },
+      roundOneReply: "partial progress so far",
+    });
+
+    const directAgentCall = findFinalDirectAgentCall();
+    const internalEvents =
+      (directAgentCall?.params?.internalEvents as Array<{
+        statusLabel?: string;
+        result?: string;
+      }>) ?? [];
+    expect(internalEvents[0]?.result).toBe("partial progress so far");
+    expect(internalEvents[0]?.statusLabel).toContain("wait expired");
+  });
+
+  it("keeps authoritative empty success intentional without transcript inference", async () => {
+    chatHistoryMessages = [
+      { role: "assistant", content: [{ type: "text", text: "stale transcript output" }] },
+    ];
+
+    await runAnnounceFlowForTest("run-ok-empty-terminal", {
+      outcome: { status: "ok" },
+      roundOneReply: undefined,
+      terminalReply: { disposition: "empty" },
+    });
+
+    const directAgentCall = findFinalDirectAgentCall();
+    const internalEvents =
+      (directAgentCall?.params?.internalEvents as Array<{
+        result?: string;
+        noVisibleResult?: boolean;
+      }>) ?? [];
+    expect(internalEvents[0]?.result).toBe("(no output)");
+    // The absence of child output is a fact on the event, not just display copy.
+    expect(internalEvents[0]?.noVisibleResult).toBe(true);
+    expect(gatewayCalls.some((call) => call.method === "chat.history")).toBe(false);
+  });
+
   it("keeps delete-mode timeout retryable while the embedded child request is still active", async () => {
     sessionStore["agent:main:subagent:worker"] = {
       sessionId: "child-session",
@@ -692,5 +803,174 @@ describe("subagent announce timeout config", () => {
     expect(internalEvents[0]?.result).toContain(
       "A longer partial summary that should stay silent.",
     );
+  });
+});
+
+// A wait that expires while the child keeps working produced an event reading
+// `status: timed out` / `(no output)` / `tokens 0`: three independent signals
+// all saying the child died. A parent acted on it and spawned a successor into
+// the live child's git worktree. Every one of those signals is pinned here.
+describe("subagent announce still-running disposition", () => {
+  beforeEach(() => {
+    gatewayCalls.length = 0;
+    chatHistoryMessages = [];
+    callGatewayImpl = async (request) => {
+      if (request.method === "chat.history") {
+        return { messages: [] };
+      }
+      return {};
+    };
+    // Token counters exist but are mid-turn zeros, exactly as observed: the
+    // child had not flushed usage because it had not finished.
+    sessionStore = {
+      "agent:main:subagent:worker": { sessionId: "child-session", inputTokens: 0, outputTokens: 0 },
+    };
+    configOverride = { session: defaultSessionConfig };
+    requesterDepthResolver = () => 0;
+    subagentSessionRunActive = true;
+    shouldIgnorePostCompletion = false;
+    pendingDescendantRuns = 0;
+    isEmbeddedAgentRunActiveMock.mockReset().mockReturnValue(false);
+    waitForEmbeddedAgentRunEndMock.mockReset().mockResolvedValue(true);
+    fallbackRequesterResolution = null;
+  });
+
+  const runWaitExpiryAnnounce = async (
+    runId: string,
+    disposition?: "still-running",
+    error?: string,
+  ) =>
+    await runAnnounceFlowForTest(runId, {
+      outcome: {
+        status: "timeout",
+        ...(error ? { error } : {}),
+        ...(disposition ? { disposition } : {}),
+      },
+      roundOneReply: undefined,
+      startedAt: 1_000,
+      endedAt: 5_401_000,
+    });
+
+  const readAnnouncedEvent = () => {
+    const directAgentCall = findFinalDirectAgentCall();
+    const [event] =
+      (directAgentCall?.params?.internalEvents as Array<{
+        statusLabel?: string;
+        disposition?: string;
+        result?: string;
+        statsLine?: string;
+      }>) ?? [];
+    const message = directAgentCall?.params?.message;
+    return { event, message: typeof message === "string" ? message : "" };
+  };
+
+  it("reports a live child as still running instead of timed out", async () => {
+    await runWaitExpiryAnnounce("run-wait-expiry-live", "still-running");
+
+    const { event, message } = readAnnouncedEvent();
+    expect(event?.disposition).toBe("still-running");
+    expect(event?.statusLabel).toBe(
+      "wait expired; child stop NOT observed — it may still be running",
+    );
+    expect(event?.result).toBe(
+      "(no output observed before this wait expired; the child may still be working — re-check before acting on this)",
+    );
+    expect(event?.statsLine).toBe("Stats: waited 1h30m • child tokens not yet reported");
+    // The rendered prompt is what a parent actually reads, so assert there too:
+    // no "timed out", no "(no output)", no zeroed token total.
+    expect(message).toContain(
+      "status: wait expired; child stop NOT observed — it may still be running",
+    );
+    expect(message).toContain("disposition: still-running");
+    expect(message).not.toContain("timed out");
+    expect(message).not.toContain("(no output)");
+    expect(message).not.toContain("tokens 0");
+  });
+
+  it("tells the parent not to replace a child that has not stopped", async () => {
+    await runWaitExpiryAnnounce("run-wait-expiry-instruction", "still-running");
+
+    const { message } = readAnnouncedEvent();
+    expect(message).toContain("is NOT known to have finished");
+    expect(message).toContain("do not start a replacement");
+  });
+
+  it("keeps a private child's provisional wake parent-only", async () => {
+    await runAnnounceFlowForTest("run-wait-expiry-private", {
+      outcome: { status: "timeout", disposition: "still-running" },
+      roundOneReply: undefined,
+      expectsCompletionMessage: true,
+      completionTarget: "parent",
+      completionRequesterSessionId: "private-parent",
+      requesterOrigin: { channel: "discord", to: "chan-main", accountId: "acct-main" },
+      suppressChildSessionEffects: true,
+      startedAt: 1_000,
+      endedAt: 5_401_000,
+    });
+
+    // Delivery decides the external target from this field alone; the
+    // provisional wake must hand it over exactly like a terminal announce.
+    expect(findFinalDirectAgentCall()?.params?.completionTarget).toBe("parent");
+    const { message } = readAnnouncedEvent();
+    expect(message).toContain("is NOT known to have finished");
+    expect(message).toContain("Your final reply stays internal; no external response is required.");
+    expect(message).not.toContain("to the user");
+  });
+
+  it("preserves the last retry-grace error while reporting the child as live", async () => {
+    await runWaitExpiryAnnounce(
+      "run-wait-expiry-error-grace",
+      "still-running",
+      "model returned an unrecoverable tool-call sequence",
+    );
+
+    const { event, message } = readAnnouncedEvent();
+    expect(event?.statusLabel).toBe(
+      "wait expired; child stop NOT observed — it may still be running (last error while retrying: model returned an unrecoverable tool-call sequence)",
+    );
+    expect(message).toContain("last error while retrying");
+    expect(message).toContain("model returned an unrecoverable tool-call sequence");
+  });
+
+  it("still reports a genuinely stopped child as timed out", async () => {
+    await runWaitExpiryAnnounce("run-wait-expiry-exited");
+
+    const { event, message } = readAnnouncedEvent();
+    expect(event?.disposition).toBe("exited");
+    expect(event?.statusLabel).toBe("timed out");
+    expect(event?.result).toBe("(no output)");
+    expect(event?.statsLine).toBe("Stats: runtime 1h30m • tokens 0 (in 0 / out 0)");
+    expect(message).toContain("status: timed out");
+    expect(message).toContain("disposition: exited");
+  });
+
+  it("never submits delete cleanup for a session the live child still owns", async () => {
+    // onBeforeDeleteChildSession is the delete-submission fence; reaching it at
+    // all means the flow was about to remove a running child's session.
+    const onBeforeDeleteChildSession = vi.fn(() => true);
+
+    await runAnnounceFlowForTest("run-wait-expiry-no-delete", {
+      outcome: { status: "timeout", disposition: "still-running" },
+      roundOneReply: undefined,
+      cleanup: "delete",
+      onBeforeDeleteChildSession,
+    });
+
+    expect(onBeforeDeleteChildSession).not.toHaveBeenCalled();
+  });
+
+  it("keeps a terminal timeout exited when the embedded active map lags", async () => {
+    isEmbeddedAgentRunActiveMock.mockReset().mockReturnValue(true);
+    waitForEmbeddedAgentRunEndMock.mockReset().mockResolvedValue(false);
+
+    await runAnnounceFlowForTest("run-wait-expiry-embedded-active", {
+      outcome: { status: "timeout" },
+      roundOneReply: undefined,
+      waitForCompletion: false,
+      cleanup: "keep",
+    });
+
+    const { event } = readAnnouncedEvent();
+    expect(event?.disposition).toBe("exited");
   });
 });

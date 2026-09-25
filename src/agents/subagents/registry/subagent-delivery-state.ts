@@ -38,8 +38,26 @@ export function projectSubagentRunForSessionList(entry: SubagentRunRecord): Suba
       status: entry.execution.status,
       ...(entry.execution.startedAt !== undefined ? { startedAt: entry.execution.startedAt } : {}),
       ...(entry.execution.endedAt !== undefined ? { endedAt: entry.execution.endedAt } : {}),
-      ...(entry.execution.outcome ? { outcome: { status: entry.execution.outcome.status } } : {}),
+      ...(entry.execution.outcome
+        ? {
+            outcome: {
+              status: entry.execution.outcome.status,
+              ...(entry.execution.outcome.disposition
+                ? { disposition: entry.execution.outcome.disposition }
+                : {}),
+              // Carried, not dropped: without it every session-list reader sees a
+              // deadline-only expiry as an ordinary `timeout` and reports a
+              // possibly-live child as dead.
+              ...(entry.execution.outcome.timeoutDisposition
+                ? { timeoutDisposition: entry.execution.outcome.timeoutDisposition }
+                : {}),
+            },
+          }
+        : {}),
     },
+    ...(entry.waitExpiryObservedAt !== undefined
+      ? { waitExpiryObservedAt: entry.waitExpiryObservedAt }
+      : {}),
     ...(entry.sessionStartedAt !== undefined ? { sessionStartedAt: entry.sessionStartedAt } : {}),
     ...(entry.accumulatedRuntimeMs !== undefined
       ? { accumulatedRuntimeMs: entry.accumulatedRuntimeMs }

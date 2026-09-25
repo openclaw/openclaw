@@ -12,6 +12,8 @@ import {
   resolveCleanupCompletionReason,
   resolveAnnounceDeliveryDeadline,
   resolveDeferredCleanupDecision,
+  resolveEffectiveCleanupMode,
+  shouldDeleteSubagentAttachments,
   shouldSuspendPendingFinalDelivery,
 } from "./subagent-registry-cleanup.js";
 import {
@@ -108,7 +110,7 @@ export const resumeAncestorCleanup = (
 const finalizeSubagentCleanup = async (
   context: SubagentLifecycleAnnounceCleanupContext,
   runId: string,
-  cleanup: "delete" | "keep",
+  requestedCleanup: "delete" | "keep",
   announceOutcome: SubagentAnnounceFlowOutcome,
   cleanupGeneration: number,
   options?: {
@@ -122,6 +124,9 @@ const finalizeSubagentCleanup = async (
   if (!entry) {
     return;
   }
+  // Re-resolved against the committed outcome: an unconfirmed child must not
+  // have its session or attachments destroyed by this attempt.
+  const cleanup = resolveEffectiveCleanupMode(entry, requestedCleanup);
   if (!context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
     await retireSupersededCleanupIfNeeded(context, runId, entry, cleanupGeneration);
     return;
@@ -154,7 +159,7 @@ const finalizeSubagentCleanup = async (
       entry.suppressCompletionDelivery = undefined;
     }
     entry.wakeOnDescendantSettle = undefined;
-    if (cleanup === "delete" || !entry.retainAttachmentsOnKeep) {
+    if (shouldDeleteSubagentAttachments(entry, cleanup)) {
       await safeRemoveAttachmentsDir(entry);
     }
     if (!context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
@@ -219,7 +224,7 @@ const finalizeSubagentCleanup = async (
     completion.fallbackResultText = undefined;
     completion.fallbackCapturedAt = undefined;
     const completionReason = resolveCleanupCompletionReason(entry);
-    if (cleanup === "delete" || !entry.retainAttachmentsOnKeep) {
+    if (shouldDeleteSubagentAttachments(entry, cleanup)) {
       await safeRemoveAttachmentsDir(entry);
     }
     if (!context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
@@ -327,7 +332,12 @@ export const startSubagentAnnounceCleanupFlow = (
     // kill. The sweeper re-enters here after durable reconciliation.
     return false;
   }
-  const cleanup = entry.cleanup;
+  // A run completed on its deadline with no observed child stop keeps its child
+  // session: deleting it would destroy a session that may still be in use, and
+  // the announce this flow is about to send says exactly that the child may
+  // still be running. `entry.cleanup` is untouched, so the run's real mode is
+  // restored the moment observed stop evidence promotes the row.
+  const cleanup = resolveEffectiveCleanupMode(entry);
   const skipRequesterDelivery = entry.suppressCompletionDelivery === true;
   // The spawning turn decides between individual review and a yielded batch.
   // Keep private results durable without admitting a competing requester turn.

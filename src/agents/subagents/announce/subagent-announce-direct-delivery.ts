@@ -25,11 +25,7 @@ import {
   classifyAgentRunTerminalOutcome,
 } from "../../agent-run-terminal-outcome.js";
 import type { EmbeddedAgentQueueMessageOptions } from "../../embedded-agent-runner/run-state.js";
-import {
-  AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION,
-  hasFailedSubagentNoOutputCompletion,
-  hasVisibleCompletionResult,
-} from "../../internal-event-contract.js";
+import { AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION } from "../../internal-event-contract.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
 import {
   formatActiveWakeFailure,
@@ -40,6 +36,8 @@ import {
 import {
   deliverCompletionDirect,
   isDirectMessageDeliveryTarget,
+  isFailedTerminalSubagentCompletion,
+  requiresSubagentNoOutputCompletionReply,
   resolveRequesterRecoveryDelivery,
   runAnnounceAgentCall,
 } from "./subagent-announce-completion-delivery.js";
@@ -163,13 +161,11 @@ export async function sendSubagentAnnounceDirectly(
         ? subagentCompletionEvents[0]
         : undefined;
     const hasFailedTrustedSubagentCompletion =
-      trustedCompletionEvent !== undefined && trustedCompletionEvent.status !== "ok";
+      isFailedTerminalSubagentCompletion(trustedCompletionEvent);
     const hasRequiredSubagentNoOutputCompletion =
       params.expectsCompletionMessage &&
       isSubagentCompletion &&
-      ((trustedCompletionEvent !== undefined &&
-        !hasVisibleCompletionResult(trustedCompletionEvent)) ||
-        hasFailedSubagentNoOutputCompletion(params.internalEvents));
+      requiresSubagentNoOutputCompletionReply(trustedCompletionEvent, params.internalEvents);
     const hasSuccessfulTrustedSubagentNoOutputCompletion =
       hasRequiredSubagentNoOutputCompletion && trustedCompletionEvent?.status === "ok";
     const textCompletionDirectDeliveryKind = hasFailedTrustedSubagentCompletion
@@ -402,6 +398,7 @@ export async function sendSubagentAnnounceDirectly(
       shouldDeliverAgentFinal,
       requiresMessageToolDelivery,
       isSubagentCompletion,
+      trustedCompletionEvent,
       hasSuccessfulTrustedSubagentNoOutputCompletion,
       hasRequiredSubagentNoOutputCompletion,
       subagentDirectMessageCompletionRequiresMessageTool,

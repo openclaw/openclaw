@@ -13,6 +13,7 @@ import type {
   SessionIdentityMutationListener,
 } from "../../../sessions/session-lifecycle-events.js";
 import { notifyListeners, registerListener } from "../../../shared/listeners.js";
+import type { SubagentAnnounceFlowOutcome } from "../announce/subagent-announce.js";
 import type {
   persistSubagentRunsToDisk,
   persistSubagentRunsToDiskOrThrow,
@@ -95,7 +96,7 @@ export function createSubagentRegistryMockState() {
     ),
     captureSubagentCompletionReply: vi.fn(async () => "final completion reply"),
     cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
-    runSubagentAnnounceFlow: vi.fn(async (): Promise<"delivered" | "retryable"> => "delivered"),
+    runSubagentAnnounceFlow: vi.fn(async (): Promise<SubagentAnnounceFlowOutcome> => "delivered"),
     getGlobalHookRunner: vi.fn(() => null),
     ensureContextEnginesInitialized: vi.fn(),
     loadAgentRuntimePluginRegistryHandle: vi.fn(),
