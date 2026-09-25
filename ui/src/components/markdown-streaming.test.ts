@@ -1,3 +1,4 @@
+import DOMPurify from "dompurify";
 import { describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
 import * as markdownDetails from "./markdown-details.ts";
@@ -7,6 +8,69 @@ import { htmlFragment } from "./markdown.test-support.ts";
 import { toSanitizedMarkdownHtml, toStreamingMarkdownParts } from "./markdown.ts";
 
 describe("toStreamingMarkdownParts", () => {
+  it("renders completed paragraphs with linear sanitizer input", () => {
+    const sanitize = vi.spyOn(DOMPurify, "sanitize");
+    let source = "";
+    try {
+      for (let index = 0; index < 40; index++) {
+        source += `Stable paragraph ${index} has **formatted** text.\n\n`;
+        const fragment = htmlFragment(
+          toStreamingMarkdownParts(source, {}, "stable-render-budget").join(""),
+        );
+        expect(fragment.querySelectorAll("p")).toHaveLength(index + 1);
+        expect(fragment.querySelectorAll("strong")).toHaveLength(index + 1);
+      }
+      const sanitizedChars = sanitize.mock.calls.reduce(
+        (total, [input]) => total + (typeof input === "string" ? input.length : 0),
+        0,
+      );
+      expect(sanitizedChars).toBeLessThan(source.length * 2);
+    } finally {
+      sanitize.mockRestore();
+    }
+  });
+
+  it("retires rendered prefixes when display options, locale, or source change", async () => {
+    const key = "rendered-prefix-ownership";
+    const source = "![Diagram](https://example.com/image.png)\n\n";
+    expect(
+      htmlFragment(toStreamingMarkdownParts(source, {}, key).join("")).querySelector("img"),
+    ).toBeNull();
+    expect(
+      htmlFragment(toStreamingMarkdownParts(source, { remoteImages: true }, key).join(""))
+        .querySelector("img")
+        ?.getAttribute("src"),
+    ).toBe("https://example.com/image.png");
+    i18n.registerTranslation("pt-BR", {
+      chat: { externalImage: { notLoaded: "Imagem não carregada", open: "Abrir" } },
+    });
+    await i18n.setLocale("pt-BR");
+    try {
+      expect(toStreamingMarkdownParts(source, {}, key).join("")).toContain("Imagem não carregada");
+      expect(toStreamingMarkdownParts("Replacement\n\n", {}, key).join("")).toBe(
+        "<p>Replacement</p>\n",
+      );
+    } finally {
+      await i18n.setLocale("en");
+    }
+  });
+
+  it("relabels earlier file links when later blocks introduce a basename collision", () => {
+    const key = "streamed-file-labels";
+    const source = "See src/one/index.ts.\n\n";
+    toStreamingMarkdownParts(source, { fileLinks: true }, key);
+    const fragment = htmlFragment(
+      toStreamingMarkdownParts(
+        `${source}Also src/two/index.ts.\n\n`,
+        { fileLinks: true },
+        key,
+      ).join(""),
+    );
+    expect(
+      [...fragment.querySelectorAll(".markdown-file-link")].map((link) => link.textContent),
+    ).toEqual(["one/index.ts", "two/index.ts"]);
+  });
+
   it("does not rescan completed disclosures in appended prefixes", () => {
     const prefixes: string[] = [];
     let prefix = "<details><summary>Done</summary></details>\n\n";
@@ -74,6 +138,8 @@ describe("toStreamingMarkdownParts", () => {
       "- one\n\n  - nested\n\n[Docs][ref\\]]\n\n[ref\\]]: /docs",
       "`` multiline\n<details> remains code\n``\n\n<details>\n<summary>Real</summary>",
       "- item\n\n    <details>\n    <summary>Logs</summary>\n\n    still inside",
+      "Intro\n\n    code\n\n    continuation\n\nAfter\n\n",
+      "> First quote\n\n> Second quote\n\nAfter\n\n",
       "1. item\n\n    <details>\n    <summary>Logs</summary>\n\n    still inside",
       ...[
         "> <!--\n> **literal",
