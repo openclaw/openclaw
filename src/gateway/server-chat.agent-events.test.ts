@@ -45,6 +45,19 @@ const logErrorMock = vi.fn();
 const logWarnMock = vi.fn();
 const normalizeLiveAssistantBufferedTextMock = vi.hoisted(() => vi.fn());
 const loadGatewaySessionRow = vi.hoisted(() => vi.fn());
+const readLatestSessionTranscriptMessageEventMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../config/sessions/session-accessor.sqlite-active-events.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../config/sessions/session-accessor.sqlite-active-events.js")
+    >();
+  return {
+    ...actual,
+    readLatestSessionTranscriptMessageEvent: (...args: unknown[]) =>
+      readLatestSessionTranscriptMessageEventMock(...args),
+  };
+});
 
 vi.mock("../logger.js", () => ({
   logError: (...args: unknown[]) => logErrorMock(...args),
@@ -144,6 +157,7 @@ describe("agent event handler", () => {
         legacyKey: undefined,
       });
     vi.mocked(loadGatewaySessionRow).mockReset().mockReturnValue(null);
+    readLatestSessionTranscriptMessageEventMock.mockReset().mockReturnValue(undefined);
     loadGatewaySessionLifecycleSnapshotMock
       .mockReset()
       .mockImplementation((sessionKey, options) => ({
@@ -2242,9 +2256,39 @@ describe("agent event handler", () => {
     nowSpy?.mockRestore();
   });
 
-  it("keeps a media-only assistant event pending without an empty or raw delta", () => {
+  it("promotes a persisted managed image into the media-only terminal message", () => {
     const { broadcast, chatRunState, handler, nowSpy } = createHarness({ now: 1_000 });
     registerNamedChatRun(chatRunState, "media-only");
+    vi.mocked(loadSessionEntry).mockReturnValue({
+      cfg: {},
+      agentId: "main",
+      storePath: "/tmp/sessions.sqlite",
+      store: {},
+      entry: { sessionId: "session-id", updatedAt: 1_000 },
+      canonicalKey: "session-1",
+      storeKeys: ["session-1"],
+      legacyKey: undefined,
+    });
+    readLatestSessionTranscriptMessageEventMock.mockReturnValue({
+      event: {
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "MEDIA:./attachment-catalog-tiny/demo.jpg" }],
+          __openclaw: { runId: "run-media-only" },
+          openclawDelivery: { mediaUrls: ["./attachment-catalog-tiny/demo.jpg"] },
+          openclawDisplayContent: [
+            {
+              type: "image",
+              artifactId: "artifact_managed_image_00000000-0000-4000-8000-000000000001",
+              url: "/api/chat/media/outgoing/session-1/image-id/full",
+              openUrl: "/api/chat/media/outgoing/session-1/image-id/full",
+              alt: "demo.jpg",
+              mimeType: "image/jpeg",
+            },
+          ],
+        },
+      },
+    });
 
     emitAgentEvent(
       handler,
@@ -2263,7 +2307,19 @@ describe("agent event handler", () => {
       state?: string;
       message?: unknown;
     }>;
-    expect(payloads).toEqual([expect.objectContaining({ state: "final", message: undefined })]);
+    expect(payloads).toEqual([
+      expect.objectContaining({
+        state: "final",
+        message: expect.objectContaining({
+          content: [
+            expect.objectContaining({
+              type: "image",
+              url: "/api/chat/media/outgoing/session-1/image-id/full",
+            }),
+          ],
+        }),
+      }),
+    ]);
     expect(JSON.stringify(payloads)).not.toContain("MEDIA:");
     nowSpy?.mockRestore();
   });

@@ -1,6 +1,7 @@
 // Gateway chat runtime projects agent events into chat/session subscriber
 // streams, lifecycle persistence, heartbeat visibility, and live UI updates.
 import { performance } from "node:perf_hooks";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { Value } from "typebox/value";
 import {
@@ -23,6 +24,8 @@ import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js"
 import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
 import { normalizeAgentPlanSteps } from "../channels/streaming.js";
 import { getRuntimeConfig } from "../config/io.js";
+import { readLatestSessionTranscriptMessageEvent } from "../config/sessions/session-accessor.sqlite-active-events.js";
+import { readTranscriptEventMessage } from "../config/sessions/session-accessor.sqlite-read.js";
 import {
   type AgentEventPayload,
   type AgentEventRuntimePayload,
@@ -38,6 +41,7 @@ import {
   isSubagentSessionKey,
   parseCronRunScopeSuffix,
 } from "../sessions/session-key-utils.js";
+import { readAssistantDisplayContent } from "../shared/assistant-display-content.js";
 import { resolveAssistantEventPhase } from "../shared/chat-message-content.js";
 import { setSafeTimeout } from "../utils/timer-delay.js";
 import { mergeAssistantText, resolveAssistantTextInput } from "./agent-event-assistant-text.js";
@@ -118,6 +122,68 @@ const RESTART_RECOVERY_LIFECYCLE_PHASES = new Set(["start", "end", "error"]);
 // Keep the newest handles, independently of tool-progress verbosity and eviction.
 const MAX_LIVE_CANVAS_BLOCKS = 32;
 const MAX_LIVE_CANVAS_BYTES = 64 * 1024;
+
+function resolveTerminalManagedImageBlocks(params: {
+  sessionKey: string;
+  agentId?: string;
+  clientRunId: string;
+  sourceRunId: string;
+  managedMediaUrls?: ReadonlySet<string>;
+}): Record<string, unknown>[] {
+  if (!params.managedMediaUrls?.size) {
+    return [];
+  }
+  try {
+    const session = loadGatewaySessionEntryReadOnly(params.sessionKey, {
+      agentId: params.agentId,
+    });
+    if (!session.entry?.sessionId) {
+      return [];
+    }
+    const latest = readLatestSessionTranscriptMessageEvent({
+      agentId: session.agentId,
+      sessionId: session.entry.sessionId,
+      sessionKey: session.canonicalKey,
+      storePath: session.storePath,
+    });
+    const message = latest ? readTranscriptEventMessage(latest.event) : undefined;
+    if (!message || message.role !== "assistant") {
+      return [];
+    }
+    const metadata = message["__openclaw"];
+    const runId =
+      isRecord(metadata) && typeof metadata.runId === "string" ? metadata.runId : undefined;
+    if (runId !== params.clientRunId && runId !== params.sourceRunId) {
+      return [];
+    }
+    const delivery = message.openclawDelivery;
+    const deliveryMediaUrls = isRecord(delivery) ? delivery.mediaUrls : undefined;
+    const persistedMediaUrls = Array.isArray(deliveryMediaUrls)
+      ? deliveryMediaUrls.filter((url): url is string => typeof url === "string")
+      : [];
+    if (
+      persistedMediaUrls.length === 0 ||
+      !persistedMediaUrls.every((url) => params.managedMediaUrls?.has(url))
+    ) {
+      return [];
+    }
+    const routePrefix = `/api/chat/media/outgoing/${encodeURIComponent(session.canonicalKey)}/`;
+    return readAssistantDisplayContent(message).flatMap((block) => {
+      if (
+        block.type !== "image" ||
+        typeof block.url !== "string" ||
+        !block.url.startsWith(routePrefix) ||
+        (block.openUrl !== undefined && block.openUrl !== block.url)
+      ) {
+        return [];
+      }
+      return [{ ...block }];
+    });
+  } catch (err) {
+    logWarn(`Live chat managed image projection skipped: ${formatForLog(err)}`);
+    return [];
+  }
+}
 
 function projectToolSearchCodeEventForChannelPayload<T extends { data?: unknown }>(payload: T): T {
   const data = payload.data;
@@ -1169,6 +1235,16 @@ export function createAgentEventHandler({
     if (jobState !== "error") {
       const run = chatRunState.runs.get(clientRunId);
       const canvasBlocks = run?.canvasBlocks ?? [];
+      const managedImageBlocks =
+        jobState === "done"
+          ? resolveTerminalManagedImageBlocks({
+              sessionKey,
+              agentId: opts?.agentId,
+              clientRunId,
+              sourceRunId,
+              managedMediaUrls: run?.managedMediaUrls,
+            })
+          : [];
       // Empty tool-only turns can render widgets; explicit silent/control replies
       // still suppress their message, even when an earlier tool hosted a widget.
       const canvasOnly =
@@ -1188,11 +1264,11 @@ export function createAgentEventHandler({
         ...(stopReason && { stopReason }),
         ...(jobState === "done" && opts?.yielded ? { yielded: true as const } : {}),
         message:
-          (text && !shouldSuppressSilent) || canvasOnly
+          (text && !shouldSuppressSilent) || canvasOnly || managedImageBlocks.length > 0
             ? appendChatCanvasBlocksToMessage(
                 {
                   role: "assistant",
-                  content: text ? [{ type: "text", text }] : [],
+                  content: [...(text ? [{ type: "text", text }] : []), ...managedImageBlocks],
                   timestamp: Date.now(),
                   ...(opts?.assistantTranscriptIdempotencyKey
                     ? {
