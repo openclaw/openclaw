@@ -1,3 +1,18 @@
+export function buildLegacyReseedPrompt(current = "current"): string {
+  return [
+    "Continue this conversation using the OpenClaw transcript below as prior session history.",
+    "Treat it as authoritative context for this fresh CLI session.",
+    "",
+    "<conversation_history>",
+    "User: previous",
+    "</conversation_history>",
+    "",
+    "<next_user_message>",
+    current,
+    "</next_user_message>",
+  ].join("\n");
+}
+
 export function createClaudeHistoryLines(sessionId: string) {
   return [
     JSON.stringify({

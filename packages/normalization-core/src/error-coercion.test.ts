@@ -414,6 +414,7 @@ describe("coerceErrorMessage", () => {
 
 describe("stringifyNonErrorCause", () => {
   it("renders primitive and structured values", () => {
+    expect(stringifyNonErrorCause("hi")).toBe("hi");
     expect(stringifyNonErrorCause(null)).toBe("null");
     expect(stringifyNonErrorCause(42)).toBe("42");
     expect(stringifyNonErrorCause({ ok: true })).toBe('{"ok":true}');
@@ -422,5 +423,6 @@ describe("stringifyNonErrorCause", () => {
   it("falls back to object tags when JSON has no string result", () => {
     expect(stringifyNonErrorCause(undefined)).toBe("[object Undefined]");
     expect(stringifyNonErrorCause(Symbol("value"))).toBe("[object Symbol]");
+    expect(stringifyNonErrorCause(() => {})).toBe("[object Function]");
   });
 });

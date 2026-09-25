@@ -187,6 +187,88 @@ describe("structured Goal admission", () => {
   });
 });
 
+describe("reply submission", () => {
+  it("escapes reply sender labels and transfers the quote before chat.send is acknowledged", async () => {
+    const sent = createDeferred<unknown>();
+
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.send": () => sent.promise,
+      },
+      chatMessage: "continue",
+      chatReplyTarget: {
+        messageId: "reply-source-1",
+        text: "quoted body",
+        senderLabel: "A *B* [C]",
+      },
+    });
+
+    const send = handleSendChat(host);
+    await Promise.resolve();
+
+    expect(host.chatReplyTarget).toBeNull();
+    expect(host.chatQueue[0]?.text).toBe("> **A \\*B\\* \\[C\\]:** quoted body\n\ncontinue");
+
+    sent.resolve({ runId: host.chatQueue[0]?.sendRunId, status: "started" });
+    await send;
+
+    expect(host.chatReplyTarget).toBeNull();
+  });
+
+  it("sends replyToId instead of an inline quote when the reply target has a transcript id", async () => {
+    const sent = createDeferred<unknown>();
+
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.send": () => sent.promise,
+      },
+      chatMessage: "continue",
+      chatReplyTarget: {
+        messageId: "id:transcript-abc",
+        text: "quoted body",
+        senderLabel: "Molty",
+        sourceMessageId: "transcript-abc",
+      },
+    });
+
+    const send = handleSendChat(host);
+    await Promise.resolve();
+
+    expect(host.chatQueue[0]?.text).toBe("continue");
+    expect(host.chatQueue[0]?.replyToId).toBe("transcript-abc");
+
+    sent.resolve({ runId: host.chatQueue[0]?.sendRunId, status: "started" });
+    await send;
+
+    const sendCall = host.request.mock.calls.find(([method]) => method === "chat.send");
+    expect(sendCall?.[1]).toMatchObject({ message: "continue", replyToId: "transcript-abc" });
+    expect(host.chatReplyTarget).toBeNull();
+  });
+
+  it("keeps failed reply metadata on the retry row instead of the composer", async () => {
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.send": () => Promise.resolve({ runId: "run-failed", status: "error" }),
+      },
+      chatMessage: "retry this",
+      chatReplyTarget: {
+        messageId: "reply-source-2",
+        text: "quoted body",
+        senderLabel: "User",
+      },
+    });
+
+    await handleSendChat(host);
+
+    expect(host.chatReplyTarget).toBeNull();
+    expect(host.chatMessage).toBe("");
+    expect(host.chatQueue[0]).toMatchObject({
+      sendState: "failed",
+      text: "> **User:** quoted body\n\nretry this",
+    });
+  });
+});
+
 describe("human mention submission", () => {
   it("keeps only selected recipients after annotation and reply prefixes", async () => {
     const host = makeChatHost({
@@ -473,12 +555,17 @@ describe("handleSendChat immediate local commands", () => {
   it("restores staged attachments when creating a new session is cancelled", async () => {
     const attachment = createStagedAttachment("cancelled-new-session-att");
     const createChatSession = vi.fn(async () => false);
-    const host = createImmediateCommandHost("/new", attachment, { createChatSession });
+    const replyTarget = { messageId: "quoted-before-new", text: "Keep this quote" };
+    const host = createImmediateCommandHost("/new", attachment, {
+      createChatSession,
+      chatReplyTarget: replyTarget,
+    });
 
     await handleSendChat(host);
 
     expect(createChatSession).toHaveBeenCalledOnce();
     expect(host.chatMessage).toBe("/new");
+    expect(host.chatReplyTarget).toEqual(replyTarget);
     expect(host.chatAttachments).toHaveLength(1);
     expect(host.chatAttachments[0]).toMatchObject(attachment);
     expect(getChatAttachmentDataUrl(host.chatAttachments[0]!)).toBe(attachmentDataUrl);

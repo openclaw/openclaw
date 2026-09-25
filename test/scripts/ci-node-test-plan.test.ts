@@ -4651,6 +4651,21 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       if (owner === "agentic-cli" && runnerBackend !== "github") {
         expect(plan.map((job) => job.runner)).toEqual([EXTRA_LARGE_NODE_TEST_RUNNER]);
       }
+      if (owner === "agentic-gateway-core-2") {
+        const changed = expectDefined(
+          createChangedNodeTestShards([target], { runnerBackend }),
+          "changed Gateway client plan",
+        );
+        expect(changed.flatMap((job) => job.targets ?? [])).not.toContain(target);
+        const changedOwner = expectDefined(
+          changed.find((job) =>
+            job.groups?.some((group) => group.includePatterns?.includes(target)),
+          ),
+          "changed Gateway client process owner",
+        );
+        expect(changedOwner.groups).toEqual(groups);
+        expect(changedOwner.planConcurrency).toBe(1);
+      }
     },
   );
 

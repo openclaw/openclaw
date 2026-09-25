@@ -1,7 +1,6 @@
 // Session creation, initial turns, and managed-worktree provisioning.
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -72,7 +71,7 @@ import { assertValidParams } from "./validation.js";
 import { resolveWorkspacePathContainment } from "./workspace-path-containment.js";
 
 export const sessionCreateHandlers: GatewayRequestHandlers = {
-  "sessions.create": async (options) => {
+  "sessions.create": idempotentSessionCreate(async (options) => {
     const {
       params,
       respond,
@@ -652,9 +651,5 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         reason: "send",
       });
     }
-  },
+  }),
 };
-
-sessionCreateHandlers["sessions.create"] = idempotentSessionCreate(
-  expectDefined(sessionCreateHandlers["sessions.create"], "sessions.create handler"),
-);

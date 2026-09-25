@@ -148,7 +148,7 @@ function ensureActiveRelayTurnId(relaySessionId: string): string {
   return relay.harness.talk.activeTurnId ?? "turn-1";
 }
 
-describe("talk realtime relay provider error projection", () => {
+describe("talk realtime relay helpers", () => {
   it.each(providerErrorCases)(
     "projects public %s failures to fixed copy",
     (_name, error, expected) => {
@@ -161,10 +161,6 @@ describe("talk realtime relay provider error projection", () => {
       expect(message).not.toContain(error.message);
     },
   );
-});
-
-describe("talk realtime gateway relay", () => {
-  const { cleanupIsolatedRelayState } = usePersistentRelayTestState(activeRelaySessions);
 
   it("rejects a late relay startup-failure claim while consuming the retained owner", () => {
     const adoptCompletionClaims = vi.fn();
@@ -226,6 +222,10 @@ describe("talk realtime gateway relay", () => {
 
     expect(revokeRequesterFinal).toHaveBeenCalledOnce();
   });
+});
+
+describe("talk realtime gateway relay", () => {
+  const { cleanupIsolatedRelayState } = usePersistentRelayTestState(activeRelaySessions);
 
   it.each([
     [{ status: "completed" as const, responseId: "response-1" }, "turn.ended"],

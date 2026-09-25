@@ -1,4 +1,4 @@
-type StoredNodeWakeAttempt = {
+export type NodeWakeAttempt = {
   available: boolean;
   throttled: boolean;
   path: "throttled" | "no-registration" | "no-auth" | "sent" | "send-error" | "invalidated";
@@ -12,7 +12,7 @@ export type NodeWakeOwnerState = {
   stateKey: string;
   // Process-local monotonic times; wall-clock changes must not alter throttling.
   lastWakeAtMs?: number;
-  inFlightWake?: Promise<StoredNodeWakeAttempt>;
+  inFlightWake?: Promise<NodeWakeAttempt>;
   lastNudgeAtMs?: number;
   lifecycle?: {
     controller: AbortController;
