@@ -117,7 +117,6 @@ export function registerLlamaCppProvider(api: OpenClawPluginApi): void {
                 existing: configured,
                 modelInventory: configured.models,
               }),
-              outcomes: [],
             }
           : await discoverLlamaServerProvider(ctx);
       },

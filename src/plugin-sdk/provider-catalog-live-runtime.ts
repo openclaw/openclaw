@@ -1,6 +1,5 @@
 import type {
   ProviderCatalogContext,
-  ProviderCatalogOutcome,
   ProviderCatalogResult,
   ProviderPlugin,
 } from "../plugins/types.js";
@@ -408,7 +407,7 @@ export async function buildOpenAICompatibleLiveProviderCatalog(
 ): Promise<ProviderCatalogResult> {
   const discovery = prepareOpenAICompatibleLiveModelDiscovery(params);
   if (discovery.kind === "static") {
-    return { provider: discovery.provider, outcomes: [] };
+    return { provider: discovery.provider };
   }
   const run = async () => ({
     provider: await buildLiveModelProviderConfig(discovery.request),
@@ -419,7 +418,7 @@ export async function buildOpenAICompatibleLiveProviderCatalog(
         profileId: discovery.profileId,
         run,
       })
-    : { ...(await run()), outcomes: [] };
+    : await run();
 }
 
 /** Builds the shared authenticated live/static hooks for an ordered provider family. */
@@ -433,12 +432,7 @@ export function buildOpenAICompatibleProviderFamilyCatalog(params: {
   return {
     catalog: {
       order: "paired" as const,
-      run: async (
-        ctx: ProviderCatalogContext,
-      ): Promise<{
-        providers: Record<string, ModelProviderConfig>;
-        outcomes?: ProviderCatalogOutcome[];
-      } | null> => {
+      run: async (ctx: ProviderCatalogContext) => {
         const entries = params.entries.filter(({ id }) => matchesProviderCatalogScope(ctx, [id]));
         if (entries.length === 0) {
           return null;
@@ -466,7 +460,9 @@ export function buildOpenAICompatibleProviderFamilyCatalog(params: {
               result && "provider" in result ? [[id, result.provider]] : [],
             ),
           ),
-          outcomes: results.flatMap(({ result }) => result?.outcomes ?? []),
+          ...(params.discoveryMode === "strict"
+            ? { outcomes: results.flatMap(({ result }) => result?.outcomes ?? []) }
+            : {}),
         };
       },
       staticRun: params.staticCatalog,

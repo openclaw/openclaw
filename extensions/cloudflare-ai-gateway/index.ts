@@ -191,7 +191,6 @@ export default definePluginEntry({
             }
             return {
               provider,
-              outcomes: [],
             };
           }
           return null;
