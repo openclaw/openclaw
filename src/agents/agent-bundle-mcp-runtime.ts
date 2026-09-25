@@ -56,6 +56,7 @@ import {
   summarizeServerCapabilities,
 } from "./mcp-metadata.js";
 import { collectMcpPaginatedItems } from "./mcp-pagination.js";
+import { stdioCommandExists } from "./mcp-stdio-command-check.js";
 import { isMcpToolAllowed, normalizeMcpToolFilter } from "./mcp-tool-filter.js";
 import { normalizeMcpToolCatalog, type McpToolCatalogMetadata } from "./mcp-tool-metadata.js";
 import { resolveMcpTransport } from "./mcp-transport.js";
@@ -808,7 +809,33 @@ function createServerMcpRuntime(
 
       try {
         failIfDisposed();
-        await ensureSessionConnected(session, resolved.connectionTimeoutMs);
+        try {
+          await ensureSessionConnected(session, resolved.connectionTimeoutMs);
+        } catch (connectError) {
+          // A missing launcher binary (e.g. `uvx` never installed) otherwise
+          // surfaces only as a generic transport "Connection closed" error,
+          // with no hint at the actual cause. This best-effort check cannot
+          // fully replicate every platform's real launch semantics (PATHEXT,
+          // wrapper/shim resolution, symlink traversal, Windows' implicit
+          // current-directory search), so it only ever enriches a connection
+          // that has already failed for some other reason, never vetoes an
+          // attempt before it happens — a false negative here can only
+          // affect the wording of an error a working server never reaches.
+          if (
+            resolved.stdioLaunch &&
+            !(await stdioCommandExists(
+              resolved.stdioLaunch.command,
+              resolved.stdioLaunch.cwd,
+              resolved.stdioLaunch.env,
+            ))
+          ) {
+            throw new Error(
+              `stdio command not found or not executable: ${resolved.stdioLaunch.command} — is it installed and on PATH?`,
+              { cause: connectError },
+            );
+          }
+          throw connectError;
+        }
         failIfDisposed();
         const capabilities = summarizeServerCapabilities(session.client.getServerCapabilities());
         let listedTools: Tool[];

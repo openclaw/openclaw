@@ -1,5 +1,4 @@
 // MCP CLI for configured servers, OAuth auth, diagnostics, and channel MCP serving.
-import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -28,6 +27,7 @@ import {
   startMcpOAuthAuthorization,
   type McpOAuthPrincipalStatus,
 } from "../agents/mcp-oauth.js";
+import { stdioCommandExists } from "../agents/mcp-stdio-command-check.js";
 import { resolveMcpTransportConfig } from "../agents/mcp-transport-config.js";
 import { parseConfigValue } from "../auto-reply/reply/config-value.js";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
@@ -38,7 +38,6 @@ import {
   startOAuthLoopbackCallbackServer,
   type OAuthLoopbackCallbackServer,
 } from "../infra/oauth-loopback-callback.js";
-import { resolveEnvironmentValue } from "../infra/process-env.js";
 import { defaultRuntime } from "../runtime.js";
 import { createLazyRuntimeMethod } from "../shared/lazy-runtime.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
@@ -343,58 +342,6 @@ async function directoryExists(filePath: string): Promise<boolean> {
   }
 }
 
-async function isExecutable(filePath: string): Promise<boolean> {
-  try {
-    await fs.access(filePath, process.platform === "win32" ? fsConstants.F_OK : fsConstants.X_OK);
-    // X_OK also succeeds for searchable directories; follow symlinks to check the target type.
-    return (await fs.stat(filePath)).isFile();
-  } catch {
-    return false;
-  }
-}
-
-function executableCandidates(command: string): string[] {
-  if (process.platform !== "win32") {
-    return [command];
-  }
-  const extensions = (process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM")
-    .split(";")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-  if (path.extname(command)) {
-    return [command];
-  }
-  return [command, ...extensions.map((extension) => `${command}${extension.toLowerCase()}`)];
-}
-
-async function commandExists(
-  command: string,
-  cwd: unknown,
-  env: Record<string, string> | undefined,
-): Promise<boolean> {
-  const hasPathSeparator =
-    path.isAbsolute(command) || command.includes("/") || command.includes("\\");
-  if (hasPathSeparator) {
-    return isExecutable(resolveConfiguredPath(command, cwd));
-  }
-  const configuredPath =
-    process.platform === "win32" ? resolveEnvironmentValue(env, "PATH") : env?.PATH;
-  const pathEntries = (configuredPath ?? process.env.PATH ?? "")
-    .split(path.delimiter)
-    .map((entry) => entry.trim() || ".");
-  for (const pathEntry of pathEntries) {
-    const resolvedPathEntry = path.isAbsolute(pathEntry)
-      ? pathEntry
-      : resolveConfiguredPath(pathEntry, cwd);
-    for (const candidate of executableCandidates(command)) {
-      if (await isExecutable(path.join(resolvedPathEntry, candidate))) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
 async function collectMcpDoctorIssues(params: {
   name: string;
   server: Record<string, unknown>;
@@ -414,7 +361,7 @@ async function collectMcpDoctorIssues(params: {
       issues.push(issue("error", "server transport is invalid"));
     }
     if (resolved?.kind === "stdio") {
-      if (!(await commandExists(resolved.command, resolved.cwd, resolved.env))) {
+      if (!(await stdioCommandExists(resolved.command, resolved.cwd, resolved.env))) {
         issues.push(
           issue("error", `stdio command not found or not executable: ${resolved.command}`),
         );
