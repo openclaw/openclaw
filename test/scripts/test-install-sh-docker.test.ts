@@ -1763,7 +1763,7 @@ if (args[0] === "--version") {
   console.log(JSON.stringify({
     status: "ok", before: { version: before }, after: { version: "2026.9.1" },
     steps: [
-      { name: "global update", exitCode: 0, command: "npm install " + args[args.indexOf("--tag") + 1] },
+      { name: before === "2026.9.1" ? "package-install" : "global update", exitCode: 0, command: "npm install " + args[args.indexOf("--tag") + 1] },
       { name: "openclaw doctor", exitCode: 0 },
     ],
   }));
