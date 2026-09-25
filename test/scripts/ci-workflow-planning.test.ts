@@ -187,7 +187,7 @@ function runCiManifestFixture(options: {
   changedPaths?: string[] | null;
   changedCoreTestSupport?: boolean;
   repository?: string;
-  eventName?: "pull_request" | "push" | "workflow_dispatch";
+  eventName?: "pull_request" | "push" | "workflow_dispatch" | "schedule";
   historicalCompatibility?: boolean;
   iosCapabilities?: boolean;
   iosBuildCapability?: boolean;
@@ -859,6 +859,7 @@ function runDiffBaseFixture(options: {
   eventBaseSha: string;
   defaultBranch?: string;
   manual?: boolean;
+  scheduled?: boolean;
   apiError?: "ref" | "comparison";
 }) {
   const root = tempDirs.make("openclaw-ci-diff-base-");
@@ -926,7 +927,11 @@ function runDiffBaseFixture(options: {
       ...process.env,
       DEFAULT_BRANCH: defaultBranch,
       EVENT_BASE_SHA: eventBaseSha,
-      GITHUB_EVENT_NAME: options.manual ? "workflow_dispatch" : "push",
+      GITHUB_EVENT_NAME: options.scheduled
+        ? "schedule"
+        : options.manual
+          ? "workflow_dispatch"
+          : "push",
       GITHUB_OUTPUT: outputPath,
       GITHUB_REPOSITORY: "openclaw/openclaw",
       PULL_REQUEST_NUMBER: "",
@@ -966,7 +971,7 @@ function runCheckShardFixture(options: {
   types?: {
     compose?: boolean;
     profile?: "blacksmith" | "github" | "hybrid";
-    eventName?: "pull_request" | "push" | "workflow_dispatch";
+    eventName?: "pull_request" | "push" | "workflow_dispatch" | "schedule";
     stripeSupport?: boolean;
     hostedContract?: boolean;
     failStripe?: string;
@@ -1554,16 +1559,21 @@ describe("ci workflow guards", () => {
     });
     expect(manifest.status).not.toBe(0);
     expect(manifest.output).toContain(
-      "main validation tier requires an ordinary canonical same-revision dispatch",
+      "main validation tier requires canonical same-revision manual or scheduled validation",
     );
   });
 
-  it.each(["main", "full"] as const)(
-    "keeps complete family coverage with the %s validation tier",
-    (tier) => {
+  it.each([
+    ["workflow_dispatch", "main"],
+    ["workflow_dispatch", "full"],
+    ["schedule", "main"],
+  ] as const)(
+    "keeps complete family coverage for %s with the %s validation tier",
+    (eventName, tier) => {
       const release = tier === "full";
       const manifest = runCiManifestFixture({
         bundledPlanner: true,
+        eventName,
         historicalCompatibility: false,
         uiE2eProjectsCapability: true,
         uiReleaseTier: true,
@@ -1628,7 +1638,7 @@ describe("ci workflow guards", () => {
       expect(dockerLanes[0]).toBe("published-upgrade-survivor");
       const workflow = readCiWorkflow();
       const context = {
-        eventName: "workflow_dispatch" as const,
+        eventName,
         repository: "openclaw/openclaw",
         runAttempt: 1,
         preflightOutputs: manifest.outputs,
@@ -5245,6 +5255,37 @@ describe("ci workflow guards", () => {
     },
   );
 
+  it("pins scheduled protocol and lockfile comparisons to the exact checkout", () => {
+    const result = runDiffBaseFixture({ commitCount: 2, eventBaseSha: "", scheduled: true });
+    expect(result.status, result.output).toBe(0);
+    expect(result.outputs).toEqual({ sha: result.headSha, head_sha: result.headSha });
+    expect(result.outputs.sha).not.toBe(result.parentSha);
+    expect(result.emittedBaseIsCommit).toBe(true);
+    const ci = readCiWorkflow();
+    const context = {
+      eventName: "schedule" as const,
+      repository: "openclaw/openclaw",
+      runAttempt: 1,
+      matrix: { task: "bundled-protocol" },
+      preflightOutputs: { diff_base_revision: result.outputs.sha },
+    };
+    expect(
+      evaluateWorkflowExpression(ci.jobs["checks-fast-core"].env.CHECKOUT_BASE_SHA, context),
+    ).toBe(result.headSha);
+    const run = ci.jobs["checks-fast-core"].steps.find(
+      (step: WorkflowStep) => step.name === "Run ${{ matrix.task }} (${{ matrix.runtime }})",
+    );
+    expect(evaluateWorkflowExpression(run.env.PROTOCOL_SINCE_BASE_SHA, context)).toBe(
+      result.headSha,
+    );
+    expect(
+      evaluateWorkflowExpression(ci.jobs["check-shard"].env.CHECKOUT_BASE_SHA, {
+        ...context,
+        matrix: { task: "npm-lock" },
+      }),
+    ).toBe(result.headSha);
+  });
+
   it.each(["main", "trunk/release"])(
     "resolves manual diff and cache bases from authenticated %s when anonymous Git is unavailable",
     (defaultBranch) => {
@@ -6243,7 +6284,7 @@ describe("ci workflow guards", () => {
   it.each<{
     label: string;
     changedPath: string;
-    eventName?: "pull_request" | "push" | "workflow_dispatch";
+    eventName?: "pull_request" | "push" | "workflow_dispatch" | "schedule";
     releaseGate?: boolean;
     legacyOutput?: boolean;
     selectedJobs: string[];
