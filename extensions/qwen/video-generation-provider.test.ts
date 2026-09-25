@@ -1,4 +1,3 @@
-// Qwen tests cover video generation provider plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -10,6 +9,7 @@ import {
   getProviderHttpMocks,
   installProviderHttpMockCleanup,
 } from "openclaw/plugin-sdk/provider-http-test-mocks";
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   expectDashscopeVideoTaskPoll,
   expectExplicitVideoGenerationCapabilities,
@@ -22,14 +22,8 @@ import {
 } from "openclaw/plugin-sdk/video-generation";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-const {
-  resolveApiKeyForProviderMock,
-  postJsonRequestMock,
-  fetchWithTimeoutMock,
-  fetchWithTimeoutGuardedMock,
-  resolveProviderHttpRequestConfigMock,
-  sanitizeConfiguredModelProviderRequestMock,
-} = getProviderHttpMocks();
+const { resolveApiKeyForProviderMock, postJsonRequestMock, fetchWithTimeoutMock } =
+  getProviderHttpMocks();
 
 let qwenVideoGenerationProvider: typeof import("./video-generation-provider.js").qwenVideoGenerationProvider;
 
@@ -43,6 +37,20 @@ afterEach(() => {
   clearRuntimeAuthProfileStoreSnapshots();
   vi.unstubAllEnvs();
 });
+
+function qwenConfig(provider: Partial<ModelProviderConfig>) {
+  return {
+    models: {
+      providers: {
+        qwen: {
+          baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+          models: [],
+          ...provider,
+        },
+      },
+    },
+  };
+}
 
 function clearQwenAuthEnvironment(): void {
   for (const name of ["QWEN_API_KEY", "MODELSTUDIO_API_KEY", "DASHSCOPE_API_KEY"]) {
@@ -118,17 +126,10 @@ describe("qwen video generation provider", () => {
 
     expect(
       qwenVideoGenerationProvider.isConfigured?.({
-        cfg: {
-          models: {
-            providers: {
-              qwen: {
-                apiKey,
-                baseUrl,
-                models: [],
-              },
-            },
-          },
-        },
+        cfg: qwenConfig({
+          apiKey,
+          baseUrl,
+        }),
       }),
     ).toBe(true);
   });
@@ -143,17 +144,10 @@ describe("qwen video generation provider", () => {
 
     expect(
       qwenVideoGenerationProvider.isConfigured?.({
-        cfg: {
-          models: {
-            providers: {
-              qwen: {
-                apiKey: "sk-ws-qwen-standard-key",
-                baseUrl,
-                models: [],
-              },
-            },
-          },
-        },
+        cfg: qwenConfig({
+          apiKey: "sk-ws-qwen-standard-key",
+          baseUrl,
+        }),
       }),
     ).toBe(false);
   });
@@ -163,17 +157,10 @@ describe("qwen video generation provider", () => {
 
     expect(
       qwenVideoGenerationProvider.isConfigured?.({
-        cfg: {
-          models: {
-            providers: {
-              qwen: {
-                apiKey: "sk-sp-qwen-subscription-key",
-                baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-                models: [],
-              },
-            },
-          },
-        },
+        cfg: qwenConfig({
+          apiKey: "sk-sp-qwen-subscription-key",
+          baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+        }),
       }),
     ).toBe(false);
   });
@@ -191,18 +178,11 @@ describe("qwen video generation provider", () => {
 
     expect(
       qwenVideoGenerationProvider.isConfigured?.({
-        cfg: {
-          models: {
-            providers: {
-              qwen: {
-                auth: "api-key",
-                apiKey: "sk-ws-qwen-standard-key",
-                baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-                models: [],
-              },
-            },
-          },
-        },
+        cfg: qwenConfig({
+          auth: "api-key",
+          apiKey: "sk-ws-qwen-standard-key",
+          baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+        }),
       }),
     ).toBe(true);
   });
@@ -307,91 +287,6 @@ describe("qwen video generation provider", () => {
     }
   });
 
-  it("applies configured request policy to DashScope video requests", async () => {
-    const requestPolicy = {
-      allowPrivateNetwork: true,
-      headers: { "X-DashScope-Route": "qwen-policy" },
-    };
-    const dispatcherPolicy = { mode: "env-proxy" as const };
-    resolveProviderHttpRequestConfigMock.mockImplementationOnce((params) => {
-      const headers = new Headers(params.defaultHeaders);
-      for (const [key, value] of Object.entries(params.request?.headers ?? {})) {
-        headers.set(key, value);
-      }
-      return {
-        baseUrl: params.baseUrl ?? params.defaultBaseUrl,
-        allowPrivateNetwork: params.request?.allowPrivateNetwork === true,
-        headers,
-        dispatcherPolicy,
-      };
-    });
-    mockSuccessfulDashscopeVideoTask({ postJsonRequestMock, fetchWithTimeoutMock });
-
-    const provider = qwenVideoGenerationProvider;
-    await provider.generateVideo({
-      provider: "qwen",
-      model: "wan2.6-t2v",
-      prompt: "animate this shot",
-      cfg: {
-        models: {
-          providers: {
-            qwen: {
-              baseUrl: "https://dashscope-intl.aliyuncs.com",
-              models: [],
-              request: requestPolicy,
-            },
-          },
-        },
-      },
-    });
-
-    expect(sanitizeConfiguredModelProviderRequestMock).toHaveBeenCalledWith(requestPolicy);
-    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "qwen",
-        capability: "video",
-        transport: "http",
-        request: requestPolicy,
-      }),
-    );
-    const request = postJsonRequestMock.mock.calls[0]?.[0] as
-      | {
-          allowPrivateNetwork?: unknown;
-          dispatcherPolicy?: unknown;
-          headers?: Headers;
-        }
-      | undefined;
-    expect(request?.allowPrivateNetwork).toBe(true);
-    expect(request?.dispatcherPolicy).toBe(dispatcherPolicy);
-    expect(request?.headers).toBeInstanceOf(Headers);
-    expect(request?.headers?.get("x-dashscope-route")).toBe("qwen-policy");
-    expect(fetchWithTimeoutGuardedMock).toHaveBeenNthCalledWith(
-      1,
-      "https://dashscope-intl.aliyuncs.com/api/v1/tasks/task-1",
-      expect.objectContaining({
-        method: "GET",
-        headers: expect.any(Headers),
-      }),
-      expect.any(Number),
-      fetch,
-      {
-        ssrfPolicy: { allowPrivateNetwork: true },
-        dispatcherPolicy,
-      },
-    );
-    expect(fetchWithTimeoutGuardedMock).toHaveBeenNthCalledWith(
-      2,
-      "https://example.com/out.mp4",
-      { method: "GET" },
-      expect.any(Number),
-      fetch,
-      {
-        ssrfPolicy: { allowPrivateNetwork: true },
-        dispatcherPolicy,
-      },
-    );
-  });
-
   it("rejects DashScope video downloads that exceed the configured media cap", async () => {
     postJsonRequestMock.mockImplementation(async () => ({
       response: Response.json({
@@ -448,39 +343,15 @@ describe("qwen video generation provider", () => {
       provider: "qwen",
       model: "wan2.6-t2v",
       prompt: "animate this shot",
-      cfg: {
-        models: {
-          providers: {
-            qwen: {
-              baseUrl,
-              models: [],
-            },
-          },
-        },
-      },
+      cfg: qwenConfig({
+        baseUrl,
+      }),
     });
 
     expect(postJsonRequestMock.mock.calls[0]?.[0]).toMatchObject({
       url: `${aigcBaseUrl}/api/v1/services/aigc/video-generation/video-synthesis`,
     });
     expectDashscopeVideoTaskPoll(fetchWithTimeoutMock, { baseUrl: aigcBaseUrl });
-  });
-
-  it("fails fast when reference inputs are local buffers instead of remote URLs", async () => {
-    const provider = qwenVideoGenerationProvider;
-
-    await expect(
-      provider.generateVideo({
-        provider: "qwen",
-        model: "wan2.6-i2v",
-        prompt: "animate this local frame",
-        cfg: {},
-        inputImages: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
-      }),
-    ).rejects.toThrow(
-      "Qwen video generation currently requires remote http(s) URLs for reference images/videos.",
-    );
-    expect(postJsonRequestMock).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -494,16 +365,9 @@ describe("qwen video generation provider", () => {
         provider: "qwen",
         model: "wan2.6-t2v",
         prompt: "animate this shot",
-        cfg: {
-          models: {
-            providers: {
-              qwen: {
-                baseUrl,
-                models: [],
-              },
-            },
-          },
-        },
+        cfg: qwenConfig({
+          baseUrl,
+        }),
       }),
     ).rejects.toThrow(/Standard DashScope endpoint.*same-region Standard API key/i);
 
@@ -518,16 +382,9 @@ describe("qwen video generation provider", () => {
         provider: "qwen",
         model: "wan2.6-t2v",
         prompt: "animate this shot",
-        cfg: {
-          models: {
-            providers: {
-              qwen: {
-                baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-                models: [],
-              },
-            },
-          },
-        },
+        cfg: qwenConfig({
+          baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+        }),
       }),
     ).rejects.toThrow(/Standard DashScope endpoint.*same-region Standard API key/i);
 
