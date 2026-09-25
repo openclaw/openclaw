@@ -267,9 +267,14 @@ describe("check-assertion-safety-ratchet", () => {
     const disconnectedBase = gitOutput(root, ["rev-parse", "HEAD"]);
     git(root, ["checkout", "release"]);
 
-    vi.spyOn(console, "error").mockImplementation(() => {});
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     vi.spyOn(console, "log").mockImplementation(() => {});
     expect(main(root, ["--base", disconnectedBase])).toBe(1);
+    expect(errors).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "is disconnected from HEAD; no verified sync merge was found",
+      ),
+    );
   });
 
   it("compares an explicit moving base at the branch fork", () => {
