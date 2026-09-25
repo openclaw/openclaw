@@ -234,6 +234,35 @@ describe("workflow cost admission", () => {
     }
   });
 
+  it.each(["pull_request", "push"])(
+    "runs full workflow audits when %s scope lookup fails",
+    async (eventName) => {
+      const scope = readWorkflow(
+        ".github/workflows/workflow-sanity.yml",
+      ).jobs.actionlint.steps.find((step: { id?: string }) => step.id === "scope");
+      const output = vi.fn();
+      const warning = vi.fn();
+      const unavailable = vi.fn().mockRejectedValue(new Error("unavailable"));
+      await runInNewContext(`(async () => { ${scope.with.script} })()`, {
+        require: () => ({ matchesGlob }),
+        context: { ...context, eventName, issue: { number: 1 }, payload: { before } },
+        core: { setOutput: output, warning },
+        github: {
+          paginate: unavailable,
+          rest: {
+            pulls: { listFiles: vi.fn() },
+            repos: { compareCommitsWithBasehead: unavailable },
+          },
+        },
+      });
+      expect(unavailable).toHaveBeenCalledOnce();
+      expect(output).toHaveBeenCalledExactlyOnceWith("changed", true);
+      expect(warning).toHaveBeenCalledExactlyOnceWith(
+        "Workflow scope lookup failed; running full workflow audits.",
+      );
+    },
+  );
+
   it("keeps closeout on release-input pushes and the existing manual completion route", () => {
     const workflow = readWorkflow(".github/workflows/openclaw-stable-main-closeout.yml");
     expect(workflow.on.workflow_run).toBeUndefined();

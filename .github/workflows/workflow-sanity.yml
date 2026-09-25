@@ -56,15 +56,19 @@ jobs:
               '.github/actionlint*', '.github/zizmor.yml', '.pre-commit-config.yaml',
               'scripts/check-composite-action-input-interpolation.py'];
             let files;
-            if (context.eventName === 'pull_request') {
-              files = await github.paginate(github.rest.pulls.listFiles, {
-                ...context.repo, pull_number: context.issue.number, per_page: 100,
-              });
-            } else {
-              const { data } = await github.rest.repos.compareCommitsWithBasehead({
-                ...context.repo, basehead: `${context.payload.before}...${context.sha}`,
-              });
-              files = data.files;
+            try {
+              if (context.eventName === 'pull_request') {
+                files = await github.paginate(github.rest.pulls.listFiles, {
+                  ...context.repo, pull_number: context.issue.number, per_page: 100,
+                });
+              } else {
+                const { data } = await github.rest.repos.compareCommitsWithBasehead({
+                  ...context.repo, basehead: `${context.payload.before}...${context.sha}`,
+                });
+                files = data.files;
+              }
+            } catch {
+              core.warning('Workflow scope lookup failed; running full workflow audits.');
             }
             // The compare API caps files at 300; never infer no changes from a partial diff.
             const limit = context.eventName === 'pull_request' ? 3000 : 300;
