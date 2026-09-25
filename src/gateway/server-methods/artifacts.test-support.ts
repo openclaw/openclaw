@@ -1,8 +1,27 @@
 import { expect } from "vitest";
+import { readSessionArtifacts as readSessionArtifactsKernel } from "../session-artifact-read.js";
 import { expectRecordFields } from "../test-helpers.assertions.js";
 
 type ResponderCalls = Array<{ ok: boolean; payload?: unknown; error?: unknown }>;
 type ArtifactListPayload = { artifacts?: Array<Record<string, unknown>> };
+
+export function withArtifactFixtureReader(
+  actual: typeof import("../session-transcript-readers.js"),
+  visitSessionMessagesAsync: typeof actual.visitSessionMessagesAsync,
+) {
+  return {
+    ...actual,
+    visitSessionMessagesAsync,
+    readSessionArtifacts: (
+      scope: Parameters<typeof readSessionArtifactsKernel>[0],
+      query: Parameters<typeof readSessionArtifactsKernel>[1],
+    ) =>
+      readSessionArtifactsKernel(scope, query, {
+        visitSessionMessagesAsync,
+        readSessionMessagesPageWithStatsAsync: actual.readSessionMessagesPageWithStatsAsync,
+      }),
+  };
+}
 
 export function runtimeContext(config: Record<string, unknown>) {
   return { getRuntimeConfig: () => config };

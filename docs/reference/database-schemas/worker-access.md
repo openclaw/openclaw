@@ -189,6 +189,15 @@ debt. Process-held incognito databases and the existing
 CLI-import history path still need their owner/lifetime migration; they are not
 new synchronous exceptions or fallbacks for a failed durable worker read.
 
+Artifact lists, image pages, and exact transcript-image selection use that same
+history worker. The worker scans and decodes transcript payloads and returns
+selected artifacts; connection-owned cursors and current access checks stay on
+the Gateway. General transcript pages, anchored visibility reads, and public
+share pages also use the worker facade. Read-only image discovery does not
+restore cold history, while ordinary reads retain their existing restoration
+owner. Process-held incognito data and native callback visitors retain their
+current owners. Schemas, stored bytes, retention, and update behavior are unchanged.
+
 Exact message membership reads for managed attachments also use the history
 worker. The worker validates the entire visible JSON range on every lookup,
 including unchanged projection revisions, and returns only matching messages.

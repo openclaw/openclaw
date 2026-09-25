@@ -499,87 +499,16 @@ serveOwnedWorkerTasks(
             };
           }
           if (request.kind === "history-page") {
+            const { readSessionHistoryRequest } =
+              await import("../../gateway/session-history-worker-reader.js");
             return await withHistoryDatabase<SessionHistoryWorkerResult>(
               request.database,
               request.kind,
-              async () => {
-                const { createReadonlySessionHistoryReader } =
-                  await import("../../gateway/session-history-readonly-reader.js");
-                const options = {
-                  readers: createReadonlySessionHistoryReader({
-                    ...request.target,
-                    database: request.database,
-                  }),
-                  readOnly: true,
-                  deferProfileDisplay: true,
-                  resolveCronJobName: () => undefined,
-                };
-                if (request.request.kind === "transcript-binding") {
-                  return {
-                    kind: "transcript-binding",
-                    binding: options.readers.readTranscriptBinding(request.request.params.run),
-                  };
-                }
-                if (request.request.kind === "message-by-id") {
-                  const { target, messageId, options: lookupOptions } = request.request.params;
-                  return {
-                    kind: "message-by-id",
-                    result: await options.readers.readSessionMessageByIdAsync(
-                      target,
-                      messageId,
-                      lookupOptions,
-                    ),
-                  };
-                }
-                if (request.request.kind === "message-count") {
-                  return {
-                    kind: "message-count",
-                    count: await options.readers.readSessionMessageCountAsync(
-                      request.request.params.target,
-                    ),
-                  };
-                }
-                if (request.request.kind === "message-lookup") {
-                  return {
-                    kind: "message-lookup",
-                    messages: await options.readers.readSessionMessagesMatchingIdAsync(
-                      request.request.params.target,
-                      request.request.params.messageId,
-                    ),
-                  };
-                }
-                if (request.request.kind === "recent") {
-                  const { target, ...limits } = request.request.params;
-                  const { messages } =
-                    await options.readers.readRecentSessionMessagesWithStatsAsync(target, limits);
-                  return { kind: "recent", messages };
-                }
-                if (request.request.kind === "delta") {
-                  const { prepareSessionHistoryDelta } =
-                    await import("../../gateway/session-history-delta-visibility.js");
-                  return {
-                    kind: "delta",
-                    ...prepareSessionHistoryDelta(
-                      options.readers.readTranscriptDisplayDelta(request.request.params.limits),
-                      options.readers.subagentCoordination,
-                    ),
-                  };
-                }
-                if (request.request.kind === "rpc") {
-                  const { readChatHistoryPageKernel } =
-                    await import("../../gateway/server-methods/chat-history-page-kernel.js");
-                  return {
-                    kind: "rpc",
-                    page: await readChatHistoryPageKernel(request.request.params, options),
-                  };
-                }
-                const { readSessionHistorySnapshotKernel } =
-                  await import("../../gateway/session-history-snapshot.js");
-                return {
-                  kind: "http",
-                  snapshot: await readSessionHistorySnapshotKernel(request.request.params, options),
-                };
-              },
+              () =>
+                readSessionHistoryRequest(request.request, {
+                  ...request.target,
+                  database: request.database,
+                }),
             );
           }
           if (request.kind === "session-reset-recall") {
@@ -627,7 +556,12 @@ serveOwnedWorkerTasks(
         request.kind === "history-page" &&
         (request.request.kind === "message-lookup" ||
           request.request.kind === "message-by-id" ||
-          request.request.kind === "message-count")
+          request.request.kind === "message-count" ||
+          request.request.kind === "artifacts" ||
+          request.request.kind === "message-page" ||
+          request.request.kind === "around-id" ||
+          request.request.kind === "source-messages" ||
+          request.request.kind === "recent-page")
       ) {
         return { ok: false, error: { kind: "syntax", message: error.message } };
       }

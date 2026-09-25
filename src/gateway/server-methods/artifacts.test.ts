@@ -42,10 +42,8 @@ vi.mock("../session-transcript-readers.js", async () => {
   const actual = await vi.importActual<typeof import("../session-transcript-readers.js")>(
     "../session-transcript-readers.js",
   );
-  return {
-    ...actual,
-    visitSessionMessagesAsync: hoisted.visitSessionMessagesAsync,
-  };
+  const { withArtifactFixtureReader } = await import("./artifacts.test-support.js");
+  return withArtifactFixtureReader(actual, hoisted.visitSessionMessagesAsync);
 });
 
 vi.mock("../server-session-key.js", async () => {

@@ -59,10 +59,8 @@ export function decodeSessionArchiveBytes(bytes: Uint8Array, compressed: boolean
 
 /**
  * Materializes a compressed archive as a plain JSONL cache file and returns
- * the readable path; plain archives pass through untouched. Archives are
- * write-once (timestamped names), so a cache hit never needs revalidation —
- * this lets every downstream transcript reader (index, tail chunks, header
- * probes) work on archives without learning about compression.
+ * the readable path; plain archives pass through untouched. Source identity
+ * validates cached bytes so downstream readers need not handle compression.
  */
 export function materializeSessionArchiveForRead(filePath: string): string {
   if (!filePath.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX)) {

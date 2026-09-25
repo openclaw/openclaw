@@ -18,6 +18,10 @@ import type {
   CurrentTranscriptProjection,
   SessionTranscriptMessageEvent,
 } from "../config/sessions/session-accessor.sqlite-projection-read.js";
+import {
+  iterateVisibleMessageRange,
+  resolveVisibleMessagePositions,
+} from "../config/sessions/session-accessor.sqlite-reset-window.js";
 import type { ReadSessionMessageByIdResult } from "../config/sessions/session-history-types.js";
 import { SessionTranscriptStorageUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import type {
@@ -61,7 +65,7 @@ export type ReadRecentSessionMessagesResult = {
   totalMessages: number;
 };
 
-type ReadSessionMessagesResult = {
+export type ReadSessionMessagesResult = {
   messages: unknown[];
   transcriptPath?: string;
 };
@@ -129,7 +133,7 @@ function readRecentSqliteMessageRecords(
   };
 }
 
-type ReadSessionMessagesAroundIdResult = ReadRecentSessionMessagesResult & {
+export type ReadSessionMessagesAroundIdResult = ReadRecentSessionMessagesResult & {
   found: boolean;
   hasOverreadContext: boolean;
   offset: number;
@@ -137,6 +141,24 @@ type ReadSessionMessagesAroundIdResult = ReadRecentSessionMessagesResult & {
 
 /** Share pagination and archive policy while the caller owns acquisition and restoration. */
 export function createSessionTranscriptReader(access: SessionTranscriptReadAccess) {
+  async function visitSessionMessagesAsync(
+    scope: SessionTranscriptReadScope,
+    visit: (message: unknown, seq: number) => void,
+  ): Promise<number> {
+    const target = await access.resolveTarget(scope);
+    return access.readSnapshot(target, (projection) => {
+      let count = 0;
+      const visible = resolveVisibleMessagePositions(projection);
+      for (const entry of iterateVisibleMessageRange(projection, 0, visible.total)) {
+        const message = asOptionalRecord(entry.event)?.message;
+        if (message !== undefined) {
+          visit(message, entry.seq);
+          count += 1;
+        }
+      }
+      return count;
+    });
+  }
   async function readSnapshotIfPresent<T>(
     target: ResolvedTranscriptReadTarget,
     read: (projection: CurrentTranscriptProjection) => T,
@@ -343,6 +365,7 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
   }
 
   return {
+    visitSessionMessagesAsync,
     readSessionMessageCountAsync,
     readSessionMessagesAsync,
     readSessionMessagesWithSourceAsync,
