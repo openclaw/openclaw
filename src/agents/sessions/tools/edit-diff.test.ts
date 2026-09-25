@@ -1,5 +1,7 @@
+import { applyPatch } from "diff";
 import { describe, expect, it } from "vitest";
-import { applyEditsPreservingLineEndings, generateDiffString } from "./edit-diff.js";
+import { applyEditsPreservingLineEndings } from "./edit-diff.js";
+import { prepareFileDiff } from "./file-diff.js";
 
 function getMismatchMessage(
   content: string,
@@ -99,28 +101,30 @@ describe("applyEditsToNormalizedContent", () => {
   });
 });
 
-describe("generateDiffString", () => {
+describe("prepareFileDiff", () => {
   it("numbers context lines from the new file after an insertion", () => {
-    const result = generateDiffString(
+    const result = prepareFileDiff(
+      "example.txt",
       "first\nthird\nfourth\n",
       "first\nsecond\nthird\nfourth\n",
-      2,
+      { context: 2 },
     );
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       diff: " 1 first\n+2 second\n 3 third\n 4 fourth",
       firstChangedLine: 2,
     });
   });
 
   it("numbers context lines from the new file after a deletion", () => {
-    const result = generateDiffString(
+    const result = prepareFileDiff(
+      "example.txt",
       "first\nsecond\nthird\nfourth\n",
       "first\nthird\nfourth\n",
-      2,
+      { context: 2 },
     );
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       diff: " 1 first\n-2 second\n 2 third\n 3 fourth",
       firstChangedLine: 2,
     });
@@ -130,10 +134,15 @@ describe("generateDiffString", () => {
     const oldContent = Array.from({ length: 10 }, (_, index) => String(index + 1)).join("\n");
     const newContent = oldContent.replace(/^2$/m, "TWO").replace(/^9$/m, "NINE");
 
-    expect(generateDiffString(oldContent, newContent, 1)).toEqual({
+    const result = prepareFileDiff("example.txt", oldContent, newContent, { context: 1 });
+    expect(result).toMatchObject({
       diff: "  1 1\n- 2 2\n+ 2 TWO\n  3 3\n    ...\n  8 8\n- 9 9\n+ 9 NINE\n 10 10",
       firstChangedLine: 2,
     });
+    if (!result) {
+      throw new Error("Expected an unbounded diff receipt");
+    }
+    expect(applyPatch(oldContent, result.patch)).toBe(newContent);
   });
 });
 

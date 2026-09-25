@@ -7,6 +7,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { applyPatch } from "diff";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../../../shared/deferred.js";
 import type { Theme } from "../../modes/interactive/theme/theme.js";
 import { createEditTool, createEditToolDefinition, type EditOperations } from "./edit.js";
 import type { EditToolDetails } from "./tool-contracts.js";
@@ -427,13 +428,14 @@ describe("edit tool", () => {
         path: "@demo.txt",
         edits: [{ oldText: `${owner} original`, newText: `${owner} changed` }],
       };
+      const invalidated = createDeferredCore();
       const context = {
         args,
         argsComplete: true,
         cwd: tmpDir,
         executionStarted: false,
         expanded: false,
-        invalidate: vi.fn(),
+        invalidate: invalidated.resolve,
         isError: false,
         isPartial: false,
         lastComponent: undefined,
@@ -443,7 +445,7 @@ describe("edit tool", () => {
       };
 
       const component = tool.renderCall?.(args, testTheme, context);
-      await vi.waitFor(() => expect(context.invalidate).toHaveBeenCalled());
+      await invalidated.promise;
 
       if (backend === "injected") {
         expect(readFile).toHaveBeenCalledWith(path.join(tmpDir, "demo.txt"));
@@ -480,13 +482,14 @@ describe("edit tool", () => {
       path: "remote.txt",
       edits: [{ oldText: 'const label = "hello";', newText: "const label = 'hi';" }],
     };
+    const invalidated = createDeferredCore();
     const context = {
       args,
       argsComplete: true,
       cwd: "/workspace",
       executionStarted: false,
       expanded: false,
-      invalidate: vi.fn(),
+      invalidate: invalidated.resolve,
       isError: false,
       isPartial: false,
       lastComponent: undefined,
@@ -496,7 +499,7 @@ describe("edit tool", () => {
     };
 
     const component = tool.renderCall?.(args, testTheme, context);
-    await vi.waitFor(() => expect(context.invalidate).toHaveBeenCalled());
+    await invalidated.promise;
 
     const preview = (component as { preview?: { error?: string; diff?: string } } | undefined)
       ?.preview;
@@ -523,13 +526,14 @@ describe("edit tool", () => {
         { oldText: "foo\u00a0", newText: "baz" },
       ],
     };
+    const invalidated = createDeferredCore();
     const context = {
       args,
       argsComplete: true,
       cwd: "/workspace",
       executionStarted: false,
       expanded: false,
-      invalidate: vi.fn(),
+      invalidate: invalidated.resolve,
       isError: false,
       isPartial: false,
       lastComponent: undefined,
@@ -539,7 +543,7 @@ describe("edit tool", () => {
     };
 
     const component = tool.renderCall?.(args, testTheme, context);
-    await vi.waitFor(() => expect(context.invalidate).toHaveBeenCalled());
+    await invalidated.promise;
 
     expect(
       (component as { preview?: { error?: string; diff?: string } } | undefined)?.preview,
@@ -565,13 +569,14 @@ describe("edit tool", () => {
         { oldText: "alpha", newText: "ALPHA" },
       ],
     };
+    const invalidated = createDeferredCore();
     const context = {
       args,
       argsComplete: true,
       cwd: "/workspace",
       executionStarted: false,
       expanded: false,
-      invalidate: vi.fn(),
+      invalidate: invalidated.resolve,
       isError: false,
       isPartial: false,
       lastComponent: undefined,
@@ -581,7 +586,7 @@ describe("edit tool", () => {
     };
 
     const component = tool.renderCall?.(args, testTheme, context);
-    await vi.waitFor(() => expect(context.invalidate).toHaveBeenCalled());
+    await invalidated.promise;
 
     expect((component as { preview?: { error?: string } } | undefined)?.preview?.error).toContain(
       "Could not find the exact text",
@@ -620,13 +625,14 @@ describe("edit tool", () => {
       path: "remote.txt",
       edits: [{ oldText: "unchanged", newText: "unchanged" }],
     };
+    const invalidated = createDeferredCore();
     const context = {
       args,
       argsComplete: true,
       cwd: "/workspace",
       executionStarted: false,
       expanded: false,
-      invalidate: vi.fn(),
+      invalidate: invalidated.resolve,
       isError: false,
       isPartial: false,
       lastComponent: undefined,
@@ -636,7 +642,7 @@ describe("edit tool", () => {
     };
 
     const component = tool.renderCall?.(args, testTheme, context);
-    await vi.waitFor(() => expect(context.invalidate).toHaveBeenCalled());
+    await invalidated.promise;
 
     expect(
       (component as { preview?: { error?: string; diff?: string } } | undefined)?.preview,
@@ -656,13 +662,14 @@ describe("edit tool", () => {
       path: "remote.txt",
       edits: [{ oldText: "foo ", newText: "foo" }],
     };
+    const invalidated = createDeferredCore();
     const context = {
       args,
       argsComplete: true,
       cwd: "/workspace",
       executionStarted: false,
       expanded: false,
-      invalidate: vi.fn(),
+      invalidate: invalidated.resolve,
       isError: false,
       isPartial: false,
       lastComponent: undefined,
@@ -672,7 +679,7 @@ describe("edit tool", () => {
     };
 
     const component = tool.renderCall?.(args, testTheme, context);
-    await vi.waitFor(() => expect(context.invalidate).toHaveBeenCalled());
+    await invalidated.promise;
 
     expect(
       (component as { preview?: { error?: string; diff?: string } } | undefined)?.preview,
