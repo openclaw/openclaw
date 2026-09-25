@@ -173,14 +173,21 @@ export async function runReplyAgent(
     followupRun.operatorAuthority?.assertCurrent();
   };
   const restartRecoverySourceTurnId = readChannelSourceTurnId(sessionCtx);
-  const restartRecoveryEntry =
-    sessionKey && storePath
-      ? ((await readSessionEntryInWorker(
-          { agentId: followupRun.run.agentId, storePath, sessionKey },
-          assertReadCurrent,
-        )) ?? activeSessionEntry)
-      : activeSessionEntry;
-  assertReadCurrent();
+  let restartRecoveryEntry = activeSessionEntry;
+  try {
+    restartRecoveryEntry =
+      sessionKey && storePath
+        ? ((await readSessionEntryInWorker(
+            { agentId: followupRun.run.agentId, storePath, sessionKey },
+            assertReadCurrent,
+          )) ?? activeSessionEntry)
+        : activeSessionEntry;
+    assertReadCurrent();
+  } catch (error) {
+    releaseAdmissionTicket();
+    typing.cleanup();
+    throw error;
+  }
   if (
     restartRecoverySourceTurnId &&
     isDuplicateRestartRecoverySource(restartRecoveryEntry, restartRecoverySourceTurnId)
