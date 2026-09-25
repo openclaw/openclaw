@@ -22,6 +22,7 @@ import { isKnownPollToolCall } from "./tool-loop-call-kind.js";
 import { getNoProgressStreak } from "./tool-loop-no-progress.js";
 import { TOOL_LOOP_WARNING_THRESHOLD } from "./tool-loop-thresholds.js";
 import { isWriteNoProgressOutcome } from "./tool-loop-write-outcome.js";
+import { getProgressCardToolOutcome } from "./tools/progress-card-tool-outcome.js";
 
 const log = createSubsystemLogger("agents/loop-detection");
 
@@ -315,6 +316,12 @@ function hashToolOutcome(
   // Keep it typed so it cannot reset the streak or collide with plugin/approval denials.
   if (isLoopVetoResult(details)) {
     return { outcomeKind: "tool-loop-veto" };
+  }
+  if (toolName === "progress_card" && result.isError !== true) {
+    const outcome = getProgressCardToolOutcome(result);
+    if (outcome !== undefined) {
+      return { resultHash: digestToolOutcome(outcome) };
+    }
   }
   if (toolName === "exec") {
     const execHash = hashExecToolOutcome(details, text);
