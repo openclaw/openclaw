@@ -271,9 +271,19 @@ export async function readSessionEntryInWorker(
       const sessionKey = resolveSqliteSessionKey(scope.sessionKey, target.logicalAgentId);
       const options = { ...target.database, env };
       const targetIdentity = readDatabasePathIdentitySync(options.path);
-      const execution = captureOpenClawAgentDatabaseExecution(options, {
-        expectedCreationIdentity: targetIdentity,
-      });
+      const execution = captureOpenClawAgentDatabaseExecution(
+        options,
+        targetIdentity.key.startsWith("file:")
+          ? {
+              expectedIdentity: {
+                kind: "file",
+                physicalIdentity: targetIdentity.key.slice("file:".length),
+                nativeLocation: targetIdentity.canonicalPath,
+                birthtime: targetIdentity.birthtime,
+              },
+            }
+          : { expectedCreationIdentity: targetIdentity },
+      );
       const assertRetainedTarget = () => {
         execution.assertCurrent();
         const currentIdentity = readDatabasePathIdentitySync(options.path);
