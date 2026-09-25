@@ -1,15 +1,21 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { createSystemAgentSession } from "./agent-turn.js";
 import { runSystemAgentTurnWithDeps as runSystemAgentTurnWithDepsImpl } from "./agent-turn.test-support.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
+import { buildFacts } from "./runtime-admission.test-helpers.js";
 import {
   createSystemAgentVerifiedInferenceTestFixture as createSystemAgentVerifiedInferenceTestFixtureImpl,
   createSystemAgentPluginMetadataTestSnapshot,
   type SystemAgentPluginMetadataTestSnapshot,
 } from "./system-agent.test-helpers.js";
 
+vi.mock(
+  "../agents/prepared-model-runtime.build.js",
+  async () => (await import("./runtime-admission.test-helpers.js")).runtimeAdmissionBuildModule,
+);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let pluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
 
@@ -25,9 +31,11 @@ const createSystemAgentVerifiedInferenceTestFixture: typeof createSystemAgentVer
 
 beforeAll(() => {
   pluginMetadataSnapshot = createSystemAgentPluginMetadataTestSnapshot();
+  buildFacts.metadata = pluginMetadataSnapshot.bindForConfig({});
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await resetPreparedModelRuntimeSnapshotsForTest();
   vi.unstubAllEnvs();
 });
 

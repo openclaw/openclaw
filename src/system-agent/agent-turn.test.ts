@@ -7,6 +7,7 @@ import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import { prepareEmbeddedSkills } from "../agents/embedded-agent-runner/skill-runtime.js";
 import { fingerprintResolvedProviderAuth } from "../agents/execution-auth-binding.js";
+import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
 import { createSystemAgentTool } from "../agents/tools/system-agent-tool.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 import { CommandLane } from "../process/lanes.js";
@@ -21,6 +22,7 @@ import {
 } from "./agent-turn.test-support.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import { resolveSystemAgentConfiguredRouteFromConfig as resolveSystemAgentConfiguredRouteFromConfigImpl } from "./inference-route.js";
+import { buildFacts } from "./runtime-admission.test-helpers.js";
 import {
   createSystemAgentVerifiedInferenceTestFixture as createSystemAgentVerifiedInferenceTestFixtureImpl,
   installSystemAgentClaudeCliBackendTestFixture,
@@ -69,6 +71,10 @@ vi.mock("../config/config.js", async (importOriginal) => ({
   })),
 }));
 
+vi.mock(
+  "../agents/prepared-model-runtime.build.js",
+  async () => (await import("./runtime-admission.test-helpers.js")).runtimeAdmissionBuildModule,
+);
 const tempDirs = createTempDirTracker();
 let restoreCliBackendFixture: (() => void) | undefined;
 let pluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
@@ -129,13 +135,15 @@ async function createVerifiedSession(config: OpenClawConfig) {
 
 beforeAll(() => {
   pluginMetadataSnapshot = createSystemAgentPluginMetadataTestSnapshot();
+  buildFacts.metadata = pluginMetadataSnapshot.bindForConfig({});
 });
 
 beforeEach(() => {
   restoreCliBackendFixture = installSystemAgentClaudeCliBackendTestFixture();
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await resetPreparedModelRuntimeSnapshotsForTest();
   restoreCliBackendFixture?.();
   restoreCliBackendFixture = undefined;
   vi.unstubAllEnvs();

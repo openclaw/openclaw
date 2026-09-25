@@ -13,6 +13,7 @@ import { resolveCliBackendConfig, type ResolvedCliBackend } from "../agents/cli-
 import { normalizeCliModel } from "../agents/cli-runner/helpers.js";
 import { SessionManager } from "../agents/sessions/index.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
+import { captureGatewayToolCallerAssertion } from "../agents/tools/gateway-caller-context.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { CliSessionBinding } from "../config/sessions.js";
 import { CommandLane } from "../process/lanes.js";
@@ -20,6 +21,7 @@ import { buildAgentMainSessionKey, toAgentStoreSessionKey } from "../routing/ses
 import { SYSTEM_AGENT_ID } from "./agent-id.js";
 import { buildSystemAgentSystemPrompt } from "./assistant-prompts.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
+import { acquireSystemAgentInferenceOwner } from "./inference-owner.js";
 import type { SystemAgentConfiguredRoute } from "./inference-route.js";
 import type { SystemAgentProposalRef } from "./operator-approval.js";
 import type { SystemAgentOverview } from "./overview.js";
@@ -314,6 +316,7 @@ async function runSystemAgentTurnWithDeps(
     runId,
     SYSTEM_AGENT_ID,
     "system-agent.turn",
+    captureGatewayToolCallerAssertion(),
   );
   // Conversation identity owns runner continuity; the main key remains policy-only.
   // Sharing the runner key lets another conversation replace its generation.
@@ -411,8 +414,17 @@ async function runSystemAgentTurnWithDeps(
       clearSystemAgentCliSession(params.session);
       const runEmbedded =
         deps.runEmbeddedAgent ?? (await import("../agents/embedded-agent.js")).runEmbeddedAgent;
+      // Retain the verified configured owner, not the requesting run's ambient generation.
+      await using inferenceOwner = await acquireSystemAgentInferenceOwner({
+        binding,
+        deps,
+        timeoutMs: shared.timeoutMs,
+        isBindingCurrent: () => params.session.verifiedInference === binding,
+      });
       result = (await runEmbedded({
         ...shared,
+        pluginGeneration: inferenceOwner.pluginGeneration,
+        abortSignal: inferenceOwner.signal,
         lane: CommandLane.SystemAgentInference,
         preparedRunAdmission,
         extraSystemPrompt: systemPrompt,

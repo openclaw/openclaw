@@ -19,6 +19,16 @@ import {
   type SystemAgentVerifiedInferenceBinding,
 } from "./verified-inference.js";
 
+// Dispatch tests already replace the embedded runner; runtime custody and drift
+// across publication are exercised by agent-turn.runtime-admission.test.ts.
+vi.mock("./inference-owner.js", () => ({
+  acquireSystemAgentInferenceOwner: vi.fn(async () => ({
+    pluginGeneration: {},
+    signal: new AbortController().signal,
+    [Symbol.asyncDispose]: async () => {},
+  })),
+}));
+
 const inferenceMocks = vi.hoisted(() => ({
   fastBindings: new WeakSet<object>(),
 }));

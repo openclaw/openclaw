@@ -10,6 +10,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { runEmbeddedAgent } from "../../agents/embedded-agent-runner/run-orchestrator.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
+import { resetPreparedModelRuntimeSnapshotsForTest } from "../../agents/prepared-model-runtime.test-support.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import {
@@ -24,6 +25,7 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import { runSystemAgentTurnWithDeps } from "../../system-agent/agent-turn.test-support.js";
 import { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
 import type { SystemAgentOverview } from "../../system-agent/overview.js";
+import { buildFacts } from "../../system-agent/runtime-admission.test-helpers.js";
 import {
   createSystemAgentPluginMetadataTestSnapshot,
   createSystemAgentVerifiedInferenceTestFixture,
@@ -38,6 +40,14 @@ const dispatch = vi.hoisted(() =>
   vi.fn<(params: RunEmbeddedAgentParams) => Promise<EmbeddedAgentRunResult>>(),
 );
 
+// Admission now retains the configured runtime owner before lane dispatch.
+// Supply synthetic catalog facts while keeping publication, leases, and lanes real.
+vi.mock(
+  "../../agents/prepared-model-runtime.build.js",
+  async () =>
+    (await import("../../system-agent/runtime-admission.test-helpers.js"))
+      .runtimeAdmissionBuildModule,
+);
 vi.mock("../../agents/embedded-agent-runner/cli-backend-dispatch.js", () => ({
   // This function is called inside run-orchestrator's admitted global-lane task.
   runEmbeddedAgentViaCliBackendIfEligible: dispatch,
@@ -73,6 +83,7 @@ const engines: SystemAgentChatEngine[] = [];
 
 beforeAll(() => {
   metadata = createSystemAgentPluginMetadataTestSnapshot();
+  buildFacts.metadata = metadata.bindForConfig({});
 });
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -80,6 +91,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     for (const engine of engines.splice(0)) {
       await engine.dispose();
     }
+    await resetPreparedModelRuntimeSnapshotsForTest();
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
     resetCommandQueueStateForTest();
