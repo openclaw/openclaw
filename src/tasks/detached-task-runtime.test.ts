@@ -230,39 +230,56 @@ describe("detached-task-runtime", () => {
   });
 
   it.each([
-    { name: "a core-owned successor with one open Gateway", settles: true },
+    {
+      name: "Gateway A's core-owned successor while Gateway B is live and active",
+      gatewayB: true,
+      settles: true,
+    },
     {
       name: "a successor that registers a plugin task runtime",
       successorRuntime: true,
       settles: false,
     },
     {
-      name: "a core-owned successor while a second Gateway is open",
-      secondGateway: true,
+      name: "a closing Gateway A while Gateway B is live and active",
+      gatewayB: true,
+      closeGatewayA: true,
+      settles: false,
+    },
+    {
+      // A published build shares this process state but never links its registries.
+      name: "a generation left unlinked by a published build while Gateway B is live and active",
+      unlinked: true,
+      gatewayB: true,
       settles: false,
     },
   ])(
     "settles, but never admits, work from a replaced plugin generation on $name",
-    async ({ successorRuntime, secondGateway, settles }) => {
+    async ({ successorRuntime, gatewayB, closeGatewayA, unlinked, settles }) => {
       const task = createFakeTaskRecord();
       const transition = vi
         .spyOn(taskTransitions, "transitionTaskRecordsByRunAsync")
         .mockResolvedValue([task]);
       const spawning = createEmptyPluginRegistry();
       setActivePluginRegistry(spawning);
-      const gateway = createPluginRegistryOwner(spawning);
+      const gatewayA = unlinked ? undefined : createPluginRegistryOwner(spawning);
       try {
-        // A plugin reload publishes the Gateway's successor and retires the admitting generation.
+        // A plugin reload publishes Gateway A's successor and retires the admitting generation.
         const successor = createEmptyPluginRegistry();
         setActivePluginRegistry(successor);
-        gateway.publish(successor);
+        gatewayA?.publish(successor);
         markPluginRegistryRetired(spawning);
         if (successorRuntime) {
           setDetachedTaskLifecycleRuntime({ ...getDetachedTaskLifecycleRuntime() });
         }
-        if (secondGateway) {
-          // The active registry may belong to either Gateway, so recovery stays strict.
-          createPluginRegistryOwner(createEmptyPluginRegistry());
+        if (gatewayB) {
+          // Gateway B becomes the process-active projection; it never succeeds A.
+          const other = createEmptyPluginRegistry();
+          setActivePluginRegistry(other);
+          createPluginRegistryOwner(other);
+        }
+        if (closeGatewayA) {
+          await gatewayA?.close();
         }
         // The retired scope cannot admit new work, even while core owns tasks.
         expect(() =>

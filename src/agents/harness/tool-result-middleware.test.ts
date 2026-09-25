@@ -10,6 +10,7 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
+import { createPluginRecord } from "../../plugins/status.test-fixtures.js";
 import { createAgentToolResultMiddlewareRunner } from "./tool-result-middleware.js";
 
 describe("createAgentToolResultMiddlewareRunner", () => {
@@ -70,11 +71,13 @@ describe("createAgentToolResultMiddlewareRunner", () => {
       await releaseEarlier.promise;
       return { result: { ...event.result, content: [{ type: "text", text: "compacted" }] } };
     };
-    // One open Gateway owner; its next registry no longer lists this plugin.
+    // The plugin belongs to its Gateway's registry; the next generation drops it.
+    const record = createPluginRecord({ id: "removed-mid-call" });
     const registry = createEmptyPluginRegistry();
+    registry.plugins.push(record);
     setActivePluginRegistry(registry);
     const gateway = createPluginRegistryOwner(registry);
-    const instance = new PluginInstance("removed-mid-call");
+    const instance = new PluginInstance(record.id, { record, registry });
     const later = instance.wrap<AgentToolResultMiddleware>((event) => ({
       result: { ...event.result, content: [{ type: "text", text: "later" }] },
     }));

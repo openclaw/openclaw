@@ -1,14 +1,10 @@
 import {
   capturePluginLifecycleAuthority,
   getPluginRecordRegistry,
+  getPluginRegistryGatewayOwner,
   isPluginRegistryRetired,
 } from "../plugins/registry-lifecycle.js";
-import {
-  getActivePluginRegistry,
-  getPluginRegistryForContext,
-  hasSingleOpenPluginRegistryOwner,
-  requireActivePluginRegistry,
-} from "../plugins/runtime.js";
+import { getPluginRegistryForContext, requireActivePluginRegistry } from "../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import {
   DetachedTaskRuntimeOwnerRetiredError,
@@ -23,30 +19,30 @@ export function getRegisteredDetachedTaskLifecycleRuntime():
 
 /**
  * Core work retains its scoped owner; plugin work follows its exact live instance.
- * Settlement of already-admitted work may move from a retired generation to the
- * live one while core owns tasks in both and exactly one Gateway owner is open.
- * New work never leaves its admitting scope.
+ * Settlement of already-admitted work may move from a retired generation to its
+ * admitting Gateway's current registry while core owns tasks in both. New work
+ * never leaves its admitting scope.
  */
 export function captureDetachedTaskRuntimeOwner(options?: { settlement?: boolean }): {
   runtime: DetachedTaskLifecycleRuntime | undefined;
   assertCurrent: () => void;
 } {
   const scoped = requireActivePluginRegistry();
-  // With several open Gateway owners the active registry may be another
-  // Gateway's; keep the strict owner check there.
-  const live =
-    options?.settlement === true && hasSingleOpenPluginRegistryOwner()
-      ? getActivePluginRegistry()
-      : null;
+  // Only the Gateway that admitted this work supplies its successor. A closing,
+  // unlinked or disputed owner leaves the strict check on the retired scope.
+  const gateway = options?.settlement === true ? getPluginRegistryGatewayOwner(scoped) : undefined;
+  const live = gateway?.current();
   const adopted =
+    gateway &&
     live &&
+    live !== scoped &&
     isPluginRegistryRetired(scoped) &&
     !scoped.detachedTaskRuntimes[0] &&
     !live.detachedTaskRuntimes[0]
-      ? live
+      ? { gateway, registry: live }
       : undefined;
-  const registry = adopted ?? scoped;
-  const currentRegistry = adopted ? getActivePluginRegistry : getPluginRegistryForContext;
+  const registry = adopted?.registry ?? scoped;
+  const currentRegistry = adopted ? adopted.gateway.current : getPluginRegistryForContext;
   const registration = registry.detachedTaskRuntimes[0];
   const runtime = registration?.runtime;
   const pluginId = registration?.pluginId;

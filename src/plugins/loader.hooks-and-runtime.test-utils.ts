@@ -1348,11 +1348,24 @@ ${channelPluginSource({
 
   it.each([
     { successor: "removed", preserved: true },
-    { successor: "replaced", preserved: false },
-    { successor: "removed while a second Gateway is open", preserved: false },
+    { successor: "replaced", replaced: true, preserved: false },
+    { successor: "removed while Gateway B is live and active", gatewayB: true, preserved: true },
+    {
+      successor: "removed and Gateway A is closing while Gateway B is live and active",
+      gatewayB: true,
+      closeGatewayA: true,
+      preserved: false,
+    },
+    {
+      // A published build shares this process state but never links its registries.
+      successor: "removed from a registry a published build left unlinked",
+      unlinked: true,
+      gatewayB: true,
+      preserved: false,
+    },
   ])(
     "keeps a run's tool result only when its middleware plugin was $successor",
-    async ({ successor, preserved }) => {
+    async ({ successor, replaced, gatewayB, closeGatewayA, unlinked, preserved }) => {
       useNoBundledPlugins();
       const pluginId = `tool-result-middleware-${successor}`;
       const plugin = writePlugin({
@@ -1374,7 +1387,7 @@ ${channelPluginSource({
         throw new Error("expected a loaded middleware plugin instance");
       }
       setActivePluginRegistry(registry);
-      const gateway = createPluginRegistryOwner(registry);
+      const gatewayA = unlinked ? undefined : createPluginRegistryOwner(registry);
       // A run resolves its middleware once and keeps that list.
       const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, [
         entry.handler,
@@ -1390,14 +1403,19 @@ ${channelPluginSource({
       ]);
 
       const next = createEmptyPluginRegistry();
-      if (successor === "replaced") {
+      if (replaced) {
         next.plugins.push({ ...record });
       }
       setActivePluginRegistry(next);
-      gateway.publish(next);
-      if (successor.includes("second Gateway")) {
-        // With two open owners the active registry may be the other Gateway's.
-        createPluginRegistryOwner(createEmptyPluginRegistry());
+      gatewayA?.publish(next);
+      if (gatewayB) {
+        // Gateway B becomes the process-active projection without this plugin.
+        const other = createEmptyPluginRegistry();
+        setActivePluginRegistry(other);
+        createPluginRegistryOwner(other);
+      }
+      if (closeGatewayA) {
+        await gatewayA?.close();
       }
       await instance.dispose();
       // Callable and cyclic details survive only on the untouched no-middleware path.
@@ -1415,7 +1433,7 @@ ${channelPluginSource({
           ).applyToolResultMiddleware({ ...event, result: raw }),
         ).toBe(raw);
       } else {
-        // A replacement exists, so the stale handler fails closed.
+        // A replacement, a closing owner or no owner link: the stale handler fails closed.
         expect(result.details).toEqual({ status: "error", middlewareError: true });
       }
     },
