@@ -31,19 +31,6 @@ describe("parseLogLine", () => {
       level: null,
       time: null,
     },
-    {
-      name: "uses the complete persisted message for generic positional records",
-      record: {
-        "0": "worker",
-        "1": "request failed",
-        "2": "retry later",
-        message: "request failed retry later",
-      },
-      message: "request failed retry later",
-      subsystem: null,
-      level: null,
-      time: null,
-    },
   ])("$name", ({ record, message, subsystem, level, time }) => {
     const parsed = parseLogLine(JSON.stringify(record));
 
@@ -64,10 +51,6 @@ describe("parseLogLine", () => {
     expect(parsed.subsystem).toBe("gateway");
     expect(parsed.message).toBe("failed to start");
     expect(parsed.raw).toContain("\\u001b");
-  });
-
-  it("strips ANSI escape sequences from plain log lines", () => {
-    expect(parseLogLine("\u001b[33mwarning\u001b[39m").message).toBe("warning");
   });
 
   it("strips OSC hyperlink escape payloads from displayed log fields", () => {

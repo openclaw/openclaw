@@ -87,6 +87,21 @@ function toggle(page: HTMLElement, title: string, checked: boolean) {
   element.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
+function typeInput(input: HTMLInputElement, value: string) {
+  input.value = value;
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+function typeDomain(page: HTMLElement, value: string) {
+  typeInput(row(page, "Domains").querySelector<HTMLInputElement>("input")!, value);
+}
+
+function submitDomain(page: HTMLElement) {
+  row(page, "Domains")
+    .querySelector<HTMLFormElement>("form")!
+    .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+}
+
 beforeEach(async () => {
   await i18n.setLocale("en");
 });
@@ -391,13 +406,10 @@ describe("native device settings pages", () => {
   it("normalizes and deduplicates added cookie hostnames and removes a selected hostname", async () => {
     const { capability } = createCapability();
     const page = await mount("openclaw-device-page", capability);
-    const input = row(page, "Domains").querySelector<HTMLInputElement>("input")!;
-    const form = row(page, "Domains").querySelector<HTMLFormElement>("form")!;
     for (const hostname of ["  EXAMPLE.COM ", "  ACCOUNTS.EXAMPLE.ORG  "]) {
-      input.value = hostname;
-      input.dispatchEvent(new Event("input", { bubbles: true }));
+      typeDomain(page, hostname);
       await page.updateComplete;
-      form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      submitDomain(page);
       await page.updateComplete;
     }
     expect(capability.set).toHaveBeenLastCalledWith(
@@ -417,13 +429,9 @@ describe("native device settings pages", () => {
     const native = createCapability();
     const page = await mount("openclaw-device-page", native.capability);
     for (const hostname of ["a.example.com", "b.example.com"]) {
-      const input = row(page, "Domains").querySelector<HTMLInputElement>("input")!;
-      input.value = hostname;
-      input.dispatchEvent(new Event("input", { bubbles: true }));
+      typeDomain(page, hostname);
       await page.updateComplete;
-      row(page, "Domains")
-        .querySelector<HTMLFormElement>("form")!
-        .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      submitDomain(page);
       await page.updateComplete;
     }
 
@@ -456,8 +464,7 @@ describe("native device settings pages", () => {
     const page = await mount("openclaw-device-page", capability);
     const input = row(page, "Target profile").querySelector<HTMLInputElement>("input")!;
     for (const value of ["work", "work-browser"]) {
-      input.value = value;
-      input.dispatchEvent(new Event("input", { bubbles: true }));
+      typeInput(input, value);
       await vi.advanceTimersByTimeAsync(200);
     }
     expect(capability.set).not.toHaveBeenCalled();
@@ -467,8 +474,7 @@ describe("native device settings pages", () => {
       "work-browser",
       expect.any(Function),
     );
-    input.value = "personal-browser";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
+    typeInput(input, "personal-browser");
     page.remove();
     expect(capability.set).toHaveBeenLastCalledWith(
       "browser.cookieSync.targetProfile",
@@ -485,8 +491,7 @@ describe("native device settings pages", () => {
     const page = await mount("openclaw-device-page", native.capability);
     const input = row(page, "Target profile").querySelector<HTMLInputElement>("input")!;
     for (const value of ["first-profile", "second-profile"]) {
-      input.value = value;
-      input.dispatchEvent(new Event("input", { bubbles: true }));
+      typeInput(input, value);
       await vi.advanceTimersByTimeAsync(400);
     }
     const older = createNativeDeviceSettingsSnapshot();
@@ -495,8 +500,7 @@ describe("native device settings pages", () => {
     await page.updateComplete;
     expect(input.value).toBe("second-profile");
 
-    input.value += "-final";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
+    typeInput(input, `${input.value}-final`);
     await vi.advanceTimersByTimeAsync(400);
     expect(native.capability.set).toHaveBeenLastCalledWith(
       "browser.cookieSync.targetProfile",
@@ -518,34 +522,24 @@ describe("native device settings pages", () => {
     vi.useFakeTimers();
     const native = createCapability();
     const first = await mount("openclaw-device-page", native.capability);
-    const firstDomain = row(first, "Domains").querySelector<HTMLInputElement>("input")!;
-    firstDomain.value = "b.example.com";
-    firstDomain.dispatchEvent(new Event("input", { bubbles: true }));
+    typeDomain(first, "b.example.com");
     await first.updateComplete;
-    row(first, "Domains")
-      .querySelector<HTMLFormElement>("form")!
-      .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    submitDomain(first);
     const firstProfile = row(first, "Target profile").querySelector<HTMLInputElement>("input")!;
-    firstProfile.value = "pending-profile";
-    firstProfile.dispatchEvent(new Event("input", { bubbles: true }));
+    typeInput(firstProfile, "pending-profile");
     first.remove();
 
     const second = await mount("openclaw-device-page", native.capability);
-    const secondDomain = row(second, "Domains").querySelector<HTMLInputElement>("input")!;
-    secondDomain.value = "c.example.com";
-    secondDomain.dispatchEvent(new Event("input", { bubbles: true }));
+    typeDomain(second, "c.example.com");
     await second.updateComplete;
-    row(second, "Domains")
-      .querySelector<HTMLFormElement>("form")!
-      .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    submitDomain(second);
     expect(native.capability.set).toHaveBeenLastCalledWith(
       "browser.cookieSync.domains",
       ["example.com", "b.example.com", "c.example.com"],
       expect.any(Function),
     );
     const secondProfile = row(second, "Target profile").querySelector<HTMLInputElement>("input")!;
-    secondProfile.value += "-remote";
-    secondProfile.dispatchEvent(new Event("input", { bubbles: true }));
+    typeInput(secondProfile, `${secondProfile.value}-remote`);
     second.remove();
     expect(native.capability.set).toHaveBeenLastCalledWith(
       "browser.cookieSync.targetProfile",
@@ -574,16 +568,11 @@ describe("native device settings pages", () => {
     vi.useFakeTimers();
     const native = createCapability();
     const first = await mount("openclaw-device-page", native.capability);
-    const domain = row(first, "Domains").querySelector<HTMLInputElement>("input")!;
-    domain.value = "rejected.example.com";
-    domain.dispatchEvent(new Event("input", { bubbles: true }));
+    typeDomain(first, "rejected.example.com");
     await first.updateComplete;
-    row(first, "Domains")
-      .querySelector<HTMLFormElement>("form")!
-      .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    submitDomain(first);
     const profile = row(first, "Target profile").querySelector<HTMLInputElement>("input")!;
-    profile.value = "rejected-profile";
-    profile.dispatchEvent(new Event("input", { bubbles: true }));
+    typeInput(profile, "rejected-profile");
     first.remove();
     const second = await mount("openclaw-device-page", native.capability);
     native.settle(0);
@@ -605,19 +594,16 @@ describe("native device settings pages", () => {
     const native = createCapability();
     const page = await mount("openclaw-device-page", native.capability);
     const input = row(page, "Target profile").querySelector<HTMLInputElement>("input")!;
-    input.value = " work ";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
+    typeInput(input, " work ");
     await vi.advanceTimersByTimeAsync(400);
     const normalized = createNativeDeviceSettingsSnapshot();
     normalized.browser.cookieSync.targetProfile = "work";
     native.settle(0, normalized);
     await page.updateComplete;
     expect(input.value).toBe("work");
-    input.value = "older";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
+    typeInput(input, "older");
     await vi.advanceTimersByTimeAsync(400);
-    input.value = "newer";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
+    typeInput(input, "newer");
     native.settle(1, normalized);
     await page.updateComplete;
     expect(input.value).toBe("newer");
@@ -633,8 +619,7 @@ describe("native device settings pages", () => {
     const page = await mount("openclaw-device-page", native.capability);
     const input = row(page, "Target profile").querySelector<HTMLInputElement>("input")!;
     for (const value of ["first", "middle", "first"]) {
-      input.value = value;
-      input.dispatchEvent(new Event("input", { bubbles: true }));
+      typeInput(input, value);
       await vi.advanceTimersByTimeAsync(400);
     }
     const older = createNativeDeviceSettingsSnapshot();
