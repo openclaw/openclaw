@@ -137,6 +137,9 @@ concurrency limits. Missing group capacity queues jobs. Shared workflows receive
 an optional `runner_group` from their release caller, including `docker-release.yml`
 and `vercel-container-registry-publish.yml` from Release Publish; `docker-image-refresh.yml`,
 ordinary CI, scheduled performance, and unrelated reusable callers retain their routing.
+Approval and credentialed publish jobs (npm trusted publishing, ClawHub, Docker)
+keep their default GitHub-hosted labels, and the hourly plugin npm preview routes
+only when Release Publish dispatches it.
 The runner count, matrix caps, and default labels do not change.
 
 To reserve capacity outside ordinary PR/main pools:

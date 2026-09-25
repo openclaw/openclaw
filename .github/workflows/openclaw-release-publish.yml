@@ -1126,7 +1126,7 @@ jobs:
       attestations: write
       contents: read
       id-token: write
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - name: Checkout trusted Android approval tooling
@@ -1258,7 +1258,7 @@ jobs:
       attestations: write
       contents: write
       id-token: write
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
+    runs-on: ubuntu-latest
     timeout-minutes: 120
     environment: npm-release
     steps:
@@ -2191,7 +2191,7 @@ jobs:
     # Approval waits must not hold the Linux updater publication queue.
     needs: [publish, publish_docker]
     if: ${{ always() && !inputs.finalize_release_before_docker && inputs.prepared_plugins == '' && inputs.publish_openclaw_npm && needs.publish.result == 'success' && (needs.publish_docker.result == 'success' || (contains(inputs.tag, '-alpha.') && needs.publish_docker.result == 'skipped')) }}
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: npm-release
     permissions: {}
@@ -2287,7 +2287,7 @@ jobs:
     name: Approve GitHub release before Docker
     needs: [publish]
     if: ${{ inputs.finalize_release_before_docker && inputs.prepared_plugins == '' && inputs.publish_openclaw_npm && needs.publish.result == 'success' }}
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: npm-release
     permissions: {}

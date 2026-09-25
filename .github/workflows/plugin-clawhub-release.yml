@@ -793,7 +793,7 @@ jobs:
         validate_release_publish_approval,
       ]
     if: always() && github.event_name == 'workflow_dispatch' && inputs.dry_run != true && needs.preview_plugins_clawhub.outputs.has_publish_candidates == 'true' && needs.validate_release_publish_approval.result == 'success' && needs.pack_plugins_clawhub_artifacts.result == 'success' && needs.seal_clawhub_transactions.result == 'success'
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
+    runs-on: ubuntu-latest
     environment: clawhub-plugin-release
     permissions:
       actions: read
