@@ -1045,6 +1045,8 @@ impl AppView {
                             .h_flex()
                             .items_center()
                             .gap(px(6.))
+                            .text_size(px(14.))
+                            .line_height(px(18.9))
                             .child(Icon::new(permission_icon(current)).size(px(16.)))
                             .child(label),
                     )

@@ -83,6 +83,7 @@ impl AppView {
                 div()
                     .h_flex()
                     .group("new-session-footer")
+                    .mx(px(-6.))
                     .items_center()
                     .gap(px(6.))
                     .child(self.composer_plus_control(cx))
@@ -262,11 +263,11 @@ impl AppView {
                     .when(incognito, |el| el.child(div().text_size(px(12.)).text_color(p.muted).px(px(14.)).child(
                         "Keep this session for 24 hours or until the Gateway restarts, whichever comes first"))))
                 .when(!incognito && self.composer.read(cx).value().trim().is_empty(), |el| el.child(
-                    div().v_flex().w_full().max_w(px(520.)).mt(px(22.)).gap(px(2.))
+                    div().v_flex().w_full().max_w(px(520.)).mt(px(36.)).gap(px(2.))
                         .when(!recent.is_empty(), |el| el.child(div().px(px(12.)).text_size(px(12.)).font_weight(FontWeight::SEMIBOLD).text_color(p.muted).child("RECENT CHATS")))
                         .children(recent.into_iter().take(5).map(|row| {
                             let key = row.key.clone();
-                            Button::new(SharedString::from(format!("draft-recent-{key}"))).ghost().small().h(px(40.)).justify_start()
+                            Button::new(SharedString::from(format!("draft-recent-{key}"))).ghost().small().h(px(40.)).px(px(12.)).justify_start()
                                 .accessibility_label(row.title()).child(div().flex_1().text_left().child(row.title())).on_click(cx.listener(move |this,_,window,cx|this.select_session(key.clone(),window,cx)))
                         })))))
             .child(Button::new("new-session-incognito").ghost().small().absolute().top(px(10.)).right(px(10.)).size(px(40.))
@@ -439,6 +440,11 @@ impl AppView {
                 Input::new(&state.search)
                     .small()
                     .appearance(false)
+                    .h(px(28.))
+                    .px(px(8.))
+                    .rounded(px(6.))
+                    .bg(Palette::get(cx).hover)
+                    .prefix(Icon::new(IconName::Search).size(px(14.)))
                     .aria_label("Search environments"),
             )
             .child(title("YOUR DEVICES", cx));
@@ -661,6 +667,7 @@ impl AppView {
                     draft.folder == folder && draft.project_id.is_empty(),
                     cx,
                 )
+                .icon(Icon::new(IconName::Folder).size(px(14.)))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.choose_draft_folder(folder.clone(), window, cx)
                 })),
@@ -670,6 +677,12 @@ impl AppView {
             Input::new(&state.search)
                 .small()
                 .appearance(false)
+                .h(px(28.))
+                .px(px(8.))
+                .border_1()
+                .border_color(Palette::get(cx).border)
+                .rounded(px(6.))
+                .bg(Palette::get(cx).bg)
                 .aria_label("Search projects or paste a clone URL"),
         );
         let query = state.search.read(cx).value().to_string();
@@ -746,40 +759,48 @@ impl AppView {
         if !repository {
             menu = menu
                 .child(
-                    row(
+                    checkout_option(
                         "draft-current-checkout",
                         "Current checkout",
+                        IconName::Folder,
+                        state.branches.head_branch.as_deref().unwrap_or(""),
                         !draft.worktree,
                         cx,
                     )
                     .disabled(draft.destination.is_remote())
-                    .icon(Icon::new(IconName::Folder).size(px(14.)))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.new_session.draft.worktree = false;
                         cx.notify();
                     })),
                 )
                 .child(
-                    row("draft-new-worktree", "New worktree", draft.worktree, cx)
-                        .icon(Icon::new(IconName::GitBranch).size(px(14.)))
-                        .disabled(
-                            state.branches.repository_status.as_deref() != Some("git")
-                                && draft.project_git_url.is_empty(),
-                        )
-                        .tooltip("Isolated copy of the repo")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.new_session.draft.worktree = true;
-                            this.new_session.draft.fresh_workspace = false;
-                            cx.notify();
-                        })),
+                    checkout_option(
+                        "draft-new-worktree",
+                        "New worktree",
+                        IconName::GitBranch,
+                        "Isolated copy of the repo",
+                        draft.worktree,
+                        cx,
+                    )
+                    .disabled(
+                        state.branches.repository_status.as_deref() != Some("git")
+                            && draft.project_git_url.is_empty(),
+                    )
+                    .tooltip("Isolated copy of the repo")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.new_session.draft.worktree = true;
+                        this.new_session.draft.fresh_workspace = false;
+                        cx.notify();
+                    })),
                 );
         }
         if draft.worktree || repository {
-            menu = menu.child(title("From", cx)).child(
-                Input::new(&state.base_ref_input)
-                    .small()
-                    .aria_label("Base branch or commit"),
-            );
+            menu = menu.child(checkout_field(
+                "From",
+                "Base branch or commit",
+                &state.base_ref_input,
+                cx,
+            ));
             let query = state.base_ref_input.read(cx).value().to_lowercase();
             for branch in state
                 .branches
@@ -816,12 +837,12 @@ impl AppView {
             ));
             if !repository {
                 menu = menu
-                    .child(title("Name", cx))
-                    .child(
-                        Input::new(&state.worktree_name_input)
-                            .small()
-                            .aria_label("New worktree name"),
-                    )
+                    .child(checkout_field(
+                        "Name",
+                        "New worktree name",
+                        &state.worktree_name_input,
+                        cx,
+                    ))
                     .child(note(
                         worktree_branch_name(&draft.worktree_name)
                             .map(|name| format!("Creates branch {name} in a separate checkout."))
@@ -876,7 +897,11 @@ fn row(
         .accessibility_label(label.clone())
         .child(div().flex_1().text_left().child(label))
         .child(div().w(px(20.)).when(selected, |el| {
-            el.child(Icon::new(IconName::Check).size(px(14.)))
+            el.child(
+                Icon::new(IconName::Check)
+                    .size(px(14.))
+                    .text_color(p.accent),
+            )
         }))
 }
 fn title(label: impl Into<SharedString>, cx: &App) -> Div {
@@ -887,6 +912,80 @@ fn title(label: impl Into<SharedString>, cx: &App) -> Div {
         .font_weight(FontWeight::SEMIBOLD)
         .text_color(Palette::get(cx).muted)
         .child(label.into())
+}
+
+fn checkout_option(
+    id: &'static str,
+    label: &'static str,
+    icon: IconName,
+    detail: &str,
+    selected: bool,
+    cx: &App,
+) -> Button {
+    let p = Palette::get(cx);
+    Button::new(id)
+        .ghost()
+        .small()
+        .w_full()
+        .h(px(28.))
+        .px(px(8.))
+        .accessibility_label(label)
+        .when(selected, |el| el.bg(p.hover))
+        .child(
+            div()
+                .h_flex()
+                .w_full()
+                .items_center()
+                .gap(px(8.))
+                .child(Icon::new(icon).size(px(14.)))
+                .child(div().text_size(px(12.)).child(label))
+                .child(
+                    div()
+                        .flex_1()
+                        .text_size(px(11.))
+                        .text_color(p.muted)
+                        .truncate()
+                        .child(detail.to_owned()),
+                )
+                .child(div().w(px(16.)).when(selected, |el| {
+                    el.child(
+                        Icon::new(IconName::Check)
+                            .size(px(14.))
+                            .text_color(p.accent),
+                    )
+                })),
+        )
+}
+
+fn checkout_field(
+    label: &'static str,
+    accessible: &'static str,
+    input: &Entity<gpui_kit::component::input::InputState>,
+    cx: &App,
+) -> Div {
+    let p = Palette::get(cx);
+    div()
+        .h_flex()
+        .items_center()
+        .gap(px(8.))
+        .px(px(8.))
+        .py(px(3.))
+        .child(
+            div()
+                .w(px(32.))
+                .flex_shrink_0()
+                .text_size(px(12.))
+                .text_color(p.muted)
+                .child(label),
+        )
+        .child(
+            Input::new(input)
+                .small()
+                .h(px(28.))
+                .flex_1()
+                .text_size(px(12.))
+                .aria_label(accessible),
+        )
 }
 fn note(label: impl Into<SharedString>, cx: &App) -> Div {
     div()
