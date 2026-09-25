@@ -10,6 +10,7 @@ import {
 import { markDiagnosticActivity as markActivity } from "./diagnostic-runtime.js";
 import type { SessionAttentionClassification } from "./diagnostic-session-attention.js";
 import {
+  isRecoveryRunReclaimOutcome,
   recoveryOutcomeClearsQueuedSessionState,
   resolveStuckSessionRecoveryRef,
   type StuckSessionRecoveryOutcome,
@@ -90,7 +91,7 @@ function applyRecoveryOutcomeToDiagnosticState(params: {
   if (!params.outcome) {
     return;
   }
-  if (params.outcome.status !== "aborted" && params.outcome.status !== "released") {
+  if (!isRecoveryRunReclaimOutcome(params.outcome) && params.outcome.status !== "released") {
     emitSessionRecoveryCompleted({ request: params.request, outcome: params.outcome });
     return;
   }
@@ -101,7 +102,8 @@ function applyRecoveryOutcomeToDiagnosticState(params: {
   const stateIsCurrent =
     expectedState === "idle" &&
     params.request.stateGeneration !== undefined &&
-    params.outcome.action === "abort_embedded_run"
+    (params.outcome.action === "abort_embedded_run" ||
+      params.outcome.action === "force_clear_embedded_run")
       ? currentState?.state === "idle" &&
         (currentGeneration === requestGeneration || currentGeneration === requestGeneration + 1)
       : isDiagnosticSessionStateCurrent({

@@ -661,9 +661,11 @@ describe("stuck session recovery integration", () => {
       // The shared deadline can leave the owner-settlement clamp's final 100 ms.
       await vi.advanceTimersByTimeAsync(15_100);
 
+      // Nothing was aborted here: the owner never acknowledged the abort and the
+      // lane was released by the force-clear, so the outcome must say so.
       await expect(recovery).resolves.toMatchObject({
-        status: "aborted",
-        action: "abort_embedded_run",
+        status: "force_cleared",
+        action: "force_clear_embedded_run",
         aborted: false,
         drained: false,
         forceCleared: true,
@@ -675,6 +677,41 @@ describe("stuck session recovery integration", () => {
       await vi.runOnlyPendingTimersAsync();
       vi.useRealTimers();
     }
+  });
+
+  it("still reports an acknowledged abort as an abort", async () => {
+    // Companion to the force-clear case above: an owner that honours the abort
+    // and drains must keep reporting status=aborted, so the two stay tellable
+    // apart in the recovery log.
+    const sessionKey = "agent:main:acknowledged-abort";
+    const sessionId = "acknowledged-abort-session";
+    const lane = resolveEmbeddedSessionLane(sessionKey);
+    const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+    operation.attachBackend({
+      kind: "embedded",
+      cancel: () => queueMicrotask(() => operation.complete()),
+      isStreaming: () => false,
+    });
+    operation.setPhase("running");
+    void enqueueCommandInLane(lane, () => new Promise<never>(() => {}), {
+      warnAfterMs: Number.MAX_SAFE_INTEGER,
+    });
+
+    const outcome = await recoverStuckDiagnosticSession({
+      sessionId,
+      sessionKey,
+      ageMs: 720_000,
+      queueDepth: 1,
+      allowActiveAbort: true,
+    });
+
+    expect(outcome).toMatchObject({
+      status: "aborted",
+      action: "abort_embedded_run",
+      aborted: true,
+      drained: true,
+      forceCleared: false,
+    });
   });
 
   it("leaves committed reply finalization to its existing lease before releasing queued work", async () => {

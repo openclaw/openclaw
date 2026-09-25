@@ -55,15 +55,25 @@ type DiagnosticSessionRecoveryBaseOutcome = {
   activeWorkKind?: DiagnosticSessionActiveWorkKind;
 };
 
+type DiagnosticSessionRecoveryReclaimOutcome = DiagnosticSessionRecoveryBaseOutcome & {
+  aborted: boolean;
+  drained: boolean;
+  forceCleared: boolean;
+  released: number;
+  queuedCount?: number;
+};
+
 export type StuckSessionRecoveryOutcome =
-  | (DiagnosticSessionRecoveryBaseOutcome & {
+  | (DiagnosticSessionRecoveryReclaimOutcome & {
       status: "aborted";
       action: "abort_embedded_run";
-      aborted: boolean;
-      drained: boolean;
-      forceCleared: boolean;
-      released: number;
-      queuedCount?: number;
+    })
+  // A force-clear releases a lane whose owner never acknowledged an abort. It is
+  // a distinct outcome: reporting it as an abort makes a release that aborted
+  // nothing indistinguishable from a run the recovery actually stopped.
+  | (DiagnosticSessionRecoveryReclaimOutcome & {
+      status: "force_cleared";
+      action: "force_clear_embedded_run";
     })
   | (DiagnosticSessionRecoveryBaseOutcome & {
       status: "released";
@@ -92,11 +102,22 @@ export type StuckSessionRecoveryOutcome =
       error: string;
     });
 
+/**
+ * Both reclaim outcomes settle an embedded run and carry the same fields; they
+ * differ only in which mechanism released it.
+ */
+export function isRecoveryRunReclaimOutcome(
+  outcome: StuckSessionRecoveryOutcome,
+): outcome is Extract<StuckSessionRecoveryOutcome, { status: "aborted" | "force_cleared" }> {
+  return outcome.status === "aborted" || outcome.status === "force_cleared";
+}
+
 export function recoveryOutcomeClearsQueuedSessionState(
   outcome: StuckSessionRecoveryOutcome,
 ): boolean {
   return (
-    (outcome.status === "released" || (outcome.status === "aborted" && outcome.released > 0)) &&
+    (outcome.status === "released" ||
+      (isRecoveryRunReclaimOutcome(outcome) && outcome.released > 0)) &&
     (outcome.queuedCount ?? 0) === 0
   );
 }
@@ -131,7 +152,7 @@ export function formatRecoveryOutcome(outcome: StuckSessionRecoveryOutcome): str
     fields.push(`released=${outcome.released}`);
   }
   if (
-    (outcome.status === "aborted" || outcome.status === "released") &&
+    (isRecoveryRunReclaimOutcome(outcome) || outcome.status === "released") &&
     outcome.queuedCount !== undefined
   ) {
     fields.push(`queuedCount=${outcome.queuedCount}`);

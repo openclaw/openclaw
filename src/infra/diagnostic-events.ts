@@ -368,6 +368,7 @@ export type DiagnosticSessionStuckEvent = DiagnosticSessionAttentionBaseEvent & 
 
 export type DiagnosticSessionRecoveryStatus =
   | "aborted"
+  | "force_cleared"
   | "released"
   | "skipped"
   | "noop"
