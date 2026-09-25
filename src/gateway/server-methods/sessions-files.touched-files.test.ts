@@ -457,6 +457,9 @@ describe("sessions.files touched-file folds", () => {
         "..cache/missing.txt",
         "missing.txt",
         "src/readme.md",
+        // An inbound media-store identity is not a workspace path even though joining it
+        // under the root lands inside the root.
+        "media://inbound/image---15547f7e.png",
       ].map((filePath) => assistantToolCall("read", { path: filePath })),
     );
 
