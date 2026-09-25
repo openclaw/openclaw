@@ -48,6 +48,23 @@ function createRoute(params: {
 }
 
 function createMockUpgradeSocket() {
+  type Listener = (...args: unknown[]) => void;
+  const listeners = new Map<string, Set<Listener>>();
+  const on = (event: string, listener: Listener) => {
+    const bucket = listeners.get(event) ?? new Set<Listener>();
+    bucket.add(listener);
+    listeners.set(event, bucket);
+    return socket;
+  };
+  const off = (event: string, listener: Listener) => {
+    listeners.get(event)?.delete(listener);
+    return socket;
+  };
+  const emit = (event: string, ...args: unknown[]) => {
+    for (const listener of Array.from(listeners.get(event) ?? [])) {
+      listener(...args);
+    }
+  };
   const socket = {
     chunks: [] as string[],
     destroyed: false,
@@ -59,8 +76,23 @@ function createMockUpgradeSocket() {
       callback();
     },
     destroy() {
+      if (socket.destroyed) {
+        return;
+      }
       socket.destroyed = true;
+      emit("close");
     },
+    on,
+    once(event: string, listener: Listener) {
+      const wrapped: Listener = (...args) => {
+        off(event, wrapped);
+        listener(...args);
+      };
+      return on(event, wrapped);
+    },
+    off,
+    removeListener: off,
+    addListener: on,
   } as unknown as Duplex & { chunks: string[]; destroyed: boolean };
   return socket;
 }
@@ -580,6 +612,34 @@ describe("createGatewayPluginUpgradeHandler", () => {
     expect(routeUpgradeHandler).toHaveBeenCalledTimes(1);
     expect(socket.destroyed).toBe(false);
     expect(socket.chunks).toStrictEqual([]);
+  });
+
+  it("flushes HTTP 503 before destroy when handleUpgrade throws", async () => {
+    const handler = createGatewayPluginUpgradeHandler({
+      registry: createGatewayTestRegistry({
+        httpRoutes: [
+          createRoute({
+            path: "/plugin/ws",
+            auth: "plugin",
+            handleUpgrade: async () => {
+              throw new Error("upgrade boom");
+            },
+          }),
+        ],
+      }),
+      log: createPluginLog(),
+    });
+    const socket = createMockUpgradeSocket();
+
+    const handled = await handler(
+      { url: "/plugin/ws" } as IncomingMessage,
+      socket,
+      Buffer.alloc(0),
+    );
+
+    expect(handled).toBe(true);
+    expect(socket.chunks.join("")).toContain("HTTP/1.1 503");
+    expect(socket.destroyed).toBe(true);
   });
 });
 

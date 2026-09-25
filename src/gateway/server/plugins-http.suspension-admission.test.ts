@@ -391,10 +391,13 @@ describe("plugin upgrade suspension admission", () => {
       }),
     ]);
     const failureSocket = createMockUpgradeSocket();
+    const failureClosed = once(failureSocket, "close");
     await expect(
       failingHandler({ url: ROUTE_PATH } as IncomingMessage, failureSocket, Buffer.alloc(0)),
     ).resolves.toBe(true);
+    await failureClosed;
     expect(failureSocket.destroyed).toBe(true);
+    expect(failureSocket.chunks.join("")).toContain("HTTP/1.1 503");
     expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 });
