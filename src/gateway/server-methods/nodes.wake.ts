@@ -143,19 +143,10 @@ export async function maybeWakeNodeWithApns(
             return withDuration({ available: false, throttled: false, path: "invalidated" });
           }
           await clearStaleApnsRegistrationIfNeeded(registration, nodeId, wakeResult);
-          if (!wakeResult.ok) {
-            return withDuration({
-              available: true,
-              throttled: false,
-              path: "send-error",
-              apnsStatus: wakeResult.status,
-              apnsReason: wakeResult.reason,
-            });
-          }
           return withDuration({
             available: true,
             throttled: false,
-            path: "sent",
+            path: wakeResult.ok ? "sent" : "send-error",
             apnsStatus: wakeResult.status,
             apnsReason: wakeResult.reason,
           });
@@ -247,21 +238,13 @@ export async function maybeSendNodeWakeNudge(
           if (!(await isAttemptCurrent())) {
             return withDuration({ sent: result.ok, throttled: false, reason: "invalidated" });
           }
-          return result.ok
-            ? withDuration({
-                sent: true,
-                throttled: false,
-                reason: "sent",
-                apnsStatus: result.status,
-                apnsReason: result.reason,
-              })
-            : withDuration({
-                sent: false,
-                throttled: false,
-                reason: "apns-not-ok",
-                apnsStatus: result.status,
-                apnsReason: result.reason,
-              });
+          return withDuration({
+            sent: result.ok,
+            throttled: false,
+            reason: result.ok ? "sent" : "apns-not-ok",
+            apnsStatus: result.status,
+            apnsReason: result.reason,
+          });
         } catch (err) {
           if (!(await isAttemptCurrent())) {
             return withDuration({ sent: false, throttled: false, reason: "invalidated" });

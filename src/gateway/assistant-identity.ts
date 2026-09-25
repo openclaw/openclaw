@@ -78,17 +78,7 @@ function normalizeAvatarValue(value: string | undefined): string | undefined {
 }
 
 function normalizeEmojiValue(value: string | undefined): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-  let hasNonAscii = false;
-  for (let i = 0; i < value.length; i += 1) {
-    if (value.charCodeAt(i) > 127) {
-      hasNonAscii = true;
-      break;
-    }
-  }
-  if (!hasNonAscii) {
+  if (!value || !/\P{ASCII}/u.test(value)) {
     return undefined;
   }
   if (

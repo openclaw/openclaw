@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   PaginatedSessionHistory,
   SessionHistoryMessage,
@@ -69,7 +70,7 @@ export async function readSessionHistorySnapshotKernel(
     totalRawMessages = tail.readPage.totalMessages;
     transcriptPath = tail.readPage.transcriptPath;
   }
-  const rawHistoryMessages = toSessionHistoryMessages(rawMessages);
+  const rawHistoryMessages = rawMessages.filter(isRecord);
   const history = paginateSessionMessages(projected.messages, params.limit, params.cursor);
   if (
     typeof totalRawMessages === "number" &&
@@ -102,13 +103,6 @@ export function resolveCursorSeq(cursor: string | undefined): number | undefined
   }
   const value = Number(normalized);
   return Number.isSafeInteger(value) && value > 0 ? value : undefined;
-}
-
-function toSessionHistoryMessages(messages: unknown[]): SessionHistoryMessage[] {
-  return messages.filter(
-    (message): message is SessionHistoryMessage =>
-      Boolean(message) && typeof message === "object" && !Array.isArray(message),
-  );
 }
 
 export function buildPaginatedSessionHistory(params: {

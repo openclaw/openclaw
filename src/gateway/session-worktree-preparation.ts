@@ -430,16 +430,12 @@ export async function prepareSessionWorktree(params: {
     try {
       return withSource ? await withSource((current) => accept(current.assertCurrent)) : accept();
     } catch (error) {
-      const failures = [error];
       try {
         await rollback?.();
       } catch (cleanupError) {
-        failures.push(cleanupError);
-      }
-      if (failures.length > 1) {
         throw new AggregateError(
-          failures,
-          `${formatErrorMessage(error)}; worktree cleanup failed: ${formatErrorMessage(failures[1])}`,
+          [error, cleanupError],
+          `${formatErrorMessage(error)}; worktree cleanup failed: ${formatErrorMessage(cleanupError)}`,
           { cause: error },
         );
       }
@@ -495,15 +491,14 @@ export async function prepareSessionWorktreeCreation(params: {
   if (acceptedPending && !acceptedPending.workspace) {
     if (lifecycleTarget.entry?.pendingProjectGitUrl) {
       // The admitted first-turn owner materializes this child's recorded clone intent.
-      return { ok: true, value: {} };
+      return ok({});
     }
-    return {
-      ok: false,
-      error: errorShape(
+    return err(
+      errorShape(
         ErrorCodes.UNAVAILABLE,
         "Saved worktree workspace is invalid; select the repository and retry.",
       ),
-    };
+    );
   }
   const inheritedSource =
     params.inheritParentKey && !acceptedWorktree && !acceptedPending
@@ -614,7 +609,7 @@ export async function prepareSessionWorktreeCreation(params: {
     withRollback: inheritedSource?.withRollback,
   });
   if (prepared.ok) {
-    return { ok: true, value: { ...prepared.value, ...(withCommit ? { withCommit } : {}) } };
+    return ok({ ...prepared.value, ...(withCommit ? { withCommit } : {}) });
   }
   return prepared;
 }

@@ -5,6 +5,7 @@ import type {
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import type { ActiveInference, RevalidateInference } from "./inference.types.js";
 
@@ -303,7 +304,6 @@ export function createWorkerInferenceSessionControls(params: {
       accept() {
         assertReserved();
         reserved = false;
-        let start!: () => void;
         let started = false;
         let settled = false;
         let releaseRequested = false;
@@ -317,11 +317,9 @@ export function createWorkerInferenceSessionControls(params: {
             }
           }
         };
-        const startedPromise = new Promise<void>((resolve) => {
-          start = resolve;
-        });
+        const startedSignal = createDeferredCore();
         let cancelling: Promise<void> | undefined;
-        const drained = startedPromise.then(() =>
+        const drained = startedSignal.promise.then(() =>
           joinInferenceOperations(
             [...capturedOperations, cancelling!],
             [...capturedStoreKeys].flatMap((storeKey) =>
@@ -330,20 +328,13 @@ export function createWorkerInferenceSessionControls(params: {
           ),
         );
         drainingSessions.set(sessionId, drained);
-        void drained.then(
-          () => {
-            settled = true;
-            if (releaseRequested) {
-              release();
-            }
-          },
-          () => {
-            settled = true;
-            if (releaseRequested) {
-              release();
-            }
-          },
-        );
+        const settle = () => {
+          settled = true;
+          if (releaseRequested) {
+            release();
+          }
+        };
+        void drained.then(settle, settle);
         accepted = {
           drained,
           hasWork: () => hasSession(sessionId) || hasSessionOperation(sessionId),
@@ -351,7 +342,7 @@ export function createWorkerInferenceSessionControls(params: {
             if (!started) {
               started = true;
               cancelling = cancelCaptured(captured, "cancelled");
-              start();
+              startedSignal.resolve();
             }
           },
           release,
@@ -391,12 +382,8 @@ export function createWorkerInferenceSessionControls(params: {
       return stoppingPromise;
     }
     stopping = true;
-    let resolveStop!: () => void;
-    let rejectStop!: (error: unknown) => void;
-    stoppingPromise = new Promise<void>((resolve, reject) => {
-      resolveStop = resolve;
-      rejectStop = reject;
-    });
+    const stopped = createDeferredCore();
+    stoppingPromise = stopped.promise;
     const acceptedDrains = new Map(drainingSessions);
     const cancelling = cancelWhere(
       (entry) => !acceptedDrains.has(entry.request.sessionId),
@@ -405,7 +392,7 @@ export function createWorkerInferenceSessionControls(params: {
     void joinInferenceOperations(
       [recovered, ...operations.keys(), ...acceptedDrains.values(), cancelling],
       [...unknownSettlements.values()].flatMap((errors) => Array.from(errors)),
-    ).then(resolveStop, rejectStop);
+    ).then(stopped.resolve, stopped.reject);
     return stoppingPromise;
   };
 

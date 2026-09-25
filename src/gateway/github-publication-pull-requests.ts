@@ -2,7 +2,10 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
 import { GitHubPublicationKnownFailure } from "./github-publication-failure.js";
-import { requirePublicationCommand } from "./github-publication-git-transport.js";
+import {
+  githubPublicationApiArgs,
+  requirePublicationCommand,
+} from "./github-publication-git-transport.js";
 
 type GitHubPublicationPullRequest = {
   userId: number;
@@ -23,13 +26,7 @@ function githubPublicationPullRequestLookupArgs(params: {
 }): string[] {
   const marker = JSON.stringify(params.marker);
   return [
-    "gh",
-    "api",
-    "--hostname",
-    "github.com",
-    "--method",
-    "GET",
-    `repos/${params.repository}/pulls`,
+    ...githubPublicationApiArgs(`repos/${params.repository}/pulls`),
     "-f",
     `head=${params.owner}:${params.branch}`,
     "-f",
@@ -40,20 +37,6 @@ function githubPublicationPullRequestLookupArgs(params: {
     "--jq",
     // Compact pages remain independently parseable; only the request marker is needed from prose.
     `map({url: .html_url, userId: .user.id, state: .state, body: (if ((.body // "") | contains(${marker})) then ${marker} else "" end), headSha: .head.sha, headRef: .head.ref, baseRef: .base.ref}) | tojson`,
-  ];
-}
-
-export function githubPublicationCreatePullRequestArgs(repository: string): string[] {
-  return [
-    "gh",
-    "api",
-    "--hostname",
-    "github.com",
-    "--method",
-    "POST",
-    `repos/${repository}/pulls`,
-    "--input",
-    "-",
   ];
 }
 
@@ -208,15 +191,7 @@ export async function reconcileGitHubPublicationPullRequest(
   const identity = await params.refreshIdentity();
   params.assertCurrent();
   const raw = await requirePublicationCommand(
-    [
-      "gh",
-      "api",
-      "--hostname",
-      "github.com",
-      "--method",
-      "GET",
-      `repos/${params.pushRepository}/git/commits/${params.headCommit}`,
-    ],
+    githubPublicationApiArgs(`repos/${params.pushRepository}/git/commits/${params.headCommit}`),
     { env: identity.env },
   );
   params.assertCurrent();
@@ -259,13 +234,9 @@ export async function reconcileGitHubPublicationPullRequest(
     const comparison: unknown = JSON.parse(
       await requirePublicationCommand(
         [
-          "gh",
-          "api",
-          "--hostname",
-          "github.com",
-          "--method",
-          "GET",
-          `repos/${params.pushRepository}/compare/${params.headCommit}...${head}?per_page=1`,
+          ...githubPublicationApiArgs(
+            `repos/${params.pushRepository}/compare/${params.headCommit}...${head}?per_page=1`,
+          ),
           "--jq",
           "{sha: .merge_base_commit.sha}",
         ],
@@ -323,15 +294,9 @@ export async function reconcileGitHubPublicationPullRequest(
   params.assertCurrent();
   const refs: unknown = JSON.parse(
     await requirePublicationCommand(
-      [
-        "gh",
-        "api",
-        "--hostname",
-        "github.com",
-        "--method",
-        "GET",
+      githubPublicationApiArgs(
         `repos/${params.pushRepository}/git/matching-refs/heads/${encodeURIComponent(params.branch)}`,
-      ],
+      ),
       { env: refIdentity.env },
     ),
   );

@@ -926,11 +926,7 @@ function collectManagedOutgoingAttachmentRefs(
       if (expectedSessionKey && parsed.sessionKey !== expectedSessionKey) {
         continue;
       }
-      const attachmentId = expectDefined(parsed.attachmentId, "managed image attachment id");
-      refs.set(attachmentId, {
-        attachmentId,
-        sessionKey: parsed.sessionKey,
-      });
+      refs.set(parsed.attachmentId, parsed);
     }
   }
   return [...refs.values()];

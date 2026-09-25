@@ -33,16 +33,12 @@ import {
   GATEWAY_AUTH_SURFACE_PATHS,
   evaluateGatewayAuthSurfaceStates,
 } from "../secrets/runtime-gateway-auth-surfaces.js";
-import { resolveGatewayAuthForConfig } from "./auth-resolve.js";
+import { mergeGatewayAuthConfig, resolveGatewayAuthForConfig } from "./auth-resolve.js";
 import { assertGatewayAuthNotKnownWeak } from "./known-weak-gateway-secrets.js";
 import { mergeActivationSectionsIntoRuntimeConfig } from "./plugin-activation-runtime-config.js";
 import type { ActivateRuntimeSecrets } from "./server-startup-config.types.js";
 import { resolveGatewayStartupSourceConfig } from "./server-startup-secret-surfaces.js";
-import {
-  ensureGatewayStartupAuth,
-  mergeGatewayAuthConfig,
-  mergeGatewayTailscaleConfig,
-} from "./startup-auth.js";
+import { ensureGatewayStartupAuth, mergeGatewayTailscaleConfig } from "./startup-auth.js";
 
 export type GatewayStartupLog = {
   info: (message: string) => void;
