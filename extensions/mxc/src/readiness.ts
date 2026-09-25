@@ -12,13 +12,14 @@ function resolveWindowsSystemExecutable(name: string): string {
   return path.win32.join(systemRoot || "C:\\Windows", "System32", name);
 }
 
-// The IsoEnvBroker service is demand-started, so it does not need to be RUNNING
-// at plugin load: we only require that it is installed. `sc.exe query` exits
-// non-zero (1060) when the service is absent, which surfaces as a thrown error;
-// a successful query means the service exists and Windows will start it on use.
-function assertWindowsIsoEnvBrokerInstalled(deps: ReadinessDeps): void {
+// The IsolationSession service (which replaced IsoEnvBroker) is demand-started, so
+// it does not need to be RUNNING at plugin load: we only require that it is
+// installed. `sc.exe query` exits non-zero (1060) when the service is absent,
+// which surfaces as a thrown error; a successful query means the service exists
+// and Windows will start it on use.
+function assertWindowsIsolationSessionInstalled(deps: ReadinessDeps): void {
   try {
-    deps.execFileSync(resolveWindowsSystemExecutable("sc.exe"), ["query", "IsoEnvBroker"], {
+    deps.execFileSync(resolveWindowsSystemExecutable("sc.exe"), ["query", "IsolationSession"], {
       encoding: "utf-8",
       stdio: "pipe",
       timeout: 5_000,
@@ -27,8 +28,8 @@ function assertWindowsIsoEnvBrokerInstalled(deps: ReadinessDeps): void {
   } catch (error) {
     const detail = error instanceof Error && error.message ? `: ${error.message.trim()}` : "";
     throw new Error(
-      `[mxc] MXC Windows ProcessContainer sandbox is not ready: IsoEnvBroker service is not installed${detail}. ` +
-        `Install the IsoEnvBroker service before enabling MXC sandbox execution.`,
+      `[mxc] MXC Windows ProcessContainer sandbox is not ready: IsolationSession service is not installed${detail}. ` +
+        `Install the IsolationSession service before enabling MXC sandbox execution.`,
       { cause: error },
     );
   }
@@ -105,5 +106,5 @@ export function assertMxcReadiness(
     return;
   }
   const deps = { ...DEFAULT_DEPS, ...params.deps };
-  assertWindowsIsoEnvBrokerInstalled(deps);
+  assertWindowsIsolationSessionInstalled(deps);
 }

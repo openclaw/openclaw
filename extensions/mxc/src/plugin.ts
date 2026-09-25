@@ -20,7 +20,7 @@ export function registerMxcPlugin(api: OpenClawPluginApi): void {
     return;
   }
 
-  // IsoEnvBroker availability is the ProcessContainer readiness signal for this plugin.
+  // IsolationSession service availability is the ProcessContainer readiness signal for this plugin.
   // Binary and host readiness checks fail load with actionable remediation.
   try {
     resolveMxcBinaryPath(config.mxcBinaryPath);

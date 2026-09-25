@@ -257,8 +257,13 @@ agents may still use them.
 
 ## Host readiness
 
-IsoEnvBroker must be available on the host OS. The plugin checks this before
-registering the sandbox backend.
+The IsolationSession Windows service (formerly IsoEnvBroker) must be installed
+on the host OS. It is demand-started, so it does not need to be running. The
+plugin checks this before registering the sandbox backend. To confirm, run:
+
+```powershell
+sc.exe query IsolationSession
+```
 
 Host preparation is advisory. If directory listing inside the sandbox fails with
 `Access is denied`, run this once from an elevated prompt:
