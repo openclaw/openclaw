@@ -1043,7 +1043,7 @@ describe("attachment validation", () => {
     expect(saveMediaBufferMock.mock.calls[0]?.[0]).toEqual(Buffer.from("d"));
   });
 
-  it.each(["QQ", "Q Q=", "QQ==\nQQ==", "QQ=Q"])(
+  it.each(["QQ", "Q Q=", "QQ==\nQQ==", "QQ=Q", "%not-base64%"])(
     "rejects attachment dialect violations %j",
     async (content) => {
       await expect(parseMessageWithAttachments("x", [pdfAttachment({ content })])).rejects.toThrow(
@@ -1058,19 +1058,6 @@ describe("attachment validation", () => {
       parseMessageWithAttachments("x", [pdfAttachment({ content: " \tQUI=\n " })], { maxBytes: 2 }),
     ).resolves.toMatchObject({ offloadedRefs: [expect.objectContaining({ sizeBytes: 2 })] });
     expect(saveMediaBufferMock.mock.calls[0]?.[0]).toEqual(Buffer.from("AB"));
-  });
-
-  it("rejects invalid base64 content", async () => {
-    const bad: ChatAttachment = {
-      type: "image",
-      mimeType: "image/png",
-      fileName: "dot.png",
-      content: "%not-base64%",
-    };
-
-    await expect(
-      parseMessageWithAttachments("x", [bad], { log: { warn: () => {} } }),
-    ).rejects.toThrow(/base64/i);
   });
 
   it("rejects images over limit without decoding base64", async () => {
