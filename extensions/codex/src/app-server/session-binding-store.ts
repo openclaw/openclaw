@@ -13,6 +13,10 @@ import {
   CODEX_APP_SERVER_BINDING_NAMESPACE,
 } from "./session-binding-meta.js";
 import {
+  withCodexBindingOverflowRecovery,
+  type CodexBindingOverflowRecoveryState,
+} from "./session-binding-overflow.js";
+import {
   readCurrentCodexAppServerBinding,
   readCurrentCodexAppServerBindings,
   readCurrentCodexNativeSubagentSubmissions,
@@ -36,12 +40,16 @@ export function createLazyCodexAppServerBindingStore(
     PluginStateKeyedStore<StoredCodexManagedThread>,
     "entries" | "lookup" | "registerIfAbsent"
   >,
+  recoveryState?: CodexBindingOverflowRecoveryState,
 ): CodexAppServerBindingStore {
   let resolved: Promise<CodexAppServerBindingStore> | undefined;
   const store = () =>
-    (resolved ??= import("./session-binding.js").then(({ createCodexAppServerBindingStore }) =>
-      createCodexAppServerBindingStore(state),
-    ));
+    (resolved ??= import("./session-binding.js").then(({ createCodexAppServerBindingStore }) => {
+      const composed = createCodexAppServerBindingStore(state);
+      // Capacity recovery needs the worker-backed paged handle; without it the
+      // insert error propagates rather than scanning the namespace inline.
+      return recoveryState ? withCodexBindingOverflowRecovery(composed, recoveryState) : composed;
+    }));
   const managedThreads: CodexManagedThreadStore | undefined = managedThreadState
     ? createCodexManagedThreadStore(managedThreadState)
     : undefined;
