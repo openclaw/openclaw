@@ -8,79 +8,127 @@ const SYSTEM32 = path.win32.join(
   "System32",
 );
 const ICACLS = path.win32.join(SYSTEM32, "icacls.exe");
-const SC_EXE = path.win32.join(SYSTEM32, "sc.exe");
+const MXC_EXE = "C:\\mxc\\bin\\x64\\wxc-exec.exe";
 
-// Fake host whose only possibly-installed service is IsolationSession; querying any
-// other name (such as the retired IsoEnvBroker) fails like `sc.exe` error 1060.
-function depsFor(params: {
-  isolationSession: "missing" | "running" | "stopped";
-  systemDriveAcl?: string;
-}) {
+function probeOutput(result: Record<string, unknown>): string {
+  return JSON.stringify({ warnings: [], probes: {}, ...result });
+}
+
+// Fake host: `probe` is what `wxc-exec --probe` prints for MXC_EXE (or the error it
+// throws). Every other executable, including sc.exe, is missing.
+function depsFor(params: { probe?: string | Error; systemDriveAcl?: string } = {}) {
+  const probe = params.probe ?? probeOutput({ tier: "base-container" });
   const systemDriveAcl =
     params.systemDriveAcl ?? "C:\\ BUILTIN\\Administrators:(OI)(CI)(F)\n    S-1-15-2-1:(R)\n";
   const exec = vi.fn((command: string, args: readonly string[] = []) => {
-    if (command === SC_EXE) {
-      if (
-        args[0] !== "query" ||
-        args[1] !== "IsolationSession" ||
-        params.isolationSession === "missing"
-      ) {
-        throw new Error("The specified service does not exist as an installed service.");
+    if (command === MXC_EXE && args[0] === "--probe") {
+      if (probe instanceof Error) {
+        throw probe;
       }
-      return params.isolationSession === "stopped"
-        ? "STATE              : 1  STOPPED"
-        : "STATE              : 4  RUNNING";
+      return probe;
     }
     if (command === ICACLS) {
       return systemDriveAcl;
     }
-    throw new Error(`unexpected command: ${command}`);
+    throw new Error(`spawn ${command} ENOENT`);
   }) as unknown as typeof execFileSync;
   return { execFileSync: exec };
 }
 
 describe("assertMxcReadiness", () => {
   test("is a no-op on non-Windows platforms", () => {
-    const deps = depsFor({ isolationSession: "missing" });
+    const deps = depsFor({ probe: new Error("probe must not run") });
 
-    expect(() => assertMxcReadiness({ platform: "linux", deps })).not.toThrow();
+    expect(() =>
+      assertMxcReadiness({ executablePath: MXC_EXE, platform: "linux", deps }),
+    ).not.toThrow();
     expect(deps.execFileSync).not.toHaveBeenCalled();
   });
 
-  test("accepts an installed IsolationSession service (system-drive prep is advisory, not gated)", () => {
-    const deps = depsFor({ isolationSession: "running" });
+  test.each(["base-container", "appcontainer-bfs", "appcontainer-dacl"])(
+    "accepts a host where MXC selects the %s tier",
+    (tier) => {
+      const warn = vi.fn();
+      const deps = depsFor({ probe: probeOutput({ tier }) });
 
-    expect(() => assertMxcReadiness({ platform: "win32", deps })).not.toThrow();
-  });
+      expect(() =>
+        assertMxcReadiness({ executablePath: MXC_EXE, platform: "win32", deps, warn }),
+      ).not.toThrow();
+      expect(warn).not.toHaveBeenCalled();
+    },
+  );
 
-  test("accepts an installed but stopped (demand-started) IsolationSession service", () => {
-    const deps = depsFor({ isolationSession: "stopped" });
+  test("reports MXC tier degradation warnings without blocking activation", () => {
+    const warn = vi.fn();
+    const deps = depsFor({
+      probe: probeOutput({
+        tier: "appcontainer-dacl",
+        warnings: ["BaseContainer API is not present on this host"],
+      }),
+    });
 
-    expect(() => assertMxcReadiness({ platform: "win32", deps })).not.toThrow();
-  });
-
-  test("rejects Windows hosts when IsolationSession is not installed", () => {
-    const deps = depsFor({ isolationSession: "missing" });
-
-    expect(() => assertMxcReadiness({ platform: "win32", deps })).toThrow(
-      /IsolationSession service is not installed/u,
+    expect(() =>
+      assertMxcReadiness({ executablePath: MXC_EXE, platform: "win32", deps, warn }),
+    ).not.toThrow();
+    expect(warn).toHaveBeenCalledOnce();
+    expect(warn.mock.calls[0]?.[0]).toMatch(
+      /appcontainer-dacl isolation tier: BaseContainer API is not present/u,
     );
   });
 
-  test("does NOT throw when system drive lacks AppContainer ACEs (advisory only)", () => {
+  test("rejects hosts where MXC cannot select an isolation tier", () => {
     const deps = depsFor({
-      isolationSession: "running",
-      systemDriveAcl: "C:\\ BUILTIN\\Administrators:(OI)(CI)(F)\n",
+      probe: probeOutput({
+        error: "DACL fallback required but fallback.allowDaclMutation is false",
+      }),
     });
 
-    expect(() => assertMxcReadiness({ platform: "win32", deps })).not.toThrow();
+    expect(() => assertMxcReadiness({ executablePath: MXC_EXE, platform: "win32", deps })).toThrow(
+      /cannot select an isolation tier on this host \(DACL fallback required.*--probe for host details/u,
+    );
+  });
+
+  test("rejects hosts where the MXC probe cannot run", () => {
+    const deps = depsFor({ probe: new Error("Command failed: wxc-exec.exe --probe") });
+
+    expect(() => assertMxcReadiness({ executablePath: MXC_EXE, platform: "win32", deps })).toThrow(
+      /host probe failed: Command failed/u,
+    );
+  });
+
+  test("rejects a probe that does not report JSON", () => {
+    const deps = depsFor({ probe: "wxc-exec: unknown option --probe" });
+
+    expect(() => assertMxcReadiness({ executablePath: MXC_EXE, platform: "win32", deps })).toThrow(
+      /host probe did not return JSON/u,
+    );
+  });
+
+  test("probes the configured executor instead of another MXC binary", () => {
+    const deps = depsFor();
+
+    expect(() =>
+      assertMxcReadiness({
+        executablePath: "C:\\override\\wxc-exec.exe",
+        platform: "win32",
+        deps,
+      }),
+    ).toThrow(/host probe failed: spawn C:\\override\\wxc-exec\.exe ENOENT/u);
+  });
+
+  test("does not gate activation on system-drive preparation", () => {
+    const deps = depsFor({ systemDriveAcl: "C:\\ BUILTIN\\Administrators:(OI)(CI)(F)\n" });
+
+    expect(() =>
+      assertMxcReadiness({ executablePath: MXC_EXE, platform: "win32", deps }),
+    ).not.toThrow();
   });
 });
 
 describe("warnMxcHostPrepIfNeeded", () => {
   test("is a no-op on non-Windows platforms", () => {
     const warn = vi.fn();
-    const deps = depsFor({ isolationSession: "running" });
+    const deps = depsFor();
 
     warnMxcHostPrepIfNeeded({ platform: "linux", deps, warn });
     expect(warn).not.toHaveBeenCalled();
@@ -89,7 +137,6 @@ describe("warnMxcHostPrepIfNeeded", () => {
   test("warns when the system drive lacks AppContainer ACEs", () => {
     const warn = vi.fn();
     const deps = depsFor({
-      isolationSession: "running",
       systemDriveAcl: "C:\\ BUILTIN\\Administrators:(OI)(CI)(F)\n",
     });
 
@@ -100,7 +147,7 @@ describe("warnMxcHostPrepIfNeeded", () => {
 
   test("stays silent when the system drive is prepared (SID form)", () => {
     const warn = vi.fn();
-    const deps = depsFor({ isolationSession: "running" });
+    const deps = depsFor();
 
     warnMxcHostPrepIfNeeded({ platform: "win32", deps, warn });
     expect(warn).not.toHaveBeenCalled();
@@ -109,7 +156,6 @@ describe("warnMxcHostPrepIfNeeded", () => {
   test("stays silent when the system drive is prepared (display-name form)", () => {
     const warn = vi.fn();
     const deps = depsFor({
-      isolationSession: "running",
       systemDriveAcl: "C:\\ APPLICATION PACKAGES:(R)\n    BUILTIN\\Administrators:(F)\n",
     });
 

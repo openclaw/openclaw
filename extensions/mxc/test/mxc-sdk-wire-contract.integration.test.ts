@@ -3,8 +3,10 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
+import { resolveMxcBinaryPath } from "../src/binary-resolver.js";
 import type { MxcConfig } from "../src/config.js";
 import { createMxcSandboxBackendHandle } from "../src/mxc-backend.js";
+import { assertMxcReadiness } from "../src/readiness.js";
 
 // The plugin hands MXC a raw ContainerConfig, so the pinned executor's wire
 // parser is the contract. `wxc-exec --dry-run` parses and validates the config
@@ -27,12 +29,38 @@ function readLauncherPayload(argv: readonly string[]): {
   if (!payloadFile) {
     throw new Error(`expected --payload-file in argv: ${JSON.stringify(argv)}`);
   }
-  const payload = JSON.parse(readFileSync(payloadFile, "utf-8"));
-  rmSync(path.dirname(payloadFile), { force: true, recursive: true });
-  return payload;
+  return JSON.parse(readFileSync(payloadFile, "utf-8"));
+}
+
+function dryRunConfig(
+  executablePath: string,
+  config: Record<string, unknown>,
+): { exitCode: number; output: string } {
+  const configBase64 = Buffer.from(JSON.stringify(config)).toString("base64");
+  try {
+    const output = execFileSync(executablePath, ["--dry-run", "--config-base64", configBase64], {
+      encoding: "utf-8",
+      stdio: "pipe",
+      timeout: 30_000,
+      windowsHide: true,
+    });
+    return { exitCode: 0, output };
+  } catch (error) {
+    const failure = error as { status?: number; stdout?: string; stderr?: string };
+    return {
+      exitCode: failure.status ?? -1,
+      output: `${failure.stdout ?? ""}${failure.stderr ?? ""}`,
+    };
+  }
 }
 
 describeOnWindows("MXC SDK wire contract", () => {
+  test("readiness accepts the pinned wxc-exec host probe", () => {
+    const executablePath = resolveMxcBinaryPath();
+
+    expect(() => assertMxcReadiness({ executablePath, platform: "win32" })).not.toThrow();
+  });
+
   test.each([
     { name: "no workspace access, blocked network", network: "none", workspaceAccess: "none" },
     { name: "read-write workspace, default network", network: "default", workspaceAccess: "rw" },
@@ -59,23 +87,17 @@ describeOnWindows("MXC SDK wire contract", () => {
       workspaceAccess: variant.workspaceAccess,
     });
     const spec = await handle.buildExecSpec({ command: "echo contract", env: {}, usePty: false });
-    const payload = readLauncherPayload(spec.argv);
-    const configBase64 = Buffer.from(JSON.stringify(payload.config)).toString("base64");
-
     let validation: { exitCode: number; output: string };
     try {
-      const output = execFileSync(
-        payload.options.executablePath,
-        ["--dry-run", "--config-base64", configBase64],
-        { encoding: "utf-8", stdio: "pipe", timeout: 30_000, windowsHide: true },
-      );
-      validation = { exitCode: 0, output };
-    } catch (error) {
-      const failure = error as { status?: number; stdout?: string; stderr?: string };
-      validation = {
-        exitCode: failure.status ?? -1,
-        output: `${failure.stdout ?? ""}${failure.stderr ?? ""}`,
-      };
+      const payload = readLauncherPayload(spec.argv);
+      validation = dryRunConfig(payload.options.executablePath, payload.config);
+    } finally {
+      await handle.finalizeExec?.({
+        status: "completed",
+        exitCode: 0,
+        timedOut: false,
+        token: spec.finalizeToken,
+      });
     }
     expect(validation).toEqual({ exitCode: 0, output: expect.any(String) });
   });
