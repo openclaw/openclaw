@@ -12,6 +12,8 @@ legacy_operator_plugin_policy() (
   # This regression cell uses the published 9.2 driver. Other historical cells
   # retain their own migration specimens and lifecycle assertions.
   [ "$baseline_version" = "2026.9.2" ] || return 0
+  # The outer Discord fixture must not install its plugin into this isolated state.
+  unset DISCORD_BOT_TOKEN
   seeded="$(node -e 'const value=JSON.parse(require("node:fs").readFileSync(process.argv[1])).seeded; if(typeof value!=="boolean") throw new Error("missing Webhooks seed evidence"); console.log(value)' \
     "$source_artifacts/legacy-operator-webhooks.json")" || return "$?"
   [ "$seeded" = true ] || { echo "The 9.2 sole-policy specimen was not seeded" >&2; return 1; }

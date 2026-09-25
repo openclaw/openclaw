@@ -1,10 +1,15 @@
 import { spawnSync } from "node:child_process";
-import { describe, expect, it } from "vitest";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   assertPreservedPluginActivation,
   assertSolePluginPolicy,
   readEnabledPolicyPlugins,
 } from "../../scripts/e2e/lib/upgrade-survivor/legacy-operator-plugin-policy.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const hooks = { enabled: true, path: "/survivor-hooks", token: "synthetic-survivor-hook-token" };
 const specimen = { hooks, plugins: { slots: { memory: "memory-core" } } };
@@ -34,6 +39,71 @@ const candidateInventory = () => ({
 });
 
 describe("sole-plugin upgrade acceptance", () => {
+  it("isolates inherited Discord discovery from policy authoring and Gateway startup", () => {
+    const root = tempDirs.make("openclaw-policy-env-");
+    const artifacts = join(root, "artifacts");
+    const prefix = join(root, "npm-prefix");
+    mkdirSync(artifacts);
+    mkdirSync(prefix);
+    writeFileSync(join(artifacts, "legacy-operator-webhooks.json"), '{"seeded":true}');
+    const result = spawnSync(
+      "bash",
+      [
+        "-euo",
+        "pipefail",
+        "-c",
+        `source scripts/e2e/lib/upgrade-survivor/legacy-operator-plugin-policy.sh
+ARTIFACT_ROOT="$1"
+RUNTIME_ROOT="$2"
+npm_config_prefix="$3"
+baseline_version=2026.9.2
+candidate_version=2026.9.6
+assert_policy_env() {
+  if [ -n "\${DISCORD_BOT_TOKEN+x}" ]; then
+    printf 'inherited Discord discovery reached isolated policy boundary\\n' >&2
+    return 1
+  fi
+  [ "$GATEWAY_AUTH_TOKEN_REF" = synthetic-gateway-hook-token ]
+  [ "$TELEGRAM_BOT_TOKEN" = synthetic-telegram-token ]
+}
+node() {
+  if [ "$1" = scripts/e2e/lib/upgrade-survivor/legacy-operator-plugin-policy.mjs ]; then
+    assert_policy_env
+    printf '%s\\n' "$2"
+    return
+  fi
+  command node "$@"
+}
+start_gateway() { assert_policy_env; printf 'gateway\\n'; }
+stop_gateway() { :; }
+read_installed_version() { printf '2026.9.2\\n'; }
+update_candidate() { assert_policy_env; update_outcome=success; update_repair_required=0; }
+legacy_operator_plugin_policy capture
+legacy_operator_plugin_policy verify
+[ "$DISCORD_BOT_TOKEN" = synthetic-discord-token ]
+printf 'main-preserved\\n'
+`,
+        "policy-cell",
+        artifacts,
+        join(root, "runtime"),
+        prefix,
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          DISCORD_BOT_TOKEN: "synthetic-discord-token",
+          GATEWAY_AUTH_TOKEN_REF: "synthetic-gateway-hook-token",
+          TELEGRAM_BOT_TOKEN: "synthetic-telegram-token",
+        },
+      },
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout.trim().split("\n")).toEqual(
+      expect.arrayContaining(["seed", "gateway", "main-preserved"]),
+    );
+  });
+
   it.each(["2026.9.3", "2026.9.4"])(
     "leaves the %s historical migration cell with its existing owner",
     (baselineVersion) => {
