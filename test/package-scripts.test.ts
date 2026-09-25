@@ -257,6 +257,12 @@ describe("package scripts", () => {
     expect(missedTargets).toEqual([]);
   });
 
+  it("runs MCP stdio environment-case coverage in Windows CI", () => {
+    expect(readWindowsCiCoverageScript()).toContain(
+      "src/agents/mcp-stdio-transport.windows.test.ts",
+    );
+  });
+
   it.for([
     { platform: "windows", parts: [1, 2] },
     { platform: "macos", parts: [1, 2, 3] },

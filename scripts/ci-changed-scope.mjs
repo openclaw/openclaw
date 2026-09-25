@@ -110,6 +110,7 @@ const ANDROID_TALK_CONTRACT_FIXTURE_RE = /^test\/fixtures\/talk-config-contract\
 const NODE_SCOPE_RE =
   /^(src\/|test\/|extensions\/|packages\/|scripts\/|ui\/|\.github\/|openclaw\.mjs$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|tsconfig.*\.json$|vitest.*\.ts$|tsdown\.config\.ts$|\.oxlintrc\.json$|\.oxfmtrc\.jsonc$)/;
 const WINDOWS_SQLITE_SCOPE_RE = /^src\/(?:state\/|.*sqlite.*\.ts$)/;
+const WINDOWS_MCP_STDIO_SCOPE_RE = /^src\/agents\/mcp-stdio-transport\.ts$/;
 // Windows process-start identity: the owner, the Windows probe it falls back to,
 // and every consumer that admits or recovers work from that identity. The
 // real-host proof for this contract only runs on the Windows lane, so a change
@@ -316,6 +317,7 @@ export function detectChangedScope(changedPaths) {
       ) ||
       (!facts.isTestOnly &&
         (WINDOWS_SCOPE_RE.test(path) ||
+          WINDOWS_MCP_STDIO_SCOPE_RE.test(path) ||
           WINDOWS_SQLITE_SCOPE_RE.test(path) ||
           WINDOWS_SECRETREF_SCOPE_RE.test(path)))
     ) {

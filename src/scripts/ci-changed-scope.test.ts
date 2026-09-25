@@ -526,6 +526,8 @@ describe("detectChangedScope", () => {
   it.each<[string, boolean, boolean]>([
     ["extensions/memory-lancedb/index.test.ts", false, false],
     ["src/auto-reply/reply/streaming-directives.ts", false, false],
+    ["src/agents/mcp-stdio-transport.ts", true, false],
+    ["src/agents/mcp-stdio-transport.windows.test.ts", true, false],
     ["src/process/exec.ts", true, false],
     ["src/process/exec.windows.test.ts", true, false],
     ["src/daemon/schtasks.ts", true, false],
