@@ -44,6 +44,11 @@ export function controlUiStableChunkName(id: string): string | undefined {
   const normalized = normalizeModuleId(id);
 
   switch (controlUiBootManifestKey(id)) {
+    case "packages/gateway-protocol/src/capability-consent-error-details.ts":
+    case "packages/gateway-protocol/src/install-policy-warning-error-details.ts":
+    case "packages/gateway-protocol/src/schema/plugin-install-progress.ts":
+      // Shared protocol readers must not pull the lazy Plugins page into chat.
+      return "plugin-contracts-runtime";
     case "ui/src/components/login-gate.ts":
     case "ui/src/components/login-gate-feedback.ts":
     case "ui/src/i18n/locales/en-login.ts":
