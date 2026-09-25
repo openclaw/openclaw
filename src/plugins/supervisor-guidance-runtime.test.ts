@@ -51,7 +51,7 @@ async function createPlugin(id: string) {
     path.join(pluginDir, "openclaw.plugin.json"),
     JSON.stringify({
       id,
-      supervisorGuidance: { version: 1, configKey: "guidance" },
+      supervisorGuidance: { configKey: "guidance" },
       configSchema: { type: "object", properties: { guidance: { type: "object" } } },
     }),
   );

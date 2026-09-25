@@ -26,7 +26,6 @@ export type SupervisorDisplayGuidance = {
 };
 
 export type PluginManifestSupervisorGuidance = {
-  version: 1;
   /** Immediate own property of plugins.entries.<id>.config, not a dotted path. */
   configKey: string;
 };
@@ -59,14 +58,13 @@ export function parseManifestSupervisorGuidance(
 ): PluginManifestSupervisorGuidance | undefined {
   if (
     !isRecord(value) ||
-    value.version !== 1 ||
     !isText(value.configKey, 128) ||
-    Object.keys(value).some((key) => key !== "version" && key !== "configKey") ||
+    Object.keys(value).some((key) => key !== "configKey") ||
     ["__proto__", "constructor", "prototype"].includes(value.configKey)
   ) {
     return undefined;
   }
-  return { version: 1, configKey: value.configKey };
+  return { configKey: value.configKey };
 }
 
 /** Reject the complete descriptor on malformed copy; never rewrite command bytes. */

@@ -653,7 +653,7 @@ containing the guidance in `openclaw.plugin.json`:
 ```json
 {
   "id": "compose-deployment",
-  "supervisorGuidance": { "version": 1, "configKey": "guidance" },
+  "supervisorGuidance": { "configKey": "guidance" },
   "configSchema": {
     "type": "object",
     "properties": {
@@ -706,8 +706,8 @@ instructions rather than choosing between deployment owners.
 
 The host reads the declaration through plugin metadata without importing plugin
 runtime code. `configKey` is a literal immediate own property, not a dotted path.
-The declaration accepts only `version` and `configKey`; invalid declarations are
-ignored. The `version` must be `1`, and `configKey` must be a nonempty string of at
+The declaration accepts only `configKey`; invalid declarations are ignored.
+`configKey` must be a nonempty string of at
 most 128 UTF-8 bytes; reserved prototype keys are rejected.
 
 The guidance object accepts only:
