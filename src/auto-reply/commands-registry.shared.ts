@@ -399,15 +399,15 @@ export function buildBuiltinChatCommands(
     ),
     defineBuiltinCommand(
       "subagents",
-      "Inspect subagent runs for this session.",
+      "Inspect subagent runs, or start one in a new thread.",
       "management",
       "standard",
       {
         activeRunSafe: true,
         modelIndependent: "always",
         args: [
-          defineCommandArgument("action", "list | log | info", {
-            choices: ["list", "log", "info"],
+          defineCommandArgument("action", "list | log | info | spawn", {
+            choices: ["list", "log", "info", "spawn"],
           }),
           defineCommandArgument("target", "Run id, index, or session key"),
           defineCommandArgument("value", "Additional input (limit/message)", {

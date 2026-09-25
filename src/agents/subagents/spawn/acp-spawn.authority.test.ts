@@ -32,11 +32,6 @@ import { withLocalGatewayRequestScope } from "../../../gateway/local-request-con
 import { handleChatAbortRequest } from "../../../gateway/server-methods/chat-abort-handler.js";
 import { createSyntheticPluginRuntimeClient } from "../../../gateway/server-plugin-runtime-client.js";
 import { getSessionRowProjection } from "../../../gateway/session-row-projection-access.js";
-import {
-  registerSessionBindingAdapter,
-  unregisterSessionBindingAdapter,
-  type SessionBindingAdapter,
-} from "../../../infra/outbound/session-binding-service.js";
 import { flushLogger, resetLogger } from "../../../logging/logger.js";
 import { loadActivatedBundledPluginPublicSurfaceModule } from "../../../plugin-sdk/facade-runtime.js";
 import { getActivePluginRegistry } from "../../../plugins/runtime.js";
@@ -160,8 +155,6 @@ describe("pending ACP spawn authority", () => {
     ["runtime", "live"],
     ["row", "admission close"],
     ["transcript", "admission close"],
-    ["thread", "admission close"],
-    ["thread", "live"],
     ["actor", "admission close"],
     ["metadata", "admission close"],
     ["initialized", "admission close"],
@@ -278,33 +271,7 @@ describe("pending ACP spawn authority", () => {
           },
         );
       }
-      const bindThread = vi.fn<NonNullable<SessionBindingAdapter["bind"]>>(async (input) => ({
-        bindingId: "default:child-thread",
-        targetSessionKey: input.targetSessionKey,
-        targetKind: "session",
-        conversation: {
-          channel: "discord",
-          accountId: "default",
-          conversationId: "child-thread",
-          parentConversationId: "parent-channel",
-        },
-        status: "active",
-        boundAt: Date.now(),
-        metadata: input.metadata,
-      }));
-      const bindingAdapter: SessionBindingAdapter = {
-        channel: "discord",
-        accountId: "default",
-        capabilities: { placements: ["child"], bindSupported: true, unbindSupported: true },
-        bind: bindThread,
-        listBySession: () => [],
-        resolveByConversation: () => null,
-        unbind: async () => [],
-      };
-      if (stage === "thread") {
-        registerSessionBindingAdapter(bindingAdapter);
-      }
-      const pausesRuntime = stage === "runtime" || stage === "thread";
+      const pausesRuntime = stage === "runtime";
       const initializesRuntime = pausesRuntime || stage === "metadata" || stage === "initialized";
       const ensuredSessions: string[] = [];
       const closeRuntime = vi.fn(async () => {});
@@ -379,13 +346,6 @@ describe("pending ACP spawn authority", () => {
         agentSessionKey: parentSessionKey,
         requesterRunId: parentRunId,
         requesterTurnRunId: parentRunId,
-        ...(stage === "thread"
-          ? {
-              agentChannel: "discord",
-              agentAccountId: "default",
-              agentTo: "channel:parent-channel",
-            }
-          : {}),
       });
       let forwarded: Promise<unknown> | undefined;
       const observed: AnyAgentTool = copyAgentToolMetadata(source, {
@@ -425,7 +385,6 @@ describe("pending ACP spawn authority", () => {
                 agentId: "fixture",
                 mode: "run",
                 expectsCompletionMessage: false,
-                ...(stage === "thread" ? { thread: true } : {}),
               }),
           ),
       );
@@ -481,9 +440,6 @@ describe("pending ACP spawn authority", () => {
             "only live initialization may ensure once; cleanup must not reopen",
           )
           .toEqual(initializesRuntime ? [childSessionKey] : []);
-        expect
-          .soft(bindThread, "a closed parent must not create an external thread")
-          .toHaveBeenCalledTimes(stage === "thread" && closure === "live" ? 1 : 0);
         if (closure === "live") {
           expect(result).toMatchObject({ details: { status: "accepted", childSessionKey } });
           expect(dispatch).toHaveBeenCalledOnce();
@@ -525,13 +481,6 @@ describe("pending ACP spawn authority", () => {
         const projection = getSessionRowProjection(context);
         projection?.dispose();
         await projection?.ensureMaterialized();
-        if (stage === "thread") {
-          unregisterSessionBindingAdapter({
-            channel: "discord",
-            accountId: "default",
-            adapter: bindingAdapter,
-          });
-        }
       }
     },
   );

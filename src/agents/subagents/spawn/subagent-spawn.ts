@@ -1,7 +1,8 @@
 /**
  * Subagent spawn executor.
  *
- * Validates spawn requests, prepares child sessions, stages attachments, binds delivery context, and registers runs.
+ * Validates spawn requests, prepares child sessions, stages attachments, and registers runs.
+ * Agent-started subagents never bind a chat; only a user command binds a new child thread.
  */
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
 import { isExecutionIdentityCollectionEnabled } from "../../../audit/audit-config.js";
@@ -53,11 +54,11 @@ import { buildSubagentLaunchRequest } from "./subagent-spawn-launch-request.js";
 import { createSubagentSpawnLifecycleEmitter } from "./subagent-spawn-lifecycle.js";
 import { resolveSubagentSpawnRequest } from "./subagent-spawn-request.js";
 import { createInitialSubagentSession } from "./subagent-spawn-session-patch.js";
-import { bindThreadForSubagentSpawn } from "./subagent-spawn-thread-binding.js";
+import { bindChildThreadForSubagentSpawn } from "./subagent-spawn-thread-binding.js";
 import { emitSessionLifecycleEvent, mergeDeliveryContext } from "./subagent-spawn.runtime.js";
 import { buildSubagentSpawnEnvelope } from "./subagent-system-prompt.js";
 
-export { SUBAGENT_SPAWN_CONTEXT_MODES, SUBAGENT_SPAWN_MODES } from "./subagent-spawn.types.js";
+export { SUBAGENT_SPAWN_CONTEXT_MODES } from "./subagent-spawn.types.js";
 
 export async function spawnSubagentDirect(
   params: SpawnSubagentParams,
@@ -67,7 +68,7 @@ export async function spawnSubagentDirect(
   const promptedAt = Date.now();
   const task = params.task;
   const label = params.label?.trim() || "";
-  const requestThreadBinding = params.thread === true;
+  const requestThreadBinding = params.childThread !== undefined;
   const sandboxMode = params.sandbox === "require" ? "require" : "inherit";
   const requesterSessionKey = ctx.agentSessionKey;
   const gatewayCaller = getGatewayToolCallerIdentity();
@@ -245,15 +246,14 @@ export async function spawnSubagentDirect(
         expectedLifecycleRevision: childEntry.lifecycleRevision,
       };
     }
-    if (requestThreadBinding) {
-      const bindResult = await bindThreadForSubagentSpawn({
+    if (params.childThread) {
+      const bindResult = await bindChildThreadForSubagentSpawn({
         assertActive,
         cfg,
         childSessionKey,
         agentId: targetAgentId,
         label: label || undefined,
-        mode: spawnMode,
-        requesterSessionKey: ownership.controllerSessionKey,
+        boundBy: params.childThread.boundBy,
         requester: {
           channel: childSessionOrigin?.channel,
           accountId: childSessionOrigin?.accountId,
@@ -278,7 +278,7 @@ export async function spawnSubagentDirect(
     // instructions, and requester receipt cannot disagree about completion.
     const completionMode = params.collect
       ? "collector"
-      : requestThreadBinding && spawnMode === "session" && hasBoundThreadDeliveryOrigin
+      : requestThreadBinding && hasBoundThreadDeliveryOrigin
         ? "thread-direct"
         : expectsCompletionMessage
           ? "announce"

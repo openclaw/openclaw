@@ -1,9 +1,6 @@
 // Projects bound conversations into channel delivery targets.
 import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
-import {
-  normalizeConversationTargetParams,
-  type ConversationTargetParams,
-} from "../utils/conversation-target.js";
+import { normalizeConversationTargetParams } from "../utils/conversation-target.js";
 import {
   normalizeDeliveryContext,
   type DeliveryContext,
@@ -26,17 +23,6 @@ function resolveConversationDeliveryTarget({
       conversationId,
       parentConversationId,
     }) ?? { to: `channel:${conversationId}` }
-  );
-}
-
-/** Formats a conversation id into a target, including a fallback for thread-only hook results. */
-export function formatConversationTarget(params: ConversationTargetParams): string | undefined {
-  const normalized = normalizeConversationTargetParams(params);
-  return (
-    resolveConversationDeliveryTarget(normalized)?.to?.trim() ||
-    (normalized.channel && normalized.conversationId
-      ? `channel:${normalized.conversationId}`
-      : undefined)
   );
 }
 

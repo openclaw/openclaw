@@ -33,14 +33,6 @@ export function firstMockCall(mock: { mock: { calls: unknown[][] } }, label: str
   return call;
 }
 
-export function latestMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
-  const call = mock.mock.calls[mock.mock.calls.length - 1];
-  if (!call) {
-    throw new Error(`Expected ${label} to be called`);
-  }
-  return call;
-}
-
 export function expectRegisteredSubagentRun(
   mock: unknown,
   expected: Partial<RegisterSubagentRunParams>,

@@ -2,7 +2,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
-import { formatConversationTarget, deliveryContextFromConversation } from "./route-projection.js";
+import { deliveryContextFromConversation } from "./route-projection.js";
 
 describe("channel route projection", () => {
   beforeEach(() => {
@@ -71,22 +71,6 @@ describe("channel route projection", () => {
     );
   });
 
-  it("formats plugin-defined conversation targets via channel messaging hooks", () => {
-    expect(
-      formatConversationTarget({ channel: "room-chat", conversationId: "!room:example" }),
-    ).toBe("room:!room:example");
-    expect(
-      formatConversationTarget({
-        channel: "room-chat",
-        conversationId: "$thread",
-        parentConversationId: "!room:example",
-      }),
-    ).toBe("room:!room:example");
-    expect(
-      formatConversationTarget({ channel: "room-chat", conversationId: "  " }),
-    ).toBeUndefined();
-  });
-
   it("projects parent-child conversation refs through plugin delivery targets", () => {
     expect(
       deliveryContextFromConversation({
@@ -117,7 +101,7 @@ describe("channel route projection", () => {
     });
   });
 
-  it("preserves thread-only plugin results while formatting can supply a target fallback", () => {
+  it("preserves thread-only plugin results", () => {
     const conversation = {
       channel: "room-chat",
       accountId: "work",
@@ -129,6 +113,5 @@ describe("channel route projection", () => {
       to: undefined,
       threadId: "$thread",
     });
-    expect(formatConversationTarget(conversation)).toBe("channel:$thread");
   });
 });

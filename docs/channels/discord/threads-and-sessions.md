@@ -97,6 +97,8 @@ failed chunk may have been delivered, so inspect the thread before retrying.
   <Accordion title="Thread-bound sessions for subagents">
     Discord can bind a thread to a session target so follow-up messages in that thread keep routing to the same session (including subagent sessions).
 
+    Only a user command binds a thread. Run `/subagents spawn --thread [--agent <id>] <task>` in a server channel. OpenClaw creates a new thread and binds a persistent subagent session there. The subagent answers in that thread, and follow-ups there go to it. The channel where you ran the command does not change. In a DM, the command stops and starts nothing. Agent-started spawns (native subagents and ACP) never bind a thread.
+
     Commands:
 
     - `/session unbind` remove the current thread binding without closing its agent session
@@ -114,7 +116,6 @@ failed chunk may have been delivered, so inspect the thread before retrying.
       idleHours: 24,
       maxAgeHours: 0,
       spawnSessions: true,
-      defaultSpawnContext: "fork",
     },
   },
 }
@@ -123,8 +124,9 @@ failed chunk may have been delivered, so inspect the thread before retrying.
     Notes:
 
     - `session.threadBindings.*` is the canonical policy for Discord and Telegram.
-    - `spawnSessions` controls auto-create/bind threads for `sessions_spawn({ thread: true })` and ACP thread spawns. Default: `true`.
-    - `defaultSpawnContext` controls native subagent context for thread-bound spawns. Default: `"fork"`.
+    - `spawnSessions` gates user thread spawns: `/subagents spawn --thread` and `/acp spawn --thread`. Default: `true`.
+    - `defaultSpawnContext` sets the default context for sub-agents started with `/subagents spawn --thread` (`"fork"` by default). Agent-started spawns start with isolated context unless the spawn passes `context: "fork"`.
+    - On upgrade, OpenClaw removes old bindings that agent spawns put on your own chat. It does this when the gateway starts and when each Discord account starts. Bindings you made stay.
     - Deprecated `spawnSubagentSessions`/`spawnAcpSessions` keys are migrated by `openclaw doctor --fix`.
     - If thread bindings are disabled, thread-bound spawns are unavailable.
 

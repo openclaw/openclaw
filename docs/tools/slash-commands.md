@@ -330,7 +330,7 @@ user skill directly.
   <Accordion title="Subagents and ACP">
     | Command | Description |
     | --- | --- |
-    | `/subagents list\|log\|info` | Inspect sub-agent runs for the current session |
+    | `/subagents list\|log\|info\|spawn` | Inspect sub-agent runs for the current session. `/subagents spawn --thread [--agent <id>] <task>` starts a sub-agent in a new thread or topic. See [Thread-bound sessions](/tools/subagents/thread-bound-sessions#quick-flow) |
     | `/acp spawn\|cancel\|steer\|close\|sessions\|status\|set-mode\|set\|cwd\|permissions\|timeout\|model\|reset-options\|doctor\|install\|help` | Manage ACP sessions and runtime options. Runtime controls require external owner or internal Gateway admin identity |
     | `/session unbind` | Detach the current conversation without closing its agent session |
     | `/agents` | List thread-bound agents for the current session |

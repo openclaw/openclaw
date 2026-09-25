@@ -154,8 +154,9 @@ timeline for current status.
     **Old**: `api.on("subagent_spawning", handler)` returning
     `threadBindingReady` or `deliveryOrigin`.
 
-    **New**: let core prepare `thread: true` subagent bindings through the
-    channel session-binding adapter. Use `api.on("subagent_spawned", handler)`
+    **New**: let core prepare subagent thread bindings through the channel
+    session-binding adapter. Core binds only for the user command
+    `/subagents spawn --thread`; agent-started spawns never bind. Use `api.on("subagent_spawned", handler)`
     only for post-launch observation.
 
     ```typescript

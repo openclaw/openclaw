@@ -3,7 +3,10 @@ import {
   asNonNegativeFiniteNumber,
   MAX_DATE_TIMESTAMP_MS,
 } from "@openclaw/normalization-core/number-coercion";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import {
@@ -27,6 +30,7 @@ type SessionThreadBindingsConfigShape = {
 };
 
 type ChannelThreadBindingsContainerShape = {
+  defaultAccount?: unknown;
   threadBindings?: SessionThreadBindingsConfigShape;
   accounts?: Record<string, { threadBindings?: SessionThreadBindingsConfigShape } | undefined>;
 };
@@ -99,6 +103,16 @@ export function resolveThreadBindingsEnabled(params: {
   return asBoolean(params.channelEnabledRaw) ?? asBoolean(params.sessionEnabledRaw) ?? true;
 }
 
+function readChannelConfig(
+  cfg: OpenClawConfig,
+  channel: string,
+): ChannelThreadBindingsContainerShape | undefined {
+  const channels = cfg.channels as Record<string, unknown> | undefined;
+  return channels?.[normalizeLowercaseStringOrEmpty(channel)] as
+    | ChannelThreadBindingsContainerShape
+    | undefined;
+}
+
 function resolveChannelThreadBindings(params: {
   cfg: OpenClawConfig;
   channel: string;
@@ -107,10 +121,7 @@ function resolveChannelThreadBindings(params: {
   root?: SessionThreadBindingsConfigShape;
   account?: SessionThreadBindingsConfigShape;
 } {
-  const channels = params.cfg.channels as Record<string, unknown> | undefined;
-  const channelConfig = channels?.[normalizeLowercaseStringOrEmpty(params.channel)] as
-    | ChannelThreadBindingsContainerShape
-    | undefined;
+  const channelConfig = readChannelConfig(params.cfg, params.channel);
   const accountConfig = channelConfig?.accounts?.[normalizeAccountId(params.accountId)];
   return {
     root: channelConfig?.threadBindings,
@@ -120,6 +131,19 @@ function resolveChannelThreadBindings(params: {
 
 function normalizeSpawnContext(value: unknown): ThreadBindingSpawnContext | undefined {
   return value === "isolated" || value === "fork" ? value : undefined;
+}
+
+/** Resolves the channel account a thread binding uses: explicit, then the channel default. */
+export function resolveThreadBindingAccountId(params: {
+  cfg: OpenClawConfig;
+  channel: string;
+  accountId?: string;
+}): string {
+  return (
+    normalizeOptionalString(params.accountId) ??
+    normalizeOptionalString(readChannelConfig(params.cfg, params.channel)?.defaultAccount) ??
+    "default"
+  );
 }
 
 /** Resolves effective spawn policy from account, channel, then global thread-binding config. */

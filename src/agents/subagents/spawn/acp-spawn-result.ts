@@ -1,4 +1,4 @@
-export type SpawnAcpMode = "run" | "session";
+type SpawnAcpMode = "run" | "session";
 
 const ACP_SPAWN_ERROR_CODES = [
   "acp_disabled",

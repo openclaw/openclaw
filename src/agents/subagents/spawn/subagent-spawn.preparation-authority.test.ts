@@ -3,7 +3,6 @@
 // oxfmt-ignore
 import {
   installSpawnAuthorityFixture,
-  installSpawnThreadBindingFixture,
   installSpawnAttachmentFixture,
 } from "./subagent-spawn.authority.test-support.js";
 import { promises as fs } from "node:fs";
@@ -62,7 +61,6 @@ describe("pending spawn preparation authority", () => {
   it.each(["closed", "live"])(
     "checks parent authority after queued fork preparation: %s",
     async (closure) => {
-      const bindingFixture = installSpawnThreadBindingFixture();
       const { cfg, storePath, context, admission, parent, admitted } = await createBoundParent();
       await replaceTranscriptEvents(
         { agentId: "main", sessionId: "parent-session", sessionKey: parentSessionKey, storePath },
@@ -196,7 +194,6 @@ describe("pending spawn preparation authority", () => {
               tool!.execute!("spawn-fork-queued", {
                 task: "bounded fork",
                 context: "fork",
-                thread: true,
                 mode: "run",
                 attachments: [{ name: "synthetic.txt", content: "synthetic attachment" }],
                 expectsCompletionMessage: false,
@@ -266,7 +263,6 @@ describe("pending spawn preparation authority", () => {
         } else {
           expect(outcome).toMatchObject({ details: { status: "accepted" } });
           expect(dispatch).toHaveBeenCalledOnce();
-          expect(bindingFixture.bind).toHaveBeenCalledOnce();
           const details = (outcome as { details: { attachments: { relDir: string } } }).details;
           expect(
             await fs.readFile(
@@ -289,15 +285,13 @@ describe("pending spawn preparation authority", () => {
         await pending;
         admission.close();
         parent.cleanup();
-        bindingFixture.unregister();
       }
     },
   );
 
   it.each([
     "native engine resolution",
-    "native thread binding",
-    "native attachment staging",
+    "native fork preparation",
     "native attachment directory",
     "native attachment files",
     "native abort",
@@ -313,20 +307,11 @@ describe("pending spawn preparation authority", () => {
   ])("rolls back an untransferred native spawn: %s", async (closure) => {
     const entered = createDeferred<string>();
     const release = createDeferred();
-    const hasThread =
-      closure === "native thread binding" || closure === "native attachment staging";
+    const forkPreparation = closure === "native fork preparation";
     const hasAttachments = closure.startsWith("native attachment");
-    const bindingFixture = hasThread
-      ? installSpawnThreadBindingFixture(async (binding) => {
-          if (closure === "native attachment staging") {
-            entered.resolve(binding.targetSessionKey);
-            await release.promise;
-          }
-        })
-      : undefined;
     const { cfg, storePath, context, admission, parent, admitted, authority } =
       await createBoundParent(closure.startsWith("projected") ? "plugin-harness" : "embedded");
-    if (closure === "native thread binding") {
+    if (forkPreparation) {
       await replaceTranscriptEvents(
         { agentId: "main", sessionId: "parent-session", sessionKey: parentSessionKey, storePath },
         [
@@ -370,7 +355,7 @@ describe("pending spawn preparation authority", () => {
     spawnTesting.setDepsForTest({
       forkSessionEntryFromParent: async (params) => {
         const result = await forkSessionEntryFromParent(params);
-        if (closure === "native thread binding") {
+        if (forkPreparation) {
           entered.resolve(params.sessionKey);
           await release.promise;
         }
@@ -459,9 +444,6 @@ describe("pending spawn preparation authority", () => {
       agentSessionKey: parentSessionKey,
       requesterRunId: parentRunId,
       requesterTurnRunId: parentRunId,
-      agentChannel: hasThread ? "matrix" : undefined,
-      agentAccountId: hasThread ? "default" : undefined,
-      agentTo: hasThread ? "room:parent" : undefined,
       signal: closure === "native construction signal" ? invocationAbort.signal : undefined,
     });
     let forwarded: Promise<unknown> | undefined;
@@ -508,13 +490,12 @@ describe("pending spawn preparation authority", () => {
             "spawn-pending",
             {
               task: "bounded child",
-              collect: closure !== "native acceptance" && !hasThread,
-              thread: hasThread,
-              context: closure === "native thread binding" ? "fork" : "isolated",
+              collect: closure !== "native acceptance" && !forkPreparation,
+              context: forkPreparation ? "fork" : "isolated",
               attachments: hasAttachments
                 ? [{ name: "synthetic.txt", content: "synthetic attachment" }]
                 : undefined,
-              groupId: closure === "native acceptance" || hasThread ? undefined : groupId,
+              groupId: closure === "native acceptance" || forkPreparation ? undefined : groupId,
             },
             closure === "native call signal" ? invocationAbort.signal : undefined,
           ),
@@ -593,7 +574,7 @@ describe("pending spawn preparation authority", () => {
       }
       expect(subagentRuns.size, "cancelled source never registers runnable work").toBe(0);
       const closedBeforePreparation =
-        closure === "native engine resolution" || hasThread || hasAttachments;
+        closure === "native engine resolution" || forkPreparation || hasAttachments;
       if (closedBeforePreparation) {
         expect
           .soft(prepare, "closed source must not start context engine preparation")
@@ -602,16 +583,9 @@ describe("pending spawn preparation authority", () => {
       } else {
         expect(rollback).toHaveBeenCalledOnce();
       }
-      if (closure === "native thread binding") {
-        expect.soft(bindingFixture!.bind).not.toHaveBeenCalled();
-      }
-      if (closure === "native attachment staging") {
-        expect(bindingFixture!.bind).toHaveBeenCalledOnce();
-      }
       expect
         .soft(attachmentFixture?.lateWrites ?? [], "no new attachment write after parent closure")
         .toEqual([]);
-      expect(bindingFixture?.bindings ?? []).toEqual([]);
       for (const directory of attachmentFixture?.attachmentDirs ?? []) {
         await expect(fs.stat(directory), directory).rejects.toMatchObject({ code: "ENOENT" });
       }
@@ -640,7 +614,6 @@ describe("pending spawn preparation authority", () => {
       admission.close();
       parent.cleanup();
       attachmentFixture?.restore();
-      bindingFixture?.unregister();
     }
   });
 });

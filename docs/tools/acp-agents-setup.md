@@ -189,7 +189,11 @@ Thread binding config is shared across supported channel adapters:
 }
 ```
 
-If thread-bound ACP spawn does not work, verify the adapter feature flag first:
+Thread-bound ACP sessions come only from a user `/acp spawn ... --thread ...`
+or `--bind here` command. An agent `sessions_spawn({ runtime: "acp" })` call
+never binds a thread.
+
+If `/acp spawn ... --thread ...` does not work, verify the adapter feature flag first:
 
 - Discord: `session.threadBindings.spawnSessions=true`
 

@@ -149,6 +149,28 @@ const ADAPTERS_BY_CHANNEL_ACCOUNT = resolveGlobalMap<string, SessionBindingAdapt
   SESSION_BINDING_ADAPTERS_KEY,
 );
 
+type SessionBindingAdapterRegisteredListener = (ref: {
+  channel: string;
+  accountId: string;
+}) => void;
+const ADAPTER_REGISTERED_LISTENERS = resolveGlobalMap<
+  string,
+  SessionBindingAdapterRegisteredListener
+>(Symbol.for("openclaw.sessionBinding.adapterRegisteredListeners"));
+
+/** Observes adapter registration, when a channel account's persisted bindings become readable. */
+export function onSessionBindingAdapterRegistered(
+  id: string,
+  listener: SessionBindingAdapterRegisteredListener,
+): () => void {
+  ADAPTER_REGISTERED_LISTENERS.set(id, listener);
+  return () => {
+    if (ADAPTER_REGISTERED_LISTENERS.get(id) === listener) {
+      ADAPTER_REGISTERED_LISTENERS.delete(id);
+    }
+  };
+}
+
 export function registerSessionBindingAdapter(adapter: SessionBindingAdapter): void {
   const normalizedAdapter: NativeCapableSessionBindingAdapter = {
     ...adapter,
@@ -168,6 +190,9 @@ export function registerSessionBindingAdapter(adapter: SessionBindingAdapter): v
     normalizedAdapter,
   });
   ADAPTERS_BY_CHANNEL_ACCOUNT.set(key, registrations);
+  for (const listener of ADAPTER_REGISTERED_LISTENERS.values()) {
+    listener({ channel: normalizedAdapter.channel, accountId: normalizedAdapter.accountId });
+  }
 }
 
 export function unregisterSessionBindingAdapter(params: {

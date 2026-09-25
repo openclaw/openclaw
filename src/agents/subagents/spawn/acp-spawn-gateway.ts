@@ -1,7 +1,6 @@
 import type { ExecutionIdentityAdmissionToken } from "../../../audit/execution-identity-admission.js";
 import { recordSessionParticipantBestEffort } from "../../../sessions/session-participant-recording.js";
 import { AGENT_LANE_SUBAGENT } from "../../lanes.js";
-import type { AcpSpawnBootstrapDeliveryPlan } from "./acp-spawn-bootstrap-delivery.js";
 import {
   buildSubagentExecutionSessionSpawnContext,
   withSubagentGatewayExecutionIdentity,
@@ -12,7 +11,6 @@ export async function launchAcpChildThroughGateway(params: {
   assertDispatchCurrent?: () => void;
   attachments?: unknown[];
   childIdem: string;
-  deliveryPlan: AcpSpawnBootstrapDeliveryPlan;
   label?: string;
   lineage: Parameters<typeof buildSubagentExecutionSessionSpawnContext>[0];
   parentExecutionIdentityToken?: ExecutionIdentityAdmissionToken;
@@ -30,12 +28,9 @@ export async function launchAcpChildThroughGateway(params: {
         params: {
           message: params.task,
           sessionKey: params.sessionKey,
-          channel: params.deliveryPlan.channel,
-          to: params.deliveryPlan.to,
-          accountId: params.deliveryPlan.accountId,
-          threadId: params.deliveryPlan.threadId,
           idempotencyKey: params.childIdem,
-          deliver: params.deliveryPlan.useInlineDelivery,
+          // Agent-started ACP children never write to a chat; results return to the requester.
+          deliver: false,
           lane: AGENT_LANE_SUBAGENT,
           acpTurnSource: "manual_spawn",
           timeout: params.runTimeoutSeconds,

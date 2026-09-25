@@ -561,6 +561,8 @@ export async function createMatrixThreadBindingManager(params: {
 
       if (input.placement === "child") {
         const roomId = parentConversationId || conversationId;
+        // The caller's authority must still hold before the thread starter is sent.
+        input.assertCurrent?.();
         const rootEventId = await sendBindingMessage({
           cfg: params.cfg,
           client: params.client,
@@ -592,6 +594,7 @@ export async function createMatrixThreadBindingManager(params: {
         idleTimeoutMs: defaults.idleTimeoutMs,
         maxAgeMs: defaults.maxAgeMs,
       };
+      input.assertCurrent?.();
       setBindingRecord(record);
       await persist();
 

@@ -27,9 +27,9 @@ default. For heavy or repetitive tasks, set a cheaper model for sub-agents
 and keep your main agent on a higher-quality model via
 `agents.defaults.subagents.model` or per-agent overrides. When a child
 genuinely needs the requester's current transcript, spawn it with
-`context: "fork"`. Thread-bound subagent sessions default to
-`context: "fork"` because they branch the current conversation into a
-follow-up thread.
+`context: "fork"`. Agent spawns otherwise start with isolated context. Sessions
+from `/subagents spawn --thread` follow `threadBindings.defaultSpawnContext`,
+which defaults to `fork`.
 </Note>
 
 A subagent run ends; a session does not. When you open a subagent run in the

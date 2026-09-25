@@ -71,11 +71,11 @@ export const discordChannelConfigUiHints = {
   },
   "threadBindings.spawnSessions": {
     label: "Discord Thread-Bound Session Spawn",
-    help: "Allow sessions_spawn(thread=true) and ACP thread spawns to auto-create and bind Discord threads (default: true). Set false to disable for this account/channel.",
+    help: "Allow /subagents spawn --thread and /acp spawn --thread to create and bind Discord threads (default: true). Set false to disable for this account/channel. Agent-started spawns never bind a thread.",
   },
   "threadBindings.defaultSpawnContext": {
     label: "Discord Thread Spawn Context",
-    help: 'Default native subagent context for thread-bound spawns. "fork" starts from the requester transcript; "isolated" starts clean. Default: "fork".',
+    help: 'Default context for subagents started with /subagents spawn --thread: "fork" starts from the requester transcript, "isolated" starts clean. Default: "fork". Agent-started spawns start isolated unless the caller passes context="fork"."fork".',
   },
   "agentComponents.ttlMs": {
     label: "Discord Component TTL (ms)",

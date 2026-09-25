@@ -248,6 +248,25 @@ describe("matrix thread bindings", () => {
     });
   });
 
+  it("does not send a thread starter once the caller's authority is revoked", async () => {
+    await createBindingManager();
+
+    await expect(
+      getSessionBindingService().bind({
+        targetSessionKey: "agent:ops:subagent:child",
+        targetKind: "subagent",
+        conversation: { channel: "matrix", accountId: "ops", conversationId: "!room:example" },
+        placement: "child",
+        metadata: { introText: "intro root" },
+        assertCurrent: () => {
+          throw new Error("owner authority revoked");
+        },
+      }),
+    ).rejects.toThrow("owner authority revoked");
+    expect(sendMessageMatrixMock).not.toHaveBeenCalled();
+    expect(getSessionBindingService().listBySession("agent:ops:subagent:child")).toEqual([]);
+  });
+
   it("posts intro messages inside existing Matrix threads for current placement", async () => {
     const cfg = { agents: { list: [{ id: "main" }, { id: "molty" }] } };
     await createBindingManager({ cfg });

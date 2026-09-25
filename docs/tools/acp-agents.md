@@ -23,6 +23,10 @@ Codex app-server plugin owns `/codex ...` controls and the default
 `openai/gpt-*` embedded runtime for agent turns. ACP owns `/acp ...` controls
 and `sessions_spawn({ runtime: "acp" })` sessions.
 
+An agent `sessions_spawn({ runtime: "acp" })` call is always a one-shot
+background run and never binds a thread. Only a user `/acp spawn` command
+(`--thread ...` or `--bind here`) makes a persistent, thread-bound ACP session.
+
 To let Codex or Claude Code connect as an external MCP client directly to
 existing OpenClaw channel conversations, use
 [`openclaw mcp serve`](/cli/mcp) instead of ACP.

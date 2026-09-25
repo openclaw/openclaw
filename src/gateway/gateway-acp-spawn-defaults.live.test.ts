@@ -514,7 +514,6 @@ describeLive("gateway live (ACP spawn defaults)", () => {
           {
             task: "Reply with exactly LIVE-ACP-SPAWN-DEFAULTS-OK",
             agentId: acpAgentId,
-            mode: "run",
           },
           { agentSessionKey: "agent:main:main" },
         );
@@ -537,7 +536,6 @@ describeLive("gateway live (ACP spawn defaults)", () => {
           {
             task: "Reply with exactly LIVE-ACP-SPAWN-PRIMARY-DEFAULT-OK",
             agentId: "codex-acp-primary-only",
-            mode: "run",
           },
           { agentSessionKey: "agent:main:main" },
         );

@@ -20,17 +20,17 @@ Two ways to start an ACP session:
     {
       "task": "Open the repo and summarize failing tests",
       "runtime": "acp",
-      "agentId": "codex",
-      "thread": true,
-      "mode": "session"
+      "agentId": "codex"
     }
     ```
 
     <Note>
     `runtime` defaults to `subagent`, so set `runtime: "acp"` explicitly for
     ACP sessions. If `agentId` is omitted, OpenClaw uses `acp.defaultAgent`
-    when configured. `mode: "session"` requires `thread: true` to keep a
-    persistent bound conversation.
+    when configured. An agent-started ACP spawn is always one-shot. It never
+    binds or creates a thread and never sends output straight into a chat.
+    Its result returns to the requester. For a persistent thread-bound ACP
+    session, the user runs `/acp spawn ... --thread ...` or `--bind here`.
     </Note>
 
   </Tab>
@@ -69,12 +69,14 @@ Two ways to start an ACP session:
   ACP target harness id. Falls back to `acp.defaultAgent` if set.
 </ParamField>
 <ParamField path="thread" type="boolean" default="false">
-  Request thread binding flow where supported.
+  Not offered. Agent-started ACP spawns never bind a thread. An older call
+  with `thread: true` still succeeds as a one-shot background run, and the
+  result `note` says that thread binding is not available for agent-started
+  spawns.
 </ParamField>
-<ParamField path="mode" type='"run" | "session"' default="run">
-  `"run"` is one-shot; `"session"` is persistent. If `thread: true` and
-  `mode` is omitted, OpenClaw may default to persistent behaviour per
-  runtime path. `mode: "session"` requires `thread: true`.
+<ParamField path="mode" type='"run"' default="run">
+  Only `"run"` (one-shot). An older call with `mode: "session"` runs as a
+  one-shot background run and says so in the result `note`.
 </ParamField>
 <ParamField path="cwd" type="string">
   Requested runtime working directory (validated by backend/runtime policy).
@@ -160,6 +162,7 @@ config-the-default error).
     - On non-thread binding surfaces, default behavior is effectively `off`.
     - Thread-bound spawn requires channel policy support:
       - Discord/Telegram: `session.threadBindings.spawnSessions=true`
+    - Only this user command creates a thread-bound ACP session. An agent `sessions_spawn({ runtime: "acp" })` call never binds a thread.
     - Use `--bind here` when you want to pin the current conversation without creating a child thread.
 
   </Tab>

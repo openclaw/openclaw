@@ -9,13 +9,24 @@ read_when:
 
 ## Slash command
 
-`/subagents` inspects sub-agent runs for the **current session**:
+`/subagents` inspects sub-agent runs for the **current session**, and starts a
+sub-agent in a new thread:
 
 ```text
 /subagents list
 /subagents log <id|#> [limit] [tools]
 /subagents info <id|#>
+/subagents spawn --thread [--agent <id>] <task>
 ```
+
+`/subagents spawn --thread` creates a new thread or topic and binds a
+persistent sub-agent session there. The sub-agent answers in the new thread,
+and your follow-ups there go to it. The conversation where you ran the command
+does not change. `--thread` is required. `--agent <id>` picks another agent
+that `subagents.allowAgents` allows. It works in Discord channels, Matrix
+rooms, and Telegram forum groups. In a DM or a group that cannot hold threads,
+it stops with a message and starts nothing. See
+[Thread-bound sessions](/tools/subagents/thread-bound-sessions#thread-bound-sessions).
 
 `/subagents info` shows run metadata (status, timestamps, session id,
 transcript path, cleanup). `/subagents log` prints recent chat turns for a
@@ -50,7 +61,8 @@ successful run clears the previous failure reason.
 
 ### Thread binding controls
 
-These commands work on channels with persistent thread bindings. See
+These commands work on channels with persistent thread bindings, such as a
+thread from `/subagents spawn --thread`. See
 [Thread supporting channels](/tools/subagents/thread-bound-sessions#thread-supporting-channels).
 
 ```text
@@ -62,16 +74,17 @@ These commands work on channels with persistent thread bindings. See
 
 ### Spawn behavior
 
-Agents start background sub-agents with the `sessions_spawn` tool. Follow the
-completion path described in the accepted receipt:
+Agents start background sub-agents with the `sessions_spawn` tool. These
+spawns never bind a thread or conversation. Follow the completion path
+described in the accepted receipt:
 
 - Ordinary announcing runs return an internal completion event to the requester,
   which reviews the result and decides whether a user-facing update is needed.
 - [Swarm collectors](/tools/swarm) return results through explicit collection,
   not completion notifications; reserve them for large parallel fan-out (several
   similar children, about five or more), and use ordinary spawns for one or a few.
-- Thread-bound session runs with a deliverable bound route reply directly to that
-  thread, without a separate parent announcement.
+- Thread-bound sessions from `/subagents spawn --thread` reply directly in their
+  new thread, without a separate parent announcement.
 - Caller-managed quiet runs send no completion notification.
 
 When [execution identity auditing](/gateway/audit#run-identity-inspection) is
@@ -126,8 +139,7 @@ explicitly unsupported even though the ACP spawn and child are observable.
   <Accordion title="Modes and ACP runtime">
     - `--model` and `--thinking` override defaults for that specific run.
     - Use `info`/`log` to inspect details and output after completion.
-    - For persistent thread-bound sessions, use `sessions_spawn` with `thread: true` and `mode: "session"`.
-    - If the requester channel does not support thread bindings, use `mode: "run"` instead of retrying an impossible thread-bound combination.
+    - Native sub-agents never bind a thread or take over a chat. They run as one-shot background runs, and results return to the requester. A `thread: true` or `mode: "session"` sub-agent request runs unbound, with a note in the result.
     - For ACP harness sessions (Claude Code, Gemini CLI, OpenCode, or explicit Codex ACP/acpx), use `sessions_spawn` with `runtime: "acp"` when the tool advertises that runtime. See [ACP delivery model](/tools/acp-agents#delivery-model) when debugging completions or agent-to-agent loops. When the `codex` plugin is enabled, Codex chat/thread control should prefer `/codex ...` over ACP unless the user explicitly asks for ACP/acpx.
     - OpenClaw hides `runtime: "acp"` until ACP is enabled, the requester is not sandboxed, and a backend plugin such as `acpx` is loaded. `runtime: "acp"` expects an external ACP harness id, or an `agents.entries.*` entry with `runtime.type="acp"`; use the default sub-agent runtime for normal OpenClaw config agents from `agents_list`.
 

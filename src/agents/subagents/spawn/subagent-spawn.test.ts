@@ -241,12 +241,7 @@ describe("spawnSubagentDirect seam flow", () => {
     vi.unstubAllEnvs();
   });
 
-  it.each([
-    { collect: true },
-    { thread: true },
-    { mode: "session" as const },
-    { expectsCompletionMessage: false },
-  ])(
+  it.each([{ collect: true }, { expectsCompletionMessage: false }])(
     "rejects unsupported private completion combinations before child effects: %j",
     async (options) => {
       const result = await spawnSubagentDirect(
@@ -327,24 +322,6 @@ describe("spawnSubagentDirect seam flow", () => {
       error: expect.stringContaining("requesting run id"),
     });
   });
-
-  it.each([{ mode: "session" as const }, { thread: true }])(
-    "rejects interactive collector mode at the direct spawn boundary",
-    async (params) => {
-      hoisted.configOverride = createConfigOverride({ tools: { swarm: true } });
-
-      const result = await spawnSubagentDirect(
-        { task: "collect once", collect: true, ...params },
-        { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
-      );
-
-      expect(result).toMatchObject({
-        status: "error",
-        error: expect.stringContaining("mode=run and thread=false"),
-      });
-      expect(gatewayRequestRecords()).toEqual([]);
-    },
-  );
 
   it("rejects explicit same-agent targets when allowAgents excludes the requester", async () => {
     hoisted.configOverride = createConfigOverride({

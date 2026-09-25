@@ -78,7 +78,6 @@ title: "Configuration — community chat channels"
         idleHours: 24,
         maxAgeHours: 0,
         spawnSessions: true,
-        defaultSpawnContext: "fork",
       },
       voice: {
         enabled: true,
@@ -128,8 +127,8 @@ title: "Configuration — community chat channels"
   - `enabled`: Discord override for thread-bound session spawning, delivery, and routing; manage bindings with `/session unbind`, `/agents`, `/session idle`, and `/session max-age`
   - `idleHours`: Discord override for inactivity auto-unbind in hours (`0` disables)
   - `maxAgeHours`: Discord override for hard max age in hours (`0` disables)
-  - `spawnSessions`: switch for `sessions_spawn({ thread: true })` and ACP thread-spawn auto thread creation/binding (default: `true`)
-  - `defaultSpawnContext`: native subagent context for thread-bound spawns (`"fork"` by default)
+  - `spawnSessions`: switch for user thread spawns, `/subagents spawn --thread` and `/acp spawn --thread` (default: `true`). Agent-started spawns never bind a thread.
+  - `defaultSpawnContext`: sets the default context for sub-agents started with `/subagents spawn --thread` (`"fork"` by default). Agent-started spawns start with isolated context unless the spawn passes `context: "fork"`.
 - Top-level `bindings[]` entries with `type: "acp"` configure persistent ACP bindings for channels and threads (use channel/thread id in `match.peer.id`). Field semantics are shared in [ACP Agents](/tools/acp-agents#persistent-channel-bindings).
 - `channels.discord.agentComponents.ttlMs` controls how long sent Discord component callbacks remain registered. Default `1800000` (30 minutes), maximum `86400000` (24 hours). Per-account overrides live under `channels.discord.accounts.<accountId>.agentComponents.ttlMs`. Prefer the shortest TTL that fits the workflow.
 - `channels.discord.voice` enables Discord voice channel conversations and optional auto-join + LLM + TTS overrides. Text-only Discord configs leave voice off by default; set `channels.discord.voice.enabled=true` to opt in.

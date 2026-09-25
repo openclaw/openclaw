@@ -50,8 +50,7 @@ child result, parent final, or generated media to a channel. The parent can stil
 choose to send a message through its permitted tools.
 
 This option supports hidden, native, one-shot runs only. It cannot be combined
-with ACP, `collect: true`, `visible: true`, `thread: true`, `mode: "session"`, or
-`expectsCompletionMessage: false`. It does not change the default completion mode.
+with ACP, `collect: true`, `visible: true`, or `expectsCompletionMessage: false`. It does not change the default completion mode.
 
 Finished private results remain in the registry until the spawning parent turn
 settles. A normal parent finish releases each ready result for private review;

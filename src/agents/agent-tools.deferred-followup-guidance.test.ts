@@ -234,7 +234,8 @@ describe("createOpenClawCodingTools availability guidance", () => {
       const [tool] = applyToolAvailabilityDescriptions([{ name, description } as AnyAgentTool]);
 
       for (const unavailableTool of unavailable) {
-        expect(tool?.description).not.toContain(unavailableTool);
+        // A `/subagents` slash-command hint is user-facing, not a tool reference.
+        expect(tool?.description).not.toMatch(new RegExp(`(?<!/)${unavailableTool}`));
       }
     },
   );
@@ -321,8 +322,7 @@ describe("createOpenClawCodingTools availability guidance", () => {
       {
         name: "sessions_spawn",
         description: describeSessionsSpawnTool({
-          acpAvailable: false,
-          threadAvailable: true,
+          acpAvailable: true,
           sessionToolsVisibility: "self",
           swarmEnabled: true,
         }),
@@ -334,10 +334,11 @@ describe("createOpenClawCodingTools availability guidance", () => {
     expect(tool?.description).toContain("configured agent (see agents_list);");
     expect(tool?.description).toContain("sessions_history");
     expect(tool?.description).not.toContain("agents_wait");
-    expect(tool?.description).not.toContain("subagents");
-    expect(tool?.description).toContain("persistent/thread-bound");
+    // The `/subagents` slash command hint is user-facing, not the unauthorized status tool.
+    expect(tool?.description).not.toMatch(/(?<!\/)subagents/);
+    expect(tool?.description).toContain("never bind or take over a chat");
+    expect(tool?.description).toContain("`/subagents spawn --thread <task>`");
     expect(tool?.description).toContain("(self: current session only)");
-    expect(tool?.description).not.toContain('runtime="acp"');
     // Transcript access alone does not expose execution/delivery diagnostics.
     expect(tool?.description).not.toContain("When diagnosing a missing result");
   });

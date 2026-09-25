@@ -48,6 +48,8 @@ How forum topics map to sessions, agents, and ACP bindings.
 
     Startup waits for stored thread bindings before accepting updates. Shutdown drains accepted binding changes before a replacement bot reloads them. Bundled Telegram handlers persist bindings through the shared SQLite worker so storage does not block message handling. Deprecated synchronous Plugin SDK touch and lifecycle setters keep their immediate behavior on the same binding owner until the next SDK major.
 
+    **Subagent in a new topic**: in a forum group, `/subagents spawn --thread [--agent <id>] <task>` creates a new topic and binds a persistent subagent session there. Follow-ups in that topic go to the subagent; the topic where you ran the command does not change. In a DM or a group that is not a forum, the command stops and starts nothing. Also controlled by `session.threadBindings.spawnSessions`. Agent-started spawns never bind a topic.
+
     Disabling `threadBindings.enabled` globally, for Telegram, or for one account leaves ordinary Telegram messages working.
 
     Template context exposes `MessageThreadId` and `IsForum`. DM chats with `message_thread_id` keep reply metadata but only use thread-aware session keys when Telegram `getMe` reports `has_topics_enabled: true`.

@@ -15,29 +15,19 @@ import { registerChatAbortController } from "../../../gateway/chat-abort.js";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import { createChatAbortContext } from "../../../gateway/server-methods/chat.abort.test-helpers.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
-import {
-  registerSessionBindingAdapter,
-  unregisterSessionBindingAdapter,
-  type SessionBindingAdapter,
-  type SessionBindingRecord,
-} from "../../../infra/outbound/session-binding-service.js";
 import * as privateStores from "../../../infra/private-file-store.js";
 import { flushLogger, resetLogger } from "../../../logging/logger.js";
 import {
   captureActivePluginRegistrySnapshot,
   getActivePluginRegistry,
   restoreActivePluginRegistrySnapshot,
-  setActivePluginRegistry,
 } from "../../../plugins/runtime.js";
 import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
 import { resetTaskFlowRegistryForTests } from "../../../tasks/task-flow-registry.test-support.js";
 import { captureTaskDeliveryWork } from "../../../tasks/task-registry-delivery.test-support.js";
 import { resetTaskRegistryForTests } from "../../../tasks/task-registry.test-support.js";
-import {
-  createChannelTestPluginBase,
-  createTestRegistry,
-} from "../../../test-utils/channel-plugins.js";
+import { createTestRegistry } from "../../../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
 import {
@@ -76,73 +66,6 @@ export async function waitForSubagentCleanupCompleted(entry: SubagentRunRecord) 
   } finally {
     unsubscribe();
   }
-}
-
-export function installSpawnThreadBindingFixture(
-  onBound?: (binding: SessionBindingRecord) => Promise<void>,
-) {
-  setActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: "matrix",
-        source: "test",
-        plugin: {
-          ...createChannelTestPluginBase({ id: "matrix" }),
-          conversationBindings: { defaultTopLevelPlacement: "child" },
-        },
-      },
-    ]),
-  );
-  const bindings: SessionBindingRecord[] = [];
-  const bind = vi.fn<NonNullable<SessionBindingAdapter["bind"]>>(async (input) => {
-    const binding: SessionBindingRecord = {
-      bindingId: "synthetic-thread",
-      targetSessionKey: input.targetSessionKey,
-      targetKind: input.targetKind,
-      status: "active",
-      boundAt: Date.now(),
-      conversation: {
-        ...input.conversation,
-        conversationId: "child-thread",
-        parentConversationId: "parent",
-      },
-    };
-    bindings.push(binding);
-    await onBound?.(binding);
-    return binding;
-  });
-  const adapter: SessionBindingAdapter = {
-    channel: "matrix",
-    accountId: "default",
-    bind,
-    capabilities: { placements: ["child"] },
-    listBySession: (key) => bindings.filter((binding) => binding.targetSessionKey === key),
-    resolveByConversation: (ref) =>
-      bindings.find((binding) => binding.conversation.conversationId === ref.conversationId) ??
-      null,
-    unbind: async (input) => {
-      const removed = bindings.filter(
-        (binding) =>
-          input.targetSessionKey === binding.targetSessionKey ||
-          input.bindingId === binding.bindingId,
-      );
-      for (const binding of removed) {
-        bindings.splice(bindings.indexOf(binding), 1);
-      }
-      return removed;
-    },
-  };
-  registerSessionBindingAdapter(adapter);
-  return {
-    bind,
-    bindings,
-    unregister: () =>
-      unregisterSessionBindingAdapter({
-        channel: adapter.channel,
-        accountId: adapter.accountId,
-        adapter,
-      }),
-  };
 }
 
 export function installSpawnAttachmentFixture(params: {

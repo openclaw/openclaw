@@ -832,7 +832,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("ACP needs agentId unless default");
   });
 
-  it("guides harness requests to ACP thread-bound spawns", () => {
+  it("keeps harness guidance without ACP thread-spawn instructions", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["sessions_spawn", "subagents", "agents_list", "exec"],
@@ -841,29 +841,13 @@ describe("buildAgentSystemPrompt", () => {
         "Use ACP for Codex only when the user explicitly asks for ACP/acpx or wants to test the ACP path.",
       ],
       acpEnabled: true,
-      runtimeInfo: {
-        channel: "discord",
-        capabilities: ["threadbound-acp-spawn"],
-      },
+      runtimeInfo: { channel: "discord", capabilities: [] },
     });
 
     expect(prompt).toContain("Native Codex app-server plugin is available");
-    expect(prompt).toContain('sessions_spawn(runtime:"acp", thread:true)');
-  });
-
-  it("omits ACP thread-spawn guidance when the runtime capability is absent", () => {
-    const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      toolNames: ["sessions_spawn", "exec"],
-      acpEnabled: true,
-      runtimeInfo: {
-        channel: "discord",
-        capabilities: [],
-      },
-    });
-
     expect(prompt).toContain('"Do in claude code/cursor/gemini/opencode" = ACP intent');
-    expect(prompt).not.toContain('sessions_spawn(runtime:"acp", thread:true)');
+    expect(prompt).not.toContain("thread:true");
+    expect(prompt).not.toContain("Discord ACP default:");
   });
 
   it("omits ACP harness guidance when ACP is disabled", () => {
@@ -2231,25 +2215,21 @@ describe("system prompt runtime cache boundary", () => {
     expect(next.suffix).toContain("- Build uses pnpm workspaces. (Source: MEMORY.md#L7)");
   });
 
-  it("keeps channel-dependent ACP routing after the stable ACP authority guidance", () => {
-    const build = (channel: string, capabilities: string[]) =>
+  it("keeps the ACP prompt prefix identical across channels", () => {
+    const build = (channel: string) =>
       buildPromptParts({
         toolNames: ["sessions_spawn"],
         acpEnabled: true,
-        runtimeInfo: { channel, capabilities },
+        runtimeInfo: { channel, capabilities: [] },
       });
-    const first = build("discord", ["threadbound-acp-spawn"]);
-    const next = build("telegram", []);
+    const first = build("discord");
+    const next = build("telegram");
 
     expect(next.prefix).toBe(first.prefix);
     expect(first.prefix).toContain(
       "never route ACP through local subagent controls or a local PTY",
     );
-    expect(first.prefix).not.toContain("Discord ACP default:");
-    expect(first.suffix).toContain("Discord ACP default:");
-    expect(first.suffix).toContain('ACP thread: only `sessions_spawn(runtime:"acp", thread:true)`');
-    expect(next.suffix).not.toContain("Discord ACP default:");
-    expect(next.suffix).not.toContain("ACP thread:");
+    expect(`${first.prefix ?? ""}${first.suffix ?? ""}`).not.toContain("ACP thread:");
   });
 
   it.each(["suggest", "prefer"] as const)(

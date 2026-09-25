@@ -744,7 +744,6 @@ export function buildAgentSystemPrompt(params: {
   const runtimeCapabilitiesLower = new Set(normalizeStringEntriesLower(runtimeCapabilities));
   const inlineButtonsEnabled = runtimeCapabilitiesLower.has("inlinebuttons");
   const collapsibleDetailsSupported = runtimeCapabilitiesLower.has("markdowndetails");
-  const threadBoundAcpSpawnEnabled = runtimeCapabilitiesLower.has("threadbound-acp-spawn");
   const subagentDelegationMode = normalizeSubagentDelegationMode(params.subagentDelegationMode);
   const proactiveSubagentOrchestration = params.proactiveSubagentOrchestration === true;
   const subagentDelegationPreferenceSection = hasSessionsSpawn
@@ -1142,16 +1141,6 @@ export function buildAgentSystemPrompt(params: {
   // stable workspace context can remain a byte-identical prefix across turns.
   lines.push(
     ...normalizeStringEntries(params.projectMemoryBootstrap),
-    ...(acpHarnessSpawnAllowed && threadBoundAcpSpawnEnabled
-      ? [
-          ...(runtimeChannel === "discord"
-            ? [
-                'Discord ACP default: persistent thread (`thread:true`, `mode:"session"`) unless user says otherwise.',
-              ]
-            : []),
-          'ACP thread: only `sessions_spawn(runtime:"acp", thread:true)`; never create a messaging thread for it.',
-        ]
-      : []),
     ...buildProactiveSubagentOrchestrationSection({
       enabled: proactiveSubagentOrchestration,
       hasSessionsSpawn,

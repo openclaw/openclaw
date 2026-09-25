@@ -63,9 +63,9 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "session.threadBindings.maxAgeHours":
     "Optional hard max age in hours for thread-bound sessions across providers/channels (0 disables hard cap). Default: 0.",
   "session.threadBindings.spawnSessions":
-    "Global default gate for creating thread-bound work sessions from sessions_spawn and ACP thread spawns. Default: true when thread bindings are enabled.",
+    "Global default gate for user thread spawns (/subagents spawn --thread, /acp spawn --thread) that create or bind thread-bound work sessions. Agent-started spawns never bind a conversation. Default: true when thread bindings are enabled.",
   "session.threadBindings.defaultSpawnContext":
-    'Default native subagent context for thread-bound spawns. Use "fork" to start from the requester transcript or "isolated" for a clean child. Default: "fork".',
+    'Default context for subagents started with /subagents spawn --thread: "fork" starts from the requester transcript, "isolated" starts clean. Default: "fork". Agent-started spawns start isolated unless the caller passes context="fork"."fork".',
   "session.sharing":
     "Controls which collaboration modes session owners and administrators may select. Omitted booleans default to enabled; set a mode false to remove it from the picker and reject new selections.",
   "session.sharing.readOnly":

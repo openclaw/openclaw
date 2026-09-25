@@ -18,7 +18,6 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../subagents/spawn/subagent-spawn.js", () => ({
   SUBAGENT_SPAWN_CONTEXT_MODES: ["isolated", "fork"],
-  SUBAGENT_SPAWN_MODES: ["run", "session"],
   spawnSubagentDirect: mocks.spawnSubagentDirect,
 }));
 vi.mock("../subagents/spawn/acp-spawn.js", () => ({

@@ -30,6 +30,7 @@ import { restoreSubagentRunsFromDisk } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 import { loadSubagentSessionEntry } from "./subagent-session-reconciliation.js";
+import { startAgentSpawnTakeoverSweep } from "./subagent-takeover-bindings.js";
 
 type RestoredQueuedFailureSettlementClaim = {
   entry: SubagentRunRecord;
@@ -110,6 +111,7 @@ export function createSubagentRegistryRestorer(config: {
   let restoreState: "idle" | "in-progress" | "succeeded" = "idle";
   let activationRequested = false;
   let activated = false;
+  let takeoverSweepStarted = false;
   // A dependency can merge rows before throwing. Keep their reconciliation
   // pending because mergeOnly correctly reports them as existing on retry.
   let restoredRowsPending = false;
@@ -141,6 +143,12 @@ export function createSubagentRegistryRestorer(config: {
     restoredRowsPending = false;
     restoreState = "succeeded";
     clearRestoreRetryTimer();
+    // Restore finishes before channels start, so each channel account sweeps the
+    // takeovers older agent spawns left as soon as its bindings become readable.
+    if (!takeoverSweepStarted) {
+      takeoverSweepStarted = true;
+      startAgentSpawnTakeoverSweep({ runs, warn });
+    }
     if (activationRequested) {
       activateRestoredRuns();
     }

@@ -144,19 +144,16 @@ describe("openclaw session lookup context", () => {
       const tool = requireTool(tools, "sessions_spawn");
 
       expect(tools.some((candidate) => candidate.name === "agents_wait")).toBe(available);
-      expect(tool.parameters).toHaveProperty(
-        "properties.mode.enum",
-        available ? ["run", "session"] : ["run"],
-      );
+      // Agent spawns never bind a conversation, so thread/session mode is never offered.
+      expect(tool.parameters).toHaveProperty("properties.mode.enum", ["run", "session"]);
+      expect(tool.parameters).not.toHaveProperty("properties.thread");
       expect(tool.parameters).toHaveProperty(
         "properties.runtime.enum",
         available ? ["subagent", "acp"] : ["subagent"],
       );
       if (available) {
-        expect(tool.parameters).toHaveProperty("properties.thread.type", "boolean");
         expect(tool.parameters).toHaveProperty("properties.collect.type", "boolean");
       } else {
-        expect(tool.parameters).not.toHaveProperty("properties.thread");
         expect(tool.parameters).not.toHaveProperty("properties.collect");
         await expect(
           tool.execute("disabled-acp", { runtime: "acp", task: "must not start" }),

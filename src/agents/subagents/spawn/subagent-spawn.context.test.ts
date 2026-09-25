@@ -345,48 +345,6 @@ describe("sessions_spawn context modes", () => {
     ).toBe(false);
   });
 
-  it("forks by default for thread-bound subagent sessions", async () => {
-    const store: SessionStore = {
-      main: {
-        sessionId: "parent-session-id",
-        sessionFile: "/tmp/parent-session.jsonl",
-        updatedAt: 1,
-        totalTokens: 1200,
-      },
-    };
-    usePersistentStoreMock(store);
-    forkSessionFromParentMock.mockImplementation(async () => ({
-      sessionId: "forked-session-id",
-      sessionFile: "/tmp/forked-session.jsonl",
-    }));
-    const prepareSubagentSpawn = vi.fn(async () => undefined);
-    resolveContextEngineMock.mockResolvedValue({ prepareSubagentSpawn });
-
-    const result = await spawnSubagentDirect(
-      { task: "spin this into a thread", thread: true },
-      {
-        agentSessionKey: "main",
-        agentChannel: "discord",
-        agentAccountId: "default",
-        agentTo: "channel:123",
-      },
-    );
-
-    expect(result.status).toBe("error");
-    expect(forkSessionFromParentMock).toHaveBeenCalledWith({
-      parentEntry: store.main,
-      agentId: "main",
-      parentSessionKey: "main",
-      sessionKey: result.childSessionKey,
-      storePath,
-    });
-    const cleanupRequest = requireGatewayRequest("sessions.delete");
-    expect(cleanupRequest.params?.key).toBe(result.childSessionKey);
-    expect(cleanupRequest.params?.deleteTranscript).toBe(true);
-    expect(cleanupRequest.params?.emitLifecycleHooks).toBe(false);
-    expect(prepareSubagentSpawn).not.toHaveBeenCalled();
-  });
-
   it("initializes built-in context engines before resolving spawn preparation", async () => {
     let initialized = false;
     ensureContextEnginesInitializedMock.mockImplementation(() => {

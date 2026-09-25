@@ -1,4 +1,4 @@
-/** Implements ACP subagent/session spawning, binding, limits, and parent-stream setup. */
+/** Implements agent-started ACP spawning, limits, and parent-stream setup. Agent spawns never bind a chat. */
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AcpTurnAttachment } from "../../../acp/control-plane/manager.types.js";
@@ -21,11 +21,6 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveGatewaySessionStoreTarget } from "../../../gateway/session-utils-store-lookup.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { resolveEventSessionRoutingPolicy } from "../../../infra/event-session-routing.js";
-import {
-  getSessionBindingService,
-  isSessionBindingError,
-  type SessionBindingRecord,
-} from "../../../infra/outbound/session-binding-service.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import {
   isIncognitoSessionKey,
@@ -54,19 +49,12 @@ import {
 } from "../../spawn-pipeline.js";
 import {
   mintSpawnSessionKey,
-  prepareSpawnThreadBinding,
   resolveSpawnAdmission,
-  resolveSpawnMode,
   resolveSpawnSandboxError,
-  type PreparedSpawnThreadBinding,
 } from "../../spawn-plan.js";
 import { resolveSpawnedWorkspaceInheritance } from "../../spawned-context.js";
 import { countUntrackedActiveAcpRunsForOwner } from "./acp-spawn-admission.js";
-import {
-  resolveAcpSpawnBootstrapDeliveryPlan,
-  toGatewayImageAttachments,
-  type AcpSpawnBootstrapDeliveryPlan,
-} from "./acp-spawn-bootstrap-delivery.js";
+import { toGatewayImageAttachments } from "./acp-spawn-bootstrap-delivery.js";
 import { launchAcpChildThroughGateway } from "./acp-spawn-gateway.js";
 import {
   type AcpSpawnParentRelayHandle,
@@ -78,15 +66,9 @@ import {
   resolveRequesterInternalSessionKey,
   validateAcpResumeSessionOwnership,
 } from "./acp-spawn-requester.js";
+import { createAcpSpawnFailure, type SpawnAcpResult } from "./acp-spawn-result.js";
 import {
-  createAcpSpawnFailure,
-  type SpawnAcpMode,
-  type SpawnAcpResult,
-} from "./acp-spawn-result.js";
-import {
-  bindPreparedAcpThread,
   initializeAcpSpawnRuntime,
-  resolveAcpSessionMode,
   resolveAcpSpawnRuntimeOptions,
   resolveRuntimeCwdForAcpSpawn,
   type AcpSpawnInitializedRuntime,
@@ -116,8 +98,6 @@ type SpawnAcpParams = {
   thinking?: string;
   runTimeoutSeconds?: number;
   cwd?: string;
-  mode?: SpawnAcpMode;
-  thread?: boolean;
   sandbox?: SpawnAcpSandboxMode;
   cleanup?: "delete" | "keep";
   expectsCompletionMessage?: boolean;
@@ -151,9 +131,7 @@ type SpawnAcpContext = {
 };
 
 const ACP_SPAWN_ACCEPTED_NOTE =
-  "initial ACP task queued in isolated session; follow-ups continue in the bound thread.";
-const ACP_SPAWN_SESSION_ACCEPTED_NOTE =
-  "thread-bound ACP session stays active after this task; continue in-thread for follow-ups.";
+  "ACP task queued in an isolated background session; it never binds a chat.";
 
 export function resolveAcpSpawnRuntimePolicyError(params: {
   cfg: OpenClawConfig;
@@ -206,7 +184,6 @@ export async function spawnAcpDirect(
     });
   }
 
-  const requestThreadBinding = params.thread === true;
   const requesterAgentId = resolveSessionAgentId({
     config: cfg,
     sessionKey: requesterInternalKey,
@@ -244,20 +221,6 @@ export async function spawnAcpDirect(
       status: "forbidden",
       errorCode: "runtime_policy",
       error: formatAcpInheritedToolAllowError(acpUnsupportedInheritedAllow),
-    });
-  }
-
-  const spawnMode = resolveSpawnMode({
-    requestedMode: params.mode,
-    threadRequested: requestThreadBinding,
-  });
-  if (spawnMode === "session" && !requestThreadBinding) {
-    return createAcpSpawnFailure({
-      status: "error",
-      errorCode: "thread_required",
-      error:
-        'sessions_spawn(runtime="acp", mode="session") requires thread=true so the ACP session can stay bound to a channel thread. ' +
-        'Retry with { mode: "session", thread: true } on a channel that exposes threads (e.g. Discord, Slack, Telegram topics), or use mode="run" for one-shot work.',
     });
   }
 
@@ -363,14 +326,13 @@ export async function spawnAcpDirect(
     });
   }
   const effectiveStreamToParent = shouldStreamAcpSpawnToParent({
-    spawnMode,
-    requestThreadBinding,
     streamToParentRequested,
     requester: requesterState,
   });
 
   const sessionKey = mintSpawnSessionKey({ targetAgentId, backend: "acp" });
-  const runtimeMode = resolveAcpSessionMode(spawnMode);
+  // Agent-started ACP spawns are one-shot background runs.
+  const runtimeMode = "oneshot";
   const resolvedCwd = resolveSpawnedWorkspaceInheritance({
     config: cfg,
     targetAgentId,
@@ -389,29 +351,6 @@ export async function spawnAcpDirect(
       errorCode: "cwd_resolution_failed",
       error: formatErrorMessage(error),
     });
-  }
-
-  let preparedBinding: PreparedSpawnThreadBinding | null = null;
-  if (requestThreadBinding) {
-    const prepared = prepareSpawnThreadBinding({
-      cfg,
-      kind: "acp",
-      mode: spawnMode,
-      bindingService: getSessionBindingService(),
-      channel: requesterState.origin?.channel,
-      accountId: requesterState.origin?.accountId,
-      to: requesterState.origin?.to,
-      threadId: requesterState.origin?.threadId,
-      groupId: ctx.agentGroupId,
-    });
-    if (!prepared.ok) {
-      return createAcpSpawnFailure({
-        status: "error",
-        errorCode: "thread_binding_invalid",
-        error: prepared.error,
-      });
-    }
-    preparedBinding = prepared.binding;
   }
 
   let childCreationEntry: SessionEntry | undefined;
@@ -449,8 +388,6 @@ export async function spawnAcpDirect(
   };
   type AcpBackendState = {
     initializedSession: AcpSpawnInitializedRuntime;
-    binding: SessionBindingRecord | null;
-    deliveryPlan?: AcpSpawnBootstrapDeliveryPlan;
     parentRelay?: AcpSpawnParentRelayHandle;
   };
   const adapter: SpawnBackendAdapter<AcpBackendState> = {
@@ -530,29 +467,9 @@ export async function spawnAcpDirect(
       });
       closeRuntimeOnFailure = initializedSession.initialized.closeRuntimeOnFailure;
       ctx.assertActive?.();
-      const binding = preparedBinding
-        ? (
-            await bindPreparedAcpThread({
-              assertActive: ctx.assertActive,
-              cfg,
-              sessionKey,
-              targetAgentId,
-              label: params.label,
-              preparedBinding,
-              initializedRuntime: initializedSession,
-            })
-          ).binding
-        : null;
-      return { initializedSession, binding };
+      return { initializedSession };
     },
     async dispatchTurn(state) {
-      state.deliveryPlan = resolveAcpSpawnBootstrapDeliveryPlan({
-        cfg,
-        spawnMode,
-        effectiveStreamToParent,
-        requester: requesterState,
-        binding: state.binding,
-      });
       // ACP bypasses the native adapter, so seed the same child lineage before dispatch.
       if (childCreationEntry) {
         recordSessionCreated(cfg, {
@@ -590,7 +507,6 @@ export async function spawnAcpDirect(
         assertDispatchCurrent: ctx.assertActive,
         task: params.task,
         sessionKey,
-        deliveryPlan: state.deliveryPlan,
         childIdem,
         runTimeoutSeconds,
         label: params.label,
@@ -646,7 +562,7 @@ export async function spawnAcpDirect(
   }
   // Admission may already hold a slot; initialization and cleanup can mutate session state.
   ctx.onSpawnEffectsStart?.();
-  let expectsCompletionMessage = false;
+  const expectsCompletionMessage = params.expectsCompletionMessage !== false;
   const pipelineResult = await runSpawnPipeline({
     adapter,
     assertActive: ctx.assertActive,
@@ -654,9 +570,7 @@ export async function spawnAcpDirect(
     hookRunner: getGlobalHookRunner(),
     progressOrigin,
     progressSessionKey: ownership.completionRequesterSessionKey,
-    buildRegistration: (state, runId) => {
-      const inlineDelivery = state.deliveryPlan?.useInlineDelivery === true;
-      expectsCompletionMessage = !inlineDelivery && params.expectsCompletionMessage !== false;
+    buildRegistration: (_state, runId) => {
       return {
         runId,
         requesterTurnRunId: ctx.requesterTurnRunId,
@@ -671,11 +585,11 @@ export async function spawnAcpDirect(
         taskName: params.taskName,
         agentId: targetAgentId,
         requesterAgentId,
-        cleanup: spawnMode === "session" ? "keep" : params.cleanup === "delete" ? "delete" : "keep",
+        cleanup: params.cleanup === "delete" ? "delete" : "keep",
         label: params.label,
         runTimeoutSeconds,
         expectsCompletionMessage,
-        spawnMode,
+        spawnMode: "run",
         // ACP's Gateway manager publishes the task; avoid a second registry projection.
         taskRowOwnership: "gateway_best_effort",
       };
@@ -685,12 +599,8 @@ export async function spawnAcpDirect(
     if (pipelineResult.phase === "initialize") {
       return createAcpSpawnFailure({
         status: "error",
-        errorCode: isSessionBindingError(pipelineResult.error)
-          ? "thread_binding_invalid"
-          : "spawn_failed",
-        error: isSessionBindingError(pipelineResult.error)
-          ? pipelineResult.error.message
-          : summarizeSpawnError(pipelineResult.error),
+        errorCode: "spawn_failed",
+        error: summarizeSpawnError(pipelineResult.error),
       });
     }
     if (pipelineResult.phase === "dispatch") {
@@ -713,10 +623,9 @@ export async function spawnAcpDirect(
     status: "accepted",
     childSessionKey: sessionKey,
     runId: pipelineResult.runId,
-    mode: spawnMode,
+    mode: "run",
     runTimeoutSeconds,
     expectsCompletionMessage,
-    ...(pipelineResult.state.deliveryPlan?.useInlineDelivery ? { inlineDelivery: true } : {}),
-    note: spawnMode === "session" ? ACP_SPAWN_SESSION_ACCEPTED_NOTE : ACP_SPAWN_ACCEPTED_NOTE,
+    note: ACP_SPAWN_ACCEPTED_NOTE,
   };
 }

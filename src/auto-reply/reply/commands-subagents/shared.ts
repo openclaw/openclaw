@@ -113,6 +113,7 @@ export function buildSubagentsHelp() {
     "- /subagents list",
     "- /subagents log <id|#> [limit] [tools]",
     "- /subagents info <id|#>",
+    "- /subagents spawn --thread [--agent <id>] <task>  (new thread or topic; forum groups and server channels)",
     "- /session unbind",
     "- /agents",
     "- /session idle <duration|off>",

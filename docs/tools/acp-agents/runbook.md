@@ -85,12 +85,13 @@ Quick `/acp` flow from chat:
     Triggers that should route to the ACP runtime:
 
     - "Run this as a one-shot Claude Code ACP session and summarize the result."
-    - "Use Gemini CLI for this task in a thread, then keep follow-ups in that same thread."
-    - "Run Codex through ACP in a background thread."
+    - "Run Codex through ACP in the background and report back."
 
-    OpenClaw picks `runtime: "acp"`, resolves the harness `agentId`, binds to
-    the current conversation or thread when supported, and routes follow-ups
-    to that session until close/expiry. Codex only follows this path when
+    OpenClaw picks `runtime: "acp"`, resolves the harness `agentId`, and
+    runs the task as a one-shot background run. The result returns to the
+    requester. An agent-started ACP spawn never binds or creates a thread.
+    For a thread with follow-ups, the user runs
+    `/acp spawn <harness> --thread auto` or `--bind here`. Codex only follows this path when
     ACP/acpx is explicit or the native Codex plugin is unavailable for the
     requested operation.
 

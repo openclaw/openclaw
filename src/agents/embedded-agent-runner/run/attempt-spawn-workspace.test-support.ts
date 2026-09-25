@@ -365,7 +365,6 @@ vi.mock("../../sessions/sdk.js", () => ({
 }));
 
 vi.mock("../../subagents/spawn/subagent-spawn.js", () => ({
-  SUBAGENT_SPAWN_MODES: ["run", "session"],
   spawnSubagentDirect: (...args: unknown[]) => hoisted.spawnSubagentDirectMock(...args),
 }));
 

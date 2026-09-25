@@ -22,19 +22,6 @@ type TestConfig = {
     list?: TestAgentConfig[];
   };
 };
-type TestBindingRequest = {
-  targetSessionKey: string;
-  targetKind?: string;
-  conversation: {
-    channel: string;
-    accountId?: string;
-    conversationId: string;
-    parentConversationId?: string;
-  };
-  placement: "current" | "child";
-  metadata?: Record<string, unknown>;
-};
-
 const hoisted = vi.hoisted(() => ({
   callGatewayMock: vi.fn(),
   configOverride: {} as Record<string, unknown>,
@@ -46,23 +33,6 @@ const hoisted = vi.hoisted(() => ({
   >(() => ({ sandboxed: false })),
   hookRunner: {
     hasHooks: vi.fn(() => false),
-  },
-  bindingService: {
-    getCapabilities: vi.fn(() => ({
-      adapterAvailable: true,
-      bindSupported: true,
-      placements: ["child"] as Array<"current" | "child">,
-    })),
-    bind: vi.fn(async (request: TestBindingRequest) => {
-      const conversation = request.conversation;
-      return {
-        targetSessionKey: request.targetSessionKey,
-        targetKind: request.targetKind,
-        status: "active",
-        conversation,
-      };
-    }),
-    listBySession: vi.fn(() => []),
   },
 }));
 
@@ -78,11 +48,6 @@ function createConfigOverride(overrides?: Record<string, unknown>) {
           workspace: "/tmp/workspace-main",
         },
       ],
-    },
-    session: {
-      threadBindings: {
-        defaultSpawnContext: "isolated",
-      },
     },
     ...overrides,
   });
@@ -149,7 +114,6 @@ describe("spawnSubagentDirect workspace inheritance", () => {
       resolveAgentConfig: resolveTestAgentConfig,
       resolveAgentWorkspaceDir: resolveTestAgentWorkspace,
       resolveSandboxRuntimeStatus: hoisted.resolveSandboxRuntimeStatusMock,
-      getSessionBindingService: () => hoisted.bindingService,
       resetModules: false,
     }));
   });
@@ -165,9 +129,6 @@ describe("spawnSubagentDirect workspace inheritance", () => {
     hoisted.resolveSandboxRuntimeStatusMock.mockImplementation(() => ({ sandboxed: false }));
     hoisted.hookRunner.hasHooks.mockReset();
     hoisted.hookRunner.hasHooks.mockImplementation(() => false);
-    hoisted.bindingService.getCapabilities.mockClear();
-    hoisted.bindingService.bind.mockClear();
-    hoisted.bindingService.listBySession.mockClear();
     hoisted.configOverride = createConfigOverride();
     setupAcceptedSubagentGatewayMock(hoisted.callGatewayMock);
   });
@@ -404,54 +365,5 @@ describe("spawnSubagentDirect workspace inheritance", () => {
     expect(deleteCall?.params?.key).toBe(result.childSessionKey);
     expect(deleteCall?.params?.deleteTranscript).toBe(true);
     expect(deleteCall?.params?.emitLifecycleHooks).toBe(false);
-  });
-
-  it("keeps lifecycle hooks enabled when registerSubagentRun fails after thread binding succeeds", async () => {
-    hoisted.registerSubagentRunMock.mockImplementation(() => {
-      throw new Error("registry unavailable");
-    });
-    hoisted.callGatewayMock.mockImplementation(
-      async (request: {
-        method?: string;
-        params?: { key?: string; deleteTranscript?: boolean; emitLifecycleHooks?: boolean };
-      }) => {
-        if (request.method === "sessions.patch") {
-          return { ok: true };
-        }
-        if (request.method === "agent") {
-          return { runId: "run-thread-register-fail" };
-        }
-        if (request.method === "sessions.delete") {
-          return { ok: true };
-        }
-        return {};
-      },
-    );
-
-    const result = await spawnSubagentDirect(
-      {
-        task: "fail after register with thread binding",
-        thread: true,
-        mode: "session",
-        context: "isolated",
-      },
-      {
-        agentSessionKey: "agent:main:main",
-        agentChannel: "discord",
-        agentAccountId: "acct-1",
-        agentTo: "user-1",
-        workspaceDir: "/tmp/requester-workspace",
-      },
-    );
-
-    expect(result.status).toBe("error");
-    expect(result.error).toBe("Failed to register subagent run: registry unavailable");
-    expect(result.childSessionKey).toMatch(/^agent:main:subagent:/);
-    expect(result.runId).toBe("run-thread-register-fail");
-
-    const deleteCall = findLastSessionDeleteCall();
-    expect(deleteCall?.params?.key).toBe(result.childSessionKey);
-    expect(deleteCall?.params?.deleteTranscript).toBe(true);
-    expect(deleteCall?.params?.emitLifecycleHooks).toBe(true);
   });
 });

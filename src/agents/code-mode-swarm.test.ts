@@ -35,7 +35,6 @@ const swarmMocks = vi.hoisted(() => ({
 
 vi.mock("./subagents/spawn/subagent-spawn.js", () => ({
   SUBAGENT_SPAWN_CONTEXT_MODES: ["isolated", "fork"],
-  SUBAGENT_SPAWN_MODES: ["run", "session"],
   spawnSubagentDirect: swarmMocks.spawnSubagentDirect,
 }));
 

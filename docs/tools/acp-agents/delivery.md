@@ -42,8 +42,9 @@ work. The delivery path depends on that shape.
 
   </Accordion>
   <Accordion title="Parent-owned one-shot ACP sessions">
-    One-shot ACP sessions spawned by another agent run are background
-    children, similar to sub-agents:
+    ACP sessions spawned by another agent run are always one-shot background
+    children, similar to sub-agents. They never bind or create a thread and
+    never send output straight into a chat:
 
     - The parent asks for work with `sessions_spawn({ runtime: "acp", mode: "run" })`.
     - The child runs in its own ACP harness session.
@@ -106,7 +107,7 @@ work. The delivery path depends on that shape.
     - `resumeSessionId` only applies when `runtime: "acp"`; the default sub-agent runtime ignores this ACP-only field.
     - `streamTo` only applies when `runtime: "acp"`; the default sub-agent runtime ignores this ACP-only field.
     - `resumeSessionId` is a host-local ACP/harness resume id, not an OpenClaw channel session key; OpenClaw still checks ACP spawn policy and target agent policy before dispatch, while the ACP backend or harness owns authorization for loading that upstream id.
-    - `resumeSessionId` restores the upstream ACP conversation history; `thread` and `mode` still apply normally to the new OpenClaw session you are creating, so `mode: "session"` still requires `thread: true`.
+    - `resumeSessionId` restores the upstream ACP conversation history; the new OpenClaw session is still a one-shot background run, like every agent-started ACP spawn.
     - The target agent must support `session/load` (Codex and Claude Code do).
     - If the session id is not found, the spawn fails with a clear error - no silent fallback to a new session.
 
@@ -122,8 +123,8 @@ work. The delivery path depends on that shape.
     5. Clean up the temporary bridge session.
 
     Keep the gate on `mode: "run"` and skip `streamTo: "parent"` -
-    thread-bound `mode: "session"` and stream-relay paths are separate richer
-    integration passes.
+    the stream-relay path and user-started `/acp spawn --thread` sessions are
+    separate richer integration passes.
 
   </Accordion>
 </AccordionGroup>

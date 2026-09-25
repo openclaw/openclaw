@@ -109,14 +109,8 @@ export function describeSessionsSendTool(): string {
   ].join(" ");
 }
 
-export function describeSubagentSpawnContext(threadAvailable: boolean): string {
-  return [
-    'Native: explicit context="isolated" starts clean; context="fork" copies requester transcript and requires the same agent.',
-    threadAvailable
-      ? "Omitted context follows configured threadBindings.defaultSpawnContext policy (fork by default) with thread=true; without a thread it is isolated."
-      : "Omitted context is isolated.",
-  ].join(" ");
-}
+export const SUBAGENT_SPAWN_CONTEXT_DESCRIPTION =
+  'Native: explicit context="isolated" starts clean; context="fork" copies requester transcript and requires the same agent. Omitted context is isolated.';
 
 export const SESSIONS_SPAWN_COLLECTOR_GUIDANCE =
   "Default to ordinary spawn for one or a few children. Reserve `collect=true` (swarm) for large parallel fan-out (several similar children, about five or more). Collectors send no completion notification and cannot be steered; explicitly collect their results; structured result per `outputSchema`; `groupId` groups a batch.";
@@ -124,8 +118,6 @@ export const SESSIONS_SPAWN_COLLECTOR_GUIDANCE =
 /** Describes the sessions_spawn tool for model-facing instructions. */
 export function describeSessionsSpawnTool(options?: {
   acpAvailable?: boolean;
-  threadAvailable?: boolean;
-  subagentThreadAvailable?: boolean;
   swarmEnabled?: boolean;
   sessionToolsVisibility?: SessionVisibilityScope;
   spawnRestricted?: boolean;
@@ -141,9 +133,7 @@ export function describeSessionsSpawnTool(options?: {
       : 'Spawn child session; default `runtime="subagent"`; ACP needs explicit `runtime="acp"`.';
   return [
     runtimeDescription,
-    options?.threadAvailable
-      ? '`mode="run"` one-shot; `mode="session"` persistent/thread-bound only on supporting requester channel.'
-      : '`mode="run"` one-shot background.',
+    '`mode="run"` one-shot background. Spawned children never bind or take over a chat; if the user wants a separate thread, tell them to run `/subagents spawn --thread <task>`.',
     "`agentId` targets a configured agent; `model` overrides its model; `cleanup` delete|keep hidden child session; `sandbox` inherit|require.",
     "Default to a hidden subagent for internal QA, research, coding, review, tests, and parallel work supporting the current task. This includes substantial, bounded API/service investigations that can be handed off with the needed context and capabilities. Omit `visible` or set it false, and report results through the parent.",
     '`visible=true`: durable visible session. Use only when the user requests a separate session or needs to revisit and steer the work independently. Shows in web UI sidebar; works without UI: announcing runs report back, progress checkable. `group` places it in a custom sidebar group (a new name creates the group); omission or an empty string leaves it ungrouped. Subagent only; omit `mode` (`mode="run"` is also accepted), `thread`, `thinking`, and `lightContext`; `attachments=[]` and omitted/blank `attachAs.mountPath` are accepted, but nonempty attachment staging is unsupported; inherits the caller tool-policy ceiling; select a registered project with `projectId` or a managed GitHub clone with `projectGitUrl` (mutually exclusive with each other and `cwd`); may check out a git worktree via `worktree`/`worktreeName`/`worktreeBaseRef`. When its accepted result includes `sessionUrl`, channel acknowledgements put the session URL on the first line and `Owner: <label>` on the second line.',
@@ -154,7 +144,7 @@ export function describeSessionsSpawnTool(options?: {
     ...(options?.acpAvailable === false
       ? []
       : ['`runtime="acp"` ids: codex, claude, gemini, opencode, or configured ACP.']),
-    describeSubagentSpawnContext(options?.subagentThreadAvailable === true),
+    SUBAGENT_SPAWN_CONTEXT_DESCRIPTION,
     "A PR/report, long runtime, or isolated worktree alone does not justify a sidebar session. A request for a subagent does not request a separate session. No spawn for quick lookup/single read.",
     "After spawn, do non-overlap work; follow the receipt's completion mode.",
   ].join(" ");

@@ -244,9 +244,9 @@ export type DiscordThreadBindingsConfig = {
   idleHours?: number;
   /** Hard max age in hours. Set 0 to disable. Default: 0. */
   maxAgeHours?: number;
-  /** Allow session spawns to create and bind Discord threads. Default: true. */
+  /** Allow user thread spawns to create and bind Discord threads. Default: true. */
   spawnSessions?: boolean;
-  /** Default context mode for native subagents. Default: fork. */
+  /** Default context for /subagents spawn --thread sessions. */
   defaultSpawnContext?: "isolated" | "fork";
 };
 

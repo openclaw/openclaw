@@ -1,6 +1,5 @@
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
-import { resolveThreadBindingSpawnPolicy } from "../../../channels/thread-bindings-policy.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { ContextEngine, SubagentSpawnPreparation } from "../../../context-engine/types.js";
@@ -192,27 +191,4 @@ export async function rollbackPreparedContextEngine(
     // Best-effort cleanup only.
     return false;
   }
-}
-
-export function resolveSubagentContextMode(params: {
-  requestedContext?: SpawnSubagentContextMode;
-  threadRequested: boolean;
-  cfg: OpenClawConfig;
-  requester: {
-    channel?: string;
-    accountId?: string;
-  };
-}): SpawnSubagentContextMode {
-  if (params.requestedContext === "fork" || params.requestedContext === "isolated") {
-    return params.requestedContext;
-  }
-  if (!params.threadRequested || !params.requester.channel) {
-    return "isolated";
-  }
-  return resolveThreadBindingSpawnPolicy({
-    cfg: params.cfg,
-    channel: params.requester.channel,
-    accountId: params.requester.accountId,
-    kind: "subagent",
-  }).defaultSpawnContext;
 }

@@ -12,7 +12,7 @@ import { loadSubagentSpawnModuleForTest } from "./subagent-spawn.test-helpers.js
 type ForkSession =
   typeof import("../../../auto-reply/reply/session-fork.js").forkSessionEntryFromParent;
 type SpawnSubagent = typeof import("./subagent-spawn.js").spawnSubagentDirect;
-type SpawnFailure = "thread binding" | "context engine" | "launch" | "registration" | "collector";
+type SpawnFailure = "context engine" | "launch" | "registration" | "collector";
 
 describe("subagent fork context through SQLite and tool boundaries", () => {
   const parentKey = "agent:main:main";
@@ -20,7 +20,6 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
   let tempDir: string;
   let storePath: string;
   let config: OpenClawConfig;
-  let threadBindingAvailable: boolean;
   let sessions: typeof import("../../../config/sessions/session-accessor.js");
   let forkSession: ForkSession;
   let spawnSubagentDirect: SpawnSubagent;
@@ -82,23 +81,6 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
       completeCollectorLaunchCleanupMock: completeCollectorLaunchCleanup,
       resolveContextEngineMock: async () => ({ prepareSubagentSpawn }),
       getRuntimeConfig: () => config,
-      getSessionBindingService: () => ({
-        getCapabilities: () => ({
-          adapterAvailable: threadBindingAvailable,
-          bindSupported: threadBindingAvailable,
-          placements: ["child"],
-        }),
-        bind: async (request) => ({
-          targetSessionKey: request.targetSessionKey,
-          status: "active",
-          conversation: {
-            channel: request.conversation.channel,
-            accountId: request.conversation.accountId,
-            conversationId: "fork-receipt-thread",
-          },
-        }),
-        listBySession: () => [],
-      }),
       loadSessionStoreMock: () =>
         Object.fromEntries(
           sessions
@@ -142,7 +124,6 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
         defaults: { workspace: tempDir, model: { primary: "openai/gpt-5.6-luna" } },
       },
     };
-    threadBindingAvailable = false;
     failure = "context engine";
     forkedEntry = undefined;
     fork.mockClear();
@@ -300,8 +281,8 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
 
   it.each([
     {
-      scenario: "omitted context uses the thread-default fork",
-      args: { thread: true },
+      scenario: "an explicit fork copies the parent",
+      args: { context: "fork" },
       parentTokens: undefined,
       preparedMode: "fork",
       operation: "fork",
@@ -325,7 +306,6 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
     async ({ args, parentTokens, preparedMode, operation }) => {
       prepareSubagentSpawn.mockResolvedValue(undefined);
       startQueuedSubagentRun.mockReturnValue(true);
-      threadBindingAvailable = true;
       config.logging = { audit: { enabled: true, executionIdentity: true } };
       const parentScope = {
         agentId: "main",
@@ -434,7 +414,6 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
   );
 
   it.each([
-    { stage: "thread binding", context: undefined },
     { stage: "context engine", context: "fork" },
     { stage: "launch", context: "fork" },
     { stage: "registration", context: "fork" },
@@ -474,15 +453,11 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
         {
           task: "inspect parent history",
           context,
-          ...(stage === "thread binding" ? { thread: true } : {}),
           ...(stage === "collector" ? { collect: true } : {}),
         },
         {
           agentSessionKey: parentKey,
           requesterRunId: "parent-run",
-          ...(stage === "thread binding"
-            ? { agentChannel: "discord", agentTo: "channel:123" }
-            : {}),
         },
       );
 
@@ -491,7 +466,7 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
         // Wait for the real cleanup callback, not a one-second guess at SQLite deletion.
         await collectorSettled.promise;
         expect(settleFailedQueuedSubagentLaunch).toHaveBeenCalled();
-      } else if (stage !== "thread binding") {
+      } else {
         expect(result.error).toContain(`${stage} failed`);
       }
       const childSessionKey = expectDefined(result.childSessionKey, "spawned child key");

@@ -146,21 +146,15 @@ export function resolveAcpSpawnRequesterState(params: {
 }
 
 export function shouldStreamAcpSpawnToParent(params: {
-  spawnMode: "run" | "session";
-  requestThreadBinding: boolean;
   streamToParentRequested: boolean;
   requester: AcpSpawnRequesterState;
 }): boolean {
-  // For mode=run without thread binding, implicitly route output to parent
-  // only for spawned subagent orchestrator sessions with heartbeat enabled
-  // AND a session-local heartbeat delivery route (target=last + usable last route).
-  // Skip requester sessions that are thread-bound (or carrying thread context)
-  // so user-facing threads do not receive unsolicited ACP progress chatter
-  // unless streamTo="parent" is explicitly requested. Use resolved spawnMode
-  // (not params.mode) so default mode selection works.
+  // Implicitly route output to parent only for spawned subagent orchestrator
+  // sessions with heartbeat enabled AND a session-local heartbeat delivery route
+  // (target=last + usable last route). Skip requester sessions that are thread-bound
+  // (or carrying thread context) so user-facing threads do not receive unsolicited
+  // ACP progress chatter unless streamTo="parent" is explicitly requested.
   const implicitStreamToParent =
-    params.spawnMode === "run" &&
-    !params.requestThreadBinding &&
     params.requester.isSubagentSession &&
     !params.requester.hasActiveSubagentBinding &&
     !params.requester.hasThreadContext &&

@@ -1,4 +1,4 @@
-// Verifies sessions_spawn lifecycle hooks, binding cleanup, and gateway calls.
+// Verifies subagent spawn lifecycle hooks, user child-thread binding cleanup, and gateway calls.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -98,8 +98,7 @@ async function spawn(params?: {
   label?: string;
   model?: string;
   runTimeoutSeconds?: number;
-  thread?: boolean;
-  mode?: "run" | "session";
+  childThread?: boolean;
   context?: "isolated" | "fork";
   agentSessionKey?: string;
   agentChannel?: string;
@@ -118,8 +117,7 @@ async function spawn(params?: {
       ...(typeof params?.runTimeoutSeconds === "number"
         ? { runTimeoutSeconds: params.runTimeoutSeconds }
         : {}),
-      ...(params?.thread ? { thread: true } : {}),
-      ...(params?.mode ? { mode: params.mode } : {}),
+      ...(params?.childThread ? { childThread: { boundBy: "user-1" } } : {}),
       context: params?.context ?? "isolated",
     },
     {
@@ -288,12 +286,12 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
     resetSubagentRegistryForTests();
   });
 
-  it("binds the subagent thread in core and emits subagent_spawned with requester metadata", async () => {
+  it("binds a user-requested child thread in core and emits subagent_spawned with requester metadata", async () => {
     const result = await spawn({
       label: "research",
       model: "openai/gpt-5.4",
       runTimeoutSeconds: 1,
-      thread: true,
+      childThread: true,
       agentAccountId: "work",
       agentTo: "channel:123",
       agentThreadId: 456,
@@ -332,6 +330,7 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
       },
       "binding request",
     );
+    expectFields(bindingRequest.metadata, { boundBy: "user-1" }, "binding metadata");
     expectFields(
       bindingRequest.conversation,
       {
@@ -428,28 +427,6 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
     );
   });
 
-  it("respects explicit mode=run when thread binding is requested", async () => {
-    const result = await spawn({
-      runTimeoutSeconds: 1,
-      thread: true,
-      mode: "run",
-      agentTo: "channel:123",
-      context: "isolated",
-    });
-
-    expectFields(result, { status: "accepted", runId: "run-1", mode: "run" }, "spawn result");
-    expect(bindingMocks.bind).toHaveBeenCalledTimes(1);
-    const event = getSpawnedEventCall();
-    expectFields(
-      event,
-      {
-        mode: "run",
-        threadRequested: true,
-      },
-      "spawned event",
-    );
-  });
-
   it("returns error when thread binding cannot be created", async () => {
     bindingMocks.bind.mockRejectedValueOnce(
       new Error("Unable to create or bind a Discord thread for this subagent session."),
@@ -457,8 +434,7 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
     const result = await spawn({
       toolCallId: "call4",
       runTimeoutSeconds: 1,
-      thread: true,
-      mode: "session",
+      childThread: true,
       agentAccountId: "work",
       agentTo: "channel:123",
       context: "isolated",
@@ -482,25 +458,13 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
     const result = await spawn({
       toolCallId: "call4b",
       runTimeoutSeconds: 1,
-      thread: true,
-      mode: "session",
+      childThread: true,
       agentAccountId: "work",
       agentTo: "channel:123",
       context: "isolated",
     });
 
-    expectThreadBindFailureCleanup(result, /unable to create or bind a thread/i);
-  });
-
-  it("rejects mode=session when thread=true is not requested", async () => {
-    const result = await spawn({
-      mode: "session",
-      agentTo: "channel:123",
-    });
-
-    expectErrorResultMessage(result, /requires thread=true/i);
-    expect(hookRunnerMocks.runSubagentSpawned).not.toHaveBeenCalled();
-    expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
+    expectThreadBindFailureCleanup(result, /can't hold a new thread/i);
   });
 
   it("rejects thread=true on channels without thread support", async () => {
@@ -510,14 +474,13 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
       placements: [],
     });
     const result = await spawn({
-      thread: true,
-      mode: "session",
+      childThread: true,
       agentChannel: "signal",
       agentTo: "+123",
       context: "isolated",
     });
 
-    expectErrorResultMessage(result, /only available on channels that expose thread bindings/i);
+    expectErrorResultMessage(result, /can't hold a new thread/i);
     expect(hookRunnerMocks.runSubagentSpawned).not.toHaveBeenCalled();
     expectSessionsDeleteWithoutAgentStart();
   });
@@ -525,8 +488,7 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
   it("runs subagent_ended cleanup hook when agent start fails after successful bind", async () => {
     mockAgentStartFailure();
     const result = await spawn({
-      thread: true,
-      mode: "session",
+      childThread: true,
       agentAccountId: "work",
       agentTo: "channel:123",
       agentThreadId: "456",
@@ -565,8 +527,7 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
     hookRunnerMocks.hasSubagentEndedHook = false;
     mockAgentStartFailure();
     const result = await spawn({
-      thread: true,
-      mode: "session",
+      childThread: true,
       agentAccountId: "work",
       agentTo: "channel:123",
       agentThreadId: "456",

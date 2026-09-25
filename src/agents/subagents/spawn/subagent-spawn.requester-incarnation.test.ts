@@ -143,7 +143,7 @@ it.each([
         backend === "native"
           ? spawnSubagentDirect({ task: "window-bound work", context: "isolated" }, ctx)
           : backend === "acp"
-            ? spawnAcpDirect({ task: "window-bound work", agentId: "main", mode: "run" }, ctx)
+            ? spawnAcpDirect({ task: "window-bound work", agentId: "main" }, ctx)
             : maybeSpawnVisibleSession({
                 raw: { visible: true },
                 ...(globalRequester ? { agentId: "worker" } : {}),

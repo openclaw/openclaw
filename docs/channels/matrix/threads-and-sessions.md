@@ -40,6 +40,7 @@ Selecting a reply target inside a thread preserves both the thread and the selec
 - Message-tool sends auto-inherit the current Matrix thread when targeting the same room (or the same DM user target), unless an explicit `threadId` is provided.
 - DM user-target reuse only kicks in when current session metadata proves the same DM peer on the same Matrix account; otherwise OpenClaw falls back to normal user-scoped routing.
 - `/session unbind`, `/agents`, `/session idle`, `/session max-age`, and thread-bound `/acp spawn` all work in Matrix rooms and DMs.
+- `/subagents spawn --thread [--agent <id>] <task>` in a room creates a new Matrix thread and binds a persistent subagent session there. Follow-ups in that thread go to the subagent; the room does not change. In a DM, it stops and starts nothing. Agent-started spawns never bind a thread.
 - `/acp spawn --thread auto` creates a new Matrix thread when `threadBindings.spawnSessions` is enabled.
 - Running `/acp spawn --thread here` inside an existing Matrix thread binds that thread in place.
 
@@ -57,7 +58,7 @@ Fast operator flow:
 - `/new` and `/reset` reset the same bound ACP session in place.
 - `/acp close` closes the ACP session and removes the binding.
 
-`--bind here` does not create a child Matrix thread. `threadBindings.spawnSessions` gates `/acp spawn --thread auto|here`, where OpenClaw needs to create or bind a child thread.
+`--bind here` does not create a child Matrix thread. `threadBindings.spawnSessions` gates `/subagents spawn --thread` and `/acp spawn --thread auto|here`, where OpenClaw needs to create or bind a child thread.
 
 ### Thread binding config
 
@@ -66,11 +67,11 @@ Matrix inherits global defaults from `session.threadBindings` and supports per-c
 - `threadBindings.enabled`
 - `threadBindings.idleHours`
 - `threadBindings.maxAgeHours`
-- `threadBindings.spawnSessions`: gates both subagent and ACP thread spawns.
+- `threadBindings.spawnSessions`: gates user thread spawns (`/subagents spawn --thread`, `/acp spawn --thread`). Agent-started spawns never bind a thread.
 - Deprecated `threadBindings.spawnSubagentSessions` / `threadBindings.spawnAcpSessions` keys are migrated to `spawnSessions` by `openclaw doctor --fix`.
-- `threadBindings.defaultSpawnContext`
+- `threadBindings.defaultSpawnContext`: sets the default context for sub-agents started with `/subagents spawn --thread` (`"fork"` by default). Agent-started spawns start with isolated context unless the spawn passes `context: "fork"`.
 
-Matrix thread-bound session spawns default on. Set `threadBindings.spawnSessions: false` to block native subagent and ACP thread spawns from creating/binding Matrix threads. Set `threadBindings.defaultSpawnContext: "isolated"` when native subagent thread spawns should not fork the parent transcript.
+Matrix thread spawns default on. Set `threadBindings.spawnSessions: false` to block `/subagents spawn --thread` and `/acp spawn --thread` from creating/binding Matrix threads.
 
 ## History context
 

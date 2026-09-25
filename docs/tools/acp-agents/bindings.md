@@ -47,7 +47,7 @@ Examples:
   <Accordion title="Thread-bound sessions">
     When thread bindings are enabled for a channel adapter:
 
-    - OpenClaw binds a thread to a target ACP session.
+    - A user command (`/acp spawn ... --thread ...` or `--bind here`) binds a thread to a target ACP session. An agent `sessions_spawn({ runtime: "acp" })` call never binds a thread; it runs as a one-shot background run.
     - Follow-up messages in that thread route to the bound ACP session.
     - ACP output is delivered back to the same thread.
     - `/session unbind`, close, archive, idle timeout, or max-age expiry removes the binding. `/session unbind` detaches only the current conversation and leaves the ACP session running.

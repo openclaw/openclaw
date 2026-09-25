@@ -24,7 +24,6 @@ vi.mock("../subagents/spawn/subagent-spawn.runtime.js", () => ({
 }));
 vi.mock("../subagents/spawn/subagent-spawn.js", () => ({
   SUBAGENT_SPAWN_CONTEXT_MODES: ["isolated", "fork"],
-  SUBAGENT_SPAWN_MODES: ["run", "session"],
   spawnSubagentDirect: (...args: unknown[]) => hoisted.spawnSubagentDirectMock(...args),
 }));
 vi.mock("../subagents/spawn/acp-spawn.js", () => ({
@@ -134,7 +133,6 @@ describe("visible session placement and authority", () => {
         expect.objectContaining({
           task: request.task,
           cwd: request.cwd,
-          mode: "run",
           completionTarget: "parent",
           expectsCompletionMessage: true,
         }),
@@ -178,7 +176,7 @@ describe("visible session placement and authority", () => {
     });
     expect(result.details).toMatchObject({ status: "accepted", runId: "local-acp-run" });
     expect(hoisted.spawnAcpDirectMock).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ task: "Review locally", cwd: "/workspace/review", mode: "run" }),
+      expect.objectContaining({ task: "Review locally", cwd: "/workspace/review" }),
       expect.anything(),
     );
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();

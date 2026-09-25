@@ -1,5 +1,5 @@
 ---
-summary: "Bind a sub-agent to a channel thread, and the allowlist, discovery, and auto-archive rules"
+summary: "Start a sub-agent in a new thread with /subagents spawn --thread, plus the allowlist, discovery, and auto-archive rules"
 title: "Thread-bound sub-agent sessions"
 read_when:
   - You are implementing or troubleshooting thread-bound subagent sessions
@@ -9,31 +9,57 @@ read_when:
 
 ## Thread-bound sessions
 
-When thread bindings are enabled for a channel, a sub-agent can stay bound
-to a thread so follow-up user messages in that thread keep routing to the
-same sub-agent session.
+Only you can bind a sub-agent to a thread. An agent cannot.
+
+- **Agent-started spawns never bind.** This applies to native sub-agents and
+  ACP sessions, on every channel. The child runs in the background, and its
+  result returns to the agent that started it. The chat where you talk to your
+  agent stays with that agent.
+- **You start a thread-bound sub-agent with a command:**
+  `/subagents spawn --thread [--agent <id>] <task>`. OpenClaw creates a **new**
+  thread or topic and binds a persistent sub-agent session to it. The
+  conversation where you ran the command does not change.
+
+The `sessions_spawn` tool does not offer `thread` or `mode: "session"`. An older
+call that passes `thread: true` or `mode: "session"` (also with
+`runtime: "acp"`) still succeeds. The child runs as a one-shot background run
+and reports back to the requester. The result `note` says that thread binding
+is not available for agent-started spawns.
+
+On upgrade, OpenClaw removes the bindings that older agent spawns put on your
+own chat. It does this when the gateway starts and when each channel account
+starts. Bindings that a user made (`/subagents spawn --thread`, `/acp`) stay.
 
 ### Thread supporting channels
 
-A channel supports persistent thread-bound subagent sessions
-(`sessions_spawn` with `thread: true`) when it registers a conversation
-binding adapter. Bundled channels with that support: **Discord**,
-**iMessage**, **Matrix**, and **Telegram**. Discord and Matrix default to
-creating a child thread; Telegram and iMessage default to binding the
-current conversation. Use the per-channel `threadBindings` config keys for
-enablement, timeouts, and `spawnSessions`.
+`/subagents spawn --thread` needs a channel that can create a child thread or
+topic:
+
+- **Discord** channels
+- **Matrix** rooms
+- **Telegram** forum groups (topics)
+
+In a DM, or in a group that cannot hold threads (such as a Telegram group that
+is not a forum), the command stops with a clear message and starts nothing.
+
+`threadBindings.spawnSessions: false` blocks `/subagents spawn --thread` and
+`/acp spawn --thread`.
+
+User-started ACP bindings, such as `/acp spawn <harness> --bind here` or
+`--thread auto`, also work on **iMessage**. See
+[ACP bindings](/tools/acp-agents/bindings#current-conversation-binds).
 
 ### Quick flow
 
 <Steps>
   <Step title="Spawn">
-    `sessions_spawn` with `thread: true` (and optionally `mode: "session"`).
+    In a Discord channel, Matrix room, or Telegram forum group, run `/subagents spawn --thread <task>`. Add `--agent <id>` to use another allowed agent.
   </Step>
   <Step title="Bind">
-    OpenClaw creates or binds a thread to that session target in the active channel.
+    OpenClaw creates a new thread or topic and binds a persistent sub-agent session to it. The sub-agent answers in that new thread.
   </Step>
   <Step title="Route follow-ups">
-    Replies and follow-up messages in that thread route to the bound session.
+    Messages you send in the new thread go to the sub-agent. The conversation where you ran the command stays with your agent.
   </Step>
   <Step title="Inspect timeouts">
     Use `/session idle` to inspect/update inactivity expiry and
@@ -56,7 +82,8 @@ enablement, timeouts, and `spawnSessions`.
 ### Config switches
 
 - **Global default:** `session.threadBindings.enabled`, `session.threadBindings.idleHours`, `session.threadBindings.maxAgeHours`.
-- **Channel override and spawn auto-bind keys** are adapter-specific. See [Thread supporting channels](#thread-supporting-channels) above.
+- **Channel override:** `channels.<id>.threadBindings.*`. `threadBindings.spawnSessions` controls `/subagents spawn --thread` and `/acp spawn --thread`. See [Thread supporting channels](#thread-supporting-channels) above.
+- `threadBindings.defaultSpawnContext` sets the default context for sub-agents started with `/subagents spawn --thread` (`"fork"` by default). Agent-started spawns start with isolated context unless the spawn passes `context: "fork"`.
 
 See [Configuration reference](/gateway/configuration-reference) and
 [Slash commands](/tools/slash-commands) for current adapter details.

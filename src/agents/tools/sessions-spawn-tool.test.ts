@@ -47,7 +47,6 @@ vi.mock("../subagents/spawn/subagent-spawn.runtime.js", () => ({
 
 vi.mock("../subagents/spawn/subagent-spawn.js", () => ({
   SUBAGENT_SPAWN_CONTEXT_MODES: ["isolated", "fork"],
-  SUBAGENT_SPAWN_MODES: ["run", "session"],
   spawnSubagentDirect: (...args: unknown[]) => hoisted.spawnSubagentDirectMock(...args),
 }));
 
@@ -199,14 +198,7 @@ describe("sessions_spawn tool", () => {
     expect(target.enum).toEqual(["parent"]);
     expect(schema.required ?? []).not.toContain("completionTarget");
     expect(target).not.toHaveProperty("default");
-    for (const restriction of [
-      "ACP",
-      "collect",
-      "visible",
-      "thread",
-      "session mode",
-      "expectsCompletionMessage=false",
-    ]) {
+    for (const restriction of ["ACP", "collect", "visible", "expectsCompletionMessage=false"]) {
       expect(target.description).toContain(restriction);
     }
     await tool.execute("private-spawn", { task: "review privately", completionTarget: "parent" });
@@ -590,7 +582,7 @@ describe("sessions_spawn tool", () => {
       "only an omitted or blank mountPath",
     );
     expect(schema.properties?.group?.description).toContain("leave it ungrouped");
-    expect(schema.properties?.mode?.enum).toEqual(["run"]);
+    expect(schema.properties?.mode?.enum).toEqual(["run", "session"]);
     expect(schema.properties?.mode?.anyOf).toBeUndefined();
     expect(schema.properties?.worktree).toBeDefined();
   });
@@ -909,8 +901,10 @@ describe("sessions_spawn tool", () => {
 
       expect(result.details).toMatchObject({ status: "accepted", runId: `run-${runtime}` });
       expect(spawn).toHaveBeenCalledOnce();
-      const { runtime: _runtime, ...forwarded } = request;
+      // Agent-started spawns always run one-shot, so no backend receives the mode.
+      const { runtime: _runtime, mode: _mode, ...forwarded } = request;
       expect(spawn).toHaveBeenCalledWith(expect.objectContaining(forwarded), expect.any(Object));
+      expect(spawn.mock.calls[0]?.[0]).not.toHaveProperty("mode");
       expect(other).not.toHaveBeenCalled();
       expect(callGateway).not.toHaveBeenCalled();
       expect(hoisted.inProcessCreationMock).not.toHaveBeenCalled();
@@ -1645,17 +1639,14 @@ describe("sessions_spawn tool", () => {
     });
   });
 
-  it.each([false, true])("describes context policy with spawnSessions=%s", (threadAvailable) => {
+  it.each([{ acp: false }, { acp: true }])("never offers thread binding: acp=$acp", ({ acp }) => {
+    if (acp) {
+      registerAcpBackendForTest();
+    }
     const tool = createSessionsSpawnTool({
       agentChannel: "discord",
       agentAccountId: "default",
-      config: {
-        session: {
-          threadBindings: {
-            spawnSessions: threadAvailable,
-          },
-        },
-      },
+      config: { session: { threadBindings: { spawnSessions: true } } },
     });
     const schema = tool.parameters as {
       properties?: Record<
@@ -1664,31 +1655,18 @@ describe("sessions_spawn tool", () => {
       >;
     };
 
-    if (threadAvailable) {
-      expect(requireSchemaProperty(schema.properties, "thread").type).toBe("boolean");
-      expect(schema.properties?.mode?.enum).toEqual(["run", "session"]);
-      expect(tool.description).toContain("thread-bound");
-    } else {
-      expect(schema.properties?.thread).toBeUndefined();
-      expect(schema.properties?.mode?.enum).toEqual(["run"]);
-      expect(tool.description).not.toContain("thread-bound");
-      expect(tool.description).not.toContain("session-mode output stays in thread");
-    }
+    expect(tool.description).toContain("never bind or take over a chat");
+    expect(tool.description).toContain("/subagents spawn --thread <task>");
+    expect(tool.description).not.toContain("thread-bound");
+    expect(schema.properties?.thread).toBeUndefined();
+    expect(schema.properties?.mode?.enum).toEqual(["run", "session"]);
     const context = requireSchemaProperty(schema.properties, "context");
     expect(context.enum).toEqual(["isolated", "fork"]);
     for (const description of [tool.description, context.description]) {
       expect(description).toMatch(/isolated.{0,60}(?:clean|empty)|(?:clean|empty).{0,60}isolated/i);
       expect(description).toMatch(/fork[^.;]*same[- ](?:target )?agent/i);
-      expect(description).not.toMatch(
-        /visible fork requires same agent|else omit\/isolated|omit\/isolated clean/i,
-      );
-      if (threadAvailable) {
-        expect(description).toMatch(/omit[^.;]*(?:policy|threadBindings\.defaultSpawnContext)/i);
-        expect(description).toMatch(/fork[^.;]*default|default[^.;]*fork/i);
-      } else {
-        expect(description).toMatch(/omit[^.;]*isolated/i);
-        expect(description).not.toContain("defaultSpawnContext");
-      }
+      expect(description).toMatch(/omit[^.;]*isolated/i);
+      expect(description).not.toContain("defaultSpawnContext");
     }
     expect(tool.description).not.toContain("Spawn clean child");
   });
@@ -1726,9 +1704,13 @@ describe("sessions_spawn tool", () => {
     expect(spawnArgs.thinking).toBe("medium");
     expect(spawnArgs.cwd).toBe("/workspace/requester");
     expect(spawnArgs).not.toHaveProperty("runTimeoutSeconds");
-    expect(spawnArgs.thread).toBe(true);
+    // Subagents never bind a chat: legacy thread/session requests run unbound.
+    expect(spawnArgs).not.toHaveProperty("thread");
+    expect(spawnArgs).not.toHaveProperty("mode");
+    expect(result.details).toMatchObject({
+      note: expect.stringContaining("Thread binding is not available for agent-started spawns"),
+    });
     expect(spawnArgs.completionTarget).toBeUndefined();
-    expect(spawnArgs.mode).toBe("session");
     expect(spawnArgs.cleanup).toBe("keep");
     const spawnContext = mockCallArg(hoisted.spawnSubagentDirectMock, 0, 1, "spawnSubagentDirect");
     expect(spawnContext.agentSessionKey).toBe("agent:main:main");
@@ -2036,8 +2018,14 @@ describe("sessions_spawn tool", () => {
     expect(spawnArgs.agentId).toBe("codex");
     expect(spawnArgs.cwd).toBe("/workspace");
     expect(spawnArgs).not.toHaveProperty("runTimeoutSeconds");
-    expect(spawnArgs.thread).toBe(true);
-    expect(spawnArgs.mode).toBe("session");
+    // Agent-started ACP spawns never bind a chat: legacy thread/session requests run unbound.
+    expect(spawnArgs).not.toHaveProperty("thread");
+    expect(spawnArgs).not.toHaveProperty("mode");
+    expect(result.details).toMatchObject({
+      note: expect.stringContaining(
+        "Thread binding is not available for agent-started spawns; the child runs in the background. A user who wants a separate thread runs /subagents spawn --thread <task>.",
+      ),
+    });
     expect(spawnArgs.cleanup).toBe("keep");
     expect(spawnArgs.expectsCompletionMessage).toBe(true);
     expect(spawnArgs.streamTo).toBe("parent");
@@ -2275,39 +2263,6 @@ describe("sessions_spawn tool", () => {
     expect(spawnArgs.cleanup).toBe("keep");
     const spawnContext = mockCallArg(hoisted.spawnAcpDirectMock, 0, 1, "spawnAcpDirect");
     expect(spawnContext.agentSessionKey).toBe("agent:main:subagent:parent");
-    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
-  });
-
-  it("forwards completion policy for inline ACP session delivery", async () => {
-    registerAcpBackendForTest();
-    hoisted.spawnAcpDirectMock.mockResolvedValueOnce({
-      status: "accepted",
-      childSessionKey: "agent:codex:acp:1",
-      runId: "run-acp",
-      mode: "session",
-      inlineDelivery: true,
-    });
-    const tool = createSessionsSpawnTool({
-      agentSessionKey: "agent:main:main",
-      agentChannel: "discord",
-      agentAccountId: "default",
-      agentTo: "channel:parent-channel",
-      agentThreadId: "child-thread",
-    });
-
-    await tool.execute("call-inline-acp", {
-      runtime: "acp",
-      task: "investigate",
-      agentId: "codex",
-      thread: true,
-      mode: "session",
-    });
-
-    const spawnArgs = mockCallArg(hoisted.spawnAcpDirectMock, 0, 0, "spawnAcpDirect");
-    expect(spawnArgs.mode).toBe("session");
-    expect(spawnArgs.cleanup).toBe("keep");
-    expect(spawnArgs.expectsCompletionMessage).toBe(true);
-    // Inline-delivery suppression is decided after the ACP adapter binds its thread.
     expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
   });
 
