@@ -29,7 +29,11 @@ function gatewayPrewarmItems(
           import("./server-methods/lazy-core-handlers.js"),
         ]);
         if (!isCancelled()) {
-          await prepareGatewayRequestHandler(coreGatewayHandlers[method]);
+          const handler = coreGatewayHandlers[method];
+          if (!handler) {
+            throw new Error(`Gateway prewarm handler not found: ${method}`);
+          }
+          await prepareGatewayRequestHandler(handler);
         }
       },
     })),
