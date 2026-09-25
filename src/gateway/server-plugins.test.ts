@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createTerminalTool } from "../agents/tools/terminal-tool.js";
 // Gateway plugin tests cover plugin loading, auto-enable, runtime registry setup,
 // request-scope injection, diagnostics, and handler dispatch integration.
@@ -41,6 +42,7 @@ import { createInternalAgentTurnFacade } from "./agent-turn/internal-facade.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const loadOpenClawPlugins = vi.hoisted(() => vi.fn());
 const loadPluginLookUpTable = vi.hoisted(() =>
   vi.fn(() => ({
@@ -812,34 +814,39 @@ describe("loadGatewayPlugins", () => {
 
   test("injects the process HOME-isolation fact into registry construction", () => {
     loadOpenClawPlugins.mockReturnValue(createRegistry([]));
-    const home = os.userInfo().homedir;
-    const defaultStateDir = path.join(home, ".openclaw");
-    withEnv(
-      {
-        HOME: home,
-        USERPROFILE: home,
-        OPENCLAW_HOME: undefined,
-        OPENCLAW_PROFILE: undefined,
-        OPENCLAW_STATE_DIR: defaultStateDir,
-        OPENCLAW_CONFIG_PATH: path.join(defaultStateDir, "openclaw.json"),
-      },
-      () => loadGatewayPluginsForTest(),
-    );
-    expect(getLastPluginLoadOption("allowProcessHomeSessionCatalogs")).toBe(true);
+    const home = tempDirs.make("openclaw-plugin-home-");
+    const userInfo = vi.spyOn(os, "userInfo").mockReturnValue({ ...os.userInfo(), homedir: home });
+    try {
+      const defaultStateDir = path.join(home, ".openclaw");
+      withEnv(
+        {
+          HOME: home,
+          USERPROFILE: home,
+          OPENCLAW_HOME: undefined,
+          OPENCLAW_PROFILE: undefined,
+          OPENCLAW_STATE_DIR: defaultStateDir,
+          OPENCLAW_CONFIG_PATH: path.join(defaultStateDir, "openclaw.json"),
+        },
+        () => loadGatewayPluginsForTest(),
+      );
+      expect(getLastPluginLoadOption("allowProcessHomeSessionCatalogs")).toBe(true);
 
-    withEnv(
-      {
-        HOME: home,
-        USERPROFILE: home,
-        OPENCLAW_HOME: undefined,
-        OPENCLAW_PROFILE: "dev",
-        OPENCLAW_STATE_DIR: path.join(home, ".openclaw-dev"),
-        OPENCLAW_CONFIG_PATH: path.join(home, ".openclaw-dev", "openclaw.json"),
-      },
-      () => loadGatewayPluginsForTest(),
-    );
+      withEnv(
+        {
+          HOME: home,
+          USERPROFILE: home,
+          OPENCLAW_HOME: undefined,
+          OPENCLAW_PROFILE: "dev",
+          OPENCLAW_STATE_DIR: path.join(home, ".openclaw-dev"),
+          OPENCLAW_CONFIG_PATH: path.join(home, ".openclaw-dev", "openclaw.json"),
+        },
+        () => loadGatewayPluginsForTest(),
+      );
 
-    expect(getLastPluginLoadOption("allowProcessHomeSessionCatalogs")).toBe(false);
+      expect(getLastPluginLoadOption("allowProcessHomeSessionCatalogs")).toBe(false);
+    } finally {
+      userInfo.mockRestore();
+    }
   });
 
   test("routes plugin registration logs through the plugin logger", () => {
