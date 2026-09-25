@@ -54,12 +54,11 @@ export async function verifyDoctorLintOAuthStateIsolation(
       ]);
       const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
       try {
-        await expect(
-          runDoctorLintCli(runtime, {
-            json: true,
-            onlyIds: ["core/doctor/runtime-tool-schemas"],
-          }),
-        ).resolves.toBe(0);
+        const exitCode = await runDoctorLintCli(runtime, {
+          json: true,
+          onlyIds: ["core/doctor/runtime-tool-schemas"],
+        });
+        expect(exitCode, String(stdout.mock.calls.at(-1)?.[0])).toBe(0);
         const report = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
         expect(report).toMatchObject({
           ok: true,
