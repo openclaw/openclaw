@@ -17,13 +17,16 @@ import {
   syncFlowFromTaskResult,
 } from "./task-flow-registry.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
+import { retainCommittedTaskFlowEffects } from "./task-registry-flow-sync.js";
 import { publishTaskRecordAfterAtomicStore } from "./task-registry-publication.js";
 import { getTaskById } from "./task-registry-query.js";
-import { markTaskTerminalById, updateTaskNotifyPolicyById } from "./task-registry-record-api.js";
+import { markTaskTerminalById } from "./task-registry-record-api.js";
 import {
   ensureTaskRegistryReadyAsync,
+  invalidateTaskRegistryProjection,
   readTaskRegistryRevision,
   runTaskRegistryWorkerMutation,
+  taskFlowSyncOwner,
   tasks,
 } from "./task-registry-state.js";
 import { configureTaskRegistryRuntime } from "./task-registry.store.js";
@@ -112,6 +115,96 @@ async function drainRetry() {
   await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
 }
 
+it("retains flow follow-up when a refresh preserves an older row without the committed link", async () => {
+  const initial: TaskRecord = { ...task, task: "Before flow link", status: "running" };
+  delete initial.parentFlowId;
+  delete initial.endedAt;
+  delete initial.terminalOutcome;
+  delete initial.terminalSummary;
+  const { store, flows, context } = await fixture([initial]);
+  const older = { ...initial, task: "Older projection" };
+  const newer = { ...task, task: "Newer committed flow task" };
+  const olderRead = createDeferred();
+  const releaseOlder = createDeferred();
+  const failedPublication = vi.fn();
+  const failure = new Error("Synthetic committed link readback failure");
+  const first = runTaskRegistryWorkerMutation(
+    {
+      scope: { taskId: task.taskId },
+      admission: context.admission,
+      publicationRecords: () => new Map([[task.taskId, older]]),
+    },
+    async () => store.upsertTaskWithDeliveryState({ task: older }),
+    async () => {
+      const snapshot = store.loadSnapshot();
+      olderRead.resolve();
+      await releaseOlder.promise;
+      return snapshot;
+    },
+  );
+  let second: Promise<unknown> | undefined;
+  try {
+    await Promise.race([
+      olderRead.promise,
+      first.then(() => {
+        throw new Error("Older read completed before its publication barrier");
+      }),
+    ]);
+    second = runTaskRegistryWorkerMutation(
+      {
+        scope: { taskId: task.taskId },
+        admission: context.admission,
+        publicationRecords: () => new Map([[task.taskId, newer]]),
+        onPublicationError: failedPublication,
+      },
+      async () => store.upsertTaskWithDeliveryState({ task: newer }),
+      async () => {
+        throw failure;
+      },
+    );
+    const read = store.loadMutationSnapshotAsync.bind(store);
+    let held = false;
+    vi.spyOn(store, "loadMutationSnapshotAsync").mockImplementation(async (...args) => {
+      const snapshot = await read(...args);
+      if (!held && Array.isArray(args[1])) {
+        held = true;
+        expect(snapshot.tasks.get(task.taskId)?.parentFlowId).toBe(flow.flowId);
+        releaseOlder.resolve();
+        await Promise.all([first, second]);
+        expect(failedPublication).toHaveBeenCalledExactlyOnceWith(failure);
+        expect(tasks.get(task.taskId)?.parentFlowId).toBeUndefined();
+      }
+      return snapshot;
+    });
+    const afterSync = vi.fn(async () => {});
+    retainCommittedTaskFlowEffects(
+      context,
+      store,
+      newer,
+      "update",
+      taskFlowSyncOwner(task.taskId),
+      afterSync,
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+    await drainRetry();
+    expect(held).toBe(true);
+    expect(flows.loadSnapshot().flows.get(flow.flowId)?.status).toBe("running");
+    expect(afterSync).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(5_000);
+    await drainRetry();
+    expect(afterSync).toHaveBeenCalledOnce();
+    expect(flows.loadSnapshot().flows.get(flow.flowId)).toMatchObject({
+      status: "blocked",
+      blockedTaskId: task.taskId,
+      goal: newer.task,
+    });
+  } finally {
+    releaseOlder.resolve();
+    await Promise.allSettled([first, second]);
+    await drainRetry();
+  }
+});
+
 it("retains the existing next retry delay after settled storage contention", async () => {
   const { store, flows } = await fixture();
   vi.spyOn(flows, "upsertFlow").mockImplementationOnce(() => {
@@ -140,12 +233,9 @@ it("retains the existing next retry delay after settled storage contention", asy
 });
 
 it.each(["converging", "exhausted"] as const)(
-  "bounds %s projection churn within live retry attempts without losing pending publication",
+  "bounds %s broad projection invalidation within live retries without losing pending publication",
   async (outcome) => {
-    const unrelated: TaskRecord = { ...task, taskId: "live-unrelated" };
-    delete unrelated.parentFlowId;
-    unrelated.cleanupAfter = resolveTaskCleanupAfter(unrelated);
-    const { store, flows, context } = await fixture([task, unrelated]);
+    const { store, flows, context } = await fixture();
     vi.spyOn(flows, "upsertFlow").mockImplementationOnce(() => {
       throw new Error("Controlled initial flow refusal");
     });
@@ -182,10 +272,8 @@ it.each(["converging", "exhausted"] as const)(
       const snapshot = readRows();
       if (invalidations < (outcome === "converging" ? 3 : 5)) {
         invalidations += 1;
-        updateTaskNotifyPolicyById({
-          taskId: unrelated.taskId,
-          notifyPolicy: invalidations % 2 === 1 ? "state_changes" : "silent",
-        });
+        // Rollback-style broad invalidation requires a new read even when rows are unchanged.
+        invalidateTaskRegistryProjection();
       }
       return snapshot;
     });

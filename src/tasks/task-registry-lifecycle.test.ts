@@ -18,6 +18,7 @@ import { createTaskFlowForTask } from "./task-flow-registry.js";
 import { createManagedTaskFlow } from "./task-flow-registry.test-support.js";
 import { getTaskActivitySnapshot } from "./task-registry-activity.js";
 import { listTaskRecordPage } from "./task-registry-query.js";
+import { prepareTaskRegistryRead } from "./task-registry-read.js";
 import { linkTaskToFlowById } from "./task-registry-record-api.js";
 import {
   readTaskRegistryRevision,
@@ -181,6 +182,102 @@ describe("task registry agent events", () => {
       }
     });
   });
+
+  it.each(["concurrent read", "post-commit database retirement"] as const)(
+    "preserves committed terminal rows across %s",
+    async (change) => {
+      await withOpenClawTestState({ layout: "state-only" }, async () => {
+        const task = createTaskFixture("cli", {
+          runId: "terminal-publication-readback",
+          task: "Synthetic terminal publication",
+          notifyPolicy: "silent",
+          deliveryStatus: "not_applicable",
+        });
+        const context = captureOpenClawStateWorkerContext();
+        await reloadTaskRegistryFromStoreAsync(context);
+        const store = getTaskRegistryStore();
+        const load = store.loadMutationSnapshotAsync.bind(store);
+        const captured = createDeferred();
+        const release = createDeferred();
+        let held = false;
+        const readback = vi
+          .spyOn(store, "loadMutationSnapshotAsync")
+          .mockImplementation(async (...args) => {
+            const snapshot = await load(...args);
+            const scope = args[1];
+            if (!held && scope && "taskId" in scope && scope.taskId === task.taskId) {
+              held = true;
+              expect(snapshot.tasks.get(task.taskId)?.status).toBe("succeeded");
+              captured.resolve();
+              await release.promise;
+            }
+            return snapshot;
+          });
+        const published = vi.fn();
+        const stop = onTaskRegistryChange((event) => {
+          if (event?.kind === "upserted" && event.task.taskId === task.taskId) {
+            published(event);
+          }
+        });
+        const transition = transitionTaskRecordsByRunAsync({
+          kind: "state",
+          params: {
+            runId: task.runId!,
+            runtime: task.runtime,
+            status: "succeeded",
+            endedAt: Date.now(),
+            suppressDelivery: true,
+          },
+        });
+        const settled = Promise.allSettled([transition]);
+        let closing: Promise<boolean> | undefined;
+        try {
+          await Promise.race([
+            captured.promise,
+            settled.then((result) => {
+              throw new Error("Transition settled before readback capture", { cause: result });
+            }),
+          ]);
+          expect(tasks.get(task.taskId)?.status).toBe("running");
+          if (change === "concurrent read") {
+            const read = await prepareTaskRegistryRead();
+            expect(read?.getTaskById(task.taskId)?.status).toBe("succeeded");
+            expect(read?.isTaskSettled(task.taskId)).toBe(false);
+          } else {
+            closing = closeOpenClawStateDatabaseByPathAsync(context.admission.databasePath);
+            expect(() => context.admission.assertCurrent()).toThrow();
+          }
+          expect(published).not.toHaveBeenCalled();
+          release.resolve();
+          const [result] = await settled;
+          if (change === "concurrent read") {
+            expect(result).toMatchObject({
+              status: "fulfilled",
+              value: [{ taskId: task.taskId, status: "succeeded" }],
+            });
+            expect(published).toHaveBeenCalledExactlyOnceWith(
+              expect.objectContaining({
+                task: expect.objectContaining({ taskId: task.taskId, status: "succeeded" }),
+              }),
+            );
+          } else {
+            expect(result?.status).toBe("rejected");
+            await closing;
+            expect(published).not.toHaveBeenCalled();
+          }
+          expect(loadTaskRegistryStateFromSqliteReadOnly().tasks.get(task.taskId)?.status).toBe(
+            "succeeded",
+          );
+        } finally {
+          release.resolve();
+          await settled;
+          await closing;
+          stop();
+          readback.mockRestore();
+        }
+      });
+    },
+  );
 
   it("preserves accepted completion order and refuses revoked queued authority", async () => {
     await withOpenClawTestState({ layout: "state-only" }, async () => {

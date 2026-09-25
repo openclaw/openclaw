@@ -1,4 +1,5 @@
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -172,7 +173,7 @@ export async function listTaskRecordPage(params: {
   cfg?: OpenClawConfig;
   prepareFilter?: (
     tasks: readonly Readonly<TaskRecord>[],
-  ) => (task: Readonly<TaskRecord>) => boolean;
+  ) => ((task: Readonly<TaskRecord>) => boolean) | Promise<(task: Readonly<TaskRecord>) => boolean>;
   sortBy?: "updatedAt" | "endedAt";
 }): Promise<
   Result<
@@ -196,13 +197,10 @@ export async function listTaskRecordPage(params: {
   let workStartedAt = performance.now();
   for (let attempt = 0; attempt < TASK_PAGE_MAX_ATTEMPTS; attempt += 1) {
     if (attempt > 0) {
-      const preparationStartedAt = performance.now();
       read = await prepareRead();
       if (!read) {
         return err("registry_changed");
       }
-      // Exclude read preparation while retaining scan work spent before the retry.
-      workStartedAt += performance.now() - preparationStartedAt;
     }
     const revision = readTaskRegistryRevision();
     if (params.expectedRevision !== undefined && params.expectedRevision !== revision) {
@@ -218,8 +216,7 @@ export async function listTaskRecordPage(params: {
     const iterator = source?.keys() ?? [].values();
     let current = iterator.next();
     while (!current.done && scannedCount < scanLimit) {
-      // Cheap pages finish atomically even while other sessions are busy. Expensive
-      // scans share the event loop without charging time queued behind other work.
+      // Preparation and scan time share a budget; only yielding starts a fresh frame.
       if (scannedCount > 0 && performance.now() - workStartedAt >= TASK_PAGE_YIELD_INTERVAL_MS) {
         await yieldToEventLoop();
         workStartedAt = performance.now();
@@ -256,8 +253,25 @@ export async function listTaskRecordPage(params: {
           taskMatchesAgent(task, agentId, params.cfg) &&
           taskMatchesRelatedSession(task, sessionKey, params.sessionAgentId, params.cfg),
       );
-      // Prepared metadata belongs to this synchronous slice, never the next await.
-      const filter = params.prepareFilter?.(candidates);
+      const preparation = params.prepareFilter?.(candidates);
+      const asyncPreparation = isPromiseLike(preparation);
+      const filter = asyncPreparation ? await preparation : preparation;
+      // Cursorless stale attempts retain the existing discard-and-retry path and work budget.
+      if (params.expectedRevision !== undefined && revision !== readTaskRegistryRevision()) {
+        return err("cursor_stale");
+      }
+      if (revision === readTaskRegistryRevision()) {
+        read.assertCurrent();
+        const preparedRead = read;
+        if (
+          asyncPreparation &&
+          candidates.some(
+            (task) => tasks.get(task.taskId) !== task || !preparedRead.isTaskCurrent(task.taskId),
+          )
+        ) {
+          return err("registry_changed");
+        }
+      }
       for (const task of candidates) {
         if (filter && !filter(task)) {
           continue;

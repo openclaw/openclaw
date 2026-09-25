@@ -32,6 +32,14 @@ export type TaskRegistryReadIdentity =
       runId?: string;
     };
 
+export type TaskRegistryReadWitness = {
+  scopes: readonly TaskRegistryMutationScope[];
+  taskIds: ReadonlySet<string>;
+  writtenTaskIds: Set<string>;
+  completedScopes: Set<TaskRegistryMutationScope>;
+  replaced: boolean;
+};
+
 export type PendingTaskRegistryMutation = {
   scope: TaskRegistryMutationScope;
   readEventTarget?: () => TaskAgentEventTarget | undefined;
@@ -47,7 +55,7 @@ export type PendingTaskRegistryMutation = {
     ready: Set<string>;
     invalidated: Set<string>;
   };
-  readWitness?: { writtenTaskIds: Set<string>; replaced: boolean };
+  readWitness?: TaskRegistryReadWitness;
   recoveryWitness?: { writtenTaskIds: Set<string>; replaced: boolean };
 };
 
@@ -154,6 +162,7 @@ type TaskRegistryProcessState = {
     dirty: boolean;
     mutationDepth: number;
     pending: Set<PendingTaskRegistryMutation>;
+    readWitnesses: Set<TaskRegistryReadWitness>;
     readTail?: Promise<void>;
     mutationTail?: Promise<void>;
     dirtyScopes: Set<TaskRegistryMutationScope>;
@@ -186,6 +195,7 @@ export function getTaskRegistryProcessState(): TaskRegistryProcessState {
       dirty: false,
       mutationDepth: 0,
       pending: new Set(),
+      readWitnesses: new Set(),
       dirtyScopes: new Set(),
     },
   };
@@ -469,10 +479,16 @@ export function selectTaskRegistryScopes(scopes?: readonly TaskRegistryMutationS
 
 /** Restore transaction-local publication facts without replacing held witness objects. */
 export function captureTaskRegistryPublicationRollback(): () => void {
+  const reads = [...indexState.projection.readWitnesses].map((witness) => ({
+    witness,
+    writtenTaskIds: new Set(witness.writtenTaskIds),
+    completedScopes: new Set(witness.completedScopes),
+    replaced: witness.replaced,
+  }));
   const captured = [...indexState.projection.pending].map((pending) => ({
     pending,
     published: new Map(pending.published),
-    witnesses: [pending.readWitness, pending.recoveryWitness].flatMap((witness) =>
+    witnesses: [pending.recoveryWitness].flatMap((witness) =>
       witness
         ? [{ witness, writtenTaskIds: new Set(witness.writtenTaskIds), replaced: witness.replaced }]
         : [],
@@ -483,6 +499,17 @@ export function captureTaskRegistryPublicationRollback(): () => void {
     },
   }));
   return () => {
+    for (const { witness, writtenTaskIds, completedScopes, replaced } of reads) {
+      witness.writtenTaskIds.clear();
+      for (const taskId of writtenTaskIds) {
+        witness.writtenTaskIds.add(taskId);
+      }
+      witness.completedScopes.clear();
+      for (const scope of completedScopes) {
+        witness.completedScopes.add(scope);
+      }
+      witness.replaced = replaced;
+    }
     for (const { pending, published, witnesses, publication } of captured) {
       pending.published.clear();
       for (const [taskId, task] of published) {
@@ -505,12 +532,36 @@ export function captureTaskRegistryPublicationRollback(): () => void {
   };
 }
 
+/** Concurrent canonical reads fence held snapshots, including after a no-op install. */
+export function recordTaskRegistryReadCompletion(
+  scopes: readonly TaskRegistryMutationScope[],
+): void {
+  for (const witness of indexState.projection.readWitnesses) {
+    for (const scope of scopes) {
+      witness.completedScopes.add(scope);
+    }
+  }
+}
+
 /** A committed projection write supersedes held reads even when its value returns to the original. */
 export function recordTaskRegistryProjectionWrite(
   source: "task" | "snapshot" | "refresh" | "delivery" | ReadonlyMap<string, TaskRecord>,
   taskId?: string,
   deleted = false,
 ): void {
+  for (const witness of indexState.projection.readWitnesses) {
+    const current = taskId === undefined ? undefined : indexState.tasks.get(taskId);
+    if (taskId === undefined) {
+      witness.replaced = true;
+    } else if (
+      witness.taskIds.has(taskId) ||
+      witness.scopes.some(
+        (scope) => scope.taskId === taskId || (current && matchesScope(current, scope)),
+      )
+    ) {
+      witness.writtenTaskIds.add(taskId);
+    }
+  }
   // A writer's readback can refresh peers outside its committed receipt.
   const kind =
     typeof source === "string"
@@ -533,18 +584,6 @@ export function recordTaskRegistryProjectionWrite(
       }
     }
     const witness = pending.readWitness;
-    if (witness) {
-      const current = taskId === undefined ? undefined : indexState.tasks.get(taskId);
-      if (taskId === undefined) {
-        witness.replaced = true;
-      } else if (
-        taskId === pending.scope.taskId ||
-        pending.published.has(taskId) ||
-        (current && matchesScope(current, pending.scope))
-      ) {
-        witness.writtenTaskIds.add(taskId);
-      }
-    }
     if (!publication || kind === "delivery") {
       continue;
     }

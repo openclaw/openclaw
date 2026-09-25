@@ -938,6 +938,25 @@ unchanged task and delivery values. Identity-preserving admission still invalida
 worker snapshots; actual row changes, cold restore, and failed publication readback
 invalidate held pages. Committed write witnesses remain independent of value equality.
 
+Scoped task projection refreshes share mutation publication's snapshot merge and
+committed-write witnesses. Refreshes keep their independent reads, without joining
+later mutation publication. A refresh retains newer canonical rows when unrelated
+activity changes the projection epoch; broad refreshes still require an unchanged
+epoch. A refresh clears only captured scopes whose data it can certify, preserving
+unresolved orphaned writes and later publication obligations. Session pages retain their initial accepted
+work fence, current revision, selected-row identity, and final visibility checks.
+Schemas, retention, writer ordering, and update behavior are unchanged.
+
+Completed canonical reads also fence concurrently held snapshots when the installed
+values are unchanged. A snapshot that conflicts with an unread committed receipt
+cannot certify its scope or replace its pending publication. A pending lost-result
+recovery retains the same scope until its own readback establishes the committed row.
+Preparation reports readiness to internal mutation and flow
+owners only after orphaned dirty scopes are reconciled; pending publication owners
+retain their existing obligations.
+A failed publication receives a fresh dirty-scope token, so snapshots captured before
+that failure cannot clear the orphaned obligation, including when the row is unchanged.
+
 Task page request preparation also captures identity-changing mutations already
 admitted for its database and store before its first wait. It joins their persistence
 and publication settlement once; later mutations do not extend that wait. Failed

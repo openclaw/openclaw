@@ -467,9 +467,15 @@ export function invalidateTaskRegistryProjection(): void {
   bumpTaskRegistryRevision();
 }
 
-function markTaskRegistryProjectionRestored(): void {
-  projection.dirty = false;
-  dirtyScopes.clear();
+function markTaskRegistryProjectionRestored(scopes?: readonly TaskRegistryMutationScope[]): void {
+  if (scopes) {
+    for (const scope of scopes) {
+      dirtyScopes.delete(scope);
+    }
+  } else {
+    projection.dirty = false;
+    dirtyScopes.clear();
+  }
   for (const pending of pendingMutations) {
     dirtyScopes.add(pending.scope);
   }
@@ -708,6 +714,11 @@ export async function runTaskRegistryWorkerMutation<T>(
         dirtyScopes.delete(scope);
       }
     } catch (error) {
+      // Pre-failure snapshots cannot certify the new orphaned publication obligation.
+      if (![...pendingMutations].some((other) => other !== pending && other.scope === scope)) {
+        dirtyScopes.delete(scope);
+      }
+      dirtyScopes.add({ ...scope });
       // Failed readback cannot establish unchanged page order, even for a superseded publisher.
       bumpTaskRegistryRevision(false);
       // A newer committed row owns publication now. Keep the dirty scope for

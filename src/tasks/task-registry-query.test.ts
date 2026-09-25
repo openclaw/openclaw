@@ -14,7 +14,10 @@ import {
   deleteTaskRecordById,
   resetTaskRegistryForTests,
 } from "./task-registry-query.js";
-import { prepareTaskRegistryRead } from "./task-registry-read.js";
+import {
+  createTaskRegistryReadPreparation,
+  prepareTaskRegistryRead,
+} from "./task-registry-read.js";
 import { markTaskTerminalById, updateTaskNotifyPolicyById } from "./task-registry-record-api.js";
 import {
   invalidateTaskRegistryProjection,
@@ -399,11 +402,13 @@ describe("listTaskRecordPage", () => {
   });
 
   it.each([
-    { cost: "cheap", workPerSliceMs: 0 },
-    { cost: "expensive", workPerSliceMs: 20 },
+    { cost: "cheap", workPerSliceMs: 0, phase: "factory" },
+    { cost: "expensive", workPerSliceMs: 20, phase: "factory" },
+    { cost: "expensive preparation continuation", workPerSliceMs: 20, phase: "preparation" },
+    { cost: "expensive consuming predicate", workPerSliceMs: 20, phase: "predicate" },
   ])(
     "keeps $cost task scans responsive and consistent under continuing activity",
-    async ({ workPerSliceMs }) => {
+    async ({ workPerSliceMs, phase }) => {
       let workMs = 0;
       vi.spyOn(performance, "now").mockImplementation(() => workMs);
       configureTaskSnapshot(
@@ -438,6 +443,22 @@ describe("listTaskRecordPage", () => {
           offset: 0,
           limit: 25,
           prepareFilter: () => {
+            if (phase !== "factory") {
+              return Promise.resolve().then(() => {
+                // This models synchronous continuation work, with no external I/O wait.
+                if (phase === "preparation") {
+                  workMs += workPerSliceMs;
+                }
+                let prepared = false;
+                return () => {
+                  if (!prepared && phase === "predicate") {
+                    prepared = true;
+                    workMs += workPerSliceMs;
+                  }
+                  return true;
+                };
+              });
+            }
             workMs += workPerSliceMs;
             return () => true;
           },
@@ -459,6 +480,64 @@ describe("listTaskRecordPage", () => {
       }
     },
   );
+
+  it("retains scan work and preparation continuation work across a retry", async () => {
+    let workMs = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => workMs);
+    configureTaskSnapshot(
+      Array.from({ length: 65 }, (_, index): TaskRecord => ({
+        taskId: `retry-task-${index}`,
+        runtime: "cli",
+        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        task: "Retry preparation work",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+        createdAt: 1,
+      })),
+    );
+    const prepare = createTaskRegistryReadPreparation();
+    let preparations = 0;
+    let changed = false;
+    let retrySlices = 0;
+    let slicesAtYield: number | undefined;
+    let pending: ReturnType<typeof setImmediate> | undefined;
+    try {
+      const page = await readTaskPage({
+        offset: 0,
+        limit: 1,
+        prepareRead: async () => {
+          const read = await prepare();
+          preparations += 1;
+          if (preparations === 2) {
+            workMs += 6;
+            pending = setImmediate(() => {
+              slicesAtYield = retrySlices;
+            });
+          }
+          return read;
+        },
+        prepareFilter: () => {
+          if (!changed) {
+            changed = true;
+            workMs += 6;
+            markTaskTerminalById({ taskId: "retry-task-0", status: "succeeded", endedAt: 2 });
+          }
+          if (preparations === 2) {
+            retrySlices += 1;
+          }
+          return () => true;
+        },
+      });
+      expect(preparations).toBe(2);
+      expect(slicesAtYield).toBe(1);
+      expect(page.tasks[0]?.taskId).toBe("retry-task-0");
+    } finally {
+      clearImmediate(pending);
+    }
+  });
 
   it.each([
     { name: "stale cursor", continuation: true, mutate: true, failLater: false },
