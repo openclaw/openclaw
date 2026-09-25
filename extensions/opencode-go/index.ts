@@ -98,6 +98,7 @@ export default defineSingleProviderPluginEntry({
         if (!auth.discoveryApiKey) {
           return {
             provider: buildStaticOpencodeGoProviderConfig(auth.apiKey),
+            outcomes: [],
           };
         }
         return await runLiveProviderCatalog({

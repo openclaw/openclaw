@@ -27,8 +27,8 @@ export {
   describeModelStudioProviderDiscoveryContract,
   describeSglangProviderDiscoveryContract,
   describeVllmProviderDiscoveryContract,
-  type ProviderDiscoveryContractPluginLoader,
 } from "./test-helpers/provider-discovery-contract.js";
+export type { ProviderDiscoveryContractPluginLoader } from "./test-helpers/provider-discovery-contract.types.js";
 export {
   EXPECTED_FALLBACKS,
   createConfigWithFallbacks,
