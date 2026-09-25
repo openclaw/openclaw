@@ -42,7 +42,8 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
 - Once publication binds the Tooling SHA to an exact protected lightweight
   `release-publish/<12sha>-<provenance-run>` tag, that live tag-to-SHA mapping
   remains authoritative when `main` advances. The suffix records tag-creation
-  provenance; it is not the current parent run id.
+  provenance; it is not the current parent run id. The regular release helpers
+  mint or reuse that tag from `--workflow-sha <tooling-sha>`.
 - Touch `main` only for an operator-requested change or the smallest critical
   main-owned blocker that prevents this release and cannot be handled from the
   release branch. If the required main landing policy is blocked by unrelated
