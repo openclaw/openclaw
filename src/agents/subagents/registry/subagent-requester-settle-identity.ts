@@ -7,7 +7,12 @@ export function buildRequesterSettleWakeIdentity(params: {
   batchRunIds: readonly string[];
   rearmGeneration?: number;
   attemptIndex?: number;
-  parentOnly?: boolean;
+  /**
+   * Private turns reuse one key across attempts: a retry must not republish
+   * private input under a new identity. Deliverable turns suffix each retry so a
+   * cached terminal failure cannot replay in place of a new delivery attempt.
+   */
+  sharedAttemptKey?: boolean;
 }): { batchKey: string; runId: string } {
   const batchKey = [
     `requester-settle:${params.requesterAgentId ?? "unknown"}:${params.requesterSessionKey}:${params.batchRunIds.toSorted().join(",")}`,
@@ -19,7 +24,9 @@ export function buildRequesterSettleWakeIdentity(params: {
   return {
     batchKey,
     runId: buildAnnounceIdempotencyKey(
-      params.parentOnly || attemptIndex === 0 ? batchKey : `${batchKey}:retry-${attemptIndex}`,
+      params.sharedAttemptKey || attemptIndex === 0
+        ? batchKey
+        : `${batchKey}:retry-${attemptIndex}`,
     ),
   };
 }
@@ -44,16 +51,20 @@ export function isRequesterSettleWakeForRun(params: {
   ) {
     return false;
   }
-  const parentOnly = batchRunIds.some((runId) => {
-    const member = params.runsById.get(runId);
-    return (
-      member?.requesterSessionKey === requesterSessionKey &&
-      (!member.requesterAgentId || member.requesterAgentId === requesterAgentId) &&
-      member.requesterSettleWake !== undefined &&
-      member.requesterSettleWake.rearmGeneration === wake.rearmGeneration &&
-      member.completionTarget === "parent"
-    );
-  });
+  // Mirrors the frozen admission policy: a yielded private batch that was
+  // admitted as deliverable retries under fresh keys like any public batch.
+  const sharedAttemptKey =
+    wake.yieldedFinalDeliverable !== true &&
+    batchRunIds.some((runId) => {
+      const member = params.runsById.get(runId);
+      return (
+        member?.requesterSessionKey === requesterSessionKey &&
+        (!member.requesterAgentId || member.requesterAgentId === requesterAgentId) &&
+        member.requesterSettleWake !== undefined &&
+        member.requesterSettleWake.rearmGeneration === wake.rearmGeneration &&
+        member.completionTarget === "parent"
+      );
+    });
   // Pending backoff still belongs to the last admitted attempt, not its next retry.
   return (
     params.runId ===
@@ -63,7 +74,7 @@ export function isRequesterSettleWakeForRun(params: {
       batchRunIds,
       rearmGeneration: wake.rearmGeneration,
       attemptIndex: wake.attemptCount - 1,
-      parentOnly,
+      sharedAttemptKey,
     }).runId
   );
 }

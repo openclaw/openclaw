@@ -13,6 +13,8 @@ export function buildRequesterSettleWakeMessage(params: {
   findings?: string;
   requireVisibleReply: boolean;
   parentOnly?: boolean;
+  /** A yield handed the conversation back; private results stay input, the final is delivered. */
+  yieldedFinalDeliverable?: boolean;
   children: readonly Pick<SubagentRunRecord, "completion">[];
   preserveModelRouteNotice: boolean;
 }): string {
@@ -41,9 +43,11 @@ export function buildRequesterSettleWakeMessage(params: {
     ...(params.parentOnly ? [] : [`[Subagent Context] ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION}`]),
     params.parentOnly
       ? `[Subagent Context] ${SUBAGENT_PRIVATE_COMPLETION_INSTRUCTION}`
-      : params.requireVisibleReply
-        ? "[Subagent Context] Child completion delivery is internal; the original user request still requires your visible final answer only after the requested outcome is complete or genuinely blocked."
-        : `[Subagent Context] Reply ONLY: ${SILENT_REPLY_TOKEN} only if you already delivered the consolidated final answer for this batch.`,
+      : params.yieldedFinalDeliverable
+        ? `[Subagent Context] Child results are internal input. Your final reply is delivered to the original conversation; reply ONLY: ${SILENT_REPLY_TOKEN} when no user-facing update is owed or you already sent it.`
+        : params.requireVisibleReply
+          ? "[Subagent Context] Child completion delivery is internal; the original user request still requires your visible final answer only after the requested outcome is complete or genuinely blocked."
+          : `[Subagent Context] Reply ONLY: ${SILENT_REPLY_TOKEN} only if you already delivered the consolidated final answer for this batch.`,
     ...(modelRouteChange
       ? [
           modelRouteChange,

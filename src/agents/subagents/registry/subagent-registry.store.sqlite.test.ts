@@ -401,9 +401,15 @@ describe("subagent registry sqlite store", () => {
     });
   });
 
-  it.each(["pending", "in_progress", "delivered", "failed", "suspended"] as const)(
-    "preserves private %s handoffs across every current reader and restart",
-    async (status) => {
+  it.each([
+    ...(["pending", "in_progress", "delivered", "failed", "suspended"] as const).map((status) => ({
+      status,
+      yieldedFinalDeliverable: true as const,
+    })),
+    { status: "delivered" as const, yieldedFinalDeliverable: undefined },
+  ])(
+    "preserves private $status handoffs across readers and restart, deliverable=$yieldedFinalDeliverable",
+    async ({ status, yieldedFinalDeliverable }) => {
       await withTempStateEnv(async () => {
         const run = createRun({
           completionTarget: "parent",
@@ -415,6 +421,7 @@ describe("subagent registry sqlite store", () => {
             batchRunIds: ["run-one", "public-run"],
             requesterYieldBatch: true,
             rearmGeneration: 2,
+            ...(yieldedFinalDeliverable ? { yieldedFinalDeliverable } : {}),
           },
           completion: {
             required: true,
@@ -435,6 +442,7 @@ describe("subagent registry sqlite store", () => {
           new Map([run, publicRun].map((entry) => [entry.runId, entry])),
         );
         const original = loadSubagentRegistryFromSqlite().get(run.runId)!;
+        expect(original.requesterSettleWake).toEqual(run.requesterSettleWake);
         const stored = openOpenClawStateDatabase()
           .db.prepare("SELECT payload_json FROM subagent_runs WHERE run_id = ?")
           .get(run.runId) as { payload_json: string };

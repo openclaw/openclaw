@@ -49,6 +49,13 @@ start another child, or reply `NO_REPLY`. OpenClaw does not automatically send t
 child result, parent final, or generated media to a channel. The parent can still
 choose to send a message through its permitted tools.
 
+If the parent called `sessions_yield` while waiting for private children, the
+yield hands the conversation back to it. When those children settle, the parent
+resumes with its own final reply deliverable to the original conversation. Child
+results stay internal input, nothing is sent automatically on the child's behalf,
+and `NO_REPLY` still stays silent. The resumed turn stays bound to the parent
+session that spawned the children.
+
 This option supports hidden, native, one-shot runs only. It cannot be combined
 with ACP, `collect: true`, `visible: true`, `thread: true`, `mode: "session"`, or
 `expectsCompletionMessage: false`. It does not change the default completion mode.

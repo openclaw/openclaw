@@ -283,14 +283,22 @@ describe("requester settle dispatch deadline", () => {
     expect(completeBatch).not.toHaveBeenCalled();
   });
 
-  it.each(["completed", "cancelled"] as const)(
-    "retains an in-flight private wake past the failure retry limit until %s",
-    async (outcome) => {
+  it.each(
+    (["completed", "cancelled"] as const).flatMap((outcome) =>
+      [true, false].map((legacy) => ({ outcome, legacy })),
+    ),
+  )(
+    "retains an in-flight private wake until $outcome, legacy=$legacy",
+    async ({ outcome, legacy }) => {
       vi.useFakeTimers();
       vi.setSystemTime(10_000);
       const child = settledChild();
       child.completionTarget = "parent";
       child.completionRequesterSessionId = "requester-session";
+      if (legacy) {
+        // An already-admitted unmarked batch retains the private-input policy.
+        Object.assign(child.requesterSettleWake!, { status: "dispatching", attemptCount: 1 });
+      }
       registryRead.listSubagentRunsForRequester.mockReturnValue([child]);
       deliver
         .mockResolvedValueOnce({
@@ -331,7 +339,8 @@ describe("requester settle dispatch deadline", () => {
       }
       const requestIds = deliver.mock.calls.map(([request]) => request.directIdempotencyKey);
       expect(requestIds).toHaveLength(6);
-      expect(new Set(requestIds).size).toBe(1);
+      const retryId = `${requestIds[0]}${legacy ? "" : ":retry-1"}`;
+      expect(requestIds.slice(1)).toEqual(Array(5).fill(retryId));
       await vi.advanceTimersByTimeAsync(30_000);
       if (outcome === "cancelled") {
         child.suppressCompletionDelivery = true;
