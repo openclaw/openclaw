@@ -38,7 +38,10 @@ import {
 import { selectExistingTaskForCreate } from "../tasks/task-registry-create-rules.js";
 import { runTaskCreateOperation } from "../tasks/task-registry-create.operation.js";
 import { assertParentFlowRecordLinkAllowed } from "../tasks/task-registry-parent-flow-rules.js";
-import { findLatestTaskForFlowInSnapshot } from "../tasks/task-registry-records.js";
+import {
+  findLatestTaskForFlowInSnapshot,
+  normalizeTaskTimestamps,
+} from "../tasks/task-registry-records.js";
 import type {
   TaskMirroredFlowSyncOutcome,
   TaskRegistryRestoreResult,
@@ -136,7 +139,7 @@ export function createInMemoryTaskRegistryStore(
     async prepareRetentionSourceAsync(context, taskId) {
       context.admission.assertCurrent();
       const task = this.loadSnapshot().tasks.get(taskId);
-      return task ? captureTaskRetentionSource(task) : undefined;
+      return task ? captureTaskRetentionSource(normalizeTaskTimestamps(task)) : undefined;
     },
     settleAgentEventWrites(join) {
       join(performance.now() + 5_000);
@@ -217,7 +220,8 @@ export function createInMemoryTaskRegistryStore(
         ) => TaskInitialWorkerOperations[Key]["output"];
       } = {
         "tasks.applyRetention": (input) => {
-          const current = state.tasks.get(input.taskId);
+          const stored = state.tasks.get(input.taskId);
+          const current = stored && normalizeTaskTimestamps(stored);
           if (!current || captureTaskRetentionSource(current).version !== input.sourceVersion) {
             return { kind: "unchanged" };
           }
