@@ -534,15 +534,14 @@ describe("managed reload authored source", () => {
     const replacement = markPreparedModelRuntimeSnapshotsStale("plugin reload is preparing", {
       waitForReplacement: true,
     });
-    let verification: Promise<void> | undefined;
     // Independent teardown also releases the gate if the original self-wait times out the test.
     finishPendingModelReload = async () => {
       rejectPendingPreparedModelRuntimeReplacement(replacement, failure);
-      await verification?.catch(() => {});
+      await verification.catch(() => {});
       await closePreparedModelRuntimeSnapshots();
     };
 
-    verification = (async () => {
+    const verification = (async () => {
       await expect(run()).rejects.toBe(failure);
       expect(ownership.markRuntimeCommitted).not.toHaveBeenCalled();
       expectAuthoredSource(initial.source);
