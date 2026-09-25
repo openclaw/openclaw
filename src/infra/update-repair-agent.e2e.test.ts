@@ -539,15 +539,15 @@ describe("update repair with a local model provider", () => {
           );
         },
       ).catch((error: unknown) => {
-        console.error(
-          "[update-repair-test] diagnostics",
-          JSON.stringify({
+        // The E2E runner suppresses console output, including failed cases.
+        process.stderr.write(
+          `[update-repair-test] diagnostics ${JSON.stringify({
             phase,
             entry,
             events,
             droppedEvents,
             workerStderrTail: diagnostics.stderrTail,
-          }),
+          })}\n`,
         );
         throw error;
       });
