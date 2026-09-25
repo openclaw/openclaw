@@ -3,7 +3,7 @@ import Testing
 @testable import OpenClaw
 
 struct GatewayKeychainAccessTests {
-    @Test(arguments: [errSecUserCanceled, errSecAuthFailed, errSecInteractionNotAllowed, errSecInteractionRequired])
+    @Test(arguments: [errSecUserCanceled, errSecAuthFailed])
     func `denied access suppresses subsequent operations until explicit retry`(_ denial: OSStatus) {
         var access = GatewayKeychainAccess()
         var operations = 0
@@ -33,8 +33,11 @@ struct GatewayKeychainAccessTests {
         #expect(access.perform { errSecSuccess } == denial)
     }
 
-    @Test(arguments: [errSecSuccess, errSecItemNotFound, errSecNotAvailable, errSecDuplicateItem])
-    func `ordinary results do not block subsequent Keychain operations`(_ status: OSStatus) {
+    @Test(arguments: [
+        errSecSuccess, errSecItemNotFound, errSecNotAvailable, errSecDuplicateItem,
+        errSecInteractionNotAllowed, errSecInteractionRequired,
+    ])
+    func `non-denial results allow subsequent Keychain operations`(_ status: OSStatus) {
         var access = GatewayKeychainAccess()
         #expect(access.perform { status } == status)
         #expect(access.perform { errSecSuccess } == errSecSuccess)

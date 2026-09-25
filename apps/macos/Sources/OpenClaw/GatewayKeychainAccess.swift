@@ -12,9 +12,10 @@ struct GatewayKeychainAccess {
         if let deniedStatus { return deniedStatus }
         let status = operation()
         switch status {
-        case errSecUserCanceled, errSecAuthFailed, errSecInteractionNotAllowed, errSecInteractionRequired:
+        case errSecUserCanceled, errSecAuthFailed:
             self.deniedStatus = status
         default:
+            // Interaction can be temporarily unavailable without the user denying access.
             break
         }
         return status
