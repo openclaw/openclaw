@@ -127,7 +127,8 @@ deletion retire the binding; the Agents API retains the remote history and
 workspace, which can be managed through its API.
 
 When creating a session, OpenClaw reads only `AGENTS.md` from the configured
-agent workspace on the Gateway and includes its bounded bootstrap snapshot in
+agent workspace on the Gateway through shared instructions-only preparation
+and includes its bounded bootstrap snapshot in
 the agent instructions, alongside any extra system instructions. The execution
 workspace does not need a copy. Follow-up turns and resumed sessions retain the
 saved instructions without rereading the file or appending it to user input.
@@ -135,6 +136,13 @@ Missing or blank files add no workspace instructions. Use `/new` or `/reset`
 to pick up later edits or to adopt this behavior in an existing session.
 If bootstrap preparation fails, the attempt fails before creating a remote
 session so the next attempt can retry the capture.
+
+The MVP client has no per-turn developer instruction carrier or instruction
+refresh operation. Persona, personal-user overlays, other workspace context,
+and memory prompt guidance remain unimplemented in the Agents API adapter.
+They are not captured as permanent session instructions. Native fork
+preparation and Gateway-to-hosted-workspace path projection are also
+unimplemented; hosted files remain separate from the Gateway workspace.
 
 If the event stream closes, the harness subscribes again and reconciles saved
 turns, saved items, and input receipts before accepting completion. It does not

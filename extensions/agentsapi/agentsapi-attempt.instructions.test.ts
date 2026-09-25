@@ -6,27 +6,26 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { runAgentsApiAttempt } from "./agentsapi-attempt.js";
 import type { AgentsApiBinding } from "./agentsapi-bindings.js";
 
-const { fetchWithSsrFGuardMock, resolveBootstrapFilesForRunMock } = vi.hoisted(() => ({
+const { fetchWithSsrFGuardMock, prepareAgentWorkspaceContextMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock:
     vi.fn<typeof import("openclaw/plugin-sdk/ssrf-runtime").fetchWithSsrFGuard>(),
-  resolveBootstrapFilesForRunMock:
-    vi.fn<typeof import("openclaw/plugin-sdk/agent-harness-runtime").resolveBootstrapFilesForRun>(),
+  prepareAgentWorkspaceContextMock:
+    vi.fn<typeof import("openclaw/plugin-sdk/agent-harness-runtime" ).prepareAgentWorkspaceContext>(),
 }));
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
-// Keep bootstrap resolution and the SDK request real; unrelated turn projection
+// Keep workspace preparation and the SDK request real; unrelated turn projection
 // and Gateway tool execution have their own boundary tests.
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async () => {
   const bootstrap = await vi.importActual<
     typeof import("openclaw/plugin-sdk/agent-harness-runtime")
   >("openclaw/plugin-sdk/agent-harness-runtime");
-  resolveBootstrapFilesForRunMock.mockImplementation(bootstrap.resolveBootstrapFilesForRun);
+  prepareAgentWorkspaceContextMock.mockImplementation(bootstrap.prepareAgentWorkspaceContext);
   return {
-    buildBootstrapContextForFiles: bootstrap.buildBootstrapContextForFiles,
-    resolveBootstrapFilesForRun: resolveBootstrapFilesForRunMock,
+    prepareAgentWorkspaceContext: prepareAgentWorkspaceContextMock,
     embeddedAgentLog: { warn: vi.fn(), debug: vi.fn() },
     formatErrorMessage: String,
     setActiveEmbeddedRun: vi.fn(),
@@ -68,7 +67,7 @@ vi.mock("./agentsapi-session.js", () => ({
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => fetchWithSsrFGuardMock.mockReset());
-afterEach(() => resolveBootstrapFilesForRunMock.mockClear());
+afterEach(() => prepareAgentWorkspaceContextMock.mockClear());
 
 describe("Agents API agent workspace instructions", () => {
   it("sends Gateway-only AGENTS.md once, preserves it on resume, and refreshes it for a new session", async () => {
@@ -164,7 +163,7 @@ describe("Agents API agent workspace instructions", () => {
       "Retryable Gateway fixture rules.",
     );
     const failure = new Error("Workspace access changed while preparing bootstrap context");
-    resolveBootstrapFilesForRunMock.mockRejectedValueOnce(failure);
+    prepareAgentWorkspaceContextMock.mockRejectedValueOnce(failure);
     await expect(fixture.run()).rejects.toBe(failure);
     expect(fixture.requests).toEqual([]);
     await fixture.run();

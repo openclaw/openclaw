@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import path from "node:path";
 import type { AgentReasoningParam } from "openai/resources/beta/agents/agents";
 import {
   buildCurrentInboundPrompt,
@@ -17,12 +16,11 @@ import {
   awaitAgentEndSideEffects,
   buildAgentHookContextChannelFields,
   buildEmbeddedForegroundPromptContext,
-  buildBootstrapContextForFiles,
   clearActiveEmbeddedRun,
   embeddedAgentLog,
   formatErrorMessage,
   resolveAgentDir,
-  resolveBootstrapFilesForRun,
+  prepareAgentWorkspaceContext,
   runAgentEndSideEffects,
   runAgentHarnessLlmOutputHook,
   sanitizeToolArgs,
@@ -650,12 +648,10 @@ function resolveAgentsApiReasoningEffort(
 async function loadAgentsApiWorkspaceInstructions(
   params: AgentHarnessAttemptParamsV2,
 ): Promise<string | undefined> {
-  const workspaceDir = params.bootstrapWorkspaceDir ?? params.workspaceDir;
-  const instructionsPath = path.join(path.resolve(workspaceDir), "AGENTS.md");
-  const warn = (message: string) => embeddedAgentLog.warn(message);
   // Failed preparation must remain retryable instead of binding an empty snapshot.
-  const files = await resolveBootstrapFilesForRun({
-    workspaceDir,
+  const prepared = await prepareAgentWorkspaceContext({
+    scope: "instructions-only",
+    workspaceDir: params.bootstrapWorkspaceDir ?? params.workspaceDir,
     config: params.config,
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
@@ -663,18 +659,9 @@ async function loadAgentsApiWorkspaceInstructions(
     chatType: params.chatType,
     contextMode: params.bootstrapContextMode,
     runKind: params.bootstrapContextRunKind,
-    warn,
+    warn: (message) => embeddedAgentLog.warn(message),
   });
-  const contextFiles = buildBootstrapContextForFiles(
-    files.filter((file) => !file.missing && path.resolve(file.path) === instructionsPath),
-    { config: params.config, agentId: params.agentId, warn },
-  ).filter((file) => file.content.trim().length > 0);
-  if (contextFiles.length === 0) {
-    return undefined;
-  }
-  return [
-    "## OpenClaw Agent Workspace Instructions",
-    "OpenClaw loaded this bounded snapshot from the configured agent workspace.",
-    ...contextFiles.map((file) => `### ${file.path}\n\n${file.content}`),
-  ].join("\n\n");
+  // TODO: Deliver persona, other workspace context, and memory guidance when the
+  // client implements a per-turn developer instruction carrier.
+  return prepared.instructionSnapshot.instructions || undefined;
 }
