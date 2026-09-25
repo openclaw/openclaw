@@ -13,9 +13,8 @@ import { FAILOVER_REASONS } from "../../packages/gateway-protocol/src/failover-r
 import { resolveCronCompletionStatus } from "./completion-status.js";
 import { isCronTimeoutErrorText } from "./execution-error-constants.js";
 import { normalizeCronRunDiagnosticsCore } from "./run-diagnostics-normalize.js";
+import type { CronJsonValue as JsonValue, CronRunRecord } from "./store/run-history.types.js";
 
-type JsonValue = import("./store/run-history.types.js").CronJsonValue;
-type CronRunRecord = import("./store/run-history.types.js").CronRunRecord;
 type CronRunLogEntry = import("./run-log-types.js").CronRunLogEntry;
 type CronDeliveryStatus = import("./types.js").CronDeliveryStatus;
 type CronRunStatus = import("./types.js").CronRunStatus;
