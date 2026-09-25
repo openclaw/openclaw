@@ -85,6 +85,8 @@ const logNames = [
   "physical-candidate-doctor.log",
   "physical-candidate-repair.json",
   "legacy-operator-cron-history-proof.json",
+  "legacy-operator-post-update-cron-history.json",
+  "legacy-operator-candidate-cron-history.json",
   "dreaming-cron-proof.json",
   "legacy-operator-baseline-turn.out",
   "legacy-operator-baseline-turn.err",
@@ -1744,6 +1746,15 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
         snapshot.updateRestartMode === "manual" &&
         ["2026.9.3", "2026.9.4"].includes(snapshot.baseline.version)
           ? ["legacy-operator-cron-history-proof.json"]
+          : []),
+        ...(snapshot.scenario === "legacy-operator-state" &&
+        (snapshot.baseline.version === "2026.9.6" ||
+          (snapshot.updateRestartMode === "manual" &&
+            ["2026.9.3", "2026.9.4"].includes(snapshot.baseline.version)))
+          ? [
+              "legacy-operator-post-update-cron-history.json",
+              "legacy-operator-candidate-cron-history.json",
+            ]
           : []),
         ...(snapshot.scenario === "legacy-operator-state" &&
         snapshot.updateRestartMode === "manual" &&
