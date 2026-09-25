@@ -1657,6 +1657,29 @@ impl DesktopState {
                 return;
             }
         };
+        self.apply_pending_approvals(app, generation, pending);
+    }
+
+    #[cfg(target_os = "linux")]
+    fn poll_pending_approvals_via_gateway(&self, app: &AppHandle, generation: u64) {
+        let gateway = app.state::<gateway_ws::GatewayClient>();
+        let pending =
+            match tauri::async_runtime::block_on(pending_approvals::fetch_gateway(&gateway)) {
+                Ok(pending) => pending,
+                Err(error) => {
+                    eprintln!("Could not poll pending approvals: {error}");
+                    return;
+                }
+            };
+        self.apply_pending_approvals(app, generation, pending);
+    }
+
+    fn apply_pending_approvals(
+        &self,
+        app: &AppHandle,
+        generation: u64,
+        pending: Vec<pending_approvals::PendingApproval>,
+    ) {
         if !self.watchdog_is_current(generation) {
             return;
         }
@@ -1854,30 +1877,90 @@ impl DesktopState {
         })
     }
 
-    fn watch_local(&self, app: AppHandle, mut cli: OpenClawCli, generation: u64) {
+    fn watch_local(&self, app: AppHandle, cli: OpenClawCli, generation: u64) {
         let state = self.clone();
-        thread::spawn(move || loop {
-            thread::sleep(CONNECTED_WATCH_INTERVAL);
-            if !state.watchdog_is_current(generation) {
+        #[cfg(target_os = "linux")]
+        let gateway = app.state::<gateway_ws::GatewayClient>().inner().clone();
+        #[cfg(target_os = "linux")]
+        let watchdog_demand = {
+            if !self.watchdog_is_current(generation) {
                 return;
             }
-            let Ok(_operation) = state.inner.operation.try_lock() else {
+            let Some(demand) = gateway.begin_watchdog_demand(generation) else {
+                return;
+            };
+            gateway.activate(app.clone());
+            demand
+        };
+        thread::spawn(move || {
+            #[cfg(target_os = "linux")]
+            let _watchdog_demand = watchdog_demand;
+            state.watch_local_loop(
+                app,
+                cli,
+                generation,
+                #[cfg(target_os = "linux")]
+                gateway,
+            );
+        });
+    }
+
+    fn watch_local_loop(
+        &self,
+        app: AppHandle,
+        mut cli: OpenClawCli,
+        generation: u64,
+        #[cfg(target_os = "linux")] gateway_client: gateway_ws::GatewayClient,
+    ) {
+        #[cfg(target_os = "linux")]
+        let mut last_snapshot = match gateway::status(&cli) {
+            Ok(snapshot) => snapshot,
+            Err(error) => GatewaySnapshot::reconnecting(error),
+        };
+        loop {
+            thread::sleep(CONNECTED_WATCH_INTERVAL);
+            if !self.watchdog_is_current(generation) {
+                return;
+            }
+            let Ok(_operation) = self.inner.operation.try_lock() else {
                 continue;
             };
+            #[cfg(target_os = "linux")]
+            let native_connected = gateway_client.desktop_state().1;
+            #[cfg(target_os = "linux")]
+            let snapshot = if native_connected {
+                last_snapshot.clone().connected()
+            } else {
+                let snapshot = match gateway::status(&cli) {
+                    Ok(snapshot) => snapshot,
+                    Err(error) => GatewaySnapshot::reconnecting(error),
+                };
+                last_snapshot = snapshot.clone();
+                snapshot
+            };
+            #[cfg(not(target_os = "linux"))]
             let snapshot = match gateway::status(&cli) {
                 Ok(snapshot) => snapshot,
                 Err(error) => GatewaySnapshot::reconnecting(error),
             };
             if snapshot.reachable {
-                state.update_tray(&snapshot);
+                self.update_tray(&snapshot);
                 if let Err(error) =
-                    state.restore_healthy_local_dashboard(&app, &cli, snapshot, generation)
+                    self.restore_healthy_local_dashboard(&app, &cli, snapshot, generation)
                 {
                     eprintln!("Could not restore the local dashboard: {error}");
                 }
                 drop(_operation);
-                // Pairing polls ride connected watchdog ticks; the reconnect loop never runs them.
-                state.poll_pending_approvals(&app, &cli, generation);
+                #[cfg(target_os = "linux")]
+                if native_connected {
+                    // The watchdog owns the native connection while healthy, so polling stays
+                    // in-process; the CLI remains the recovery owner for a disconnected service.
+                    self.poll_pending_approvals_via_gateway(&app, generation);
+                } else {
+                    self.poll_pending_approvals(&app, &cli, generation);
+                }
+                #[cfg(not(target_os = "linux"))]
+                self.poll_pending_approvals(&app, &cli, generation);
                 continue;
             }
 
@@ -1890,27 +1973,27 @@ impl DesktopState {
             let mut displayed_phase = snapshot.phase;
             if !preserve_dashboard
                 && matches!(
-                    state.show_local(&app, local_mode(&snapshot), false, Some(generation)),
+                    self.show_local(&app, local_mode(&snapshot), false, Some(generation)),
                     Ok(false)
                 )
             {
                 return;
             }
-            state.update_tray(&snapshot);
+            self.update_tray(&snapshot);
             drop(_operation);
             loop {
-                if !state.watchdog_is_current(generation) {
+                if !self.watchdog_is_current(generation) {
                     return;
                 }
-                if let Ok(_operation) = state.inner.operation.try_lock() {
+                if let Ok(_operation) = self.inner.operation.try_lock() {
                     if !cli.is_available() {
-                        match state.resolve_cli() {
+                        match self.resolve_cli() {
                             Ok(discovered) => cli = discovered,
                             Err(error) => {
                                 if matches!(error, CliError::Missing) {
-                                    let _ = state.show_missing_cli(&app, false, Some(generation));
+                                    let _ = self.show_missing_cli(&app, false, Some(generation));
                                 } else {
-                                    state.show_cli_recovery_error(&app, generation, error);
+                                    self.show_cli_recovery_error(&app, generation, error);
                                 }
                                 return;
                             }
@@ -1920,16 +2003,18 @@ impl DesktopState {
                         Ok(snapshot) => snapshot,
                         Err(error) => GatewaySnapshot::reconnecting(error),
                     };
-                    state.update_tray(&snapshot);
+                    #[cfg(target_os = "linux")]
+                    last_snapshot.clone_from(&snapshot);
+                    self.update_tray(&snapshot);
                     if snapshot.reachable {
                         if let Ok(ready) = gateway::dashboard(&cli, snapshot) {
                             app.state::<gateway_ws::GatewayClient>()
                                 .configure(&app, ready.gateway_ws.clone());
                             if preserve_dashboard {
-                                state.update_tray(&ready.snapshot);
+                                self.update_tray(&ready.snapshot);
                                 break;
                             }
-                            match state.navigate_local(
+                            match self.navigate_local(
                                 &app,
                                 &ready.dashboard_url,
                                 false,
@@ -1938,7 +2023,7 @@ impl DesktopState {
                                 true,
                             ) {
                                 Ok(true) => {
-                                    state.update_tray(&ready.snapshot);
+                                    self.update_tray(&ready.snapshot);
                                     break;
                                 }
                                 Ok(false) => return,
@@ -1948,7 +2033,7 @@ impl DesktopState {
                     } else if !preserve_dashboard && snapshot.phase != displayed_phase {
                         displayed_phase = snapshot.phase;
                         if matches!(
-                            state.show_local(&app, local_mode(&snapshot), false, Some(generation),),
+                            self.show_local(&app, local_mode(&snapshot), false, Some(generation),),
                             Ok(false)
                         ) {
                             return;
@@ -1957,7 +2042,7 @@ impl DesktopState {
                 }
                 thread::sleep(RECONNECT_INTERVAL);
             }
-        });
+        }
     }
 }
 

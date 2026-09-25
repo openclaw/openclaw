@@ -1,5 +1,9 @@
 use crate::cli::OpenClawCli;
+#[cfg(target_os = "linux")]
+use crate::gateway_ws::{DesktopMethod, GatewayClient};
 use serde::Deserialize;
+#[cfg(target_os = "linux")]
+use serde_json::json;
 use std::collections::HashSet;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -64,6 +68,12 @@ struct NodePendingRequest {
 }
 
 #[derive(Deserialize)]
+struct NodePairingList {
+    #[serde(default)]
+    pending: Vec<NodePendingRequest>,
+}
+
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DevicePendingRequest {
     request_id: String,
@@ -86,6 +96,33 @@ pub fn fetch(cli: &OpenClawCli) -> Result<Vec<PendingApproval>, String> {
         .json::<DevicePairingList, _, _>(["devices", "list", "--json"])
         .map_err(|error| error.to_string())?;
 
+    Ok(combine(nodes, devices))
+}
+
+#[cfg(target_os = "linux")]
+pub async fn fetch_gateway(client: &GatewayClient) -> Result<Vec<PendingApproval>, String> {
+    let (generation, connected) = client.desktop_state();
+    if !connected {
+        return Err("Gateway connection is unavailable.".to_string());
+    }
+    let nodes = client
+        .desktop_request(generation, DesktopMethod::NodePairList, json!({}))
+        .await
+        .and_then(|value| {
+            serde_json::from_value::<NodePairingList>(value)
+                .map_err(|error| format!("Invalid node pairing response: {error}"))
+        })?;
+    let devices = client
+        .desktop_request(generation, DesktopMethod::DevicePairList, json!({}))
+        .await
+        .and_then(|value| {
+            serde_json::from_value::<DevicePairingList>(value)
+                .map_err(|error| format!("Invalid device pairing response: {error}"))
+        })?;
+    Ok(combine(nodes.pending, devices))
+}
+
+fn combine(nodes: Vec<NodePendingRequest>, devices: DevicePairingList) -> Vec<PendingApproval> {
     let mut pending = Vec::with_capacity(nodes.len() + devices.pending.len());
     pending.extend(nodes.into_iter().map(|request| PendingApproval {
         kind: ApprovalKind::Node,
@@ -101,7 +138,7 @@ pub fn fetch(cli: &OpenClawCli) -> Result<Vec<PendingApproval>, String> {
             Some(&request.device_id),
         ]),
     }));
-    Ok(pending)
+    pending
 }
 
 fn preferred_label<'a>(candidates: impl IntoIterator<Item = Option<&'a str>>) -> String {
@@ -116,7 +153,14 @@ fn preferred_label<'a>(candidates: impl IntoIterator<Item = Option<&'a str>>) ->
 
 #[cfg(test)]
 mod tests {
-    use super::{ApprovalKind, PendingApproval, PendingApprovalState};
+    use super::{
+        combine, ApprovalKind, DevicePairingList, NodePairingList, PendingApproval,
+        PendingApprovalState,
+    };
+    use serde_json::json;
+
+    #[cfg(target_os = "linux")]
+    use crate::gateway_ws::tests::RpcFixture;
 
     fn request(kind: ApprovalKind, id: &str, label: &str) -> PendingApproval {
         PendingApproval {
@@ -179,6 +223,78 @@ mod tests {
         assert_eq!(
             request(ApprovalKind::Device, "request-2", "Browser").notification_body(),
             "Device pairing request from Browser — open the dashboard to approve"
+        );
+    }
+
+    #[test]
+    fn gateway_pairing_lists_preserve_cli_notification_semantics() {
+        let nodes: NodePairingList = serde_json::from_value(json!({
+            "pending": [{
+                "requestId": "node-request",
+                "nodeId": "node-id",
+                "displayName": "Kitchen Node",
+                "ignored": true
+            }]
+        }))
+        .unwrap();
+        let devices: DevicePairingList = serde_json::from_value(json!({
+            "pending": [{
+                "requestId": "device-request",
+                "deviceId": "device-id",
+                "displayName": null,
+                "clientId": "browser"
+            }],
+            "paired": []
+        }))
+        .unwrap();
+
+        assert_eq!(
+            combine(nodes.pending, devices),
+            vec![
+                request(ApprovalKind::Node, "node-request", "Kitchen Node"),
+                request(ApprovalKind::Device, "device-request", "browser"),
+            ]
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn gateway_poll_uses_the_existing_pairing_connection() {
+        let mut fixture = RpcFixture::new().await;
+        let client = fixture.client.clone();
+        let polling = tokio::spawn(async move { super::fetch_gateway(&client).await });
+
+        fixture
+            .request("node.pair.list")
+            .await
+            .1
+            .send(Ok(json!({
+                "pending": [{
+                    "requestId": "node-request",
+                    "nodeId": "node-id",
+                    "displayName": "Kitchen Node"
+                }]
+            })))
+            .unwrap();
+        fixture
+            .request("device.pair.list")
+            .await
+            .1
+            .send(Ok(json!({
+                "pending": [{
+                    "requestId": "device-request",
+                    "deviceId": "device-id",
+                    "clientId": "browser"
+                }]
+            })))
+            .unwrap();
+
+        assert_eq!(
+            polling.await.unwrap().unwrap(),
+            vec![
+                request(ApprovalKind::Node, "node-request", "Kitchen Node"),
+                request(ApprovalKind::Device, "device-request", "browser"),
+            ]
         );
     }
 }

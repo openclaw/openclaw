@@ -260,6 +260,8 @@ pub(crate) enum DesktopMethod {
     Sessions,
     Send,
     Create,
+    NodePairList,
+    DevicePairList,
 }
 
 #[cfg(target_os = "linux")]
@@ -270,7 +272,27 @@ impl DesktopMethod {
             Self::Sessions => "sessions.list",
             Self::Send => "chat.send",
             Self::Create => "sessions.create",
+            Self::NodePairList => "node.pair.list",
+            Self::DevicePairList => "device.pair.list",
         }
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) struct WatchdogDemandLease {
+    client: GatewayClient,
+    generation: u64,
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for WatchdogDemandLease {
+    fn drop(&mut self) {
+        // A replaced watchdog owns the newer generation; a late exit must not park it.
+        let _ = self
+            .client
+            .inner
+            .watchdog_demand_generation
+            .compare_exchange(self.generation, 0, Ordering::SeqCst, Ordering::SeqCst);
     }
 }
 
@@ -406,6 +428,7 @@ struct GatewayClientInner {
     connection_state: AtomicU64,
     reconnect_paused: AtomicBool,
     sleep_cycle_depth: AtomicU64,
+    watchdog_demand_generation: AtomicU64,
     running: AtomicBool,
     desktop_demand: AtomicBool,
 }
@@ -458,6 +481,34 @@ impl GatewayClient {
     #[cfg(target_os = "linux")]
     pub(crate) fn set_desktop_demand(&self, active: bool) {
         self.inner.desktop_demand.store(active, Ordering::SeqCst);
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn begin_watchdog_demand(&self, generation: u64) -> Option<WatchdogDemandLease> {
+        let mut current = self.inner.watchdog_demand_generation.load(Ordering::SeqCst);
+        loop {
+            if current >= generation && current != 0 {
+                return None;
+            }
+            match self.inner.watchdog_demand_generation.compare_exchange_weak(
+                current,
+                generation,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => break,
+                Err(observed) => current = observed,
+            }
+        }
+        self.resume_reconnect();
+        Some(WatchdogDemandLease {
+            client: self.clone(),
+            generation,
+        })
+    }
+
+    fn has_watchdog_demand(&self) -> bool {
+        self.inner.watchdog_demand_generation.load(Ordering::SeqCst) != 0
     }
 
     #[cfg(target_os = "linux")]
@@ -893,7 +944,8 @@ impl GatewayClient {
         loop {
             if !driver_should_run(
                 app.get_window(QUICKCHAT_LABEL).is_some()
-                    || self.inner.desktop_demand.load(Ordering::SeqCst),
+                    || self.inner.desktop_demand.load(Ordering::SeqCst)
+                    || self.has_watchdog_demand(),
                 self.inner.sleep_cycle_depth.load(Ordering::SeqCst) > 0,
             ) {
                 self.inner.reconnect_paused.store(false, Ordering::SeqCst);
@@ -975,7 +1027,8 @@ impl GatewayClient {
             }
             if !driver_should_run(
                 app.get_window(QUICKCHAT_LABEL).is_some()
-                    || self.inner.desktop_demand.load(Ordering::SeqCst),
+                    || self.inner.desktop_demand.load(Ordering::SeqCst)
+                    || self.has_watchdog_demand(),
                 self.inner.sleep_cycle_depth.load(Ordering::SeqCst) > 0,
             ) {
                 continue;
@@ -1091,7 +1144,8 @@ impl GatewayClient {
             if self.inner.config_generation.load(Ordering::SeqCst) != generation
                 || !driver_should_run(
                     app.get_window(QUICKCHAT_LABEL).is_some()
-                        || self.inner.desktop_demand.load(Ordering::SeqCst),
+                        || self.inner.desktop_demand.load(Ordering::SeqCst)
+                        || self.has_watchdog_demand(),
                     self.inner.sleep_cycle_depth.load(Ordering::SeqCst) > 0,
                 )
             {
@@ -3140,6 +3194,40 @@ esac
         assert!(driver_should_run(false, sleep_active(&client)));
         client.end_sleep_cycle();
         assert!(!driver_should_run(false, sleep_active(&client)));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn replaced_watchdog_retains_the_newer_connection_demand() {
+        let client = GatewayClient::new();
+        let old = client.begin_watchdog_demand(1).unwrap();
+        let current = client.begin_watchdog_demand(2).unwrap();
+
+        drop(old);
+        assert!(client.has_watchdog_demand());
+        assert_eq!(
+            client
+                .inner
+                .watchdog_demand_generation
+                .load(Ordering::SeqCst),
+            2
+        );
+
+        drop(current);
+        assert!(!client.has_watchdog_demand());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn delayed_old_watchdog_cannot_replace_newer_connection_demand() {
+        let client = GatewayClient::new();
+        let current = client.begin_watchdog_demand(2).unwrap();
+
+        assert!(client.begin_watchdog_demand(1).is_none());
+        assert!(client.has_watchdog_demand());
+
+        drop(current);
+        assert!(!client.has_watchdog_demand());
     }
 
     #[test]
