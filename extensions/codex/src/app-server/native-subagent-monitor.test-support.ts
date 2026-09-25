@@ -80,37 +80,38 @@ type CodexNativeSubagentMonitorInstance = InstanceType<typeof CodexNativeSubagen
 
 /** Join real native persistence and recovery before asserting outcomes or releasing fixture stores. */
 export function captureNativeSubagentMonitorWork() {
-  const pending = new Set<Promise<void>>();
-  // oxlint-disable-next-line typescript/unbound-method -- Invoked below with .call(this, ...) to preserve the observed instance.
-  const deliverPending = CodexNativeSubagentCompletionDelivery.prototype.deliverPending;
-  const completion = vi
-    .spyOn(CodexNativeSubagentCompletionDelivery.prototype, "deliverPending")
-    .mockImplementation(function (this: CodexNativeSubagentCompletionDelivery, ...args) {
-      const work = deliverPending.call(this, ...args);
-      pending.add(work);
-      return work;
-    });
-  // oxlint-disable-next-line typescript/unbound-method -- Invoked below with .call(this, ...) to preserve the observed instance.
-  const reconcile = CodexNativeSubagentRecoveryCoordinator.prototype.reconcileTaskCandidate;
-  const recovery = vi
-    .spyOn(CodexNativeSubagentRecoveryCoordinator.prototype, "reconcileTaskCandidate")
-    .mockImplementation(function (this: CodexNativeSubagentRecoveryCoordinator, candidate, after) {
-      const work = reconcile.call(this, candidate, after);
-      pending.add(work);
-      return work;
-    });
+  const completion = vi.spyOn(CodexNativeSubagentCompletionDelivery.prototype, "deliverPending");
+  const recovery = vi.spyOn(
+    CodexNativeSubagentRecoveryCoordinator.prototype,
+    "reconcileTaskCandidate",
+  );
+  let completed = 0;
+  let reconciled = 0;
   return {
     async settle(): Promise<unknown[]> {
       const failures: unknown[] = [];
-      while (pending.size > 0) {
-        const work = [...pending];
-        pending.clear();
-        const results = await Promise.allSettled(work);
+      while (
+        completed < completion.mock.results.length ||
+        reconciled < recovery.mock.results.length
+      ) {
+        const work = [
+          ...completion.mock.results.slice(completed),
+          ...recovery.mock.results.slice(reconciled),
+        ];
+        completed = completion.mock.results.length;
+        reconciled = recovery.mock.results.length;
+        for (const result of work) {
+          if (result.type === "throw") {
+            failures.push(result.value);
+          }
+        }
+        const results = await Promise.allSettled(
+          work.filter((result) => result.type === "return").map((result) => result.value),
+        );
         failures.push(
           ...results.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
         );
       }
-      // Surface unexpected native work failures to the fixture.
       return failures;
     },
     [Symbol.dispose]() {
