@@ -48,7 +48,7 @@ export default defineSingleProviderPluginEntry({
         });
         return discoveryApiKey
           ? await runLiveProviderCatalog({ providerId: PROVIDER_ID, profileId, run })
-          : { ...(await run()), outcomes: [] };
+          : await run();
       },
       // Startup and unauthenticated catalog reads must not depend on live discovery.
       staticRun: async () => ({ provider: await buildHuggingfaceProvider() }),

@@ -1,9 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ModelProviderConfig } from "../config/types.models.js";
-import {
-  buildOpenAICompatibleLiveProviderCatalog,
-  buildOpenAICompatibleProviderFamilyCatalog,
-} from "./provider-catalog-live-runtime.js";
+import { buildOpenAICompatibleProviderFamilyCatalog } from "./provider-catalog-live-runtime.js";
 import type { ProviderCatalogContext } from "./provider-catalog-shared.js";
 
 describe("provider catalog live-runtime scope", () => {
@@ -55,55 +51,9 @@ describe("provider catalog live-runtime scope", () => {
     ]);
     expect(buildPrimary).not.toHaveBeenCalled();
     expect(buildPlan).toHaveBeenCalledOnce();
-    expect(result?.outcomes).toEqual([]);
 
     resolveProviderApiKey.mockClear();
     await expect(family.catalog.run({ ...context, providerIds: ["other"] })).resolves.toBeNull();
     expect(resolveProviderApiKey).not.toHaveBeenCalled();
   });
-
-  it.each(["skipped", "advisory-ready", "advisory-empty", "advisory-unavailable"] as const)(
-    "keeps %s rows outside authoritative discovery outcomes",
-    async (kind) => {
-      const provider: ModelProviderConfig = {
-        baseUrl: "https://custom.example/v1",
-        api: "openai-completions",
-        models: [
-          {
-            id: "known",
-            name: "Known",
-            reasoning: false,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 32768,
-            maxTokens: 4096,
-          },
-        ],
-      };
-      const fetchGuard = vi.fn(async () => ({
-        response: Response.json(
-          { data: kind === "advisory-ready" ? [{ id: "known" }] : [] },
-          { status: kind === "advisory-unavailable" ? 503 : 200 },
-        ),
-        finalUrl: `${provider.baseUrl}/models`,
-        release: async () => {},
-      }));
-      const result = await buildOpenAICompatibleLiveProviderCatalog({
-        providerId: `catalog-${kind}`,
-        providerConfig: provider,
-        fetchGuard,
-        modelDiscovery:
-          kind === "skipped"
-            ? {
-                endpointUrl: {
-                  url: "https://catalog.example/models",
-                  requireBaseUrl: "https://canonical.example/v1",
-                },
-              }
-            : undefined,
-      });
-      expect(result).toEqual({ provider, outcomes: [] });
-      expect(fetchGuard).toHaveBeenCalledTimes(kind === "skipped" ? 0 : 1);
-    },
-  );
 });

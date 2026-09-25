@@ -296,10 +296,7 @@ describe("opencode provider plugin", () => {
       providerIds: ["opencode"],
       resolveProviderApiKey,
     } as never);
-    expect(ownScope).toMatchObject({
-      provider: { apiKey: NON_ENV_SECRETREF_MARKER },
-      outcomes: [],
-    });
+    expect(ownScope).toMatchObject({ provider: { apiKey: NON_ENV_SECRETREF_MARKER } });
     expect(resolveProviderApiKey).toHaveBeenCalledOnce();
     expect(fetchMock).not.toHaveBeenCalled();
   });

@@ -220,7 +220,7 @@ export async function augmentModelCatalogWithAgentHarness(params: {
         listedRows = loaded;
       } else {
         listedRows = loaded.entries;
-        outcomes = copyProviderCatalogOutcomes(loaded) ?? [];
+        outcomes = copyProviderCatalogOutcomes(loaded);
         for (const outcome of outcomes) {
           outcome.provider = normalizeProvider(outcome.provider);
         }

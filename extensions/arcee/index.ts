@@ -35,7 +35,7 @@ async function resolveArceeCatalog(ctx: ProviderCatalogContext) {
   if (normalizeArceeOpenRouterBaseUrl(configuredBaseUrl)) {
     const openRouterKey = ctx.resolveProviderApiKey("openrouter").apiKey;
     return openRouterKey
-      ? { provider: { ...buildArceeOpenRouterProvider(), apiKey: openRouterKey }, outcomes: [] }
+      ? { provider: { ...buildArceeOpenRouterProvider(), apiKey: openRouterKey } }
       : null;
   }
   const directAuth = ctx.resolveProviderApiKey(PROVIDER_ID);
@@ -55,7 +55,7 @@ async function resolveArceeCatalog(ctx: ProviderCatalogContext) {
   }
   const openRouterKey = ctx.resolveProviderApiKey("openrouter").apiKey;
   if (openRouterKey) {
-    return { provider: { ...buildArceeOpenRouterProvider(), apiKey: openRouterKey }, outcomes: [] };
+    return { provider: { ...buildArceeOpenRouterProvider(), apiKey: openRouterKey } };
   }
 
   return null;
