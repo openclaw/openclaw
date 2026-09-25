@@ -20,6 +20,9 @@ function parseArgs(argv) {
     if (!key.startsWith("--")) {
       throw new Error(`unexpected argument: ${key}`);
     }
+    if (key === "--stable-soak-waiver" || key === "--lane-waiver") {
+      throw new Error(`${key} was removed; rerun stable/full validation without waivers.`);
+    }
     const value = argv[index + 1];
     if (!value || value.startsWith("-")) {
       throw new Error(`${key} requires a value.`);
@@ -153,8 +156,6 @@ function main() {
     fullReleaseValidationRunId: args["full-release-validation-run-id"],
     fullReleaseValidationRunAttempt: args["full-release-validation-run-attempt"],
     releasePublishRunId: args["release-publish-run-id"],
-    stableSoakWaiver: args["stable-soak-waiver"] ?? "",
-    laneWaiver: args["lane-waiver"] ?? "",
     rollbackDrillId: args["rollback-drill-id"],
     rollbackDrillDate: args["rollback-drill-date"],
     allowStaleRollbackDrill: args["allow-stale-rollback-drill"] === "true",

@@ -10,8 +10,6 @@ export type ReleasePublishPreflightOptions = {
   npmDistTag: string;
   pluginPublishScope: "selected" | "all-publishable";
   plugins?: string;
-  stableSoakWaiver?: string;
-  laneWaiver?: string;
   workflowRef: string;
   workflowSha?: string;
   releaseProfile?: string;
@@ -42,8 +40,6 @@ export function buildReleasePublishDispatchCommand(
     npm_dist_tag: options.npmDistTag,
     plugin_publish_scope: options.pluginPublishScope,
     plugins: options.plugins,
-    stable_soak_waiver: options.stableSoakWaiver,
-    lane_waiver: options.laneWaiver,
     release_profile: options.releaseProfile ?? "from-validation",
     publish_openclaw_npm: String(options.publishOpenclawNpm !== false),
     openclaw_npm_resume_run_id: resume,
@@ -92,8 +88,6 @@ export function parsePublishPreflightArgs(argv: string[]) {
     "npm-dist-tag",
     "plugin-publish-scope",
     "plugins",
-    "stable-soak-waiver",
-    "lane-waiver",
     "workflow-ref",
     "workflow-sha",
     "release-profile",
@@ -141,8 +135,6 @@ export function parsePublishPreflightArgs(argv: string[]) {
     npmDistTag: value("npm-dist-tag", "beta"),
     pluginPublishScope: scope,
     plugins: value("plugins"),
-    stableSoakWaiver: value("stable-soak-waiver"),
-    laneWaiver: value("lane-waiver"),
     workflowRef: value("workflow-ref"),
     workflowSha: value("workflow-sha") || undefined,
     releaseProfile: value("release-profile", "from-validation"),
