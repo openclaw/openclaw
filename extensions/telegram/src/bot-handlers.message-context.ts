@@ -19,10 +19,12 @@ import type {
   TelegramMessageContextOptions,
   TelegramPromptContextEntry,
 } from "./bot-message-context.types.js";
+import { resolveTelegramDmModelDefault } from "./bot-model-default.js";
 import {
   buildSenderName,
   getTelegramTextParts,
   resolveTelegramPrimaryMedia,
+  shouldUseTelegramDmThreadSession,
   type TelegramThreadSpec,
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
@@ -221,25 +223,38 @@ export function createTelegramMessageSessionRuntime({
       agentId: route.agentId,
     });
     const entry = loadSessionEntry({ storePath, sessionKey });
+    const defaultModel = resolveDefaultModelForAgent({
+      cfg: params.runtimeCfg,
+      agentId: route.agentId,
+    });
+    const useDmThreadSession = shouldUseTelegramDmThreadSession({
+      dmThreadId,
+      botHasTopicsEnabled: params.botHasTopicsEnabled,
+    });
     const storedOverride = resolveStoredModelOverride({
       sessionEntry: entry,
       loadSessionEntry: (parentSessionKey) =>
         loadSessionEntry({ storePath, sessionKey: parentSessionKey }),
       sessionKey,
-      defaultProvider: resolveDefaultModelForAgent({
-        cfg: params.runtimeCfg,
-        agentId: route.agentId,
-      }).provider,
+      parentSessionKey: entry?.parentSessionKey ?? (useDmThreadSession ? null : undefined),
+      defaultProvider: defaultModel.provider,
     });
-    if (storedOverride) {
+    if (storedOverride || useDmThreadSession) {
+      const selection =
+        storedOverride ??
+        resolveTelegramDmModelDefault({
+          cfg: params.runtimeCfg,
+          agentId: route.agentId,
+          chatId: params.chatId,
+          senderId: params.senderId,
+          defaultModel,
+        });
       return {
         agentId: route.agentId,
         sessionEntry: entry,
         sessionKey,
         storePath,
-        model: storedOverride.provider
-          ? `${storedOverride.provider}/${storedOverride.model}`
-          : storedOverride.model,
+        model: `${selection.provider ?? defaultModel.provider}/${selection.model}`,
       };
     }
     const provider = entry?.modelProvider?.trim();

@@ -74,11 +74,14 @@ export function resolveDirectStoredModelOverride(
 
 function resolveParentSessionKeyCandidate(params: {
   sessionKey?: string;
-  parentSessionKey?: string;
+  parentSessionKey?: string | null;
 }): string | null {
   const explicit = normalizeOptionalString(params.parentSessionKey);
   if (explicit && explicit !== params.sessionKey) {
     return explicit;
+  }
+  if (params.parentSessionKey === null) {
+    return null;
   }
   const derived = resolveSessionParentSessionKey(params.sessionKey);
   if (derived && derived !== params.sessionKey) {
@@ -93,7 +96,8 @@ export function resolveStoredModelOverride(params: {
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
-  parentSessionKey?: string;
+  /** Explicit parent key; null suppresses suffix-derived inheritance. */
+  parentSessionKey?: string | null;
   defaultProvider: string;
   allowPluginNormalization?: boolean;
 }): StoredModelOverride | null {
@@ -115,7 +119,7 @@ export function resolveStoredModelOverrideCore(
     sessionEntry?: SessionEntry;
     sessionStore?: Record<string, SessionEntry>;
     sessionKey?: string;
-    parentSessionKey?: string;
+    parentSessionKey?: string | null;
     defaultProvider: string;
     allowPluginNormalization?: boolean;
   } & ModelManifestNormalizationContext,

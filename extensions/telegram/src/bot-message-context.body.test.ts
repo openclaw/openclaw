@@ -217,6 +217,7 @@ describe("Telegram admitted model input", () => {
     expect(harness.replySpy.mock.calls.at(-1)?.[0].SessionKey).toBe(
       "agent:support:main:thread:42001:77",
     );
+    expect(harness.replySpy.mock.calls.at(-1)?.[0].ModelParentSessionKey).toBeNull();
   });
 
   it.each([

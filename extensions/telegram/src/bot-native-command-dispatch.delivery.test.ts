@@ -23,6 +23,7 @@ import {
 import {
   parseSqliteSessionFileMarker,
   upsertSessionEntry,
+  type SessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   appendSessionTranscriptMessageByIdentity,
@@ -175,7 +176,162 @@ describe("Telegram typed command delivery", () => {
 });
 
 describe("Telegram native argument menus", () => {
-  it("inherits a user-selected parent model for a DM-topic keyboard", async () => {
+  it.each<{
+    name: string;
+    topic: Partial<SessionEntry>;
+    channelModels?: Record<string, string>;
+    thinking: string;
+  }>([
+    {
+      name: "channel-mapped",
+      topic: {},
+      channelModels: { "42001": "openai/gpt-5.4" },
+      thinking: "medium",
+    },
+    {
+      name: "channel alias with historical metadata",
+      topic: { modelProvider: "anthropic", model: "claude-opus-4-7" },
+      channelModels: { "42001": "topic-model" },
+      thinking: "off",
+    },
+    {
+      name: "prefixed channel-mapped",
+      topic: {},
+      channelModels: { "telegram:42001": "topic-model" },
+      thinking: "off",
+    },
+    {
+      name: "prefixed mapping ahead of bare and wildcard mappings",
+      topic: {},
+      channelModels: {
+        "telegram:42001": "topic-model",
+        "42001": "openai/gpt-5.4",
+        "*": "openai/gpt-5.5",
+      },
+      thinking: "off",
+    },
+    { name: "fresh", topic: {}, thinking: "low" },
+    {
+      name: "previously used",
+      topic: { modelProvider: "anthropic", model: "claude-opus-4-7" },
+      thinking: "low",
+    },
+    {
+      name: "explicitly pinned",
+      channelModels: { "42001": "openai/gpt-5.4" },
+      topic: { providerOverride: "anthropic", modelOverride: "claude-opus-4-7" },
+      thinking: "high",
+    },
+    {
+      name: "explicitly parented",
+      channelModels: { "42001": "openai/gpt-5.4" },
+      topic: { parentSessionKey: "agent:main:main" },
+      thinking: "high",
+    },
+  ])(
+    "shows the effective model's thinking level for a $name DM topic",
+    async ({ topic, thinking, channelModels }) => {
+      const cfg = commandConfig({
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.5",
+            models: {
+              "openai/gpt-5.5": { params: { thinking: "low" } },
+              "openai/gpt-5.4": { params: { thinking: "medium" } },
+              "anthropic/claude-sonnet-4-6": {
+                alias: "topic-model",
+                params: { thinking: "off" },
+              },
+              "anthropic/claude-opus-4-7": { params: { thinking: "high" } },
+            },
+          },
+        },
+      });
+      if (channelModels) {
+        cfg.channels!.modelByChannel = { telegram: channelModels };
+      }
+      await upsertSessionEntry({
+        storePath: cfg.session!.store!,
+        sessionKey: "agent:main:main",
+        entry: {
+          sessionId: "menu-parent",
+          updatedAt: 1,
+          providerOverride: "anthropic",
+          modelOverride: "claude-opus-4-7",
+          modelOverrideSource: "user",
+        },
+      });
+      await upsertSessionEntry({
+        storePath: cfg.session!.store!,
+        sessionKey: "agent:main:main:thread:42001:77",
+        entry: { sessionId: "menu-topic", updatedAt: 2, ...topic },
+      });
+      await (
+        await createBot(true, true, cfg, true)
+      ).handleUpdate({
+        update_id: 3110,
+        message: { ...commandMessage("/think"), message_thread_id: 77 },
+      });
+      expect(sentMenu().text).toContain(
+        `Current thinking level: ${thinking}.\nChoose level for /think.`,
+      );
+      expect(sentMenu().reply_markup.inline_keyboard.flat().length).toBeGreaterThan(0);
+      expect(apiCalls).toHaveBeenCalledWith(
+        "sendMessage",
+        expect.objectContaining({ message_thread_id: 77 }),
+      );
+      expect(harness.replySpy).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { threadId: undefined, model: "gpt-5.5" },
+    { threadId: 77, model: "gpt-5.4" },
+  ])(
+    "uses the configured $model default instead of runtime metadata for the fast menu",
+    async ({ threadId, model }) => {
+      const cfg = commandConfig({
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.5",
+            models: {
+              [`openai/${model}`]: { params: { fastMode: "auto", fastAutoOnSeconds: 30 } },
+            },
+          },
+        },
+      });
+      if (threadId) {
+        cfg.channels!.modelByChannel = { telegram: { "42001": "openai/gpt-5.4" } };
+      }
+      await upsertSessionEntry({
+        storePath: cfg.session!.store!,
+        sessionKey: "agent:main:main",
+        entry: {
+          sessionId: "fast-parent",
+          updatedAt: 1,
+          modelProvider: "openai-codex",
+          model: "gpt-5.5",
+        },
+      });
+      await (
+        await createBot(true, true, cfg, Boolean(threadId))
+      ).handleUpdate({
+        update_id: 3111,
+        message: { ...commandMessage("/fast"), message_thread_id: threadId },
+      });
+      expect(sentMenu().text).toContain(
+        "Current fast mode: auto (30 sec) (default: model).\nOptions: on, off, auto (30 sec), default, status.",
+      );
+      expect(
+        sentMenu()
+          .reply_markup.inline_keyboard.flat()
+          .map((button) => button.text),
+      ).toContain("auto (30 sec)");
+      expect(harness.replySpy).not.toHaveBeenCalled();
+    },
+  );
+
+  it("honors an explicitly stored parent model for a DM-topic keyboard", async () => {
     const cfg = commandConfig({
       agents: {
         defaults: {
@@ -195,6 +351,11 @@ describe("Telegram native argument menus", () => {
         modelOverride: "reasoner",
         modelOverrideSource: "user",
       },
+    });
+    await upsertSessionEntry({
+      storePath: cfg.session!.store!,
+      sessionKey: "agent:main:main:thread:42001:77",
+      entry: { sessionId: "topic", updatedAt: 2, parentSessionKey: "agent:main:main" },
     });
     await (
       await createBot(true, true, cfg, true)

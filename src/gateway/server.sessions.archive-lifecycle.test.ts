@@ -318,6 +318,7 @@ test.for(["owner", "viewer"] as const)(
       });
       const persistence = createDeferredCore();
       const reclaimGate = createDeferredCore();
+      const reclaimEntered = createDeferredCore();
       let unsubscribe: (() => void) | undefined;
       let archive: Promise<LifecycleHandlerResponse> | undefined;
       let sharing: Promise<LifecycleHandlerResponse> | undefined;
@@ -336,6 +337,7 @@ test.for(["owner", "viewer"] as const)(
         const requestContext = await archiveLifecycleRequestContext(active.context);
         let placement = workerPlacement({ sessionId, sessionKey, state: "active" });
         const reclaim = vi.fn(async () => {
+          reclaimEntered.resolve();
           await reclaimGate.promise;
           placement = workerPlacement({ sessionId, sessionKey, state: "reclaimed" });
           return placement as Extract<WorkerSessionPlacementRecord, { state: "reclaimed" }>;
@@ -384,7 +386,8 @@ test.for(["owner", "viewer"] as const)(
           expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
           return;
         }
-        await vi.waitFor(() => expect(reclaim).toHaveBeenCalledOnce());
+        await waitForArchivePhase(reclaimEntered.promise, archive, signal);
+        expect(reclaim).toHaveBeenCalledOnce();
         expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
         reclaimGate.resolve();
         expect(await archive).toMatchObject({ ok: true });

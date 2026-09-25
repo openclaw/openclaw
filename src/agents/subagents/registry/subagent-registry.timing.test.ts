@@ -21,6 +21,7 @@ import {
   resetTaskRegistryForTests,
 } from "../../../tasks/task-runtime.test-helpers.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
+import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import {
   cleanupSubagentRegistryPersistenceTest,
   readSubagentSessionStore,
@@ -53,6 +54,7 @@ describe("subagent timing completion", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   let stateDir: string;
   let logFile: string;
+  let settleRootWork: ReturnType<typeof observeRootWork> | undefined;
 
   beforeEach(() => {
     setRuntimeConfigSnapshot({});
@@ -70,6 +72,9 @@ describe("subagent timing completion", () => {
   });
 
   afterEach(async () => {
+    await vi.dynamicImportSettled();
+    await settleRootWork?.();
+    settleRootWork = undefined;
     await cleanupSubagentRegistryPersistenceTest({
       stateDir,
       resetRegistry: () => resetSubagentRegistryForTests({ persist: false }),
@@ -132,6 +137,9 @@ describe("subagent timing completion", () => {
     }
     const endedAt = startedAt + 500;
     const terminal = { status: "ok", startedAt, endedAt, terminalReply };
+    // Capture completion after the blocked agent.wait has entered, before either terminal source.
+    const settleCompletion = observeRootWork();
+    settleRootWork = settleCompletion;
 
     // Deliver through the callbacks installed by the production event listener.
     const emitTerminal = () => {
@@ -148,6 +156,8 @@ describe("subagent timing completion", () => {
       }
     };
     const waitForCleanup = async () => {
+      await vi.dynamicImportSettled();
+      await settleCompletion(true);
       await settleSubagentRegistryPersistenceWork();
       expect(readRun()?.cleanupCompletedAt).toEqual(expect.any(Number));
     };
@@ -206,7 +216,7 @@ describe("subagent timing completion", () => {
       await waitForCleanup();
       if (mode === "sequential") {
         emitTerminal();
-        await settleSubagentRegistryPersistenceWork();
+        await waitForCleanup();
       }
     }
 

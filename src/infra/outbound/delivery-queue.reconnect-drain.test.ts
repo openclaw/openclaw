@@ -12,6 +12,7 @@ import { drainPendingDeliveries as drainPluginPendingDeliveries } from "../../pl
 import { buildConversationRef } from "../../routing/conversation-ref.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { racePromiseWithAbortSignal } from "../abort-signal.js";
 import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
 import {
@@ -349,7 +350,7 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
     expect(deliver).toHaveBeenCalledTimes(channels.length);
   });
 
-  it("bounds stop admission independently of queued backlog size", async () => {
+  it("bounds stop admission independently of queued backlog size", async ({ signal }) => {
     for (const index of Array.from({ length: 64 }, (_, position) => position)) {
       const id = await enqueueDelivery(
         {
@@ -383,7 +384,7 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
       shouldContinue: () => shouldContinue,
     });
     try {
-      await Promise.race([firstStarted, drain]);
+      await racePromiseWithAbortSignal(Promise.race([firstStarted, drain]), signal);
       expect(deliver).toHaveBeenCalledOnce();
     } finally {
       shouldContinue = false;
@@ -568,7 +569,7 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
     await first;
   });
 
-  it("does not re-deliver an entry already being recovered at startup", async () => {
+  it("does not re-deliver an entry already being recovered at startup", async ({ signal }) => {
     const log = createRecoveryLog();
     const startupLog = createRecoveryLog();
     const { promise: deliveryStarted, resolve: signalDeliveryStarted } = createDeferred();
@@ -592,7 +593,7 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
     });
 
     try {
-      await Promise.race([deliveryStarted, startupRecovery]);
+      await racePromiseWithAbortSignal(Promise.race([deliveryStarted, startupRecovery]), signal);
       expect(deliver).toHaveBeenCalledTimes(1);
 
       await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
@@ -657,7 +658,9 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
     }
   });
 
-  it("does not re-deliver a stale startup snapshot after reconnect already acked it", async () => {
+  it("does not re-deliver a stale startup snapshot after reconnect already acked it", async ({
+    signal,
+  }) => {
     const log = createRecoveryLog();
     const startupLog = createRecoveryLog();
     const { promise: blockerStarted, resolve: signalBlockerStarted } = createDeferred();
@@ -690,7 +693,7 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
     });
 
     try {
-      await Promise.race([blockerStarted, startupRecovery]);
+      await racePromiseWithAbortSignal(Promise.race([blockerStarted, startupRecovery]), signal);
       expect(deliver).toHaveBeenCalledWith(
         expect.objectContaining({ channel: "demo-channel-a", to: "+1000" }),
       );

@@ -28,6 +28,7 @@ import {
   loadTranscriptEvents,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import {
   beginSessionWorkAdmission,
   getActiveSessionLifecycleMutationCount,
@@ -80,7 +81,7 @@ for (const { name, fault, replaceParent } of [
     replaceParent: true,
   },
 ]) {
-  test(name, async () => {
+  test(name, async ({ signal }) => {
     const suffix = replaceParent ? "replacement" : fault ? "fault" : "success";
     const parentRunId = `parent-${suffix}`;
     const parentKey = `agent:main:sibling-abort-${suffix}`;
@@ -151,7 +152,7 @@ for (const { name, fault, replaceParent } of [
           ok: true,
           payload: { runId: parentRunId, status: "accepted" },
         });
-        const parent = await parentStarted.promise;
+        const parent = await racePromiseWithAbortSignal(parentStarted.promise, signal);
         expect(agentCommandMock).toHaveBeenCalledTimes(1);
 
         for (const runId of selected) {

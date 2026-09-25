@@ -392,7 +392,10 @@ export async function resolveReplyDirectives(params: {
       sessionStore,
       sessionKey,
       parentSessionKey:
-        targetSessionEntry?.parentSessionKey ?? ctx.ModelParentSessionKey ?? ctx.ParentSessionKey,
+        targetSessionEntry?.parentSessionKey ??
+        (ctx.ModelParentSessionKey !== undefined
+          ? ctx.ModelParentSessionKey
+          : ctx.ParentSessionKey),
       storePath,
       defaultProvider,
       defaultModel,

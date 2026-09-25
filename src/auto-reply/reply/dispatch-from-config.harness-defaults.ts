@@ -106,7 +106,7 @@ function resolveChannelModelCandidate(params: {
   ctx: FinalizedMsgContext;
   defaultProvider: string;
   entry?: SessionEntry;
-  parentSessionKey?: string;
+  parentSessionKey?: string | null;
 }): HarnessDefaultCandidate | undefined {
   if (!params.cfg.channels?.modelByChannel) {
     return undefined;
@@ -148,7 +148,7 @@ function resolveStoredModelCandidate(params: {
   cfg: OpenClawConfig;
   defaultProvider: string;
   entry?: SessionEntry;
-  parentSessionKey?: string;
+  parentSessionKey?: string | null;
   sessionAgentId: string;
   sessionKey?: string;
   sessionStore?: Record<string, SessionEntry>;
@@ -247,9 +247,11 @@ function resolveHarnessSourceVisibleRepliesDefault(params: {
       defaultProvider: defaultModelRef.provider,
     });
     const parentSessionKey =
-      params.entry?.parentSessionKey ??
-      params.ctx.ModelParentSessionKey ??
-      params.ctx.ParentSessionKey;
+      params.entry?.parentSessionKey !== undefined
+        ? params.entry.parentSessionKey
+        : params.ctx.ModelParentSessionKey !== undefined
+          ? params.ctx.ModelParentSessionKey
+          : params.ctx.ParentSessionKey;
     const channelModelCandidate = resolveChannelModelCandidate({
       aliasIndex,
       cfg: params.cfg,

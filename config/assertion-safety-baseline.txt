@@ -1111,7 +1111,6 @@ extensions/telegram/src/bot-handlers.message-context.ts	1
 extensions/telegram/src/bot-info-cache.ts	1
 extensions/telegram/src/bot-info.ts	1
 extensions/telegram/src/bot-message-context.body.ts	1
-extensions/telegram/src/bot-message-context.session.ts	2
 extensions/telegram/src/bot-message-context.ts	3
 extensions/telegram/src/bot-message-dispatch-draft.ts	5
 extensions/telegram/src/bot-message-dispatch-reply.ts	2

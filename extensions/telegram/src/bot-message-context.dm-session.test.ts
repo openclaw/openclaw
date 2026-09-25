@@ -26,6 +26,7 @@ import {
   getSessionEntry,
   normalizeSessionDeliveryState,
   upsertSessionEntry,
+  type SessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -34,6 +35,7 @@ import {
   chat,
   commandMessage,
   createBot,
+  from,
   groupChat,
   groupCommand,
   harness,
@@ -170,6 +172,132 @@ describe("Telegram recorded session destinations", () => {
       const delivery = getSessionEntry({ storePath, sessionKey: key })?.delivery;
       expect(delivery).toMatchObject({ kind: "external", context: { channel: "telegram", to } });
       expect(delivery?.kind === "external" ? delivery.context.threadId : null).toBe(savedThread);
+      if (!group && thread !== undefined) {
+        expect(harness.replySpy.mock.calls.at(-1)?.[0].ModelParentSessionKey).toBeNull();
+      }
+    },
+  );
+
+  it.each<{
+    name: string;
+    topic: Partial<SessionEntry>;
+    channelModels?: Record<string, string>;
+    provider: string;
+    model: string;
+  }>([
+    {
+      name: "channel-mapped",
+      topic: {},
+      channelModels: { "42001": "openai/gpt-5.4" },
+      provider: "openai",
+      model: "gpt-5.4",
+    },
+    {
+      name: "prefixed channel-mapped",
+      topic: {},
+      channelModels: { "telegram:42001": "topic-model" },
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+    },
+    {
+      name: "prefixed mapping ahead of bare and wildcard mappings",
+      topic: {},
+      channelModels: {
+        "telegram:42001": "topic-model",
+        "42001": "openai/gpt-5.4",
+        "*": "openai/gpt-5.5",
+      },
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+    },
+    {
+      name: "channel alias with historical metadata",
+      topic: { modelProvider: "anthropic", model: "claude-opus-4-7" },
+      channelModels: { "42001": "topic-model" },
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+    },
+    { name: "fresh", topic: {}, provider: "openai", model: "gpt-5.5" },
+    {
+      name: "previously used",
+      topic: { modelProvider: "anthropic", model: "claude-opus-4-7" },
+      provider: "openai",
+      model: "gpt-5.5",
+    },
+    {
+      name: "explicitly pinned",
+      channelModels: { "42001": "openai/gpt-5.4" },
+      topic: { providerOverride: "anthropic", modelOverride: "claude-opus-4-7" },
+      provider: "anthropic",
+      model: "claude-opus-4-7",
+    },
+    {
+      name: "explicitly parented",
+      channelModels: { "42001": "openai/gpt-5.4" },
+      topic: { parentSessionKey: "agent:main:main" },
+      provider: "anthropic",
+      model: "claude-opus-4-7",
+    },
+  ])(
+    "marks the effective model for a $name DM topic in the registered picker",
+    async ({ topic, channelModels, provider, model }) => {
+      cfg.agents = {
+        defaults: {
+          model: "openai/gpt-5.5",
+          models: { "anthropic/claude-sonnet-4-6": { alias: "topic-model" } },
+        },
+      };
+      if (channelModels) {
+        cfg.channels!.modelByChannel = { telegram: channelModels };
+      }
+      await upsertSessionEntry({
+        storePath,
+        sessionKey: "agent:main:main",
+        entry: {
+          sessionId: "picker-parent",
+          updatedAt: 1,
+          providerOverride: "anthropic",
+          modelOverride: "claude-opus-4-7",
+          modelOverrideSource: "user",
+        },
+      });
+      await upsertSessionEntry({
+        storePath,
+        sessionKey: "agent:main:main:thread:42001:77",
+        entry: { sessionId: "picker-topic", updatedAt: 2, ...topic },
+      });
+      vi.mocked(harness.telegramBotDepsForTest.buildModelsProviderData).mockResolvedValue({
+        byProvider: new Map([
+          ["openai", new Set(["gpt-5.4", "gpt-5.5"])],
+          ["anthropic", new Set(["claude-sonnet-4-6", "claude-opus-4-7"])],
+        ]),
+        providers: ["openai", "anthropic"],
+        resolvedDefault: { provider: "openai", model: "gpt-5.5" },
+        modelNames: new Map(),
+        modelCatalog: [],
+      });
+      const bot = createBot(false, true, cfg, true);
+      await bot.handleUpdate({
+        update_id: ++updateId,
+        callback_query: {
+          id: "dm-topic-models",
+          chat_instance: "dm-topic-picker",
+          from,
+          data: `mdl_list_${provider}_1`,
+          message: { message_id: 300, date: 1736380800, chat, message_thread_id: 77 },
+        },
+      });
+      expect(apiCalls).toHaveBeenCalledWith(
+        "editMessageText",
+        expect.objectContaining({
+          reply_markup: {
+            inline_keyboard: expect.arrayContaining([
+              [{ text: `${model} ✓`, callback_data: `mdl_sel_${provider}/${model}` }],
+            ]),
+          },
+        }),
+      );
+      expect(harness.replySpy).not.toHaveBeenCalled();
     },
   );
 

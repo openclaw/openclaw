@@ -98,7 +98,7 @@ export type RouteFacts = {
   dispatchSessionKey?: string;
   persistedSessionKey?: string;
   parentSessionKey?: string;
-  modelParentSessionKey?: string;
+  modelParentSessionKey?: string | null;
   mainSessionKey?: string;
   createIfMissing?: boolean;
 };
