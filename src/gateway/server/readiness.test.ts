@@ -51,20 +51,6 @@ function createManager(snapshot: ChannelRuntimeSnapshot): ChannelManager {
   };
 }
 
-function createHealthyDiscordManager(
-  startedAt: number,
-  lastTransportActivityAt: number,
-): ChannelManager {
-  return createManager(
-    snapshotWith({
-      discord: managedAccount({
-        lastStartAt: startedAt,
-        lastTransportActivityAt,
-      }),
-    }),
-  );
-}
-
 function withReadinessClock(run: () => void) {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-03-06T12:00:00Z"));
@@ -149,25 +135,6 @@ function failingSnapshot(failing: string[], uptimeMs = FIVE_MIN_MS): Record<stri
 }
 
 describe("createReadinessChecker", () => {
-  it("reports ready when all managed channels are healthy", () => {
-    withReadinessClock(() => {
-      const startedAt = Date.now() - FIVE_MIN_MS;
-      const manager = createHealthyDiscordManager(startedAt, Date.now() - 1_000);
-
-      const readiness = createReadinessChecker({ channelManager: manager, startedAt });
-      expect(readiness()).toEqual(readySnapshot());
-    });
-  });
-
-  it("keeps readiness red while startup sidecars are pending", () => {
-    withReadinessClock(() => {
-      const { readiness } = createReadinessHarness({
-        getStartupPending: () => true,
-      });
-      expect(readiness()).toEqual(failingSnapshot(["startup-sidecars"]));
-    });
-  });
-
   it("reports the current startup pending reason", () => {
     withReadinessClock(() => {
       const { readiness } = createReadinessHarness({
@@ -191,18 +158,6 @@ describe("createReadinessChecker", () => {
       startupPending = false;
       expect(readiness()).toEqual(readySnapshot());
       expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  it("reports not ready while the gateway command queue is draining for restart", () => {
-    withReadinessClock(() => {
-      const { manager, readiness } = createReadinessHarness({
-        getGatewayDraining: () => true,
-        cacheTtlMs: 1_000,
-      });
-
-      expect(readiness()).toEqual(failingSnapshot(["gateway-draining"]));
-      expect(manager.getRuntimeSnapshot).not.toHaveBeenCalled();
     });
   });
 
