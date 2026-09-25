@@ -220,7 +220,7 @@ it.each([true, false])(
       expect(cache.retirement).toBeUndefined();
       owner.beginClose();
       let joined = false;
-      const shutdown = owner.waitForRetirement().then((result) => {
+      const shutdown = owner.close().then((result) => {
         joined = true;
         return result;
       });
@@ -237,6 +237,47 @@ it.each([true, false])(
     }
   },
 );
+
+it("settles publication after admission closes before final close releases retained consumers", async () => {
+  const cache = getPluginCache();
+  const instance = new PluginInstance("retained-publication");
+  const dispose = vi.fn();
+  instance.lifecycle.onDispose(dispose);
+  cache.setupModules.set("retained-publication", instance);
+  const release = retainPluginCache(cache);
+  const owner = retainGatewayPluginMetadata();
+  owner.publish(owner.runBootstrap(() => createPluginMetadataSnapshotFixture()));
+  owner.publish(withPluginCache(createPluginCache(), () => createPluginMetadataSnapshotFixture()));
+  owner.beginClose();
+  let published = false;
+  const publication = owner.waitForRetirement().then(() => {
+    published = true;
+  });
+  let closing: Promise<unknown> | undefined;
+  try {
+    await expect.poll(() => published).toBe(true);
+    expect(dispose).not.toHaveBeenCalled();
+    const finalEntered = createDeferredCore();
+    let closed = false;
+    closing = owner
+      .close(async (retire) => {
+        finalEntered.resolve();
+        await retire();
+      })
+      .then(() => {
+        closed = true;
+      });
+    await finalEntered.promise;
+    expect(closed).toBe(false);
+    expect(dispose).not.toHaveBeenCalled();
+    release();
+    await closing;
+    expect(dispose).toHaveBeenCalledOnce();
+  } finally {
+    release();
+    await Promise.allSettled([publication, closing ?? owner.close()]);
+  }
+});
 
 it("fences admission before retirement while an admitted sibling stays usable", async () => {
   const cache = getPluginCache();
