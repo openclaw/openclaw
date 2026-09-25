@@ -357,40 +357,55 @@ impl AppView {
     }
 
     fn draft_agent_menu(&self, cx: &mut Context<Self>) -> AnyElement {
-        let query = self.new_session.search.read(cx).value().to_lowercase();
+        let p = Palette::get(cx);
         panel("draft-agents-menu", 320., cx)
-            .child(title("AGENTS", cx))
+            .gap_0()
             .child(
-                Input::new(&self.new_session.search)
+                div()
+                    .px(px(8.))
+                    .py(px(4.))
+                    .text_size(px(11.))
+                    .line_height(px(16.))
+                    .text_color(p.muted)
+                    .child("AGENTS"),
+            )
+            .children(self.sidebar_state.agents.iter().map(|agent| {
+                let id = agent.id.clone();
+                let selected = self.new_session.draft.agent_id == id;
+                Button::new(SharedString::from(format!("draft-agent-{id}")))
+                    .ghost()
                     .small()
-                    .appearance(false)
-                    .aria_label("Search agents"),
-            )
-            .children(
-                self.sidebar_state
-                    .agents
-                    .iter()
-                    .filter(|a| {
-                        format!("{} {}", a.name(), a.id)
-                            .to_lowercase()
-                            .contains(&query)
-                    })
-                    .map(|agent| {
-                        let id = agent.id.clone();
-                        row(
-                            format!("draft-agent-{id}"),
-                            agent.name().to_owned(),
-                            self.new_session.draft.agent_id == id,
-                            cx,
-                        )
-                        .child(self.render_agent_avatar(agent, 24., cx))
-                        .on_click(cx.listener(
-                            move |this, _, window, cx| {
-                                this.choose_draft_agent(id.clone(), window, cx)
-                            },
-                        ))
-                    }),
-            )
+                    .w_full()
+                    .h(px(36.))
+                    .px(px(8.))
+                    .accessibility_label(agent.name().to_owned())
+                    .when(selected, |el| el.bg(p.hover))
+                    .child(
+                        div()
+                            .h_flex()
+                            .w_full()
+                            .items_center()
+                            .gap(px(10.))
+                            .child(self.render_agent_avatar(agent, 20., cx))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .text_left()
+                                    .text_size(px(13.))
+                                    .child(agent.name().to_owned()),
+                            )
+                            .child(div().w(px(16.)).when(selected, |el| {
+                                el.child(
+                                    Icon::new(IconName::Check)
+                                        .size(px(14.))
+                                        .text_color(p.accent),
+                                )
+                            })),
+                    )
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.choose_draft_agent(id.clone(), window, cx)
+                    }))
+            }))
             .into_any_element()
     }
 

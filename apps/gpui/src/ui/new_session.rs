@@ -74,6 +74,7 @@ struct RetainedDraft {
     completed_key: Option<String>,
     error: Option<String>,
     initialized: bool,
+    group_unresolved: bool,
 }
 
 impl NewSessionUi {
@@ -186,6 +187,7 @@ impl NewSessionUi {
                     completed_key: self.completed_key.take(),
                     error: self.error.take(),
                     initialized: self.initialized,
+                    group_unresolved: self.group_pending || self.group_failed,
                 },
             );
         }
@@ -199,7 +201,7 @@ impl NewSessionUi {
         self.initialized = saved.initialized;
         self.pending_open = None;
         self.group_pending = false;
-        self.group_failed = false;
+        self.group_failed = saved.group_unresolved;
         self.environments = Default::default();
         self.projects.clear();
         self.groups.clear();
