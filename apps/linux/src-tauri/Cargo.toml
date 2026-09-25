@@ -43,7 +43,8 @@ tauri-plugin-process = "2.3.1"
 tauri-plugin-single-instance = { version = "2.4.4", features = ["deep-link"] }
 # Defer Windows cleanup until the installer launches successfully.
 # Return to crates.io once an eligible release includes this fix.
-tauri-plugin-updater = { version = "=2.11.0", git = "https://github.com/steipete/plugins-workspace.git", rev = "63e8185eb184cf0af6b665f631e2314c7b14d9c6" }
+# Preserve 2.10.1's network features instead of enabling OS proxy discovery.
+tauri-plugin-updater = { version = "=2.11.0", git = "https://github.com/steipete/plugins-workspace.git", rev = "63e8185eb184cf0af6b665f631e2314c7b14d9c6", default-features = false, features = ["rustls-tls", "zip"] }
 tauri-plugin-window-state = "2.4.1"
 tauri-utils = { version = "2.9.3", features = ["config-json5"] }
 tokio = { version = "1.53.1", features = ["macros", "sync", "time"] }
