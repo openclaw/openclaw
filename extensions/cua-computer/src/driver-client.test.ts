@@ -7,13 +7,17 @@ import {
 
 const mocks = vi.hoisted(() => ({
   callTool: vi.fn(async () => ({})),
-  click: vi.fn(async () => ({})),
+  click: vi.fn(async () => ({ effect: 0, route: 2 })),
   close: vi.fn(),
   create: vi.fn(),
   createConfigured: vi.fn(),
   createDesktopTarget: vi.fn(({ displayId }: { displayId: string }) => ({
     tag: "Desktop",
     inner: { displayId },
+  })),
+  createClickPosition: vi.fn(({ x, y }: { x: number; y: number }) => ({
+    tag: "Coordinates",
+    inner: { x, y },
   })),
   createTrustedSession: vi.fn(),
   drag: vi.fn(async () => ({})),
@@ -35,6 +39,7 @@ const mocks = vi.hoisted(() => ({
     desktopUnlocked: true,
   })),
   isAvailable: vi.fn(() => true),
+  isToolError: vi.fn((_error: unknown) => false),
   moveCursor: vi.fn(async () => ({})),
   pressKey: vi.fn(async () => ({})),
   scroll: vi.fn(async () => ({})),
@@ -45,21 +50,18 @@ const mocks = vi.hoisted(() => ({
 
 const sdk = {
   ActionTarget: { Desktop: { new: mocks.createDesktopTarget } },
+  ClickPosition: { Coordinates: { new: mocks.createClickPosition } },
   ClickButton: { Left: 0, Right: 1, Middle: 2 },
   CuaDriver: { create: mocks.create, createConfigured: mocks.createConfigured },
-  EscalationReason: { Other: "other" },
+  DriverError: { Tool: { instanceOf: mocks.isToolError } },
+  InputDeliveryMode: { Foreground: 1 },
   ScrollBy: { Line: 0 },
   ScrollDirection: { Up: 0, Down: 1, Left: 2, Right: 3 },
   SessionPermissionMode: { Unrestricted: "unrestricted" },
   createTrustedSession: mocks.createTrustedSession,
 };
 
-import {
-  ClickButton,
-  createCuaDriver,
-  EscalationReason,
-  ScrollDirection,
-} from "./driver-client.js";
+import { ClickButton, createCuaDriver, ScrollDirection } from "./driver-client.js";
 
 const authorization = {
   allowedModes: ["unrestricted"],
@@ -72,6 +74,7 @@ const authorization = {
 describe("CUA Driver direct session", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.isToolError.mockReturnValue(false);
     mocks.createConfigured.mockReturnValue({
       isAvailable: mocks.isAvailable,
       shutdown: mocks.shutdown,
@@ -190,21 +193,28 @@ describe("CUA Driver direct session", () => {
   it("targets desktop input while keeping the global cursor read untargeted", async () => {
     const driver = createCuaDriver({ loadSdk: () => sdk as never });
 
-    await driver.click({ x: 20, y: 30, button: ClickButton.Left, count: 1 });
+    const clicked = await driver.click({ x: 20, y: 30, button: ClickButton.Left, count: 1 });
+    expect(clicked).toMatchObject({ isError: false, action: { effect: 0, route: 2 } });
     await driver.drag({ fromX: 1, fromY: 2, toX: 3, toY: 4, durationMs: 5n });
     await driver.moveCursor({ x: 6, y: 7 });
     await driver.scroll({ x: 8, y: 9, direction: ScrollDirection.Down, amount: 3n });
     await driver.typeText("hello");
     await driver.pressKey({ key: "a", modifiers: ["cmd"] });
     await driver.getCursorPosition();
-    await driver.escalateScope(EscalationReason.Other);
+    await driver.getSessionState();
 
     const sessionOptions = mocks.createTrustedSession.mock.calls[0]?.[1];
     const target = { tag: "Desktop", inner: { displayId: "primary" } };
     expect(mocks.createDesktopTarget).toHaveBeenCalledOnce();
     expect(mocks.createDesktopTarget).toHaveBeenCalledWith({ displayId: "primary" });
     expect(mocks.click).toHaveBeenCalledWith(
-      { x: 20, y: 30, button: ClickButton.Left, count: 1, target },
+      {
+        position: { tag: "Coordinates", inner: { x: 20, y: 30 } },
+        deliveryMode: 1,
+        button: ClickButton.Left,
+        count: 1,
+        target,
+      },
       undefined,
     );
     expect(mocks.drag).toHaveBeenCalledWith(
@@ -239,6 +249,34 @@ describe("CUA Driver direct session", () => {
     expect(mocks.escalateSession).not.toHaveBeenCalled();
 
     await driver.dispose();
+  });
+
+  it("preserves typed SDK click refusals in the shared driver result", async () => {
+    const { DriverError } = await import("@trycua/cua-driver");
+    const refusal = DriverError.Tool.new({
+      tool: "click",
+      message: "desktop input is unavailable",
+      errorCode: "desktop_unavailable",
+    });
+    mocks.isToolError.mockImplementation((error) => DriverError.Tool.instanceOf(error));
+    mocks.click.mockRejectedValueOnce(refusal);
+    const driver = createCuaDriver({ loadSdk: () => sdk as never });
+    try {
+      await expect(
+        driver.click({ x: 20, y: 30, button: ClickButton.Left, count: 1 }),
+      ).resolves.toMatchObject({
+        isError: true,
+        errorCode: "desktop_unavailable",
+        text: "desktop input is unavailable",
+      });
+      const transportError = new Error("transport disconnected");
+      mocks.click.mockRejectedValueOnce(transportError);
+      await expect(driver.click({ x: 20, y: 30, button: ClickButton.Left, count: 1 })).rejects.toBe(
+        transportError,
+      );
+    } finally {
+      await driver.dispose();
+    }
   });
 
   it("keeps a missing native desktop library behind command availability", async () => {

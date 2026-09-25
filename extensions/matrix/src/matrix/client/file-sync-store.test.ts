@@ -2,7 +2,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync, StatementSync } from "node:sqlite";
 import { setImmediate } from "node:timers/promises";
 import type { ISyncResponse } from "matrix-js-sdk/lib/matrix.js";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -12,7 +11,10 @@ import {
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  closeOpenClawStateDatabaseAsync,
+  observeHostDataSql,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getMatrixRuntime } from "../../runtime.js";
 import { installMatrixTestRuntime } from "../../test-runtime.js";
@@ -150,13 +152,8 @@ describe("SqliteBackedMatrixSyncStore", () => {
 
   it("loads, persists, deletes and closes the sync cache without host SQLite", async () => {
     const storageRoot = createStorageRoot();
-    const sql = [
-      vi.spyOn(DatabaseSync.prototype, "prepare"),
-      vi.spyOn(DatabaseSync.prototype, "exec"),
-      ...(["get", "all", "run", "iterate"] as const).map((method) =>
-        vi.spyOn(StatementSync.prototype, method),
-      ),
-    ];
+    const observation = observeHostDataSql(openMatrixSyncCacheStoreOptions(storageRoot).env);
+    const sql = observation.calls;
     const timings: Record<string, number> = {};
     try {
       let started = performance.now();
@@ -189,7 +186,7 @@ describe("SqliteBackedMatrixSyncStore", () => {
       }
       console.log("matrix-sync-cache-worker timings", JSON.stringify(timings));
     } finally {
-      sql.forEach((method) => method.mockRestore());
+      observation.restore();
     }
   });
 

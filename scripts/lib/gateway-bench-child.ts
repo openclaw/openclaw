@@ -109,13 +109,15 @@ export async function stopChild(
   const signalProcessTree = (signal: NodeJS.Signals): boolean => {
     let delivered = true;
     terminateManagedChild(
-      {
-        kill(childSignal) {
-          delivered = child.kill(childSignal);
-          return delivered;
-        },
-        pid: child.pid,
-      },
+      process.platform === "win32"
+        ? child
+        : {
+            kill(childSignal) {
+              delivered = child.kill(childSignal);
+              return delivered;
+            },
+            pid: child.pid,
+          },
       signal,
       {
         onChildSignalError(error) {

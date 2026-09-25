@@ -117,7 +117,7 @@ export function renderSettingsPageHeader(props: SettingsPageHeaderProps): Templa
   return html`
     <section class="content-header content-header--settings">
       <div>
-        <div class="page-title">${props.title}</div>
+        <h1 class="page-title">${props.title}</h1>
         ${props.subtitle ? html`<div class="page-subtitle">${props.subtitle}</div>` : nothing}
       </div>
       ${
@@ -176,17 +176,9 @@ export function renderSettingsSection(props: SettingsSectionProps, rows: unknown
           </div>
         `
       : nothing;
-  const groupClass = [
-    "settings-group",
-    props.danger ? "settings-group--danger" : "",
-    props.carapace ? "oc-settings-group" : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
   return html`
     <section class="settings-section ${props.carapace ? "oc-settings-section" : ""}">
-      ${header} ${props.notice ?? nothing}
-      <div class=${groupClass}>${rows}</div>
+      ${header} ${props.notice ?? nothing} ${renderSettingsGroup(rows, props)}
     </section>
   `;
 }
@@ -374,8 +366,9 @@ export function renderSettingsToggleRow(props: {
   `;
 }
 
+// Controls already show inherited values; reserve default references for overrides.
 export function renderSettingsDefaultDescription(value: string, overridden: boolean) {
-  return html`${t(overridden ? "configForm.defaultValue" : "configForm.usingDefault", { value })}`;
+  return overridden ? html`${t("configForm.defaultValue", { value })}` : undefined;
 }
 
 export function renderSettingsSegmented<T extends string>(

@@ -1,8 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { DatabaseSync, SQLInputValue } from "node:sqlite";
-import { expectDefined } from "@openclaw/normalization-core";
+import type { SQLInputValue } from "node:sqlite";
 import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -33,7 +32,6 @@ import {
   projectDeliveryQueueTerminalEntry,
 } from "./delivery-queue-sqlite.types.js";
 import { hashFileDescriptorSync } from "./file-descriptor.js";
-import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
 import { migrationFileExists } from "./state-migrations.fs.js";
 import {
@@ -47,109 +45,14 @@ import {
   readLegacyMigrationSourceSnapshotSync,
   type LegacyMigrationSourceSnapshot,
 } from "./state-migrations.source-snapshot.js";
-import {
-  insertTaskDeliveryRowSql,
-  insertTaskRunRowSql,
-  legacyBindValue,
-  listSqliteColumns,
-  normalizeLegacySqliteInteger,
-  pickLegacyColumn,
-  readLegacyTaskDeliveryRows,
-  readLegacyTaskRows,
-  type SqliteBindRow,
-} from "./state-migrations.task-sidecar-rows.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
 
-export { normalizeLegacySqliteInteger };
+type SqliteBindRow = Record<string, SQLInputValue>;
 
-export type LegacyPluginStateSidecarRow = {
-  plugin_id: string;
-  namespace: string;
-  entry_key: string;
-  value_json: string;
-  created_at: number | bigint;
-  expires_at: number | bigint | null;
-};
-
-// Move the canonical database first so a partial archive never leaves a
-// readable database separated from committed WAL rows. Pending sidecars are
-// detected and archived without reopening the migrated database.
-export const PLUGIN_STATE_SQLITE_SIDECAR_SUFFIXES = ["", "-shm", "-wal", "-journal"] as const;
-export const TASK_STATE_SQLITE_SIDECAR_SUFFIXES = PLUGIN_STATE_SQLITE_SIDECAR_SUFFIXES;
 // Only the file-to-SQLite cutover expires old intent; live queues have no age TTL.
 const LEGACY_DELIVERY_QUEUE_MAX_AGE_MS = 72 * 60 * 60_000;
 
-class LegacyTaskStateSidecarConflictError extends Error {
-  constructor(readonly conflictedKeys: string[]) {
-    super("legacy task-state sidecar conflicts with shared state");
-  }
-}
-
-export function resolveLegacyPluginStateSidecarPath(stateDir: string): string {
-  return path.join(stateDir, "plugin-state", "state.sqlite");
-}
-
-export function resolveLegacyTaskRunsSidecarPath(stateDir: string): string {
-  return path.join(stateDir, "tasks", "runs.sqlite");
-}
-
-export function resolveLegacyFlowRunsSidecarPath(stateDir: string): string {
-  return path.join(stateDir, "flows", "registry.sqlite");
-}
-
-export function readLegacyPluginStateSidecarRows(
-  sourcePath: string,
-): LegacyPluginStateSidecarRow[] {
-  const db = openNodeSqliteDatabase(sourcePath, { readOnly: true });
-  try {
-    return db
-      .prepare(
-        `
-          SELECT plugin_id, namespace, entry_key, value_json, created_at, expires_at
-          FROM plugin_state_entries
-          ORDER BY plugin_id ASC, namespace ASC, entry_key ASC
-        `,
-      )
-      .all() as LegacyPluginStateSidecarRow[];
-  } finally {
-    db.close();
-  }
-}
-
-export function legacyPluginStateRowsMatch(
-  existing: { value_json: string; created_at: number | bigint; expires_at: number | bigint | null },
-  legacy: LegacyPluginStateSidecarRow,
-): boolean {
-  return (
-    existing.value_json === legacy.value_json &&
-    normalizeLegacySqliteInteger(existing.created_at) ===
-      normalizeLegacySqliteInteger(legacy.created_at) &&
-    normalizeLegacySqliteInteger(existing.expires_at) ===
-      normalizeLegacySqliteInteger(legacy.expires_at)
-  );
-}
-
-export function isLegacyPluginStateRowExpired(
-  row: LegacyPluginStateSidecarRow,
-  now: number,
-): boolean {
-  const expiresAt = normalizeLegacySqliteInteger(row.expires_at);
-  return expiresAt !== null && expiresAt <= now;
-}
-
-export function hasPendingSqliteSidecarArchive(
-  sourcePath: string,
-  suffixes: readonly string[],
-): boolean {
-  return (
-    !migrationFileExists(sourcePath) &&
-    migrationFileExists(`${sourcePath}.migrated`) &&
-    suffixes.some((suffix) => suffix !== "" && migrationFileExists(`${sourcePath}${suffix}`))
-  );
-}
-
 type LegacyArchiveResolution = {
-  sourcePath: string;
   targetPath: string;
   action: "archived" | "removed";
 };
@@ -176,81 +79,19 @@ function archiveLegacyFileSource(params: {
         index === 1 ? `${params.sourcePath}.migrated` : `${params.sourcePath}.migrated.${index}`;
       if (!fs.existsSync(targetPath)) {
         fs.renameSync(params.sourcePath, targetPath);
-        return { sourcePath: params.sourcePath, targetPath, action: "archived" };
+        return { targetPath, action: "archived" };
       }
-      // SQLite sidecars can exceed whole-file allocation limits; hash only collisions.
+      // Legacy sources can exceed whole-file allocation limits; hash only collisions.
       sourceSha256 ??= hashLegacyArchiveSource(params.sourcePath);
       if (sourceSha256 === hashLegacyArchiveSource(targetPath)) {
         fs.rmSync(params.sourcePath, { force: true });
-        return { sourcePath: params.sourcePath, targetPath, action: "removed" };
+        return { targetPath, action: "removed" };
       }
     }
   } catch (err) {
     params.warnings.push(`Failed archiving ${params.label} ${params.sourcePath}: ${String(err)}`);
     return null;
   }
-}
-
-function recordArchiveCollisionResolutions(
-  changes: string[],
-  label: string,
-  resolutions: readonly LegacyArchiveResolution[],
-): void {
-  for (const resolution of resolutions) {
-    changes.push(
-      resolution.action === "removed"
-        ? `Removed already-archived ${label} legacy source ${resolution.sourcePath}`
-        : `Archived ${label} legacy source → ${resolution.targetPath}`,
-    );
-  }
-}
-
-function archiveLegacySqliteSidecar(params: {
-  sourcePath: string;
-  label: string;
-  changes: string[];
-  warnings: string[];
-}): void {
-  const existingSources = PLUGIN_STATE_SQLITE_SIDECAR_SUFFIXES.map(
-    (suffix) => `${params.sourcePath}${suffix}`,
-  ).filter(migrationFileExists);
-  if (existingSources.length === 0) {
-    return;
-  }
-
-  const resolutions: LegacyArchiveResolution[] = [];
-  for (const sourcePath of existingSources) {
-    const resolution = archiveLegacyFileSource({
-      sourcePath,
-      label: `${params.label} sidecar`,
-      warnings: params.warnings,
-    });
-    if (!resolution) {
-      return;
-    }
-    resolutions.push(resolution);
-  }
-  if (
-    resolutions.every(
-      (resolution) =>
-        resolution.action === "archived" &&
-        resolution.targetPath === `${resolution.sourcePath}.migrated`,
-    )
-  ) {
-    params.changes.push(
-      `Archived ${params.label} sidecar legacy source → ${params.sourcePath}.migrated`,
-    );
-  } else {
-    recordArchiveCollisionResolutions(params.changes, `${params.label} sidecar`, resolutions);
-  }
-}
-
-export function archiveLegacyPluginStateSidecar(params: {
-  sourcePath: string;
-  changes: string[];
-  warnings: string[];
-}): void {
-  archiveLegacySqliteSidecar({ ...params, label: "plugin-state" });
 }
 
 export function readLegacyInstalledPluginIndex(sourcePath: string): InstalledPluginIndex | null {
@@ -348,37 +189,26 @@ function readInstallRecordField(
   return (record as Partial<Record<string, unknown>>)[key];
 }
 
-function readInstallRecordStringField(
-  record: InstalledPluginIndex["installRecords"][string],
-  key: string,
-): string | undefined {
-  const value = readInstallRecordField(record, key);
-  return typeof value === "string" ? value : undefined;
-}
-
 function legacyInstallRecordHasCurrentResolvedIdentity(params: {
   currentRecord: InstalledPluginIndex["installRecords"][string];
   legacyRecord: InstalledPluginIndex["installRecords"][string];
 }): boolean {
   const { currentRecord, legacyRecord } = params;
-  const currentResolvedSpec = readInstallRecordStringField(currentRecord, "resolvedSpec");
-  const legacySpec = readInstallRecordStringField(legacyRecord, "spec");
-  if (legacySpec) {
-    return currentResolvedSpec === legacySpec;
+  if (legacyRecord.spec) {
+    return currentRecord.resolvedSpec === legacyRecord.spec;
   }
-  const legacyResolvedSpec = readInstallRecordStringField(legacyRecord, "resolvedSpec");
-  return Boolean(legacyResolvedSpec && currentResolvedSpec === legacyResolvedSpec);
+  return Boolean(
+    legacyRecord.resolvedSpec && currentRecord.resolvedSpec === legacyRecord.resolvedSpec,
+  );
 }
 
 function readAuthoritativeCurrentNpmIdentity(
   record: InstalledPluginIndex["installRecords"][string],
 ): { name: string; version: string } | null {
-  const resolvedName = readInstallRecordStringField(record, "resolvedName");
-  const resolvedVersion = readInstallRecordStringField(record, "resolvedVersion");
+  const { resolvedName, resolvedVersion, resolvedSpec } = record;
   if (resolvedName && resolvedVersion) {
     return { name: resolvedName, version: resolvedVersion };
   }
-  const resolvedSpec = readInstallRecordStringField(record, "resolvedSpec");
   const parsed = resolvedSpec ? parseRegistryNpmSpec(resolvedSpec) : null;
   if (parsed?.selectorKind === "exact-version" && parsed.selector) {
     return { name: parsed.name, version: parsed.selector };
@@ -394,8 +224,7 @@ function legacyNpmInstallRecordSupersededByCurrent(params: {
   if (currentRecord.source !== "npm" || legacyRecord.source !== "npm") {
     return false;
   }
-  const legacySpec = readInstallRecordStringField(legacyRecord, "spec");
-  const legacyParsedSpec = legacySpec ? parseRegistryNpmSpec(legacySpec) : null;
+  const legacyParsedSpec = legacyRecord.spec ? parseRegistryNpmSpec(legacyRecord.spec) : null;
   if (legacyParsedSpec?.selectorKind !== "exact-version") {
     return false;
   }
@@ -533,367 +362,6 @@ export function archiveLegacyImportSource(params: {
   return resolution;
 }
 
-function legacyKeyValue(value: SQLInputValue): string {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (typeof value === "number" || typeof value === "bigint") {
-    return `${value}`;
-  }
-  return "";
-}
-
-function normalizeLegacyFlowRow(row: Record<string, unknown>): SqliteBindRow {
-  const syncMode =
-    row.sync_mode === "task_mirrored" || row.shape === "single_task" ? "task_mirrored" : "managed";
-  const ownerKey =
-    typeof row.owner_key === "string" && row.owner_key.trim()
-      ? row.owner_key.trim()
-      : typeof row.owner_session_key === "string"
-        ? row.owner_session_key.trim()
-        : "";
-  const controllerId =
-    syncMode === "managed"
-      ? typeof row.controller_id === "string" && row.controller_id.trim()
-        ? row.controller_id.trim()
-        : "core/legacy-restored"
-      : null;
-  return {
-    flow_id: legacyBindValue(row.flow_id ?? ""),
-    shape: legacyBindValue(row.shape),
-    sync_mode: syncMode,
-    owner_key: ownerKey,
-    requester_origin_json: legacyBindValue(row.requester_origin_json),
-    controller_id: controllerId,
-    revision: normalizeLegacySqliteInteger(row.revision as number | bigint | null) ?? 0,
-    status: legacyBindValue(row.status ?? ""),
-    notify_policy: legacyBindValue(row.notify_policy ?? ""),
-    goal: legacyBindValue(row.goal ?? ""),
-    current_step: legacyBindValue(row.current_step),
-    blocked_task_id: legacyBindValue(row.blocked_task_id),
-    blocked_summary: legacyBindValue(row.blocked_summary),
-    state_json: legacyBindValue(row.state_json),
-    wait_json: legacyBindValue(row.wait_json),
-    cancel_requested_at: normalizeLegacySqliteInteger(
-      row.cancel_requested_at as number | bigint | null,
-    ),
-    created_at: normalizeLegacySqliteInteger(row.created_at as number | bigint | null) ?? 0,
-    updated_at: normalizeLegacySqliteInteger(row.updated_at as number | bigint | null) ?? 0,
-    ended_at: normalizeLegacySqliteInteger(row.ended_at as number | bigint | null),
-  };
-}
-
-function legacyRowsMatch(
-  existing: Record<string, unknown>,
-  incoming: Record<string, unknown>,
-  columns: string[],
-): boolean {
-  return columns.every(
-    (column) =>
-      normalizeLegacySqliteInteger(existing[column] as number | bigint | null) ===
-      normalizeLegacySqliteInteger(incoming[column] as number | bigint | null),
-  );
-}
-
-function readLegacyFlowRows(sourcePath: string): SqliteBindRow[] {
-  const db = openNodeSqliteDatabase(sourcePath, { readOnly: true });
-  try {
-    const columns = listSqliteColumns(db, "flow_runs");
-    if (columns.size === 0) {
-      return [];
-    }
-    const selectColumns = [
-      "flow_id",
-      pickLegacyColumn(columns, "shape"),
-      pickLegacyColumn(columns, "sync_mode"),
-      pickLegacyColumn(columns, "owner_key"),
-      pickLegacyColumn(columns, "owner_session_key"),
-      pickLegacyColumn(columns, "requester_origin_json"),
-      pickLegacyColumn(columns, "controller_id"),
-      pickLegacyColumn(columns, "revision", "0"),
-      "status",
-      "notify_policy",
-      "goal",
-      pickLegacyColumn(columns, "current_step"),
-      pickLegacyColumn(columns, "blocked_task_id"),
-      pickLegacyColumn(columns, "blocked_summary"),
-      pickLegacyColumn(columns, "state_json"),
-      pickLegacyColumn(columns, "wait_json"),
-      pickLegacyColumn(columns, "cancel_requested_at"),
-      "created_at",
-      "updated_at",
-      pickLegacyColumn(columns, "ended_at"),
-    ];
-    return db
-      .prepare(
-        `SELECT ${selectColumns.join(", ")} FROM flow_runs ORDER BY created_at ASC, flow_id ASC`,
-      )
-      .all()
-      .map((row) => normalizeLegacyFlowRow(row as Record<string, unknown>));
-  } finally {
-    db.close();
-  }
-}
-
-function insertFlowRunRowSql(db: DatabaseSync, row: SqliteBindRow): void {
-  db.prepare(
-    `
-      INSERT INTO flow_runs (
-        flow_id, shape, sync_mode, owner_key, requester_origin_json, controller_id, revision,
-        status, notify_policy, goal, current_step, blocked_task_id, blocked_summary, state_json,
-        wait_json, cancel_requested_at, created_at, updated_at, ended_at
-      ) VALUES (
-        @flow_id, @shape, @sync_mode, @owner_key, @requester_origin_json, @controller_id,
-        @revision, @status, @notify_policy, @goal, @current_step, @blocked_task_id,
-        @blocked_summary, @state_json, @wait_json, @cancel_requested_at, @created_at,
-        @updated_at, @ended_at
-      )
-    `,
-  ).run(row);
-}
-
-async function migrateLegacyTaskRunsSidecar(params: {
-  stateDir: string;
-}): Promise<{ changes: string[]; warnings: string[] }> {
-  const sourcePath = resolveLegacyTaskRunsSidecarPath(params.stateDir);
-  if (!migrationFileExists(sourcePath)) {
-    const changes: string[] = [];
-    const warnings: string[] = [];
-    if (hasPendingSqliteSidecarArchive(sourcePath, TASK_STATE_SQLITE_SIDECAR_SUFFIXES)) {
-      archiveLegacySqliteSidecar({ sourcePath, label: "task registry", changes, warnings });
-    }
-    return { changes, warnings };
-  }
-  const changes: string[] = [];
-  const warnings: string[] = [];
-  let taskRows: SqliteBindRow[];
-  let deliveryRows: SqliteBindRow[];
-  try {
-    taskRows = readLegacyTaskRows(sourcePath);
-    deliveryRows = readLegacyTaskDeliveryRows(sourcePath);
-  } catch (err) {
-    return {
-      changes,
-      warnings: [`Failed reading task registry sidecar ${sourcePath}: ${String(err)}`],
-    };
-  }
-
-  try {
-    const conflicts: string[] = [];
-    let importedTasks = 0;
-    let importedDeliveryStates = 0;
-    let skippedOrphanDeliveryStates = 0;
-    runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        const taskColumns = [
-          "runtime",
-          "task_kind",
-          "source_id",
-          "requester_session_key",
-          "owner_key",
-          "scope_kind",
-          "child_session_key",
-          "parent_flow_id",
-          "parent_task_id",
-          "agent_id",
-          "requester_agent_id",
-          "run_id",
-          "label",
-          "task",
-          "status",
-          "delivery_status",
-          "notify_policy",
-          "created_at",
-          "started_at",
-          "ended_at",
-          "last_event_at",
-          "cleanup_after",
-          "error",
-          "progress_summary",
-          "terminal_summary",
-          "terminal_outcome",
-          "detail_json",
-        ];
-        for (const row of taskRows) {
-          const taskId = legacyKeyValue(expectDefined(row.task_id, "task migration row key"));
-          const existing = db
-            .prepare(`SELECT ${taskColumns.join(", ")} FROM task_runs WHERE task_id = ?`)
-            .get(taskId);
-          if (existing) {
-            if (!legacyRowsMatch(existing as Record<string, unknown>, row, taskColumns)) {
-              conflicts.push(taskId);
-            }
-            continue;
-          }
-          insertTaskRunRowSql(db, row);
-          importedTasks++;
-        }
-        const deliveryColumns = ["requester_origin_json", "last_notified_event_at"];
-        for (const row of deliveryRows) {
-          const taskId = legacyKeyValue(expectDefined(row.task_id, "delivery migration row key"));
-          const existing = db
-            .prepare(
-              `SELECT requester_origin_json, last_notified_event_at FROM task_delivery_state WHERE task_id = ?`,
-            )
-            .get(taskId);
-          if (existing) {
-            if (!legacyRowsMatch(existing as Record<string, unknown>, row, deliveryColumns)) {
-              conflicts.push(`${taskId}/delivery`);
-            }
-            continue;
-          }
-          const taskExists = db.prepare("SELECT 1 FROM task_runs WHERE task_id = ?").get(taskId);
-          if (!taskExists) {
-            skippedOrphanDeliveryStates++;
-            continue;
-          }
-          insertTaskDeliveryRowSql(db, row);
-          importedDeliveryStates++;
-        }
-        if (conflicts.length > 0) {
-          throw new LegacyTaskStateSidecarConflictError(conflicts);
-        }
-      },
-      { env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } },
-    );
-    if (importedTasks > 0) {
-      changes.push(
-        `Migrated ${importedTasks} task registry sidecar ${importedTasks === 1 ? "row" : "rows"} → shared SQLite state`,
-      );
-    }
-    if (importedDeliveryStates > 0) {
-      changes.push(
-        `Migrated ${importedDeliveryStates} task delivery sidecar ${importedDeliveryStates === 1 ? "row" : "rows"} → shared SQLite state`,
-      );
-    }
-    if (skippedOrphanDeliveryStates > 0) {
-      warnings.push(
-        `Skipped ${skippedOrphanDeliveryStates} orphan task delivery sidecar ${skippedOrphanDeliveryStates === 1 ? "row" : "rows"} with no task run`,
-      );
-    }
-  } catch (err) {
-    if (err instanceof LegacyTaskStateSidecarConflictError) {
-      return {
-        changes,
-        warnings: [
-          `Left task registry sidecar in place because ${err.conflictedKeys.length} ${err.conflictedKeys.length === 1 ? "row" : "rows"} already existed in shared state: ${err.conflictedKeys[0]}`,
-        ],
-      };
-    }
-    return {
-      changes,
-      warnings: [`Failed migrating task registry sidecar ${sourcePath}: ${String(err)}`],
-    };
-  }
-
-  archiveLegacySqliteSidecar({ sourcePath, label: "task registry", changes, warnings });
-  return { changes, warnings };
-}
-
-async function migrateLegacyFlowRunsSidecar(params: {
-  stateDir: string;
-}): Promise<{ changes: string[]; warnings: string[] }> {
-  const sourcePath = resolveLegacyFlowRunsSidecarPath(params.stateDir);
-  if (!migrationFileExists(sourcePath)) {
-    const changes: string[] = [];
-    const warnings: string[] = [];
-    if (hasPendingSqliteSidecarArchive(sourcePath, TASK_STATE_SQLITE_SIDECAR_SUFFIXES)) {
-      archiveLegacySqliteSidecar({ sourcePath, label: "task flow", changes, warnings });
-    }
-    return { changes, warnings };
-  }
-  const changes: string[] = [];
-  const warnings: string[] = [];
-  let rows: SqliteBindRow[];
-  try {
-    rows = readLegacyFlowRows(sourcePath);
-  } catch (err) {
-    return {
-      changes,
-      warnings: [`Failed reading task flow sidecar ${sourcePath}: ${String(err)}`],
-    };
-  }
-
-  try {
-    const conflicts: string[] = [];
-    let imported = 0;
-    runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        const columns = [
-          "shape",
-          "sync_mode",
-          "owner_key",
-          "requester_origin_json",
-          "controller_id",
-          "revision",
-          "status",
-          "notify_policy",
-          "goal",
-          "current_step",
-          "blocked_task_id",
-          "blocked_summary",
-          "state_json",
-          "wait_json",
-          "cancel_requested_at",
-          "created_at",
-          "updated_at",
-          "ended_at",
-        ];
-        for (const row of rows) {
-          const flowId = legacyKeyValue(expectDefined(row.flow_id, "flow migration row key"));
-          const existing = db
-            .prepare(`SELECT ${columns.join(", ")} FROM flow_runs WHERE flow_id = ?`)
-            .get(flowId);
-          if (existing) {
-            if (!legacyRowsMatch(existing as Record<string, unknown>, row, columns)) {
-              conflicts.push(flowId);
-            }
-            continue;
-          }
-          insertFlowRunRowSql(db, row);
-          imported++;
-        }
-        if (conflicts.length > 0) {
-          throw new LegacyTaskStateSidecarConflictError(conflicts);
-        }
-      },
-      { env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } },
-    );
-    if (imported > 0) {
-      changes.push(
-        `Migrated ${imported} task flow sidecar ${imported === 1 ? "row" : "rows"} → shared SQLite state`,
-      );
-    }
-  } catch (err) {
-    if (err instanceof LegacyTaskStateSidecarConflictError) {
-      return {
-        changes,
-        warnings: [
-          `Left task flow sidecar in place because ${err.conflictedKeys.length} ${err.conflictedKeys.length === 1 ? "row" : "rows"} already existed in shared state: ${err.conflictedKeys[0]}`,
-        ],
-      };
-    }
-    return {
-      changes,
-      warnings: [`Failed migrating task flow sidecar ${sourcePath}: ${String(err)}`],
-    };
-  }
-
-  archiveLegacySqliteSidecar({ sourcePath, label: "task flow", changes, warnings });
-  return { changes, warnings };
-}
-
-export async function migrateLegacyTaskStateSidecars(params: {
-  stateDir: string;
-}): Promise<{ changes: string[]; warnings: string[] }> {
-  const taskRuns = await migrateLegacyTaskRunsSidecar(params);
-  const flowRuns = await migrateLegacyFlowRunsSidecar(params);
-  return {
-    changes: [...taskRuns.changes, ...flowRuns.changes],
-    warnings: [...taskRuns.warnings, ...flowRuns.warnings],
-  };
-}
-
 function buildLegacyDeliveryQueueRow(params: {
   queueName: string;
   id: string;
@@ -994,13 +462,10 @@ function legacyDeliveryQueueRowsMatch(
   ].every((column) => {
     const left = existing[column];
     const right = incoming[column];
-    if (typeof left === "bigint" || typeof right === "bigint") {
-      return (
-        normalizeLegacySqliteInteger(left as number | bigint | null) ===
-        normalizeLegacySqliteInteger(right as number | bigint | null)
-      );
-    }
-    return left === right;
+    return (
+      (typeof left === "bigint" ? Number(left) : left) ===
+      (typeof right === "bigint" ? Number(right) : right)
+    );
   });
 }
 

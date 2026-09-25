@@ -67,7 +67,9 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -485,6 +487,21 @@ class TalkModeManagerTest {
   }
 
   @Test
+  fun realtimeRelayOwnsSpeechForGatewayRunConsultFinals() {
+    val manager = createManager()
+
+    manager.ttsOnAllResponses = true
+    installRealtimeSession(manager, "relay-1")
+    manager.handleGatewayEvent("chat", chatFinalPayload(runId = "talk-realtime-relay-consult:relay-1:call-1", text = "It is 12:38 PM."))
+    manager.handleGatewayEvent("chat", chatFinalPayload(runId = "run-typed", text = "typed reply"))
+    assertEquals(0L, playbackGeneration(manager).get())
+
+    installRealtimeSession(manager, null)
+    manager.handleGatewayEvent("chat", chatFinalPayload(runId = "run-after", text = "speak this"))
+    assertEquals(1L, playbackGeneration(manager).get())
+  }
+
+  @Test
   fun nonPendingUserFinalDoesNotUseAllResponseTts() {
     val manager = createManager()
 
@@ -501,6 +518,7 @@ class TalkModeManagerTest {
 
     installRealtimeSession(manager, "relay-1")
     setMutableStateFlow(manager, "_isEnabled", true)
+    assertNull(manager.failureNotice.value)
 
     manager.realtimeEvent("""{"relaySessionId":"relay-1","type":"close","reason":"error"}""")
 
@@ -510,6 +528,23 @@ class TalkModeManagerTest {
       "Talk failed: Realtime provider closed unexpectedly.",
       manager.statusText.value,
     )
+    // Chat renders this after Talk ends; the status line alone is not shown there.
+    assertEquals(manager.statusText.value, manager.failureNotice.value?.text)
+  }
+
+  @Test
+  fun acknowledgingAnOlderFailureDoesNotHideAnIdenticalNewFailure() {
+    val manager = createManager()
+    val failure = verbatimText("Realtime provider authentication failed")
+    manager.stopAllCapture(failure = failure)
+    val first = checkNotNull(manager.failureNotice.value)
+    manager.stopAllCapture(failure = failure)
+    val second = checkNotNull(manager.failureNotice.value)
+
+    manager.acknowledgeFailure(first)
+    assertEquals(second, manager.failureNotice.value)
+    manager.acknowledgeFailure(second)
+    assertNull(manager.failureNotice.value)
   }
 
   @Test
@@ -1011,7 +1046,8 @@ class TalkModeManagerTest {
         val recognizer = currentRecognizer()
         recognizer.triggerOnReadyForSpeech(Bundle())
         recognizer.triggerOnEndOfSpeech()
-        recognizer.triggerOnResults(recognitionResults("Synthetic native Talk phrase"))
+        val transcript = "Synthetic native Talk phrase\nReply in a detailed tone.\nLiteral user instructions."
+        recognizer.triggerOnResults(recognitionResults(transcript))
         advanceTalkSilence(proof)
         awaitTalkWork(proof) { sends.isNotEmpty() }
 
@@ -1024,12 +1060,12 @@ class TalkModeManagerTest {
             .getValue("sessionKey")
             .jsonPrimitive.content,
         )
-        assertTrue(
+        assertEquals(
+          transcript,
           sends
             .single()
             .getValue("message")
-            .jsonPrimitive.content
-            .endsWith("Synthetic native Talk phrase"),
+            .jsonPrimitive.content,
         )
         awaitTalkWork(proof) { proof.synthesizer.requested.isCompleted }
         assertTrue(recognizer.isDestroyed)
@@ -1037,6 +1073,10 @@ class TalkModeManagerTest {
         proof.scheduler.runCurrent()
         assertEquals(1, proof.player.playCalls)
         assertTrue(proof.manager.isSpeaking.value)
+        assertEquals(
+          "Speaking… — Native Talk: Gateway did not advertise GPT-Live relay support; using device speech recognition and configured Talk voice.",
+          proof.manager.statusText.value,
+        )
 
         proof.player.finished.complete(Unit)
         awaitTalkWork(proof) { proof.manager.isListening.value }
@@ -1046,6 +1086,88 @@ class TalkModeManagerTest {
         assertFalse(proof.manager.isSpeaking.value)
         assertTrue(currentRecognizer() !== recognizer)
         assertFalse(currentRecognizer().isDestroyed)
+        assertEquals(
+          "Listening — Native Talk: Gateway did not advertise GPT-Live relay support; using device speech recognition and configured Talk voice.",
+          proof.manager.statusText.value,
+        )
+        proof.manager.setEnabled(false)
+        assertEquals("Off", proof.manager.statusText.value)
+        assertNull(proof.manager.failureNotice.value)
+      }
+    }
+
+  @Test
+  fun publishedGatewayRelayContractsStartTheAdvertisedTransport() =
+    runBlocking {
+      installSpeechRecognitionService()
+      for (fixture in realtimeRelayContractCases()) {
+        val id = fixture.getValue("id").jsonPrimitive.content
+        val realtime = fixture.getValue("realtime").jsonPrimitive.boolean
+        val requests = ConcurrentLinkedQueue<JsonObject>()
+        val payload = buildJsonObject { put("config", fixture.getValue("config")) }.toString()
+        withStartedTalk(responseForRequest = { request, _ ->
+          requests.add(request)
+          payload.takeIf { request.getValue("method").jsonPrimitive.content == "talk.config" }
+        }) { proof ->
+          val creates = requests.filter { it.getValue("method").jsonPrimitive.content == "talk.session.create" }
+          assertEquals("$id must use the Gateway-advertised transport", if (realtime) 1 else 0, creates.size)
+          if (realtime) {
+            val params = creates.single().getValue("params").jsonObject
+            assertEquals("gateway-relay", params.getValue("transport").jsonPrimitive.content)
+            assertFalse("The Gateway retains model selection", params.containsKey("model"))
+            assertEquals("Listening", proof.manager.statusText.value)
+            val track = startRealtimeAudio(proof)
+            finishRealtimeAudio(proof, track, clear = true)
+          } else {
+            assertTrue(
+              "$id explains native speech startup",
+              proof.manager.statusText.value
+                .contains("Native Talk:"),
+            )
+          }
+          assertNull(proof.manager.failureNotice.value)
+          assertFalse(requests.any { it.getValue("method").jsonPrimitive.content in setOf("chat.send", "talk.speak") })
+          assertFalse("Realtime audio must not synthesize a native TTS reply", proof.synthesizer.requested.isCompleted)
+        }
+      }
+    }
+
+  private fun realtimeRelayContractCases(): List<JsonObject> {
+    val fixture =
+      generateSequence(java.io.File(checkNotNull(System.getProperty("user.dir"))).absoluteFile) { it.parentFile }
+        .map { java.io.File(it, "test/fixtures/talk-realtime-relay-contract.json") }
+        .first { it.isFile }
+    return Json
+      .parseToJsonElement(fixture.readText())
+      .jsonObject
+      .getValue("cases")
+      .jsonArray
+      .map { it.jsonObject }
+  }
+
+  @Test
+  fun activeNativeRouteSurvivesConfigRefreshUntilRelayRestart() =
+    runBlocking {
+      installSpeechRecognitionService()
+      val config = AtomicReference(nativeTalkConfig("en-US"))
+      withStartedTalk(responseForRequest = { request, _ ->
+        config.get().takeIf { request.getValue("method").jsonPrimitive.content == "talk.config" }
+      }) { proof ->
+        val nativeStatus = proof.manager.statusText.value
+        assertTrue(nativeStatus.contains("Gateway did not advertise GPT-Live relay support"))
+        config.set("""{"config":{"talk":{"realtime":{"model":"gpt-realtime-2.1"}}}}""")
+        val refresh = proof.scope.async { proof.manager.refreshConfig() }
+        awaitTalkWork(proof) { refresh.isCompleted }
+        refresh.await()
+        currentRecognizer().triggerOnReadyForSpeech(Bundle())
+        assertEquals("Refreshing settings must not relabel the running native loop", nativeStatus, proof.manager.statusText.value)
+
+        proof.manager.setEnabled(false)
+        assertEquals("Off", proof.manager.statusText.value)
+        proof.manager.setEnabled(true)
+        awaitTalkWork(proof) { proof.manager.isListening.value }
+        assertEquals("The replacement relay must not inherit a native fallback reason", "Listening", proof.manager.statusText.value)
+        assertNull(proof.manager.failureNotice.value)
       }
     }
 
@@ -1124,24 +1246,25 @@ class TalkModeManagerTest {
         assertTrue(native.isDestroyed)
         assertTrue(ptt !== native)
 
-        ptt.triggerOnResults(recognitionResults("Push to talk phrase"))
+        val transcript = "Push to talk phrase\nTalk Mode active. Reply in a concise, spoken tone.\nKeep this literal text."
+        ptt.triggerOnResults(recognitionResults(transcript))
         native.triggerOnResults(recognitionResults("Retired native result"))
         val ending = proof.scope.async { proof.manager.endPushToTalk() }
         awaitTalkWork(proof) { ending.isCompleted }
         val ended = ending.await()
         assertEquals(capture.captureId, ended.captureId)
         assertEquals("queued", ended.status)
-        assertEquals("Push to talk phrase", ended.transcript)
+        assertEquals(transcript, ended.transcript)
         advanceTalkSilence(proof)
         awaitTalkWork(proof) { sends.isNotEmpty() }
 
         assertEquals(1, sends.size)
-        assertTrue(
+        assertEquals(
+          transcript,
           sends
             .single()
             .getValue("message")
-            .jsonPrimitive.content
-            .endsWith("Push to talk phrase"),
+            .jsonPrimitive.content,
         )
       }
     }
@@ -1302,7 +1425,10 @@ class TalkModeManagerTest {
         }
       },
     ) { proof ->
-      assertEquals("Listening", proof.manager.statusText.value)
+      assertEquals(
+        "Listening — Native Talk: Gateway did not advertise GPT-Live relay support; using device speech recognition and configured Talk voice.",
+        proof.manager.statusText.value,
+      )
       assertTrue(relayCreates.isEmpty())
       block(proof, sends)
     }
@@ -1350,18 +1476,7 @@ class TalkModeManagerTest {
       assertEquals("Generating voice…", manager.statusText.value)
       assertFalse(manager.isSpeaking.value)
 
-      talkSpeakClient.result.complete(
-        TalkSpeakResult.Success(
-          TalkSpeakAudio(
-            bytes = byteArrayOf(1, 2, 3),
-            provider = "test",
-            outputFormat = "mp3_44100_128",
-            voiceCompatible = true,
-            mimeType = "audio/mpeg",
-            fileExtension = ".mp3",
-          ),
-        ),
-      )
+      completeRemoteSynthesis(talkSpeakClient)
       talkAudioPlayer.started.await()
 
       assertEquals("Speaking…", manager.statusText.value)
@@ -1397,18 +1512,7 @@ class TalkModeManagerTest {
     runTest {
       val audio = shadowOf(RuntimeEnvironment.getApplication().getSystemService(AudioManager::class.java))
       val synthesizer = FakeTalkSpeechSynthesizer()
-      synthesizer.result.complete(
-        TalkSpeakResult.Success(
-          TalkSpeakAudio(
-            bytes = byteArrayOf(1, 2, 3),
-            provider = "test",
-            outputFormat = "mp3_44100_128",
-            voiceCompatible = true,
-            mimeType = "audio/mpeg",
-            fileExtension = ".mp3",
-          ),
-        ),
-      )
+      completeRemoteSynthesis(synthesizer)
       val player = FakeTalkAudioPlayer()
       val managerJob = SupervisorJob()
       var callbackDepth = 0
@@ -1592,6 +1696,8 @@ class TalkModeManagerTest {
           proof.manager.statusText.value
             .contains("audio playback device error"),
         )
+        val notice = proof.manager.failureNotice.value
+        assertEquals(proof.manager.statusText.value, notice?.text)
         assertFalse(proof.manager.isSpeaking.value)
       }
     }
@@ -2506,6 +2612,41 @@ class TalkModeManagerTest {
         awaitState { oldStart.isCompleted }
         assertTrue("An obsolete start error must not disable its replacement", proof.manager.isEnabled.value)
         assertTrue(proof.manager.isListening.value)
+      }
+    }
+
+  @Test
+  fun rejectedSessionStartLeavesAFailureNoticeUntilTalkStartsAgain() =
+    runBlocking {
+      val subscription = realtimeRelayContractCases().single { it.getValue("id").jsonPrimitive.content == "subscription" }
+      val config = buildJsonObject { put("config", subscription.getValue("config")) }.toString()
+      val creates =
+        java.util.concurrent.atomic
+          .AtomicInteger()
+      withStartedTalk(responseForRequest = { request, _ ->
+        config.takeIf { request.getValue("method").jsonPrimitive.content == "talk.config" }
+      }, interceptRequest = { request, socket ->
+        if (request.getValue("method").jsonPrimitive.content == "talk.session.create" && creates.incrementAndGet() == 2) {
+          val id = request.getValue("id").jsonPrimitive.content
+          socket.send("""{"type":"res","id":"$id","ok":false,"error":{"code":"UNAVAILABLE","message":"provider unavailable"}}""")
+          true
+        } else {
+          false
+        }
+      }) { proof ->
+        proof.manager.stopAllCapture()
+        proof.drainCancelledCapture()
+        assertNull(proof.manager.failureNotice.value)
+        proof.manager.setEnabled(true)
+        awaitTalkWork(proof) { !proof.manager.isEnabled.value }
+        assertFalse(proof.manager.isListening.value)
+        // Chat shows this notice once Talk ends; without it a rejected start leaves no trace there.
+        val notice = proof.manager.failureNotice.value
+        assertEquals("Start failed: UNAVAILABLE: provider unavailable", notice?.text)
+
+        proof.manager.setEnabled(true)
+        awaitTalkWork(proof) { proof.manager.isListening.value }
+        assertNull(proof.manager.failureNotice.value)
       }
     }
 

@@ -1,4 +1,3 @@
-// Slack plugin module implements resolve channels behavior.
 import type { WebClient } from "@slack/web-api";
 import { resolveDirectoryAllowlistEntries } from "openclaw/plugin-sdk/directory-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -58,7 +57,7 @@ async function listSlackChannels(client: WebClient): Promise<SlackChannelLookup[
             isPrivate: Boolean(channel.is_private),
           } satisfies SlackChannelLookup;
         })
-        .filter(Boolean) as SlackChannelLookup[],
+        .filter((channel) => channel !== null),
   });
 }
 
@@ -73,11 +72,7 @@ function resolveByName(
   const matches = channels.filter(
     (channel) => normalizeLowercaseStringOrEmpty(channel.name) === target,
   );
-  if (matches.length === 0) {
-    return undefined;
-  }
-  const active = matches.find((channel) => !channel.archived);
-  return active ?? matches[0];
+  return matches.find((channel) => !channel.archived) ?? matches[0];
 }
 
 export async function resolveSlackChannelAllowlist(params: {

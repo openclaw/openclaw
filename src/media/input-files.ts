@@ -15,6 +15,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { logWarn } from "../logger.js";
+import type { DocumentExtractionMetadata } from "../plugins/document-extractor-types.js";
 import { convertHeicToJpeg } from "./media-services.js";
 import { extractPdfContent, type PdfExtractedImage } from "./pdf-extract.js";
 
@@ -26,6 +27,7 @@ type InputFileExtractResult = {
   filename: string;
   text?: string;
   images?: InputImageContent[];
+  metadata?: DocumentExtractionMetadata;
 };
 
 /** PDF extraction limits applied before model-visible input_file content is produced. */
@@ -79,19 +81,7 @@ export type InputImageSource =
     };
 
 /** Supported input_file source variants before text/PDF extraction. */
-type InputFileSource =
-  | {
-      type: "base64";
-      data: string;
-      mediaType?: string;
-      filename?: string;
-    }
-  | {
-      type: "url";
-      url: string;
-      mediaType?: string;
-      filename?: string;
-    };
+type InputFileSource = InputImageSource & { filename?: string };
 
 /** Guarded URL fetch result before final MIME allowlist validation. */
 type InputFetchResult = {
@@ -242,18 +232,25 @@ async function fetchWithGuard(
   return result;
 }
 
-function decodeTextContent(buffer: Buffer, charset: string | undefined, maxChars: number): string {
+function decodeTextContent(buffer: Buffer, charset: string | undefined, maxChars: number) {
   const encoding = normalizeOptionalLowercaseString(charset) || "utf-8";
   const limit = Math.max(0, Math.floor(maxChars));
   const decode = (label: string) => {
     const decoder = new TextDecoder(label);
     let text = "";
-    for (let offset = 0; offset < buffer.length && text.length < limit; offset += 16_384) {
+    // Look past an exact limit: unread bytes may only contain decoder state, not omitted text.
+    for (let offset = 0; offset < buffer.length && text.length <= limit; offset += 16_384) {
       const end = Math.min(offset + 16_384, buffer.length);
       // Preserve charset state across chunks; only actual EOF flushes incomplete bytes.
       text += decoder.decode(buffer.subarray(offset, end), { stream: end < buffer.length });
     }
-    return truncateUtf16Safe(text, limit);
+    const prefix = truncateUtf16Safe(text, limit);
+    return {
+      text: prefix,
+      ...(prefix.length < text.length
+        ? { metadata: { textTruncated: true, imagesTruncated: false } }
+        : {}),
+    };
   };
   try {
     return decode(encoding);
@@ -463,14 +460,20 @@ export async function extractFileContentFromBuffer(params: {
           },
         }),
     });
-    const text = extracted.text ? truncateUtf16Safe(extracted.text, limits.maxChars) : "";
+    const text = truncateUtf16Safe(extracted.text, limits.maxChars);
+    const metadata: DocumentExtractionMetadata = {
+      ...extracted.metadata,
+      textTruncated:
+        extracted.metadata?.textTruncated === true || text.length < extracted.text.length,
+      imagesTruncated: extracted.metadata?.imagesTruncated === true,
+    };
     return {
       filename,
       text,
       images: extracted.images.length > 0 ? extracted.images : undefined,
+      metadata,
     };
   }
 
-  const text = decodeTextContent(buffer, charset, limits.maxChars);
-  return { filename, text };
+  return { filename, ...decodeTextContent(buffer, charset, limits.maxChars) };
 }

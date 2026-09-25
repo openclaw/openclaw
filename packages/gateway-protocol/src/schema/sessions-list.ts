@@ -23,6 +23,10 @@ export const SessionsListParamsSchema = closedObject({
   includeUnknown: Type.Optional(Type.Boolean()),
   /** Exclude subagent sessions before facets and pagination. */
   excludeSubagents: Type.Optional(Type.Boolean()),
+  /** Exclude automation roots as well as individual cron runs. */
+  excludeCron: Type.Optional(Type.Boolean()),
+  /** Exclude machine-created probe/system sessions using recorded provenance. */
+  excludeSystem: Type.Optional(Type.Boolean()),
   /** Limit agent-scoped rows to agents currently present in config. */
   configuredAgentsOnly: Type.Optional(Type.Boolean()),
   /**

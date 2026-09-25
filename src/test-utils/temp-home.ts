@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "./env.js";
-import { cleanupSessionStateForTest } from "./session-state-cleanup.js";
 
 const HOME_ENV_KEYS = [
   "HOME",
@@ -47,6 +46,7 @@ async function ensurePrefixRoot(prefix: string): Promise<string> {
 
 /** Creates a temporary OpenClaw home and process env override for stateful tests. */
 export async function createTempHomeEnv(prefix: string): Promise<TempHomeEnv> {
+  const { cleanupSessionStateForTest } = await import("./session-state-cleanup.js");
   const prefixRoot = await ensurePrefixRoot(prefix);
   const home = path.join(prefixRoot, `home-${String(nextHomeIndex)}`);
   const stateDir = path.join(home, ".openclaw");
@@ -77,8 +77,11 @@ export async function createTempHomeEnv(prefix: string): Promise<TempHomeEnv> {
   return {
     home,
     restore: async () => {
-      await cleanupSessionStateForTest({ stateDir }).catch(() => undefined);
-      snapshot.restore();
+      try {
+        await cleanupSessionStateForTest({ stateDir, rootPath: home });
+      } finally {
+        snapshot.restore();
+      }
       await fs.rm(home, { recursive: true, force: true });
     },
   };

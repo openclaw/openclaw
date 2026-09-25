@@ -1,32 +1,8 @@
-// Memory Core plugin module implements tokenize behavior.
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-/**
- * Shared CJK-aware tokenizer + Jaccard similarity helpers.
- *
- * Originally introduced for memory MMR re-ranking; now also used by the dreaming
- * dedupe path so similar-but-not-identical CJK candidates do not slip past the
- * Jaccard threshold (issue #80613).
- */
-
-/**
- * Regex matching CJK-family characters that lack whitespace word boundaries:
- * - CJK Unified Ideographs (Chinese hanzi, Japanese kanji, Korean hanja)
- * - CJK Extension A
- * - Hiragana & Katakana (Japanese)
- * - Hangul Syllables & Jamo (Korean)
- */
 const CJK_RE = /[\u3040-\u309f\u30a0-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\u1100-\u11ff]/;
 
-/**
- * Tokenize text for Jaccard similarity computation.
- * Extracts alphanumeric tokens, CJK-family characters (unigrams),
- * and consecutive CJK character pairs (bigrams).
- *
- * Bigrams are only created from characters that are adjacent in the
- * original text, so mixed content like "我喜欢hello你好" will NOT
- * produce the spurious bigram "欢你".
- */
+// Only adjacent CJK characters form bigrams: "我喜欢hello你好" must not yield "欢你".
 export function tokenize(text: string): Set<string> {
   const lower = normalizeLowercaseStringOrEmpty(text);
   const ascii = lower.match(/[a-z0-9_]+/g) ?? [];
@@ -56,10 +32,6 @@ export function tokenize(text: string): Set<string> {
   return tokens;
 }
 
-/**
- * Compute Jaccard similarity between two token sets.
- * Returns a value in [0, 1] where 1 means identical sets.
- */
 export function jaccardSimilarity(setA: Set<string>, setB: Set<string>): number {
   if (setA.size === 0 && setB.size === 0) {
     return 1;
@@ -82,17 +54,7 @@ export function jaccardSimilarity(setA: Set<string>, setB: Set<string>): number 
   return unionSize === 0 ? 0 : intersectionSize / unionSize;
 }
 
-/**
- * Compute text similarity between two content strings using Jaccard on tokens.
- *
- * When BOTH inputs tokenize to empty sets (e.g. Cyrillic/Arabic/emoji-only or
- * punctuation-only snippets that contain no ASCII or CJK tokens), the raw
- * `jaccardSimilarity` returns `1` for two empty sets. To prevent the dreaming
- * dedupe path (and other callers that compare distinct strings via Jaccard)
- * from collapsing distinct non-tokenized snippets into one, we fall back to
- * exact normalized-string equality for that empty/empty case. Non-empty cases
- * continue to use Jaccard unchanged.
- */
+// Distinct text outside the tokenizer's alphabet must not collapse as two empty sets.
 export function textSimilarity(contentA: string, contentB: string): number {
   const tokensA = tokenize(contentA);
   const tokensB = tokenize(contentB);

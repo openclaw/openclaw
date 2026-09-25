@@ -527,16 +527,12 @@ async function migrateWithExclusiveStateOwnership(params: {
   };
 }
 
-/**
- * Import a verified retired primary identity under explicit Doctor or startup authority.
- * Startup authority cannot repair or replace an invalid canonical identity.
- */
+/** Import a verified retired primary identity under explicit Doctor authority. */
 export async function migrateLegacyDeviceIdentity(params: {
   detected: LegacyDeviceIdentityDetection;
   stateDir: string;
   env?: NodeJS.ProcessEnv;
   doctorOnlyStateMigrations?: boolean;
-  allowLegacyDeviceIdentityImport?: boolean;
   beforeClaim?: (sourcePath: string) => void;
   beforeCleanup?: () => void;
   removeSource?: (sourcePath: string) => Promise<void> | void;
@@ -544,10 +540,7 @@ export async function migrateLegacyDeviceIdentity(params: {
   if (!params.detected.hasLegacy && !params.detected.hasInvalidCanonical) {
     return { changes: [], warnings: [] };
   }
-  if (
-    params.doctorOnlyStateMigrations !== true &&
-    params.allowLegacyDeviceIdentityImport !== true
-  ) {
+  if (params.doctorOnlyStateMigrations !== true) {
     return { changes: [], warnings: [] };
   }
   let identityCoordinator: ReturnType<typeof acquireDeviceIdentityCoordinator> | undefined;

@@ -3,6 +3,7 @@ import { html, nothing } from "lit";
 import type { SessionGoal } from "../../../api/types.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerChatGoalsEnglish } from "../../../i18n/locales/en-chat-goals.ts";
 import type { ChatGoalDraftMode } from "../../../lib/chat/chat-types.ts";
 import type { SlashCommandDef } from "../../../lib/chat/commands.ts";
 import { adjustTextareaHeight } from "./chat-composer-dom.ts";
@@ -10,6 +11,8 @@ import { resetSkillMenuState } from "./chat-composer-skill-menu.ts";
 import { resetSlashMenuState } from "./chat-composer-slash-menu.ts";
 import { commitComposerDraft, composerDraftKey } from "./chat-composer-state.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
+
+registerChatGoalsEnglish();
 
 export function createGoalComposerController(
   props: ChatComposerProps,

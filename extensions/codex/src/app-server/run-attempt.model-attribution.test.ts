@@ -4,15 +4,12 @@ import { fileURLToPath } from "node:url";
 import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
-import {
-  createPluginStateSyncKeyedStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createPluginStateSyncKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createTestPluginApi, type TestPluginApiInput } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { ensureAuthProfileStore, resolveAuthProfileOrder } from "openclaw/plugin-sdk/provider-auth";
 import { resolveProviderIdForAuth } from "openclaw/plugin-sdk/provider-auth-aliases";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import plugin from "../../index.js";
 import { CodexAppServerClient } from "./client.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
@@ -39,14 +36,11 @@ import { createClientHarness } from "./test-support.js";
 import { codexDynamicToolsFingerprint } from "./thread-fingerprints.js";
 
 setupRunAttemptTestHooks();
-afterEach(() => resetPluginStateStoreForTests());
 
 describe("registered Codex harness model attribution", () => {
   it.each(["completed", "timed out"] as const)("attributes models (%s)", async (outcome) => {
     // Protocol events own completion; host load must not spend the attempt watchdog.
-    if (outcome === "timed out") {
-      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    }
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const params = createTestParams();
     // Supervision replaces the helper model; this fixture supplies no host tools.
     params.hostCapabilities = Object.freeze({
@@ -221,6 +215,7 @@ describe("registered Codex harness model attribution", () => {
       data: { phase: "model", provider: "openai", model: "rerouted-model" },
     };
     const run = registered.runAttempt(params);
+    let next: typeof run | undefined;
     try {
       await Promise.race([
         turnStarted.promise,
@@ -298,7 +293,7 @@ describe("registered Codex harness model attribution", () => {
       if (outcome === "completed") {
         nativeModel = "changed-native-model";
         turnStarted = createDeferred<void>();
-        const next = registered.runAttempt({ ...params, runId: "native-second-turn" });
+        next = registered.runAttempt({ ...params, runId: "native-second-turn" });
         await Promise.race([
           turnStarted.promise,
           next.then((earlyResult) => {
@@ -332,12 +327,16 @@ describe("registered Codex harness model attribution", () => {
         expect(requests.filter(({ method }) => method === "thread/inject_items")).toHaveLength(1);
       }
     } finally {
-      vi.useRealTimers();
       abort.abort("test cleanup");
-      await transport.client.closeAndWait();
-      await Promise.allSettled([run]);
-      await registered.dispose?.();
-      vi.useRealTimers();
+      try {
+        // Restoring clocks first discards the pending relay-replacement listener-close timer.
+        await vi.runOnlyPendingTimersAsync();
+      } finally {
+        vi.useRealTimers();
+        await transport.client.closeAndWait();
+        await Promise.allSettled([run, next]);
+        await registered.dispose?.();
+      }
     }
   });
 });

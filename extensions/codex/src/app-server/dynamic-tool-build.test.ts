@@ -8,7 +8,6 @@ import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
 import {
   embeddedAgentLog,
   isToolWrappedWithBeforeToolCallHook,
-  resolveAgentHarnessBeforePromptBuildResult,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   wrapToolWithBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -39,6 +38,7 @@ import {
   resolveCodexSandboxEnvironmentSelection,
   shouldEnableCodexAppServerNativeToolSurface,
 } from "./dynamic-tool-build.js";
+import type { RuntimeDynamicToolForTest } from "./dynamic-tool-build.test-support.js";
 import {
   filterCodexDynamicTools,
   filterCodexDynamicToolsForDisabledNativeSurface,
@@ -58,41 +58,18 @@ import {
 import { resolveCodexDynamicToolDirectNames } from "./run-attempt-tools.js";
 import { createCodexTestModel } from "./test-support.js";
 
-const { buildDynamicToolsForTest, createCodexRuntimePlanFixture, createParams, hoisted } =
-  await import("./dynamic-tool-build.test-support.js");
+const {
+  bindProductionCodexHostCapabilities,
+  buildDynamicToolsForTest,
+  cleanupDynamicToolBuildFixture,
+  createCodexRuntimePlanFixture,
+  createParams,
+  createRuntimeDynamicTool,
+  hoisted,
+} = await import("./dynamic-tool-build.test-support.js");
 
 let tempDir: string;
 const hostCapabilityClosers: Array<() => void> = [];
-
-async function bindProductionCodexHostCapabilities(
-  params: EmbeddedRunAttemptParams,
-): Promise<void> {
-  const { hostCapabilities: _hostCapabilities, ...attempt } = params;
-  const host = await createAgentHarnessHostCapabilitiesForTest({ attempt, pluginId: "codex" });
-  params.hostCapabilities = host.capabilities;
-  hostCapabilityClosers.push(host.close);
-}
-
-type RuntimeDynamicToolForTest = Parameters<
-  typeof createCodexDynamicToolBridge
->[0]["tools"][number];
-
-function createRuntimeDynamicTool(name: string): RuntimeDynamicToolForTest {
-  return {
-    name,
-    label: name,
-    description: `${name} test tool`,
-    parameters: {
-      type: "object",
-      properties: {},
-      additionalProperties: true,
-    },
-    execute: vi.fn(async () => ({
-      content: [{ type: "text" as const, text: `${name} done` }],
-      details: {},
-    })),
-  };
-}
 
 function shellTestToolNames(tools: readonly { name: string }[]): string[] {
   return tools
@@ -335,7 +312,7 @@ describe("Codex app-server dynamic tool build", () => {
         createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
       );
       try {
-        await bindProductionCodexHostCapabilities(params);
+        await bindProductionCodexHostCapabilities(params, hostCapabilityClosers);
 
         const tools = await buildDynamicToolsForTest(params, workspaceDir, {
           sandboxSessionKey: params.sandboxSessionKey ?? params.sessionKey,
@@ -419,13 +396,7 @@ describe("Codex app-server dynamic tool build", () => {
   });
 
   afterEach(async () => {
-    for (const close of hostCapabilityClosers.splice(0)) {
-      close();
-    }
-
-    vi.restoreAllMocks();
-    vi.unstubAllEnvs();
-    await fs.rm(tempDir, { recursive: true, force: true });
+    await cleanupDynamicToolBuildFixture(tempDir, hostCapabilityClosers);
   });
 
   it("uses the message tool channel before a differing ingress provider", () => {
@@ -577,7 +548,7 @@ describe("Codex app-server dynamic tool build", () => {
     params.sessionRoot = workspaceDir;
     params.execOverrides = { host: "gateway", mode: "ask" };
     params.runtimePlan = createCodexRuntimePlanFixture();
-    await bindProductionCodexHostCapabilities(params);
+    await bindProductionCodexHostCapabilities(params, hostCapabilityClosers);
 
     const tools = await buildDynamicToolsForTest(params, workspaceDir, {
       sessionPermissionPolicy: { mode: "guarded", root: workspaceDir, execMode: "ask" },
@@ -1483,86 +1454,13 @@ describe("Codex app-server dynamic tool build", () => {
     ).toEqual({ type: "externalSandbox", networkAccess: "enabled" });
   });
 
-  it("exposes OpenClaw sandbox shell tools under distinct names for non-Docker sandbox backends", async () => {
-    const execTool = expectDefined(
-      createOpenClawCodingTools({ workspaceDir: tempDir }).find((tool) => tool.name === "exec"),
-      "assembled exec tool",
-    );
-
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    const params = createParams(sessionFile, workspaceDir);
-    setCodexTestToolFactory(params, () => [
-      createRuntimeDynamicTool("read"),
-      createRuntimeDynamicTool("write"),
-      createRuntimeDynamicTool("edit"),
-      createRuntimeDynamicTool("apply_patch"),
-      execTool,
-      createRuntimeDynamicTool("process"),
-      createRuntimeDynamicTool("message"),
-    ]);
-    params.disableTools = false;
-    params.runtimePlan = createCodexRuntimePlanFixture();
-
-    const tools = await buildDynamicToolsForTest(params, workspaceDir, {
-      sandbox: { enabled: true, backendId: "ssh" } as never,
-      nativeToolSurfaceEnabled: false,
-    });
-
-    expect(tools.map((tool) => tool.name)).toEqual([
-      "read",
-      "write",
-      "edit",
-      "apply_patch",
-      "message",
-      "sandbox_exec",
-      "sandbox_process",
-    ]);
-    expect(tools.find((tool) => tool.name === "sandbox_exec")?.description).toContain(
-      "configured sandbox backend",
-    );
-    expect(tools.find((tool) => tool.name === "sandbox_exec")?.parameters).not.toHaveProperty(
-      "properties.security",
-    );
-    expect(tools.find((tool) => tool.name === "sandbox_process")?.description).toContain(
-      "background shell sessions",
-    );
-  });
-
-  it("exposes Docker sandbox shell tools when OpenClaw sandboxing disables native Code Mode", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    const params = createParams(sessionFile, workspaceDir);
-    setCodexTestToolFactory(params, () => [
-      createRuntimeDynamicTool("exec"),
-      createRuntimeDynamicTool("process"),
-      createRuntimeDynamicTool("message"),
-    ]);
-    params.disableTools = false;
-    params.runtimePlan = createCodexRuntimePlanFixture();
-    const sandbox = { enabled: true, backendId: "docker" } as never;
-    const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(params, sandbox);
-
-    const dockerTools = await buildDynamicToolsForTest(params, workspaceDir, {
-      sandbox,
-      nativeToolSurfaceEnabled,
-    });
-
-    expect(nativeToolSurfaceEnabled).toBe(false);
-    expect(dockerTools.map((tool) => tool.name)).toEqual([
-      "message",
-      "sandbox_exec",
-      "sandbox_process",
-    ]);
-  });
-
   it("keeps a pinned Gateway shell path beside Codex native shell", async () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "gateway-session.jsonl"), workspaceDir);
     params.disableTools = false;
     params.runtimePlan = createCodexRuntimePlanFixture();
     params.execOverrides = { host: "gateway" };
-    await bindProductionCodexHostCapabilities(params);
+    await bindProductionCodexHostCapabilities(params, hostCapabilityClosers);
 
     const tools = await buildDynamicToolsForTest(params, workspaceDir, {
       nativeToolSurfaceEnabled: true,
@@ -1634,7 +1532,7 @@ describe("Codex app-server dynamic tool build", () => {
     params.disableTools = false;
     params.runtimePlan = createCodexRuntimePlanFixture();
     params.execOverrides = { host: "gateway" };
-    await bindProductionCodexHostCapabilities(params);
+    await bindProductionCodexHostCapabilities(params, hostCapabilityClosers);
 
     const tools = await buildDynamicToolsForTest(params, workspaceDir, {
       nativeToolSurfaceEnabled: true,
@@ -1846,7 +1744,7 @@ describe("Codex app-server dynamic tool build", () => {
     const params = createParams(sessionFile, workspaceDir);
     params.disableTools = false;
     params.runtimePlan = createCodexRuntimePlanFixture();
-    await bindProductionCodexHostCapabilities(params);
+    await bindProductionCodexHostCapabilities(params, hostCapabilityClosers);
     const resolveExecutionPolicy = vi.spyOn(
       nativeExecutionPolicy,
       "resolveCodexNativeExecutionPolicy",
@@ -1907,7 +1805,7 @@ describe("Codex app-server dynamic tool build", () => {
     boundAutoParams.config = {
       tools: { exec: { host: "auto", node: "bound-mac-mini" } },
     } as never;
-    await bindProductionCodexHostCapabilities(boundAutoParams);
+    await bindProductionCodexHostCapabilities(boundAutoParams, hostCapabilityClosers);
     const boundAutoTools = await buildDynamicToolsForTest(boundAutoParams, workspaceDir, {
       nativeToolSurfaceEnabled: true,
     });
@@ -1925,7 +1823,7 @@ describe("Codex app-server dynamic tool build", () => {
     gatewayParams.disableTools = false;
     gatewayParams.runtimePlan = createCodexRuntimePlanFixture();
     gatewayParams.execOverrides = { host: "gateway" };
-    await bindProductionCodexHostCapabilities(gatewayParams);
+    await bindProductionCodexHostCapabilities(gatewayParams, hostCapabilityClosers);
     const gatewayTools = await buildDynamicToolsForTest(gatewayParams, workspaceDir, {
       nativeToolSurfaceEnabled: true,
     });
@@ -2050,138 +1948,6 @@ describe("Codex app-server dynamic tool build", () => {
       expect(tools.map((tool) => tool.name)).toEqual(expected);
     },
   );
-
-  it.each([
-    { allow: undefined, expected: ["message", "sandbox_exec", "sandbox_process"] },
-    { allow: ["group:runtime"], expected: ["sandbox_exec", "sandbox_process"] },
-    { allow: ["exec*"], expected: ["sandbox_exec", "sandbox_process"] },
-    { allow: ["exec"], restrictWith: ["process"], expected: ["sandbox_process"] },
-    { allow: ["sandbox_process"], restrictWith: ["process"], expected: ["sandbox_process"] },
-  ])(
-    "keeps Docker shell projections pinned for runtime selectors $allow restricted by $restrictWith",
-    async ({ allow, restrictWith, expected }) => {
-      const sessionFile = path.join(tempDir, "session.jsonl");
-      const workspaceDir = path.join(tempDir, "workspace");
-      const params = createParams(sessionFile, workspaceDir);
-      setCodexTestToolFactory(params, () => [
-        createRuntimeDynamicTool("exec"),
-        createRuntimeDynamicTool("process"),
-        createRuntimeDynamicTool("message"),
-      ]);
-      params.disableTools = false;
-      params.runtimePlan = createCodexRuntimePlanFixture();
-      params.toolsAllow = allow;
-      if (restrictWith) {
-        initializeGlobalHookRunner(
-          createMockPluginRegistry([
-            { hookName: "before_prompt_build", handler: () => ({ toolsAllow: allow }) },
-            { hookName: "before_prompt_build", handler: () => ({ toolsAllow: restrictWith }) },
-          ]),
-        );
-        const result = await resolveAgentHarnessBeforePromptBuildResult({
-          prompt: params.prompt,
-          developerInstructions: "",
-          messages: [],
-          ctx: { agentId: "main", sessionKey: params.sessionKey },
-        });
-        params.toolsAllow = result.toolsAllow;
-      }
-      const resolveExecutionPolicy = vi.spyOn(
-        nativeExecutionPolicy,
-        "resolveCodexNativeExecutionPolicy",
-      );
-
-      const tools = await buildDynamicToolsForTest(params, workspaceDir, {
-        sandbox: {
-          enabled: true,
-          backendId: "docker",
-          docker: { binds: ["/tmp/openclaw-data:/data:rw"] },
-        } as never,
-        nativeToolSurfaceEnabled: false,
-      });
-
-      expect(resolveExecutionPolicy).toHaveBeenCalledOnce();
-      expect(resolveExecutionPolicy).toHaveBeenCalledWith(
-        expect.objectContaining({ sandboxAvailable: true }),
-      );
-      expect(tools.map((tool) => tool.name)).toEqual(expected);
-      expect(tools.map((tool) => tool.catalogMode)).toEqual(
-        expected.map((name) => (name === "message" ? undefined : "direct-only")),
-      );
-      if (expected.includes("sandbox_exec")) {
-        expect(tools.find((tool) => tool.name === "sandbox_exec")?.description).toContain(
-          "Docker container-path bind layout",
-        );
-      }
-    },
-  );
-
-  it("exposes node shell but not sandbox shell tools when sandbox routing is disabled", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    const params = createParams(sessionFile, workspaceDir);
-    setCodexTestToolFactory(params, () => [
-      createRuntimeDynamicTool("exec"),
-      createRuntimeDynamicTool("process"),
-      createRuntimeDynamicTool("message"),
-    ]);
-    params.disableTools = false;
-    params.runtimePlan = createCodexRuntimePlanFixture();
-
-    const disabledSandboxTools = await buildDynamicToolsForTest(params, workspaceDir, {
-      sandbox: { enabled: false, backendId: "ssh" } as never,
-      nativeToolSurfaceEnabled: false,
-    });
-
-    expect(disabledSandboxTools.map((tool) => tool.name)).toEqual([
-      "exec",
-      "process",
-      "message",
-      "node_exec",
-    ]);
-  });
-
-  it("does not expose sandbox_exec without a matching process follow-up tool", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    const params = createParams(sessionFile, workspaceDir);
-    setCodexTestToolFactory(params, () => [
-      createRuntimeDynamicTool("exec"),
-      createRuntimeDynamicTool("message"),
-    ]);
-    params.disableTools = false;
-    params.runtimePlan = createCodexRuntimePlanFixture();
-
-    const tools = await buildDynamicToolsForTest(params, workspaceDir, {
-      sandbox: { enabled: true, backendId: "ssh" } as never,
-      nativeToolSurfaceEnabled: false,
-    });
-
-    expect(tools.map((tool) => tool.name)).toEqual(["message"]);
-  });
-
-  it("honors Codex dynamic tool excludes for sandbox shell exposure", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    const params = createParams(sessionFile, workspaceDir);
-    setCodexTestToolFactory(params, () => [
-      createRuntimeDynamicTool("exec"),
-      createRuntimeDynamicTool("process"),
-      createRuntimeDynamicTool("message"),
-    ]);
-    params.disableTools = false;
-    params.runtimePlan = createCodexRuntimePlanFixture();
-
-    for (const excludedToolName of ["sandbox_exec", "process"]) {
-      const tools = await buildDynamicToolsForTest(params, workspaceDir, {
-        sandbox: { enabled: true, backendId: "ssh" } as never,
-        nativeToolSurfaceEnabled: false,
-        pluginConfig: { codexDynamicToolsExclude: [excludedToolName] },
-      });
-
-      expect(tools.map((tool) => tool.name)).toEqual(["message"]);
-    }
-  });
 
   it("passes auth profiles into Codex dynamic tool construction", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
@@ -3073,7 +2839,7 @@ describe("Codex app-server dynamic tool build", () => {
     expect(sourceReplySchema.properties).toMatchObject({
       final: {
         type: "boolean",
-        description: expect.stringContaining("Ignored for other sends"),
+        description: expect.stringContaining("For react, set true only when"),
       },
     });
 

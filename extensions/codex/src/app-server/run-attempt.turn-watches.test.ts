@@ -11,8 +11,12 @@ import * as mediaStore from "openclaw/plugin-sdk/media-store";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it, vi } from "vitest";
 import * as approvalBridge from "./approval-bridge.js";
-import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
+import {
+  expectSuccessfulAttempt,
+  expectTimedOutAttempt,
+  projectAttemptResult,
+} from "./attempt-terminal.test-support.js";
 import {
   TURN_FINALIZE_DRAIN_ABORT_GRACE_MS,
   TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS,
@@ -43,11 +47,6 @@ import {
   readCodexAppServerBinding,
   writeCodexAppServerBinding as writeRawCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
-
-const projectAttemptResult = (result: EmbeddedRunAttemptResult) => ({
-  ...result,
-  ...readAttemptTerminal(result),
-});
 
 setupRunAttemptTestHooks();
 
@@ -198,27 +197,13 @@ function makeMediaProjectionGate() {
   return { projectionStarted, releaseProjection };
 }
 
-function expectSuccessfulAttempt(result: EmbeddedRunAttemptResult): void {
-  expect(readAttemptTerminal(result).aborted).toBe(false);
-  expect(readAttemptTerminal(result).timedOut).toBe(false);
-  expect(readAttemptTerminal(result).promptError).toBeNull();
-}
-
-function expectTimedOutAttempt(result: EmbeddedRunAttemptResult): void {
-  expect(readAttemptTerminal(result).aborted).toBe(true);
-  expect(readAttemptTerminal(result).timedOut).toBe(true);
-  expect(readAttemptTerminal(result).promptError).toBe(
-    "codex app-server execution budget timed out",
-  );
-}
-
 async function runExecutionTimeoutScenario(notifications: CodexServerNotification[]) {
   vi.useFakeTimers();
   const harness = createStartedThreadHarness();
   const onRunAgentEvent = vi.fn();
   const params = makeTestParams({ timeoutMs: 60_000, onAgentEvent: onRunAgentEvent });
   const run = runCodexAppServerAttempt(params);
-  await harness.waitForMethod("turn/start");
+  await run.waitForTurnAccepted();
   for (const notification of notifications) {
     await harness.notify(notification);
   }
@@ -229,7 +214,7 @@ async function runExecutionTimeoutScenario(notifications: CodexServerNotificatio
 async function runClientCloseScenario(notifications: CodexServerNotification[]) {
   const harness = createStartedThreadHarness();
   const run = runCodexAppServerAttempt(createTestParams());
-  await harness.waitForMethod("turn/start");
+  await run.waitForTurnAccepted();
   for (const notification of notifications) {
     await harness.notify(notification);
   }
@@ -301,7 +286,7 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     const run = runCodexAppServerAttempt(makeTestParams({ timeoutMs: MAX_TIMER_TIMEOUT_MS }));
     const settled = vi.fn();
     void run.then(settled);
-    await harness.waitForMethod("turn/start");
+    await run.waitForTurnAccepted();
     for (const notification of notifications) {
       await harness.notify(notification);
     }
@@ -403,7 +388,7 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     const onAttemptTimeout = vi.fn();
     params.onAttemptTimeout = onAttemptTimeout;
     const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
+    await run.waitForTurnAccepted();
     for (let index = 0; index < 5; index += 1) {
       await vi.advanceTimersByTimeAsync(10_000);
       await harness.notify(makeAgentMessageDelta({ delta: `progress ${index}` }));
@@ -422,7 +407,7 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(tempDir, "state"));
 
     const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
+    await run.waitForTurnAccepted();
     await harness.notify(
       rawItemCompleted({
         id: "ig_raw_1",
@@ -899,7 +884,7 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     const firstParams = createParams(sessionFile, workspaceDir);
     firstParams.timeoutMs = 60_000;
     const firstRun = runCodexAppServerAttempt(firstParams);
-    await Promise.race([firstRun, firstHarness.waitForMethod("turn/start")]);
+    await firstRun.waitForTurnAccepted();
     expect(firstHarness.requests.some((entry) => entry.method === "thread/resume")).toBe(true);
 
     await vi.advanceTimersByTimeAsync(60_000);
@@ -1249,64 +1234,6 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     });
   });
 
-  it("releases completion and native hook relay state after marker plus interrupted completion", async () => {
-    const harness = createStartedThreadHarness();
-    const run = runCodexAppServerAttempt(createTestParams(), {
-      nativeHookRelay: { enabled: true },
-    });
-    let resolved = false;
-    void run.then(() => {
-      resolved = true;
-    });
-
-    await harness.waitForMethod("turn/start");
-    const startRequest = harness.requests.find((request) => request.method === "thread/start");
-    const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
-    await harness.notify(
-      rawItemCompleted({
-        id: "abort-marker-1",
-        type: "message",
-        role: "user",
-        content: [
-          {
-            type: "input_text",
-            text: "<turn_aborted>\nThe user interrupted the previous turn on purpose. Any running unified exec processes may still be running in the background. If any tools/commands were aborted, they may have partially executed.\n</turn_aborted>",
-          },
-        ],
-      }),
-    );
-
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    expect(resolved).toBe(false);
-    expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeDefined();
-
-    await harness.notify(turnCompleted({ id: "turn-1", status: "interrupted", items: [] }));
-
-    const result = await run;
-    expect(resolved).toBe(true);
-    expect(readAttemptTerminal(result).aborted).toBe(true);
-    expect(readAttemptTerminal(result).timedOut).toBe(false);
-    expect(readAttemptTerminal(result).promptError).toBeNull();
-    expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
-    expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
-    await expect(
-      invokeNativeHookRelay({
-        provider: "codex",
-        relayId,
-        event: "pre_tool_use",
-        rawPayload: {
-          hook_event_name: "PreToolUse",
-          tool_name: "Bash",
-          tool_input: { command: "pnpm test" },
-        },
-      }),
-    ).rejects.toThrow("native hook relay not found");
-    await nativeHookRelayUnregisterQueue.flush();
-    expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
-  });
-
   it("cleans up native hook relay state when Codex completes the turn as interrupted", async () => {
     const harness = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(createTestParams(), {
@@ -1347,7 +1274,7 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     });
     const run = runCodexAppServerAttempt(params);
 
-    await harness.waitForMethod("turn/start");
+    await run.waitForTurnAccepted();
     abortController.abort("user_cancelled");
     await harness.notify(turnCompleted({ id: "turn-1", status: "interrupted" }));
 
@@ -1372,7 +1299,7 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     });
     const run = runCodexAppServerAttempt(params);
 
-    await harness.waitForMethod("turn/start");
+    await run.waitForTurnAccepted();
     const timeoutError = new Error("cron watchdog timeout");
     timeoutError.name = "TimeoutError";
     abortController.abort(timeoutError);
@@ -1394,22 +1321,28 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     });
   });
 
-  it("settles a client-close route after the host trajectory capability closes", async () => {
-    const harness = createStartedThreadHarness();
-    const params = Object.assign(createTestParams(), {
-      trajectoryRecorder: { recordEvent: vi.fn(), flush: vi.fn() },
-    });
-    const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
-    const run = runCodexAppServerAttempt(params);
+  it.each([
+    undefined,
+    { profileId: "staff-fixture", scopes: ["operator.write"], assertCurrent: () => {} },
+  ])(
+    "settles a client-close route after the host trajectory capability closes (%j)",
+    async (operatorSource) => {
+      const harness = createStartedThreadHarness();
+      const params = Object.assign(createTestParams(), {
+        trajectoryRecorder: { recordEvent: vi.fn(), flush: vi.fn() },
+      });
+      const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params, operatorSource);
+      const run = runCodexAppServerAttempt(params);
 
-    await harness.waitForMethod("turn/start");
-    closeHost();
-    harness.close();
+      await run.waitForTurnAccepted();
+      closeHost();
+      harness.close();
 
-    await expect(run).resolves.toMatchObject({
-      codexAppServerFailure: { kind: "client_closed_before_turn_completed" },
-    });
-  });
+      await expect(run).resolves.toMatchObject({
+        codexAppServerFailure: { kind: "client_closed_before_turn_completed" },
+      });
+    },
+  );
 
   it("retains completed-looking assistant text as a failure when the client closes before terminal", async () => {
     const result = await runClientCloseScenario([
@@ -1571,7 +1504,7 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     const harness = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(createTestParams());
 
-    await harness.waitForMethod("turn/start");
+    await run.waitForTurnAccepted();
     const completed = harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     harness.close();
     await completed;

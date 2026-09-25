@@ -188,6 +188,10 @@ openclaw migrate apply codex --yes --plugin google-calendar
 - Personal AgentSkills under `$HOME/.agents/skills`, copied into the current OpenClaw agent workspace for per-agent ownership.
 - Source-installed `openai-curated` Codex plugins discovered through Codex app-server `plugin/installed`. Planning reads `plugin/read` for each enabled installed plugin.
 
+Codex sessions and chat history are not imported. Consolidated memories are not conversation transcripts. Migration does not move or delete your source files.
+
+During onboarding, the migration offer explains this scope before asking whether to continue. Continuing opens the import options; credentials require separate consent, skills and eligible plugins can be selected, and a final confirmation is required before applying.
+
 App-backed plugin migration has extra gates:
 
 - App-backed plugins require the source Codex app-server account to be a ChatGPT subscription account. Non-ChatGPT or missing account responses are skipped with `codex_subscription_required`.

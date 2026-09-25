@@ -1,5 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { createDeferredCore } from "../shared/deferred.js";
+import type { OpenClawStateDatabaseReadAdmission } from "../state/openclaw-state-db-async-lifecycle.js";
+import type { TaskAgentEventTarget } from "./task-registry-agent-event-target.js";
 import {
   cloneTaskDeliveryState,
   cloneTaskRecord,
@@ -11,13 +13,32 @@ import {
   matchesScope,
   taskIdsInScope,
   type PendingTaskRegistryMutation,
+  type TaskRegistryReadIdentity,
 } from "./task-registry.process-state.js";
+import type { TaskRegistryStore } from "./task-registry.store.js";
 import type {
   TaskRegistryMutationScope,
   TaskRegistryStoreSnapshot,
   TaskRegistryObserverEvent,
 } from "./task-registry.store.types.js";
 import type { TaskRecord } from "./task-registry.types.js";
+
+export type TaskRegistryWorkerMutationContext = {
+  scope: TaskRegistryMutationScope;
+  admission: OpenClawStateDatabaseReadAdmission;
+  publicationRecords: () => ReadonlyMap<string, TaskRecord>;
+  readEventTarget?: () => TaskAgentEventTarget | undefined;
+  /** Producer-owned identity writes; canonical readback and discovery retain the full scope. */
+  readIdentity?: TaskRegistryReadIdentity;
+  /** Prepare current rows before this mutation invalidates their projection. */
+  prepare?: () => Promise<void>;
+  taskRowsWritten?: () => boolean;
+  beforeObservers?: (assertCurrent: () => void) => Promise<void>;
+  recoverPublication?: (snapshot: TaskRegistryStoreSnapshot) => TaskRecord | undefined;
+  onPublished?: (task: TaskRecord) => void;
+  onPublicationError?: (error: unknown) => void;
+  forcePublish?: () => TaskRecord | undefined;
+};
 
 function* currentTasksInScope(scope: TaskRegistryMutationScope): Iterable<TaskRecord> {
   const { tasks } = getTaskRegistryProcessState();
@@ -43,6 +64,41 @@ function captureTaskRegistryWorkerSnapshot(
     }
   }
   return captured;
+}
+
+function createTaskRegistryPublicationRecovery(
+  pending: PendingTaskRegistryMutation,
+  recover: (snapshot: TaskRegistryStoreSnapshot) => TaskRecord | undefined,
+) {
+  const witness = { writtenTaskIds: new Set<string>(), replaced: false };
+  pending.recoveryWitness = witness;
+  let expected: TaskRecord | undefined;
+  const superseded = new Error("Task publication was superseded by a current write");
+  return {
+    isSuperseded: (error: unknown) => error === superseded,
+    begin() {
+      witness.writtenTaskIds.clear();
+      witness.replaced = false;
+    },
+    recover: (snapshot: TaskRegistryStoreSnapshot) => {
+      expected = recover(snapshot);
+      return expected;
+    },
+    assertCurrent() {
+      if (!expected) {
+        return;
+      }
+      const current = getTaskRegistryProcessState().tasks.get(expected.taskId);
+      if (
+        witness.replaced ||
+        witness.writtenTaskIds.has(expected.taskId) ||
+        !current ||
+        !isEquivalentTaskRecord(current, expected)
+      ) {
+        throw superseded;
+      }
+    },
+  };
 }
 
 /** Preserve committed projection writes, including ABA, without restarting the settled mutation. */
@@ -101,7 +157,9 @@ export async function reconcileTaskRegistryWorkerSnapshot(params: {
   pending: PendingTaskRegistryMutation;
   assertCurrent: () => void;
   read: () => Promise<TaskRegistryStoreSnapshot>;
-  install: (snapshot: TaskRegistryStoreSnapshot) => void;
+  install: (snapshot: TaskRegistryStoreSnapshot, records?: ReadonlyMap<string, TaskRecord>) => void;
+  recoverPublication?: (snapshot: TaskRegistryStoreSnapshot) => TaskRecord | undefined;
+  taskRowsWritten?: boolean;
 }): Promise<{ conflicted: boolean }> {
   const { pending, assertCurrent, read, install } = params;
   const projection = getTaskRegistryProcessState().projection;
@@ -123,7 +181,32 @@ export async function reconcileTaskRegistryWorkerSnapshot(params: {
       snapshot,
       witness,
     });
-    install(merged.snapshot);
+    const recovery = pending.recoveryWitness;
+    if (
+      params.recoverPublication &&
+      recovery &&
+      !recovery.replaced &&
+      !recovery.writtenTaskIds.has(pending.scope.taskId)
+    ) {
+      const recovered = params.recoverPublication(merged.snapshot);
+      if (recovered) {
+        if (recovered.taskId !== pending.scope.taskId) {
+          throw new Error("Recovered publication differs from its committed task target");
+        }
+        claimTaskRegistryPublication(pending, new Map([[recovered.taskId, recovered]]));
+      }
+    }
+    // This owner's synchronous install is not a competing write. Keep tracking
+    // replacements across the awaited flow effects that follow it.
+    delete pending.recoveryWitness;
+    try {
+      install(
+        merged.snapshot,
+        params.taskRowsWritten === false ? undefined : pending.publication?.records,
+      );
+    } finally {
+      pending.recoveryWitness = recovery;
+    }
     const { tasks } = getTaskRegistryProcessState();
     for (const [taskId, expected] of pending.publication?.records ?? []) {
       const current = tasks.get(taskId);
@@ -146,6 +229,7 @@ export function publishTaskRegistryWorkerMutation(params: {
   pending: PendingTaskRegistryMutation;
   forced?: TaskRecord;
   emit: (event: () => TaskRegistryObserverEvent) => void;
+  onPublished?: (task: TaskRecord) => void;
 }): void {
   const { pending, forced, emit } = params;
   const publication = pending.publication;
@@ -171,6 +255,14 @@ export function publishTaskRegistryWorkerMutation(params: {
         task: cloneTaskRecordForObserver(next),
         ...(previous ? { previous } : {}),
       }));
+      const current = tasks.get(taskId);
+      if (
+        current &&
+        !publication.invalidated.has(taskId) &&
+        isEquivalentTaskRecord(expected, current)
+      ) {
+        params.onPublished?.(current);
+      }
     }
   }
 }
@@ -206,7 +298,12 @@ export function claimTaskRegistryPublication(
     ready: new Set(),
     invalidated: new Set(),
   };
+  const recovery = pending.recoveryWitness;
   for (const [taskId, record] of pending.publication.records) {
+    // Competing writes can precede the receipt's publication claim.
+    if (recovery?.replaced || recovery?.writtenTaskIds.has(taskId)) {
+      pending.publication.invalidated.add(taskId);
+    }
     const previous = pending.published.get(taskId);
     for (const other of getTaskRegistryProcessState().projection.pending) {
       if (
@@ -223,10 +320,29 @@ export function claimTaskRegistryPublication(
 }
 
 export function createPendingTaskRegistryMutation(
-  scope: TaskRegistryMutationScope,
-): PendingTaskRegistryMutation {
+  {
+    scope,
+    admission,
+    readIdentity,
+    recoverPublication,
+  }: Pick<
+    TaskRegistryWorkerMutationContext,
+    "scope" | "admission" | "readIdentity" | "recoverPublication"
+  >,
+  store: TaskRegistryStore,
+  readEventTarget?: () => TaskAgentEventTarget | undefined,
+) {
+  const readSettlement = readIdentity === "preserved" ? undefined : createDeferredCore();
   const pending: PendingTaskRegistryMutation = {
     scope,
+    readIdentity,
+    ...(readSettlement && {
+      readSettlement: {
+        databaseKey: admission.identity.key,
+        store,
+        promise: readSettlement.promise,
+      },
+    }),
     published: new Map(
       Array.from(currentTasksInScope(scope), (task) => [
         task.taskId,
@@ -250,5 +366,21 @@ export function createPendingTaskRegistryMutation(
   for (const taskId of baselineIds) {
     inheritPublicationBaseline(pending, taskId);
   }
-  return pending;
+  if (readEventTarget) {
+    const { tasks } = getTaskRegistryProcessState();
+    const residentTargets = new Map(
+      [...taskIdsInScope(scope)].map((taskId) => [taskId, tasks.get(taskId)]),
+    );
+    pending.readEventTarget = () => {
+      const target = readEventTarget();
+      // A committed creation may fill an unchanged projection, never replace a newer one.
+      return target && tasks.get(target.taskId) === residentTargets.get(target.taskId)
+        ? target
+        : undefined;
+    };
+  }
+  const recovery = recoverPublication
+    ? createTaskRegistryPublicationRecovery(pending, recoverPublication)
+    : undefined;
+  return { pending, recovery, settle: readSettlement?.resolve };
 }

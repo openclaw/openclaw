@@ -8,6 +8,7 @@ import {
   buildSlashCommandsFromEntries,
   findInlineSlashCompletion,
   getRemoteCommandEntries,
+  getSlashCommandDescription,
   getSkillCommandCompletions,
   getSlashCommandCompletions,
   isModelIndependentChatCommand,
@@ -275,6 +276,31 @@ function slashCommand(
 }
 
 describe("getSlashCommandCompletions", () => {
+  it.each([false, true])(
+    "describes browser exports without workspace arguments (discovered: %s)",
+    (discovered) => {
+      if (discovered) {
+        applyRemoteEntries([
+          {
+            name: "export-session",
+            textAliases: ["/export-session", "/export"],
+            description: "Export current session to an owner-only HTML file in the workspace.",
+            source: "native",
+            scope: "both",
+            acceptsArgs: true,
+            args: [{ name: "path", description: "Output path", type: "string" }],
+          },
+        ]);
+      }
+      for (const alias of ["export", "export-session"]) {
+        const command = expectDefined(getSlashCommandCompletions(alias)[0], "export completion");
+        expect(command.key).toBe("export-session");
+        expect(getSlashCommandDescription(command)).toBe("Download this conversation as Markdown");
+        expect(command.args).toBeUndefined();
+      }
+    },
+  );
+
   it("presents the first-class dashboard command with the dashboard icon", () => {
     const dashboard = SLASH_COMMANDS.find((entry) => entry.name === "dashboard");
 

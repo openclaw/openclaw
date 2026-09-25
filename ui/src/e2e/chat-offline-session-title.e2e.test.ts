@@ -71,7 +71,7 @@ suite.define(() => {
         await gateway.setOnline(false);
         await gateway.closeLatest(1001, "mock Gateway restart");
         await expect.poll(() => page.title()).toMatch(/^\(Disconnected/);
-        await page.getByRole("button", { name: "Offline — Retry now", exact: true }).waitFor();
+        await page.locator(".gateway-status__label", { hasText: "Reconnecting…" }).waitFor();
         await page.screenshot({ path: `${suite.artifactDir}/offline.png` });
         const offlineTitle = await page.title();
         const offlineHeadings = await headings.allTextContents();

@@ -6,7 +6,7 @@ import {
   type ChannelProgressDraftCompositorLine,
   type ChannelProgressDraftCompositorSnapshot,
 } from "openclaw/plugin-sdk/channel-outbound";
-import type { TelegramDraftPreview } from "./draft-stream.js";
+import type { TelegramDraftPreview } from "./draft-stream-message.js";
 import { escapeTelegramHtml, renderTelegramHtmlText } from "./format.js";
 import {
   boldRichText,
@@ -23,6 +23,9 @@ function isTelegramProgressPriorityLine(line: ChannelProgressDraftCompositorLine
     return false;
   }
   const status = line.status?.toLowerCase();
+  if (line.kind === "item" && line.toolName?.trim() && status === "failed") {
+    return false;
+  }
   return (
     line.kind === "approval" || status === "failed" || status === "error" || status === "blocked"
   );
@@ -99,7 +102,8 @@ export function renderTelegramProgressDraftPreview(
     : isChannelProgressAttentionLine;
   const attention = activity.filter(isPriorityLine);
   const checklist = selectPlanChecklistSteps(snapshot.plan ?? [], {
-    maxLines: maxLines - attention.length,
+    maxLines:
+      maxLines - Math.max(attention.length, options.toolProgress && activity.length ? 1 : 0),
   });
   const checklistLines = checklist.steps.length + (checklist.summary ? 1 : 0);
   const lineBudget = Math.max(0, maxLines - checklistLines);

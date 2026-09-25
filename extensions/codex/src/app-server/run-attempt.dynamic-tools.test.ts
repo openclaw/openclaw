@@ -8,6 +8,7 @@ import {
   waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
@@ -63,8 +64,12 @@ setupRunAttemptTestHooks();
 describe("runCodexAppServerAttempt dynamic tools", () => {
   it("acknowledges a terminal sandbox process poll only after Codex accepts its exact result", async () => {
     const process = createProcessPollDeliveryContract("codex-result-delivery");
-
-    const harness = createStartedThreadHarness();
+    const turnStarted = createDeferred<void>();
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "turn/start") {
+        turnStarted.resolve();
+      }
+    });
     const params = createParams(
       path.join(tempDir, "session.jsonl"),
       path.join(tempDir, "workspace"),
@@ -73,9 +78,16 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
     params.runtimePlan = createCodexRuntimePlanFixture();
     setCodexTestModelSupportsTools(params, true);
     const closeHostCapabilities = await bindProductionHarnessHostCapabilitiesForTest(params);
+    // Protocol acceptance owns this test; host I/O must not spend the execution watchdog.
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const run = runCodexAppServerAttempt(params);
     try {
-      await harness.waitForMethod("turn/start");
+      await Promise.race([
+        turnStarted.promise,
+        run.then((result) => {
+          throw new Error("Attempt ended before turn/start", { cause: result });
+        }),
+      ]);
       const response = await harness.handleServerRequest({
         id: "process-poll",
         method: "item/tool/call",
@@ -117,10 +129,14 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
       await harness.notify(completed("turn-1", response));
       expect(process.pendingNotifications()).toEqual(["unrelated event"]);
     } finally {
-      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-      await run;
-      closeHostCapabilities();
-      process.close();
+      try {
+        await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+        expect(readAttemptTerminal(await run)).toMatchObject({ aborted: false, timedOut: false });
+      } finally {
+        vi.useRealTimers();
+        closeHostCapabilities();
+        process.close();
+      }
     }
   });
 

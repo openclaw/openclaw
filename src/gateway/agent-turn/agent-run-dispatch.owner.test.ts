@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import type { AgentCommandOpts } from "../../agents/command/types.js";
 import type { CreatedDetachedTaskRun } from "../../tasks/detached-task-runtime-contract.js";
-import type { TaskRunOwner } from "../../tasks/task-registry.process-state.js";
 import type { TaskRecord } from "../../tasks/task-registry.types.js";
+import type { TaskRunOwner } from "../../tasks/task-run-owner.types.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
+import { setGatewayDedupeEntries } from "./agent-dedupe.js";
 import { dispatchAgentRunFromGateway } from "./agent-run-dispatch.js";
 import { createTrackedDispatch } from "./agent-run-dispatch.test-support.js";
 
@@ -11,14 +13,22 @@ const mocks = vi.hoisted(() => ({
   createTaskReceipt:
     vi.fn<(params: unknown, assertCurrent: () => void) => Promise<CreatedDetachedTaskRun | null>>(),
   createRunningTaskRun: vi.fn<() => TaskRecord | null>(),
-  agentCommand: vi.fn(async (options: { onExecutionStarted?: () => void }) => {
-    options.onExecutionStarted?.();
+  agentCommand: vi.fn(async (options: Pick<AgentCommandOpts, "onExecutionStarted">) => {
+    await options.onExecutionStarted?.();
     return { payloads: [], meta: {} };
   }),
   taskRunOwners: new Map<string, TaskRunOwner>(),
   bindTaskRunOwner: vi.fn<(task: TaskRecord, cancel: TaskRunOwner["cancel"]) => () => void>(),
   getTaskRunOwner: vi.fn<(task: TaskRecord) => TaskRunOwner | undefined>(),
   finalizeTrackedTask: vi.fn(),
+  finalizeActive:
+    vi.fn<
+      (
+        task: TaskRecord,
+        terminal: Parameters<CreatedDetachedTaskRun["finalizeActive"]>[0],
+        canSettle: (task: TaskRecord) => boolean,
+      ) => Promise<void>
+    >(),
   clearAgentRunContext: vi.fn(),
 }));
 
@@ -47,11 +57,13 @@ vi.mock("../../tasks/task-run-owner.js", () => ({
 vi.mock("../server-methods/agent-task-tracking.js", () => ({
   tryFinalizeTrackedAgentTask: mocks.finalizeTrackedTask,
 }));
-vi.mock("../../infra/agent-run-registry.js", () => ({
+vi.mock(import("../../infra/agent-run-registry.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
   clearAgentRunContext: mocks.clearAgentRunContext,
   validateAgentRunDelegatedAuthority: () => true,
 }));
-vi.mock("../../infra/agent-events.js", () => ({
+vi.mock(import("../../infra/agent-events.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
   isAgentEventLifecycleGenerationCurrent: () => true,
 }));
 vi.mock("../../agents/cron-creator-authority-context.js", () => ({
@@ -62,11 +74,37 @@ vi.mock("../chat-abort-ops.js", () => ({ createChatAbortOps: vi.fn() }));
 vi.mock("../chat-abort.js", () => ({ abortChatRunById: vi.fn() }));
 vi.mock("./agent-dedupe.js", () => ({ setGatewayDedupeEntries: vi.fn() }));
 
+function taskReceipt(
+  task: TaskRecord,
+  settleUnstarted: CreatedDetachedTaskRun["settleUnstarted"],
+): CreatedDetachedTaskRun {
+  return {
+    task,
+    async bindRunOwner(cancel, assertCurrent) {
+      assertCurrent();
+      const release = mocks.bindTaskRunOwner(task, cancel);
+      const owner = mocks.getTaskRunOwner(task);
+      if (!owner) {
+        throw new Error("Expected the bound fixture task owner");
+      }
+      return { owner, release };
+    },
+    settleUnstarted,
+    finalizeActive: (terminal, canSettle) => mocks.finalizeActive(task, terminal, canSettle),
+  };
+}
+
 describe("Gateway dispatch task creation ownership", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.taskRunOwners.clear();
     mocks.finalizeTrackedTask.mockReset();
+    mocks.finalizeActive.mockImplementation(async (task, terminal, canSettle) => {
+      if (!canSettle(task)) {
+        return;
+      }
+      Object.assign(task, terminal);
+    });
     mocks.bindTaskRunOwner.mockImplementation((task, cancel) => {
       const owner = { task, cancel };
       mocks.taskRunOwners.set(task.taskId, owner);
@@ -78,9 +116,341 @@ describe("Gateway dispatch task creation ownership", () => {
     });
     mocks.getTaskRunOwner.mockImplementation((task) => mocks.taskRunOwners.get(task.taskId));
     mocks.agentCommand.mockImplementation(async (options) => {
-      options.onExecutionStarted?.();
+      await options.onExecutionStarted?.();
       return { payloads: [], meta: {} };
     });
+  });
+
+  it("joins a captured terminal save when command startup fails before its delivery hook", async () => {
+    const { runId, sessionKey, context, entry } = createTrackedDispatch();
+    const finishCommand = createDeferred();
+    const saving = createDeferred();
+    const finishSave = createDeferred();
+    mocks.agentCommand.mockImplementationOnce(async () => {
+      await finishCommand.promise;
+      throw new Error("Synthetic startup failure");
+    });
+    const emitFinal = vi.fn();
+    const completion = dispatchAgentRunFromGateway({
+      admittedRunEntry: entry,
+      ingressOpts: {
+        message: "Synthetic startup",
+        sessionKey,
+        allowModelOverride: false,
+        abortSignal: entry.controller.signal,
+      },
+      runId,
+      dedupeKeys: [],
+      abortController: entry.controller,
+      cleanupAbortController: vi.fn(),
+      io: { emitAcceptance: vi.fn(), emitFinal },
+      context,
+      taskTrackingMode: "none",
+    });
+    try {
+      const producer = entry.resolveTerminalProducer?.();
+      expect(
+        producer?.handoff(async (producerCompleted) => {
+          await producerCompleted;
+          saving.resolve();
+          await finishSave.promise;
+        }),
+      ).toBe(true);
+      entry.controller.abort();
+      finishCommand.resolve();
+      await saving.promise;
+      expect(emitFinal).not.toHaveBeenCalled();
+      finishSave.resolve();
+      await completion;
+      expect(emitFinal).toHaveBeenCalledOnce();
+      expect(entry.resolveTerminalProducer?.()).toBeUndefined();
+    } finally {
+      finishCommand.resolve();
+      finishSave.resolve();
+      await completion;
+    }
+  });
+
+  it.each(["registration", "controller", "session", "instance"] as const)(
+    "rejects captured transcript custody after %s replacement",
+    async (replacement) => {
+      const { runId, sessionKey, context, entry } = createTrackedDispatch();
+      const finish = createDeferred();
+      mocks.agentCommand.mockImplementationOnce(async () => {
+        await finish.promise;
+        return { payloads: [], meta: {} };
+      });
+      const completion = dispatchAgentRunFromGateway({
+        admittedRunEntry: entry,
+        ingressOpts: {
+          message: "Synthetic stale producer",
+          sessionKey,
+          allowModelOverride: false,
+          abortSignal: entry.controller.signal,
+        },
+        runId,
+        dedupeKeys: [],
+        abortController: entry.controller,
+        cleanupAbortController: vi.fn(),
+        io: { emitAcceptance: vi.fn(), emitFinal: vi.fn() },
+        context,
+        taskTrackingMode: "none",
+      });
+      try {
+        const producer = entry.resolveTerminalProducer?.();
+        expect(producer).toBeDefined();
+        if (replacement === "registration") {
+          context.chatAbortControllers.set(runId, { ...entry });
+        } else if (replacement === "controller") {
+          entry.controller = new AbortController();
+        } else if (replacement === "session") {
+          entry.sessionId = "successor-session";
+        } else {
+          entry.operationalRunInstance = { runId, instanceId: "successor-instance" };
+        }
+        const save = vi.fn(async () => {});
+        expect(producer?.handoff(save)).toBe(false);
+        expect(save).not.toHaveBeenCalled();
+      } finally {
+        finish.resolve();
+        await completion;
+      }
+    },
+  );
+
+  it.each(["success", "failure", "cancelled"] as const)(
+    "awaits the captured active terminal owner before Gateway completion (%s)",
+    async (outcome) => {
+      const { runId, sessionKey, context, entry, task } = createTrackedDispatch();
+      const entered = createDeferred();
+      const resume = createDeferred();
+      const settleUnstarted = vi.fn(async () => false);
+      mocks.createTaskReceipt.mockResolvedValue(taskReceipt(task, settleUnstarted));
+      mocks.agentCommand.mockImplementationOnce(async (options) => {
+        await options.onExecutionStarted?.();
+        if (outcome === "failure") {
+          throw new Error("Synthetic active run failure");
+        }
+        if (outcome === "cancelled") {
+          entry.controller.abort();
+        }
+        return {
+          payloads: [],
+          meta: outcome === "cancelled" ? { aborted: true, stopReason: "rpc" } : {},
+        };
+      });
+      mocks.finalizeActive.mockImplementation(async (selected, terminal, canSettle) => {
+        entered.resolve();
+        await resume.promise;
+        if (!canSettle(selected)) {
+          return;
+        }
+        Object.assign(selected, terminal);
+      });
+      const emitFinal = vi.fn();
+      const onSettled = vi.fn(() => true);
+      const completion = dispatchAgentRunFromGateway({
+        admittedRunEntry: entry,
+        assertSettlementCurrent() {},
+        ingressOpts: { message: task.task, sessionKey, allowModelOverride: false },
+        runId,
+        dedupeKeys: [],
+        abortController: entry.controller,
+        cleanupAbortController: vi.fn(),
+        io: { emitAcceptance: vi.fn(), emitFinal },
+        context,
+        taskTrackingMode: "cli",
+        onSettled,
+      });
+      try {
+        await Promise.race([entered.promise, completion]);
+        expect(mocks.finalizeActive).toHaveBeenCalledOnce();
+        expect(mocks.finalizeTrackedTask).not.toHaveBeenCalled();
+        expect(settleUnstarted).not.toHaveBeenCalled();
+        expect(emitFinal).not.toHaveBeenCalled();
+        expect(onSettled).not.toHaveBeenCalled();
+        resume.resolve();
+        await completion;
+        expect(task.status).toBe(
+          outcome === "success" ? "succeeded" : outcome === "failure" ? "failed" : "cancelled",
+        );
+        expect(emitFinal).toHaveBeenCalledOnce();
+        expect(onSettled).toHaveBeenCalledOnce();
+      } finally {
+        resume.resolve();
+        await completion;
+      }
+    },
+  );
+
+  it.each(["Gateway", "same-session run", "task owner", "different-session run"] as const)(
+    "rechecks active terminal authority after waiting for the %s change",
+    async (replacement) => {
+      const { runId, sessionKey, context, entry, task } = createTrackedDispatch();
+      const entered = createDeferred();
+      const resume = createDeferred();
+      let gatewayCurrent = true;
+      mocks.createTaskReceipt.mockResolvedValue(taskReceipt(task, async () => false));
+      mocks.finalizeActive.mockImplementation(async (selected, terminal, canSettle) => {
+        entered.resolve();
+        await resume.promise;
+        if (!canSettle(selected)) {
+          return;
+        }
+        Object.assign(selected, terminal);
+      });
+      const completion = dispatchAgentRunFromGateway({
+        admittedRunEntry: entry,
+        assertSettlementCurrent() {
+          if (!gatewayCurrent) {
+            throw new Error("Gateway retired");
+          }
+        },
+        ingressOpts: { message: task.task, sessionKey, allowModelOverride: false },
+        runId,
+        dedupeKeys: [],
+        abortController: entry.controller,
+        cleanupAbortController: vi.fn(),
+        io: { emitAcceptance: vi.fn(), emitFinal: vi.fn() },
+        context,
+        taskTrackingMode: "cli",
+      });
+      try {
+        await Promise.race([entered.promise, completion]);
+        expect(mocks.finalizeActive).toHaveBeenCalledOnce();
+        if (replacement === "Gateway") {
+          gatewayCurrent = false;
+        } else if (replacement === "task owner") {
+          mocks.taskRunOwners.set(task.taskId, { task, cancel: vi.fn<TaskRunOwner["cancel"]>() });
+        } else {
+          context.chatAbortControllers.set(runId, {
+            ...entry,
+            controller: new AbortController(),
+            operationalRunInstance: { runId, instanceId: "successor" },
+            sessionKey: replacement === "different-session run" ? "agent:main:other" : sessionKey,
+          });
+        }
+        resume.resolve();
+        await completion;
+        expect(task.status).toBe(replacement === "different-session run" ? "succeeded" : "running");
+        expect(mocks.finalizeTrackedTask).not.toHaveBeenCalled();
+        expect(setGatewayDedupeEntries).toHaveBeenCalledWith(
+          expect.objectContaining({
+            session: {
+              sessionKey,
+              sessionId: entry.sessionId,
+              agentId: entry.agentId,
+              lifecycleGeneration: entry.lifecycleGeneration,
+            },
+          }),
+        );
+      } finally {
+        resume.resolve();
+        await completion;
+      }
+    },
+  );
+  it("keeps rejected pre-dispatch results with their admitted registration", async () => {
+    const { runId, sessionKey, context, entry, task } = createTrackedDispatch();
+    const successor: ChatAbortControllerEntry = {
+      ...entry,
+      controller: new AbortController(),
+      sessionId: "successor-session",
+      sessionKey: "agent:main:successor-session",
+      operationalRunInstance: { runId, instanceId: "successor-instance" },
+    };
+    context.chatAbortControllers.set(runId, successor);
+    const emitFinal = vi.fn();
+    await dispatchAgentRunFromGateway({
+      assertCurrent() {
+        if (context.chatAbortControllers.get(runId) !== entry) {
+          throw new Error("Gateway run owner replaced");
+        }
+      },
+      admittedRunEntry: entry,
+      ingressOpts: { message: task.task, sessionKey, allowModelOverride: false },
+      runId,
+      dedupeKeys: [`agent:${runId}`],
+      abortController: entry.controller,
+      cleanupAbortController: vi.fn(),
+      io: { emitAcceptance: vi.fn(), emitFinal },
+      context,
+      taskTrackingMode: "none",
+    });
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(mocks.clearAgentRunContext).not.toHaveBeenCalled();
+    expect(context.chatAbortControllers.get(runId)).toBe(successor);
+    expect(setGatewayDedupeEntries).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session: {
+          sessionKey,
+          sessionId: entry.sessionId,
+          agentId: entry.agentId,
+          lifecycleGeneration: entry.lifecycleGeneration,
+        },
+        entry: expect.objectContaining({ ok: false }),
+      }),
+    );
+    expect(emitFinal).toHaveBeenCalledOnce();
+  });
+
+  it("settles cancellation when source retirement races committed task creation", async () => {
+    const { runId, sessionKey, context, entry, task } = createTrackedDispatch();
+    const creation = createDeferred<CreatedDetachedTaskRun>();
+    let sourceCurrent = true;
+    const settleUnstarted = vi.fn<CreatedDetachedTaskRun["settleUnstarted"]>(
+      async (terminal, canSettle) => {
+        if (!canSettle(task)) {
+          return false;
+        }
+        Object.assign(task, terminal);
+        return true;
+      },
+    );
+    mocks.createTaskReceipt.mockReturnValue(creation.promise);
+    const emitFinal = vi.fn();
+    const completion = dispatchAgentRunFromGateway({
+      assertCurrent() {
+        if (!sourceCurrent) {
+          throw new Error("operator source authority is no longer active");
+        }
+      },
+      assertSettlementCurrent() {},
+      ingressOpts: { message: task.task, sessionKey, allowModelOverride: false },
+      runId,
+      dedupeKeys: [`agent:${runId}`],
+      admittedRunEntry: entry,
+      abortController: entry.controller,
+      cleanupAbortController: vi.fn(),
+      io: { emitAcceptance: vi.fn(), emitFinal },
+      context,
+      taskTrackingMode: "cli",
+    });
+    sourceCurrent = false;
+    entry.controller.abort();
+    creation.resolve(taskReceipt(task, settleUnstarted));
+    await completion;
+
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(mocks.bindTaskRunOwner).not.toHaveBeenCalled();
+    expect(settleUnstarted).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ status: "cancelled" }),
+      expect.any(Function),
+    );
+    expect(task.status).toBe("cancelled");
+    expect(emitFinal).toHaveBeenCalledExactlyOnceWith(
+      [
+        true,
+        expect.objectContaining({
+          runId,
+          status: "timeout",
+          summary: "aborted",
+          stopReason: "rpc",
+        }),
+        undefined,
+      ],
+      { runId },
+    );
   });
 
   it.each(["current", "different-session", "adopted-task"] as const)(
@@ -97,7 +467,7 @@ describe("Gateway dispatch task creation ownership", () => {
           return true;
         },
       );
-      const receipt: CreatedDetachedTaskRun = { task, settleUnstarted };
+      const receipt = taskReceipt(task, settleUnstarted);
       mocks.createRunningTaskRun.mockReturnValue(task);
       mocks.createTaskReceipt.mockImplementation((_params, assertCurrent) => {
         assertCurrent();
@@ -119,11 +489,13 @@ describe("Gateway dispatch task creation ownership", () => {
         },
         runId,
         dedupeKeys: [`agent:${runId}`],
+        admittedRunEntry: entry,
         abortController: entry.controller,
         cleanupAbortController,
         io: { emitAcceptance: vi.fn(), emitFinal },
         context,
         taskTrackingMode: "cli",
+        assertSettlementCurrent() {},
         onSettled,
       });
       try {
@@ -168,8 +540,10 @@ describe("Gateway dispatch task creation ownership", () => {
           expect(settleUnstarted).not.toHaveBeenCalled();
           expect(mocks.agentCommand).toHaveBeenCalledOnce();
           expect(mocks.bindTaskRunOwner).toHaveBeenCalledOnce();
-          expect(mocks.finalizeTrackedTask).toHaveBeenCalledWith(
-            expect.objectContaining({ runId, status: "succeeded" }),
+          expect(mocks.finalizeActive).toHaveBeenCalledWith(
+            task,
+            expect.objectContaining({ status: "succeeded" }),
+            expect.any(Function),
           );
           expect(emitFinal).toHaveBeenCalledWith(
             [true, expect.objectContaining({ status: "ok" }), undefined],
@@ -202,7 +576,7 @@ describe("Gateway dispatch task creation ownership", () => {
           return true;
         },
       );
-      mocks.createTaskReceipt.mockResolvedValue({ task, settleUnstarted });
+      mocks.createTaskReceipt.mockResolvedValue(taskReceipt(task, settleUnstarted));
       const adoptedOwner: TaskRunOwner = { task, cancel: vi.fn<TaskRunOwner["cancel"]>() };
       const successor: ChatAbortControllerEntry = {
         ...entry,
@@ -213,7 +587,7 @@ describe("Gateway dispatch task creation ownership", () => {
       };
       mocks.agentCommand.mockImplementationOnce(async (options) => {
         if (phase === "execution") {
-          options.onExecutionStarted?.();
+          await options.onExecutionStarted?.();
         }
         if (replacement === "different-session" || replacement === "same-session") {
           context.chatAbortControllers.set(runId, successor);
@@ -232,11 +606,13 @@ describe("Gateway dispatch task creation ownership", () => {
         ingressOpts: { message: task.task, sessionKey, allowModelOverride: false },
         runId,
         dedupeKeys: [`agent:${runId}`],
+        admittedRunEntry: entry,
         abortController: entry.controller,
         cleanupAbortController,
         io: { emitAcceptance: vi.fn(), emitFinal },
         context,
         taskTrackingMode: "cli",
+        assertSettlementCurrent() {},
       });
 
       expect(mocks.agentCommand).toHaveBeenCalledOnce();
@@ -249,12 +625,10 @@ describe("Gateway dispatch task creation ownership", () => {
       } else {
         expect(settleUnstarted).not.toHaveBeenCalled();
         if (replacement === "different-session") {
-          expect(mocks.finalizeTrackedTask).toHaveBeenCalledWith(
-            expect.objectContaining({
-              runId,
-              sessionKey,
-              status: failed ? "failed" : "succeeded",
-            }),
+          expect(mocks.finalizeActive).toHaveBeenCalledWith(
+            task,
+            expect.objectContaining({ status: failed ? "failed" : "succeeded" }),
+            expect.any(Function),
           );
           expect(context.chatAbortControllers.get(runId)).toBe(successor);
           expect(mocks.clearAgentRunContext).not.toHaveBeenCalled();
@@ -305,7 +679,7 @@ describe("Gateway dispatch task creation ownership", () => {
           return true;
         },
       );
-      mocks.createTaskReceipt.mockResolvedValue({ task, settleUnstarted });
+      mocks.createTaskReceipt.mockResolvedValue(taskReceipt(task, settleUnstarted));
       // A run-scoped finalizer would also write this unrelated matching sibling.
       mocks.finalizeTrackedTask.mockImplementation((terminal: { status: TaskRecord["status"] }) => {
         task.status = terminal.status;
@@ -333,11 +707,13 @@ describe("Gateway dispatch task creation ownership", () => {
         ingressOpts: { message: task.task, sessionKey, allowModelOverride: false },
         runId,
         dedupeKeys: [],
+        admittedRunEntry: entry,
         abortController: entry.controller,
         cleanupAbortController: vi.fn(),
         io: { emitAcceptance: vi.fn(), emitFinal },
         context,
         taskTrackingMode: "cli",
+        assertSettlementCurrent() {},
         onSettled,
       });
       try {

@@ -9,9 +9,9 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { normalizeCsvOrLooseStringList } from "@openclaw/normalization-core/string-normalization";
 import { Command } from "commander";
-import { buildBundleMcpToolsFromCatalog } from "../agents/agent-bundle-mcp-materialize.js";
-import type { McpToolCatalog } from "../agents/agent-bundle-mcp-types.js";
+import type { SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
 import {
   setConfiguredMcpServer,
   unsetConfiguredMcpServer,
@@ -46,6 +46,7 @@ import { formatCliCommand } from "./command-format.js";
 import { formatCliJsonFailure } from "./failure-output.js";
 import { resolveGatewayAuthOptions } from "./gateway-secret-options.js";
 import { requestExitAfterOneShotOutput } from "./one-shot-exit.js";
+import { collectOption } from "./program/helpers.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
 const createSessionMcpRuntime = createLazyRuntimeMethod(
@@ -128,18 +129,8 @@ type McpServerControlOptions = {
 };
 
 function parseCsvList(value: string | undefined): string[] | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const entries = value
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0);
+  const entries = normalizeCsvOrLooseStringList(value);
   return entries.length > 0 ? entries : undefined;
-}
-
-function collectOption(value: string, previous: string[] = []): string[] {
-  return [...previous, value];
 }
 
 function parseKeyValueEntries(values: readonly string[] | undefined, label: string) {
@@ -529,7 +520,7 @@ async function probeMcpServerIssues(params: {
     manifestRegistry: { plugins: [] },
   });
   try {
-    const result = formatMcpProbeResult(await runtime.getCatalog());
+    const result = await readMcpProbeResult(runtime);
     const diagnostic = result.diagnostics[0];
     if (diagnostic) {
       return [issue("error", `probe failed: ${diagnostic.message}`)];
@@ -548,10 +539,10 @@ async function probeMcpServerIssues(params: {
   }
 }
 
-function countConnectedMcpPrincipals(
+async function countConnectedMcpPrincipals(
   name: string,
   server: Record<string, unknown>,
-): number | undefined {
+): Promise<number | undefined> {
   const resolved = resolveMcpTransportConfig(name, server);
   if (
     server.auth !== "oauth" ||
@@ -595,7 +586,7 @@ async function buildMcpStatusEntries(
         const identity = operatorMcpOAuthIdentity(name, resolved.url);
         // Documented `mcp status --json` contract: the six legacy authStatus
         // booleans stay for existing scripts; `state` is the additive shape.
-        const store = readMcpOAuthStoreReadOnly(identity.storeKey);
+        const store = await readMcpOAuthStoreReadOnly(identity.storeKey);
         entry.authStatus = {
           hasTokens: Boolean(store.tokens),
           requiresAuthorization:
@@ -604,32 +595,21 @@ async function buildMcpStatusEntries(
           hasCodeVerifier: Boolean(store.codeVerifier),
           hasDiscoveryState: Boolean(store.discoveryState),
           hasLastAuthorizationUrl: Boolean(store.lastAuthorizationUrl),
-          ...(await readMcpOAuthCredentialsStatus(identity)),
+          ...(await readMcpOAuthCredentialsStatus(identity, store)),
         };
       } else {
-        entry.connectedPrincipals = countConnectedMcpPrincipals(name, server);
+        entry.connectedPrincipals = await countConnectedMcpPrincipals(name, server);
       }
       return entry;
     }),
   );
 }
 
-function formatMcpProbeResult(catalog: McpToolCatalog) {
-  const projectedTools = buildBundleMcpToolsFromCatalog({
-    catalog,
-    createResourceListExecute: () => async () => {
-      throw new Error("probe projection cannot execute MCP resources_list");
-    },
-    createResourceReadExecute: () => async () => {
-      throw new Error("probe projection cannot execute MCP resources_read");
-    },
-    createPromptListExecute: () => async () => {
-      throw new Error("probe projection cannot execute MCP prompts_list");
-    },
-    createPromptGetExecute: () => async () => {
-      throw new Error("probe projection cannot execute MCP prompts_get");
-    },
-  });
+async function readMcpProbeResult(runtime: SessionMcpRuntime) {
+  const { buildBundleMcpToolsFromCatalog } =
+    await import("../agents/agent-bundle-mcp-materialize.js");
+  const catalog = await runtime.getCatalog();
+  const projectedTools = buildBundleMcpToolsFromCatalog({ catalog });
   return {
     generatedAt: new Date(catalog.generatedAt).toISOString(),
     servers: Object.fromEntries(
@@ -708,7 +688,7 @@ function applyMcpProbeInitializeTimeout(server: Record<string, unknown>): Record
 }
 
 function resolveMcpProbeIssue(params: {
-  result: ReturnType<typeof formatMcpProbeResult>;
+  result: Awaited<ReturnType<typeof readMcpProbeResult>>;
   servers: Record<string, Record<string, unknown>>;
   path: string;
 }): string | undefined {
@@ -724,18 +704,11 @@ function resolveMcpProbeIssue(params: {
   return undefined;
 }
 
-function failOnMcpProbeIssues(params: Parameters<typeof resolveMcpProbeIssue>[0]): void {
-  const probeIssue = resolveMcpProbeIssue(params);
-  if (probeIssue) {
-    fail(probeIssue);
-  }
-}
-
 async function probeMcpServersOrFail(params: {
   config: OpenClawConfig;
   servers: Record<string, Record<string, unknown>>;
   path: string;
-}): Promise<ReturnType<typeof formatMcpProbeResult>> {
+}): Promise<Awaited<ReturnType<typeof readMcpProbeResult>>> {
   const probeServers = Object.fromEntries(
     Object.entries(params.servers).map(([name, server]) => [
       name,
@@ -749,8 +722,11 @@ async function probeMcpServersOrFail(params: {
     manifestRegistry: { plugins: [] },
   });
   try {
-    const result = formatMcpProbeResult(await runtime.getCatalog());
-    failOnMcpProbeIssues({ result, servers: params.servers, path: params.path });
+    const result = await readMcpProbeResult(runtime);
+    const probeIssue = resolveMcpProbeIssue({ result, servers: params.servers, path: params.path });
+    if (probeIssue) {
+      fail(probeIssue);
+    }
     return result;
   } finally {
     await runtime.dispose();
@@ -829,7 +805,7 @@ export function registerMcpCli(program: Command) {
       }
       defaultRuntime.log(`OpenClaw-managed MCP servers (${loaded.path}):`);
       for (const [name, server] of entries) {
-        const connectedPrincipals = countConnectedMcpPrincipals(name, server);
+        const connectedPrincipals = await countConnectedMcpPrincipals(name, server);
         const connected =
           connectedPrincipals === undefined
             ? ""
@@ -943,7 +919,7 @@ export function registerMcpCli(program: Command) {
         manifestRegistry: { plugins: [] },
       });
       try {
-        const result = formatMcpProbeResult(await runtime.getCatalog());
+        const result = await readMcpProbeResult(runtime);
         if (opts.json) {
           printJson(result);
         } else {

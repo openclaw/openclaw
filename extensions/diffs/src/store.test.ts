@@ -1,14 +1,44 @@
 // Diffs tests cover store plugin behavior.
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import path from "node:path";
-import type { PluginBlobStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { gunzipSync, gzipSync } from "node:zlib";
+import type { PluginBlobStore, PluginBlobEntry } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createMockServerResponse } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDiffsHttpHandler } from "./http.js";
 import { DiffArtifactStore } from "./store.js";
-import { createDiffStoreHarness, ensureCuratedViewerRuntimeForTests } from "./test-helpers.js";
+import {
+  createDiffStoreHarness,
+  ensureCuratedViewerRuntimeForTests,
+  expireDiffArtifactForTest,
+} from "./test-helpers.js";
 import type { DiffArtifactBlobMetadata } from "./types.js";
+
+type CompressionCallback = (error: Error | null, bytes: Buffer) => void;
+const compression = vi.hoisted(() => ({
+  gzip: vi.fn<(input: Uint8Array, callback: CompressionCallback) => void>(),
+  gunzip:
+    vi.fn<
+      (
+        input: Uint8Array,
+        options: { maxOutputLength: number },
+        callback: CompressionCallback,
+      ) => void
+    >(),
+}));
+
+// Keep stable functions before store import: promisify captures them once.
+// Outside an individual callback fixture these forward to native compression.
+vi.mock("node:zlib", async (importOriginal) => {
+  const native = await importOriginal<typeof import("node:zlib")>();
+  return {
+    ...native,
+    gzip: compression.gzip.mockImplementation(native.gzip),
+    gunzip: compression.gunzip.mockImplementation(native.gunzip),
+  };
+});
 
 beforeAll(async () => {
   await ensureCuratedViewerRuntimeForTests();
@@ -28,13 +58,190 @@ describe("DiffArtifactStore", () => {
       blobStore,
       reopen: reopenStore,
       cleanup: cleanupRootDir,
-    } = await createDiffStoreHarness("openclaw-diffs-store-"));
+    } = await createDiffStoreHarness("openclaw-diffs-store-", { nativeKernel: true }));
   });
 
   afterEach(async () => {
     vi.useRealTimers();
     await cleanupRootDir();
   });
+
+  describe("compression contract", () => {
+    const maximum = 64 * 1024 * 1024;
+    const params = { title: "Compression", inputKind: "patch", fileCount: 1 } as const;
+
+    beforeEach(async () => {
+      const native = await vi.importActual<typeof import("node:zlib")>("node:zlib");
+      compression.gzip.mockReset().mockImplementation(native.gzip);
+      compression.gunzip.mockReset().mockImplementation(native.gunzip);
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it.each(["empty", "multibyte", "limit"] as const)(
+      "round trips native compressed %s bytes through SQLite",
+      async (kind) => {
+        const html = kind === "limit" ? "x".repeat(maximum) : kind === "empty" ? "" : "é 🦀\0";
+        const expected = Buffer.from(html);
+        const artifact = await store.createArtifact({ ...params, html });
+        const entry = await blobStore.lookup(artifact.id);
+        assert.isDefined(entry);
+        expect(entry.metadata).toMatchObject({ decodedBytes: Buffer.byteLength(html) });
+        expect(Buffer.compare(gunzipSync(entry.bytes), expected)).toBe(0);
+        const loaded = await store.readAuthorizedViewer(artifact.id, artifact.token);
+        assert.isNotNull(loaded);
+        expect(Buffer.compare(loaded.html, expected)).toBe(0);
+        expect(compression.gunzip).toHaveBeenCalledExactlyOnceWith(
+          entry.bytes,
+          { maxOutputLength: maximum },
+          expect.any(Function),
+        );
+      },
+    );
+
+    it("rejects oversized input before compression, token creation, registration or cleanup", async () => {
+      const random = vi.spyOn(crypto, "randomBytes");
+      const register = vi.spyOn(blobStore, "registerIfAbsent");
+      const cleanup = vi.spyOn(store, "scheduleCleanup");
+      await expect(
+        store.createArtifact({ ...params, html: "x".repeat(maximum + 1) }),
+      ).rejects.toThrow(`Diff viewer HTML exceeds ${maximum} bytes.`);
+      expect(compression.gzip).not.toHaveBeenCalled();
+      expect(random).not.toHaveBeenCalled();
+      expect(register).not.toHaveBeenCalled();
+      expect(cleanup).not.toHaveBeenCalled();
+    });
+
+    it.each(["corrupt", "size-mismatch", "oversized-output"] as const)(
+      "rejects %s with valid authorized metadata",
+      async (kind) => {
+        const artifact = await store.createArtifact({ ...params, html: "viewer" });
+        const entry = await blobStore.lookup(artifact.id);
+        assert.isDefined(entry);
+        if (entry.metadata.kind !== "viewer") {
+          throw new Error("Expected viewer metadata");
+        }
+        const bytes =
+          kind === "corrupt"
+            ? Buffer.from("invalid gzip")
+            : kind === "oversized-output"
+              ? gzipSync(Buffer.alloc(maximum + 1, 120))
+              : entry.bytes;
+        const decodedBytes =
+          kind === "oversized-output" ? maximum : Buffer.byteLength("viewer") + 1;
+        await blobStore.register(artifact.id, bytes, { ...entry.metadata, decodedBytes });
+        await expect(
+          store.readAuthorizedViewer(artifact.id, artifact.token),
+        ).rejects.toBeInstanceOf(Error);
+        expect(compression.gunzip).toHaveBeenCalledExactlyOnceWith(
+          expect.any(Uint8Array),
+          { maxOutputLength: maximum },
+          expect.any(Function),
+        );
+        const call = compression.gunzip.mock.calls[0];
+        assert.isDefined(call);
+        expect(Buffer.compare(call[0], bytes)).toBe(0);
+      },
+    );
+
+    it("awaits compression before side effects and retains callback buffer identities", async () => {
+      const html = Buffer.from("callback result");
+      const compressed = gzipSync(html);
+      const started = Promise.withResolvers<CompressionCallback>();
+      compression.gzip.mockImplementationOnce((input, callback) => {
+        expect(input).toEqual(html);
+        started.resolve(callback);
+      });
+      const random = vi.spyOn(crypto, "randomBytes");
+      const register = vi.spyOn(blobStore, "registerIfAbsent");
+      const cleanup = vi.spyOn(store, "scheduleCleanup");
+      const pending = store.createArtifact({ ...params, html: html.toString() });
+      const complete = await started.promise;
+      expect(random).not.toHaveBeenCalled();
+      expect(register).not.toHaveBeenCalled();
+      expect(cleanup).not.toHaveBeenCalled();
+      complete(null, compressed);
+      const artifact = await pending;
+      expect(register.mock.calls[0]?.[1]).toBe(compressed);
+      expect(register.mock.invocationCallOrder[0]).toBeLessThan(
+        cleanup.mock.invocationCallOrder[0]!,
+      );
+      const entry = await blobStore.lookup(artifact.id);
+      assert.isDefined(entry);
+      expect(Buffer.compare(entry.bytes, compressed)).toBe(0);
+      compression.gunzip.mockImplementationOnce((input, options, callback) => {
+        expect(Buffer.compare(input, compressed)).toBe(0);
+        expect(options).toEqual({ maxOutputLength: maximum });
+        callback(null, html);
+      });
+      expect((await store.readAuthorizedViewer(artifact.id, artifact.token))?.html).toBe(html);
+    });
+
+    it.each([
+      ["gzip", "callback"],
+      ["gzip", "throw"],
+      ["gunzip", "callback"],
+      ["gunzip", "throw"],
+    ] as const)("preserves %s %s error identity", async (operation, mode) => {
+      const artifact = await store.createArtifact({ ...params, html: "failure fixture" });
+      const failure = new Error(`${operation} fixture`);
+      const complete = (callback: CompressionCallback) => {
+        if (mode === "throw") {
+          throw failure;
+        }
+        callback(failure, Buffer.alloc(0));
+      };
+      if (operation === "gzip") {
+        compression.gzip.mockImplementationOnce((_input, callback) => complete(callback));
+      } else {
+        compression.gunzip.mockImplementationOnce((_input, _options, callback) =>
+          complete(callback),
+        );
+      }
+      const random = vi.spyOn(crypto, "randomBytes");
+      const register = vi.spyOn(blobStore, "registerIfAbsent");
+      const cleanup = vi.spyOn(store, "scheduleCleanup");
+      const pending =
+        operation === "gzip"
+          ? store.createArtifact({ ...params, html: "failure fixture" })
+          : store.readAuthorizedViewer(artifact.id, artifact.token);
+      await expect(pending).rejects.toBe(failure);
+      expect(random).not.toHaveBeenCalled();
+      expect(register).not.toHaveBeenCalled();
+      expect(cleanup).not.toHaveBeenCalled();
+    });
+  });
+
+  async function mockDateBoundaryBlob() {
+    await store.stopCleanup();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const maximum = 8_640_000_000_000_000;
+    vi.setSystemTime(maximum - 1_000);
+    let entry: PluginBlobEntry<DiffArtifactBlobMetadata> | undefined;
+    const register = vi
+      .spyOn(blobStore, "registerIfAbsent")
+      .mockImplementation(async (key, bytes, metadata) => {
+        entry = {
+          key,
+          bytes,
+          metadata,
+          sizeBytes: bytes.byteLength,
+          createdAt: maximum - 1_000,
+          expiresAt: maximum,
+        };
+        return true;
+      });
+    const lookup = vi.spyOn(blobStore, "lookup").mockImplementation(async () => entry);
+    return {
+      register,
+      restore() {
+        lookup.mockRestore();
+        register.mockRestore();
+      },
+    };
+  }
 
   it("stores compressed viewer bytes and retrieves them with one authorized lookup", async () => {
     const lookup = vi.spyOn(blobStore, "lookup");
@@ -76,18 +283,26 @@ describe("DiffArtifactStore", () => {
   });
 
   it("caps artifact expiry instead of throwing near the Date boundary", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date(8_640_000_000_000_000 - 1_000));
+    const boundary = await mockDateBoundaryBlob();
+    try {
+      const artifact = await store.createArtifact({
+        html: "<html>demo</html>",
+        title: "Demo",
+        inputKind: "patch",
+        fileCount: 1,
+        ttlMs: 60_000,
+      });
 
-    const artifact = await store.createArtifact({
-      html: "<html>demo</html>",
-      title: "Demo",
-      inputKind: "patch",
-      fileCount: 1,
-      ttlMs: 60_000,
-    });
-
-    expect(artifact.expiresAt).toBe("+275760-09-13T00:00:00.000Z");
+      expect(artifact.expiresAt).toBe("+275760-09-13T00:00:00.000Z");
+      expect(boundary.register).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.any(Uint8Array),
+        expect.any(Object),
+        { ttlMs: 1_000 },
+      );
+    } finally {
+      boundary.restore();
+    }
   });
 
   it("serves viewer artifacts after reopening the shared SQLite store", async () => {
@@ -97,21 +312,14 @@ describe("DiffArtifactStore", () => {
       inputKind: "patch",
       fileCount: 1,
     });
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-
-    ({ store, blobStore } = reopenStore());
+    ({ store, blobStore } = await reopenStore());
 
     const loaded = await store.readAuthorizedViewer(artifact.id, artifact.token);
     expect(Buffer.from(loaded!.html).toString("utf8")).toBe("<html>persisted</html>");
   });
 
   it("expires artifacts after the ttl", async () => {
-    vi.useFakeTimers();
-    const now = new Date("2026-02-27T16:00:00Z");
-    vi.setSystemTime(now);
-
+    vi.useFakeTimers({ toFake: ["Date"] });
     const artifact = await store.createArtifact({
       html: "<html>demo</html>",
       title: "Demo",
@@ -120,7 +328,8 @@ describe("DiffArtifactStore", () => {
       ttlMs: 1_000,
     });
 
-    vi.setSystemTime(new Date(now.getTime() + 2_000));
+    await store.stopCleanup();
+    await expireDiffArtifactForTest(rootDir, artifact.id, 1_000);
     const loaded = await store.readAuthorizedViewer(artifact.id, artifact.token);
     expect(loaded).toBeNull();
     await expect(blobStore.deleteExpired()).resolves.toEqual([]);
@@ -149,19 +358,24 @@ describe("DiffArtifactStore", () => {
   });
 
   it("caps standalone file expiry instead of throwing near the Date boundary", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date(8_640_000_000_000_000 - 1_000));
+    const boundary = await mockDateBoundaryBlob();
+    try {
+      const standalone = await store.createStandaloneFileArtifact({ ttlMs: 60_000 });
 
-    const standalone = await store.createStandaloneFileArtifact({ ttlMs: 60_000 });
-
-    expect(standalone.expiresAt).toBe("+275760-09-13T00:00:00.000Z");
+      expect(standalone.expiresAt).toBe("+275760-09-13T00:00:00.000Z");
+      expect(boundary.register).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.any(Uint8Array),
+        expect.any(Object),
+        { ttlMs: 1_000 },
+      );
+    } finally {
+      boundary.restore();
+    }
   });
 
   it("expires standalone file artifacts using ttl metadata", async () => {
-    vi.useFakeTimers();
-    const now = new Date("2026-02-27T16:00:00Z");
-    vi.setSystemTime(now);
-
+    vi.useFakeTimers({ toFake: ["Date"] });
     const standalone = await store.createStandaloneFileArtifact({
       format: "png",
       ttlMs: 1_000,
@@ -169,7 +383,8 @@ describe("DiffArtifactStore", () => {
     await fs.writeFile(standalone.filePath, Buffer.from("png"));
     await store.completeFileArtifact(standalone.id);
 
-    vi.setSystemTime(new Date(now.getTime() + 2_000));
+    await store.stopCleanup();
+    await expireDiffArtifactForTest(rootDir, standalone.id, 1_000);
     await store.cleanupExpired();
 
     const error = await fs.stat(path.dirname(standalone.filePath)).then(
@@ -199,8 +414,7 @@ describe("DiffArtifactStore", () => {
   });
 
   it("removes only expired file rows and leaves live materializations", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-02-27T16:00:00Z"));
+    vi.useFakeTimers({ toFake: ["Date"] });
     const expired = await store.createStandaloneFileArtifact({ ttlMs: 1_000 });
     const live = await store.createStandaloneFileArtifact({ ttlMs: 60_000 });
     await fs.writeFile(expired.filePath, "expired");
@@ -208,7 +422,10 @@ describe("DiffArtifactStore", () => {
     await store.completeFileArtifact(expired.id);
     await store.completeFileArtifact(live.id);
 
-    vi.setSystemTime(new Date("2026-02-27T16:00:02Z"));
+    await store.stopCleanup();
+    vi.setSystemTime(Date.parse(expired.expiresAt) + 1);
+    await expect(blobStore.lookup(expired.id)).resolves.toBeUndefined();
+    await expireDiffArtifactForTest(rootDir, expired.id, 1_000);
     await store.cleanupExpired();
 
     await expect(fs.stat(path.dirname(expired.filePath))).rejects.toMatchObject({ code: "ENOENT" });
@@ -216,13 +433,13 @@ describe("DiffArtifactStore", () => {
   });
 
   it("keeps expired file metadata claimable across later blob writes", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-02-27T16:00:00Z"));
+    vi.useFakeTimers({ toFake: ["Date"] });
     const expired = await store.createStandaloneFileArtifact({ ttlMs: 1_000 });
     await fs.writeFile(expired.filePath, "expired");
     await store.completeFileArtifact(expired.id);
 
-    vi.setSystemTime(new Date("2026-02-27T16:00:02Z"));
+    await store.stopCleanup();
+    await expireDiffArtifactForTest(rootDir, expired.id, 1_000);
     await blobStore.register(
       "later-write",
       new Uint8Array(),
@@ -337,6 +554,8 @@ describe("DiffArtifactStore", () => {
     await fs.writeFile(artifact.filePath, "rendering");
     const oldTime = new Date(now.getTime() - 25 * 60 * 60 * 1_000);
     await fs.utimes(path.dirname(artifact.filePath), oldTime, oldTime);
+    await store.stopCleanup();
+    await expireDiffArtifactForTest(rootDir, artifact.id, 1_000);
     vi.setSystemTime(new Date(now.getTime() + 2_000));
 
     await store.cleanupExpired();
@@ -348,7 +567,7 @@ describe("DiffArtifactStore", () => {
   });
 
   it("throttles cleanup sweeps across repeated artifact creation", async () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["Date"] });
     const now = new Date("2026-02-27T16:00:00Z");
     vi.setSystemTime(now);
     store = new DiffArtifactStore({
@@ -616,7 +835,7 @@ describe("createDiffsHttpHandler", () => {
   });
 
   it("slides the remote failure window across the original window boundary", async () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["Date"] });
     const startedAt = new Date("2026-08-19T12:00:00Z").getTime();
     vi.setSystemTime(startedAt);
     const handler = createDiffsHttpHandler({ store, allowRemoteViewer: true });

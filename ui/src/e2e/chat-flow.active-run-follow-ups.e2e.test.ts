@@ -40,7 +40,9 @@ suite.define(() => {
       const followUpSelect = page.locator("[data-settings-follow-up-mode]");
       await followUpSelect.waitFor({ state: "visible", timeout: 10_000 });
       expect(await followUpSelect.inputValue()).toBe("server");
-      await page.getByText("Using server default (followup)").waitFor({ timeout: 10_000 });
+      await expect
+        .poll(() => followUpSelect.locator("option:checked").textContent())
+        .toContain("Server default (followup)");
       const configPatchCount = (await gateway.getRequests("config.patch")).length;
       const configGetCount = (await gateway.getRequests("config.get")).length;
       const overrideConfig = {
@@ -70,7 +72,9 @@ suite.define(() => {
       await page.getByRole("button", { name: "Reset to server default" }).click();
       await waitForRequests(gateway, "config.patch", configPatchCount + 2);
       await waitForRequests(gateway, "config.get", configGetCount + 2);
-      await page.getByText("Using server default (followup)").waitFor({ timeout: 10_000 });
+      await expect
+        .poll(() => followUpSelect.locator("option:checked").textContent())
+        .toContain("Server default (followup)");
       expect(await followUpSelect.inputValue()).toBe("server");
 
       await page.goto(`${suite.server.baseUrl}chat`);
@@ -497,6 +501,7 @@ suite.define(() => {
     const initialText = "Explain the long running operation.";
     const beforeText = "A B";
     const commentaryText = "Checking the intermediate result.";
+    const latestCommentaryText = "Checking the remaining work.";
     const steerText = "Now focus on the remaining work.";
     const afterText = "The remaining work continues after steering.";
     const userMessage = {
@@ -593,7 +598,25 @@ suite.define(() => {
           },
           steerMessage,
         ],
-        inFlightRun: { runId, startedAt, text: beforeText },
+        inFlightRun: {
+          runId,
+          startedAt,
+          text: beforeText,
+          events: [
+            {
+              runId,
+              seq: 1,
+              stream: "item",
+              ts: startedAt + 4_000,
+              sessionKey: "agent:main:main",
+              data: {
+                kind: "preamble",
+                itemId: "split-latest-commentary",
+                progressText: latestCommentaryText,
+              },
+            },
+          ],
+        },
         sessionInfo,
       });
       const startupsBefore = (await gateway.getRequests("chat.startup")).length;
@@ -610,7 +633,15 @@ suite.define(() => {
       try {
         await expect
           .poll(bubbleTexts)
-          .toEqual([initialText, "A", commentaryText, "B", steerText, afterText]);
+          .toEqual([
+            initialText,
+            "A",
+            commentaryText,
+            "B",
+            steerText,
+            latestCommentaryText,
+            afterText,
+          ]);
       } finally {
         await capture("recovered-continuation");
       }

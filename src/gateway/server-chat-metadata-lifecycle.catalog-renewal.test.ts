@@ -101,7 +101,11 @@ async function createRenewalLifecycle() {
     agentDir: state.agentDir("main"),
   })!;
   await owner.loadFullModelCatalog!({ refresh: true });
-  const broadcast = vi.fn();
+  const observedCatalogs: ModelCatalogSnapshot[] = [];
+  const broadcast = vi.fn(() => {
+    // A connected consumer receives serialized status, not the owner's live status getters.
+    observedCatalogs.push(structuredClone(owner.readFullModelCatalog!()!));
+  });
   const lifecycle = await createGatewayChatMetadataLifecycle({
     getConfig: () => config,
     minimalTestGateway: false,
@@ -114,12 +118,28 @@ async function createRenewalLifecycle() {
   );
   await lifecycle.read({ agentId: "main" });
   broadcast.mockClear();
+  observedCatalogs.length = 0;
   buildCommands.mockClear();
   buildProjection.mockClear();
-  return { inventory, broadcast, lifecycle, stop: () => sidecars.stop() };
+  return { inventory, broadcast, observedCatalogs, lifecycle, stop: () => sidecars.stop() };
 }
 
 describe("catalog renewal metadata broadcasts", () => {
+  it("observes expired published inventory without starting provider discovery", async () => {
+    const harness = await createRenewalLifecycle();
+    const inventoryOwner = resolvePreparedModelRuntimeOwnerBySnapshot(owner)!;
+    inventoryOwner.catalogInventory!.providers.get("custom")!.expiresAt = 0;
+    const acquisitions = mocks.runPreparedModelCatalogWorker.mock.calls.length;
+    try {
+      await harness.lifecycle.refresh();
+      const metadata = await harness.lifecycle.read({ agentId: "main" });
+      expect(metadata.models).toMatchObject(harness.inventory.entries);
+      expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(acquisitions);
+    } finally {
+      await harness.stop();
+    }
+  });
+
   it.each(["identical", "usage", "auth", "added", "removed", "outcome", "failed"] as const)(
     "publishes only settled visible changes for a renewal (%s)",
     async (change) => {
@@ -172,11 +192,12 @@ describe("catalog renewal metadata broadcasts", () => {
       });
       const inventoryOwner = resolvePreparedModelRuntimeOwnerBySnapshot(owner)!;
       inventoryOwner.catalogInventory!.providers.get("custom")!.expiresAt = 0;
-      owner.readFullModelCatalog!();
+      owner.refreshExpiredModelCatalog!();
       let renewal: Promise<unknown> | undefined;
       try {
         await entered.promise;
-        expect(original.pendingProviders).toEqual(["custom"]);
+        const pendingCatalog = structuredClone(original);
+        expect(pendingCatalog.pendingProviders).toEqual(["custom"]);
         // An unrelated refresh during discovery must not turn progress into a metadata change.
         await harness.lifecycle.refresh();
         await harness.lifecycle.read({ agentId: "main" });
@@ -201,21 +222,35 @@ describe("catalog renewal metadata broadcasts", () => {
                 {
                   phase: "catalog-published",
                   modelFactsChanged: change !== "identical" && change !== "usage",
+                  refreshStatusChanged: true,
                 },
               ],
         );
-        const changes = change === "identical" || change === "usage" ? 0 : 1;
-        expect(harness.broadcast.mock.calls).toEqual(
-          Array.from({ length: changes }, () => [
+        expect(harness.broadcast.mock.calls).toEqual([
+          [
             "chat.metadata.changed",
-            {},
+            {
+              modelCatalogChanged: true,
+              authChanged: change !== "identical" && change !== "usage" && change !== "failed",
+            },
             { dropIfSlow: true },
-          ]),
-        );
-        expect(buildCommands).toHaveBeenCalledTimes(changes);
-        expect(buildProjection).toHaveBeenCalledTimes(changes);
+          ],
+        ]);
+        expect(harness.observedCatalogs).toHaveLength(1);
+        const observedCatalog = harness.observedCatalogs[0];
+        if (!observedCatalog) {
+          throw new Error("Expected the settled catalog notification");
+        }
+        expect(observedCatalog.pendingProviders).toBeUndefined();
+        // The pending reply remains pending until the consumer receives the settlement signal.
+        expect(pendingCatalog.pendingProviders).toEqual(["custom"]);
+        const modelChanges = change === "identical" || change === "usage" ? 0 : 1;
+        expect(buildCommands).toHaveBeenCalledTimes(modelChanges);
+        expect(buildProjection).toHaveBeenCalledTimes(modelChanges);
         if (change === "identical" || change === "usage") {
           expect(owner.readFullModelCatalog!()).toBe(original);
+          expect(observedCatalog.entries).toEqual(pendingCatalog.entries);
+          expect(owner.isCurrent()).toBe(true);
           if (change === "usage") {
             expect(getPreparedModelFullCatalogAuth(original)?.authStore.lastGood).toEqual({
               custom: "custom:default",
@@ -245,6 +280,10 @@ describe("catalog renewal metadata broadcasts", () => {
             });
           }
         }
+        const broadcasts = harness.broadcast.mock.calls.length;
+        await harness.lifecycle.refresh();
+        await harness.lifecycle.read({ agentId: "main" });
+        expect(harness.broadcast).toHaveBeenCalledTimes(broadcasts);
       } finally {
         release.resolve();
         await renewal;

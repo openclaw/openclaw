@@ -30,7 +30,6 @@ import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { SystemAgentConfiguredRoute } from "./inference-route.js";
-import type { probeLocalCommand } from "./probes.js";
 import type {
   SetupInferenceAuthOption,
   SetupInferenceManualProvider,
@@ -272,17 +271,9 @@ export async function waitForProviderAuth<T>(
   }
 }
 
-type SetupInferenceRunEmbeddedAgent = (
-  params: Parameters<typeof import("../agents/embedded-agent.js").runEmbeddedAgent>[0] & {
-    onSuccessfulAuthBinding?: (binding: AgentExecutionAuthBinding) => void;
-    authProfileStateMode?: "read-write" | "read-only";
-    preparedModelRuntimeMode?: "isolated-read-only";
-  },
-) => ReturnType<typeof import("../agents/embedded-agent.js").runEmbeddedAgent>;
-
 export type ActivateSetupInferenceDeps = {
   readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
-  runEmbeddedAgent?: SetupInferenceRunEmbeddedAgent;
+  runEmbeddedAgent?: typeof import("../agents/embedded-agent.js").runEmbeddedAgent;
   runCliAgent?: typeof import("../agents/cli-runner.js").runCliAgent;
   ensureCodexRuntimePlugin?: typeof import("../commands/codex-runtime-plugin-install.js").ensureCodexRuntimePluginForModelSelection;
   transformConfigWithPendingPluginInstalls?: typeof import("../plugins/install-record-commit.js").transformConfigWithPendingPluginInstalls;
@@ -311,7 +302,6 @@ export type DetectSetupInferenceDeps = {
   /** Supplies prepared setup choices before native or provider discovery starts. */
   onPartial?: (detection: SetupInferenceDetection) => void;
   detectInferenceBackends?: typeof detectInferenceBackends;
-  probeLocalCommand?: typeof probeLocalCommand;
   resolveManifestProviderAuthChoices?: typeof resolveManifestProviderAuthChoices;
   resolvePluginProviders?: typeof resolvePluginProvidersCore;
   enablePluginInConfig?: typeof enablePluginInConfig;
@@ -326,18 +316,7 @@ export function toSavedAuthSetupKind(profileId: string): SavedAuthSetupInference
 }
 
 export function parseSavedAuthSetupProfileId(kind: string): string | undefined {
-  if (!kind.startsWith(SAVED_AUTH_SETUP_KIND_PREFIX)) {
-    return undefined;
-  }
-  const encoded = kind.slice(SAVED_AUTH_SETUP_KIND_PREFIX.length);
-  if (!encoded) {
-    return undefined;
-  }
-  try {
-    return decodeURIComponent(encoded) || undefined;
-  } catch {
-    return undefined;
-  }
+  return parseEncodedSetupKind(kind, SAVED_AUTH_SETUP_KIND_PREFIX);
 }
 
 export function parseInferenceRef(modelRef: string): { provider: string; model: string } {
@@ -348,15 +327,15 @@ export function parseInferenceRef(modelRef: string): { provider: string; model: 
 }
 
 export function parseProviderAutoSetupChoiceId(kind: string): string | undefined {
-  if (!kind.startsWith(PROVIDER_AUTO_SETUP_KIND_PREFIX)) {
-    return undefined;
-  }
-  const encoded = kind.slice(PROVIDER_AUTO_SETUP_KIND_PREFIX.length);
-  if (!encoded) {
+  return parseEncodedSetupKind(kind, PROVIDER_AUTO_SETUP_KIND_PREFIX);
+}
+
+function parseEncodedSetupKind(kind: string, prefix: string): string | undefined {
+  if (!kind.startsWith(prefix)) {
     return undefined;
   }
   try {
-    return decodeURIComponent(encoded) || undefined;
+    return decodeURIComponent(kind.slice(prefix.length)) || undefined;
   } catch {
     return undefined;
   }

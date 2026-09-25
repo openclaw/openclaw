@@ -54,6 +54,31 @@ describe("logical requester settlement", () => {
     expect(result.requesterContinuationSettled).toBeUndefined();
   });
 
+  it("transfers producer-owned completion after a partial harness receipt", async () => {
+    const admission = prepareSystemAgentRunAdmission({}, requester.runId, "main", "yield-test");
+    try {
+      await admission.admit("embedded");
+      mergeAcceptedSessionSpawnsForRun(admission.operationalRunInstance, acceptedSessionSpawns);
+      const result: EmbeddedAgentRunResult = {
+        acceptedSessionSpawns: [{ runId: "child", childSessionKey: "agent:main:subagent:child" }],
+        meta: { durationMs: 1, yielded: true },
+      };
+
+      settleRequesterRun({ ...requester, preparedRunAdmission: admission }, result, assertCurrent);
+
+      expect(registry.settle).toHaveBeenCalledExactlyOnceWith({
+        requesterSessionKey: requester.sessionKey,
+        requesterAgentId: requester.agentId,
+        requesterTurnRunId: requester.runId,
+        requesterYielded: true,
+        acceptedSessionSpawns,
+      });
+      expect(result.requesterContinuationSettled).toBe(true);
+    } finally {
+      admission.close();
+    }
+  });
+
   it("surfaces failed persistence without acknowledging a successor", () => {
     registry.settle.mockImplementation(() => {
       throw new Error("storage unavailable");

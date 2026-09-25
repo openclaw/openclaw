@@ -8,7 +8,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { buildChannelApprovalNativeTargetKey } from "./approval-native-target-key.js";
 import type { ChannelApprovalKind } from "./approval-types.js";
-import type { ExecApprovalRequest } from "./exec-approvals.js";
+import type { ExecApprovalRequest } from "./exec-approvals-core.js";
 import type { PluginApprovalRequest } from "./plugin-approvals.js";
 import type { SystemAgentApprovalRequest } from "./system-agent-approvals.js";
 
@@ -92,20 +92,12 @@ export async function resolveChannelNativeApprovalDeliveryPlan(params: {
     });
   }
 
-  if (preferApproverDm) {
+  if (preferApproverDm || !originTarget) {
     for (const target of approverDmTargets) {
       plannedTargets.push({
         surface: "approver-dm",
         target,
-        reason: "preferred",
-      });
-    }
-  } else if (!originTarget) {
-    for (const target of approverDmTargets) {
-      plannedTargets.push({
-        surface: "approver-dm",
-        target,
-        reason: "fallback",
+        reason: preferApproverDm ? "preferred" : "fallback",
       });
     }
   }

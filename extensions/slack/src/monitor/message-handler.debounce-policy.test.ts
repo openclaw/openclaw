@@ -84,7 +84,7 @@ it("updates Slack delay and flushes newly buffered top-level keys before immedia
     await enqueue("second");
     expect(bodies()).toEqual(["immediate"]);
     await vi.advanceTimersByTimeAsync(25);
-    expect(bodies()).toEqual(["immediate", "first\nsecond"]);
+    await vi.waitFor(() => expect(bodies()).toEqual(["immediate", "first\nsecond"]));
     await enqueue("pending top level", "C1");
     publish(0);
     await enqueue("after disable", "C1");

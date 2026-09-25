@@ -9,6 +9,13 @@ read_when:
 Run `openclaw doctor` to repair and migrate an OpenClaw install. This page covers the
 command, its automation flags, and the read-only lint mode.
 
+When the System agent runs Doctor, it uses a separate process from the same
+OpenClaw installation. Bulk diagnostic checks can then run without blocking the
+Gateway's event loop. This uses the existing `--non-interactive` behavior,
+including its safe migrations; it does not enable additional repairs. Once
+started, Doctor finishes and releases its resources before a cancelled caller
+settles, so cancellation cannot abandon an in-progress migration.
+
 ## Quick start
 
 ```bash
@@ -23,7 +30,7 @@ openclaw doctor
     openclaw doctor --yes
     ```
 
-    Accept default non-service repairs without prompting and enter maintenance while preserving the installed gateway service definition.
+    Accept default non-service repairs without prompting and enter maintenance under the [service-preservation and installation-drift rules](/cli/doctor/recovery#gateway-service-recovery).
 
   </Tab>
   <Tab title="--fix">
@@ -31,7 +38,7 @@ openclaw doctor
     openclaw doctor --fix
     ```
 
-    Apply recommended non-service repairs without prompting (`--repair` is an alias) and enter maintenance while preserving the installed gateway service definition.
+    Apply recommended non-service repairs without prompting (`--repair` is an alias) and enter maintenance under the [service-preservation and installation-drift rules](/cli/doctor/recovery#gateway-service-recovery).
 
   </Tab>
   <Tab title="--lint">
@@ -49,7 +56,7 @@ openclaw doctor
     openclaw doctor --fix --force
     ```
 
-    Apply aggressive config/state repairs too. Repair maintenance preserves the installed service definition; use `openclaw gateway install --force` from the intended installation to replace its launcher and managed environment.
+    Apply aggressive config/state repairs too. Repair maintenance uses the same service-preservation and installation-drift rules; use `openclaw gateway install --force` from the intended installation to replace its launcher and managed environment.
 
   </Tab>
   <Tab title="--non-interactive">
@@ -65,6 +72,11 @@ openclaw doctor
     migrations. Explicit repair checks ownership before database snapshots;
     another live owner must stop before repair can proceed. Malformed or
     conflicting retained files require the manual recovery named in the error.
+
+    When the shared database is already current, preparation leaves the running
+    Gateway's worker environments available. Actual schema repairs retire the old
+    database resources before later maintenance continues, including when repair
+    cleanup fails.
 
   </Tab>
   <Tab title="--deep">

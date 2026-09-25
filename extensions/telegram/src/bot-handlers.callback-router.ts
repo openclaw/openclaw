@@ -472,14 +472,16 @@ async function handleTelegramModelCallback(params: {
     }
     const agentId =
       paginationMatch[2]?.trim() ||
-      messageRuntime.resolveTelegramSessionState({
-        chatId,
-        isGroup,
-        threadSpec,
-        botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(ctx.me),
-        senderId,
-        runtimeCfg,
-      }).agentId;
+      (
+        await messageRuntime.resolveTelegramSessionState({
+          chatId,
+          isGroup,
+          threadSpec,
+          botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(ctx.me),
+          senderId,
+          runtimeCfg,
+        })
+      ).agentId;
     const result = await retryModelAction(async () => {
       const skillCommands = telegramDeps.listSkillCommandsForAgents({
         cfg: runtimeCfg,
@@ -519,7 +521,7 @@ async function handleTelegramModelCallback(params: {
   }
 
   const { sessionState, modelData } = await retryModelAction(async () => {
-    const session = messageRuntime.resolveTelegramSessionState({
+    const session = await messageRuntime.resolveTelegramSessionState({
       chatId,
       isGroup,
       threadSpec,
@@ -673,7 +675,7 @@ async function handleTelegramModelCallback(params: {
           provider: selection.provider,
           model: selection.model,
           isDefault: isDefaultSelection,
-          runtime: { kind: "clear" },
+          runtime: isDefaultSelection ? { kind: "clear" } : { kind: "unchanged" },
         },
         markLiveSwitchPending: true,
       }),
@@ -694,7 +696,7 @@ async function handleTelegramModelCallback(params: {
     const actionText = isDefaultSelection
       ? "reset to default"
       : `changed to <b>${escapeHtml(selection.provider)}/${escapeHtml(selection.model)}</b>`;
-    const runtimeText = `Runtime set to <b>${escapeHtml(applied.agentRuntime)}</b> from configured policy.`;
+    const runtimeText = `Runtime set to <b>${escapeHtml(applied.agentRuntime)}</b>${isDefaultSelection ? " from configured policy" : ""}.`;
     const scopeText = isDefaultSelection
       ? `Session model selection cleared.${defaultAuthProfileNotice ? ` ${defaultAuthProfileNotice}` : ""} ${runtimeText} New replies use the agent's configured default.`
       : `Session-only model selection. ${runtimeText} The agent default in openclaw.json is unchanged. This chat keeps the model selection across /new and /reset; use /model default -s to clear the session model selection.`;

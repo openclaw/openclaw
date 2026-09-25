@@ -676,7 +676,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
       expect(activeSession.messages).toEqual(expectedSnapshotMessages);
       expect(sessionManager.getLeafId()).toBe(appended.entryId);
       if (scenario === "after-reset-metadata") {
-        sessionManager.appendThinkingLevelChange("low");
+        await sessionManager.appendThinkingLevelChange("low");
       }
       const persistedBefore = loadTranscriptEventsSync(target);
       const handle = {

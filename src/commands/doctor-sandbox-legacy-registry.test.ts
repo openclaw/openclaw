@@ -1,6 +1,7 @@
 // Doctor sandbox legacy registry tests cover migration, ordering, and invalid source cleanup.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 const {
@@ -44,7 +45,13 @@ import {
   readRegistryEntry,
   updateRegistry,
 } from "../agents/sandbox/registry.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { migrateLegacySandboxRegistryFiles } from "./doctor-sandbox-legacy-registry.js";
 
@@ -60,6 +67,7 @@ const registryTargets = [
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   await fs.rm(path.join(TEST_STATE_DIR, "state"), { recursive: true, force: true });
   await fs.rm(SANDBOX_CONTAINERS_DIR, { recursive: true, force: true });
@@ -76,6 +84,7 @@ afterEach(async () => {
 });
 
 afterAll(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   await fs.rm(TEST_STATE_DIR, { recursive: true, force: true });
   if (PREVIOUS_OPENCLAW_STATE_DIR === undefined) {
@@ -198,6 +207,145 @@ describe("legacy sandbox registry migration", () => {
     expect(browser?.cdpPort).toBe(9333);
     expect(browser?.noVncPort).toBe(6081);
     expect(browser?.configHash).toBe("legacy-browser-hash");
+  });
+
+  it("imports without application-thread SQLite and keeps the captured database across filesystem awaits", async () => {
+    seedRegistry(SANDBOX_REGISTRY_PATH, [containerEntry()]);
+    const redirectedState = path.join(TEST_STATE_DIR, "redirected");
+    const stat = fs.stat.bind(fs);
+    vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
+      if (args[0] === SANDBOX_CONTAINERS_DIR) {
+        setTestEnvValue("OPENCLAW_STATE_DIR", redirectedState);
+      }
+      return stat(...args);
+    });
+    const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
+    const exec = vi.spyOn(DatabaseSync.prototype, "exec");
+    try {
+      await migrateLegacySandboxRegistryFiles();
+      expect(prepare).not.toHaveBeenCalled();
+      expect(exec).not.toHaveBeenCalled();
+      await expectPathMissing(path.join(redirectedState, "state", "openclaw.sqlite"));
+    } finally {
+      prepare.mockRestore();
+      exec.mockRestore();
+      setTestEnvValue("OPENCLAW_STATE_DIR", TEST_STATE_DIR);
+    }
+    expect((await readRegistry()).entries[0]?.containerName).toBe("container-a");
+  });
+
+  it("retains legacy bytes and the committed prefix when later commit admission fails", async () => {
+    seedRegistry(SANDBOX_REGISTRY_PATH, [
+      containerEntry({ containerName: "first" }),
+      containerEntry({ containerName: "second" }),
+    ]);
+    const original = await fs.readFile(SANDBOX_REGISTRY_PATH, "utf8");
+    const maintenance = createOpenClawDatabaseMaintenanceScope();
+    const refusal = new Error("migration custody withdrawn");
+    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+    let commits = 0;
+    vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
+      (admit, attachment) =>
+        createAdmission((request, grant) => {
+          if (request.stage === "commit" && ++commits === 2) {
+            vi.spyOn(maintenance, "assertAdmission").mockImplementation(() => {
+              throw refusal;
+            });
+          }
+          admit(request, grant);
+        }, attachment),
+    );
+    try {
+      await expect(maintenance.run(() => migrateLegacySandboxRegistryFiles())).rejects.toBe(
+        refusal,
+      );
+      expect(await fs.readFile(SANDBOX_REGISTRY_PATH, "utf8")).toBe(original);
+    } finally {
+      vi.restoreAllMocks();
+      await maintenance.close();
+    }
+    expect((await readRegistry()).entries.map((entry) => entry.containerName)).toEqual(["first"]);
+    await migrateLegacySandboxRegistryFiles();
+    expect((await readRegistry()).entries.map((entry) => entry.containerName)).toEqual([
+      "first",
+      "second",
+    ]);
+  });
+
+  it("joins accepted migration and durable source cleanup before maintenance closes", async () => {
+    seedRegistry(SANDBOX_REGISTRY_PATH, [containerEntry()]);
+    const maintenance = createOpenClawDatabaseMaintenanceScope();
+    const removingSource = createDeferredCore();
+    const releaseRemoval = createDeferredCore();
+    let closed = false;
+    let closing: Promise<void> | undefined;
+    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+    vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
+      (admit, attachment) =>
+        createAdmission((request, grant) => {
+          if (request.stage === "commit") {
+            closing = maintenance.close().then(() => {
+              closed = true;
+            });
+          }
+          admit(request, grant);
+        }, attachment),
+    );
+    const remove = fs.rm.bind(fs);
+    vi.spyOn(fs, "rm").mockImplementation(async (pathname, options) => {
+      if (pathname === SANDBOX_REGISTRY_PATH) {
+        const database = new DatabaseSync(path.join(TEST_STATE_DIR, "state", "openclaw.sqlite"), {
+          readOnly: true,
+        });
+        try {
+          expect(
+            database.prepare("SELECT container_name FROM sandbox_registry_entries").all(),
+          ).toEqual([{ container_name: "container-a" }]);
+        } finally {
+          database.close();
+        }
+        removingSource.resolve();
+        await releaseRemoval.promise;
+      }
+      return remove(pathname, options);
+    });
+    const migration = maintenance.run(() => migrateLegacySandboxRegistryFiles());
+    try {
+      await Promise.race([removingSource.promise, migration]);
+      expect(closing).toBeDefined();
+      await fs.access(SANDBOX_REGISTRY_PATH);
+      expect(closed).toBe(false);
+    } finally {
+      releaseRemoval.resolve();
+      try {
+        await migration;
+      } finally {
+        await (closing ?? maintenance.close());
+      }
+    }
+    expect(closed).toBe(true);
+    await expectPathMissing(SANDBOX_REGISTRY_PATH);
+  });
+
+  it("replays idempotently when durable import succeeds but legacy removal fails", async () => {
+    seedRegistry(SANDBOX_REGISTRY_PATH, [{ ...containerEntry(), customLegacy: { kept: true } }]);
+    const source = await fs.readFile(SANDBOX_REGISTRY_PATH, "utf8");
+    const remove = fs.rm.bind(fs);
+    const removalFailure = new Error("legacy removal unavailable");
+    const failedRemove = vi.spyOn(fs, "rm").mockImplementation(async (pathname, options) => {
+      if (pathname === SANDBOX_REGISTRY_PATH) {
+        throw removalFailure;
+      }
+      return remove(pathname, options);
+    });
+    await expect(migrateLegacySandboxRegistryFiles()).rejects.toBe(removalFailure);
+    expect(await fs.readFile(SANDBOX_REGISTRY_PATH, "utf8")).toBe(source);
+    const before = await readRegistryEntry("container-a");
+    expect(before).toMatchObject({ customLegacy: { kept: true }, createdAtMs: 1 });
+    failedRemove.mockRestore();
+    await migrateLegacySandboxRegistryFiles();
+    expect(await readRegistryEntry("container-a")).toEqual(before);
+    await expectPathMissing(SANDBOX_REGISTRY_PATH);
   });
 
   it("migrates legacy sharded container and browser registry files after explicit repair", async () => {
@@ -354,6 +502,7 @@ describe("legacy sandbox registry migration", () => {
       { kind: "browsers", status: "missing" },
     ]);
     await expectPathMissing(SANDBOX_REGISTRY_PATH);
+    await expectPathMissing(path.join(TEST_STATE_DIR, "state", "openclaw.sqlite"));
     expect((await readRegistry()).entries).toEqual([]);
     expect((await readBrowserRegistry()).entries).toEqual([]);
   });

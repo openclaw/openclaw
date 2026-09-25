@@ -1,4 +1,3 @@
-// Memory Core plugin module implements embeddings behavior.
 import {
   getMemoryEmbeddingProvider,
   type MemoryEmbeddingProvider,
@@ -17,13 +16,12 @@ import type { MemoryManagerProviderFactory } from "./manager-registry.js";
 
 export type EmbeddingProvider = MemoryEmbeddingProvider;
 export type EmbeddingProviderId = string;
-export type EmbeddingProviderRequest = string;
 type EmbeddingProviderFallback = string;
 export type EmbeddingProviderRuntime = MemoryEmbeddingProviderRuntime;
 
 export type EmbeddingProviderResult = {
   provider: EmbeddingProvider | null;
-  requestedProvider: EmbeddingProviderRequest;
+  requestedProvider: string;
   fallbackFrom?: string;
   fallbackReason?: string;
   providerUnavailableReason?: string;
@@ -31,7 +29,7 @@ export type EmbeddingProviderResult = {
 };
 
 type CreateEmbeddingProviderOptions = Omit<MemoryEmbeddingProviderCreateOptions, "dimensions"> & {
-  provider: EmbeddingProviderRequest;
+  provider: string;
   fallback: EmbeddingProviderFallback;
   outputDimensionality?: number;
   acquireLocalService?: MemoryCoreAcquireLocalService;
@@ -182,12 +180,12 @@ export async function createEmbeddingProvider(
         const fallbackReason = formatProviderError(fallbackAdapter, fallbackErr);
         const wrapped = new Error(
           `${reason}\n\nFallback to ${options.fallback} failed: ${fallbackReason}`,
-        ) as Error & { cause?: unknown };
+        );
         wrapped.cause = primaryErr;
         throw wrapped;
       }
     }
-    const wrapped = new Error(reason) as Error & { cause?: unknown };
+    const wrapped = new Error(reason);
     wrapped.cause = primaryErr;
     throw wrapped;
   }

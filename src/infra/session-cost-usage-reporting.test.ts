@@ -49,7 +49,7 @@ describe("session usage reporting pricing", () => {
       name: "configured all-zero pricing",
       pricing: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       recordedCost: { total: 0 },
-      expectedCost: undefined,
+      expectedCost: 0,
     },
     {
       // The recorded call owns its estimate; a later catalog cannot recover its service tier.
@@ -101,6 +101,12 @@ describe("session usage reporting pricing", () => {
       pricing: tieredPricing,
       recordedCost: { total: 0.125, totalOrigin: "provider-billed" },
       expectedCost: 0.125,
+    },
+    {
+      name: "zero total with recorded component evidence",
+      recordedCost: { total: 0, input: 0.25 },
+      expectedCost: 0,
+      expectedBreakdown: { input: 0.25, output: 0, cacheRead: 0, cacheWrite: 0 },
     },
     {
       name: "recorded positive cost preserved with flat pricing",

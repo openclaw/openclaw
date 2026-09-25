@@ -27,14 +27,16 @@ import {
   type WorkspaceHashMemo,
   type WorkspaceReconcileMetrics,
 } from "./workspace-hash-memo.js";
-import { MAX_WORKSPACE_MANIFEST_BYTES } from "./workspace-inventory-limits.js";
+import {
+  MAX_WORKSPACE_INVENTORY_ENTRIES,
+  MAX_WORKSPACE_MANIFEST_BYTES,
+} from "./workspace-inventory-limits.js";
 import { prepareLocalWorkspaceReconciliation } from "./workspace-local-reconciliation.js";
 import { parseWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { DERIVED_WORKSPACE_RSYNC_EXCLUDES } from "./workspace-path-exclusions.js";
 import { createWorkerWorkspaceQuiescence } from "./workspace-quiescence.js";
 import {
   assertWorkspaceMatchesManifest,
-  MAX_RECONCILIATION_ENTRIES,
   MAX_RECONCILIATION_FILE_BYTES,
   MAX_RECONCILIATION_TOTAL_BYTES,
 } from "./workspace-reconcile.js";
@@ -452,7 +454,6 @@ export function createWorkerWorkspaceActions(
     );
     const stagingRoot = path.join(temporaryDirectory, "staging");
     const manifestRoot = path.join(temporaryDirectory, "manifests");
-    const baseManifestPath = path.join(manifestRoot, `${baseDigest}.json`);
     const transferListPath = path.join(temporaryDirectory, "transfer-list");
     const acceptedWorkspacePublisher = createAcceptedWorkspacePublisherFactory({
       runWorkspaceCommand,
@@ -464,10 +465,10 @@ export function createWorkerWorkspaceActions(
       hashMemo,
       metrics,
     });
-    try {
-      await fs.mkdir(stagingRoot, { mode: 0o700 });
-      await fs.mkdir(manifestRoot, { mode: 0o700 });
-      const baseManifestTransfer = await runBoundedInboundRsync({
+    const downloadManifest = async (manifestRef: string) => {
+      const digest = manifestRef.slice("sha256:".length);
+      const manifestPath = path.join(manifestRoot, `${digest}.json`);
+      const transferred = await runBoundedInboundRsync({
         prepared,
         argv: (rsyncSsh) => [
           "rsync",
@@ -479,23 +480,26 @@ export function createWorkerWorkspaceActions(
           "-e",
           rsyncSsh,
           "--",
-          `${prepared.scpTarget}:.openclaw-worker/manifests/${baseDigest}.json`,
-          baseManifestPath,
+          `${prepared.scpTarget}:.openclaw-worker/manifests/${digest}.json`,
+          manifestPath,
         ],
         destinationRoot: manifestRoot,
         entryLimit: 1,
         totalByteLimit: MAX_WORKSPACE_MANIFEST_BYTES,
       });
-      if (!success(baseManifestTransfer)) {
-        throw workspaceSyncError(baseManifestTransfer);
+      if (!success(transferred)) {
+        throw workspaceSyncError(transferred);
       }
-      const baseRaw = await readTransferredManifest(baseManifestPath);
-      const base = await parseWorkspaceManifest(
-        baseRaw,
-        request.baseManifestRef,
-        options.ownerSignal,
-      );
-      await fs.rm(baseManifestPath);
+      const raw = await readTransferredManifest(manifestPath);
+      const manifest = await parseWorkspaceManifest(raw, manifestRef, options.ownerSignal);
+      return { raw, manifest, path: manifestPath };
+    };
+    try {
+      await fs.mkdir(stagingRoot, { mode: 0o700 });
+      await fs.mkdir(manifestRoot, { mode: 0o700 });
+      const downloadedBase = await downloadManifest(request.baseManifestRef);
+      const { raw: baseRaw, manifest: base } = downloadedBase;
+      await fs.rm(downloadedBase.path);
       // Recover interrupted publication before measuring; a partial swap is not a planning base.
       await recoverAcceptedWorkspacePublication({
         runWorkspaceCommand,
@@ -529,32 +533,7 @@ export function createWorkerWorkspaceActions(
       let current = base;
       let currentRaw = baseRaw;
       if (changed) {
-        const currentDigest = currentRef.slice("sha256:".length);
-        const currentManifestPath = path.join(manifestRoot, `${currentDigest}.json`);
-        const currentManifestTransfer = await runBoundedInboundRsync({
-          prepared,
-          argv: (rsyncSsh) => [
-            "rsync",
-            "--archive",
-            "--no-recursive",
-            "--checksum",
-            `--max-size=${MAX_WORKSPACE_MANIFEST_BYTES}`,
-            `--bwlimit=${INBOUND_RSYNC_BW_LIMIT_KIB}`,
-            "-e",
-            rsyncSsh,
-            "--",
-            `${prepared.scpTarget}:.openclaw-worker/manifests/${currentDigest}.json`,
-            currentManifestPath,
-          ],
-          destinationRoot: manifestRoot,
-          entryLimit: 1,
-          totalByteLimit: MAX_WORKSPACE_MANIFEST_BYTES,
-        });
-        if (!success(currentManifestTransfer)) {
-          throw workspaceSyncError(currentManifestTransfer);
-        }
-        currentRaw = await readTransferredManifest(currentManifestPath);
-        current = await parseWorkspaceManifest(currentRaw, currentRef, options.ownerSignal);
+        ({ raw: currentRaw, manifest: current } = await downloadManifest(currentRef));
       }
       const { expectedRemoteRef, publishAcceptedManifest } = acceptedWorkspacePublisher(
         current,
@@ -584,7 +563,7 @@ export function createWorkerWorkspaceActions(
               `${stagingRoot}/`,
             ],
             destinationRoot: stagingRoot,
-            entryLimit: MAX_RECONCILIATION_ENTRIES * 2,
+            entryLimit: MAX_WORKSPACE_INVENTORY_ENTRIES,
             totalByteLimit: MAX_RECONCILIATION_TOTAL_BYTES,
           });
           if (!success(resultTransfer)) {
@@ -626,6 +605,7 @@ export function createWorkerWorkspaceActions(
       baseManifestRef: request.baseManifestRef,
       localPath: request.source.path,
       journal: request.source.journal,
+      assertCurrent: request.source.assertCurrent,
       stagedResult: request.source.stagedResult,
     };
     return await runInstrumentedWorkspaceReconcile((metrics) =>

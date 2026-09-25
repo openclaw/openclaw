@@ -3,20 +3,20 @@
  *
  * Handles host paths, file URLs, temporary media paths, and workspace root assertions.
  */
-import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { URL } from "node:url";
-import { promisify } from "node:util";
-import { isPassThroughRemoteMediaSource } from "@openclaw/media-core/media-source-url";
-import { isWindowsDrivePath } from "../infra/archive-path.js";
 import {
+  assertNoPathAliasEscape,
   assertNoWindowsNetworkPath,
   hasEncodedFileUrlSeparator,
+  resolvePathPrefixSync,
   safeFileURLToPath,
-} from "../infra/local-file-access.js";
-import { assertNoPathAliasEscape, type PathAliasPolicy } from "../infra/path-alias-guards.js";
-import { isNotFoundPathError, isPathInside } from "../infra/path-guards.js";
+  type PathAliasPolicy,
+} from "@openclaw/fs-safe/advanced";
+import { isWindowsDrivePath } from "@openclaw/fs-safe/archive";
+import { isPassThroughRemoteMediaSource } from "@openclaw/media-core/media-source-url";
+import { isPathInside } from "../infra/path-guards.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { resolveConfigDir, shortenHomePath } from "../utils.js";
 
@@ -81,33 +81,66 @@ export function resolveSandboxPath(params: { filePath: string; cwd: string; root
     path.isAbsolute(relative) ||
     isWindowsDrivePath(relative)
   ) {
-    throw new Error(
-      `Path escapes sandbox root (${shortenHomePath(rootResolved)}): ${params.filePath}`,
+    throw markHostRootEscape(
+      new Error(`Path escapes sandbox root (${shortenHomePath(rootResolved)}): ${params.filePath}`),
     );
   }
   return { resolved, relative };
 }
 
-const realpathNative = promisify(fs.realpath.native);
+const HOST_ROOT_ESCAPE = Symbol.for("openclaw.hostRootEscape");
+
+/**
+ * Tag a rejection as coming from the host workspace root. Sandbox filesystem bridges
+ * enforce their own mount boundary and leave their rejections untagged, so callers can
+ * tell the two apart without reading the message text.
+ */
+export function markHostRootEscape<E>(error: E): E {
+  try {
+    if (error instanceof Error && Object.isExtensible(error)) {
+      Object.defineProperty(error, HOST_ROOT_ESCAPE, { value: true });
+    }
+  } catch {
+    // Diagnostic annotation must never replace the original rejection.
+  }
+  return error;
+}
+
+/** True when a rejection came from the host workspace root rather than a container mount. */
+export function isHostRootEscapeError(error: unknown): error is Error {
+  try {
+    return error instanceof Error && Reflect.get(error, HOST_ROOT_ESCAPE) === true;
+  } catch {
+    return false;
+  }
+}
+
+function rethrowHostPathAliasError(error: unknown): never {
+  // Only the direct host validator calls this. fs-safe reports escape kinds as
+  // messages; bridge errors never enter this classifier. Other alias and I/O
+  // failures must keep their own explanation.
+  if (isPathBoundaryEscapeError(error, "sandbox root")) {
+    throw markHostRootEscape(error);
+  }
+  throw error;
+}
+
+/** Classify fs-safe's untyped escape errors only at a known validator boundary. */
+export function isPathBoundaryEscapeError(
+  error: unknown,
+  boundary: "sandbox root" | "workspace root",
+): error is Error {
+  return (
+    error instanceof Error &&
+    /^(?:Path escapes|Path resolves outside|Symlink escapes) (sandbox root|workspace root) \(/.exec(
+      error.message,
+    )?.[1] === boundary
+  );
+}
 
 async function resolveRawPathViaExistingAncestor(rawPath: string): Promise<string> {
-  let cursor = rawPath;
-  const missingSuffix: string[] = [];
-  while (true) {
-    try {
-      return path.resolve(await realpathNative(cursor), ...missingSuffix);
-    } catch (error) {
-      if (!isNotFoundPathError(error)) {
-        throw error;
-      }
-      const parent = path.dirname(cursor);
-      if (parent === cursor) {
-        throw error;
-      }
-      missingSuffix.unshift(path.basename(cursor));
-      cursor = parent;
-    }
-  }
+  const { existingPath, unresolvedSegments } = resolvePathPrefixSync(rawPath);
+  return path.resolve(existingPath, ...unresolvedSegments);
 }
 
 async function assertRawParentWithinRoot(params: {
@@ -146,8 +179,10 @@ async function assertRawParentWithinRoot(params: {
       ? await resolveRawPathViaExistingAncestor(rawAbsolute)
       : path.resolve(parentCanonical, finalSegment);
   if (targetCanonical !== rootCanonical && !isPathInside(rootCanonical, targetCanonical)) {
-    throw new Error(
-      `Path escapes sandbox root (${shortenHomePath(rootCanonical)}): ${params.filePath}`,
+    throw markHostRootEscape(
+      new Error(
+        `Path escapes sandbox root (${shortenHomePath(rootCanonical)}): ${params.filePath}`,
+      ),
     );
   }
   return { rootCanonical, targetCanonical };
@@ -217,7 +252,7 @@ export async function assertSandboxPath(params: {
     rootPath: root,
     boundaryLabel: "sandbox root",
     policy,
-  });
+  }).catch(rethrowHostPathAliasError);
   // Also check raw parents: absolute input can enter the root only after a
   // symlink/.. prefix outside it, which the alias guard normalizes away.
   const rawTarget = await assertRawParentWithinRoot(normalized);
@@ -227,7 +262,7 @@ export async function assertSandboxPath(params: {
       rootPath: rawTarget.rootCanonical,
       boundaryLabel: "sandbox root",
       policy,
-    });
+    }).catch(rethrowHostPathAliasError);
   }
   return resolved;
 }

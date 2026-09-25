@@ -1,4 +1,3 @@
-// Discord plugin module implements gateway registry behavior.
 import type { GatewayPlugin } from "../internal/gateway.js";
 
 /**

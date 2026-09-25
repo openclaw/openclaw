@@ -22,7 +22,6 @@ import {
   coerceConfig,
   containsConfigIncludeDirective,
   hashConfigRaw,
-  maybeLoadDotEnvForConfig,
   parseConfigJson5,
   resolveConfigForRead,
   resolveConfigIncludesForRead,
@@ -30,8 +29,15 @@ import {
   restoreEnvChangesIfUnchanged,
   snapshotEnv,
 } from "./io.read-helpers.js";
-import { materializeConfigSnapshotDefaults } from "./io.snapshot-preparation.js";
-import type { CapturedConfigSnapshotPreparation } from "./io.snapshot-preparation.types.js";
+import { maybeLoadDotEnvForConfig } from "./io.runtime-env.js";
+import {
+  materializeConfigSnapshotDefaults,
+  prepareConfigSnapshotValidation,
+} from "./io.snapshot-preparation.js";
+import type {
+  CapturedConfigSnapshotPreparation,
+  ValidationRequest,
+} from "./io.snapshot-preparation.types.js";
 import {
   collectInvalidConfigLegacyIssues,
   createConfigFileSnapshot,
@@ -40,6 +46,7 @@ import {
 import type {
   BestEffortConfigSnapshot,
   ConfigSnapshotReadOptions,
+  ConfigSnapshotMetadataReadOptions,
   PreparedConfigRecovery,
   ReadConfigFileSnapshotForWriteResult,
   ReadConfigFileSnapshotInternalResult,
@@ -58,6 +65,7 @@ import type { ConfigFileSnapshot, LegacyConfigIssue, OpenClawConfig } from "./ty
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
 type InternalReadOptions = {
+  prepareValidation?: "runtime" | "strict";
   preparation?: CapturedConfigSnapshotPreparation | null;
   allowCurrentPluginMetadata?: boolean;
   recoverSuspicious?: boolean;
@@ -116,7 +124,6 @@ async function readConfigSnapshotWithPreparation(
     const migrated = migratePersistedImplicitMainRoster({});
     const config = coerceConfig(migrated.config);
     const metadata = context.createValidationPluginMetadataSnapshotLoader({
-      effectiveConfigRaw: config,
       env: deps.env,
       allowCurrentPluginMetadata: options.allowCurrentPluginMetadata,
     });
@@ -255,9 +262,6 @@ async function readConfigSnapshotWithPreparation(
       ...rosterMigration.diagnostics.map((message) => ({ path: "agents.entries", message })),
     );
     const effectiveConfigRaw = rosterMigration.config;
-    const validationConfigRaw = effectiveConfigRaw;
-    const snapshotRaw = raw;
-    const snapshotParsed = effectiveParsed;
     // The write revision covers every authored input, without hashing runtime defaults or env.
     const snapshotHash = hashConfigRevision(
       raw,
@@ -267,38 +271,56 @@ async function readConfigSnapshotWithPreparation(
     fallbackHash = snapshotHash;
     fallbackSourceConfig = coerceConfig(effectiveConfigRaw);
     const pluginMetadata = context.createValidationPluginMetadataSnapshotLoader({
-      effectiveConfigRaw,
       env: deps.env,
       allowCurrentPluginMetadata: options.allowCurrentPluginMetadata,
     });
+    const validationRequest: ValidationRequest = {
+      kind: "validate",
+      prepareValidation: options.prepareValidation,
+      context,
+      metadata: pluginMetadata,
+      raw: effectiveConfigRaw,
+      sourceRaw: effectiveParsed,
+    };
     const { deferredPluginMigrations, validated } = await deps.measure(
       "config.snapshot.read.validate",
       () =>
         preparation
-          ? preparation((prepare) =>
-              prepare({
-                kind: "validate",
-                context,
-                metadata: pluginMetadata,
-                raw: validationConfigRaw,
-                sourceRaw: effectiveParsed,
-              }),
-            )
-          : withSynchronousArtifactPreservingStateSnapshot(() => {
-              const pending = context.resolveDeferredPluginMigrations();
-              return {
-                deferredPluginMigrations: pending,
-                validated: validateConfigObjectWithPlugins(validationConfigRaw, {
-                  ...pathResolution,
-                  pluginValidation: context.options.pluginValidation,
-                  loadPluginMetadataSnapshot: pluginMetadata.load,
-                  sourceRaw: effectiveParsed,
-                  preservedLegacyRootKeys: context.options.preservedLegacyRootKeys,
+          ? preparation((prepare) => prepare(validationRequest))
+          : options.prepareValidation
+            ? prepareConfigSnapshotValidation(validationRequest)
+            : withSynchronousArtifactPreservingStateSnapshot(() => {
+                const pending = context.resolveDeferredPluginMigrations();
+                return {
                   deferredPluginMigrations: pending,
-                }),
-              };
-            }),
+                  validated: validateConfigObjectWithPlugins(effectiveConfigRaw, {
+                    ...pathResolution,
+                    pluginValidation: context.options.pluginValidation,
+                    loadPluginMetadataSnapshot: pluginMetadata.load,
+                    sourceRaw: effectiveParsed,
+                    preservedLegacyRootKeys: context.options.preservedLegacyRootKeys,
+                    deferredPluginMigrations: pending,
+                  }),
+                };
+              }),
     );
+    const snapshotSource = () => ({
+      path: configPath,
+      includedPaths: listResolvedIncludePaths(includeFilePathsForWatch),
+      exists: true,
+      raw,
+      parsed: effectiveParsed,
+      authoredConfig: coerceConfig(resolved),
+      includeProvenance,
+      agentRosterIncludeOwned,
+      bindingsIncludeOwned,
+      sourceConfigBeforeMigrations: coerceConfig(readResolution.resolvedConfigRaw),
+      sourceConfig: coerceConfig(effectiveConfigRaw),
+      hash: snapshotHash,
+      deferredPluginMigrations,
+      warnings: [...validated.warnings, ...envVarWarnings],
+      resolutionFacts: readResolution.resolutionFacts,
+    });
     if (!validated.ok) {
       const availableSnapshot = pluginMetadata.getSnapshot();
       const collect = () =>
@@ -321,23 +343,10 @@ async function readConfigSnapshotWithPreparation(
       });
       return await finalizeReadConfigSnapshotInternalResult(deps, {
         snapshot: createConfigFileSnapshot({
-          path: configPath,
-          includedPaths: listResolvedIncludePaths(includeFilePathsForWatch),
-          exists: true,
-          raw: snapshotRaw,
-          parsed: snapshotParsed,
-          includeProvenance,
-          agentRosterIncludeOwned,
-          bindingsIncludeOwned,
-          sourceConfigBeforeMigrations: coerceConfig(readResolution.resolvedConfigRaw),
-          sourceConfig: coerceConfig(effectiveConfigRaw),
+          ...snapshotSource(),
           valid: false,
           runtimeConfig: coerceConfig(effectiveConfigRaw),
-          hash: snapshotHash,
           issues: validated.issues,
-          deferredPluginMigrations,
-          warnings: [...validated.warnings, ...envVarWarnings],
-          resolutionFacts: readResolution.resolutionFacts,
           legacyIssues,
         }),
         envSnapshotForRestore: readResolution.envSnapshotForRestore,
@@ -389,6 +398,7 @@ async function readConfigSnapshotWithPreparation(
         });
         return await readConfigFileSnapshotInternal(context, {
           preparation,
+          prepareValidation: options.prepareValidation,
           allowCurrentPluginMetadata: options.allowCurrentPluginMetadata,
           recoverSuspicious: options.recoverSuspicious,
           skipSuspiciousRecovery: true,
@@ -408,29 +418,17 @@ async function readConfigSnapshotWithPreparation(
         deps,
         {
           snapshot: createConfigFileSnapshot({
-            path: configPath,
-            includedPaths: listResolvedIncludePaths(includeFilePathsForWatch),
-            exists: true,
-            raw: snapshotRaw,
-            parsed: snapshotParsed,
-            includeProvenance,
-            agentRosterIncludeOwned,
-            bindingsIncludeOwned,
-            sourceConfigBeforeMigrations: coerceConfig(readResolution.resolvedConfigRaw),
-            sourceConfig: coerceConfig(effectiveConfigRaw),
+            ...snapshotSource(),
             valid: true,
             runtimeConfig: snapshotConfig,
-            hash: snapshotHash,
             issues: [],
-            warnings: [...validated.warnings, ...envVarWarnings],
-            deferredPluginMigrations,
-            resolutionFacts: readResolution.resolutionFacts,
             legacyIssues: [],
           }),
           envSnapshotForRestore: readResolution.envSnapshotForRestore,
           includeFileHashesForWrite,
           includeFileTargetsForWrite,
           pluginMetadataSnapshot: pluginMetadata.getSnapshot(),
+          ...(validated.strictIssues ? { strictIssues: validated.strictIssues } : {}),
         },
         { observe: !callerRejectedSuspiciousRecovery },
       ),
@@ -499,12 +497,15 @@ export async function prepareConfigRecoveryFromContext(
         retryable: false,
       });
     }
-    const previewContext = createConfigIoContext({
-      ...context.options,
-      configPath: context.configPath,
-      env: cloneEnvWithPlatformSemantics(context.deps.env),
-      observe: false,
-    });
+    const previewContext = createConfigIoContext(
+      {
+        ...context.options,
+        configPath: context.configPath,
+        env: cloneEnvWithPlatformSemantics(context.deps.env),
+        observe: false,
+      },
+      context.transformRecoveryCandidate,
+    );
     const plan = await prepareSuspiciousConfigRead({
       deps: previewContext.deps,
       configPath: context.configPath,
@@ -548,11 +549,23 @@ export async function readConfigFileSnapshotFromContext(
 
 export async function readConfigFileSnapshotWithPluginMetadataFromContext(
   context: ConfigIoContext,
-  options: ConfigSnapshotReadOptions = {},
+  options: ConfigSnapshotMetadataReadOptions = {},
+): Promise<ReadConfigFileSnapshotWithPluginMetadataResult> {
+  const read = () => readConfigSnapshotWithPluginMetadata(context, options);
+  // Explicit CLI validation prepares async state facts before command admission.
+  return options.prepareValidation && !context.deps.observe
+    ? withArtifactPreservingStateReads(read)
+    : read();
+}
+
+async function readConfigSnapshotWithPluginMetadata(
+  context: ConfigIoContext,
+  options: ConfigSnapshotMetadataReadOptions,
 ): Promise<ReadConfigFileSnapshotWithPluginMetadataResult> {
   const preparation = captureManagedConfigSnapshotPreparation(context.configPath);
   const result = await readConfigFileSnapshotInternal(context, {
     preparation,
+    prepareValidation: options.prepareValidation,
     allowCurrentPluginMetadata: options.allowCurrentPluginMetadata,
     recoverSuspicious: options.recoverSuspicious === true,
     allowSuspiciousRecovery: options.allowSuspiciousRecovery,
@@ -560,7 +573,6 @@ export async function readConfigFileSnapshotWithPluginMetadataFromContext(
   let pluginMetadataSnapshot = result.pluginMetadataSnapshot;
   if (!pluginMetadataSnapshot && result.snapshot.valid) {
     const pluginMetadata = context.createValidationPluginMetadataSnapshotLoader({
-      effectiveConfigRaw: result.snapshot.sourceConfig,
       env: context.deps.env,
       allowCurrentPluginMetadata: options.allowCurrentPluginMetadata,
     });
@@ -572,6 +584,8 @@ export async function readConfigFileSnapshotWithPluginMetadataFromContext(
           config: result.snapshot.sourceConfig,
         }),
       );
+    } else if (options.prepareValidation) {
+      await pluginMetadata.loadAsync(result.snapshot.sourceConfig);
     } else {
       pluginMetadata.load(result.snapshot.sourceConfig);
     }
@@ -580,6 +594,7 @@ export async function readConfigFileSnapshotWithPluginMetadataFromContext(
   preparation?.assertCurrent();
   return {
     snapshot: result.snapshot,
+    ...(result.strictIssues ? { strictIssues: result.strictIssues } : {}),
     ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
   };
 }

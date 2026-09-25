@@ -2,6 +2,7 @@ import type { z } from "zod";
 // Defines gateway runtime and networking configuration types.
 import type { SecretInput } from "./types.secrets.js";
 import type { GatewayConfigSchema } from "./zod-schema.gateway.js";
+import type { OpenClawSchemaShape } from "./zod-schema.root-shape.js";
 import type { TalkSchema } from "./zod-schema.root-support.js";
 
 type GatewayConfigInput = NonNullable<z.input<typeof GatewayConfigSchema>>;
@@ -12,30 +13,10 @@ export type GatewayBindMode = NonNullable<GatewayConfigInput["bind"]>;
 
 export type GatewayTlsConfig = NonNullable<GatewayConfigInput["tls"]>;
 
-export type WideAreaDiscoveryConfig = {
-  /** Optional unicast DNS-SD domain (e.g. "openclaw.internal"). */
-  domain?: string;
-};
-
-/** mDNS/Bonjour metadata exposure level for local gateway discovery. */
-export type MdnsDiscoveryMode = "off" | "minimal" | "full";
-
-export type MdnsDiscoveryConfig = {
-  /**
-   * mDNS/Bonjour discovery broadcast mode (default: minimal).
-   * - off: disable mDNS entirely
-   * - minimal: omit cliPath/sshPort from TXT records
-   * - full: include cliPath/sshPort in TXT records
-   */
-  mode?: MdnsDiscoveryMode;
-};
-
-export type DiscoveryConfig = {
-  /** Wide-area DNS-SD discovery settings. */
-  wideArea?: WideAreaDiscoveryConfig;
-  /** Local mDNS/Bonjour discovery settings. */
-  mdns?: MdnsDiscoveryConfig;
-};
+export type DiscoveryConfig = NonNullable<z.input<typeof OpenClawSchemaShape.discovery>>;
+export type WideAreaDiscoveryConfig = NonNullable<DiscoveryConfig["wideArea"]>;
+export type MdnsDiscoveryConfig = NonNullable<DiscoveryConfig["mdns"]>;
+export type MdnsDiscoveryMode = NonNullable<MdnsDiscoveryConfig["mode"]>;
 
 export type TalkProviderConfig = NonNullable<TalkConfigInput["providers"]>[string];
 export type TalkRealtimeConfig = NonNullable<TalkConfigInput["realtime"]>;
@@ -98,6 +79,11 @@ export type GatewayTailscaleConfig = Omit<
   /** @deprecated Migrate to `mode="funnel"`, which uses managed ingress. */
   preserveFunnel?: boolean;
 };
+
+/** Operator-provisioned private HTTPS wildcard portal ingress. */
+export type GatewayPortalIngressConfig = NonNullable<
+  NonNullable<GatewayConfigInput["portals"]>["ingress"]
+>;
 
 export type GatewayRemoteConfig = NonNullable<GatewayConfigInput["remote"]>;
 
@@ -169,7 +155,7 @@ export type GatewayNodesConfig = NonNullable<GatewayConfigInput["nodes"]> & {
 
 export type GatewayToolsConfig = NonNullable<GatewayConfigInput["tools"]>;
 
-/** Closed session, sandbox, agent, and operator-scope policy for one named team role. */
+/** Closed session, sandbox, agent, model, and operator-scope policy for one named team role. */
 export type GatewayOperatorRoleDefinition = NonNullable<
   GatewayConfigInput["roles"]
 >["definitions"][string];

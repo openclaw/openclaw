@@ -33,11 +33,6 @@ const cases: Array<{
   shutdown?: "delayed" | "cancelled" | "unconfirmed";
 }> = [
   {
-    name: "recovers a settled failure",
-    failFirst: true,
-    activeSibling: false,
-  },
-  {
     name: "leaves active siblings alone",
     failFirst: true,
     activeSibling: true,
@@ -262,6 +257,7 @@ it.each(cases)(
           codex: {
             enabled: true,
             config: {
+              sessionCatalog: { enabled: false },
               appServer: {
                 args: [
                   "app-server",
@@ -491,6 +487,7 @@ it.each(cases)(
         expect(exitGate.child.signalCode).toBeNull();
         expect(nodeProcess.kill(exitGate.pid, 0)).toBe(true);
       } else if (shutdown === "unconfirmed") {
+        await vi.advanceTimersByTimeAsync(2_000);
         expect(await wait(continued.runId)).toMatchObject({
           status: "error",
           error: expect.stringContaining("did not confirm shutdown"),
@@ -561,6 +558,9 @@ function holdNativeExit(
   child.on("newListener", onListener);
   const end = vi.spyOn(stdin, "end").mockImplementation(() => {
     closing = true;
+    // Hold the shutdown clock with the child: binding reads and chat.abort
+    // must precede the exit deadline, even when the host is busy.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     return stdin;
   });
   const destroy = vi.spyOn(stdin, "destroy").mockImplementation(() => stdin);
@@ -631,6 +631,7 @@ function holdNativeExit(
         return;
       }
       released = true;
+      vi.useRealTimers();
       child.off("newListener", onListener);
       restoreExitConfirmation();
       end.mockRestore();

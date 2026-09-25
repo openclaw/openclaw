@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../../../config/types.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { findUninspectedPluginDiagnostic } from "../../../plugins/discovery-availability.js";
 import { discoverConfiguredPluginLoadPaths } from "../../../plugins/discovery.js";
+import { applyPluginDoctorCompatibilityMigration } from "../../../plugins/doctor-compatibility-migration.js";
 import {
   applyPluginDoctorCompatibilityMigrations,
   collectDoctorConfigRepairPluginIds,
@@ -115,6 +116,7 @@ export function applyChannelDoctorCompatibilityMigrations(
 ): {
   next: Record<string, unknown>;
   changes: string[];
+  warnings?: string[];
 } {
   let nextCfg = cfg as OpenClawConfig;
   const loadPaths = nextCfg.plugins?.load?.paths ?? [];
@@ -128,6 +130,7 @@ export function applyChannelDoctorCompatibilityMigrations(
     }
   }
   const changes: string[] = [];
+  const warnings: string[] = [];
   migrateHeartbeatVisibility(cfg, changes);
   const unresolvedChannelIds: string[] = [];
 
@@ -140,12 +143,14 @@ export function applyChannelDoctorCompatibilityMigrations(
       unresolvedChannelIds.push(channelId);
       continue;
     }
-    const mutation = normalizeCompatibilityConfig({ cfg: nextCfg });
-    if (!mutation || mutation.changes.length === 0) {
-      continue;
-    }
+    const mutation = applyPluginDoctorCompatibilityMigration({
+      pluginId: channelId,
+      config: nextCfg,
+      normalize: normalizeCompatibilityConfig,
+    });
     nextCfg = mutation.config;
     changes.push(...mutation.changes);
+    warnings.push(...(mutation.warnings ?? []));
   }
 
   // Plugin id collection loads the installed-plugin registry from the shared state
@@ -161,10 +166,12 @@ export function applyChannelDoctorCompatibilityMigrations(
     });
     nextCfg = compat.config;
     changes.push(...compat.changes);
+    warnings.push(...(compat.warnings ?? []));
   }
 
   return {
     next: nextCfg as OpenClawConfig & Record<string, unknown>,
     changes,
+    ...(warnings.length ? { warnings } : {}),
   };
 }

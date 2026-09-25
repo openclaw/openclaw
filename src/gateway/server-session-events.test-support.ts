@@ -68,14 +68,24 @@ const {
   createTranscriptUpdateBroadcastHandler: createTranscriptHandler,
 } = await import("./server-session-events.js");
 const { createGatewayBroadcaster } = await import("./server-broadcast.js");
-const { subscribePluginSessionsChanged } = await import("../plugins/gateway-events.js");
+const { subscribePluginSessionsChanged } = await import("../plugins/services.test-support.js");
 
 const projection = {
   get state() {
     return { rowContext: { projectedAgentRuns: buildProjectedAgentRunIndex() } };
   },
   ensureMaterialized: async () => {},
+  prepareMembership: async () => {},
+  needsMembershipPreparation: () => false,
+  withPreparedExactRows: (async (queries, consume) => {
+    queries(runtimeConfigState.value);
+    return { kind: "complete", value: consume(projection) };
+  }) satisfies SessionRowProjection["withPreparedExactRows"],
   isCurrent: () => true,
+  observeGeneration: (() => ({
+    isCurrent: (row) => projection.isCurrent(row),
+    dispose() {},
+  })) satisfies SessionRowProjection["observeGeneration"],
   selectEntries(query: { key?: string; agentId?: string; storePath?: string }) {
     if (!query.key) {
       return (

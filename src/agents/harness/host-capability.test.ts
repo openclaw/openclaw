@@ -5,6 +5,7 @@ import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
+import { setActiveNodeContext } from "../../infra/active-node-context.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
 import {
   resetAgentRunRegistryForTest,
@@ -149,6 +150,7 @@ function bindTool(
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  setActiveNodeContext(null);
   for (const admission of admissions.splice(0)) {
     admission.close();
   }
@@ -371,7 +373,7 @@ describe("agent harness host capability", () => {
     }
   });
 
-  it("keeps prepared environment access closure-bound", async () => {
+  it("keeps host context reads current and closure-bound", async () => {
     vi.stubEnv("GH_TOKEN", "");
     vi.stubEnv("GITHUB_TOKEN", "");
     const config = { tools: { github: { profileId: "ghp_11111111111111111111111111111111" } } };
@@ -392,8 +394,19 @@ describe("agent harness host capability", () => {
       },
     });
     expect(Object.isFrozen(host.capabilities.preparedEnvironment?.().localProcessEnv)).toBe(true);
+    for (const nodeId of ["mac-a", "mac-b"]) {
+      setActiveNodeContext({ nodeId });
+      expect(host.capabilities.activeComputerContext?.()).toBe(
+        `Current active computer (latest physical input, not message origin): active_node=${nodeId}`,
+      );
+    }
+    setActiveNodeContext({ nodeId: "mac-b" }, { isCurrent: () => false });
+    expect(host.capabilities.activeComputerContext?.()).toBe(
+      "Current active computer (latest physical input, not message origin): active_node=unknown",
+    );
     host.close();
     expect(() => host.capabilities.preparedEnvironment?.()).toThrow("no longer active");
+    expect(() => host.capabilities.activeComputerContext?.()).toThrow("no longer active");
   });
 
   it("rejects retained preparation after the admitted Gateway is replaced", async () => {
@@ -433,6 +446,38 @@ describe("agent harness host capability", () => {
 
     expect(preparedExecute).not.toHaveBeenCalled();
   });
+
+  it.each(policyRevocations)(
+    "does not stage reply bytes after $name during a remote read",
+    async ({ revoke }) => {
+      const readStarted = createDeferred();
+      const readResult = createDeferred<Buffer>();
+      const readWorkspaceFile = vi.fn(async () => {
+        readStarted.resolve();
+        return await readResult.promise;
+      });
+      const { attempt, admission } = await admittedAttempt("run-reply-media");
+      const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+      const prepare = host.capabilities.prepareReplyMedia;
+      if (!prepare) {
+        throw new Error("expected reply media capability");
+      }
+      const request = {
+        kind: "payload" as const,
+        payload: { text: "Artifact ready\nMEDIA:./artifact.txt" },
+        readWorkspaceFile,
+      };
+      const pending = prepare(request);
+      const rejected = expect(pending).rejects.toThrow();
+      await readStarted.promise;
+      await revoke({ host, attempt, admission });
+      readResult.resolve(Buffer.from("remote artifact"));
+      await rejected;
+      await expect(prepare(request)).rejects.toThrow();
+      expect(readWorkspaceFile).toHaveBeenCalledTimes(1);
+      host.close();
+    },
+  );
 
   it("delegates trajectory events and rejects a flush that outlives the capability", async () => {
     const flushStarted = createDeferred();
@@ -769,6 +814,7 @@ describe("agent harness host capability", () => {
       expect(payload).toMatchObject({
         mcpTool: { server: "docs", tool: "write_note" },
         toolCallId: "item-1",
+        detail: "Full review evidence",
       });
       expect(payload).not.toHaveProperty("isMcpToolApprovalActive");
       expect(takeMcpToolApprovalBinding({ ...scope, agentId: "other" })).toBeUndefined();
@@ -779,6 +825,7 @@ describe("agent harness host capability", () => {
     await host.capabilities.requestApproval({
       title: "MCP approval",
       description: "Write a note",
+      detail: "Full review evidence",
       severity: "warning",
       toolName: "codex_mcp_tool_approval",
       toolCallId: "item-1",

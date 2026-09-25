@@ -114,12 +114,19 @@ suite.define(() => {
       });
       await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
       await expect.poll(() => composer.inputValue()).toBe("");
+      await captureProof(page, `background-${label}-running.png`);
+      await expect
+        .poll(() => page.locator(".new-session-page__starting").textContent())
+        .toContain(`run this separately on ${label}`);
+      await expect
+        .poll(() => page.locator(".new-session-page__starting").textContent())
+        .toContain("Session created");
+      await page.getByRole("button", { name: "Open session", exact: true }).waitFor();
       await expect
         .poll(() =>
           page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`).count(),
         )
         .toBe(1);
-      await captureProof(page, `background-${label}-running.png`);
       if (captureProofEnabled) {
         await page.waitForTimeout(600);
       }
@@ -259,7 +266,7 @@ suite.define(() => {
     }
   });
 
-  it("keeps the submitted preview while Chat loads and commits the ready session", async () => {
+  it("keeps the submitted preview and restores its thinking choice after a rejected edit", async () => {
     const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const thinkingLevels = ["off", "low", "medium", "high", "xhigh"].map((id) => ({
@@ -287,6 +294,14 @@ suite.define(() => {
     });
     const gateway = await installMockGateway(page, {
       agentModel: "openai/gpt-5.6-sol",
+      featureMethods: [
+        "agent.wait",
+        "chat.metadata",
+        "chat.startup",
+        "sessions.create",
+        "sessions.dispatch",
+        "sessions.patch",
+      ],
       heldMethods: ["sessions.resolve"],
       models: [
         {
@@ -469,6 +484,54 @@ suite.define(() => {
         .poll(() => chatEffortPicker.getAttribute("data-chat-thinking-value"))
         .toBe("xhigh");
       await captureProof(page, "03-chat-route-ready.png");
+
+      await gateway.deferNext("sessions.patch");
+      await chatEffortPicker.click();
+      const chatThinkingSlider = page.locator('[data-chat-thinking-slider="true"]');
+      const lowIndex = await chatThinkingSlider.evaluate(
+        (element) =>
+          element.getAttribute("data-chat-thinking-values")?.split(",").indexOf("low") ?? -1,
+      );
+      expect(lowIndex).toBeGreaterThanOrEqual(0);
+      await chatThinkingSlider.fill(String(lowIndex));
+      const thinkingPatch = await gateway.waitForRequest("sessions.patch");
+      expect(thinkingPatch.params).toMatchObject({
+        key: SESSION_KEY,
+        thinkingLevel: "low",
+      });
+      await expect
+        .poll(() => chatEffortPicker.getAttribute("data-chat-thinking-value"))
+        .toBe("low");
+      await expect.poll(() => chatThinkingSlider.inputValue()).toBe(String(lowIndex));
+      await captureProof(page, "04-thinking-update-pending.png");
+
+      await gateway.rejectDeferred("sessions.patch", {
+        code: "INVALID_REQUEST",
+        message: "Synthetic thinking update rejected",
+      });
+      await expect
+        .poll(() => chatEffortPicker.getAttribute("data-chat-thinking-value"))
+        .toBe("xhigh");
+      await expect.poll(() => chatThinkingSlider.inputValue()).toBe(String(xhighIndex));
+      await captureProof(page, "05-thinking-update-rejected.png");
+      if (captureProofEnabled) {
+        await writeFile(
+          path.join(transitionProofDir(), "thinking-update.json"),
+          JSON.stringify(
+            {
+              createdThinkingLevel: entry.thinkingLevel,
+              pendingThinkingLevel: "low",
+              rejected: true,
+              restoredThinkingLevel: await chatEffortPicker.getAttribute(
+                "data-chat-thinking-value",
+              ),
+              request: thinkingPatch,
+            },
+            null,
+            2,
+          ),
+        );
+      }
     } catch (error) {
       await captureControlUiE2eFailureDiagnostics(page, {
         error: error instanceof Error ? error : new Error(String(error)),
@@ -617,9 +680,11 @@ suite.define(() => {
           expect(await gateway.getRequests("chat.startup")).toHaveLength(0);
           await expect.poll(() => submittedPrompt.isVisible()).toBe(true);
           if (content === "json") {
-            await submittedPrompt.locator(".chat-json-summary").click();
-            await pollLocatorText(submittedPrompt.locator(".chat-json-content")).toBe(
-              submittedMessage,
+            const pendingJson = submittedPrompt.locator(".chat-text");
+            await pendingJson.locator("pre code").waitFor({ state: "visible" });
+            await pollLocatorText(pendingJson.locator("pre code")).toBe(submittedMessage);
+            expect(await pendingJson.locator("button, details, .code-block-wrapper").count()).toBe(
+              0,
             );
           } else {
             const pendingMarkdown = submittedPrompt.locator(".chat-text");
@@ -733,9 +798,11 @@ suite.define(() => {
               .click();
             await expandedTable.waitFor({ state: "detached" });
           } else {
-            await acceptedPrompt.locator(".chat-json-summary").click();
-            await pollLocatorText(acceptedPrompt.locator(".chat-json-content")).toBe(
-              submittedMessage,
+            const acceptedJson = acceptedPrompt.locator(".chat-text");
+            await acceptedJson.locator("pre code").waitFor({ state: "visible" });
+            await pollLocatorText(acceptedJson.locator("pre code")).toBe(submittedMessage);
+            expect(await acceptedJson.locator("button, details, .code-block-wrapper").count()).toBe(
+              0,
             );
           }
           await expectDecodedThumbnail(acceptedPrompt.locator("img.chat-message-image"));

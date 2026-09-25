@@ -21,11 +21,9 @@ import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/
 import { retryAsync, type RetryOptions } from "../infra/retry.js";
 import { isTransientNetworkError } from "../infra/retryable-network-errors.js";
 import { redactSensitiveText } from "../logging/redact.js";
-import {
-  captureChannelReadScope,
-  withChannelReadAuthority,
-} from "../shared/channel-read-authority.js";
+import { captureChannelReadScope } from "../shared/channel-read-authority.js";
 import { buildTimeoutAbortSignal } from "../utils/fetch-timeout.js";
+import { withMediaReadScope } from "./fetch.read-scope.js";
 import { saveMediaStream, type SavedMedia } from "./store.js";
 import { SaveMediaSourceError } from "./store.shared.js";
 
@@ -127,6 +125,8 @@ type SaveResponseMediaOptions = {
 
 /** Options for guarded URL fetches that are saved directly into the media store. */
 type SaveRemoteMediaOptions = FetchMediaOptions & {
+  /** Revalidate caller-owned read authority through transport and file publication. */
+  assertCurrent?: () => void;
   fallbackContentType?: string;
   subdir?: string;
   originalFilename?: string;
@@ -287,10 +287,6 @@ async function readErrorBodySnippet(
   }
 }
 
-function redactMediaUrl(url: string): string {
-  return redactSensitiveText(url);
-}
-
 function createMediaFetchFailure(sourceUrl: string, cause: unknown): MediaFetchError {
   return new MediaFetchError(
     "fetch_failed",
@@ -318,7 +314,7 @@ async function fetchGuardedMediaResponse(
     shouldRetryFetchError,
     trustExplicitProxyDns,
   } = options;
-  const sourceUrl = redactMediaUrl(url);
+  const sourceUrl = redactSensitiveText(url);
 
   // Dispatcher attempts are fallback routes inside one logical guarded fetch operation.
   const attempts =
@@ -412,7 +408,7 @@ async function assertMediaResponseOk(params: {
     return;
   }
   const statusText = res.statusText ? ` ${res.statusText}` : "";
-  const redirected = finalUrl !== url ? ` (redirected to ${redactMediaUrl(finalUrl)})` : "";
+  const redirected = finalUrl !== url ? ` (redirected to ${redactSensitiveText(finalUrl)})` : "";
   let detail = `HTTP ${res.status}${statusText}`;
   // Failed response bodies may have been deliberately discarded by the caller.
   if (res.ok) {
@@ -635,7 +631,7 @@ async function withMediaFetchRetry<T>(
       retry.sleep ??
       ((delay) =>
         sleepWithAbort(delay, options.requestInit?.signal ?? undefined).catch((cause: unknown) => {
-          throw createMediaFetchFailure(redactMediaUrl(options.url), cause);
+          throw createMediaFetchFailure(redactSensitiveText(options.url), cause);
         })),
   });
 }
@@ -645,7 +641,7 @@ export async function saveResponseMedia(
   res: Response,
   options: SaveResponseMediaOptions = {},
 ): Promise<SavedRemoteMedia> {
-  const sourceUrl = redactMediaUrl((options.sourceUrl ?? res.url) || "response");
+  const sourceUrl = redactSensitiveText((options.sourceUrl ?? res.url) || "response");
   const finalUrl = options.sourceUrl ?? res.url;
   await assertMediaResponseOk({
     res,
@@ -669,21 +665,8 @@ export async function saveResponseMedia(
 
 /** Fetches media through SSRF guards and saves the body into the media store. */
 export async function saveRemoteMedia(options: SaveRemoteMediaOptions): Promise<SavedRemoteMedia> {
-  if (!captureChannelReadScope()) {
-    return await withMediaFetchRetry(options, () => saveRemoteMediaOnce(options));
-  }
-  // Retain request deadlines through MIME detection and publication, including late retries.
-  return await withChannelReadAuthority(
-    () => {},
-    async () => {
-      const scope = captureChannelReadScope()!;
-      const scopedOptions = {
-        ...options,
-        requestInit: { ...options.requestInit, signal: scope.signal },
-      };
-      return await withMediaFetchRetry(scopedOptions, () => saveRemoteMediaOnce(scopedOptions));
-    },
-    options.requestInit?.signal ?? undefined,
+  return await withMediaReadScope(options, (scopedOptions) =>
+    withMediaFetchRetry(scopedOptions, () => saveRemoteMediaOnce(scopedOptions)),
   );
 }
 
@@ -741,7 +724,7 @@ async function readRemoteMediaBufferOnce(options: FetchMediaOptions): Promise<Fe
         onOverflow: ({ maxBytes, res: resLocal }) =>
           new MediaFetchError(
             "max_bytes",
-            `Failed to fetch media from ${redactMediaUrl(resLocal.url || options.url)}: payload exceeds maxBytes ${maxBytes}`,
+            `Failed to fetch media from ${redactSensitiveText(resLocal.url || options.url)}: payload exceeds maxBytes ${maxBytes}`,
           ),
         chunkTimeoutMs: options.readIdleTimeoutMs,
       });
@@ -749,7 +732,7 @@ async function readRemoteMediaBufferOnce(options: FetchMediaOptions): Promise<Fe
       if (err instanceof MediaFetchError) {
         throw err;
       }
-      throw createMediaFetchFailure(redactMediaUrl(res.url || options.url), err);
+      throw createMediaFetchFailure(redactSensitiveText(res.url || options.url), err);
     }
     let fileName = resolveRemoteFileName({
       res,

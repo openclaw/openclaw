@@ -20,36 +20,21 @@ import {
   ensureStandalonePluginToolRegistryLoaded,
   resolvePluginTools,
 } from "../../plugins/tools.js";
+import { hasMultipleSessionSharingIdentities } from "../../state/user-profile-list.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
-type ToolCatalogEntry = {
-  id: string;
-  label: string;
-  description: string;
-  fullDescription?: string;
-  source: "core" | "plugin";
-  pluginId?: string;
-  optional?: boolean;
-  risk?: "low" | "medium" | "high";
-  tags?: string[];
-  defaultProfiles: Array<"minimal" | "coding" | "messaging" | "full">;
-};
-
-type ToolCatalogGroup = {
-  id: string;
-  label: string;
-  source: "core" | "plugin";
-  pluginId?: string;
-  tools: ToolCatalogEntry[];
-};
+type ToolCatalogGroup = ToolsCatalogResult["groups"][number];
 
 function buildCoreGroups(params: { cfg: OpenClawConfig; agentId: string }): ToolCatalogGroup[] {
   // Core catalog rows come from static tool sections so profile chips remain
   // stable even before any runtime agent session exists.
   const swarmEnabled = resolveSwarmConfig(params.cfg, params.agentId).enabled;
-  return listCoreToolSections({ swarmEnabled }).map((section) => ({
+  return listCoreToolSections({
+    swarmEnabled,
+    personalInstructionsEnabled: hasMultipleSessionSharingIdentities(),
+  }).map((section) => ({
     id: section.id,
     label: section.label,
     source: "core",
@@ -109,15 +94,13 @@ function buildPluginGroups(params: {
     const meta = getPluginToolMeta(tool);
     const pluginId = meta?.pluginId ?? "plugin";
     const groupId = `plugin:${pluginId}`;
-    const existing =
-      groups.get(groupId) ??
-      ({
-        id: groupId,
-        label: pluginId,
-        source: "plugin",
-        pluginId,
-        tools: [],
-      } as ToolCatalogGroup);
+    const existing: ToolCatalogGroup = groups.get(groupId) ?? {
+      id: groupId,
+      label: pluginId,
+      source: "plugin",
+      pluginId,
+      tools: [],
+    };
     const ownedMetadata = meta?.pluginId
       ? pluginToolMetadata.get(buildPluginToolMetadataKey(meta.pluginId, tool.name))
       : undefined;
@@ -155,15 +138,13 @@ function buildPluginGroups(params: {
       const groupId = `plugin:${entry.pluginId}`;
       // Declared-but-unresolved plugin tools still appear so operators can see
       // optional capabilities that may need config before they bind at runtime.
-      const existing =
-        groups.get(groupId) ??
-        ({
-          id: groupId,
-          label: entry.pluginName ?? entry.pluginId,
-          source: "plugin",
-          pluginId: entry.pluginId,
-          tools: [],
-        } as ToolCatalogGroup);
+      const existing: ToolCatalogGroup = groups.get(groupId) ?? {
+        id: groupId,
+        label: entry.pluginName ?? entry.pluginId,
+        source: "plugin",
+        pluginId: entry.pluginId,
+        tools: [],
+      };
       const ownedMetadata = pluginToolMetadata.get(
         buildPluginToolMetadataKey(entry.pluginId, name),
       );
@@ -186,11 +167,10 @@ function buildPluginGroups(params: {
       groups.set(groupId, existing);
     }
   }
-  return [...groups.values()]
-    .map((group) =>
-      Object.assign({}, group, { tools: group.tools.toSorted((a, b) => a.id.localeCompare(b.id)) }),
-    )
-    .toSorted((a, b) => a.label.localeCompare(b.label));
+  return Array.from(groups.values(), (group) => {
+    group.tools = group.tools.toSorted((a, b) => a.id.localeCompare(b.id));
+    return group;
+  }).toSorted((a, b) => a.label.localeCompare(b.label));
 }
 
 /** Build the merged core/plugin tool catalog for one agent. */

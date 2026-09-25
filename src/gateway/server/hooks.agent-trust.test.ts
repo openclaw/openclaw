@@ -10,6 +10,8 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
+import { getSpawnBroker, runWithSpawnBroker } from "../../process/spawn-broker/context.js";
+import { useSpawnBrokerTestFixture } from "../../process/spawn-broker/host.test-support.js";
 
 const enqueueSystemEventMock = vi.fn();
 const requestHeartbeatMock = vi.fn();
@@ -77,6 +79,7 @@ vi.mock("./hooks-request-handler.js", () => ({
 }));
 
 const { createGatewayHooksRequestHandler } = await import("./hooks.js");
+const createBroker = useSpawnBrokerTestFixture(afterEach);
 
 function waitForFast<T>(
   callback: () => T | Promise<T>,
@@ -282,23 +285,28 @@ describe("dispatchAgentHook trust handling", () => {
     await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   });
 
-  it("gives a queued hook run a resolvable gateway context", async () => {
+  it("gives a queued hook run its owning Gateway context and broker", async () => {
+    const broker = await createBroker();
     const gatewayContext = {
       terminalSessions: {},
       resolveGatewayContext: () => gatewayContext,
     } as never;
     let observed: unknown = "never-ran";
     let observedClient: unknown = "never-ran";
+    let observedBroker: unknown = "never-ran";
     runCronIsolatedAgentTurnMock.mockImplementationOnce(async () => {
       const scope = getPluginRuntimeGatewayRequestScope();
       observed = scope?.resolveGatewayContext?.();
       observedClient = scope?.client;
+      observedBroker = getSpawnBroker();
       return { status: "ok", summary: "done", delivered: false };
     });
-    createGatewayHooksRequestHandler({
-      ...buildMinimalParams(),
-      resolveGatewayContext: () => gatewayContext,
-    });
+    runWithSpawnBroker(broker, () =>
+      createGatewayHooksRequestHandler({
+        ...buildMinimalParams(),
+        resolveGatewayContext: () => gatewayContext,
+      }),
+    );
 
     await withPluginRuntimeGatewayRequestScope({ client: { id: "retired-request" } } as never, () =>
       dispatchAgentHook(buildAgentPayload("Gateway context")),
@@ -306,6 +314,7 @@ describe("dispatchAgentHook trust handling", () => {
 
     expect(observed).toBe(gatewayContext);
     expect(observedClient).toBeUndefined();
+    expect(observedBroker).toBe(broker);
     await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   });
 
@@ -402,16 +411,20 @@ describe("dispatchAgentHook trust handling", () => {
     const runGate = new Promise<void>((resolve) => {
       continueRun = resolve;
     });
-    runCronIsolatedAgentTurnMock.mockImplementationOnce(async () => {
-      await runGate;
-      subordinateAdmissionClosed = isGatewaySubordinateWorkAdmissionClosed();
-      return { status: "ok", summary: "done", delivered: false };
-    });
+    runCronIsolatedAgentTurnMock.mockImplementationOnce(
+      async (params: { onExecutionStarted?: () => void }) => {
+        params.onExecutionStarted?.();
+        await runGate;
+        subordinateAdmissionClosed = isGatewaySubordinateWorkAdmissionClosed();
+        return { status: "ok", summary: "done", delivered: false };
+      },
+    );
     const requestAdmission = tryBeginGatewayRootWorkAdmission();
     expect(requestAdmission).not.toBeNull();
 
     await requestAdmission?.run(async () => {
-      dispatchAgentHook(buildAgentPayload("Async hook"));
+      const admission = await dispatchAgentHook(buildAgentPayload("Async hook"));
+      expect(admission).toMatchObject({ ok: true });
       expect(getActiveGatewayRootWorkCount()).toBe(2);
     });
     requestAdmission?.release();
@@ -472,31 +485,41 @@ describe("dispatchAgentHook trust handling", () => {
     const dispatch = resolveDispatchAgentHook();
     const firstGate = createDeferred();
     const secondGate = createDeferred();
-    runCronIsolatedAgentTurnMock.mockImplementationOnce(async () => {
-      await firstGate.promise;
-      return { status: "ok", summary: "first done", delivered: false };
-    });
+    runCronIsolatedAgentTurnMock.mockImplementationOnce(
+      async (params: { onExecutionStarted?: () => void }) => {
+        params.onExecutionStarted?.();
+        await firstGate.promise;
+        return { status: "ok", summary: "first done", delivered: false };
+      },
+    );
 
-    runCronIsolatedAgentTurnMock.mockImplementationOnce(async () => {
-      await secondGate.promise;
-      return { status: "ok", summary: "second done", delivered: false };
-    });
+    runCronIsolatedAgentTurnMock.mockImplementationOnce(
+      async (params: { onExecutionStarted?: () => void }) => {
+        params.onExecutionStarted?.();
+        await secondGate.promise;
+        return { status: "ok", summary: "second done", delivered: false };
+      },
+    );
 
-    dispatch({
+    const firstAdmission = dispatch({
       ...buildAgentPayload("First"),
       message: "first",
       sessionKey: "agent:main:session-a",
     });
-    dispatch({
+    const secondAdmission = dispatch({
       ...buildAgentPayload("Second"),
       message: "second",
       sessionKey: "agent:main:session-b",
     });
 
-    expect(getActiveGatewayRootWorkCount()).toBe(2);
-
     try {
-      await waitForFast(() => expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledTimes(2));
+      const admissions = await Promise.all([firstAdmission, secondAdmission]);
+      expect(admissions).toEqual([
+        expect.objectContaining({ ok: true }),
+        expect.objectContaining({ ok: true }),
+      ]);
+      expect(getActiveGatewayRootWorkCount()).toBe(2);
+      expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledTimes(2);
     } finally {
       firstGate.resolve();
       secondGate.resolve();

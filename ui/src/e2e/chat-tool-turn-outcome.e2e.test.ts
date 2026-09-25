@@ -289,7 +289,13 @@ suite.define(() => {
     expect(summaryClasses[1]).not.toContain("chat-tool-msg-summary--error");
     expect(await page.getByText("Command could not finish", { exact: false }).count()).toBe(0);
     await page.locator(".chat-tool-msg-summary").first().click();
-    await page.locator(".chat-json-summary").first().click();
+    const expandedResult = page.locator(".chat-tool-msg-body").first();
+    await expandedResult.locator(".chat-text pre code").waitFor({ state: "visible" });
+    expect(await expandedResult.locator(".chat-text pre code").textContent()).toBe(
+      failedTool(1).content,
+    );
+    expect(await expandedResult.locator("details, .code-block-json-mode").count()).toBe(0);
+    expect(await expandedResult.locator(".code-block-copy").isVisible()).toBe(true);
     await page.getByText("Command could not finish", { exact: false }).waitFor();
     await expect
       .poll(() => page.locator(".chat-tool-card__outcome").first().textContent())
@@ -375,7 +381,7 @@ suite.define(() => {
     await page.goto(`${suite.server.baseUrl}chat`);
     const activity = page.locator(".chat-group--activity .chat-activity-group__summary");
     await activity.waitFor();
-    expect(await activity.textContent()).toContain("Read source, Apply patch");
+    expect(await activity.textContent()).toContain("2 other operations");
     const activityGeometry = await activity.evaluate((node) => {
       const container = node.closest<HTMLElement>(".chat-activity-group");
       const label = node.querySelector<HTMLElement>(".chat-activity-group__label");
@@ -567,7 +573,7 @@ suite.define(() => {
       .poll(() => page.evaluate(() => document.documentElement.dataset.themeMode))
       .toBe("dark");
     await captureFactrowProof(page, activity, "dark");
-    expect(await summary.textContent()).toContain("Apply Patch, Exec");
+    expect(await summary.textContent()).toContain("2 other operations");
     expect(await patchRow.locator(".chat-tool-row__verb").textContent()).toBe("Changed");
     await context.close();
   });
@@ -615,7 +621,7 @@ suite.define(() => {
     await context.close();
   });
 
-  it("keeps a message-only turn visible with its first message line", async () => {
+  it("keeps a message-only turn visible with its caption behind disclosure", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
     const page = await context.newPage();
     const message = "Hello Molty, first claw-to-claw hello.";
@@ -650,19 +656,16 @@ suite.define(() => {
     });
 
     await page.goto(`${suite.server.baseUrl}chat`);
-    const row = page.locator(".chat-tool-msg-summary", { hasText: message });
+    const row = page.locator(".chat-tool-msg-summary");
     await row.waitFor();
 
-    expect(await page.locator(".chat-work-group").count()).toBe(0);
-    expect(await row.locator(".chat-tool-msg-summary__label").textContent()).toBe("Message");
-    expect(await row.locator(".chat-tool-msg-summary__names").textContent()).toBe(message);
+    expect(await row.count()).toBe(1);
+    expect(await page.getByText(message, { exact: false }).isVisible()).toBe(false);
     await captureToolActivityProof(page, "message-only-turn-visible");
     await row.click();
-    await page.getByText("action:", { exact: true }).waitFor();
-    expect(await page.getByText("send", { exact: true }).count()).toBe(1);
-    expect(await page.getByText("Hidden second line.", { exact: false }).count()).toBeGreaterThan(
-      0,
-    );
+    const diagnostics = page.locator(".chat-tool-msg-body");
+    await diagnostics.getByText("Hidden second line.", { exact: false }).waitFor();
+    expect(await diagnostics.textContent()).toContain(message);
     await context.close();
   });
 

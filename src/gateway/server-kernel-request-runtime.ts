@@ -58,20 +58,23 @@ export async function prepareGatewayKernelRequestRuntime(params: {
       logHealth,
     });
   });
-  const projectionReady = startupTrace.measure("sessions.projection", async () => {
-    const { createSessionRowProjection } = await import("./session-row-projection.js");
-    return createSessionRowProjection({
-      cfg: getRuntimeConfig(),
-      getConfig: getRuntimeConfig,
-      getModelCatalog: () =>
-        readPreparedServerMethodModelCatalogs(
-          gatewayRequestContext,
-          listAgentIds(getRuntimeConfig()),
-        ),
-      context: gatewayRequestContext,
-      placementFactsReader: runtime.workerEnvironmentStartup?.placementStore,
-    });
-  });
+  const projectionReady = runtime.opts.updateCanary
+    ? Promise.resolve(undefined)
+    : startupTrace.measure("sessions.projection", async () => {
+        const { createSessionRowProjection } = await import("./session-row-projection.js");
+        return createSessionRowProjection({
+          cfg: getRuntimeConfig(),
+          getConfig: getRuntimeConfig,
+          getPolicyConfig: gatewayRequestContext.getCommittedRuntimeConfig ?? getRuntimeConfig,
+          getModelCatalog: () =>
+            readPreparedServerMethodModelCatalogs(
+              gatewayRequestContext,
+              listAgentIds(getRuntimeConfig()),
+            ),
+          context: gatewayRequestContext,
+          placementFactsReader: runtime.workerEnvironmentStartup?.placementStore,
+        });
+      });
   const projectionLifetime: { closing: boolean; detach?: () => void } = { closing: false };
   runtime.registerGatewayLifetimeSidecars({
     stop: async () => {
@@ -91,20 +94,24 @@ export async function prepareGatewayKernelRequestRuntime(params: {
   if (projectionLifetime.closing) {
     throw new Error("Gateway closed during session projection startup");
   }
-  projectionLifetime.detach = runtime.attachSessionRowProjection(projection);
+  if (projection) {
+    projectionLifetime.detach = runtime.attachSessionRowProjection(projection);
+  }
   gatewayRequestContext.requestEntryLifetime = runtime.requestEntryLifetime;
   bindApprovalPublicationContext(gatewayRequestContext);
-  await attachInitialGatewayLifetimeSidecars({
-    chatMetadataLifecycle,
-    gatewayRequestContext,
-    flushPendingSessionsChangedEvents: shutdownRuntime.flushPendingSessionsChangedEvents,
-    minimalTestGateway,
-    logWarning: (message) => log.warn(message),
-    ...(!workerPlacementRuntime && githubPublicationRuntime
-      ? { reconcileGitHubPublications: githubPublicationRuntime.reconcilePublications }
-      : {}),
-    publishSidecars: runtimeState.gatewayLifetimeSidecars.publish,
-  });
+  if (!runtime.opts.updateCanary) {
+    await attachInitialGatewayLifetimeSidecars({
+      chatMetadataLifecycle,
+      gatewayRequestContext,
+      flushPendingSessionsChangedEvents: shutdownRuntime.flushPendingSessionsChangedEvents,
+      minimalTestGateway,
+      logWarning: (message) => log.warn(message),
+      ...(!workerPlacementRuntime && githubPublicationRuntime
+        ? { reconcileGitHubPublications: githubPublicationRuntime.reconcilePublications }
+        : {}),
+      publishSidecars: runtimeState.gatewayLifetimeSidecars.publish,
+    });
+  }
   pluginGatewayContext.current = gatewayRequestContext;
   gatewayRequestContext.dispatchHookAgentTurn = async (pluginId, hookParams) => {
     const transport = runtime.transportBridge.current();
@@ -137,6 +144,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
   if (hostLifecycle) {
     gatewayRequestContext.hostLifecycle = {
       externalRestart: hostLifecycle.externalRestart,
+      getShutdownBudget: () => hostLifecycle.getShutdownBudget?.(),
       request: (action, assertCaller) =>
         hostLifecycle.request(action, () => {
           if (!gatewayInstanceRuntime.isAvailable()) {

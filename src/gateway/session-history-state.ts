@@ -39,10 +39,6 @@ type InlineSessionHistoryAppend = {
   shouldRefresh?: boolean;
 };
 
-function isMessageToolMirrorMessage(message: SessionHistoryMessage): boolean {
-  return message.openclawMessageToolMirror !== undefined;
-}
-
 export async function readSessionHistorySnapshotAsync(
   params: SessionHistoryReadParams,
 ): Promise<SessionHistorySnapshot> {
@@ -110,7 +106,7 @@ export class SessionHistorySseState {
     this.rawTranscriptSeq = snapshot.rawTranscriptSeq;
     this.turnBoundaryPending = snapshot.turnBoundaryPending;
     this.assistantErrorPending = snapshot.assistantErrorPending;
-    this.transcriptPath = normalizeTranscriptPathForComparison(snapshot.transcriptPath);
+    this.transcriptPath = resolveTranscriptPathForComparison(snapshot.transcriptPath);
   }
 
   snapshot(): PaginatedSessionHistory {
@@ -223,7 +219,6 @@ export class SessionHistorySseState {
       }
       const projectedMessage = expectDefined(addedMessages[0], "projected inline message");
       const emittedMessage: SessionHistoryMessage =
-        isMessageToolMirrorMessage(projectedMessage) ||
         resolveMessageSeq(projectedMessage) === undefined
           ? (attachOpenClawTranscriptMeta(projectedMessage, {
               seq: this.rawTranscriptSeq,
@@ -249,7 +244,7 @@ export class SessionHistorySseState {
   }
 
   shouldRefreshForTranscriptPath(updatePath: string | undefined): boolean {
-    const nextPath = normalizeTranscriptPathForComparison(updatePath);
+    const nextPath = resolveTranscriptPathForComparison(updatePath);
     return Boolean(this.transcriptPath && nextPath && this.transcriptPath !== nextPath);
   }
 
@@ -263,12 +258,8 @@ export class SessionHistorySseState {
     this.rawTranscriptSeq = snapshot.rawTranscriptSeq;
     this.turnBoundaryPending = snapshot.turnBoundaryPending;
     this.assistantErrorPending = snapshot.assistantErrorPending;
-    this.transcriptPath = normalizeTranscriptPathForComparison(snapshot.transcriptPath);
+    this.transcriptPath = resolveTranscriptPathForComparison(snapshot.transcriptPath);
     this.sentHistory = snapshot.history;
     return snapshot.history;
   }
-}
-
-function normalizeTranscriptPathForComparison(filePath: string | undefined): string | undefined {
-  return typeof filePath === "string" ? resolveTranscriptPathForComparison(filePath) : undefined;
 }

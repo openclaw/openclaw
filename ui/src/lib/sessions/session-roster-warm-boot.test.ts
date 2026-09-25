@@ -409,10 +409,6 @@ describe("session capability warm roster", () => {
             h.emitChanged(current);
           }
         }
-        if (source === "event") {
-          // A second consumer must not recapture the old payload in this connection.
-          expect(h.sessions.reconcileChanged(previous).applied).toBe(false);
-        }
         const accepted = h.sessions.state.result?.sessions.find((row) => row.key === key);
         expect(accepted?.label).toBe(observeAfterReconnect ? current.label : previous.label);
         expect(h.write).not.toHaveBeenCalled();

@@ -44,7 +44,7 @@ describe("runMessageAction send validation", () => {
       toolContext: {
         currentChannelProvider: "webchat",
       },
-      sessionKey: "agent:main",
+      sessionKey: "agent:main:main",
       sourceReplyDeliveryMode: "message_tool_only",
     });
 
@@ -200,7 +200,7 @@ describe("runMessageAction send validation", () => {
       toolContext: {
         currentChannelProvider: "webchat",
       },
-      sessionKey: "agent:main",
+      sessionKey: "agent:main:main",
       sourceReplyDeliveryMode: "message_tool_only",
     });
 
@@ -226,7 +226,7 @@ describe("runMessageAction send validation", () => {
         toolContext: {
           currentChannelProvider: "webchat",
         },
-        sessionKey: "agent:main",
+        sessionKey: "agent:main:main",
         sourceReplyDeliveryMode: "automatic",
       }),
     ).rejects.toThrow(/requires a target/i);
@@ -264,7 +264,7 @@ describe("runMessageAction send validation", () => {
         toolContext: {
           currentChannelProvider: "webchat",
         },
-        sessionKey: "agent:main",
+        sessionKey: "agent:main:main",
         sourceReplyDeliveryMode: "message_tool_only",
         dryRun: true,
       });

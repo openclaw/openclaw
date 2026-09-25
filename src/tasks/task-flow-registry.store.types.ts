@@ -21,15 +21,14 @@ export type TaskFlowRegistryUpdateResult =
   | TaskFlowRegistryObservedUpdate
   | { applied: false; reason: "invalid_patch"; error: unknown };
 
-/** Stage read-your-writes state separately from committed observer publication. */
+/** Stage read-your-writes state and settle it with the owning transaction. */
 export type TaskFlowRegistryUpdatePublication = {
   stage: () => void;
   rollback: () => void;
   commit: () => void;
-  publish: () => void;
 };
 
-/** Full task-flow registry snapshot used for persistence restore and replacement writes. */
+/** Task-flow rows for a full restore or an explicitly scoped projection refresh. */
 export type TaskFlowRegistryStoreSnapshot = {
   flows: Map<string, TaskFlowRecord>;
 };

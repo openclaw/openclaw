@@ -3,12 +3,13 @@
  *
  * Handles provider config, credential normalization, guarded endpoint calls, caching, and filters.
  */
+import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
-import { createProviderErrorTextRedactor } from "../provider-http-errors.js";
+import { createProviderErrorTextRedactor, ProviderHttpError } from "../provider-http-errors.js";
 import {
   DEFAULT_CACHE_TTL_MINUTES,
   DEFAULT_TIMEOUT_SECONDS,
@@ -44,13 +45,6 @@ export type SearchConfigRecord = (NonNullable<OpenClawConfig["tools"]>["web"] ex
   : never) &
   Record<string, unknown>;
 
-type UnsupportedWebSearchFilterName =
-  | "country"
-  | "language"
-  | "freshness"
-  | "date_after"
-  | "date_before";
-
 export const DEFAULT_SEARCH_COUNT = 5;
 export const MAX_SEARCH_COUNT = 10;
 const SEARCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
@@ -64,9 +58,7 @@ export function resolveSearchCacheTtlMs(searchConfig?: SearchConfigRecord): numb
 }
 
 export function resolveSearchCount(value: unknown, fallback: number): number {
-  const parsed = typeof value === "number" && Number.isFinite(value) ? value : fallback;
-  const clamped = Math.max(1, Math.min(MAX_SEARCH_COUNT, Math.floor(parsed)));
-  return clamped;
+  return resolveIntegerOption(value, fallback, { min: 1, max: MAX_SEARCH_COUNT });
 }
 
 export function readConfiguredSecretString(value: unknown, path: string): string | undefined {
@@ -146,7 +138,9 @@ export async function throwWebSearchApiError(
   const message = redact(detail.text || res.statusText, {
     truncated: Boolean(detail.text) && detail.truncated,
   });
-  throw new Error(`${providerLabel} API error (${res.status}): ${message}`);
+  throw new ProviderHttpError(`${providerLabel} API error (${res.status}): ${message}`, {
+    status: res.status,
+  });
 }
 
 export function resolveSiteName(url: string | undefined): string | undefined {
@@ -405,34 +399,6 @@ export function writeCachedSearchPayload(
   writeCache(SEARCH_CACHE, cacheKey, payload, ttlMs);
 }
 
-function readUnsupportedSearchFilter(
-  params: Record<string, unknown>,
-): UnsupportedWebSearchFilterName | undefined {
-  for (const name of ["country", "language", "freshness", "date_after", "date_before"] as const) {
-    const value = params[name];
-    if (typeof value === "string" && value.trim()) {
-      return name;
-    }
-  }
-
-  return undefined;
-}
-
-function describeUnsupportedSearchFilter(name: UnsupportedWebSearchFilterName): string {
-  switch (name) {
-    case "country":
-      return "country filtering";
-    case "language":
-      return "language filtering";
-    case "freshness":
-      return "freshness filtering";
-    case "date_after":
-    case "date_before":
-      return "date_after/date_before filtering";
-  }
-  throw new Error("Unsupported web search filter");
-}
-
 export function buildUnsupportedSearchFilterResponse(
   params: Record<string, unknown>,
   provider: string,
@@ -444,14 +410,16 @@ export function buildUnsupportedSearchFilterResponse(
       docs: string;
     }
   | undefined {
-  const unsupported = readUnsupportedSearchFilter(params);
+  const unsupported = ["country", "language", "freshness", "date_after", "date_before"].find(
+    (name) => typeof params[name] === "string" && params[name].trim(),
+  );
   if (!unsupported) {
     return undefined;
   }
 
-  const label = describeUnsupportedSearchFilter(unsupported);
-  const supportedLabel =
-    unsupported === "date_after" || unsupported === "date_before" ? "date filtering" : label;
+  const isDateFilter = unsupported === "date_after" || unsupported === "date_before";
+  const label = isDateFilter ? "date_after/date_before filtering" : `${unsupported} filtering`;
+  const supportedLabel = isDateFilter ? "date filtering" : label;
 
   return {
     error: unsupported.startsWith("date_")

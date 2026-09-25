@@ -1,4 +1,3 @@
-// Logger implementation writes structured log output with redaction and transports.
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -35,10 +34,10 @@ import { fileLogTransport } from "./logger-file-transport.js";
 import { defaultLoggerHostnameResolver, loggerHostnameState } from "./logger-hostname-state.js";
 import { setLoggerFileTargetResolver } from "./logger-settings-internal.js";
 import {
-  redactLogRecordForTransport,
   redactSecrets,
   redactSensitiveText,
   resolveFileLogRedactOptions,
+  serializeRedactedFileLogRecord,
 } from "./redact.js";
 import { APPLIED_LOGGING_CONFIG_UNOWNED, loggingState } from "./state.js";
 import { formatTimestamp } from "./timestamps.js";
@@ -91,15 +90,12 @@ const DIAGNOSTIC_LOG_ATTRIBUTE_KEY_RE = /^[A-Za-z0-9_.:-]{1,64}$/u;
 
 type DiagnosticLogAttributes = Record<string, string | number | boolean>;
 
-function clampDiagnosticLogText(value: string, maxChars: number): string {
+function clampLogText(value: string, maxChars: number): string {
   return value.length > maxChars ? `${truncateUtf16Safe(value, maxChars)}...(truncated)` : value;
 }
 
 function sanitizeDiagnosticLogText(value: string, maxChars: number): string {
-  return clampDiagnosticLogText(
-    redactSensitiveText(clampDiagnosticLogText(value, maxChars)),
-    maxChars,
-  );
+  return clampLogText(redactSensitiveText(clampLogText(value, maxChars)), maxChars);
 }
 
 function normalizeDiagnosticLogName(value: string | undefined): string | undefined {
@@ -217,14 +213,10 @@ function getSortedNumericLogEntries(logObj: TsLogRecord): Array<[string, unknown
     .toSorted((a, b) => Number(a[0]) - Number(b[0]));
 }
 
-function clampFileLogText(value: string, maxChars: number): string {
-  return value.length > maxChars ? `${truncateUtf16Safe(value, maxChars)}...(truncated)` : value;
-}
-
 function normalizeFileLogContextValue(value: unknown): string | undefined {
   if (typeof value === "string") {
     const normalized = value.trim();
-    return normalized ? clampFileLogText(normalized, MAX_FILE_LOG_CONTEXT_VALUE_CHARS) : undefined;
+    return normalized ? clampLogText(normalized, MAX_FILE_LOG_CONTEXT_VALUE_CHARS) : undefined;
   }
   if (typeof value === "number" && Number.isFinite(value)) {
     return String(value);
@@ -607,7 +599,7 @@ function buildLogger(): TsLogger<LogObj> {
         }
         const time = formatTimestamp(logObj.date ?? new Date(), { style: "long" });
         const { fields, messageParts } = prepareFileLogRecord(logObj as TsLogRecord);
-        const record = redactLogRecordForTransport(
+        const line = serializeRedactedFileLogRecord(
           {
             ...logObj,
             _meta: withResolvedLogMetaHostname(
@@ -622,7 +614,6 @@ function buildLogger(): TsLogger<LogObj> {
             decodedOptions: resolveFileLogRedactOptions(),
           },
         );
-        const line = JSON.stringify(record);
         fileLogTransport.enqueue({
           file: activeFile,
           hostname: expectDefined(fields.hostname, "structured log hostname"),

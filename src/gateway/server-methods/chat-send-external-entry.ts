@@ -44,6 +44,9 @@ const externalAuthorityAdmission: ChatSendExternalAuthorityAdmission = {
           authority.callerOrigin,
           authority.managementEntitlement,
           authority.isCurrent,
+          undefined,
+          authority.requesterOwner,
+          authority.callerScopedCreation,
         )
       : undefined;
   },

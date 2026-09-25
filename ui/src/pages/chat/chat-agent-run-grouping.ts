@@ -1,18 +1,19 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import { resolveAssistantMessagePhase } from "../../../../src/shared/chat-message-content.js";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
+import {
+  assistantMessageIsInterrupted,
+  resolveAssistantReplyPhase,
+} from "./chat-assistant-reply.ts";
 import type {
   ActivityRunRenderItem,
   CompletedTurnRenderItem,
   StreamRunRenderItem,
   WorkGroupRenderItem,
 } from "./chat-thread-grouping.ts";
-import { isKeyedAssistantStreamFallbackMessage } from "./chat-thread-run-identity.ts";
 import { assistantGroupIsForwardedBoundary, chatItemStartsUserTurn } from "./chat-turn-boundary.ts";
 import { extractMessageMediaText } from "./components/chat-message-media.ts";
-import { readLiveTerminalDisposition } from "./terminal-message-identity.ts";
 
 type AgentRunFramePart =
   | MessageGroup
@@ -53,20 +54,11 @@ function itemRunId(item: AgentRunFramePart): string | undefined {
   return runId && groups.every((group) => group.runId === runId) ? runId : undefined;
 }
 
-function messageIsInterrupted(message: unknown): boolean {
-  const record = asRecord(message);
-  const stopReason = typeof record?.stopReason === "string" ? record.stopReason.toLowerCase() : "";
-  return (
-    readLiveTerminalDisposition(message) !== null ||
-    asRecord(record?.openclawAbort)?.aborted === true ||
-    ["aborted", "cancelled", "canceled", "timeout", "timed_out"].includes(stopReason)
-  );
-}
-
 function itemFailsFrame(item: AgentRunFramePart): boolean {
   return itemGroups(item).some((group) =>
     group.messages.some(
-      ({ message }) => messageIsInterrupted(message) || asRecord(message)?.stopReason === "error",
+      ({ message }) =>
+        assistantMessageIsInterrupted(message) || asRecord(message)?.stopReason === "error",
     ),
   );
 }
@@ -112,13 +104,12 @@ export function agentRunFrameGroups(frame: AgentRunFrameRenderItem): MessageGrou
 
 function messageCanOwnCompletedFrame(message: unknown, explicitOnly: boolean): boolean {
   const record = asRecord(message);
-  const phase = resolveAssistantMessagePhase(message);
+  const phase = resolveAssistantReplyPhase(message);
   const stopReason = record?.stopReason;
   const metadata = asRecord(record?.["__openclaw"]);
   if (
     !(extractTextCached(message)?.trim() || extractMessageMediaText(message)) ||
-    isKeyedAssistantStreamFallbackMessage(message) ||
-    messageIsInterrupted(message) ||
+    assistantMessageIsInterrupted(message) ||
     phase === "commentary" ||
     stopReason === "toolUse" ||
     stopReason === "error" ||
@@ -183,6 +174,8 @@ export function coalesceAgentRunFrames(
   }
   const result: Array<AgentRunFrameInput | AgentRunFrameRenderItem> = [];
   let boundaryId: string | undefined;
+  let presentationBoundaryKey: string | undefined;
+  const emittedFrameKeys = new Set<string>();
   let segmentId: string | undefined;
   let runId: string | undefined;
   let parts: AgentRunFramePart[] = [];
@@ -190,9 +183,16 @@ export function coalesceAgentRunFrames(
     if (!runId || !boundaryId || parts.length === 0) {
       return;
     }
+    const semanticKey = frameKey(runId, boundaryId, frameSegmentId(parts, segmentId));
+    // A peer input can split one causal run into separate presentation rows.
+    // Reopening it must not reuse the earlier row’s DOM or measured height.
+    const key = emittedFrameKeys.has(semanticKey)
+      ? frameKey(runId, boundaryId, JSON.stringify([presentationBoundaryKey, parts[0]!.key]))
+      : semanticKey;
+    emittedFrameKeys.add(semanticKey);
     result.push({
       kind: "agent-run-frame",
-      key: frameKey(runId, boundaryId, frameSegmentId(parts, segmentId)),
+      key,
       runId,
       boundaryId,
       outcome: failed
@@ -216,6 +216,7 @@ export function coalesceAgentRunFrames(
     const boundaryGroup = itemGroups(item)[0];
     if (boundaryGroup && chatItemStartsUserTurn(boundaryGroup)) {
       flush();
+      presentationBoundaryKey = boundaryGroup.key;
       segmentId = undefined;
       const nextBoundaryId = groupBoundaryId(boundaryGroup);
       if (

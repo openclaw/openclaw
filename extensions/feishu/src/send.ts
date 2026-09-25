@@ -1,4 +1,3 @@
-// Feishu plugin module implements send behavior.
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -9,6 +8,7 @@ import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { assertFeishuApiSuccess } from "./api-response.js";
 import { createFeishuClient } from "./client.js";
 import { requestFeishuApi } from "./comment-shared.js";
+import { createConfiguredFeishuClient } from "./configured-client.js";
 import { parseInteractiveCardContent } from "./interactive-message-content.js";
 import {
   assertFeishuPostWithinEnvelope,
@@ -25,7 +25,12 @@ import { renderPostContent } from "./post.js";
 import { withFeishuMessageDispatch } from "./send-context.js";
 import { resolveFeishuReceiptKind, toFeishuSendResult } from "./send-result.js";
 import { resolveFeishuSendTarget } from "./send-target.js";
-import type { FeishuChatType, FeishuMessageInfo, FeishuSendResult } from "./types.js";
+import {
+  normalizeFeishuEventChatType,
+  type FeishuChatType,
+  type FeishuMessageInfo,
+  type FeishuSendResult,
+} from "./types.js";
 
 export { resolveFeishuCardTemplate };
 
@@ -269,13 +274,7 @@ function parseFeishuMessageItem(
   return {
     messageId: item.message_id ?? fallbackMessageId ?? "",
     chatId: item.chat_id ?? "",
-    chatType:
-      item.chat_type === "group" ||
-      item.chat_type === "topic_group" ||
-      item.chat_type === "private" ||
-      item.chat_type === "p2p"
-        ? item.chat_type
-        : undefined,
+    chatType: normalizeFeishuEventChatType(item.chat_type),
     senderId: item.sender?.id,
     senderOpenId: item.sender?.id_type === "open_id" ? item.sender?.id : undefined,
     senderType: item.sender?.sender_type,
@@ -297,12 +296,7 @@ export async function getMessageFeishu(params: {
   accountId?: string;
 }): Promise<FeishuMessageInfo | null> {
   const { cfg, messageId, accountId } = params;
-  const account = resolveFeishuRuntimeAccount({ cfg, accountId });
-  if (!account.configured) {
-    throw new Error(`Feishu account "${account.accountId}" not configured`);
-  }
-
-  const client = createFeishuClient(account);
+  const client = createConfiguredFeishuClient({ cfg, accountId });
 
   try {
     const response = (await client.im.message.get({
@@ -366,12 +360,7 @@ export async function listFeishuThreadMessages(params: {
   accountId?: string;
 }): Promise<FeishuThreadMessageInfo[]> {
   const { cfg, threadId, currentMessageId, rootMessageId, limit = 20, accountId } = params;
-  const account = resolveFeishuRuntimeAccount({ cfg, accountId });
-  if (!account.configured) {
-    throw new Error(`Feishu account "${account.accountId}" not configured`);
-  }
-
-  const client = createFeishuClient(account);
+  const client = createConfiguredFeishuClient({ cfg, accountId });
 
   const results: FeishuThreadMessageInfo[] = [];
   const seenMessageIds = new Set<string>();
@@ -664,39 +653,14 @@ export function chunkFeishuCardMarkdown(
 /**
  * Send a message as a structured card with optional header and note.
  */
-export async function sendStructuredCardFeishu(params: {
-  cfg: ClawdbotConfig;
-  to: string;
-  text: string;
-  replyToMessageId?: string;
-  /** When true, reply creates a Feishu topic thread instead of an inline reply */
-  replyInThread?: boolean;
-  allowTopLevelReplyFallback?: boolean;
-  mentions?: MentionTarget[];
-  accountId?: string;
-  header?: CardHeaderConfig;
-  note?: string;
-}): Promise<FeishuSendResult> {
-  const {
-    cfg,
-    to,
-    text,
-    replyToMessageId,
-    replyInThread,
-    allowTopLevelReplyFallback,
-    mentions,
-    accountId,
-    header,
-    note,
-  } = params;
-  const card = buildStructuredCard(text, { header, note, mentions });
+export async function sendStructuredCardFeishu(
+  params: Omit<SendFeishuMessageParams, "preparedPostText"> & {
+    header?: CardHeaderConfig;
+    note?: string;
+  },
+): Promise<FeishuSendResult> {
   return sendCardFeishu({
-    cfg,
-    to,
-    card,
-    replyToMessageId,
-    replyInThread,
-    allowTopLevelReplyFallback,
-    accountId,
+    ...params,
+    card: buildStructuredCard(params.text, params),
   });
 }

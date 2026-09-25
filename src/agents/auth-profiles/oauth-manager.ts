@@ -6,18 +6,25 @@ import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion"
  */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeSecretInputString } from "../../config/types.secrets.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
-import { redactSensitiveText } from "../../logging/redact.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
+import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { OAUTH_REFRESH_CALL_TIMEOUT_MS, authProfilesLog } from "./constants.js";
 import { hasUsableOAuthCredential } from "./credential-state.js";
+import {
+  resolveEffectiveOAuthCredentialCore,
+  type OAuthBootstrapCredentialReader,
+} from "./effective-oauth.js";
 import { isPersistedExternalCliAuthProfile } from "./external-cli-sync.js";
 import { shouldMirrorRefreshedOAuthCredential } from "./oauth-identity.js";
 import { withOAuthProfileLock } from "./oauth-profile-lock.js";
 import {
+  OAuthManagerRefreshError,
   OAuthRefreshFailureError,
-  readProviderOAuthRefreshFailure,
+  appendOAuthRefreshCleanupErrors,
+  markOAuthRefreshFailureSettled,
 } from "./oauth-refresh-failure.js";
 import {
   isExactOAuthCredential,
@@ -34,7 +41,10 @@ import {
   isOAuthRefreshFence,
   isPendingOAuthRefreshFence,
   isSameOAuthRefreshGeneration,
+  readPendingOAuthRefreshClaimId,
+  readOAuthRefreshGenerationDigest,
 } from "./oauth-refresh-marker.js";
+import { beginOAuthRefreshObservation } from "./oauth-refresh-observation.js";
 import {
   failOAuthRefreshPeerClaims,
   fenceOAuthRefreshPeers,
@@ -49,7 +59,6 @@ import {
   isSafeOAuthPostClaimSettlement,
   isSafeToAdoptBootstrapOAuthIdentity,
   isSafeToAdoptMainStoreOAuthIdentity,
-  shouldBootstrapFromExternalCliCredential,
 } from "./oauth-shared.js";
 import { resolveSharedAuthStorePath } from "./path-resolve.js";
 import { resolveOAuthRefreshLockPath } from "./paths.js";
@@ -76,11 +85,7 @@ type OAuthManagerAdapter = {
     credential: OAuthCredential,
     context: { cfg?: OpenClawConfig; agentDir?: string },
   ) => Promise<boolean>;
-  readBootstrapCredential: (params: {
-    store: AuthProfileStore;
-    profileId: string;
-    credential: OAuthCredential;
-  }) => OAuthCredential | null;
+  readBootstrapCredential: OAuthBootstrapCredentialReader;
 };
 
 type ResolvedOAuthAccess = {
@@ -88,123 +93,7 @@ type ResolvedOAuthAccess = {
   credential: OAuthCredential;
 };
 
-const oauthRefreshCleanupAggregates = new WeakSet<AggregateError>();
 const oauthRefreshRecoveryBuildFailures = new WeakSet<Error>();
-
-function appendOAuthRefreshCleanupErrors(error: unknown, cleanupErrors: readonly unknown[]): Error {
-  const primaryError = toErrorObject(error, "OAuth refresh failed");
-  if (cleanupErrors.length === 0) {
-    return primaryError;
-  }
-  const normalizedCleanupErrors = cleanupErrors.map((cleanupError) =>
-    toErrorObject(cleanupError, "OAuth refresh cleanup failed"),
-  );
-  const errors =
-    primaryError instanceof AggregateError && oauthRefreshCleanupAggregates.has(primaryError)
-      ? [...primaryError.errors, ...normalizedCleanupErrors]
-      : [primaryError, ...normalizedCleanupErrors];
-  const aggregate = new AggregateError(
-    errors,
-    "OAuth refresh failed and cleanup could not be completed.",
-    { cause: errors[0] },
-  );
-  oauthRefreshCleanupAggregates.add(aggregate);
-  return aggregate;
-}
-
-function readOAuthRefreshInitiatingError(error: unknown): unknown {
-  return error instanceof AggregateError &&
-    oauthRefreshCleanupAggregates.has(error) &&
-    error.errors.length > 0
-    ? error.errors[0]
-    : error;
-}
-
-function createOAuthRefreshUserFacingCause(cause: unknown): unknown {
-  if (cause instanceof Error && "code" in cause && cause.code === "refresh_contention") {
-    // The structured error retains diagnostics; public cause traversal must not expose lock paths.
-    return new Error(cause.message);
-  }
-  return cause;
-}
-
-/** Refresh failure that preserves a redacted refreshed store and credential. */
-export class OAuthManagerRefreshError extends OAuthRefreshFailureError {
-  override readonly profileId: string;
-  readonly code?: string;
-  readonly lockPath?: string;
-  readonly #refreshedStore: AuthProfileStore;
-  readonly #credential: OAuthCredential;
-
-  constructor(params: {
-    credential: OAuthCredential;
-    attemptedCredentials?: OAuthCredential[];
-    profileId: string;
-    refreshedStore: AuthProfileStore;
-    cause: unknown;
-  }) {
-    const initiatingCause = readOAuthRefreshInitiatingError(params.cause);
-    const structuredCause =
-      typeof initiatingCause === "object" && initiatingCause !== null
-        ? (initiatingCause as { code?: unknown; lockPath?: unknown; cause?: unknown })
-        : undefined;
-    const surfacedCause = createOAuthRefreshUserFacingCause(initiatingCause);
-    const storedCredential = params.refreshedStore.profiles[params.profileId];
-    const secrets = collectOAuthCredentialSecrets(
-      params.credential,
-      ...(params.attemptedCredentials ?? []),
-      storedCredential?.type === "oauth" ? storedCredential : undefined,
-    );
-    const presentation = readProviderOAuthRefreshFailure(initiatingCause);
-    const causeMessage = formatRedactedOAuthRefreshError(surfacedCause, secrets);
-    super({
-      provider: params.credential.provider,
-      profileId: params.profileId,
-      message: `OAuth token refresh failed for ${params.credential.provider}: ${causeMessage}`,
-      cause: createRedactedOAuthRefreshCause(params.cause, secrets),
-      errorType: presentation?.errorType,
-      reason: presentation?.reason,
-      status: presentation?.status,
-      summary: presentation?.summary
-        ? formatRedactedOAuthRefreshError(presentation.summary, secrets)
-        : undefined,
-    });
-    this.name = "OAuthManagerRefreshError";
-    this.#credential = params.credential;
-    this.profileId = params.profileId;
-    this.#refreshedStore = params.refreshedStore;
-    if (structuredCause) {
-      this.code = typeof structuredCause.code === "string" ? structuredCause.code : undefined;
-      if (typeof structuredCause.lockPath === "string") {
-        this.lockPath = structuredCause.lockPath;
-      } else if (
-        typeof structuredCause.cause === "object" &&
-        structuredCause.cause !== null &&
-        "lockPath" in structuredCause.cause &&
-        typeof structuredCause.cause.lockPath === "string"
-      ) {
-        this.lockPath = structuredCause.cause.lockPath;
-      }
-    }
-  }
-
-  getRefreshedStore(): AuthProfileStore {
-    return this.#refreshedStore;
-  }
-
-  getCredential(): OAuthCredential {
-    return this.#credential;
-  }
-
-  toJSON(): { name: string; message: string; profileId: string; provider: string } {
-    return {
-      name: this.name,
-      message: this.message,
-      profileId: this.profileId,
-      provider: this.provider,
-    };
-  }
-}
 
 function canReuseOAuthCredentialAfterRefreshFailure(params: {
   forceRefresh?: boolean;
@@ -219,88 +108,6 @@ function canReuseOAuthCredentialAfterRefreshFailure(params: {
   );
 }
 
-function collectOAuthCredentialSecrets(
-  ...credentials: Array<OAuthCredential | undefined>
-): string[] {
-  const secrets = new Set<string>();
-  for (const credential of credentials) {
-    for (const secret of [credential?.access, credential?.refresh, credential?.idToken]) {
-      if (secret) {
-        secrets.add(secret);
-      }
-    }
-  }
-  return Array.from(secrets).toSorted((a, b) => b.length - a.length);
-}
-
-function redactOAuthCredentialSecrets(message: string, secrets: string[]): string {
-  let redacted = message;
-  for (const secret of secrets) {
-    redacted = redacted.split(secret).join("[redacted]");
-  }
-  return redacted;
-}
-
-function formatRawErrorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    let formatted = error.message || error.name || "Error";
-    let cause: unknown = error.cause;
-    const seen = new Set<unknown>([error]);
-    while (cause && !seen.has(cause)) {
-      seen.add(cause);
-      if (cause instanceof Error) {
-        if (cause.message) {
-          formatted += ` | ${cause.message}`;
-        }
-        cause = cause.cause;
-      } else if (typeof cause === "string") {
-        formatted += ` | ${cause}`;
-        break;
-      } else {
-        break;
-      }
-    }
-    return formatted;
-  }
-  if (
-    typeof error === "string" ||
-    typeof error === "number" ||
-    typeof error === "boolean" ||
-    typeof error === "bigint"
-  ) {
-    return String(error);
-  }
-  try {
-    return JSON.stringify(error) ?? String(error);
-  } catch {
-    return Object.prototype.toString.call(error);
-  }
-}
-
-function formatRedactedOAuthRefreshError(error: unknown, secrets: string[]): string {
-  return redactSensitiveText(redactOAuthCredentialSecrets(formatRawErrorMessage(error), secrets));
-}
-
-function createRedactedOAuthRefreshCause(cause: unknown, secrets: string[]): Error {
-  if (cause instanceof AggregateError) {
-    const errors = cause.errors.map((error) => createRedactedOAuthRefreshCause(error, secrets));
-    const sanitized = new AggregateError(
-      errors,
-      formatRedactedOAuthRefreshError(cause.message, secrets),
-      errors.length > 0 ? { cause: errors[0] } : undefined,
-    );
-    sanitized.name = cause.name;
-    return sanitized;
-  }
-  const surfacedCause = createOAuthRefreshUserFacingCause(cause);
-  const redacted = formatRedactedOAuthRefreshError(surfacedCause, secrets);
-  const sanitized = new Error(redacted);
-  if (surfacedCause instanceof Error && surfacedCause.name) {
-    sanitized.name = surfacedCause.name;
-  }
-  return sanitized;
-}
-
 function loadStoredOAuthRefreshStore(agentDir?: string, profileId?: string): AuthProfileStore {
   return loadAuthProfileStoreWithoutExternalProfiles(agentDir, {
     allowKeychainPrompt: true,
@@ -308,63 +115,27 @@ function loadStoredOAuthRefreshStore(agentDir?: string, profileId?: string): Aut
   });
 }
 
-/** Select local OAuth unless a safe external bootstrap credential should win. */
-export function resolveEffectiveOAuthCredentialCore(params: {
-  store: AuthProfileStore;
-  profileId: string;
-  credential: OAuthCredential;
-  readBootstrapCredential: OAuthManagerAdapter["readBootstrapCredential"];
-}): OAuthCredential {
-  if (isUserModelAuthProfileId(params.profileId)) {
-    return params.credential;
-  }
-  const imported = params.readBootstrapCredential({
-    store: params.store,
-    profileId: params.profileId,
-    credential: params.credential,
-  });
-  if (!imported) {
-    return params.credential;
-  }
-  if (hasUsableOAuthCredential(params.credential)) {
-    authProfilesLog.debug("resolved oauth credential from canonical local store", {
-      profileId: params.profileId,
-      provider: params.credential.provider,
-      localExpires: params.credential.expires,
-      externalExpires: imported.expires,
-    });
-    return params.credential;
-  }
-  if (!isSafeToAdoptBootstrapOAuthIdentity(params.credential, imported)) {
-    authProfilesLog.warn(
-      "refused external oauth bootstrap credential: identity mismatch or missing binding",
-      {
-        profileId: params.profileId,
-        provider: params.credential.provider,
-      },
-    );
-    return params.credential;
-  }
-  const shouldBootstrap = shouldBootstrapFromExternalCliCredential({
-    existing: params.credential,
-    imported,
-  });
-  if (shouldBootstrap) {
-    authProfilesLog.debug("resolved oauth credential from external cli bootstrap", {
-      profileId: params.profileId,
-      provider: imported.provider,
-      localExpires: params.credential.expires,
-      externalExpires: imported.expires,
-    });
-    return imported;
-  }
-  return params.credential;
-}
-
 /** Create an OAuth manager bound to provider-specific build/refresh adapters. */
 export function createOAuthManager(adapter: OAuthManagerAdapter) {
+  async function buildValidatedAccess(
+    credential: OAuthCredential,
+    context: {
+      cfg?: OpenClawConfig;
+      agentDir?: string;
+      validateCredential?: (credential: OAuthCredential) => void;
+    },
+  ): Promise<ResolvedOAuthAccess> {
+    context.validateCredential?.(credential);
+    return {
+      apiKey: await adapter.buildApiKey(credential.provider, credential, {
+        cfg: context.cfg,
+        agentDir: context.agentDir,
+      }),
+      credential,
+    };
+  }
+
   function adoptNewerMainOAuthCredential(params: {
-    store: AuthProfileStore;
     profileId: string;
     agentDir?: string;
     credential: OAuthCredential;
@@ -401,10 +172,6 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
   }
 
   let refreshQueue = new KeyedAsyncQueue();
-
-  function refreshQueueKey(provider: string, profileId: string): string {
-    return `${provider}\u0000${profileId}`;
-  }
 
   class OAuthSettlementCredentialValidationError extends Error {
     constructor(cause: unknown, cleanupErrors: readonly unknown[] = []) {
@@ -535,6 +302,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
         authPath: string;
         peerClaims: OAuthRefreshPeerClaim[];
         peerGeneration?: OAuthCredential;
+        observation: ReturnType<typeof beginOAuthRefreshObservation>;
       };
 
   async function settleOAuthRefreshClaim(params: {
@@ -658,6 +426,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     provider: string;
     agentDir?: string;
     cfg?: OpenClawConfig;
+    signal?: AbortSignal;
     forceRefresh?: boolean;
     attemptedCredential: OAuthCredential;
     bootstrapCredential?: OAuthCredential | null;
@@ -674,10 +443,14 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     const globalRefreshLockPath = resolveOAuthRefreshLockPath(params.provider, params.profileId);
     const peerConfig = params.cfg ?? {};
 
+    let observation: ReturnType<typeof beginOAuthRefreshObservation> | undefined;
+    let observationTransferred = false;
+
     try {
-      return await withOAuthProfileLock(
+      const claim = await withOAuthProfileLock<OAuthRefreshClaim>(
         { provider: params.provider, profileId: params.profileId },
         async () => {
+          params.signal?.throwIfAborted();
           const store = loadStoredOAuthRefreshStore(ownerAgentDir, params.profileId);
           const cred = store.profiles[params.profileId];
           if (!cred || cred.type !== "oauth" || cred.provider !== params.provider) {
@@ -852,12 +625,27 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
             profileId: params.profileId,
             credential: credentialToRefresh,
           });
+          const claimId = readPendingOAuthRefreshClaimId(fence);
+          if (!claimId) {
+            throw new Error("OAuth refresh fence is missing its claim identity");
+          }
+          observation = beginOAuthRefreshObservation({
+            databasePath: authPath,
+            profileId: params.profileId,
+            provider: params.provider,
+            claimId,
+            generation: readOAuthRefreshGenerationDigest({
+              profileId: params.profileId,
+              credential: fence,
+            }),
+          });
           let claimed = false;
           const updated = await updateAuthProfileStoreWithLock({
             agentDir: ownerAgentDir,
             profileId: params.profileId,
             updater: (authoritative) => {
               const existing = authoritative.profiles[params.profileId];
+              params.signal?.throwIfAborted();
               if (
                 !isExactOAuthCredential(existing?.type === "oauth" ? existing : undefined, cred)
               ) {
@@ -917,9 +705,11 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
                 generation: peerGeneration,
                 fence,
                 rollbackOnFailure: false,
+                onFence: observation.includeDatabase,
               });
             }
           } catch (error) {
+            observation.beginSettlement();
             if (error instanceof OAuthRefreshPeerFenceError) {
               peerClaims = mergePeerClaims(peerClaims, error.claims);
             }
@@ -961,9 +751,12 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
             authPath,
             peerClaims,
             ...(peerGeneration ? { peerGeneration } : {}),
+            observation,
           };
         },
       );
+      observationTransferred = claim.kind === "claimed";
+      return claim;
     } catch (error) {
       if (isGlobalRefreshLockTimeoutError(error, globalRefreshLockPath)) {
         throw buildRefreshContentionError({
@@ -973,6 +766,10 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
         });
       }
       throw error;
+    } finally {
+      if (!observationTransferred) {
+        observation?.finish();
+      }
     }
   }
 
@@ -981,6 +778,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     provider: string;
     agentDir?: string;
     cfg?: OpenClawConfig;
+    signal?: AbortSignal;
     forceRefresh?: boolean;
     attemptedCredential: OAuthCredential;
     attemptedCredentials?: OAuthCredential[];
@@ -988,6 +786,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     bootstrapBaseCredential?: OAuthCredential;
     validateCredential?: (credential: OAuthCredential) => void;
   }): Promise<ResolvedOAuthAccess | null> {
+    params.signal?.throwIfAborted();
     const claim = await claimOAuthRefresh(params);
     if (claim.kind === "unavailable") {
       return null;
@@ -996,6 +795,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
       const observed = await observeOAuthRefreshFenceSettlement({
         label: `refreshOAuthCredential(${params.provider})`,
         timeoutMs: OAUTH_REFRESH_CALL_TIMEOUT_MS,
+        signal: params.signal,
         read: () =>
           loadStoredOAuthRefreshStore(claim.ownerAgentDir, params.profileId).profiles[
             params.profileId
@@ -1011,27 +811,13 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
           ) {
             return null;
           }
-          params.validateCredential?.(credential);
-          return {
-            apiKey: await adapter.buildApiKey(credential.provider, credential, {
-              cfg: params.cfg,
-              agentDir: params.agentDir,
-            }),
-            credential,
-          };
+          return await buildValidatedAccess(credential, params);
         },
       });
       return observed;
     }
     if (claim.kind === "use") {
-      params.validateCredential?.(claim.credential);
-      return {
-        apiKey: await adapter.buildApiKey(claim.credential.provider, claim.credential, {
-          cfg: params.cfg,
-          agentDir: params.agentDir,
-        }),
-        credential: claim.credential,
-      };
+      return await buildValidatedAccess(claim.credential, params);
     }
 
     params.attemptedCredentials?.push(claim.credential);
@@ -1085,6 +871,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
                     generation: claim.peerGeneration,
                     fence: claim.fence,
                     rollbackOnFailure: false,
+                    onFence: claim.observation.includeDatabase,
                   }),
                 );
               } catch (error) {
@@ -1145,7 +932,9 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
 
     const settleFailure = async (failure?: {
       error: unknown;
+      externalRefresh?: boolean;
     }): Promise<ResolvedOAuthAccess | null> => {
+      claim.observation.beginSettlement();
       const initiatingError = failure
         ? toErrorObject(failure.error, "OAuth refresh failed")
         : undefined;
@@ -1155,14 +944,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
       }
       if (supersedingOwner) {
         try {
-          params.validateCredential?.(supersedingOwner);
-          return {
-            apiKey: await adapter.buildApiKey(supersedingOwner.provider, supersedingOwner, {
-              cfg: params.cfg,
-              agentDir: params.agentDir,
-            }),
-            credential: supersedingOwner,
-          };
+          return await buildValidatedAccess(supersedingOwner, params);
         } catch (error) {
           const combinedFailure =
             initiatingError !== undefined
@@ -1173,7 +955,18 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
         }
       }
       if (initiatingError !== undefined) {
-        throw appendOAuthRefreshCleanupErrors(initiatingError, cleanupErrors);
+        const error = appendOAuthRefreshCleanupErrors(initiatingError, cleanupErrors);
+        if (failure?.externalRefresh && cleanupErrors.length === 0) {
+          const settled = new OAuthRefreshFailureError({
+            provider: params.provider,
+            profileId: params.profileId,
+            message: error.message,
+            cause: error,
+          });
+          markOAuthRefreshFailureSettled(settled, error);
+          throw settled;
+        }
+        throw error;
       }
       if (cleanupErrors.length === 0) {
         return null;
@@ -1181,7 +974,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
       throw appendOAuthRefreshCleanupErrors(cleanupErrors[0], cleanupErrors.slice(1));
     };
 
-    const settlement = (async (): Promise<ResolvedOAuthAccess | null> => {
+    const settlement = trackAsyncWork(async (): Promise<ResolvedOAuthAccess | null> => {
       let refreshed: OAuthCredentials | null;
       try {
         refreshed = await adapter.refreshCredential(claim.credential, {
@@ -1189,8 +982,9 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
           agentDir: params.agentDir,
         });
       } catch (error) {
-        return await settleFailure({ error });
+        return await settleFailure({ error, externalRefresh: true });
       }
+      claim.observation.beginSettlement();
       if (!refreshed) {
         return await settleFailure();
       }
@@ -1221,6 +1015,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
                     generation: claim.peerGeneration,
                     fence: claim.fence,
                     rollbackOnFailure: false,
+                    onFence: claim.observation.includeDatabase,
                   }),
                 );
               } catch (error) {
@@ -1299,35 +1094,21 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
         if (!settled) {
           throw new Error("Failed to persist refreshed OAuth credential");
         }
-        params.validateCredential?.(settled.credential);
-        return {
-          apiKey: await adapter.buildApiKey(settled.credential.provider, settled.credential, {
-            cfg: params.cfg,
-            agentDir: params.agentDir,
-          }),
-          credential: settled.credential,
-        };
+        return await buildValidatedAccess(settled.credential, params);
       } catch (error) {
         if (error instanceof OAuthSettlementCredentialValidationError) {
           throw error;
         }
         return await settleFailure({ error });
       }
-    })();
+    });
     // The caller deadline observes the owner; it never cancels durable settlement.
-    void settlement.catch(() => {});
+    void settlement.then(claim.observation.finish, claim.observation.finish);
     return await observeOAuthRefreshSettlement(
       `refreshOAuthCredential(${claim.credential.provider})`,
       OAUTH_REFRESH_CALL_TIMEOUT_MS,
       settlement,
-    );
-  }
-
-  async function refreshOAuthTokenQueued(
-    params: Parameters<typeof refreshOAuthTokenWithLock>[0],
-  ): Promise<ResolvedOAuthAccess | null> {
-    return await refreshQueue.enqueue(refreshQueueKey(params.provider, params.profileId), () =>
-      refreshOAuthTokenWithLock(params),
+      params.signal,
     );
   }
 
@@ -1337,9 +1118,11 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     credential: OAuthCredential;
     agentDir?: string;
     cfg?: OpenClawConfig;
+    signal?: AbortSignal;
     forceRefresh?: boolean;
     validateCredential?: (credential: OAuthCredential) => void;
   }): Promise<ResolvedOAuthAccess | null> {
+    params.signal?.throwIfAborted();
     const personalProfile = isUserModelAuthProfileId(params.profileId);
     let credential = params.credential;
     if (personalProfile) {
@@ -1352,7 +1135,6 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
       credential = owned;
     }
     const newerMainCredential = adoptNewerMainOAuthCredential({
-      store: params.store,
       profileId: params.profileId,
       agentDir: params.agentDir,
       credential,
@@ -1387,31 +1169,34 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
       !isOAuthRefreshFence(adoptedCredential) &&
       hasUsableOAuthCredential(effectiveCredential)
     ) {
-      params.validateCredential?.(effectiveCredential);
-      return {
-        apiKey: await adapter.buildApiKey(effectiveCredential.provider, effectiveCredential, {
-          cfg: params.cfg,
-          agentDir: params.agentDir,
-        }),
-        credential: effectiveCredential,
-      };
+      return await buildValidatedAccess(effectiveCredential, params);
     }
 
     try {
-      const refreshed = await refreshOAuthTokenQueued({
-        profileId: params.profileId,
-        provider: credential.provider,
-        agentDir: params.agentDir,
-        cfg: params.cfg,
-        forceRefresh: params.forceRefresh,
-        attemptedCredential: effectiveCredential,
-        attemptedCredentials,
-        bootstrapCredential,
-        bootstrapBaseCredential: adoptedCredential,
-        validateCredential: params.validateCredential,
-      });
-      return refreshed;
+      const queued = trackAsyncWork(() =>
+        refreshQueue.enqueue(`${credential.provider}\u0000${params.profileId}`, () =>
+          refreshOAuthTokenWithLock({
+            profileId: params.profileId,
+            provider: credential.provider,
+            agentDir: params.agentDir,
+            cfg: params.cfg,
+            signal: params.signal,
+            forceRefresh: params.forceRefresh,
+            attemptedCredential: effectiveCredential,
+            attemptedCredentials,
+            bootstrapCredential,
+            bootstrapBaseCredential: adoptedCredential,
+            validateCredential: params.validateCredential,
+          }),
+        ),
+      );
+      // The queue retains admission and claim cleanup after this caller stops observing.
+      // Claimed refreshes transfer to durable settlement before their queue task exits.
+      const resolved = await racePromiseWithAbortSignal(queued, params.signal);
+      params.signal?.throwIfAborted();
+      return resolved;
     } catch (error) {
+      params.signal?.throwIfAborted();
       let refreshError: unknown = error;
       let recoveryBuildFailed =
         refreshError instanceof OAuthSettlementCredentialValidationError ||
@@ -1422,14 +1207,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
         candidate: OAuthCredential,
       ): Promise<ResolvedOAuthAccess | null> => {
         try {
-          params.validateCredential?.(candidate);
-          return {
-            apiKey: await adapter.buildApiKey(candidate.provider, candidate, {
-              cfg: params.cfg,
-              agentDir: params.agentDir,
-            }),
-            credential: candidate,
-          };
+          return await buildValidatedAccess(candidate, params);
         } catch (cleanupError) {
           refreshError = appendOAuthRefreshCleanupErrors(refreshError, [cleanupError]);
           recoveryBuildFailed = true;
@@ -1487,8 +1265,8 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
               return recovered;
             }
           }
-        } catch {
-          // keep the original refresh error below
+        } catch (cleanupError) {
+          refreshError = appendOAuthRefreshCleanupErrors(refreshError, [cleanupError]);
         }
       }
       throw new OAuthManagerRefreshError({

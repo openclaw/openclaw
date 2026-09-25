@@ -1,30 +1,23 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewaySessionRow, SessionsPatchResult } from "../../api/types.ts";
+import type { SessionsPatchResult } from "../../api/types.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
-import type { BoardWidgetPageMenu } from "../../components/board/board-widget-cell-render.ts";
 import { t } from "../../i18n/index.ts";
-import type { BoardCommandEvent, BoardProvider } from "../../lib/board/provider.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { showToast } from "../../lib/toast.ts";
-import { createMockBoardProvider } from "../../test-helpers/board-provider.ts";
-import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { ensureBoardViewElement } from "./board-session-surface.ts";
 import { createChatPaneRails } from "./chat-pane-rails.ts";
-import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import { sidebarRegionCallbacks } from "./chat-pane-sidebar-layout.ts";
 import {
-  createGatewayBrowserClientFixture,
-  createTestChatPane,
-  type TestChatPane,
-} from "./chat-pane.test-support.ts";
-import { createPageState } from "./chat-state-page.ts";
-import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
-import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
+  createDashboardHarness,
+  expectPresentation,
+  key,
+  select,
+  session,
+} from "./dashboard-presentation-defaults.test-support.ts";
 import {
   closeSlot,
   ensureSidebarConversation,
@@ -39,7 +32,6 @@ import {
   toggleSidebarPanelExpanded,
   sidebarMainPanel,
   sidebarActivePanel,
-  type SidebarLayout,
 } from "./sidebar-layout.ts";
 
 vi.mock("../../lib/toast.ts", () => ({ showToast: vi.fn() }));
@@ -52,190 +44,8 @@ vi.mock("../../components/board/board-view.ts", () => {
   return {};
 });
 
-type DashboardPane = TestChatPane & {
-  visuallyPresented: boolean;
-  fullscreenBoardWidgetMenu: (
-    layout: SidebarLayout,
-    board?: ResolvedBoardView,
-  ) => BoardWidgetPageMenu | undefined;
-  boardProvider: BoardProvider;
-  routeFace: "chat" | "dashboard";
-  dashboardExpanded: boolean;
-  narrow: boolean;
-  paneWidth: number;
-  resolveBoardView: () => ResolvedBoardView;
-  syncRetainedBoardSession: (board: ResolvedBoardView) => void;
-  commitSidebarPanelResize: (layout: SidebarLayout, columnId: string, size: number) => void;
-  handleBoardCommand: (event: BoardCommandEvent) => void;
-  saveDashboardDefault: (row: GatewaySessionRow, agentId: string | undefined) => Promise<void>;
-};
-type HeaderMenu = HTMLElement & { updateComplete: Promise<boolean> };
-
-const key = "agent:main:dashboard-defaults";
 const defaultAction = '[value="quick:layout:dashboard-default"]';
 const defaultStatus = '[data-menu-status="dashboard-default"]';
-
-function session(overrides: Partial<GatewaySessionRow> = {}): GatewaySessionRow {
-  return {
-    key,
-    agentId: "main",
-    sessionId: "dashboard-session",
-    kind: "direct",
-    updatedAt: 10,
-    boardFace: "dashboard",
-    boardPresentation: "split",
-    ...overrides,
-  };
-}
-
-function createDashboardHarness(
-  options: {
-    row?: GatewaySessionRow;
-    savedLayout?: SidebarLayout;
-    metadataPending?: boolean;
-    expandedLink?: boolean;
-    scopes?: string[];
-  } = {},
-) {
-  let current = options.row ?? session();
-  let patchReply: Promise<SessionsPatchResult> | undefined;
-  const request = vi.fn(async (method: string) => {
-    if (method === "sessions.list") {
-      return sessionsResult([current], current.updatedAt ?? 0);
-    }
-    if (method === "sessions.patch") {
-      if (!patchReply) {
-        throw new Error("Unexpected sessions.patch without a configured acknowledgement");
-      }
-      const result = await patchReply;
-      if (result && result.entry.sessionId === current.sessionId) {
-        current = {
-          ...current,
-          ...(result.entry.updatedAt !== undefined ? { updatedAt: result.entry.updatedAt } : {}),
-          ...(Object.hasOwn(result.entry, "boardPresentation")
-            ? { boardPresentation: result.entry.boardPresentation }
-            : {}),
-        };
-      }
-      return result;
-    }
-    if (method === "sessions.describe") {
-      return { session: current };
-    }
-    return {};
-  });
-  const client = createGatewayBrowserClientFixture({ request });
-  const harness = createTestChatPane({ client });
-  const pane = harness.pane as DashboardPane;
-  patchSettings({
-    sessionKey: current.key,
-    sidebarSessionLayouts: options.savedLayout ? { [current.key]: options.savedLayout } : {},
-  });
-  const state = createPageState(
-    pane.context,
-    { invalidate: vi.fn(), afterCommit: () => () => {} },
-    pane,
-  );
-  pane.state = state;
-  pane.sessionKey = current.key;
-  pane.routeFace = "dashboard";
-  pane.dashboardExpanded = options.expandedLink ?? false;
-  pane.paneWidth = 1400;
-  pane.boardProvider = createMockBoardProvider(current.key);
-  // The detached pane exposes real controller methods without running unrelated
-  // connectedCallback polling. Header templates are mounted separately below.
-  vi.spyOn(pane, "requestUpdate").mockImplementation(() => {});
-  pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
-    ["sessions.patch"],
-    options.scopes ?? ["operator.write", "operator.read"],
-  );
-  state.client = client;
-  state.connected = true;
-  state.connectionEpoch = pane.connectionGeneration;
-  state.hello = pane.context.gateway.snapshot.hello;
-  state.sessionKey = current.key;
-  state.sessionsResult = options.metadataPending ? null : sessionsResult([current], 10);
-  const mount = document.body.appendChild(document.createElement("div"));
-  const publishRow = (row: GatewaySessionRow) => {
-    current = row;
-    state.sessionsResult = sessionsResult([row], row.updatedAt ?? 0);
-  };
-  const sync = () => pane.syncRetainedBoardSession(pane.resolveBoardView());
-  const revisit = () => {
-    // Exercise the real presented setter and its activation reset, without
-    // starting unrelated connection hydration on this detached fixture.
-    Object.defineProperty(pane, "isConnected", { configurable: true, value: false });
-    pane.presented = false;
-    pane.presented = true;
-    Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
-    sync();
-  };
-  const saved = () => loadSettings().sidebarSessionLayouts?.[state.sessionKey];
-  const resize = () => {
-    const column = state.sidebarLayout.columns[0];
-    expect(column).toBeDefined();
-    pane.commitSidebarPanelResize(state.sidebarLayout, column!.id, 620);
-  };
-  const header = async () => {
-    render(
-      pane.renderPaneHeader(
-        createSessionWorkspaceProps(state),
-        createBackgroundTasksProps(state),
-        state.sessionsResult?.sessions[0],
-        false,
-        undefined,
-        false,
-        null,
-        state.sidebarLayout,
-      ),
-      mount,
-    );
-    const menu = mount.querySelector<HeaderMenu>("openclaw-chat-header-session-menu");
-    expect(menu).not.toBeNull();
-    await menu!.updateComplete;
-    if (pane.narrow) {
-      select(menu!, "compact:open-layout");
-      await menu!.updateComplete;
-    }
-    return menu!;
-  };
-  return {
-    ...harness,
-    pane,
-    state,
-    client,
-    mount,
-    request,
-    publishRow,
-    sync,
-    revisit,
-    saved,
-    resize,
-    header,
-    setPatchReply: (promise: Promise<SessionsPatchResult>) => {
-      patchReply = promise;
-    },
-  };
-}
-
-function select(menu: ParentNode, value: string) {
-  const dropdown = menu.querySelector("wa-dropdown");
-  expect(dropdown).not.toBeNull();
-  dropdown!.dispatchEvent(
-    new CustomEvent("wa-select", {
-      bubbles: true,
-      cancelable: true,
-      composed: true,
-      detail: { item: { value } },
-    }),
-  );
-}
-
-function expectPresentation(layout: SidebarLayout, expanded: boolean) {
-  expect(isSidebarSlotVisible(layout, "dashboard")).toBe(true);
-  expect(layout.expanded).toBe(expanded);
-  expect(isSidebarSlotVisible(layout, "conversation")).toBe(!expanded);
-}
 
 beforeEach(() => {
   vi.stubGlobal("localStorage", createStorageMock());
@@ -251,6 +61,30 @@ afterEach(() => {
 });
 
 describe("dashboard default activation and personal layout persistence", () => {
+  it.each(["split", "expanded-side"] as const)(
+    "keeps a live %s dashboard when focus adopts its face after the shared default changes",
+    (presentation) => {
+      const split = openSlot(ensureSidebarConversation({ columns: [] }), "dashboard");
+      const h = createDashboardHarness({
+        savedLayout: {
+          ...(presentation === "split" ? split : toggleSidebarPanelExpanded(split, "dashboard")),
+          dashboardPresentationOverride: null,
+        },
+      });
+      h.pane.routeFace = "chat";
+      const layout = structuredClone(h.state.sidebarLayout);
+      h.publishRow(session({ boardPresentation: presentation === "split" ? "expanded" : "split" }));
+
+      h.pane.routeFace = h.pane.captureNavigationFace();
+      h.sync();
+
+      expect(h.pane.routeFace).toBe("dashboard");
+      expect(h.state.sidebarLayout).toEqual(layout);
+      expect(sidebarMainPanel(h.state.sidebarLayout)?.slot).toBe("conversation");
+      expect(sidebarActivePanel(h.state.sidebarLayout)?.slot).toBe("dashboard");
+    },
+  );
+
   it("relocates only the visible fullscreen widget when a replacement task menu exists", async () => {
     await ensureBoardViewElement();
     const { pane } = createDashboardHarness();
@@ -453,6 +287,8 @@ describe("dashboard default activation and personal layout persistence", () => {
     h.sync();
     expect(isSidebarSlotVisible(h.state.sidebarLayout, "dashboard")).toBe(false);
     expect(h.saved()).toBeUndefined();
+    h.pane.routeFace = h.pane.captureNavigationFace();
+    expect(h.pane.routeFace).toBe("dashboard");
     h.state.sessionsResult = sessionsResult([session({ key: "agent:main:other" })], 10);
     h.sync();
     expect(isSidebarSlotVisible(h.state.sidebarLayout, "dashboard")).toBe(false);
@@ -519,7 +355,7 @@ describe("dashboard default activation and personal layout persistence", () => {
     });
     onTestFinished(stop);
     h.sync();
-    h.sessions.reconcileChanged({
+    h.emitGatewayEvent("sessions.changed", {
       ...session({ boardPresentation: "expanded", updatedAt: 20 }),
       sessionKey: key,
       reason: "patch",
@@ -897,8 +733,10 @@ describe("dashboard shared default in the real header Layout menu", () => {
     expect(menu.querySelector(defaultStatus)).toBeNull();
   });
 
-  it("saves through the session capability, disables duplicate clicks, and acknowledges without rearranging", async () => {
-    const h = createDashboardHarness();
+  it("saves the opening face when presentation already matches, without rearranging or duplicate writes", async () => {
+    const h = createDashboardHarness({
+      row: session({ boardFace: undefined, boardPresentation: "expanded" }),
+    });
     await h.sessions.refresh({ agentId: "main", force: true });
     const stop = h.sessions.subscribe((next) => {
       h.state.sessionsResult = next.result;
@@ -934,18 +772,26 @@ describe("dashboard shared default in the real header Layout menu", () => {
     select(menu, "quick:layout:dashboard-default");
     expect(patch).toHaveBeenCalledExactlyOnceWith(
       key,
-      { boardPresentation: "expanded" },
+      { boardFace: "dashboard", boardPresentation: "expanded" },
       { agentId: "main", expectedSessionId: "dashboard-session" },
     );
-    expect(h.sessions.state.result?.sessions[0]?.boardPresentation).toBe("split");
+    expect(h.sessions.state.result?.sessions[0]?.boardFace).toBeUndefined();
     reply.resolve({
       ok: true,
       key,
       path: "(multiple)",
-      entry: { sessionId: "dashboard-session", updatedAt: 20, boardPresentation: "expanded" },
+      entry: {
+        sessionId: "dashboard-session",
+        updatedAt: 20,
+        boardFace: "dashboard",
+        boardPresentation: "expanded",
+      },
     });
     await operation;
-    expect(h.sessions.state.result?.sessions[0]?.boardPresentation).toBe("expanded");
+    expect(h.sessions.state.result?.sessions[0]).toMatchObject({
+      boardFace: "dashboard",
+      boardPresentation: "expanded",
+    });
     expect(h.state.sidebarLayout).toEqual(layout);
     expect(h.saved()).toEqual(persisted);
     menu = await h.header();

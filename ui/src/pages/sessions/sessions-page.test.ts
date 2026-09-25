@@ -1,15 +1,12 @@
 /* @vitest-environment jsdom */
 
+import { ContextProvider } from "@lit/context";
 import { nothing } from "lit";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type {
-  GatewaySessionRow,
-  SessionCompactionCheckpoint,
-  SessionsListResult,
-} from "../../api/types.ts";
-import type { ApplicationContext } from "../../app/context.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
@@ -20,6 +17,10 @@ import type {
   SessionDeleteOutcome,
   SessionDeleteTarget,
 } from "../../lib/sessions/session-capability.ts";
+import {
+  gatewayHelloForMethods,
+  SESSION_MUTATION_TEST_METHODS,
+} from "../../test-helpers/gateway-methods.ts";
 import {
   createContext,
   createGateway,
@@ -167,20 +168,6 @@ describe("sessions page lifecycle", () => {
     );
   });
 
-  it("shows a connection error in the checkpoints drawer while disconnected", async () => {
-    const mutableGateway = createGateway({} as GatewayBrowserClient);
-    const page = await createPage(createContext(mutableGateway.gateway, createSessions()));
-    mutableGateway.emit({ phase: "reconnecting", client: null });
-
-    await page.loadCheckpoint("agent:main:main");
-
-    // Without the recorded error the drawer would render "No checkpoints"
-    // beside a nonzero checkpoint badge.
-    expect(page.checkpointErrorByKey["agent:main:main"]).toBe(
-      "Connect to the Gateway to change sessions.",
-    );
-  });
-
   it.each([
     ["green", "Green"],
     [null, "No color"],
@@ -227,6 +214,61 @@ describe("sessions page lifecycle", () => {
     await menu?.updateComplete;
     expect(menu?.querySelector('[value="toggle-pin"]')).toBeNull();
   });
+
+  it.each([false, true])(
+    "uses the personal visibility RPC from the management menu (hidden: %s)",
+    async (hidden) => {
+      const request = vi.fn(async () => ({ ok: true }));
+      const mutable = createGateway({ request } as unknown as GatewayBrowserClient);
+      mutable.emit({
+        hello: {
+          ...gatewayHelloForMethods(
+            [...SESSION_MUTATION_TEST_METHODS, "sessions.setInvolvement"],
+            ["operator.read"],
+          ),
+          policy: { hasMultipleSessionSharingIdentities: true },
+        },
+      });
+      const managed = createManagedSessions();
+      const row = {
+        key: "agent:main:personal",
+        sessionId: "personal-session",
+        kind: "direct",
+        hiddenFromInvolvingMe: hidden,
+      } satisfies GatewaySessionRow;
+      const context = createContext(mutable.gateway, managed.sessions);
+      const page = await createRenderedPage(context, sessionsResult([row], 1));
+      new ContextProvider(page, { context: applicationContext }).setValue(context);
+      page.openSessionMenu(row, { x: 10, y: 20 }, document.createElement("button"));
+      await page.updateComplete;
+      const menu = page.querySelector<TestSessionMenu>("openclaw-session-menu");
+      await menu?.updateComplete;
+      const item = menu?.querySelector('[value="toggle-involving-me"]');
+      expect(item?.textContent).toContain(
+        hidden ? "Show in Involving me" : "Hide from Involving me",
+      );
+      expect(item?.hasAttribute("disabled")).toBe(false);
+      managed.refreshList.mockClear();
+      menu?.querySelector("wa-dropdown")?.dispatchEvent(
+        new CustomEvent("wa-select", {
+          bubbles: true,
+          detail: { item: { value: "toggle-involving-me" } },
+        }),
+      );
+      await vi.waitFor(() =>
+        expect(request).toHaveBeenCalledWith(
+          "sessions.setInvolvement",
+          expect.objectContaining({
+            key: row.key,
+            expectedSessionId: row.sessionId,
+            hidden: !hidden,
+          }),
+        ),
+      );
+      await vi.waitFor(() => expect(managed.refreshList).toHaveBeenCalled());
+      expect(managed.sessions.patch).not.toHaveBeenCalled();
+    },
+  );
 
   it("disables Fork session for model-selection-locked rows", async () => {
     const row = {
@@ -275,28 +317,6 @@ describe("sessions page lifecycle", () => {
     expect(menu.querySelector<HTMLButtonElement>('[value="delete"]')?.disabled).toBe(true);
   });
 
-  it("invalidates checkpoint work and mutation locks on same-client disconnect", async () => {
-    const checkpoints = createDeferred<SessionCompactionCheckpoint[]>();
-    const sessions = createSessions({
-      listCheckpoints: vi.fn(() => checkpoints.promise),
-    });
-    const client = {} as GatewayBrowserClient;
-    const mutableGateway = createGateway(client);
-    const page = await createPage(createContext(mutableGateway.gateway, sessions));
-    const request = page.loadCheckpoint("main");
-    page.checkpointBusyKey = "busy";
-    page.sessionMutationPending = true;
-
-    mutableGateway.emit({ phase: "reconnecting", client });
-
-    expect(page.checkpointLoadingKey).toBeNull();
-    expect(page.checkpointBusyKey).toBeNull();
-    expect(page.sessionMutationPending).toBe(false);
-    checkpoints.resolve([{ checkpointId: "stale" }] as SessionCompactionCheckpoint[]);
-    await request;
-    expect(page.checkpointItemsByKey).toEqual({});
-  });
-
   it("closes an open row menu on a same-client disconnect", async () => {
     const sessions = createSessions();
     const client = {} as GatewayBrowserClient;
@@ -323,7 +343,7 @@ describe("sessions page lifecycle", () => {
       "writer",
     );
     mutableGateway.emit({ sessionKey: key });
-    page.selectedKeys = new Set([key]);
+    page.selectedSessions = new Map([[key, { key, sessionId }]]);
     vi.mocked(showConfirmDialog).mockResolvedValue(true);
 
     await page.deleteSelected();
@@ -333,7 +353,7 @@ describe("sessions page lifecycle", () => {
     ]);
     expect(mutableGateway.setSessionKey).toHaveBeenCalledWith("agent:writer:main");
     expect(page.result?.sessions).toEqual([]);
-    expect(page.selectedKeys).toEqual(new Set());
+    expect(page.selectedSessions.size).toBe(0);
   });
 
   it.each([
@@ -368,7 +388,9 @@ describe("sessions page lifecycle", () => {
         count: 1,
         sessions: [{ key, sessionId: "confirmed-session", archived: originalArchived }],
       } as SessionsListResult;
-      page.selectedKeys = new Set([key]);
+      page.selectedSessions = new Map([
+        [key, { key, sessionId: "confirmed-session", archived: originalArchived }],
+      ]);
 
       const deleting = page.deleteSelected();
       expect(showConfirmDialog).toHaveBeenCalledOnce();
@@ -406,7 +428,7 @@ describe("sessions page lifecycle", () => {
     const { page, sessions, deleteRequest, query, setRows } = await createDeletionPage([row]);
     const deleted = createDeferred<SessionDeleteOutcome>();
     deleteRequest.mockReturnValueOnce(deleted.promise);
-    page.selectedKeys = new Set([row.key]);
+    page.selectedSessions = new Map([[row.key, row]]);
     vi.mocked(showConfirmDialog).mockResolvedValue(true);
 
     const deleting = page.deleteSelected();
@@ -422,7 +444,7 @@ describe("sessions page lifecycle", () => {
     deleted.resolve({ deleted: true });
     await deleting;
     expect(page.result?.sessions).toEqual([arrived]);
-    expect(page.selectedKeys).toEqual(new Set());
+    expect(page.selectedSessions.size).toBe(0);
     expect(page.sessionMutationPending).toBe(false);
   });
 
@@ -436,7 +458,7 @@ describe("sessions page lifecycle", () => {
       count: 1,
       sessions: [{ key: "agent:main:old" }],
     } as SessionsListResult;
-    page.selectedKeys = new Set(["agent:main:old"]);
+    page.selectedSessions = new Map([["agent:main:old", { key: "agent:main:old" }]]);
 
     const deleting = page.deleteSelected();
     await Promise.resolve();
@@ -492,10 +514,9 @@ describe("sessions page lifecycle", () => {
     expect(sessions.deleteMany).toHaveBeenCalledWith([{ key, agentId: undefined }]);
   });
 
-  it("derives archive gates per selected row and keeps unknown rows admin-only", async () => {
+  it("derives archive gates per selected row and retains failed selections", async () => {
     const activeKey = "agent:main:active";
     const archivedKey = "agent:main:archived";
-    const unknownKey = "agent:main:unknown";
     const retryError = `Session ${activeKey} changed before deletion. Retry.`;
     const active: GatewaySessionRow = {
       key: activeKey,
@@ -513,7 +534,10 @@ describe("sessions page lifecycle", () => {
     };
     const { page, sessions, deleteRequest } = await createDeletionPage([active, archived]);
     deleteRequest.mockRejectedValueOnce(new Error(retryError));
-    page.selectedKeys = new Set([activeKey, archivedKey, unknownKey]);
+    page.selectedSessions = new Map([
+      [activeKey, active],
+      [archivedKey, archived],
+    ]);
     vi.mocked(showConfirmDialog).mockResolvedValue(true);
 
     await page.deleteSelected();
@@ -526,13 +550,12 @@ describe("sessions page lifecycle", () => {
         archivedOnly: true,
         expectedSessionId: archived.sessionId,
       },
-      { key: unknownKey, agentId: undefined },
     ]);
     expect(page.result).toMatchObject({
       count: 1,
       sessions: [{ key: activeKey, archived: false }],
     });
-    expect(page.selectedKeys).toEqual(new Set([activeKey, unknownKey]));
+    expect([...page.selectedSessions.keys()]).toEqual([activeKey]);
     expect(page.error).toBe(retryError);
     expect(page.error).not.toContain("GatewayRequestError");
   });
@@ -668,15 +691,11 @@ describe("sessions page lifecycle", () => {
     const deleted = createDeferred<Awaited<ReturnType<SessionCapability["deleteMany"]>>>();
     const patched = createDeferred<unknown>();
     const forked = createDeferred<string | null>();
-    const branched = createDeferred<{ key: string }>();
-    const restored = createDeferred<unknown>();
     const groupsPut = createDeferred<Awaited<ReturnType<SessionCapability["groupsPut"]>>>();
     const sessions = createSessions({
       deleteMany: vi.fn(() => deleted.promise),
       patch: vi.fn(() => patched.promise as never),
       create: vi.fn(() => forked.promise),
-      branchCheckpoint: vi.fn(() => branched.promise as never),
-      restoreCheckpoint: vi.fn(() => restored.promise as never),
       groupsPut: vi.fn(() => groupsPut.promise),
     });
     const request = vi.fn((method: string) => {
@@ -693,15 +712,13 @@ describe("sessions page lifecycle", () => {
       count: 1,
       sessions: [{ key: "main", sessionId: "session-main" }],
     } as SessionsListResult;
-    page.selectedKeys = new Set(["main"]);
+    page.selectedSessions = new Map([["main", { key: "main", sessionId: "session-main" }]]);
     vi.mocked(showConfirmDialog).mockResolvedValue(true);
 
     const requests = [
       page.deleteSelected(),
       page.patchSession("main", { archived: true }, undefined, "session-main"),
       page.forkSession("main"),
-      page.branchCheckpoint("main", "branch-checkpoint"),
-      page.restoreCheckpoint("main", "restore-checkpoint"),
       page.rememberCustomGroup("Stale group"),
     ];
     await vi.waitFor(() => expect(sessions.deleteMany).toHaveBeenCalledOnce());
@@ -714,16 +731,13 @@ describe("sessions page lifecycle", () => {
     });
     patched.resolve({ ok: true });
     forked.resolve("forked");
-    branched.resolve({ key: "branched" });
-    restored.reject(new Error("stale restore error"));
     groupsPut.reject(new Error("stale group error"));
     await Promise.all(requests);
 
     expect(page.result?.sessions.map((row) => row.key)).toEqual(["main"]);
-    expect(page.selectedKeys).toEqual(new Set(["main"]));
+    expect([...page.selectedSessions.keys()]).toEqual(["main"]);
     expect(page.error).toBeNull();
     expect(page.sessionMutationPending).toBe(false);
-    expect(page.checkpointBusyKey).toBeNull();
     expect(mutableGateway.setSessionKey).not.toHaveBeenCalled();
     expect(context.navigate).not.toHaveBeenCalled();
   });

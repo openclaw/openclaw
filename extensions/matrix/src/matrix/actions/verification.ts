@@ -1,8 +1,5 @@
-// Matrix plugin module implements verification behavior.
 import { setTimeout as sleep } from "node:timers/promises";
-import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { CoreConfig } from "../../types.js";
 import { formatMatrixEncryptionUnavailableError } from "../encryption-guidance.js";
 import type { MatrixDeviceVerificationStatus, MatrixOwnDeviceVerificationStatus } from "../sdk.js";
 import type { MatrixVerificationSummary } from "../sdk/verification-manager.js";
@@ -24,17 +21,16 @@ type MatrixSelfVerificationResult = MatrixVerificationSummary & {
 };
 
 function requireCrypto(
-  client: import("../sdk.js").MatrixClient,
+  client: MatrixActionClient,
   opts: MatrixActionClientOpts,
-): NonNullable<import("../sdk.js").MatrixClient["crypto"]> {
+): MatrixCryptoActionFacade {
   if (!client.crypto) {
     if (!opts.cfg) {
       throw new Error(
         "Matrix verification actions requires a resolved runtime config. Load and resolve config at the command or gateway boundary, then pass cfg through the runtime path.",
       );
     }
-    const cfg = requireRuntimeConfig(opts.cfg, "Matrix verification actions") as CoreConfig;
-    throw new Error(formatMatrixEncryptionUnavailableError(cfg, opts.accountId));
+    throw new Error(formatMatrixEncryptionUnavailableError(opts.cfg, opts.accountId));
   }
   return client.crypto;
 }
@@ -47,24 +43,26 @@ function resolveVerificationId(input: string): string {
   return normalized;
 }
 
-async function ensureMatrixVerificationDmTracked(
-  crypto: MatrixCryptoActionFacade,
-  opts: MatrixVerificationDmLookupOpts,
-): Promise<void> {
-  const roomId = normalizeOptionalString(opts.verificationDmRoomId);
-  const userId = normalizeOptionalString(opts.verificationDmUserId);
-  if (Boolean(roomId) !== Boolean(userId)) {
-    throw new Error("--user-id and --room-id must be provided together for Matrix DM verification");
-  }
-  if (!roomId || !userId) {
-    return;
-  }
-  const tracked = await crypto.ensureVerificationDmTracked({ roomId, userId });
-  if (!tracked) {
-    throw new Error(
-      `Matrix DM verification request not found for room ${roomId} and user ${userId}`,
-    );
-  }
+async function withTrackedMatrixVerification<T>(
+  opts: MatrixActionClientOpts & MatrixVerificationDmLookupOpts,
+  run: (crypto: MatrixCryptoActionFacade, client: MatrixActionClient) => Promise<T>,
+): Promise<T> {
+  return await withStartedActionClient(opts, async (client) => {
+    const crypto = requireCrypto(client, opts);
+    const roomId = normalizeOptionalString(opts.verificationDmRoomId);
+    const userId = normalizeOptionalString(opts.verificationDmUserId);
+    if (Boolean(roomId) !== Boolean(userId)) {
+      throw new Error(
+        "--user-id and --room-id must be provided together for Matrix DM verification",
+      );
+    }
+    if (roomId && userId && !(await crypto.ensureVerificationDmTracked({ roomId, userId }))) {
+      throw new Error(
+        `Matrix DM verification request not found for room ${roomId} and user ${userId}`,
+      );
+    }
+    return await run(crypto, client);
+  });
 }
 
 function isSameMatrixVerification(
@@ -360,9 +358,7 @@ export async function acceptMatrixVerification(
   requestId: string,
   opts: MatrixActionClientOpts & MatrixVerificationDmLookupOpts = {},
 ) {
-  return await withStartedActionClient(opts, async (client) => {
-    const crypto = requireCrypto(client, opts);
-    await ensureMatrixVerificationDmTracked(crypto, opts);
+  return await withTrackedMatrixVerification(opts, async (crypto) => {
     return await crypto.acceptVerification(resolveVerificationId(requestId));
   });
 }
@@ -372,9 +368,7 @@ export async function cancelMatrixVerification(
   opts: MatrixActionClientOpts &
     MatrixVerificationDmLookupOpts & { reason?: string; code?: string } = {},
 ) {
-  return await withStartedActionClient(opts, async (client) => {
-    const crypto = requireCrypto(client, opts);
-    await ensureMatrixVerificationDmTracked(crypto, opts);
+  return await withTrackedMatrixVerification(opts, async (crypto) => {
     return await crypto.cancelVerification(resolveVerificationId(requestId), {
       reason: normalizeOptionalString(opts.reason),
       code: normalizeOptionalString(opts.code),
@@ -386,9 +380,7 @@ export async function startMatrixVerification(
   requestId: string,
   opts: MatrixActionClientOpts & MatrixVerificationDmLookupOpts & { method?: "sas" } = {},
 ) {
-  return await withStartedActionClient(opts, async (client) => {
-    const crypto = requireCrypto(client, opts);
-    await ensureMatrixVerificationDmTracked(crypto, opts);
+  return await withTrackedMatrixVerification(opts, async (crypto) => {
     return await crypto.startVerification(resolveVerificationId(requestId), opts.method ?? "sas");
   });
 }
@@ -397,9 +389,7 @@ export async function generateMatrixVerificationQr(
   requestId: string,
   opts: MatrixActionClientOpts & MatrixVerificationDmLookupOpts = {},
 ) {
-  return await withStartedActionClient(opts, async (client) => {
-    const crypto = requireCrypto(client, opts);
-    await ensureMatrixVerificationDmTracked(crypto, opts);
+  return await withTrackedMatrixVerification(opts, async (crypto) => {
     return await crypto.generateVerificationQr(resolveVerificationId(requestId));
   });
 }
@@ -409,9 +399,7 @@ export async function scanMatrixVerificationQr(
   qrDataBase64: string,
   opts: MatrixActionClientOpts & MatrixVerificationDmLookupOpts = {},
 ) {
-  return await withStartedActionClient(opts, async (client) => {
-    const crypto = requireCrypto(client, opts);
-    await ensureMatrixVerificationDmTracked(crypto, opts);
+  return await withTrackedMatrixVerification(opts, async (crypto) => {
     const payload = qrDataBase64.trim();
     if (!payload) {
       throw new Error("Matrix QR data is required");
@@ -424,9 +412,7 @@ export async function getMatrixVerificationSas(
   requestId: string,
   opts: MatrixActionClientOpts & MatrixVerificationDmLookupOpts = {},
 ) {
-  return await withStartedActionClient(opts, async (client) => {
-    const crypto = requireCrypto(client, opts);
-    await ensureMatrixVerificationDmTracked(crypto, opts);
+  return await withTrackedMatrixVerification(opts, async (crypto) => {
     return await crypto.getVerificationSas(resolveVerificationId(requestId));
   });
 }
@@ -435,9 +421,7 @@ export async function confirmMatrixVerificationSas(
   requestId: string,
   opts: MatrixActionClientOpts & MatrixVerificationDmLookupOpts = {},
 ) {
-  return await withStartedActionClient(opts, async (client) => {
-    const crypto = requireCrypto(client, opts);
-    await ensureMatrixVerificationDmTracked(crypto, opts);
+  return await withTrackedMatrixVerification(opts, async (crypto, client) => {
     const summary = await crypto.confirmVerificationSas(resolveVerificationId(requestId));
     // For self-verifications, mirror the trust-own-identity step that the
     // higher-level runMatrixSelfVerification path already performs at
@@ -455,9 +439,7 @@ export async function mismatchMatrixVerificationSas(
   requestId: string,
   opts: MatrixActionClientOpts & MatrixVerificationDmLookupOpts = {},
 ) {
-  return await withStartedActionClient(opts, async (client) => {
-    const crypto = requireCrypto(client, opts);
-    await ensureMatrixVerificationDmTracked(crypto, opts);
+  return await withTrackedMatrixVerification(opts, async (crypto) => {
     return await crypto.mismatchVerificationSas(resolveVerificationId(requestId));
   });
 }
@@ -466,9 +448,7 @@ export async function confirmMatrixVerificationReciprocateQr(
   requestId: string,
   opts: MatrixActionClientOpts & MatrixVerificationDmLookupOpts = {},
 ) {
-  return await withStartedActionClient(opts, async (client) => {
-    const crypto = requireCrypto(client, opts);
-    await ensureMatrixVerificationDmTracked(crypto, opts);
+  return await withTrackedMatrixVerification(opts, async (crypto) => {
     return await crypto.confirmVerificationReciprocateQr(resolveVerificationId(requestId));
   });
 }

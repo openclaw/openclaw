@@ -32,6 +32,7 @@ import {
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
+import { transcriptEventJsonSql } from "./transcript-payload.js";
 import type { SessionEntry } from "./types.js";
 
 /** Internal doctor/migration import target for one legacy session row. */
@@ -44,6 +45,8 @@ type SqliteSessionImportRowsParams = Pick<
   repairLegacyTranscript?: boolean;
   /** Doctor-discovered history cannot replace the current logical session or window owner. */
   historicalOnly?: boolean;
+  /** Unverified recovery history may only bootstrap an empty destination. */
+  requireEmptyStore?: boolean;
   preserveExactStoredKey?: boolean;
   skipIfExists?: boolean;
   entry: SessionEntry;
@@ -157,7 +160,7 @@ function importSqliteSessionRowsInTransaction(
       database.db,
       getSessionKysely(database.db)
         .selectFrom("transcript_events")
-        .select("event_json")
+        .select(transcriptEventJsonSql(database.db).as("event_json"))
         .where("session_id", "=", params.entry.sessionId),
     )) {
       stage.addSeen(row.event_json);
@@ -205,6 +208,7 @@ export async function importSqliteSessionRowsBatch(
     return [];
   }
   const prepared = params.map(resolveSqliteSessionImport);
+  const requireEmptyStore = params.some((row) => row.requireEmptyStore);
   const resolved = prepared[0]!.resolved;
   const databasePath = resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolved));
   if (
@@ -243,19 +247,25 @@ export async function importSqliteSessionRowsBatch(
         for (const { params: importParams } of prepared) {
           importParams.beforePersistentApply?.();
         }
-        return runOpenClawAgentWriteTransaction(
-          (database) =>
-            prepared.map((row, source) =>
-              importSqliteSessionRowsInTransaction(
-                database,
-                row,
-                stage,
-                source,
-                repairs.get(source),
-              ),
-            ),
-          toDatabaseOptions(resolved),
-        );
+        return runOpenClawAgentWriteTransaction((database) => {
+          if (
+            requireEmptyStore &&
+            executeSqliteQueryTakeFirstSync(
+              database.db,
+              getSessionKysely(database.db)
+                .selectFrom("session_nodes")
+                .select("session_key")
+                .limit(1),
+            )
+          ) {
+            throw new Error(
+              "Session recovery history cannot be verified; SQLite destination is not empty",
+            );
+          }
+          return prepared.map((row, source) =>
+            importSqliteSessionRowsInTransaction(database, row, stage, source, repairs.get(source)),
+          );
+        }, toDatabaseOptions(resolved));
       }),
     "session.import.batch",
   );

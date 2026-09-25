@@ -1,5 +1,9 @@
 // Covers gateway restart process and supervisor paths.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  isGatewayWorkAdmissionClosed,
+  resetGatewayWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { captureFullEnv, withEnv } from "../test-utils/env.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 
@@ -12,6 +16,35 @@ const execFileMock = vi.hoisted(() =>
 );
 const resolveLsofCommandSyncMock = vi.hoisted(() => vi.fn());
 const resolveGatewayPortMock = vi.hoisted(() => vi.fn());
+const observedArgv = vi.hoisted(() => new Map<number, string[]>());
+
+vi.mock("node:fs", async () => {
+  const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
+  return mockNodeBuiltinModule(
+    () => vi.importActual<typeof import("node:fs")>("node:fs"),
+    (actual) => ({
+      readFileSync: new Proxy(actual.readFileSync, {
+        apply(target, receiver, args) {
+          const pid = Number(/^\/proc\/(\d+)\/cmdline$/.exec(String(args[0]))?.[1]);
+          const argv = observedArgv.get(pid);
+          if (!argv) {
+            return Reflect.apply(target, receiver, args);
+          }
+          const bytes = Buffer.from(argv.join("\0"));
+          const encoding = typeof args[1] === "string" ? args[1] : args[1]?.encoding;
+          return encoding ? bytes.toString(encoding) : bytes;
+        },
+      }),
+    }),
+    { mirrorToDefault: true },
+  );
+});
+vi.mock("../process/supervisor/darwin-process-command.js", () => ({
+  readDarwinProcessCommand: (pid: number) => {
+    const argv = observedArgv.get(pid);
+    return argv ? { argv } : undefined;
+  },
+}));
 
 vi.mock("node:child_process", async () => {
   const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
@@ -37,15 +70,18 @@ vi.mock("../config/paths.js", () => ({
 const { cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } =
   await import("./restart-stale-pids.js");
 const {
+  consumeGatewayRestartAuthorization,
   normalizeGatewayRestartDelayMs,
+  requestGatewayRestartWithSignalAdmission,
   resetGatewayRestartStateForInProcessRestart,
-  scheduleGatewaySigusr1Restart,
+  scheduleGatewayRestart,
   triggerOpenClawRestart,
 } = await import("./restart.js");
 
 const envSnapshot = captureFullEnv();
 
 beforeEach(() => {
+  observedArgv.clear();
   execFileMock.mockReset();
   spawnSyncMock.mockReset();
   resolveLsofCommandSyncMock.mockReset();
@@ -70,9 +106,13 @@ function requireFirstSpawnSyncCall(): [unknown, unknown, unknown] {
 
 describe.runIf(process.platform !== "win32")("findGatewayPidsOnPortSync", () => {
   it("parses lsof output and filters non-openclaw/current processes", () => {
+    mockProcessPlatform("linux");
     const gatewayPidA = process.pid + 1000;
     const gatewayPidB = process.pid + 2000;
     const foreignPid = process.pid + 3000;
+    observedArgv.set(gatewayPidA, ["openclaw-gateway"]);
+    observedArgv.set(gatewayPidB, ["openclaw", "gateway"]);
+    observedArgv.set(foreignPid, ["python", "server.py"]);
     spawnSyncMock.mockReturnValue({
       error: undefined,
       status: 0,
@@ -122,6 +162,8 @@ describe.runIf(process.platform !== "win32")("cleanStaleGatewayProcessesSync", (
   it("kills stale gateway pids discovered on the gateway port", () => {
     const stalePidA = process.pid + 1000;
     const stalePidB = process.pid + 2000;
+    observedArgv.set(stalePidA, ["openclaw-gateway"]);
+    observedArgv.set(stalePidB, ["openclaw", "gateway"]);
     spawnSyncMock
       .mockReturnValueOnce({
         error: undefined,
@@ -147,6 +189,7 @@ describe.runIf(process.platform !== "win32")("cleanStaleGatewayProcessesSync", (
 
   it("uses explicit port override when provided", () => {
     const stalePid = process.pid + 1000;
+    observedArgv.set(stalePid, ["openclaw-gateway"]);
     spawnSyncMock
       .mockReturnValueOnce({
         error: undefined,
@@ -264,7 +307,33 @@ describe("triggerOpenClawRestart", () => {
   });
 });
 
-describe("gateway restart delay normalization", () => {
+describe("gateway restart delivery and delay", () => {
+  it.each(["linux", "darwin"] as const)(
+    "rejects restart without signaling an embedded %s host that has no restart handler",
+    (platform) => {
+      mockProcessPlatform(platform);
+      const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+      const listeners = process.listeners("SIGUSR2");
+      process.removeAllListeners("SIGUSR2");
+      resetGatewayRestartStateForInProcessRestart();
+      resetGatewayWorkAdmission();
+      try {
+        expect(requestGatewayRestartWithSignalAdmission("embedded-host")).toEqual({
+          status: "failed",
+        });
+        expect(killSpy).not.toHaveBeenCalled();
+        expect(consumeGatewayRestartAuthorization()).toBe(false);
+        expect(isGatewayWorkAdmissionClosed()).toBe(false);
+      } finally {
+        for (const listener of listeners) {
+          process.on("SIGUSR2", listener);
+        }
+        resetGatewayRestartStateForInProcessRestart();
+        resetGatewayWorkAdmission();
+      }
+    },
+  );
+
   it.each([
     { requested: undefined, effective: 2000 },
     { requested: Number.NaN, effective: 2000 },
@@ -280,7 +349,7 @@ describe("gateway restart delay normalization", () => {
     vi.useFakeTimers();
     const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
     try {
-      const restart = scheduleGatewaySigusr1Restart({
+      const restart = scheduleGatewayRestart({
         delayMs: 2_147_153_648,
         skipCooldown: true,
       });

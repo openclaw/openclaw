@@ -74,21 +74,27 @@ async function handleSessionsList(params: Record<string, unknown>) {
 
 async function handleSessionsResolve(params: Record<string, unknown>) {
   const rt = await getRuntime();
-  const resolved = rt.resolveSessionKeyFromResolveParams({
-    projection: await borrowSessionRowProjection(),
-    client: null,
-    p: params as SessionsResolveParams,
-  });
-  if (!resolved.ok) {
-    throw new Error(resolved.error.message);
-  }
-  if ("missing" in resolved) {
-    return { ok: false };
-  }
-  if ("ambiguous" in resolved) {
-    return { ok: false, candidates: resolved.candidates };
-  }
-  return { ok: true, key: resolved.key, agentId: resolved.agentId };
+  const publication = sessionProjection;
+  return await rt.withPreparedSessionResolve(
+    {
+      projection: await borrowSessionRowProjection(),
+      isCurrent: () => sessionProjection === publication,
+      client: null,
+      p: params as SessionsResolveParams,
+    },
+    (resolved) => {
+      if (!resolved.ok) {
+        throw new Error(resolved.error.message);
+      }
+      if ("missing" in resolved) {
+        return { ok: false };
+      }
+      if ("ambiguous" in resolved) {
+        return { ok: false, candidates: resolved.candidates };
+      }
+      return { ok: true, key: resolved.key, agentId: resolved.agentId };
+    },
+  );
 }
 
 async function handleSessionsSearch(params: Record<string, unknown>) {
@@ -140,7 +146,7 @@ async function handleSessionsSearch(params: Record<string, unknown>) {
     requestedAgentId ??
     agentIds.values().next().value ??
     rt.resolveSessionAgentId({ sessionKey: "main", config: cfg });
-  const result = rt.searchSessionTranscripts({
+  const result = await rt.searchSessionTranscripts({
     agentId,
     storePath: rt.resolveSessionStorePathCore(cfg.session?.store, { agentId }),
     query,

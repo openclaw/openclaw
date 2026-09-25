@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 /* @vitest-environment-options {"url":"http://chat-pane-retained.test/"} */
 
-import { queryObjects } from "node:v8";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -33,6 +32,7 @@ import {
 } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
+import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
 import { resetChatComposerState } from "./components/chat-composer.ts";
 import { openSessionWorkspaceFile } from "./components/chat-session-workspace.ts";
 import { readTaskTranscript, type TaskDetailHost } from "./components/chat-task-detail-state.ts";
@@ -77,9 +77,7 @@ describe("chat pane retained presentation lifecycle", () => {
       pane.presented = false;
       pane.presented = true;
       const retainedControl = new WeakRef({ unowned: true });
-      await collectGarbageForTest(() => {
-        queryObjects(ReplyPreviewMessage);
-      });
+      await collectGarbageForTest();
       expect(retainedControl.deref()).toBeUndefined();
       expect(preview!.deref()).toBeDefined();
       pane.requestReplyMessage("source-message");
@@ -91,9 +89,7 @@ describe("chat pane retained presentation lifecycle", () => {
         pane.disconnectedCallback();
       }
       const retiredControl = new WeakRef({ unowned: true });
-      await collectGarbageForTest(() => {
-        queryObjects(ReplyPreviewMessage);
-      });
+      await collectGarbageForTest();
       expect(retiredControl.deref()).toBeUndefined();
       expect(preview!.deref()).toBeUndefined();
       expect(pane.readReplyMessage("source-message")).toBeUndefined();
@@ -105,7 +101,10 @@ describe("chat pane retained presentation lifecycle", () => {
     (compact) => {
       vi.stubGlobal("localStorage", createStorageMock());
       const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
-      const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+      const { pane, state } = createTestChatPane({
+        client,
+        sessions: createSessionCapabilityFixture(),
+      });
       const layout = promoteSidebarPanel(
         openSlot(openSlot({ columns: [] }, "workspace"), "companion"),
         "companion",
@@ -142,11 +141,11 @@ describe("chat pane retained presentation lifecycle", () => {
     const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
     const page = createTestChatPane({
       client,
-      sessions: {} as SessionCapability,
+      sessions: createSessionCapabilityFixture(),
     });
     const dock = createTestChatPane({
       client,
-      sessions: {} as SessionCapability,
+      sessions: createSessionCapabilityFixture(),
     });
     const listeners = new Set<(draft: string) => void>();
     page.pane.context.nativeChatDrafts.subscribe = (listener) => {
@@ -464,6 +463,32 @@ describe("chat pane retained presentation lifecycle", () => {
     }
   });
 
+  it.each(["connection", "pane"] as const)(
+    "retires task transcript work without deleting saved selection at the %s boundary",
+    (boundary) => {
+      const { pane, state } = createTestChatPane({ client: createGatewayBrowserClientFixture() });
+      const selected = openSlot(state.sidebarLayout, "tasks");
+      selected.columns
+        .flatMap((column) => column.panels)
+        .find((panel) => panel.slot === "tasks")!.taskId = "task-retired";
+      state.updateSidebarLayout(selected);
+      createBackgroundTasksProps(state, { presented: false });
+      readTaskTranscript(state, { taskId: "task-retired" });
+      expect(state.taskDetailState).toBeDefined();
+      if (boundary === "connection") {
+        pane.applyGatewaySnapshot({ ...pane.context.gateway.snapshot, phase: "stopped" });
+      } else {
+        pane.disconnectedCallback();
+      }
+      expect(
+        state.sidebarLayout.columns
+          .flatMap((column) => column.panels)
+          .find((panel) => panel.slot === "tasks")?.taskId,
+      ).toBe("task-retired");
+      expect(state.taskDetailState).toBeUndefined();
+    },
+  );
+
   it("retires foreground-only state when a retained pane is hidden", () => {
     const { pane, state } = createTestChatPane({
       client: {} as GatewayBrowserClient,
@@ -473,7 +498,13 @@ describe("chat pane retained presentation lifecycle", () => {
     const release = vi.fn();
     state.realtimeTalkSession = { stop } as unknown as ChatPageHost["realtimeTalkSession"];
     state.realtimeTalkActive = true;
-    state.sidebarContent = { kind: "task", taskId: "task-live" };
+    state.sidebarContent = { kind: "markdown", content: "Review selection" };
+    const selected = openSlot(state.sidebarLayout, "tasks");
+    selected.columns
+      .flatMap((column) => column.panels)
+      .find((panel) => panel.slot === "tasks")!.taskId = "task-live";
+    state.updateSidebarLayout(selected);
+    createBackgroundTasksProps(state, { presented: false });
     state.imageLightbox = { release, src: "blob:test", title: "preview" };
     const detailHost = state as unknown as TaskDetailHost;
     readTaskTranscript(detailHost, {
@@ -490,8 +521,12 @@ describe("chat pane retained presentation lifecycle", () => {
     expect(stop).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledOnce();
     expect(state.sidebarContent).toBeNull();
-    // The wiped detail slot can no longer reset the loader itself; retirement
-    // must stop its timer/fetch loop so hidden panes stop reading history.
+    expect(
+      state.sidebarLayout.columns
+        .flatMap((column) => column.panels)
+        .find((panel) => panel.slot === "tasks")?.taskId,
+    ).toBe("task-live");
+    // Retirement must stop the selected task's timer/fetch loop.
     expect(detailHost.taskDetailState).toBeUndefined();
     expect(announcement.getAttribute("aria-live")).toBe("off");
   });

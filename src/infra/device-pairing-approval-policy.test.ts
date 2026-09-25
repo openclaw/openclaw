@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { approveBootstrapDevicePairing, approveDevicePairing } from "./device-pairing-approval.js";
-import { withDevicePairingLock } from "./device-pairing-state.js";
+import { withDevicePairingLock } from "./device-pairing-lock.js";
 import { ensureDeviceToken } from "./device-pairing-tokens.js";
 import { getPairedDevice, listDevicePairing, requestDevicePairing } from "./device-pairing.js";
 
@@ -14,7 +14,7 @@ beforeAll(async () => {
   await roots.setup();
 });
 afterAll(async () => {
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
   await roots.cleanup();
 });
 

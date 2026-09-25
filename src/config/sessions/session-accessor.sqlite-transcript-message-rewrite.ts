@@ -24,6 +24,7 @@ import type { SessionTranscriptAccessScope } from "./session-accessor.types.js";
 import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 import type { SessionLifecycleRevisionExpectation } from "./session-transcript-turn-lifecycle.types.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
+import { transcriptEventJsonSql } from "./transcript-payload.js";
 import {
   assertOwnedTranscriptWriteCommit,
   SessionTranscriptWriterClaimReboundError,
@@ -52,7 +53,7 @@ export async function rewriteTranscriptMessageAtAnchor<TMessage>(
             database.db,
             getSessionKysely(database.db)
               .selectFrom("transcript_events")
-              .select("event_json")
+              .select(transcriptEventJsonSql(database.db).as("event_json"))
               .where("session_id", "=", resolved.sessionId)
               .where("seq", "=", anchor.rawSeq),
           );

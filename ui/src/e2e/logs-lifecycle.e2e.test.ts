@@ -210,7 +210,7 @@ suite.define(() => {
               return app?.runtime?.context?.gateway?.snapshot?.phase === "reconnecting";
             });
             await expect
-              .poll(() => page.locator(".sidebar-footer-bar__status").textContent())
+              .poll(() => page.locator(".gateway-status__label").textContent())
               .toContain("Reconnecting…");
             await expect.poll(() => visibleMessages(page)).toHaveLength(3);
             signal.throwIfAborted();

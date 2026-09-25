@@ -19,6 +19,17 @@ RUN apt-get update \
 RUN corepack enable
 RUN npm install -g tsx@4.23.12 --no-fund --no-audit
 
+# Mounted survivor helpers resolve compiler tooling independently of installed packages.
+COPY package.json /tmp/openclaw-e2e-package.json
+RUN <<'INSTALL_TYPESCRIPT'
+set -eu
+typescript_version="$(node -p 'require("/tmp/openclaw-e2e-package.json").devDependencies.typescript')"
+npm install --prefix /opt/openclaw-e2e "typescript@$typescript_version" \
+  --no-save --package-lock=false --no-fund --no-audit
+ln -s /opt/openclaw-e2e/node_modules /node_modules
+rm /tmp/openclaw-e2e-package.json
+INSTALL_TYPESCRIPT
+
 COPY --chmod=0644 scripts/prepublish-plugin-registry-artifact.mjs /opt/openclaw-e2e/scripts/
 COPY --chmod=0755 scripts/e2e/lib/prepublish-plugin-registry.sh /opt/openclaw-e2e/scripts/e2e/lib/
 COPY scripts/e2e/lib/plugins/npm-registry-server.mjs /opt/openclaw-e2e/scripts/e2e/lib/plugins/
@@ -51,7 +62,8 @@ CMD ["bash"]
 
 FROM ${OPENCLAW_NODE_ALPINE_IMAGE} AS musl
 
-RUN apk add --no-cache bash
+# Native dependencies without musl prebuilds must compile during real npm installs.
+RUN apk add --no-cache bash g++ make python3
 COPY --from=e2e-runner /opt/openclaw-e2e /opt/openclaw-e2e
 COPY scripts/docker/verify-fs-safe-native.mjs /tmp/verify-fs-safe-native.mjs
 

@@ -3,6 +3,7 @@ import { constants as fsConstants } from "node:fs";
 import type { BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { sha256File } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   resolveMacOSDesktopCodexAppPathCandidates,
   type MacOSDesktopCodexAppPathCandidate,
@@ -23,8 +24,9 @@ export async function readMacOSDesktopGenerationFingerprint(
     for (const artifactPath of resolveMacOSDesktopGenerationPaths(candidate)) {
       entries.push(`${artifactPath}\0${await statFingerprint(artifactPath)}`);
     }
-    const pluginRoot = resolveComputerUsePluginRoot(candidate);
-    entries.push(`${pluginRoot}\0${await directoryTreeFingerprint(pluginRoot)}`);
+    for (const pluginRoot of resolveComputerUseArtifactRoots(candidate)) {
+      entries.push(`${pluginRoot}\0${await readCodexDesktopArtifactTreeFingerprint(pluginRoot)}`);
+    }
   }
   return createHash("sha256").update(entries.join("\0")).digest("hex");
 }
@@ -35,6 +37,8 @@ function resolveMacOSDesktopGenerationPaths(
   return [
     candidate.appBundlePath,
     path.join(candidate.bundledMarketplacePath, ".agents", "plugins", "marketplace.json"),
+    path.join(path.dirname(candidate.appServerCommandPath), "cua_node", "bin", "node"),
+    path.join(path.dirname(candidate.appServerCommandPath), "cua_node", "bin", "node_repl"),
     ...candidate.computerUseServiceAppPaths.flatMap((servicePath) => [
       servicePath,
       path.join(servicePath, "Contents", "Info.plist"),
@@ -51,8 +55,21 @@ function resolveMacOSDesktopGenerationPaths(
   ];
 }
 
-function resolveComputerUsePluginRoot(candidate: MacOSDesktopCodexAppPathCandidate): string {
-  return path.join(candidate.bundledMarketplacePath, "plugins", "computer-use");
+function resolveComputerUseArtifactRoots(candidate: MacOSDesktopCodexAppPathCandidate): string[] {
+  const modules = path.join(
+    path.dirname(candidate.appServerCommandPath),
+    "cua_node",
+    "lib",
+    "node_modules",
+    "@oai",
+  );
+  return [
+    path.join(candidate.bundledMarketplacePath, "plugins", "computer-use"),
+    path.join(candidate.bundledMarketplacePath, "plugins", "unified-computer-use"),
+    path.join(modules, "cua-repl"),
+    path.join(modules, "cua"),
+    path.join(modules, "sky", "dist"),
+  ];
 }
 
 /** Stable roots that cover bundle replacement and recursive artifact updates. */
@@ -68,7 +85,7 @@ export function resolveMacOSDesktopGenerationWatchPaths(
   return [...watched];
 }
 
-async function directoryTreeFingerprint(root: string): Promise<string> {
+export async function readCodexDesktopArtifactTreeFingerprint(root: string): Promise<string> {
   let rootStat: BigIntStats;
   try {
     rootStat = await fs.lstat(root, { bigint: true });
@@ -155,17 +172,14 @@ async function readFileFingerprint(
     if (!sameStat(before, expected)) {
       throw new Error(`Codex desktop artifact changed while fingerprinting: ${filePath}`);
     }
-    const hash = createHash("sha256");
     // Metadata can collide on coarse filesystems. Content binds an event-driven generation
     // to the exact executable/config bytes without adding request-hot-path polling.
-    for await (const chunk of handle.createReadStream({ autoClose: false })) {
-      hash.update(chunk);
-    }
+    const hash = await sha256File(handle, { maxBytes: Number(before.size) });
     const after = await handle.stat({ bigint: true });
-    if (!sameStat(before, after)) {
+    if (BigInt(hash.bytes) !== before.size || !sameStat(before, after)) {
       throw new Error(`Codex desktop artifact changed while fingerprinting: ${filePath}`);
     }
-    return hash.digest("hex");
+    return hash.digest;
   } finally {
     await handle.close();
   }

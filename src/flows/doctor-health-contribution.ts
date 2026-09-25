@@ -16,7 +16,7 @@ export function createDoctorHealthContribution(params: {
   healthChecks?: DoctorContributionHealthCheck | readonly DoctorContributionHealthCheck[];
   hint?: string;
   required?: true;
-  updatePolicy?: DoctorHealthContribution["updatePolicy"];
+  updateWork?: DoctorHealthContribution["updateWork"];
   run?: (ctx: DoctorHealthFlowContext) => Promise<void>;
 }): DoctorHealthContribution {
   const healthChecks = normalizeHealthChecks(params.id, params.healthChecks);
@@ -37,7 +37,7 @@ export function createDoctorHealthContribution(params: {
     healthChecks,
     healthCheckIds,
     ...(params.required ? { required: true as const } : {}),
-    ...(params.updatePolicy ? { updatePolicy: params.updatePolicy } : {}),
+    ...(params.updateWork ? { updateWork: params.updateWork } : {}),
     run:
       params.run ??
       ((ctx) =>
@@ -137,14 +137,21 @@ export function recordDoctorHealthWarnings(
   ctx: DoctorHealthFlowContext,
   findings: readonly HealthFinding[],
   warnings: readonly string[] = [],
+  options?: { prepend?: boolean },
 ): void {
-  ctx.updateWarnings = normalizeUpdatePostInstallDoctorWarnings([
-    ...(ctx.updateWarnings ?? []),
+  const existing = ctx.updateWarnings ?? [];
+  const added = [
     ...findings
       .filter((finding) => finding.severity === "warning")
-      .map((finding) => `${finding.checkId}: ${finding.message}`),
+      .map(
+        (finding) =>
+          `${finding.checkId}${finding.errorCode ? ` [${finding.errorCode}]` : ""}: ${finding.message}`,
+      ),
     ...warnings,
-  ]);
+  ];
+  ctx.updateWarnings = normalizeUpdatePostInstallDoctorWarnings(
+    options?.prepend ? [...added, ...existing] : [...existing, ...added],
+  );
 }
 
 export function renderStructuredHealthFindings(

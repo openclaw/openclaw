@@ -4,6 +4,7 @@ import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { normalizeUiAppearancePreference } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
 import { DEFAULT_SIDEBAR_ENTRIES, normalizeSidebarEntries } from "../app-navigation.ts";
 import { configuredUiDevGateway } from "../dev-gateway.ts";
 import { isSupportedLocale } from "../i18n/index.ts";
@@ -23,7 +24,6 @@ import { parseThemeSelection, type ThemeMode, type ThemeName } from "./theme.ts"
 import { normalizeTypefaceOverride, type TypefaceId } from "./typography.ts";
 import { normalizeLocalUserIdentity, type LocalUserIdentity } from "./user-identity.ts";
 
-// Control UI module implements storage behavior.
 const SETTINGS_KEY_PREFIX = "openclaw.control.settings.v1:";
 const LEGACY_SETTINGS_KEY = "openclaw.control.settings.v1";
 export const NAV_WIDTH_MIN = 240;
@@ -142,9 +142,7 @@ export type ChatWorkspaceDock = (typeof CHAT_WORKSPACE_DOCKS)[number];
 export const normalizeChatWorkspaceDock = normalizeChoice(CHAT_WORKSPACE_DOCKS, "right");
 
 export function normalizeAccentColor(value: unknown): string | undefined {
-  return typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value)
-    ? value.toLowerCase()
-    : undefined;
+  return normalizeUiAppearancePreference("ui.accent", value);
 }
 
 export function normalizeTextScale(value: unknown, fallback: TextScaleStop = 100): TextScaleStop {
@@ -169,6 +167,7 @@ export const UI_APPEARANCE_DEFAULTS = {
   textScale: 100,
   sidebarLiveActivity: true,
   chatMessageMaxWidth: "48rem",
+  chatShowTaskProgress: true,
   chatCollapseTaskProgress: false,
   chatSendShortcut: "enter",
   catalogOpenTarget: "viewer",
@@ -194,6 +193,8 @@ export type UiSettings = {
   chatShowThinking: boolean;
   chatShowToolCalls: boolean;
   chatPersistCommentary?: boolean;
+  // Browser-local composer visibility; saved progress and other placements are unchanged.
+  chatShowTaskProgress?: boolean;
   // Browser-local presentation preference; false preserves active-card auto-expand.
   chatCollapseTaskProgress?: boolean;
   chatSendShortcut?: ChatSendShortcut;
@@ -292,10 +293,6 @@ export function resolvePageGatewaySettings(settings: UiSettings): UiSettings {
   };
 }
 
-function getSessionStorage(): Storage | null {
-  return getSafeSessionStorage();
-}
-
 type PersistedSettingsSource = {
   gatewayUrl: string;
   parsed: PersistedUiSettings;
@@ -308,25 +305,15 @@ function parsePersistedSettings(raw: string | null): PersistedUiSettings | null 
   return (safeParseJson(raw) as PersistedUiSettings | undefined) ?? null;
 }
 
-function settingsMatchGatewayTarget(parsed: PersistedUiSettings, targetUrl: string): boolean {
-  const storedUrl = normalizeOptionalString(parsed.gatewayUrl);
-  if (!storedUrl) {
-    return false;
-  }
-  return gatewayOriginScope(storedUrl) === gatewayOriginScope(targetUrl);
-}
-
 function readSettingsForGateway(
   storage: Storage | null,
   targetUrl: string,
 ): PersistedSettingsSource | null {
   const scoped = parsePersistedSettings(storage?.getItem(settingsKeyForGateway(targetUrl)) ?? null);
-  if (
-    scoped &&
-    (!normalizeOptionalString(scoped.gatewayUrl) || settingsMatchGatewayTarget(scoped, targetUrl))
-  ) {
+  const storedUrl = normalizeOptionalString(scoped?.gatewayUrl);
+  if (scoped && (!storedUrl || gatewayOriginScope(storedUrl) === gatewayOriginScope(targetUrl))) {
     return {
-      gatewayUrl: normalizeOptionalString(scoped.gatewayUrl) ?? targetUrl,
+      gatewayUrl: storedUrl ?? targetUrl,
       parsed: scoped,
     };
   }
@@ -376,7 +363,7 @@ export function loadGatewaySessionSelection(gatewayUrl: string): ScopedSessionSe
 
 function loadSessionToken(gatewayUrl: string): string {
   try {
-    const storage = getSessionStorage();
+    const storage = getSafeSessionStorage();
     if (!storage) {
       return "";
     }
@@ -407,7 +394,7 @@ export function resolveGatewayCredentialsForUrlEdit(
 
 export function persistSessionToken(gatewayUrl: string, token: string) {
   try {
-    const storage = getSessionStorage();
+    const storage = getSafeSessionStorage();
     if (!storage) {
       return;
     }
@@ -471,6 +458,7 @@ export function loadUiPreferences(
     chatShowThinking: true,
     chatShowToolCalls: true,
     chatPersistCommentary: true,
+    chatShowTaskProgress: UI_APPEARANCE_DEFAULTS.chatShowTaskProgress,
     chatCollapseTaskProgress: UI_APPEARANCE_DEFAULTS.chatCollapseTaskProgress,
     chatSendShortcut: UI_APPEARANCE_DEFAULTS.chatSendShortcut,
     catalogOpenTarget: UI_APPEARANCE_DEFAULTS.catalogOpenTarget,
@@ -499,11 +487,8 @@ export function loadUiPreferences(
     const gatewayUrl =
       targetGatewayUrl ?? (parsedGatewayUrl === pageDerivedUrl ? defaultUrl : parsedGatewayUrl);
     const scopedSessionSelection = resolveScopedSessionSelection(gatewayUrl, parsed, defaults);
-    const customTheme = parseImportedCustomTheme((parsed as { customTheme?: unknown }).customTheme);
-    const { theme, mode } = parseThemeSelection(
-      (parsed as { theme?: unknown }).theme,
-      (parsed as { themeMode?: unknown }).themeMode,
-    );
+    const customTheme = parseImportedCustomTheme(parsed.customTheme);
+    const { theme, mode } = parseThemeSelection(parsed.theme, parsed.themeMode);
     const parsedRecord = asOptionalRecord(parsed) ?? {};
     const hasSidebarEntries = Object.hasOwn(parsedRecord, "sidebarEntries");
     // One-time read of the retired route-only shape; all writes use sidebarEntries.
@@ -538,6 +523,10 @@ export function loadUiPreferences(
         typeof parsed.chatPersistCommentary === "boolean"
           ? parsed.chatPersistCommentary
           : defaults.chatPersistCommentary,
+      chatShowTaskProgress:
+        typeof parsed.chatShowTaskProgress === "boolean"
+          ? parsed.chatShowTaskProgress
+          : defaults.chatShowTaskProgress,
       chatCollapseTaskProgress:
         typeof parsed.chatCollapseTaskProgress === "boolean"
           ? parsed.chatCollapseTaskProgress
@@ -654,10 +643,6 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
   const storage = getSafeLocalStorage();
   const scope = gatewayOriginScope(next.gatewayUrl);
   const scopedKey = settingsKeyForGateway(next.gatewayUrl);
-  const accent = normalizeAccentColor(next.accent);
-  const fontUi = normalizeTypefaceOverride(next.fontUi);
-  const fontChat = normalizeTypefaceOverride(next.fontChat);
-  const chatFollowUpMode = normalizeChatFollowUpModeOverride(next.chatFollowUpMode);
   let existingSessionsByGateway: Record<string, ScopedSessionSelection> = {};
   try {
     const source = readSettingsForGateway(storage, next.gatewayUrl);
@@ -689,76 +674,61 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
     gatewayUrl: next.gatewayUrl,
     theme: next.theme,
     themeMode: next.themeMode,
-    ...(accent ? { accent } : {}),
-    ...(fontUi ? { fontUi } : {}),
-    ...(fontChat ? { fontChat } : {}),
+    accent: normalizeAccentColor(next.accent),
+    fontUi: normalizeTypefaceOverride(next.fontUi),
+    fontChat: normalizeTypefaceOverride(next.fontChat),
     chatShowThinking: next.chatShowThinking,
     chatShowToolCalls: next.chatShowToolCalls,
     chatPersistCommentary: next.chatPersistCommentary ?? true,
-    ...(next.chatCollapseTaskProgress === true ? { chatCollapseTaskProgress: true } : {}),
-    ...(normalizeChatSendShortcut(next.chatSendShortcut) === "modifier-enter"
-      ? { chatSendShortcut: "modifier-enter" as const }
-      : {}),
-    ...(chatFollowUpMode ? { chatFollowUpMode } : {}),
-    ...(normalizeCatalogOpenTarget(next.catalogOpenTarget) === "terminal"
-      ? { catalogOpenTarget: "terminal" as const }
-      : {}),
-    ...(normalizeOptionalString(next.realtimeTalkInputDeviceId)
-      ? { realtimeTalkInputDeviceId: normalizeOptionalString(next.realtimeTalkInputDeviceId) }
-      : {}),
-    ...(normalizeOptionalString(next.realtimeTalkVideoDeviceId)
-      ? { realtimeTalkVideoDeviceId: normalizeOptionalString(next.realtimeTalkVideoDeviceId) }
-      : {}),
-    ...(next.composerHoldToRecord === false ? { composerHoldToRecord: false } : {}),
-    ...(typeof next.talkCameraAutoEnable === "boolean"
-      ? { talkCameraAutoEnable: next.talkCameraAutoEnable }
-      : {}),
-    ...(next.chatSplitLayout ? { chatSplitLayout: next.chatSplitLayout } : {}),
+    chatShowTaskProgress: next.chatShowTaskProgress === false ? false : undefined,
+    chatCollapseTaskProgress: next.chatCollapseTaskProgress === true ? true : undefined,
+    chatSendShortcut: next.chatSendShortcut === "modifier-enter" ? "modifier-enter" : undefined,
+    chatFollowUpMode: normalizeChatFollowUpModeOverride(next.chatFollowUpMode),
+    catalogOpenTarget: next.catalogOpenTarget === "terminal" ? "terminal" : undefined,
+    realtimeTalkInputDeviceId: normalizeOptionalString(next.realtimeTalkInputDeviceId),
+    realtimeTalkVideoDeviceId: normalizeOptionalString(next.realtimeTalkVideoDeviceId),
+    composerHoldToRecord: next.composerHoldToRecord === false ? false : undefined,
+    talkCameraAutoEnable:
+      typeof next.talkCameraAutoEnable === "boolean" ? next.talkCameraAutoEnable : undefined,
+    chatSplitLayout: next.chatSplitLayout || undefined,
     // Right dock is the default; only the opt-in bottom dock persists.
-    ...(next.chatWorkspaceDock === "bottom" ? { chatWorkspaceDock: "bottom" as const } : {}),
-    ...(next.boardSessionViews && Object.keys(next.boardSessionViews).length > 0
-      ? { boardSessionViews: normalizeBoardSessionViews(next.boardSessionViews) }
-      : {}),
-    ...(next.sidebarSessionLayouts && Object.keys(next.sidebarSessionLayouts).length > 0
-      ? { sidebarSessionLayouts: normalizeSidebarSessionLayouts(next.sidebarSessionLayouts) }
-      : {}),
-    ...(next.sidebarSessionActivePanels && Object.keys(next.sidebarSessionActivePanels).length > 0
-      ? {
-          sidebarSessionActivePanels: normalizeSidebarSessionActivePanels(
-            next.sidebarSessionActivePanels,
-          ),
-        }
-      : {}),
+    chatWorkspaceDock: next.chatWorkspaceDock === "bottom" ? "bottom" : undefined,
+    boardSessionViews:
+      next.boardSessionViews && Object.keys(next.boardSessionViews).length > 0
+        ? normalizeBoardSessionViews(next.boardSessionViews)
+        : undefined,
+    sidebarSessionLayouts:
+      next.sidebarSessionLayouts && Object.keys(next.sidebarSessionLayouts).length > 0
+        ? normalizeSidebarSessionLayouts(next.sidebarSessionLayouts)
+        : undefined,
+    sidebarSessionActivePanels:
+      next.sidebarSessionActivePanels && Object.keys(next.sidebarSessionActivePanels).length > 0
+        ? normalizeSidebarSessionActivePanels(next.sidebarSessionActivePanels)
+        : undefined,
     navWidth: next.navWidth, // Persist size, not visibility: shared localStorage leaks across tabs.
     sidebarAgentsMode: next.sidebarAgentsMode === "roster" ? "roster" : "chip",
     sidebarPreTeamScope: normalizeSidebarPreTeamScope(next.sidebarPreTeamScope),
-    ...(next.sidebarCollapsedAgentIds?.length
-      ? {
-          sidebarCollapsedAgentIds: normalizeUniqueTrimmedStringList(next.sidebarCollapsedAgentIds),
-        }
-      : {}),
+    sidebarCollapsedAgentIds: next.sidebarCollapsedAgentIds?.length
+      ? normalizeUniqueTrimmedStringList(next.sidebarCollapsedAgentIds)
+      : undefined,
     sidebarEntries: next.sidebarEntries,
-    ...(next.sidebarLiveActivity === false ? { sidebarLiveActivity: false } : {}),
-    ...(normalizeChatMessageMaxWidth(next.chatMessageMaxWidth)
-      ? { chatMessageMaxWidth: normalizeChatMessageMaxWidth(next.chatMessageMaxWidth) }
-      : {}),
-    ...(next.showAdvancedSettings === true ? { showAdvancedSettings: true } : {}),
+    sidebarLiveActivity: next.sidebarLiveActivity === false ? false : undefined,
+    chatMessageMaxWidth: normalizeChatMessageMaxWidth(next.chatMessageMaxWidth),
+    showAdvancedSettings: next.showAdvancedSettings === true ? true : undefined,
     // Empty pin list is the default; only real pins persist.
-    ...(next.pinnedAgentIds && next.pinnedAgentIds.length > 0
-      ? { pinnedAgentIds: next.pinnedAgentIds }
-      : {}),
-    ...(next.textScale !== undefined ? { textScale: normalizeTextScale(next.textScale) } : {}),
-    ...(next.customTheme ? { customTheme: next.customTheme } : {}),
+    pinnedAgentIds: next.pinnedAgentIds?.length ? next.pinnedAgentIds : undefined,
+    textScale: next.textScale !== undefined ? normalizeTextScale(next.textScale) : undefined,
+    customTheme: next.customTheme || undefined,
     sessionsByGateway,
-    ...(next.locale ? { locale: next.locale } : {}),
+    locale: next.locale || undefined,
     // Visits default on; only an explicit opt-out persists. Sounds default
     // off; only an explicit opt-in persists.
-    ...(next.lobsterPetVisits === false ? { lobsterPetVisits: false } : {}),
-    ...(next.lobsterPetSounds === true ? { lobsterPetSounds: true } : {}),
+    lobsterPetVisits: next.lobsterPetVisits === false ? false : undefined,
+    lobsterPetSounds: next.lobsterPetSounds === true ? true : undefined,
     // Only the opted-out value is persisted; absence means the safe default.
-    ...(next.sessionDeleteConfirm === false ? { sessionDeleteConfirm: false } : {}),
+    sessionDeleteConfirm: next.sessionDeleteConfirm === false ? false : undefined,
     // External links keep host behavior unless the operator explicitly opts in.
-    ...(next.openLinksInControlUiBrowser === true ? { openLinksInControlUiBrowser: true } : {}),
+    openLinksInControlUiBrowser: next.openLinksInControlUiBrowser === true ? true : undefined,
   };
   const serialized = JSON.stringify(persisted);
   const { token: _token, ...preferences } = next;

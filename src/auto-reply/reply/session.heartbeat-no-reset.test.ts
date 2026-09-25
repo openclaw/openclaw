@@ -106,7 +106,7 @@ describe("initSessionState - heartbeat should not trigger session reset", () => 
     return entry;
   };
 
-  it.each(["heartbeat", "cron", "exec"] as const)(
+  it.each(["heartbeat", "cron", "exec", "progress-card-refresh"] as const)(
     "does not reset a stale session for an internal %s turn",
     async (source) => {
       // Setup: Create a session entry that is "stale" (older than idle timeout)

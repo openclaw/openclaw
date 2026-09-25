@@ -1,7 +1,13 @@
 import type { ProviderAuthAliasLookupParams } from "openclaw/plugin-sdk/agent-runtime";
 import type { CodexAppServerCommandSource } from "./config-contracts.shared.js";
 import type { ParsedCodexPluginConfig, ParsedCodexSupervisionEndpoint } from "./config-parsing.js";
-import type { CodexApprovalPolicy, CodexServiceTier, JsonObject } from "./protocol.js";
+import type {
+  CodexApprovalPolicy,
+  CodexApprovalsReviewer,
+  CodexSandboxMode,
+  CodexServiceTier,
+  JsonObject,
+} from "./protocol.js";
 
 export {
   CODEX_PLUGIN_MARKETPLACE_NAME_PATTERN,
@@ -25,17 +31,15 @@ export type ProviderAuthAliasConfig = NonNullable<ProviderAuthAliasLookupParams>
 export type CodexAppServerDefaultPolicy = {
   mode: CodexAppServerPolicyMode;
   approvalPolicy?: CodexAppServerManagedApprovalPolicy;
-  approvalsReviewer?: CodexAppServerApprovalsReviewer;
-  sandbox?: CodexAppServerSandboxMode;
+  approvalsReviewer?: CodexApprovalsReviewer;
+  sandbox?: CodexSandboxMode;
   dangerFullAccessAllowed?: boolean;
 };
 export type CodexAppServerApprovalPolicy = "never" | "on-request";
 export type CodexAppServerManagedApprovalPolicy = Extract<CodexApprovalPolicy, string>;
 export type CodexAppServerApprovalPolicySource = "config" | "env" | "requirements" | "implicit";
 export type CodexAppServerEffectiveApprovalPolicy = CodexApprovalPolicy;
-export type CodexAppServerSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
-export type CodexAppServerApprovalsReviewer = "user" | "auto_review" | "guardian_subagent";
-export type CodexManagedCommandOrder = "package-first" | "desktop-first";
+export type CodexManagedCommandOrder = "package-first" | "desktop-first" | "package-only";
 export type CodexDynamicToolsLoading = "searchable" | "direct";
 
 export const CODEX_PLUGINS_MARKETPLACE_NAME = "openai-curated";
@@ -76,6 +80,8 @@ export type ResolvedCodexAppServerNetworkProxyConfig = {
 export type CodexAppServerStartOptions = {
   transport: CodexAppServerTransportMode;
   homeScope?: CodexAppServerHomeScope;
+  /** Lifecycle-captured local home; does not change requested home ownership. */
+  codexHome?: string;
   command: string;
   commandSource?: CodexAppServerCommandSource;
   /** Desktop-first is reserved for the macOS app process that owns Computer Use permissions. */
@@ -103,8 +109,8 @@ export type CodexAppServerRuntimeOptions = {
   requestTimeoutMs: number;
   approvalPolicy: CodexAppServerEffectiveApprovalPolicy;
   approvalPolicySource?: CodexAppServerApprovalPolicySource;
-  sandbox: CodexAppServerSandboxMode;
-  approvalsReviewer: CodexAppServerApprovalsReviewer;
+  sandbox: CodexSandboxMode;
+  approvalsReviewer: CodexApprovalsReviewer;
   /** Prepared boundary for an explicit session permission mode. */
   sessionRoot?: string;
   serviceTier?: CodexServiceTier | null;

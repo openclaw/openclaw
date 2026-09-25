@@ -52,6 +52,10 @@ type PortalProxyTarget = {
   target: PortalTarget;
   token: string;
   cookieNamespace: string;
+  /** Published ingress authority, independent of the backend listener's TLS. */
+  publicOrigin?: string;
+  /** HTTPS wildcard ingress can be embedded under a different top-level site. */
+  partitionedCookies?: boolean;
 };
 
 type PortalAuthorization =
@@ -108,7 +112,7 @@ function readTargetCookies(
   return normalized || undefined;
 }
 
-function rewriteTargetCookie(cookie: string, cookieNamespace: string): string | undefined {
+function rewriteTargetCookie(cookie: string, target: PortalProxyTarget): string | undefined {
   const [cookiePair, ...attributes] = cookie.split(";");
   const separator = cookiePair?.indexOf("=") ?? -1;
   if (!cookiePair || separator <= 0) {
@@ -119,8 +123,22 @@ function rewriteTargetCookie(cookie: string, cookieNamespace: string): string | 
     return undefined;
   }
   const retainedAttributes = attributes.filter((attribute) => !/^\s*domain\s*=/iu.test(attribute));
+  if (target.partitionedCookies) {
+    // Partition embedded state by its top-level site, retaining an app's explicit
+    // SameSite restriction rather than weakening its cross-site policy.
+    if (!retainedAttributes.some((attribute) => /^\s*samesite\s*=/iu.test(attribute))) {
+      retainedAttributes.push(" SameSite=None");
+    }
+    for (const attribute of ["Secure", "Partitioned"]) {
+      if (
+        !retainedAttributes.some((value) => value.trim().toLowerCase() === attribute.toLowerCase())
+      ) {
+        retainedAttributes.push(` ${attribute}`);
+      }
+    }
+  }
   const suffix = retainedAttributes.length > 0 ? `;${retainedAttributes.join(";")}` : "";
-  return `${portalCookiePrefix(cookieNamespace)}${name}=${cookiePair.slice(separator + 1)}${suffix}`;
+  return `${portalCookiePrefix(target.cookieNamespace)}${name}=${cookiePair.slice(separator + 1)}${suffix}`;
 }
 
 function parsePortalUrl(req: IncomingMessage): URL | undefined {
@@ -137,34 +155,31 @@ function authorizePortalRequest(
 ): PortalAuthorization {
   const url = parsePortalUrl(req);
   const queryToken = url?.searchParams.get(PORTAL_AUTH_NAME) ?? undefined;
-  if (tokensEqual(queryToken, target.token)) {
-    url?.searchParams.delete(PORTAL_AUTH_NAME);
-    return {
-      kind: "authorized",
-      requestPath: `${url?.pathname ?? "/"}${url?.search ?? ""}`,
-      setCookie: true,
-    };
+  const setCookie = tokensEqual(queryToken, target.token);
+  if (
+    !setCookie &&
+    !tokensEqual(readPortalCookie(req.headers.cookie, target.listenPort), target.token)
+  ) {
+    return { kind: "unauthorized" };
   }
-  if (tokensEqual(readPortalCookie(req.headers.cookie, target.listenPort), target.token)) {
-    url?.searchParams.delete(PORTAL_AUTH_NAME);
-    return {
-      kind: "authorized",
-      requestPath: `${url?.pathname ?? "/"}${url?.search ?? ""}`,
-      setCookie: false,
-    };
-  }
-  return { kind: "unauthorized" };
+  url?.searchParams.delete(PORTAL_AUTH_NAME);
+  return {
+    kind: "authorized",
+    requestPath: `${url?.pathname ?? "/"}${url?.search ?? ""}`,
+    setCookie,
+  };
 }
 
 function portalCookie(target: PortalProxyTarget, tls: boolean): string {
-  return `${portalAuthCookieName(target.listenPort)}=${target.token}; HttpOnly; SameSite=Lax; Path=/${tls ? "; Secure" : ""}`;
+  const sameSite = target.partitionedCookies ? "None; Partitioned" : "Lax";
+  return `${portalAuthCookieName(target.listenPort)}=${target.token}; HttpOnly; SameSite=${sameSite}; Path=/${tls ? "; Secure" : ""}`;
 }
 
 function setProxyResponseHeader(
   res: ServerResponse,
   name: string,
   value: string | string[] | number,
-  cookieNamespace: string,
+  target: PortalProxyTarget,
 ): void {
   if (name !== "set-cookie") {
     res.setHeader(name, value);
@@ -175,7 +190,7 @@ function setProxyResponseHeader(
     existing === undefined ? [] : Array.isArray(existing) ? existing : [existing];
   const targetCookies = Array.isArray(value) ? value : [String(value)];
   const rewrittenCookies = targetCookies.flatMap((cookie) => {
-    const rewritten = rewriteTargetCookie(cookie, cookieNamespace);
+    const rewritten = rewriteTargetCookie(cookie, target);
     return rewritten ? [rewritten] : [];
   });
   const cookies = [...existingCookies.map(String), ...rewrittenCookies];
@@ -247,6 +262,18 @@ function proxyHeaders(headers: IncomingHttpHeaders, cookieNamespace?: string): O
     ) {
       continue;
     }
+    // Ingress identity and caller-supplied forwarding metadata do not belong
+    // to an agent-run app. The portal supplies its own forwarding facts.
+    if (
+      cookieNamespace !== undefined &&
+      (normalized === "forwarded" ||
+        normalized === "x-real-ip" ||
+        normalized.startsWith("x-forwarded-") ||
+        normalized.startsWith("tailscale-") ||
+        normalized.startsWith("cf-access-"))
+    ) {
+      continue;
+    }
     if (normalized === "cookie" && cookieNamespace !== undefined) {
       const cookie = readTargetCookies(
         Array.isArray(value) ? value.join("; ") : value,
@@ -267,6 +294,60 @@ function proxyHeaders(headers: IncomingHttpHeaders, cookieNamespace?: string): O
   return result;
 }
 
+function targetRequestHeaders(
+  req: IncomingMessage,
+  target: PortalProxyTarget,
+  tls: boolean,
+): OutgoingHttpHeaders {
+  const headers = proxyHeaders(req.headers, target.cookieNamespace);
+  const publicUrl = target.publicOrigin ? new URL(target.publicOrigin) : undefined;
+  const targetPort = target.target.kind === "local" ? target.target.port : target.target.remotePort;
+  headers.host = `localhost:${targetPort}`;
+  headers["x-forwarded-for"] = req.socket.remoteAddress ?? "";
+  headers["x-forwarded-proto"] = tls ? "https" : "http";
+  const publicHost = publicUrl?.host ?? req.headers.host;
+  if (publicHost) {
+    headers["x-forwarded-host"] = publicHost;
+  }
+  return headers;
+}
+
+function portalRedirect(
+  location: string,
+  req: IncomingMessage,
+  target: PortalProxyTarget,
+  tls: boolean,
+): string {
+  // Translate only the app's absolute loopback redirects. Relative navigation
+  // and intentionally external redirects retain their semantics.
+  if (!/^https?:\/\//iu.test(location) && !location.startsWith("//")) {
+    return location;
+  }
+  const origin = target.publicOrigin ?? `${tls ? "https" : "http"}://${req.headers.host}`;
+  try {
+    const destination = new URL(location, origin);
+    const targetPort =
+      target.target.kind === "local" ? target.target.port : target.target.remotePort;
+    const port = Number(destination.port || (destination.protocol === "https:" ? 443 : 80));
+    if (
+      !["localhost", "127.0.0.1", "[::1]"].includes(destination.hostname) ||
+      port !== targetPort ||
+      destination.username ||
+      destination.password
+    ) {
+      return location;
+    }
+    const published = new URL(origin);
+    destination.protocol = published.protocol;
+    destination.host = published.host;
+    // The host setter preserves an existing port when the new host omits it.
+    destination.port = published.port;
+    return destination.href;
+  } catch {
+    return location;
+  }
+}
+
 /** Proxies one authorized portal request to its local or worker target. */
 export function handlePortalProxyRequest(params: {
   req: IncomingMessage;
@@ -284,15 +365,8 @@ export function handlePortalProxyRequest(params: {
     res.setHeader("Set-Cookie", portalCookie(target, tls));
   }
 
-  const headers = proxyHeaders(req.headers, target.cookieNamespace);
-  const originalHost = req.headers.host;
+  const headers = targetRequestHeaders(req, target, tls);
   const targetPort = target.target.kind === "local" ? target.target.port : target.target.remotePort;
-  headers.host = `localhost:${targetPort}`;
-  headers["x-forwarded-for"] = req.socket.remoteAddress ?? "";
-  headers["x-forwarded-proto"] = tls ? "https" : "http";
-  if (originalHost) {
-    headers["x-forwarded-host"] = originalHost;
-  }
   void connectPortalTarget(target.target).then(
     (targetSocket) => {
       if (req.aborted || res.destroyed) {
@@ -310,7 +384,11 @@ export function handlePortalProxyRequest(params: {
       proxyReq.once("response", (proxyRes) => {
         for (const [name, value] of Object.entries(proxyHeaders(proxyRes.headers))) {
           if (value !== undefined) {
-            setProxyResponseHeader(res, name, value, target.cookieNamespace);
+            const forwarded =
+              name === "location" && typeof value === "string"
+                ? portalRedirect(value, req, target, tls)
+                : value;
+            setProxyResponseHeader(res, name, forwarded, target);
           }
         }
         // Overwrite, never default: a target answering with `unsafe-url` would otherwise
@@ -349,40 +427,23 @@ export function handlePortalProxyRequest(params: {
 
 function websocketHeaders(
   req: IncomingMessage,
-  targetPort: number,
-  cookieNamespace: string,
+  target: PortalProxyTarget,
+  tls: boolean,
   requestPath: string,
 ): string {
   const lines = [`${req.method ?? "GET"} ${requestPath} HTTP/1.1`];
-  for (const [name, value] of Object.entries(req.headers)) {
-    const normalized = name.toLowerCase();
-    if (
-      value === undefined ||
-      normalized === "host" ||
-      (HOP_BY_HOP_HEADERS.has(normalized) &&
-        normalized !== "connection" &&
-        normalized !== "upgrade")
-    ) {
-      continue;
-    }
-    if (normalized === "cookie") {
-      const cookie = readTargetCookies(
-        Array.isArray(value) ? value.join("; ") : value,
-        cookieNamespace,
-      );
-      if (cookie) {
-        lines.push(`cookie: ${cookie}`);
-      }
-      continue;
-    }
-    if (normalized === "referer" && String(value).includes(`${PORTAL_AUTH_NAME}=`)) {
+  const headers = targetRequestHeaders(req, target, tls);
+  headers.connection = "Upgrade";
+  headers.upgrade = req.headers.upgrade;
+  for (const [name, value] of Object.entries(headers)) {
+    if (value === undefined) {
       continue;
     }
     for (const item of Array.isArray(value) ? value : [value]) {
-      lines.push(`${normalized}: ${item}`);
+      lines.push(`${name}: ${item}`);
     }
   }
-  lines.push(`host: localhost:${targetPort}`, "", "");
+  lines.push("", "");
   return lines.join("\r\n");
 }
 
@@ -405,7 +466,7 @@ function respondUpgradeWaiting(socket: Duplex, targetPort: number): void {
 function forwardWebSocketResponse(
   targetSocket: Duplex,
   browserSocket: Duplex,
-  cookieNamespace: string,
+  target: PortalProxyTarget,
   onResponse: () => void,
 ): void {
   let pending = Buffer.alloc(0);
@@ -427,7 +488,7 @@ function forwardWebSocketResponse(
       if (separator <= 0 || line.slice(0, separator).trim().toLowerCase() !== "set-cookie") {
         return [line];
       }
-      const rewritten = rewriteTargetCookie(line.slice(separator + 1).trimStart(), cookieNamespace);
+      const rewritten = rewriteTargetCookie(line.slice(separator + 1).trimStart(), target);
       return rewritten ? [`${line.slice(0, separator)}: ${rewritten}`] : [];
     });
     onResponse();
@@ -448,8 +509,9 @@ export function handlePortalProxyUpgrade(params: {
   head: Buffer;
   target: PortalProxyTarget;
   upgradedSockets: Set<Duplex>;
+  tls: boolean;
 }): void {
-  const { req, socket, head, target, upgradedSockets } = params;
+  const { req, socket, head, target, upgradedSockets, tls } = params;
   // Node releases socket errors on upgrade; own them before replies or worker attachment.
   socket.once("error", () => socket.destroy());
   const authorization = authorizePortalRequest(req, target);
@@ -485,12 +547,10 @@ export function handlePortalProxyUpgrade(params: {
     targetSocket.once("end", closeUpgrade);
     targetSocket.once("error", closeUpgrade);
     const spliceUpgrade = () => {
-      forwardWebSocketResponse(targetSocket, socket, target.cookieNamespace, () => {
+      forwardWebSocketResponse(targetSocket, socket, target, () => {
         responseStarted = true;
       });
-      targetSocket.write(
-        websocketHeaders(req, targetPort, target.cookieNamespace, authorization.requestPath),
-      );
+      targetSocket.write(websocketHeaders(req, target, tls, authorization.requestPath));
       if (head.length > 0) {
         targetSocket.write(head);
       }

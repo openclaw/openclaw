@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements channel react action behavior.
 export { readStringOrNumberParam, readStringParam } from "openclaw/plugin-sdk/channel-actions";
 export type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 

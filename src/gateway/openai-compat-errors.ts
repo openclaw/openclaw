@@ -1,7 +1,8 @@
-import { describeFailoverError, resolveFailoverStatus } from "../agents/failover-error.js";
 // OpenAI-compatible error helpers.
 // Converts OpenClaw failover/sampling errors to OpenAI-style HTTP responses.
+import { describeFailoverError, resolveFailoverStatus } from "../agents/failover-error.js";
 import type { FailoverReason } from "../agents/failover/signal.js";
+import { ToolAuthorizationError } from "../agents/tool-input-error.js";
 
 type OpenAiCompatError = {
   status: number;
@@ -60,6 +61,9 @@ function messageForReason(params: {
 
 /** Converts a provider failover error into an OpenAI-compatible error envelope. */
 export function resolveOpenAiCompatError(err: unknown): OpenAiCompatError | undefined {
+  if (err instanceof ToolAuthorizationError) {
+    return { status: 403, error: { message: err.message, type: "permission_error" } };
+  }
   const described = describeFailoverError(err);
   const reason = described.reason;
   if (!reason) {
@@ -85,53 +89,34 @@ export function resolveOpenAiCompatError(err: unknown): OpenAiCompatError | unde
   };
 }
 
-/** Validates OpenAI-compatible sampling parameters before provider dispatch. */
+/** Validates sampling ranges after the HTTP request schema admits numeric fields. */
 export function validateOpenAiSamplingParams(params: {
-  temperature?: unknown;
-  topP?: unknown;
-  frequencyPenalty?: unknown;
-  presencePenalty?: unknown;
-  seed?: unknown;
+  temperature?: number | null;
+  topP?: number | null;
+  frequencyPenalty?: number | null;
+  presencePenalty?: number | null;
+  seed?: number | null;
 }): string | undefined {
-  if (params.temperature != null) {
-    if (typeof params.temperature !== "number" || !Number.isFinite(params.temperature)) {
-      return "`temperature` must be a finite number.";
-    }
-    if (params.temperature < 0 || params.temperature > 2) {
-      return "`temperature` must be between 0 and 2.";
-    }
+  if (params.temperature != null && (params.temperature < 0 || params.temperature > 2)) {
+    return "`temperature` must be between 0 and 2.";
   }
-  if (params.topP != null) {
-    if (typeof params.topP !== "number" || !Number.isFinite(params.topP)) {
-      return "`top_p` must be a finite number.";
-    }
-    if (params.topP < 0 || params.topP > 1) {
-      return "`top_p` must be between 0 and 1.";
-    }
+  if (params.topP != null && (params.topP < 0 || params.topP > 1)) {
+    return "`top_p` must be between 0 and 1.";
   }
-  if (params.frequencyPenalty != null) {
-    if (typeof params.frequencyPenalty !== "number" || !Number.isFinite(params.frequencyPenalty)) {
-      return "`frequency_penalty` must be a finite number.";
-    }
-    if (params.frequencyPenalty < -2 || params.frequencyPenalty > 2) {
-      return "`frequency_penalty` must be between -2.0 and 2.0.";
-    }
+  if (
+    params.frequencyPenalty != null &&
+    (params.frequencyPenalty < -2 || params.frequencyPenalty > 2)
+  ) {
+    return "`frequency_penalty` must be between -2.0 and 2.0.";
   }
-  if (params.presencePenalty != null) {
-    if (typeof params.presencePenalty !== "number" || !Number.isFinite(params.presencePenalty)) {
-      return "`presence_penalty` must be a finite number.";
-    }
-    if (params.presencePenalty < -2 || params.presencePenalty > 2) {
-      return "`presence_penalty` must be between -2.0 and 2.0.";
-    }
+  if (
+    params.presencePenalty != null &&
+    (params.presencePenalty < -2 || params.presencePenalty > 2)
+  ) {
+    return "`presence_penalty` must be between -2.0 and 2.0.";
   }
-  if (params.seed != null) {
-    if (typeof params.seed !== "number" || !Number.isFinite(params.seed)) {
-      return "`seed` must be a finite number.";
-    }
-    if (!Number.isInteger(params.seed)) {
-      return "`seed` must be an integer.";
-    }
+  if (params.seed != null && !Number.isInteger(params.seed)) {
+    return "`seed` must be an integer.";
   }
   return undefined;
 }

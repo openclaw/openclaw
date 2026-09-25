@@ -164,7 +164,7 @@ export function readTaskRegistryStatusSnapshot(
         cronLookups.set(jobId, lookup);
       }
       lookup.taskIds.set(task.taskId, undefined);
-      if (task.runId?.trim()) {
+      if (task.runId) {
         lookup.runIds.set(task.runId, undefined);
       }
     }
@@ -176,7 +176,8 @@ export function readTaskRegistryStatusSnapshot(
       }
       const lookup =
         row.runtime === "cron" && row.source_id ? cronLookups.get(row.source_id) : undefined;
-      if (!lookup || (!lookup.taskIds.has(row.task_id) && !lookup.runIds.has(row.run_id ?? ""))) {
+      const runId = row.run_id;
+      if (!lookup || (!lookup.taskIds.has(row.task_id) && !lookup.runIds.has(runId ?? ""))) {
         continue;
       }
       const match: CronRecoveryRow = {
@@ -193,8 +194,8 @@ export function readTaskRegistryStatusSnapshot(
       if (lookup.taskIds.has(row.task_id)) {
         lookup.taskIds.set(row.task_id, earlierCronRow(lookup.taskIds.get(row.task_id), match));
       }
-      if (row.run_id && lookup.runIds.has(row.run_id)) {
-        lookup.runIds.set(row.run_id, earlierCronRow(lookup.runIds.get(row.run_id), match));
+      if (runId && lookup.runIds.has(runId)) {
+        lookup.runIds.set(runId, earlierCronRow(lookup.runIds.get(runId), match));
       }
     }
     for (const task of result.candidates) {

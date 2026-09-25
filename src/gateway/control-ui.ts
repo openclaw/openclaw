@@ -2,11 +2,14 @@ import { createHmac, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
+import { readFileWindowFully, safeFileURLToPath } from "@openclaw/fs-safe/advanced";
+import { isWithinDir } from "@openclaw/fs-safe/path";
 import { detectMime, kindFromMime } from "@openclaw/media-core/mime";
 import {
   asDateTimestampMs,
   resolveTimestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
+import { isControlUiFocusPath } from "@openclaw/session-url-contract";
 import { startsWithSvgRootElement } from "../../packages/gateway-protocol/src/svg-image.js";
 import {
   type AgentAvatarResolution,
@@ -20,10 +23,7 @@ import {
   readFileDescriptorBounded,
 } from "../infra/boundary-file-read.js";
 import { resolveDevInstallGitBranch } from "../infra/dev-install-branch.js";
-import { readFileWindowFully } from "../infra/file-read.js";
 import { openLocalFileSafely, FsSafeError } from "../infra/fs-safe.js";
-import { safeFileURLToPath } from "../infra/local-file-access.js";
-import { isWithinDir } from "../infra/path-safety.js";
 import { assertLocalMediaAllowed, LocalMediaAccessError } from "../media/local-media-access.js";
 import {
   probePlaybackMediaFileDescriptor,
@@ -51,15 +51,17 @@ import {
   resolveGatewayAssistantAvatar,
 } from "./assistant-avatar.js";
 import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
-import { buildAssistantMediaContentDisposition } from "./assistant-media-content-disposition.js";
+import {
+  buildAssistantMediaContentDisposition,
+  resolveAssistantMediaFilename,
+} from "./assistant-media-content-disposition.js";
 import {
   resolveAssistantMediaPolicy,
   type AssistantMediaSession,
   type AssistantMediaReader,
 } from "./assistant-media-policy.js";
-import type { AuthRateLimiter } from "./auth-rate-limit.js";
-import type { ResolvedGatewayAuth } from "./auth.js";
 import type { ControlUiAssetRetention } from "./control-ui-asset-retention.js";
+import { resolveControlUiBootstrapPresentation } from "./control-ui-bootstrap-presentation.js";
 import {
   buildControlUiRootAssetPath,
   CONTROL_UI_BASE_PATH_ATTRIBUTE,
@@ -75,18 +77,18 @@ import {
   type ControlUiEnvironment,
   type ControlUiPluginFrameGrantAck,
 } from "./control-ui-contract.js";
-import { buildControlUiCspHeader, computeInlineScriptHashes } from "./control-ui-csp.js";
+import {
+  applyControlUiSecurityHeaders,
+  buildControlUiCspHeader,
+  computeInlineScriptHashes,
+} from "./control-ui-csp.js";
 import {
   isReadHttpMethod,
   respondNotFound as respondControlUiNotFound,
   respondPlainText,
 } from "./control-ui-http-utils.js";
 import { resolveAssistantMediaRoutePath } from "./control-ui-resource-routes.js";
-import {
-  classifyControlUiRequest,
-  isControlUiApprovalDocumentPath,
-  isControlUiFocusDocumentPath,
-} from "./control-ui-routing.js";
+import { classifyControlUiRequest, isControlUiApprovalDocumentPath } from "./control-ui-routing.js";
 import { isControlUiSharePath, serveControlUiShareDocument } from "./control-ui-share.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import {
@@ -111,6 +113,7 @@ import {
   applyHttpImageContentSecurityPolicy,
   sendHttpImageResponse,
 } from "./http-image-response.js";
+import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
 import { authorizeControlUiReadRequestOrReply } from "./http-utils.js";
 import { isTerminalConfigEnabled } from "./terminal/enabled.js";
 
@@ -124,16 +127,12 @@ const loadAvatarThumbnail = createLazyRuntimeModule(
   () => import("./assistant-avatar-thumbnail.runtime.js"),
 );
 
-type ControlUiRequestOptions = {
+type ControlUiRequestOptions = Partial<GatewayHttpRequestAuthOptions> & {
   basePath?: string;
   config?: OpenClawConfig;
   terminalEnabled?: boolean;
   agentId?: string;
   root?: ControlUiRootState;
-  auth?: ResolvedGatewayAuth;
-  trustedProxies?: string[];
-  allowRealIpFallback?: boolean;
-  rateLimiter?: AuthRateLimiter;
 };
 
 export type ControlUiRootState =
@@ -200,19 +199,6 @@ function controlUiAvatarResolutionMeta(resolved: AgentAvatarResolution | null): 
   };
 }
 
-function applyControlUiSecurityHeaders(res: ServerResponse) {
-  res.setHeader("X-Frame-Options", "DENY");
-  res.setHeader("Content-Security-Policy", buildControlUiCspHeader());
-  res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("Referrer-Policy", "no-referrer");
-  // Browser Talk is owned by this same-origin Control UI document. Keep camera
-  // access here; the Gateway's default policy continues to deny it elsewhere.
-  res.setHeader(
-    "Permissions-Policy",
-    "camera=(self), microphone=*, geolocation=*, clipboard-write=*",
-  );
-}
-
 function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.statusCode = status;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -220,22 +206,16 @@ function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.end(JSON.stringify(body));
 }
 
-function respondControlUiAssetsUnavailable(
-  res: ServerResponse,
-  options?: {
-    configuredRootPath?: string;
-    failed?: boolean;
-    preparing?: boolean;
-  },
-) {
-  const message = options?.preparing
-    ? "Control UI assets are being prepared. Try again shortly."
-    : options?.failed
-      ? "Control UI assets could not be prepared. Check the Gateway logs or run `openclaw doctor --fix`."
-      : options?.configuredRootPath
-        ? `Control UI assets not found at ${options.configuredRootPath}. Build them with \`pnpm ui:build\` (auto-installs UI deps), or update gateway.controlUi.root.`
-        : CONTROL_UI_ASSETS_MISSING_MESSAGE;
-  if (options?.preparing) {
+function respondControlUiAssetsUnavailable(res: ServerResponse, root?: ControlUiRootState) {
+  const message =
+    root?.kind === "preparing"
+      ? "Control UI assets are being prepared. Try again shortly."
+      : root?.kind === "failed"
+        ? "Control UI assets could not be prepared. Check the Gateway logs or run `openclaw doctor --fix`."
+        : root?.kind === "invalid" && root.path
+          ? `Control UI assets not found at ${root.path}. Build them with \`pnpm ui:build\` (auto-installs UI deps), or update gateway.controlUi.root.`
+          : CONTROL_UI_ASSETS_MISSING_MESSAGE;
+  if (root?.kind === "preparing") {
     res.setHeader("Cache-Control", "no-store");
     res.setHeader("Retry-After", "1");
   }
@@ -488,39 +468,36 @@ async function resolveAssistantMediaAvailability(
 ): Promise<AssistantMediaAvailability & { mediaTicket?: string; mediaTicketExpiresAt?: string }> {
   try {
     const { opened, mimeType, file } = await openAssistantMedia(source, policy, allowance);
-    try {
-      const mediaKind = kindFromMime(mimeType);
-      const playbackProbe =
-        mediaKind === "audio" || mediaKind === "video"
-          ? await probePlaybackMediaFileDescriptor(opened.handle.fd, mediaKind)
-          : null;
-      const playback =
-        mimeType && (mediaKind === "audio" || mediaKind === "video")
-          ? await resolvePlaybackModeForSource({
-              sourcePath: opened.realPath,
-              sourceStat: opened.stat,
-              mimeType,
-              kind: mediaKind,
-              probe: playbackProbe,
-            })
-          : undefined;
-      return {
-        available: true,
-        ...(mimeType ? { mimeType } : {}),
-        ...(playback ? { playback } : {}),
-        sizeBytes: opened.stat.size,
-        ...toMediaProbeResult(playbackProbe),
-        ...createAssistantMediaTicket({
-          source,
-          agentId,
-          session: policy.session,
-          reader: policy.reader,
-          ...(file ? { file } : {}),
-        }),
-      };
-    } finally {
-      await opened.handle.close().catch(() => {});
-    }
+    await using mediaOwner = opened;
+    const mediaKind = kindFromMime(mimeType);
+    const playbackProbe =
+      mediaKind === "audio" || mediaKind === "video"
+        ? await probePlaybackMediaFileDescriptor(mediaOwner.handle.fd, mediaKind)
+        : null;
+    const playback =
+      mimeType && (mediaKind === "audio" || mediaKind === "video")
+        ? await resolvePlaybackModeForSource({
+            sourcePath: opened.realPath,
+            sourceStat: opened.stat,
+            mimeType,
+            kind: mediaKind,
+            probe: playbackProbe,
+          })
+        : undefined;
+    return {
+      available: true,
+      ...(mimeType ? { mimeType } : {}),
+      ...(playback ? { playback } : {}),
+      sizeBytes: opened.stat.size,
+      ...toMediaProbeResult(playbackProbe),
+      ...createAssistantMediaTicket({
+        source,
+        agentId,
+        session: policy.session,
+        reader: policy.reader,
+        ...(file ? { file } : {}),
+      }),
+    };
   } catch (error) {
     return classifyAssistantMediaError(error);
   }
@@ -529,14 +506,10 @@ async function resolveAssistantMediaAvailability(
 export async function handleControlUiAssistantMediaRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  opts?: {
+  opts?: Partial<GatewayHttpRequestAuthOptions> & {
     basePath?: string;
     config?: OpenClawConfig;
     agentId?: string;
-    auth?: ResolvedGatewayAuth;
-    trustedProxies?: string[];
-    allowRealIpFallback?: boolean;
-    rateLimiter?: AuthRateLimiter;
   },
 ): Promise<boolean> {
   const urlRaw = req.url;
@@ -571,12 +544,10 @@ export async function handleControlUiAssistantMediaRequest(
   const requestAuth =
     isMetaRequest || !ticketCandidate
       ? await authorizeControlUiReadRequestOrReply({
+          ...opts,
           req,
           res,
-          auth: opts?.auth,
-          trustedProxies: opts?.trustedProxies,
-          allowRealIpFallback: opts?.allowRealIpFallback,
-          rateLimiter: opts?.rateLimiter,
+          cfg: opts?.cfg ?? opts?.config,
           allowQueryToken: !explicitAllow,
         })
       : undefined;
@@ -624,6 +595,7 @@ export async function handleControlUiAssistantMediaRequest(
     // A global access epoch changes on ordinary session activity, so it cannot revoke tickets.
     const current = resolveAssistantMediaPolicy({ ...policyParams, reader: policy.reader });
     if (
+      requestAuth?.hasCurrentClientAuthority?.() === false ||
       !current ||
       current.session?.sessionKey !== policy.session?.sessionKey ||
       current.session?.agentId !== policy.session?.agentId ||
@@ -666,16 +638,17 @@ export async function handleControlUiAssistantMediaRequest(
   let byteStream: ReturnType<typeof createGatewayByteStream> | undefined;
   try {
     const media = await openAssistantMedia(source, policy, allowance);
-    const resolvedReference = media.reference;
-    const localPath = resolvedReference.path;
     let opened = media.opened;
     byteStream = createGatewayByteStream(res, opened.handle, () => respondControlUiNotFound(res));
     const mime = media.mimeType;
     let contentType = mime ?? "application/octet-stream";
     let filename =
-      resolvedReference.kind === "inbound"
-        ? extractOriginalFilename(localPath)
-        : path.basename(localPath);
+      media.reference.kind === "inbound"
+        ? resolveAssistantMediaFilename(
+            extractOriginalFilename(media.reference.path),
+            url.searchParams.get("filename"),
+          )
+        : path.basename(media.reference.path);
     const mediaKind = kindFromMime(contentType);
     if (
       url.searchParams.get("playback") === "1" &&
@@ -735,13 +708,9 @@ export async function handleControlUiAssistantMediaRequest(
 export async function handleControlUiAvatarRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  opts: {
+  opts: Partial<GatewayHttpRequestAuthOptions> & {
     basePath?: string;
     config: OpenClawConfig;
-    auth?: ResolvedGatewayAuth;
-    trustedProxies?: string[];
-    allowRealIpFallback?: boolean;
-    rateLimiter?: AuthRateLimiter;
   },
 ): Promise<boolean> {
   const urlRaw = req.url;
@@ -767,18 +736,16 @@ export async function handleControlUiAvatarRequest(
     return true;
   }
 
-  if (
-    !(await authorizeControlUiReadRequestOrReply({
-      req,
-      res,
-      auth: opts.auth,
-      trustedProxies: opts.trustedProxies,
-      allowRealIpFallback: opts.allowRealIpFallback,
-      rateLimiter: opts.rateLimiter,
-    }))
-  ) {
+  const requestAuth = await authorizeControlUiReadRequestOrReply({
+    ...opts,
+    req,
+    res,
+    cfg: opts.cfg ?? opts.config,
+  });
+  if (!requestAuth) {
     return true;
   }
+  requestAuth.assertCurrent();
 
   const identity = resolveAssistantIdentity({ cfg: opts.config, agentId });
   const projection = openGatewayAssistantAvatar({ cfg: opts.config, identity });
@@ -802,23 +769,20 @@ export async function handleControlUiAvatarRequest(
       const source = projection.openedFile
         ? { file: projection.openedFile }
         : { dataUrl: identity.avatar };
-      try {
-        const image = await (await loadAvatarThumbnail()).readGatewayAvatarThumbnail(source);
-        // Browser HTTP caches must not reuse authenticated bytes after a credential switch.
-        res.setHeader("vary", "Authorization, Cookie");
-        sendHttpImageResponse({
-          req,
-          res,
-          image,
-          filename: "avatar",
-          cacheControl:
-            url.searchParams.get("v") === gatewayAvatarImageRevision(source)
-              ? "private, max-age=31536000, immutable"
-              : "private, no-cache",
-        });
-      } catch {
-        respondControlUiNotFound(res);
-      }
+      const image = await (await loadAvatarThumbnail()).readGatewayAvatarThumbnail(source);
+      requestAuth.assertCurrent();
+      // Browser HTTP caches must not reuse authenticated bytes after a credential switch.
+      res.setHeader("vary", "Authorization, Cookie");
+      sendHttpImageResponse({
+        req,
+        res,
+        image,
+        filename: "avatar",
+        cacheControl:
+          url.searchParams.get("v") === gatewayAvatarImageRevision(source)
+            ? "private, max-age=31536000, immutable"
+            : "private, no-cache",
+      });
       return true;
     }
 
@@ -827,23 +791,28 @@ export async function handleControlUiAvatarRequest(
       return true;
     }
 
-    try {
-      res.setHeader("Content-Type", resolveAvatarMime(projection.openedFile.path));
-      res.setHeader("Cache-Control", "no-cache");
-      if (req.method === "HEAD") {
-        res.statusCode = 200;
-        // The pinned descriptor exposes GET's exact byte count without reading the avatar.
-        res.setHeader("Content-Length", String(projection.openedFile.stat.size));
-        res.end();
-        return true;
-      }
-      const body = await readFileDescriptorBounded(projection.openedFile.fd, AVATAR_MAX_BYTES);
-      res.end(body);
-      return true;
-    } catch {
-      respondControlUiNotFound(res);
+    const body =
+      req.method === "HEAD"
+        ? undefined
+        : await readFileDescriptorBounded(projection.openedFile.fd, AVATAR_MAX_BYTES);
+    requestAuth.assertCurrent();
+    res.setHeader("Content-Type", resolveAvatarMime(projection.openedFile.path));
+    res.setHeader("Cache-Control", "no-cache");
+    if (req.method === "HEAD") {
+      res.statusCode = 200;
+      // The pinned descriptor exposes GET's exact byte count without reading the avatar.
+      res.setHeader("Content-Length", String(projection.openedFile.stat.size));
+      res.end();
       return true;
     }
+    res.end(body);
+    return true;
+  } catch {
+    if (!res.writableEnded && !res.destroyed) {
+      requestAuth.assertCurrent();
+      respondControlUiNotFound(res);
+    }
+    return true;
   } finally {
     if (projection.openedFile) {
       fs.closeSync(projection.openedFile.fd);
@@ -949,61 +918,23 @@ function isSafeRelativePath(relPath: string) {
   return true;
 }
 
-// Path served by the gateway under the default Control UI namespace when no
-// `gateway.controlUi.basePath` is configured. The SPA is mounted at
-// `/__openclaw__/`, so a browser that opens the default entry infers
-// `/__openclaw__` as its base path (see `inferBasePathFromPathname`) and fetches
-// `/__openclaw__/control-ui-config.json`. Accept that namespaced alias so the
-// default entry resolves its bootstrap config instead of 404ing.
+// The default SPA entry infers /__openclaw__ as its base path before bootstrap.
 const CONTROL_UI_DEFAULT_NAMESPACE_BOOTSTRAP_CONFIG_PATH = `${CONTROL_UI_NAMESPACE_PREFIX.replace(
   /\/$/,
   "",
 )}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`;
 
-// Single-underscore `/__openclaw` prefix used by the pre-base-path-relative
-// bootstrap endpoint. Before #66946 made the config path base-path-relative,
-// `CONTROL_UI_BOOTSTRAP_CONFIG_PATH` was hard-coded to
-// `/__openclaw/control-ui-config.json`, so current main and the v2026.6.1
-// release serve and document that exact path under an empty base path.
+// v2026.6.1 clients use this pre-#66946 bootstrap suffix, including under a base path.
 const LEGACY_CONTROL_UI_NAMESPACE_PREFIX = "/__openclaw";
-
-// The old documented no-base-path bootstrap endpoint
-// (`/__openclaw/control-ui-config.json`, single underscore). It is derived from
-// the legacy `/__openclaw` namespace joined with the canonical config constant
-// so it tracks any rename of the config filename. Kept as an empty-base-path
-// compatibility alias so older bundles and clients that fetch the previously
-// documented endpoint keep receiving config after upgrading instead of 404ing.
 const LEGACY_BOOTSTRAP_CONFIG_PATH = `${LEGACY_CONTROL_UI_NAMESPACE_PREFIX}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`;
 
-/**
- * Whether `pathname` should be served the Control UI bootstrap config payload.
- *
- * The canonical endpoint is the configured base path joined with the shared
- * bootstrap constant (or the bare constant when no base path is configured).
- * For every base path (configured or empty) we additionally accept the legacy
- * single-underscore suffix `${basePath}/__openclaw/control-ui-config.json` that
- * current main and v2026.6.1 serve and document, so older bundles and clients
- * that still request the pre-#66946 endpoint keep receiving config after an
- * upgrade instead of 404ing. When no base path is configured we further accept
- * the default-namespace alias `/__openclaw__/control-ui-config.json`, which is
- * what the default `/__openclaw__/` entry requests after inferring its base path
- * from the URL. All compatibility endpoints are preserved; no path is removed.
- */
 function matchesControlUiBootstrapConfigPath(pathname: string, basePath: string): boolean {
-  // Canonical and legacy suffixes apply under both an empty and a configured
-  // base path. `LEGACY_BOOTSTRAP_CONFIG_PATH` already starts with the legacy
-  // `/__openclaw` namespace, so joining it with the base path yields
-  // `${basePath}/__openclaw/control-ui-config.json` (or the bare legacy path
-  // when no base path is configured).
   if (
     pathname === `${basePath}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}` ||
     pathname === `${basePath}${LEGACY_BOOTSTRAP_CONFIG_PATH}`
   ) {
     return true;
   }
-  // The default `/__openclaw__/` namespace alias only applies when no base path
-  // is configured; with a configured base path the canonical endpoint already
-  // lives under that base path and this inferred alias does not apply.
   return basePath === "" && pathname === CONTROL_UI_DEFAULT_NAMESPACE_BOOTSTRAP_CONFIG_PATH;
 }
 
@@ -1055,21 +986,19 @@ export async function handleControlUiHttpRequest(
 
   if (matchesControlUiBootstrapConfigPath(pathname, basePath)) {
     let pluginFrameGrants: readonly ControlUiPluginFrameGrantAck[] = [];
-    if (
-      !(await authorizeControlUiReadRequestOrReply({
-        req,
-        res,
-        auth: opts?.auth,
-        trustedProxies: opts?.trustedProxies,
-        allowRealIpFallback: opts?.allowRealIpFallback,
-        rateLimiter: opts?.rateLimiter,
-        onPluginFrameGrants: (grants) => {
-          pluginFrameGrants = grants;
-        },
-      }))
-    ) {
+    const requestAuth = await authorizeControlUiReadRequestOrReply({
+      ...opts,
+      req,
+      res,
+      cfg: opts?.cfg ?? opts?.config,
+      onPluginFrameGrants: (grants) => {
+        pluginFrameGrants = grants;
+      },
+    });
+    if (!requestAuth) {
       return true;
     }
+    requestAuth.assertCurrent();
     if (req.method === "HEAD") {
       res.statusCode = 200;
       res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -1092,6 +1021,8 @@ export async function handleControlUiHttpRequest(
           })
         : { avatar: identity.avatar, resolution: null };
     const avatarMeta = controlUiAvatarResolutionMeta(avatarProjection.resolution);
+    const devGitBranch = (await resolveDevInstallGitBranch()) ?? undefined;
+    requestAuth.assertCurrent();
     sendJson(res, 200, {
       basePath,
       assistantName: identity.name,
@@ -1105,18 +1036,8 @@ export async function handleControlUiHttpRequest(
         config?.gateway?.controlUi?.root === undefined
           ? (resolveRuntimeServiceBuildId() ?? undefined)
           : undefined,
-      devGitBranch: (await resolveDevInstallGitBranch()) ?? undefined,
-      embedSandbox:
-        config?.gateway?.controlUi?.embedSandbox === "trusted"
-          ? "trusted"
-          : config?.gateway?.controlUi?.embedSandbox === "strict"
-            ? "strict"
-            : "scripts",
-      allowExternalEmbedUrls: config?.gateway?.controlUi?.allowExternalEmbedUrls === true,
-      automaticallyFetchFavicons: config?.gateway?.controlUi?.automaticallyFetchFavicons !== false,
-      seamColor: config?.ui?.seamColor,
-      environment: config?.gateway?.controlUi?.environment,
-      communityInvite: config?.gateway?.controlUi?.communityInvite !== false,
+      devGitBranch,
+      ...resolveControlUiBootstrapPresentation(config),
       terminalEnabled,
       cliAgentsEnabled: config?.gateway?.cliAgents?.enabled !== false,
       pluginAssetsRequireAuth: opts?.auth !== undefined && opts.auth.mode !== "none",
@@ -1130,26 +1051,8 @@ export async function handleControlUiHttpRequest(
   }
 
   const rootState = opts?.root;
-  if (rootState?.kind === "invalid") {
-    respondControlUiAssetsUnavailable(res, {
-      configuredRootPath: rootState.path,
-    });
-    return true;
-  }
-  if (rootState?.kind === "preparing") {
-    respondControlUiAssetsUnavailable(res, {
-      preparing: true,
-    });
-    return true;
-  }
-  if (rootState?.kind === "failed") {
-    respondControlUiAssetsUnavailable(res, {
-      failed: true,
-    });
-    return true;
-  }
-  if (!rootState || rootState.kind === "missing") {
-    respondControlUiAssetsUnavailable(res);
+  if (!rootState || (rootState.kind !== "bundled" && rootState.kind !== "resolved")) {
+    respondControlUiAssetsUnavailable(res, rootState);
     return true;
   }
 
@@ -1176,7 +1079,7 @@ export async function handleControlUiHttpRequest(
     basePath && pathname.startsWith(`${basePath}/`) ? pathname.slice(basePath.length) : pathname;
   const standaloneDocument =
     isControlUiApprovalDocumentPath({ basePath, pathname }) ||
-    isControlUiFocusDocumentPath({ basePath, pathname });
+    isControlUiFocusPath(pathname, basePath);
   const rel = (() => {
     if (uiPath === "/share/card.png") {
       return "social-card.png";

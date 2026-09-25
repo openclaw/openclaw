@@ -1,6 +1,5 @@
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
-import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { fetchChildSessionRows } from "../lib/sessions/child-session-data.ts";
@@ -206,7 +205,7 @@ function mergeRefreshedChildSessionRows(
 
 export function scheduleSidebarChildSessions(
   owner: {
-    readonly context: ApplicationContext<RouteId> | undefined;
+    readonly context: ApplicationContext | undefined;
     readonly childSessionScope: object;
     readonly isSessionDataHostConnected: boolean;
     retireStaleChildSessions(revalidating: ReadonlySet<string>): void;

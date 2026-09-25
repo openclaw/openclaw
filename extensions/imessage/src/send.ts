@@ -1,4 +1,3 @@
-// Imessage plugin module implements send behavior.
 import { constants, accessSync } from "node:fs";
 import { basename } from "node:path";
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
@@ -40,6 +39,7 @@ import {
   registerIMessageApprovalReactionTarget,
 } from "./approval-reactions.js";
 import { chatContextFromIMessageTarget, resolveIMessageDirectChatService } from "./chat-context.js";
+import { withIMessageReceiptGuidReader } from "./chat-db.js";
 import { runIMessageCliJsonCommand } from "./cli-output.js";
 import { resolveIMessageChatDbLookupPath } from "./cli-path.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "./client.js";
@@ -56,7 +56,6 @@ import {
 } from "./monitor/sanitize-outbound.js";
 import { withIMessageRemoteFile } from "./remote-file.js";
 import { resolveIMessageRemoteHost } from "./remote-host.js";
-import { withIMessageReceiptGuidReader } from "./send-receipt-db.js";
 import { requestIMessageRpcSend, type IMessageSendHandoff } from "./send-transport.js";
 import {
   formatIMessageChatTarget,

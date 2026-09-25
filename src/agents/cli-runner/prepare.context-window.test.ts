@@ -30,11 +30,11 @@ describe("CLI context-window ownership", () => {
     fixture = createCliRunnerPrepareFixture(prepareCliRunContext);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     resetCliRunnerPrepareTestDeps();
     cliBackendsTesting.resetDepsForTest();
     resetContextWindowCacheForTest();
-    fixture.cleanup();
+    await fixture.cleanup();
   });
 
   it.each([

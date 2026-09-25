@@ -1,10 +1,20 @@
 import { vi } from "vitest";
+import { getTaskRegistryProcessState } from "../../../tasks/task-registry.process-state.js";
 import * as mod from "./subagent-registry.test-helpers.js";
 
 export function createLifecycleWaits(requesterSessionKey: string) {
   const flushAsync = async () => {
-    await Promise.resolve();
-    await Promise.resolve();
+    await vi.dynamicImportSettled();
+    // Fake-time polling does not join native worker commits. Delivery can enqueue
+    // another task mutation after terminal settlement, so drain each accepted tail.
+    for (
+      let pending = getTaskRegistryProcessState().projection.mutationTail;
+      pending;
+      pending = getTaskRegistryProcessState().projection.mutationTail
+    ) {
+      await pending;
+      await vi.dynamicImportSettled();
+    }
   };
 
   const waitForCleanupHandledFalse = async (runId: string) => {
@@ -56,5 +66,29 @@ export function createLifecycleWaits(requesterSessionKey: string) {
     );
   };
 
-  return { waitForCleanupHandledFalse, waitForDeliveredCleanup };
+  const waitForFrozenResult = async (runId: string, matches: (resultText: string) => boolean) => {
+    for (let attempt = 0; attempt < 80; attempt += 1) {
+      const run = mod
+        .listSubagentRunsForRequester(requesterSessionKey)
+        .find((candidate) => candidate.runId === runId);
+      const resultText = run?.completion?.resultText;
+      if (run && typeof resultText === "string" && matches(resultText)) {
+        return run;
+      }
+      await vi.advanceTimersByTimeAsync(1);
+      await flushAsync();
+    }
+    throw new Error(`run ${runId} frozen result did not refresh`);
+  };
+
+  const waitForFrozenResultText = async (runId: string, expectedText: string) =>
+    waitForFrozenResult(runId, (resultText) => resultText === expectedText);
+
+  return {
+    flushAsync,
+    waitForCleanupHandledFalse,
+    waitForDeliveredCleanup,
+    waitForFrozenResult,
+    waitForFrozenResultText,
+  };
 }

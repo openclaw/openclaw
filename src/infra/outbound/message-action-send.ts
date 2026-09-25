@@ -25,6 +25,7 @@ import type { AssistantDeliveryTtsFacts } from "../../llm/types.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { withChannelReadAuthority } from "../../shared/channel-read-authority.js";
+import { dedupeByKey } from "../../shared/dedupe-by-key.js";
 import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
 import { findCodeRegions } from "../../shared/text/code-regions.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
@@ -187,14 +188,7 @@ export async function buildMessagePayload(params: {
       return entry;
     }),
   );
-  const seenMedia = new Set<string>();
-  const preparedMedia = normalizedMedia.filter((entry) => {
-    if (seenMedia.has(entry.url)) {
-      return false;
-    }
-    seenMedia.add(entry.url);
-    return true;
-  });
+  const preparedMedia = dedupeByKey(normalizedMedia, (entry) => entry.url);
   const mergedMediaUrls = preparedMedia.map((entry) => entry.url);
   const mediaAttachments = preparedMedia.map((entry) =>
     Object.assign(
@@ -548,7 +542,8 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
         }),
       });
   if (gatewayPluginAction) {
-    if (projectPluginMessageDeliveryFact(gatewayPluginAction.payload)?.status !== "suppressed") {
+    const deliveryFact = projectPluginMessageDeliveryFact(gatewayPluginAction.payload);
+    if (!deliveryFact || deliveryFact.status === "settled") {
       await commitOutboundSessionRoute();
     }
     return await annotateSourceDelivery(
@@ -618,16 +613,19 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     threadId: resolvedThreadId ?? undefined,
   });
 
-  // Gateway-relayed core sends return no identified platform result locally;
-  // a non-failed, non-suppressed return is their success proof. Failed and
-  // suppressed sends leave the durable route untouched.
-  const coreDeliveryStatus = send.sendResult?.deliveryStatus;
-  if (
-    coreDeliveryStatus !== "failed" &&
-    coreDeliveryStatus !== "suppressed" &&
-    projectPluginMessageDeliveryFact(send.payload)?.status !== "suppressed"
-  ) {
-    await commitOutboundSessionRoute();
+  // Local plugin acceptance commits through onSendAccepted. Gateway-relayed core
+  // sends may return no identified platform result locally; their successful
+  // return still commits the route unless the payload proves non-delivery.
+  if (send.handledBy === "core") {
+    const coreDeliveryStatus = send.sendResult?.deliveryStatus;
+    const deliveryFact = projectPluginMessageDeliveryFact(send.payload);
+    if (
+      coreDeliveryStatus !== "failed" &&
+      coreDeliveryStatus !== "suppressed" &&
+      (!deliveryFact || deliveryFact.status === "settled")
+    ) {
+      await commitOutboundSessionRoute();
+    }
   }
 
   const result: Extract<MessageActionResult, { kind: "send" }> = {

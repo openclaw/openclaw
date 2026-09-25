@@ -105,26 +105,14 @@ export function truncateCodexCatalogPreview(
   return Buffer.from(catalogPreview(value, sanitize) ?? "", "utf8").toString("utf8");
 }
 
-type CodexInteractiveThreadSource =
-  | (typeof CODEX_INTERACTIVE_THREAD_SOURCE_KINDS)[number]
-  | (typeof CODEX_INTERACTIVE_CUSTOM_THREAD_SOURCES)[number];
-
-function normalizeInteractiveThreadSource(
-  source: unknown,
-): CodexInteractiveThreadSource | undefined {
-  if (
-    CODEX_INTERACTIVE_THREAD_SOURCE_KINDS.some((kind) => kind === source) ||
-    CODEX_INTERACTIVE_CUSTOM_THREAD_SOURCES.some((kind) => kind === source)
-  ) {
-    return source as CodexInteractiveThreadSource;
-  }
-  if (
-    isRecord(source) &&
-    CODEX_INTERACTIVE_CUSTOM_THREAD_SOURCES.some((kind) => kind === source.custom)
-  ) {
-    return source.custom as (typeof CODEX_INTERACTIVE_CUSTOM_THREAD_SOURCES)[number];
-  }
-  return undefined;
+function normalizeInteractiveThreadSource(source: unknown) {
+  return (
+    CODEX_INTERACTIVE_THREAD_SOURCE_KINDS.find((kind) => kind === source) ??
+    CODEX_INTERACTIVE_CUSTOM_THREAD_SOURCES.find((kind) => kind === source) ??
+    (isRecord(source)
+      ? CODEX_INTERACTIVE_CUSTOM_THREAD_SOURCES.find((kind) => kind === source.custom)
+      : undefined)
+  );
 }
 
 export function isInteractiveThreadSource(source: unknown): boolean {
@@ -210,20 +198,19 @@ export function toCatalogSession(
   };
 }
 
-export function normalizeLimit(value: unknown, key: string): number {
+export function normalizeLimit(
+  value: unknown,
+  key: string,
+  fallback = DEFAULT_PAGE_LIMIT,
+  max = CODEX_SESSION_CATALOG_MAX_PAGE_LIMIT,
+): number {
   if (value === undefined) {
-    return DEFAULT_PAGE_LIMIT;
+    return fallback;
   }
-  if (
-    !Number.isInteger(value) ||
-    (value as number) < 1 ||
-    (value as number) > CODEX_SESSION_CATALOG_MAX_PAGE_LIMIT
-  ) {
-    throw new CatalogParamsError(
-      `${key} must be an integer from 1 to ${CODEX_SESSION_CATALOG_MAX_PAGE_LIMIT}`,
-    );
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > max) {
+    throw new CatalogParamsError(`${key} must be an integer from 1 to ${max}`);
   }
-  return value as number;
+  return value;
 }
 
 export function readBoundedOptionalString(
@@ -281,7 +268,7 @@ export function readGatewayParams(
   if (value !== undefined && !isRecord(value)) {
     throw new CatalogParamsError("Codex session catalog parameters must be an object");
   }
-  const params = isRecord(value) ? value : {};
+  const params = value ?? {};
   requireOnlyKeys(params, new Set(["search", "limitPerHost", "hostIds", "cursors"]));
   const search = readBoundedOptionalString(params, "search", MAX_SEARCH_LENGTH);
   let hostIds: string[] | undefined;
@@ -302,14 +289,7 @@ export function readGatewayParams(
     }
     cursors = {};
     for (const [hostId, cursor] of entries) {
-      const normalizedHostId = hostId.trim();
-      if (
-        normalizedHostId.length === 0 ||
-        normalizedHostId.length > MAX_HOST_ID_LENGTH ||
-        (!normalizedHostId.startsWith("gateway:") && !normalizedHostId.startsWith("node:"))
-      ) {
-        throw new CatalogParamsError(`invalid Codex session catalog host id: ${hostId}`);
-      }
+      const normalizedHostId = readHostId(hostId);
       if (
         typeof cursor !== "string" ||
         !cursor.trim() ||
@@ -465,6 +445,11 @@ export function parseCatalogPage(
     throw new Error("Codex session catalog returned an invalid page");
   }
   const nextCursor = parseOptionalCatalogString(value.nextCursor, "next cursor", MAX_CURSOR_LENGTH);
+  const sourceHomeId = parseOptionalCatalogString(
+    value.sourceHomeId,
+    "source home id",
+    MAX_SESSION_ID_LENGTH,
+  );
   const backwardsCursor = parseOptionalCatalogString(
     value.backwardsCursor,
     "backwards cursor",
@@ -472,6 +457,10 @@ export function parseCatalogPage(
   );
   return {
     sessions: value.sessions.map((session) => parseCatalogSession(session, options)),
+    ...(sourceHomeId ? { sourceHomeId } : {}),
+    ...(typeof value.canContinueCodex === "boolean"
+      ? { canContinueCodex: value.canContinueCodex }
+      : {}),
     ...(nextCursor ? { nextCursor } : {}),
     ...(backwardsCursor ? { backwardsCursor } : {}),
   };

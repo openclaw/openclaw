@@ -206,6 +206,87 @@ async function capturePanel(page: Page, name: string): Promise<void> {
 }
 
 suite.define(() => {
+  it.each([844, 640])(
+    "keeps the mobile empty panel picker below the composer at height %s",
+    async (height) => {
+      await suite.withPage(
+        {
+          viewport: { width: 390, height },
+          hasTouch: true,
+          locale: "en-US",
+          serviceWorkers: "block",
+        },
+        async ({ page }) => {
+          await seedSettings(page, "light");
+          await installMockGateway(page, {
+            ...scenario(),
+            featureMethods: [...defaultControlUiFeatureMethods, "browser.request", "terminal.open"],
+            terminalEnabled: true,
+          });
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+          await page.locator(".chat-group").first().waitFor();
+          const composer = page.locator(".agent-chat__input");
+          await composer.waitFor();
+          const shell = page.locator(".agent-chat__composer-shell");
+          const textarea = composer.locator("textarea");
+          const bottomGap = () =>
+            shell.evaluate((element) => getComputedStyle(element).marginBottom);
+          for (const safeArea of [0, 24]) {
+            await page.evaluate((inset) => {
+              document.documentElement.style.setProperty("--safe-area-bottom", `${inset}px`);
+            }, safeArea);
+            expect(await bottomGap()).toBe(`${6 + safeArea}px`);
+            await textarea.focus();
+            expect(await bottomGap()).toBe(`${6 + safeArea}px`);
+            await textarea.blur();
+          }
+          await page.evaluate(() =>
+            document.documentElement.style.removeProperty("--safe-area-bottom"),
+          );
+          await capturePanel(page, "mobile-composer-spacing");
+          await page.locator(".chat-side-panel-toggle").click();
+          const picker = page.locator(".side-panel-empty--selector");
+          await picker.waitFor();
+          await waitForShellLayout(page);
+          await capturePanel(page, "mobile-empty-panel");
+          const geometry = await picker.evaluate((element) => {
+            const bounds = element.getBoundingClientRect();
+            const body = element.closest(".side-panel__empty-body")!.getBoundingClientRect();
+            const first = element.querySelector("button")!.getBoundingClientRect();
+            const composerBounds = document
+              .querySelector(".agent-chat__input")!
+              .getBoundingClientRect();
+            return {
+              pickerTop: bounds.top,
+              panelTop: body.top,
+              firstTop: first.top,
+              composerBottom: composerBounds.bottom,
+            };
+          });
+          expect(geometry.pickerTop).toBeGreaterThanOrEqual(geometry.panelTop);
+          expect(geometry.firstTop).toBeGreaterThanOrEqual(geometry.composerBottom);
+          const choices = picker.locator("button");
+          expect(await choices.count()).toBeGreaterThan(5);
+          for (const choice of [choices.first(), choices.last()]) {
+            await choice.scrollIntoViewIfNeeded();
+            await choice.click({ trial: true });
+            const contained = await choice.evaluate((button) => {
+              const box = button.getBoundingClientRect();
+              const body = button.closest(".side-panel__empty-body")!.getBoundingClientRect();
+              return box.top >= body.top && box.bottom <= body.bottom;
+            });
+            expect(contained).toBe(true);
+          }
+          await capturePanel(page, "mobile-empty-panel-scrolled");
+          await choices.filter({ hasText: "Files" }).click();
+          await page.locator('.side-panel__panel[data-panel-slot="workspace"]:visible').waitFor();
+          await page.locator(".chat-side-panel-toggle").click();
+          await expect.poll(() => picker.isVisible()).toBe(false);
+        },
+      );
+    },
+  );
+
   it.each(["ltr", "rtl"] as const)(
     "keeps session Actions clickable beside an attachment in %s",
     async (direction) => {

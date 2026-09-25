@@ -8,8 +8,8 @@ import {
   resetDiagnosticEventsForTest,
   waitForDiagnosticEventsDrained,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
+import type { DiagnosticEventPayload } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { afterEach, beforeEach, expect, test } from "vitest";
-import type { DiagnosticEventPayload } from "../api.js";
 import {
   getReportedExporterHealth,
   startOtelService,

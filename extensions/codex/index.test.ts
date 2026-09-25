@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync, StatementSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import {
@@ -18,7 +18,10 @@ import {
 import { ensureAuthProfileStore, resolveAuthProfileOrder } from "openclaw/plugin-sdk/provider-auth";
 import { resolveProviderIdForAuth } from "openclaw/plugin-sdk/provider-auth-aliases";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
-import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  closeOpenClawStateDatabaseAsync,
+  observeHostDataSql,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { describe, expect, it, vi } from "vitest";
 import openAIPlugin from "../openai/index.js";
 import { createCodexAppServerAgentHarness } from "./harness.js";
@@ -152,13 +155,8 @@ describe("codex plugin", () => {
     vi.spyOn(runtime.state, "openKeyedStore");
     vi.spyOn(runtime.state, "openSyncKeyedStore");
     const registerAgentHarness = vi.fn();
-    const sql = [
-      vi.spyOn(DatabaseSync.prototype, "prepare"),
-      vi.spyOn(DatabaseSync.prototype, "exec"),
-      ...(["get", "all", "run", "iterate"] as const).map((method) =>
-        vi.spyOn(StatementSync.prototype, method),
-      ),
-    ];
+    const observation = observeHostDataSql(env);
+    const sql = observation.calls;
     try {
       const calibration = new DatabaseSync(":memory:");
       try {
@@ -213,7 +211,13 @@ describe("codex plugin", () => {
           hasActiveWork: () => false,
           disconnect: async () => {},
           forRequest: () => control,
-          forNode: async () => ({ control, sourceHomeId: "home", codexHome: "/synthetic" }),
+          forNode: async () => ({
+            control,
+            sourceHomeId: "home",
+            codexHome: "/synthetic",
+            transport: "stdio",
+            assertCurrent: () => {},
+          }),
           homesForAgent: async () => [],
           forUpstream: async () => undefined,
         },

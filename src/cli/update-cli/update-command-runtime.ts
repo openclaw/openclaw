@@ -28,6 +28,7 @@ export async function completeSourceUpdateRuntime(params: {
   timeoutMs: number;
   lease: PluginLifecycleLeaseContext;
   beforePersistentEffect?: () => void | Promise<void>;
+  beforePublication?: () => Promise<void>;
 }): Promise<{ changed: boolean }> {
   params.lease.assertOwned();
   const installKind = await resolveUpdateInstallKind(params.root, {
@@ -84,6 +85,8 @@ export async function completeSourceUpdateRuntime(params: {
     try {
       params.lease.assertOwned();
       if (prepared.changed) {
+        await params.beforePublication?.();
+        params.lease.assertOwned();
         await withGatewayRuntimeArtifactPublication(
           {
             root,

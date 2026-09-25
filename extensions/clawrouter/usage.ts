@@ -91,6 +91,7 @@ export async function fetchClawRouterUsage(params: {
   token: string;
   baseUrl?: string;
   timeoutMs: number;
+  signal?: AbortSignal;
   /** Test-only seam; production keeps the shared SSRF guard owning transport. */
   fetchGuard?: ClawRouterUsageFetchGuard;
 }): Promise<ProviderUsageSnapshot> {
@@ -109,6 +110,7 @@ export async function fetchClawRouterUsage(params: {
         },
       },
       timeoutMs: params.timeoutMs,
+      signal: params.signal,
       policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(rootUrl),
       auditContext: "clawrouter.usage",
     }),

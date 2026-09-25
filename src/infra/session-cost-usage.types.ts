@@ -8,6 +8,20 @@ import type {
 
 export type CostBreakdown = Partial<Usage["cost"]>;
 
+export type UsageCostTranscriptFile = {
+  filePath: string;
+  /** Durable identity when filePath is a transient archive materialization. */
+  sourcePath: string;
+  kind: "jsonl" | "sqlite";
+  size: number;
+  mtimeMs: number;
+  sessionId?: string;
+  device?: number;
+  inode?: number;
+  eventCount?: number;
+  maxSeq?: number;
+};
+
 export type ParsedTranscriptEntry = {
   message: Record<string, unknown>;
   role?: "user" | "assistant";
@@ -136,6 +150,9 @@ export type SessionModelUsage = {
 };
 
 export type SessionCostSummary = CostUsageTotals & {
+  computedAt?: number;
+  staleSince?: number;
+  refreshing?: boolean;
   sessionId?: string;
   sessionFile?: string;
   firstActivity?: number;

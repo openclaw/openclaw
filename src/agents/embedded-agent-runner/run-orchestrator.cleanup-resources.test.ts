@@ -12,7 +12,11 @@ import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-re
 import { createColdPluginFixture } from "../../plugins/test-helpers/cold-plugin-fixtures.js";
 import { captureAsyncWorkTracker, getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
+import {
+  createAdmittedRunOperatorAuthority,
+  prepareSystemAgentRunAdmission,
+} from "../admitted-run-context.js";
+import { prepareOperatorModelPolicy } from "../operator-model-policy.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../prepared-model-runtime.test-support.js";
 import { createAgentCleanupScope, runOwnedAgentCleanup } from "../run-cleanup-timeout.js";
 import { SessionManager } from "../sessions/session-manager.js";
@@ -33,13 +37,14 @@ type Registration = {
 const fixtureKey = "__openclawCandidateCleanupResources";
 
 it.each([
+  "model-denied",
   "late-success",
   "late-failure",
   "required-timeout",
   "ordinary-error",
   "parent-cancel",
 ] as const)(
-  "holds the candidate's actual registry through %s cleanup and descendants",
+  "keeps candidate registration and cleanup within execution authority for %s",
   async (mode) => {
     // Direct cases rely solely on the public runner's work owner.
     const state = await createOpenClawTestState({
@@ -107,7 +112,12 @@ it.each([
           defaults: {
             workspace: state.workspaceDir,
             model: "candidate-provider/candidate-model",
-            models: { "candidate-provider/candidate-model": { agentRuntime: { id: "openclaw" } } },
+            models: {
+              "candidate-provider/candidate-model": { agentRuntime: { id: "openclaw" } },
+              ...(mode === "model-denied"
+                ? { "candidate-provider/restricted-model": { alias: "blocked-alias" } }
+                : {}),
+            },
           },
         },
         models: {
@@ -214,7 +224,31 @@ it.each([
         };
       });
       const runId = `candidate-cleanup-${mode}`;
-      admission = prepareSystemAgentRunAdmission(cfg, runId, "main", "candidate-cleanup-test");
+      const operatorAuthority =
+        mode === "model-denied"
+          ? createAdmittedRunOperatorAuthority({
+              profileId: "candidate-reader",
+              scopes: ["operator.write"],
+              assertCurrent: () => {},
+              modelPolicy: prepareOperatorModelPolicy({
+                cfg,
+                policy: {
+                  sourceAgent: "main",
+                  allow: ["candidate-provider/*"],
+                  deny: ["candidate-provider/restricted-*"],
+                },
+                manifestPlugins: [],
+              }),
+            })
+          : undefined;
+      admission = prepareSystemAgentRunAdmission(
+        cfg,
+        runId,
+        "main",
+        "candidate-cleanup-test",
+        undefined,
+        operatorAuthority,
+      );
       const params: RunEmbeddedAgentInternalParams = {
         config: cfg,
         agentId: "main",
@@ -224,7 +258,7 @@ it.each([
         sessionKey: `agent:main:${runId}`,
         runId,
         provider: fixture.providerId,
-        model: "candidate-model",
+        model: mode === "model-denied" ? "blocked-alias" : "candidate-model",
         prompt: "Complete the synthetic candidate",
         timeoutMs: 5000,
         enqueue: immediateEnqueue,
@@ -243,6 +277,12 @@ it.each([
           : runEmbeddedAgent(params),
       );
       void logical.catch(() => {});
+      if (mode === "model-denied") {
+        await expect(logical).rejects.toThrow("operator role cannot use this model");
+        expect(records.size).toBe(0);
+        expect(loop).not.toHaveBeenCalled();
+        return;
+      }
       await Promise.race([
         cleanupStarted.promise,
         logical.then(() => {

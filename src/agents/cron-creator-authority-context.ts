@@ -43,6 +43,7 @@ export function createCronCreatorAuthorityCapability(
   isCurrent?: () => boolean,
   channelRequester?: CronAuthenticatedChannelRequester,
   requesterOwner?: CronCreatorAuthorityCapability["requesterOwner"],
+  callerScopedCreation?: true,
 ): CronCreatorAuthorityCapability | undefined {
   const normalizedRunId = runId.trim();
   return normalizedRunId
@@ -53,6 +54,7 @@ export function createCronCreatorAuthorityCapability(
         isCurrent,
         channelRequester,
         requesterOwner,
+        callerScopedCreation,
       )
     : undefined;
 }
@@ -245,7 +247,7 @@ export function bindCronManagementGrant(runId: string | undefined) {
   ) {
     return undefined;
   }
-  const managementOnly = scope.callerOrigin.kind === "unknown";
+  const managementOnly = scope.callerOrigin.kind === "unknown" && !scope.callerScopedCreation;
   return {
     managementOnly,
     mint: (method: string, signal?: AbortSignal) => {
@@ -267,7 +269,9 @@ export function captureCronRequesterGrantIssuer(runId: string | undefined) {
   const scope = activeCronCreatorAuthority.getStore();
   if (
     !scope ||
-    (scope.callerOrigin.kind !== "local" && !hasCronChannelRequester(scope)) ||
+    (scope.callerOrigin.kind !== "local" &&
+      !hasCronChannelRequester(scope) &&
+      !scope.callerScopedCreation) ||
     scope.runId !== runId
   ) {
     return undefined;

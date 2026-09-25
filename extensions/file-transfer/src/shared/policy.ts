@@ -1,50 +1,5 @@
-// Path policy for file-transfer node.invoke calls.
-//
-// Default behavior is DENY. The operator must explicitly opt in by adding
-// a config block to ~/.openclaw/openclaw.json under
-// `plugins.entries.file-transfer.config.nodes`. Without a matching block,
-// every file operation is rejected before reaching the node.
-//
-// Schema (informal):
-//
-//   "plugins": {
-//     "entries": {
-//       "file-transfer": {
-//         "config": {
-//           "nodes": {
-//             "<nodeId-or-displayName>": {
-//               "ask":              "off" | "on-miss" | "always",
-//               "allowReadPaths":   ["~/Screenshots/**", "/tmp/**"],
-//               "allowWritePaths":  ["~/Downloads/**"],
-//               "denyPaths":        ["**/.ssh/**", "**/.aws/**"],
-//               "maxBytes":         16777216,
-//               "followSymlinks":   false
-//             },
-//             "*": { "ask": "on-miss" }
-//           }
-//         }
-//       }
-//     }
-//   }
-//
-// `ask` modes:
-//   off       — silent: allow if matched, deny if not (today's default)
-//   on-miss   — silent allow if matched; prompt operator if not matched
-//   always    — prompt operator on every call (denyPaths still hard-deny)
-//
-// `denyPaths` always wins, even in `ask: always`.
-// `allow-always` grants are stored separately from operator-authored globs.
-// They are scoped to a stable node ID, command, requested path, and the
-// node-authoritative canonical path returned by the successful operation.
-//
-// `followSymlinks` (default false): if false, the node-side handler
-// realpaths the requested path (or its parent for new-file writes) BEFORE
-// any I/O, and refuses with SYMLINK_REDIRECT if it differs from the
-// requested path. This stops a symlink in user-controlled territory
-// (e.g. ~/Downloads/evil → /etc) from redirecting an allowed-looking path
-// to a disallowed canonical location. Set to true to opt back into the
-// looser "follow + post-flight check" behavior, e.g. on macOS where
-// /var → /private/var trips the check for /var/folders paths.
+// Deny-by-default policy. Authored globs and exact standing grants remain separate;
+// grants bind the node, command, requested path, and node-authoritative canonical path.
 
 import os from "node:os";
 import path from "node:path";
@@ -321,33 +276,10 @@ function normalizeAskMode(value: unknown): FilePolicyAskMode {
 }
 
 /**
- * Evaluate whether (nodeId, kind, path) is permitted.
- *
- * Resolution order:
- *   1. No file-transfer config or no entry for this node → NO_POLICY (deny,
- *      not askable — operator hasn't opted in at all).
- *   2. denyPaths matches → POLICY_DENIED, not askable (hard deny).
- *   3. ask=always → ask-always (prompt every time).
- *   4. allowPaths matches → matched-allow (silent allow).
- *   5. ask=on-miss → POLICY_DENIED with askable=true.
- *   6. ask=off (or unset) → POLICY_DENIED, not askable.
+ * Check raw segments before glob matching: normalizing away '..' could authorize
+ * traversal through an allowed prefix. Both separators count for Windows nodes.
  */
-/**
- * Reject any path whose RAW string contains a ".." segment. Checking the
- * raw string (not the normalized form) is the point — `posix.normalize`
- * collapses "/allowed/../etc/passwd" to "/etc/passwd", which would defeat
- * the check. We want to flag the literal traversal sequence the agent
- * passed in, before any glob match runs.
- *
- * Without this, "/allowed/../etc/passwd" matches the glob "/allowed/**"
- * pre-realpath, so the node fetches the bytes before the post-flight
- * canonical-path check denies — too late, the bytes already crossed the
- * node→gateway boundary.
- *
- * Treats backslash and forward slash as equivalent separators so a Windows
- * node can't be hit with "C:\\allowed\\..\\Windows\\system.ini".
- */
-function containsParentRefSegment(p: string): boolean {
+export function containsParentRefSegment(p: string): boolean {
   const unified = p.replace(/\\/gu, "/");
   return unified.split("/").includes("..");
 }
@@ -364,10 +296,8 @@ type FilePolicyInput = {
 function evaluateFilePolicyInternal(
   input: FilePolicyInput,
   constraintsOnly: boolean,
+  pluginPolicy = readFileTransferConfig(input.pluginConfig),
 ): FilePolicyDecision {
-  // Reject literal traversal sequences before consulting any allow/deny
-  // glob list. minimatch on the raw string can wrongly accept
-  // "/allowed/../etc/passwd" against "/allowed/**".
   if (containsParentRefSegment(input.path)) {
     return {
       ok: false,
@@ -376,7 +306,6 @@ function evaluateFilePolicyInternal(
       askable: false,
     };
   }
-  const pluginPolicy = readFileTransferConfig(input.pluginConfig);
   const config = pluginPolicy ? readNodes(pluginPolicy) : null;
   if (!pluginPolicy || !config) {
     return {
@@ -417,7 +346,7 @@ function evaluateFilePolicyInternal(
       : undefined;
   const followSymlinks = nodeConfig.followSymlinks === true;
 
-  // 1. Deny patterns always win.
+  // Deny patterns also constrain standing grants and interactive approvals.
   const denyPatterns = normalizeGlobs(nodeConfig.denyPaths);
   if (matchesAnyDeny(input.path, denyPatterns)) {
     return {
@@ -439,7 +368,6 @@ function evaluateFilePolicyInternal(
     matchesPendingReapproval(input, resolved.key, pending),
   );
 
-  // 2. ask=always: prompt every time even if matched.
   if (askMode === "always") {
     return {
       ok: true,
@@ -451,7 +379,6 @@ function evaluateFilePolicyInternal(
     };
   }
 
-  // 3. Match operator-authored glob policy for this kind.
   const allowPatterns =
     input.kind === "read"
       ? normalizeGlobs(nodeConfig.allowReadPaths)
@@ -461,7 +388,7 @@ function evaluateFilePolicyInternal(
     return { ok: true, reason: "matched-allow", maxBytes, followSymlinks };
   }
 
-  // 4. Match exact standing grants by stable identity and command. These
+  // Match exact standing grants by stable identity and command. These
   // strings are opaque node paths: never normalize them or feed them to a
   // glob matcher on the Gateway.
   if (input.command) {
@@ -498,7 +425,6 @@ function evaluateFilePolicyInternal(
     };
   }
 
-  // 5. No allow match. Either askable on miss or hard-deny.
   if (askMode === "on-miss") {
     return {
       ok: false,
@@ -523,6 +449,49 @@ function evaluateFilePolicyInternal(
     maxBytes,
     followSymlinks,
   };
+}
+
+/** Carry only this node's read rules to the host that prepares a Skill bundle. */
+export function snapshotNodeFileReadPolicy(input: {
+  nodeId: string;
+  nodeDisplayName?: string;
+  pluginConfig?: Record<string, unknown>;
+}) {
+  const policy = readFileTransferConfig(input.pluginConfig);
+  const nodes = policy && readNodes(policy);
+  const resolved = nodes && resolveNodePolicy(nodes, input.nodeId, input.nodeDisplayName);
+  if (!resolved) {
+    throw new Error("Node file read policy is unavailable");
+  }
+  const { ask, allowReadPaths, denyPaths, maxBytes, followSymlinks } = resolved.entry;
+  return {
+    nodeId: input.nodeId,
+    pluginConfig: {
+      policyVersion: policy?.policyVersion,
+      nodes: {
+        [input.nodeId]: {
+          ask,
+          allowReadPaths: normalizeGlobs(allowReadPaths),
+          denyPaths: normalizeGlobs(denyPaths),
+          maxBytes,
+          followSymlinks,
+        },
+      },
+    },
+  };
+}
+
+/** A delegated read uses the Gateway snapshot, never the Node process's local policy. */
+export function evaluateFileReadPolicySnapshot(input: {
+  nodeId: string;
+  pluginConfig: Record<string, unknown>;
+  path: string;
+}): FilePolicyDecision {
+  return evaluateFilePolicyInternal(
+    { ...input, kind: "read" },
+    false,
+    readFileTransferConfigFromPluginConfig(input.pluginConfig),
+  );
 }
 
 export function evaluateFilePolicy(input: FilePolicyInput): FilePolicyDecision {
@@ -571,7 +540,8 @@ export async function persistLiteralGrant(input: PersistLiteralGrantInput): Prom
         canonicalPath: input.canonicalPath,
       });
       policyConfig.literalGrants = grants;
-      const kind = input.command === "file.write" ? "write" : "read";
+      const kind =
+        input.command === "file.write" || input.command === "file.create" ? "write" : "read";
       policyConfig.pendingReapprovals = readPendingReapprovals(policyConfig).filter(
         (pending) =>
           pending.kind !== kind ||

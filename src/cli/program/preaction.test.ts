@@ -5,10 +5,9 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { loggingState } from "../../logging/state.js";
 import { isConfigSetJsonParseOnly } from "../config-output-mode.js";
 import { setCommandJsonMode } from "./json-mode.js";
-import { applyParentDefaultHelpAction } from "./parent-default-help.js";
 import {
   COLD_READ_COMMAND_PATHS,
-  registerColdReadCommandFixtures,
+  registerPreActionCommandFixtures,
   registerNativeExecutorPreActionTests,
 } from "./preaction.test-helpers.js";
 
@@ -18,11 +17,9 @@ const setVerboseMock = vi.fn();
 const emitCliBannerMock = vi.fn();
 type EnsureConfigReadyOptions = {
   allowInvalid?: boolean;
-  beforeStateMigrations?: () => Promise<boolean>;
+  beforeStatePreparation?: () => Promise<boolean>;
   commandPath?: string[];
   requireConfig?: boolean;
-  skipPristineCoreStateMigrations?: boolean;
-  skipPristineStartupStateMigrations?: boolean;
 };
 const ensureConfigReadyMock = vi.fn<(_opts: EnsureConfigReadyOptions) => Promise<void>>(
   async () => {},
@@ -32,8 +29,6 @@ const routeLogsToStderrMock = vi.fn();
 const prepareGatewayRunBootstrapMock = vi.fn(async () => true);
 const recheckGatewayRunBootstrapMock = vi.fn(async () => true);
 const reloadTrustedGatewayRunEnvironmentMock = vi.fn(async () => true);
-const wasPreparedGatewayRunCoreStatePristineMock = vi.fn(() => true);
-const wasPreparedGatewayRunStatePristineMock = vi.fn(() => true);
 
 const runtimeMock = {
   log: vi.fn(),
@@ -67,12 +62,14 @@ vi.mock("../plugin-registry.js", () => ({
   ensurePluginRegistryLoaded: ensurePluginRegistryLoadedMock,
 }));
 
+vi.mock("../state-dir-gateway-check.js", () => ({
+  checkCliGatewayStateDir: vi.fn(async () => ({ kind: "allow" })),
+}));
+
 vi.mock("../gateway-cli/pre-bootstrap.js", () => ({
   prepareGatewayRunBootstrap: prepareGatewayRunBootstrapMock,
   recheckGatewayRunBootstrap: recheckGatewayRunBootstrapMock,
   reloadTrustedGatewayRunEnvironment: reloadTrustedGatewayRunEnvironmentMock,
-  wasPreparedGatewayRunCoreStatePristine: wasPreparedGatewayRunCoreStatePristineMock,
-  wasPreparedGatewayRunStatePristine: wasPreparedGatewayRunStatePristineMock,
 }));
 
 let registerPreActionHooks: typeof import("./preaction.js").registerPreActionHooks;
@@ -149,137 +146,7 @@ describe("registerPreActionHooks", () => {
 
   function buildProgram() {
     const programLocal = new Command().name("openclaw").enablePositionalOptions();
-    const agent = programLocal
-      .command("agent")
-      .argument("[note]")
-      .requiredOption("-m, --message <text>")
-      .option("--agent <id>")
-      .option("--local")
-      .option("--json")
-      .action(() => {});
-    agent
-      .command("exec")
-      .argument("[message]")
-      .option("--json")
-      .action(() => {});
-    programLocal
-      .command("status")
-      .option("--json")
-      .action(() => {});
-    const acp = programLocal
-      .command("acp")
-      .option("--token <token>")
-      .option("--verbose")
-      .action(() => {});
-    acp
-      .command("client")
-      .option("--cwd <dir>")
-      .action(() => {});
-    programLocal
-      .command("mcp")
-      .command("serve")
-      .action(() => {});
-    const gateway = programLocal
-      .command("gateway")
-      .option("--port <port>")
-      .option("--token <token>")
-      .option("--allow-unconfigured")
-      .option("--force")
-      .option("--reset")
-      .action(() => {});
-    gateway
-      .command("run")
-      .option("--allow-unconfigured")
-      .option("--force")
-      .option("--reset")
-      .action(() => {});
-    gateway
-      .command("call")
-      .argument("<method>")
-      .option("--json")
-      .action(() => {});
-    gateway
-      .command("health")
-      .option("--json")
-      .action(() => {});
-    for (const gatewayCommand of ["stability", "usage-cost"]) {
-      gateway
-        .command(gatewayCommand)
-        .option("--json")
-        .action(() => {});
-    }
-    programLocal
-      .command("backup")
-      .command("create")
-      .option("--json")
-      .action(() => {});
-    programLocal
-      .command("doctor")
-      .option("--lint")
-      .action(() => {});
-    programLocal.command("completion").action(() => {});
-    programLocal.command("secrets").action(() => {});
-    const modelList = programLocal.command("models").command("aliases").command("list");
-    modelList.option("--plain").action(() => {});
-    const skills = programLocal.command("skills");
-    skills.option("--json").action(() => {});
-    for (const skillCommand of ["list", "check"]) {
-      skills
-        .command(skillCommand)
-        .option("--json")
-        .action(() => {});
-    }
-    registerColdReadCommandFixtures(programLocal, skills);
-    for (const skillCommand of ["install", "verify"]) {
-      skills
-        .command(skillCommand)
-        .argument("<skill-ref>")
-        .option("--version <version>")
-        .action(() => {});
-    }
-    programLocal
-      .command("qa")
-      .command("suite")
-      .action(() => {});
-    const agents = programLocal.command("agents");
-    agents
-      .command("list")
-      .option("--json")
-      .action(() => {});
-    agents
-      .command("bindings")
-      .option("--json")
-      .action(() => {});
-    programLocal
-      .command("approvals")
-      .command("pending")
-      .option("--json")
-      .action(() => {});
-    programLocal.command("configure").action(() => {});
-    programLocal.command("onboard").action(() => {});
-    const channels = programLocal.command("channels");
-    channels.command("add").action(() => {});
-    channels
-      .command("send")
-      .option("--json")
-      .action(() => {});
-    applyParentDefaultHelpAction(channels);
-    programLocal
-      .command("plugins")
-      .command("install")
-      .argument("<spec>")
-      .option("--marketplace <marketplace>")
-      .action(() => {});
-    programLocal
-      .command("update")
-      .command("status")
-      .option("--json")
-      .action(() => {});
-    programLocal
-      .command("message")
-      .command("send")
-      .option("--json")
-      .action(() => {});
+    registerPreActionCommandFixtures(programLocal);
     setCommandJsonMode(programLocal.command("machine"), "output", ({ argv, stdoutIsTTY }) => {
       observedMachineOutputStdoutIsTTY = stdoutIsTTY;
       return argv.includes("--machine-output");
@@ -335,6 +202,8 @@ describe("registerPreActionHooks", () => {
   });
 
   it("applies shared skip policy to routed reads on the Commander path", async () => {
+    // A reused worker may already have the CLI title, which needs no setter call.
+    observedProcessTitle = "node";
     const processTitleSetSpy = vi.spyOn(process, "title", "set");
     await runPreAction({
       parseArgv: ["status"],
@@ -345,7 +214,8 @@ describe("registerPreActionHooks", () => {
     expect(setVerboseMock).toHaveBeenCalledWith(true);
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
-    expect(processTitleSetSpy).toHaveBeenCalledWith("openclaw-status");
+    expect(processTitleSetSpy).toHaveBeenCalledWith("openclaw");
+    expect(processTitleSetSpy).not.toHaveBeenCalledWith("openclaw-status");
 
     vi.clearAllMocks();
     await runPreAction({
@@ -417,15 +287,13 @@ describe("registerPreActionHooks", () => {
 
     expect(ensureConfigReadyMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        beforeStateMigrations: expect.any(Function),
+        beforeStatePreparation: expect.any(Function),
         commandPath: ["gateway", "run"],
         measure: expect.any(Function),
-        skipPristineCoreStateMigrations: true,
-        skipPristineStartupStateMigrations: true,
       }),
     );
-    const beforeStateMigrations = ensureConfigReadyMock.mock.calls[0]?.[0]?.beforeStateMigrations;
-    await beforeStateMigrations?.();
+    const beforeStatePreparation = ensureConfigReadyMock.mock.calls[0]?.[0]?.beforeStatePreparation;
+    await beforeStatePreparation?.();
     expect(recheckGatewayRunBootstrapMock).toHaveBeenCalledWith({
       opts: expect.objectContaining({ force: false, reset: false }),
       runtime: runtimeMock,
@@ -1008,6 +876,16 @@ describe("registerPreActionHooks", () => {
     });
 
     expect(routeLogsToStderrMock).toHaveBeenCalledOnce();
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+  });
+
+  it("defers message config preparation until the action selects local or Gateway execution", async () => {
+    const parseProgram = buildProgram();
+    process.argv = ["node", "openclaw", "message", "send", "--json"];
+
+    await parseProgram.parseAsync(process.argv);
+
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });

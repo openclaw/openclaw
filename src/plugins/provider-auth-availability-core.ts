@@ -17,6 +17,21 @@ import { resolveManagedSecretRefRuntimeProviderAuth } from "../agents/model-auth
 import { resolveDirectProviderCredentialMode } from "../agents/model-auth-runtime-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
+type ProviderAuthProfileLookup = {
+  /** Provider id whose usable auth profiles should be resolved. */
+  provider: string;
+  /** Runtime config used to resolve profile order, secret refs, and the default agent dir. */
+  cfg?: OpenClawConfig;
+  /** Agent directory containing auth profiles. */
+  agentDir?: string;
+  /** Optional allowed profile credential types. */
+  profileTypes?: readonly AuthProfileCredential["type"][];
+  /** Whether profile store reads may prompt for keychain-backed credentials. */
+  allowKeychainPrompt?: boolean;
+  /** Whether external CLI auth profiles may be discovered and included. */
+  includeExternalCliAuth?: boolean;
+};
+
 export function createProviderAuthAvailability(
   authStore: Pick<
     ReturnType<typeof createAuthProfileStoreRuntime>,
@@ -170,20 +185,10 @@ export function createProviderAuthAvailability(
   /**
    * Lists auth profile ids usable for a provider without throwing on missing stores or keychain access.
    */
-  function listUsableProviderAuthProfileIds(params: {
-    /** Provider id whose usable auth profiles should be listed. */
-    provider: string;
-    /** Optional runtime config used to resolve auth profile order and default agent dir. */
-    cfg?: OpenClawConfig;
-    /** Agent directory containing auth profiles. */
-    agentDir?: string;
-    /** Optional allowed profile credential types. */
-    profileTypes?: readonly AuthProfileCredential["type"][];
-    /** Whether profile store reads may prompt for keychain-backed credentials. */
-    allowKeychainPrompt?: boolean;
-    /** Whether external CLI auth profiles may be discovered and included. */
-    includeExternalCliAuth?: boolean;
-  }): { agentDir: string; profileIds: string[] } {
+  function listUsableProviderAuthProfileIds(params: ProviderAuthProfileLookup): {
+    agentDir: string;
+    profileIds: string[];
+  } {
     try {
       const { agentDir, profileIds, store } = resolveUsableProviderAuthProfiles(params);
       return { agentDir, profileIds: filterAuthProfileIdsByType(store, profileIds, params) };
@@ -195,40 +200,16 @@ export function createProviderAuthAvailability(
   /**
    * Checks whether any usable auth profile exists for a provider.
    */
-  function isProviderAuthProfileConfigured(params: {
-    /** Provider id to check for usable auth profiles. */
-    provider: string;
-    /** Optional runtime config used to resolve auth profile order and default agent dir. */
-    cfg?: OpenClawConfig;
-    /** Agent directory containing auth profiles. */
-    agentDir?: string;
-    /** Optional allowed profile credential types. */
-    profileTypes?: readonly AuthProfileCredential["type"][];
-    /** Whether profile store reads may prompt for keychain-backed credentials. */
-    allowKeychainPrompt?: boolean;
-    /** Whether external CLI auth profiles may be discovered and included. */
-    includeExternalCliAuth?: boolean;
-  }): boolean {
+  function isProviderAuthProfileConfigured(params: ProviderAuthProfileLookup): boolean {
     return listUsableProviderAuthProfileIds(params).profileIds.length > 0;
   }
 
   /**
    * Resolves the first usable auth-profile API key for a provider in configured profile order.
    */
-  async function resolveProviderAuthProfileApiKey(params: {
-    /** Provider id whose first usable auth profile should resolve to an API key. */
-    provider: string;
-    /** Optional runtime config used to resolve auth profile order and secret refs. */
-    cfg?: OpenClawConfig;
-    /** Agent directory containing auth profiles. */
-    agentDir?: string;
-    /** Optional allowed profile credential types. */
-    profileTypes?: readonly AuthProfileCredential["type"][];
-    /** Whether profile store reads may prompt for keychain-backed credentials. */
-    allowKeychainPrompt?: boolean;
-    /** Whether external CLI auth profiles may be discovered and included. */
-    includeExternalCliAuth?: boolean;
-  }): Promise<string | undefined> {
+  async function resolveProviderAuthProfileApiKey(
+    params: ProviderAuthProfileLookup,
+  ): Promise<string | undefined> {
     const { resolveApiKeyForProfile } = await import("../agents/auth-profiles/oauth.js");
     const { agentDir, profileIds, store } = resolveUsableProviderAuthProfiles({
       ...params,

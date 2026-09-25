@@ -22,6 +22,9 @@ export function isDeeplyFrozenPlainData(value: unknown): boolean {
   if (deeplyFrozenPlainData.has(value)) {
     return true;
   }
+  if (!isPlainDataObject(value) || !Object.isFrozen(value)) {
+    return false;
+  }
   const inspected = new Set<object>();
   const pending = [value];
   while (pending.length) {

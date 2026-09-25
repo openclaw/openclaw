@@ -3,11 +3,15 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import {
   appendTranscriptEvent,
   persistSessionTranscriptTurn,
@@ -15,15 +19,23 @@ import {
   type SessionTranscriptReadScope,
 } from "./session-accessor.js";
 import { readRecentSessionTranscriptHistoryEvents } from "./session-accessor.sqlite-history-events.js";
-import { insertSyntheticHistory } from "./session-accessor.sqlite-history.test-support.js";
+import {
+  insertSyntheticHistory,
+  readSessionTranscriptHistoryEventCount,
+} from "./session-accessor.sqlite-history.test-support.js";
+import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { transcriptMessage } from "./transcript-message.test-support.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => {
-  vi.restoreAllMocks();
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-});
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  }),
+);
 
 function readHistoryWithMarkerPlan(
   database: OpenClawAgentDatabase,
@@ -56,7 +68,7 @@ function readHistoryWithMarkerPlan(
   }
 }
 
-it("keeps history marker reads selective after ANALYZE", async () => {
+it.each([false, true])("keeps history marker reads selective (analyzed=%s)", async (analyzed) => {
   const scope = {
     agentId: "main",
     env: { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("openclaw-history-query-plan-") },
@@ -104,7 +116,10 @@ it("keeps history marker reads selective after ANALYZE", async () => {
     });
     parentId = id;
   }
-  database.db.exec("ANALYZE");
+  if (analyzed) {
+    await waitForSessionTranscriptIndexReconcile(scope);
+    database.db.exec("ANALYZE");
+  }
   const { page, drivingSearch } = readHistoryWithMarkerPlan(database, scope);
   const firstSequence = messageCount - markerIds.length + 2;
   expect(page.totalMessages).toBe(messageCount + markerIds.length + 1);
@@ -139,7 +154,10 @@ it("keeps history marker reads selective after ANALYZE", async () => {
     touchSessionEntry: false,
   });
   await waitForSessionTranscriptProjection(denseScope);
-  database.db.exec("ANALYZE");
+  if (analyzed) {
+    await waitForSessionTranscriptIndexReconcile(scope);
+    database.db.exec("ANALYZE");
+  }
   const branch = readHistoryWithMarkerPlan(database, denseScope);
   expect(branch.page.totalMessages).toBe(22);
   expect(branch.page.events.map(({ event }) => event)).toEqual(
@@ -149,4 +167,37 @@ it("keeps history marker reads selective after ANALYZE", async () => {
     Array.from({ length: 20 }, (_, index) => index + 3),
   );
   expect(branch.drivingSearch).toMatch(/^SEARCH active .*\(session_id=\?/u);
+  expect(readSessionTranscriptHistoryEventCount(denseScope)).toBe(22);
+
+  // Discarded ordinary messages do not justify scanning a branch with few markers.
+  await appendTranscriptEvent(plainScope, {
+    type: "compaction",
+    id: "sparse-branch-marker",
+    parentId: "seed",
+    summary: "Current branch marker",
+  });
+  await persistSessionTranscriptTurn(plainScope, {
+    messages: branchIds.map((id, index) =>
+      transcriptMessage(id, index === 0 ? "sparse-branch-marker" : branchIds[index - 1]!, {
+        role: index % 2 === 0 ? "user" : "assistant",
+        content: id,
+      }),
+    ),
+    touchSessionEntry: false,
+  });
+  await waitForSessionTranscriptProjection(plainScope);
+  if (analyzed) {
+    await waitForSessionTranscriptIndexReconcile(scope);
+    database.db.exec("ANALYZE");
+  }
+  const sparseBranch = readHistoryWithMarkerPlan(database, plainScope);
+  expect(sparseBranch.page.events.map(({ event }) => event)).toEqual(
+    branchIds.map((id) => expect.objectContaining({ id })),
+  );
+  expect(sparseBranch.page.events.map(({ seq }) => seq)).toEqual(
+    branch.page.events.map(({ seq }) => seq),
+  );
+  expect(sparseBranch.page.totalMessages).toBe(22);
+  expect(sparseBranch.drivingSearch).toMatch(/\(session_id=\? AND event_type=\?/u);
+  expect(readSessionTranscriptHistoryEventCount(plainScope)).toBe(22);
 });

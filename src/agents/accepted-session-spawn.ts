@@ -29,7 +29,9 @@ export function mergeAcceptedSessionSpawnsForRun(
     acceptedSpawnsByRun.set(instance, receipts);
   }
   for (const spawn of accepted) {
-    receipts?.set(spawn.runId, spawn);
+    // Acceptance is immutable for this run; later harness projections cannot
+    // erase the producer's completion obligation.
+    receipts?.set(spawn.runId, receipts.get(spawn.runId) ?? spawn);
   }
   return receipts ? [...receipts.values()] : [];
 }

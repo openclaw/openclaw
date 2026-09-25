@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import * as nodeSqlite from "../../infra/node-sqlite.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import {
@@ -58,7 +57,7 @@ vi.mock("./session-accessor.sqlite-reclamation-worker.js", async (importOriginal
     await importOriginal<typeof import("./session-accessor.sqlite-reclamation-worker.js")>();
   return {
     ...actual,
-    withSqliteReclamationWorker: ((options, claim, run, assertRequestCurrent) =>
+    withSqliteReclamationWorker: ((options, claim, run, assertRequestCurrent, signal) =>
       actual.withSqliteReclamationWorker(
         options,
         claim,
@@ -66,6 +65,9 @@ vi.mock("./session-accessor.sqlite-reclamation-worker.js", async (importOriginal
           const originalRun = worker.run.bind(worker);
           let inWriteAdmission: ReturnType<typeof AsyncLocalStorage.snapshot> | undefined;
           const spy = vi.spyOn(worker, "run").mockImplementation((params) => {
+            if (params.plan.kind !== "entry" && params.plan.kind !== "historical-generation") {
+              return originalRun(params);
+            }
             return originalRun({
               ...params,
               withWriteAdmission: (performWrite, diagnostics) =>
@@ -79,9 +81,8 @@ vi.mock("./session-accessor.sqlite-reclamation-worker.js", async (importOriginal
                   throw new Error("Worker requested commit without writer admission");
                 }
                 inWriteAdmission(() => archiveMaterializationHook.beforeCommitRequest?.());
-                const errors = params.onCommitRequest();
+                params.onCommitRequest();
                 archiveMaterializationHook.afterCommitRequest?.();
-                return errors;
               },
             });
           });
@@ -92,6 +93,7 @@ vi.mock("./session-accessor.sqlite-reclamation-worker.js", async (importOriginal
           }
         },
         assertRequestCurrent,
+        signal,
       )) satisfies typeof actual.withSqliteReclamationWorker,
   };
 });
@@ -144,7 +146,7 @@ describe("SQLite reclamation admission races", () => {
     });
     const writes: Promise<void>[] = [];
     let pendingBeforeAuthorization: Array<string | undefined> = [];
-    archiveMaterializationHook.beforeCommitRequest = () => {
+    archiveMaterializationHook.beforeCommitRequest = vi.fn(() => {
       // Start real asynchronous producers in the observed order, but leave the
       // parent free to authorize the worker whose transaction already owns SQLite.
       for (const recorder of recorders) {
@@ -155,7 +157,7 @@ describe("SQLite reclamation admission races", () => {
         }
       }
       pendingBeforeAuthorization = recorders.map((recorder) => recorder.describeFlushState());
-    };
+    });
     const deletion = await deleteSessionEntryLifecycle({
       archiveTranscript: true,
       commitGuard: () => {},
@@ -167,6 +169,7 @@ describe("SQLite reclamation admission races", () => {
     );
     const outcomes = await Promise.allSettled(writes);
     expect(deletion).toMatchObject({ result: { deleted: true } });
+    expect(archiveMaterializationHook.beforeCommitRequest).toHaveBeenCalledOnce();
     expect(pendingBeforeAuthorization).toEqual(
       recorders.map(() => expect.stringContaining("pendingRows=1")),
     );
@@ -215,27 +218,16 @@ describe("SQLite reclamation admission races", () => {
     },
   );
 
-  it("publishes the committed deletion after a recovered commit barrier close failure", async () => {
-    const sessionKey = "agent:main:recovered-deletion";
-    const sessionId = "recovered-deletion";
+  it("publishes an accepted deletion after its caller retires", async () => {
+    const sessionKey = "agent:main:accepted-deletion";
+    const sessionId = "accepted-deletion";
     await replaceSessionEntry({ sessionKey, storePath }, { sessionId, updatedAt: 1 });
     await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, [
       { type: "session", id: sessionId, content: "archive the committed deletion" },
     ]);
-    const actualOpen = nodeSqlite.openNodeSqliteDatabase;
-    let faultInjected = false;
-    archiveMaterializationHook.beforeCommitRequest = () => {
-      vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementationOnce((...args) => {
-        const database = actualOpen(...args);
-        const actualClose = database.close.bind(database);
-        // Fault this handle's settlement; a fast Worker can skip the lock transaction.
-        vi.spyOn(database, "close").mockImplementationOnce(() => {
-          actualClose();
-          faultInjected = true;
-          throw new Error("injected reclamation barrier close failure");
-        });
-        return database;
-      });
+    let current = true;
+    archiveMaterializationHook.afterCommitRequest = () => {
+      current = false;
     };
     const mutations: string[] = [];
     const unsubscribe = onSessionIdentityMutation((event) => {
@@ -246,11 +238,15 @@ describe("SQLite reclamation admission races", () => {
     try {
       const result = await deleteSessionEntryLifecycle({
         archiveTranscript: true,
-        commitGuard: () => {},
+        commitGuard: () => {
+          if (!current) {
+            throw new Error("retired caller");
+          }
+        },
         storePath,
         target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
       });
-      expect(faultInjected).toBe(true);
+      expect(current).toBe(false);
       expect(result.deleted).toBe(true);
       expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
       expect(

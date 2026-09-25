@@ -1,6 +1,7 @@
 import { createContext } from "@lit/context";
 import type { RouteLocation, Router } from "@openclaw/uirouter";
 import type { HumanMention } from "../../../packages/gateway-protocol/src/index.js";
+import type { ThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
 import type { AgentCapability } from "../lib/agents/index.ts";
@@ -13,6 +14,7 @@ import type {
 import type { RuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import type { LiveActivity } from "../pages/activity/live-activity.ts";
+import type { reviewPrivateComposerDraft } from "../pages/chat/components/private-composer-recovery-dialog.ts";
 import type { NewSessionDraftHandoff } from "../pages/new-session/draft-persistence.ts";
 import type { ControlUiPluginCapability } from "../plugins/control-ui-capability.ts";
 import type { AgentSelectionCapability } from "./agent-selection.ts";
@@ -28,6 +30,7 @@ import type { ApplicationOverlays } from "./overlays-types.ts";
 import type { ApplicationPlacementStartup } from "./session-placement-startup.ts";
 import type { UiPreferences } from "./settings.ts";
 import type { SidebarAttentionStore } from "./sidebar-attention-store.ts";
+import type { ThemeCatalogSnapshot } from "./theme-catalog.ts";
 import type { ThemeMode, ThemeName } from "./theme.ts";
 import type { WebPushCapability } from "./web-push.ts";
 
@@ -45,6 +48,9 @@ export type ApplicationThemeServerSelection = {
 };
 
 export type ApplicationTheme = {
+  readonly branding: ThemeBranding;
+  readonly catalog?: ThemeCatalogSnapshot;
+  retryCatalog?: () => void;
   readonly settings: UiPreferences;
   readonly mode: ThemeMode;
   readonly resolvedMode: "dark" | "light";
@@ -88,6 +94,8 @@ export type ApplicationChatAttachmentHandoff = {
       goalMode?: ChatGoalDraftMode | null;
       mentions?: readonly HumanMention[];
       newSessionDraft?: NewSessionDraftHandoff;
+      incognito?: boolean;
+      reviewPrivateDraft: typeof reviewPrivateComposerDraft;
     },
   ): void;
   consume(handoff: ChatAttachmentHandoffKey): {
@@ -105,12 +113,12 @@ export type ApplicationChatAttachmentHandoff = {
   dispose(): void;
 };
 
-export type ApplicationContext<TRouteId extends string = string> = {
+export type ApplicationContext<TRouteId extends string = RouteId> = {
   readonly basePath: string;
   readonly resourceBasePath: string;
   readonly lifecycleAbortSignal?: AbortSignal;
   readonly router: Pick<
-    Router<RouteId, ApplicationContext<RouteId>, unknown, unknown>,
+    Router<RouteId, ApplicationContext, unknown, unknown>,
     "getState" | "subscribe" | "navigate"
   >;
   readonly gateway: ApplicationGateway;
@@ -151,5 +159,4 @@ export type ApplicationContext<TRouteId extends string = string> = {
   readonly preload: (routeId: TRouteId) => Promise<void>;
 };
 
-export const applicationContext =
-  createContext<ApplicationContext<RouteId>>("openclaw.application");
+export const applicationContext = createContext<ApplicationContext>("openclaw.application");

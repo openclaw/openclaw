@@ -3,10 +3,14 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import {
   appendTranscriptEvent,
   loadTranscriptEventsSync,
@@ -46,8 +50,10 @@ describe("SQLite transcript context accounting", () => {
     };
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
   });
 
@@ -167,6 +173,7 @@ describe("SQLite transcript context accounting", () => {
         // The connection-local view corrupts reads without changing canonical rows or projections.
         database.db.exec(`CREATE TEMP VIEW transcript_events AS
           SELECT event.session_id, event.seq, event.created_at,
+            event.event_zstd, event.event_utf8_bytes, event.navigation_json,
             CASE identity.event_id
               WHEN 'oldest' THEN ${failureKind === "sql" ? "json_extract('{broken', '$')" : "'{\"old\":}'"}
               WHEN 'middle' THEN '{"newer":}'

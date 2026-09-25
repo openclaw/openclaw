@@ -1,8 +1,10 @@
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
+import type { ControlUiLinkReaderPreview } from "../../../../src/shared/control-ui-link-reader.js";
 import type { ApplicationContext } from "../../app/context.ts";
-import "../../components/github-link-hovercard-registration.ts";
+import "../../components/link-reader-hovercard-registration.ts";
+import { availableLinkPreviewReaders } from "../../app/link-reader-routing.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
@@ -22,6 +24,37 @@ function renderDiff(item: { additions?: number; deletions?: number }) {
       ? nothing
       : html`<span class="activity-feed__deletions">−${item.deletions.toLocaleString()}</span>`
   }`;
+}
+
+function pullRequestPreview(pr: ControlUiSessionPullRequest): ControlUiLinkReaderPreview {
+  return {
+    url: pr.url,
+    title: pr.title,
+    subtitle: pr.owner + "/" + pr.repo + " #" + pr.number,
+    badge: {
+      label: t("activity.git." + pr.state),
+      tone:
+        pr.state === "merged"
+          ? "accent"
+          : pr.state === "open"
+            ? "positive"
+            : pr.state === "closed"
+              ? "negative"
+              : "neutral",
+    },
+    author: pr.author?.login,
+    authorUrl: pr.author?.login
+      ? "https://github.com/" + encodeURIComponent(pr.author.login)
+      : undefined,
+    metadata: [
+      ...(pr.additions === undefined
+        ? []
+        : [{ label: "", value: "+" + pr.additions, tone: "positive" as const }]),
+      ...(pr.deletions === undefined
+        ? []
+        : [{ label: "", value: "−" + pr.deletions, tone: "negative" as const }]),
+    ],
+  };
 }
 
 function renderPullRequest(pr: ControlUiSessionPullRequest) {
@@ -96,22 +129,11 @@ class ActivitySessionGit extends OpenClawLightDomElement {
       return nothing;
     }
     const stale = snapshot.status !== "ready" || gateway.snapshot.phase !== "connected";
-    return html`<openclaw-github-link-hovercard-provider
-      .client=${gateway.snapshot.client}
+    return html`<openclaw-link-reader-hovercard-provider
+      .client=${gateway.snapshot.phase === "connected" ? gateway.snapshot.client : null}
+      .readers=${availableLinkPreviewReaders(gateway.snapshot)}
       .agentId=${this.agentId}
-      .previewSeeds=${snapshot.pullRequests.map((pr) => ({
-        kind: "pull",
-        owner: pr.owner,
-        repo: pr.repo,
-        number: pr.number,
-        href: pr.url,
-        title: pr.title,
-        state: pr.state === "draft" ? "open" : pr.state,
-        draft: pr.state === "draft",
-        login: pr.author?.login,
-        additions: pr.additions,
-        deletions: pr.deletions,
-      }))}
+      .previewSeeds=${snapshot.pullRequests.map(pullRequestPreview)}
     >
       <div class="activity-feed__git">
         ${
@@ -139,7 +161,7 @@ class ActivitySessionGit extends OpenClawLightDomElement {
             : nothing
         }
       </div>
-    </openclaw-github-link-hovercard-provider>`;
+    </openclaw-link-reader-hovercard-provider>`;
   }
 }
 

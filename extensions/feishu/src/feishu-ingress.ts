@@ -198,7 +198,10 @@ function resolveFeishuIngressNonRetryableFailure(error: unknown) {
 /** Fan one merged Feishu turn's adoption across every transport and logical claim. */
 export function buildFeishuFlushIngressLifecycle(
   sources: readonly FeishuLifecycleSource[],
-  options?: { onReplayCommitError?: (error: unknown) => void },
+  options?: {
+    onReplayCommitError?: (error: unknown) => void;
+    trackTask?: (task: Promise<void>) => void;
+  },
 ): {
   lifecycle: FeishuIngressLifecycle | undefined;
   settle: () => Promise<void>;
@@ -297,6 +300,7 @@ export function buildFeishuFlushIngressLifecycle(
         }
       })();
     adopting = activeAdoption;
+    options?.trackTask?.(activeAdoption);
     try {
       await activeAdoption;
     } finally {

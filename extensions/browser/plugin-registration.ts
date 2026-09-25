@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 /**
  * Browser plugin registration helpers. This file keeps registration lazy while
  * advertising Browser tools, services, node-host commands, and audits.
@@ -15,32 +14,23 @@ import type {
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { normalizeAgentId, parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { createSubsystemLogger, isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
-import { isBrowserMachineOutput } from "./cli-output-mode.js";
+import { registerBrowserCliMetadata } from "./cli-metadata.js";
+import { bindBrowserDashboardEvents } from "./src/browser-dashboard-events.js";
 import {
   BROWSER_REQUEST_GATEWAY_METHOD,
   BROWSER_REQUEST_GATEWAY_SCOPE,
+  SESSION_BROWSER_REQUEST_GATEWAY_METHOD,
 } from "./src/browser-gateway-contract.js";
 import {
   BROWSER_PROXY_COMMAND,
   BROWSER_PROXY_UPLOAD_COMMAND,
 } from "./src/browser-node-commands.js";
-import { getBrowserStateRuntime } from "./src/browser-runtime-state.js";
-import { parseBrowserTabToolBinding } from "./src/browser-tool-binding.js";
-import { describeBrowserTool } from "./src/browser-tool-description.js";
-import {
-  BrowserToolOutputSchema,
-  createBrowserToolSchema,
-  resolveBrowserToolCapabilities,
-} from "./src/browser-tool.schema.js";
-import { resolveBrowserConfig, resolveProfile } from "./src/browser/config.js";
-import { getBrowserProfileCapabilities } from "./src/browser/profile-capabilities.js";
+import { getOptionalBrowserStateRuntime } from "./src/browser-runtime-state.js";
+import { createBrowserToolDefinition } from "./src/browser-tool-description.js";
 import {
   initializeBrowserSessionTabStore,
   readBrowserDashboardSessionOwners,
-  readBrowserDashboardTabs,
-  readBrowserDashboardStopIntents,
 } from "./src/browser/session-tab-store.js";
 import {
   configureSystemProfileImportStateStore,
@@ -83,67 +73,24 @@ function deriveChatTypeFromSessionKey(
   return undefined;
 }
 
-const BROWSER_CLI_DESCRIPTOR = {
-  name: "browser",
-  description: "Manage OpenClaw's dedicated browser (Chrome/Chromium)",
-  hasSubcommands: true,
-  machineOutput: isBrowserMachineOutput,
-};
+type BrowserToolOptions = NonNullable<
+  Parameters<typeof import("./src/browser-tool.js").createBrowserTool>[0]
+>;
 
 function createLazyBrowserTool(
-  opts?: {
-    sandboxBridgeUrl?: string;
-    allowHostControl?: boolean;
-    agentSessionKey?: string;
-    agentId?: string;
-    agentDir?: string;
-    workspaceDir?: string;
-    activeModel?: {
-      provider?: string;
-      model?: string;
-    };
-    mediaScope?: {
-      sessionKey?: string;
-      channel?: string;
-      chatType?: string;
-    };
-    runToolBinding?: unknown;
-  },
+  opts?: BrowserToolOptions,
   config?: OpenClawPluginToolContext["runtimeConfig"],
 ): AnyAgentTool {
-  const bindingResult =
-    opts?.runToolBinding === undefined
-      ? undefined
-      : parseBrowserTabToolBinding(opts.runToolBinding);
-  if (bindingResult && !bindingResult.ok) {
-    throw new Error(`invalid browser run binding: ${bindingResult.error}`);
-  }
-  const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
-  const hostHint =
-    opts?.allowHostControl === false ? "Host target blocked by policy." : "Host target allowed.";
-  const boundProfile =
-    bindingResult?.ok && bindingResult.binding.target === "host"
-      ? resolveProfile(resolveBrowserConfig(config?.browser, config), bindingResult.binding.profile)
-      : undefined;
-  const capabilities = resolveBrowserToolCapabilities({
-    tabBound: bindingResult?.ok,
-    evaluateEnabled: config?.browser?.evaluateEnabled !== false,
-    ...(boundProfile ? { profileCapabilities: getBrowserProfileCapabilities(boundProfile) } : {}),
-  });
+  const { binding, capabilities, metadata } = createBrowserToolDefinition(opts, () => config);
   return {
-    label: "Browser",
-    name: "browser",
-    resultContentSource: "network",
-    description: describeBrowserTool({ targetDefault, hostHint, capabilities }),
-    parameters: createBrowserToolSchema(capabilities),
-    outputSchema: BrowserToolOutputSchema,
+    ...metadata,
     execute: async (toolCallId, args, signal, onUpdate) => {
       const { createBrowserTool } = await loadBrowserRegistrationRuntimeModule();
       const tool = createBrowserTool(
-        bindingResult?.ok
+        binding
           ? {
               ...opts,
-              runToolBinding: bindingResult.binding,
+              runToolBinding: binding,
               toolCapabilities: capabilities,
             }
           : { ...opts, toolCapabilities: capabilities },
@@ -153,24 +100,7 @@ function createLazyBrowserTool(
   };
 }
 
-function createBrowserToolOptions(ctx: OpenClawPluginToolContext): {
-  sandboxBridgeUrl?: string;
-  allowHostControl?: boolean;
-  agentSessionKey?: string;
-  agentId?: string;
-  agentDir?: string;
-  workspaceDir?: string;
-  activeModel?: {
-    provider?: string;
-    model?: string;
-  };
-  mediaScope?: {
-    sessionKey?: string;
-    channel?: string;
-    chatType?: string;
-  };
-  runToolBinding?: unknown;
-} {
+function createBrowserToolOptions(ctx: OpenClawPluginToolContext): BrowserToolOptions {
   const mediaChannel = ctx.deliveryContext?.channel ?? ctx.messageChannel;
   const mediaChatType = deriveChatTypeFromSessionKey(ctx.sessionKey);
   return {
@@ -268,103 +198,35 @@ export const browserSecurityAuditCollectors: OpenClawPluginSecurityAuditCollecto
 
 function createLazyBrowserPluginService(): OpenClawPluginService {
   let service: OpenClawPluginService | null = null;
-  let eventBinding:
-    | {
-        runtime: ReturnType<typeof getBrowserStateRuntime>;
-        events: NonNullable<Parameters<OpenClawPluginService["start"]>[0]["gatewayEvents"]>;
-      }
-    | undefined;
-  let unsubscribeBoardChanges: (() => void) | undefined;
-  let reconciliation: Promise<void> | undefined;
-  const pendingSessions = new Set<string>();
-  let stopping = false;
-  const releaseEvents = () => {
-    unsubscribeBoardChanges?.();
-    unsubscribeBoardChanges = undefined;
-    if (eventBinding && eventBinding.runtime.dashboardEvents === eventBinding.events) {
-      eventBinding.runtime.dashboardEvents = undefined;
-    }
-    eventBinding = undefined;
-  };
-  const reconcilePending = () => {
-    if (reconciliation || pendingSessions.size === 0) {
-      return;
-    }
-    reconciliation = (async () => {
-      const { reconcileBrowserDashboards } = await import("./src/browser-dashboard.js");
-      while (pendingSessions.size > 0) {
-        const sessionKeys = [...pendingSessions];
-        pendingSessions.clear();
-        await reconcileBrowserDashboards({
-          sessionKeys,
-          onWarn: (message) => logger.warn(message),
-        });
-      }
-    })()
-      .catch((error: unknown) => {
-        pendingSessions.clear();
-        logger.warn(`Browser dashboard reconciliation failed: ${String(error)}`);
-      })
-      .finally(() => {
-        reconciliation = undefined;
-        if (!stopping) {
-          reconcilePending();
-        }
-      });
-  };
-  const loadService = async () => {
-    if (!service) {
-      const { createBrowserPluginService, stopBrowserControlService } =
-        await loadBrowserRegistrationRuntimeModule();
-      service = createBrowserPluginService({ stopOnDemand: stopBrowserControlService });
-    }
-    return service;
-  };
+  let stopDashboardEvents: (() => Promise<void>) | undefined;
   return {
     id: "browser-control",
     // Policy changes drain the service's generation before adopting new values.
     // Profile-level refresh keeps the admitted policy until this owner stops.
     reload: {
-      configPrefixes: ["browser.enabled", "browser.evaluateEnabled", "browser.ssrfPolicy"],
+      configPrefixes: [
+        "browser.enabled",
+        "browser.evaluateEnabled",
+        "browser.ssrfPolicy",
+        "browser.extensionRelay.allowLegacyAuth",
+      ],
     },
     start: async (ctx) => {
-      stopping = false;
-      releaseEvents();
-      if (ctx.gatewayEvents) {
-        const runtime = getBrowserStateRuntime();
-        const events = ctx.gatewayEvents;
-        eventBinding = { runtime, events };
-        runtime.dashboardEvents = events;
-        const onBoardChanged: Parameters<typeof events.onSessionsChanged>[0] = (event) => {
-          if (stopping || event.reason !== "board") {
-            return;
-          }
-          for (const dashboard of readBrowserDashboardSessionOwners()) {
-            if (
-              dashboard.sessionKey === event.sessionKey ||
-              (event.agentId &&
-                dashboard.agentId === normalizeAgentId(event.agentId) &&
-                parseAgentSessionKey(dashboard.sessionKey)?.rest === event.sessionKey)
-            ) {
-              pendingSessions.add(dashboard.sessionKey);
-            }
-          }
-          reconcilePending();
-        };
-        // Board publishers run outside the service's instance-local runtime scope.
-        unsubscribeBoardChanges = events.onSessionsChanged(AsyncLocalStorage.bind(onBoardChanged));
-      }
+      await stopDashboardEvents?.();
+      stopDashboardEvents = ctx.gatewayEvents
+        ? bindBrowserDashboardEvents(ctx.gatewayEvents, (message) => logger.warn(message))
+        : undefined;
       if (!isTruthyEnvValue(process.env[EAGER_BROWSER_CONTROL_SERVICE_ENV])) {
         return;
       }
-      const loaded = await loadService();
-      await loaded.start(ctx);
+      const { createBrowserPluginService, stopBrowserControlService } =
+        await loadBrowserRegistrationRuntimeModule();
+      service ??= createBrowserPluginService({ stopOnDemand: stopBrowserControlService });
+      await service.start(ctx);
     },
     stop: async (ctx) => {
-      stopping = true;
-      releaseEvents();
-      await reconciliation;
-      pendingSessions.clear();
+      await stopDashboardEvents?.();
+      stopDashboardEvents = undefined;
       if (!service) {
         const loadedRuntime = loadBrowserRegistrationRuntimeModule.peek();
         if (!loadedRuntime) {
@@ -381,14 +243,14 @@ function createLazyBrowserPluginService(): OpenClawPluginService {
 
 /** Register Browser tool factories, CLI, gateway methods, services, and audits. */
 export function registerBrowserPlugin(api: OpenClawPluginApi) {
-  initializeBrowserSessionTabStore(api.runtime);
+  const runtime = initializeBrowserSessionTabStore(api.runtime);
   api.session.controls.registerControlUiDescriptor({
     id: "dashboard",
     surface: "widget",
     label: "Browser",
     description:
-      "An HTTP(S) dashboard shared with the agent's managed browser. Author with dashboard widget_put, then use the browser tool's dashboard selector to interact with that same page.",
-    requiredScopes: ["operator.admin"],
+      "An interactive HTTP(S) browser dashboard. Session writers share an isolated session context with the agent's dashboard selector; administrators use the separate managed-profile browser. Author with dashboard widget_put.",
+    requiredScopes: ["operator.sessions.write"],
     schema: {
       type: "object",
       additionalProperties: false,
@@ -402,24 +264,35 @@ export function registerBrowserPlugin(api: OpenClawPluginApi) {
         profile: {
           type: "string",
           maxLength: 128,
-          description: "Local managed Browser profile; defaults to openclaw",
+          description:
+            "Administrator-only local managed profile (default openclaw). Session browser uses the configured default profile; omit this property.",
         },
       },
     },
   });
   api.on("session_end", async (event) => {
     if (
-      event.reason === "deleted" &&
-      event.sessionKey &&
-      (readBrowserDashboardTabs().some((tab) => tab.dashboard?.sessionKey === event.sessionKey) ||
-        readBrowserDashboardStopIntents().some((intent) => intent.sessionKey === event.sessionKey))
+      event.reason !== "deleted" ||
+      !event.sessionKey ||
+      getOptionalBrowserStateRuntime() !== runtime
     ) {
-      const { reconcileBrowserDashboards } = await import("./src/browser-dashboard.js");
-      await reconcileBrowserDashboards({
-        sessionKeys: [event.sessionKey],
-        onWarn: (message) => logger.warn(message),
-      });
+      return;
     }
+    const dashboards = await readBrowserDashboardSessionOwners();
+    if (
+      getOptionalBrowserStateRuntime() !== runtime ||
+      !dashboards.some((dashboard) => dashboard.sessionKey === event.sessionKey)
+    ) {
+      return;
+    }
+    const { reconcileBrowserDashboards } = await import("./src/browser-dashboard.js");
+    if (getOptionalBrowserStateRuntime() !== runtime) {
+      return;
+    }
+    await reconcileBrowserDashboards({
+      sessionKeys: [event.sessionKey],
+      onWarn: (message) => logger.warn(message),
+    });
   });
   configureSystemProfileImportStateStore(
     api.runtime.state.openKeyedStore<SystemProfileImportState>({
@@ -431,13 +304,7 @@ export function registerBrowserPlugin(api: OpenClawPluginApi) {
     const config = ctx.getRuntimeConfig?.() ?? ctx.runtimeConfig ?? ctx.config;
     return createLazyBrowserTool(createBrowserToolOptions(ctx), config);
   }) as OpenClawPluginToolFactory);
-  api.registerCli(
-    async ({ program }) => {
-      const { registerBrowserCli } = await import("./src/cli/browser-cli.js");
-      registerBrowserCli(program, process.argv, api.rootDir);
-    },
-    { commands: ["browser"], descriptors: [BROWSER_CLI_DESCRIPTOR] },
-  );
+  registerBrowserCliMetadata(api);
   api.registerGatewayMethod(
     BROWSER_REQUEST_GATEWAY_METHOD,
     async (opts) => {
@@ -446,6 +313,17 @@ export function registerBrowserPlugin(api: OpenClawPluginApi) {
     },
     {
       scope: BROWSER_REQUEST_GATEWAY_SCOPE,
+    },
+  );
+  api.registerGatewayMethod(
+    SESSION_BROWSER_REQUEST_GATEWAY_METHOD,
+    async (opts) => {
+      const { handleSessionBrowserGatewayRequest } = await loadBrowserRegistrationRuntimeModule();
+      return handleSessionBrowserGatewayRequest(opts);
+    },
+    {
+      scope: "operator.write",
+      sessionAccess: { mode: "write", allowOwnSessionScope: true, requiredTool: "browser" },
     },
   );
   // Remote extension relay: lets the Chrome extension connect directly to this

@@ -4,6 +4,7 @@ import path from "node:path";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
+  OpenAsyncKeyedStoreOptions,
   OpenKeyedStoreOptions,
   PluginStateCompareIntent,
   PluginStateSyncKeyedStore,
@@ -57,7 +58,7 @@ describe("ClickClack discussion state persistence", () => {
 
     try {
       const harness = createHarness({ label: "Persisted legacy title" }, { openSyncKeyedStore });
-      harness.runtime.state.openKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
+      harness.runtime.state.openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) =>
         createPluginStateKeyedStoreForTests<T>("clickclack", { ...options, env });
       const service = new ClickClackDiscussionService(harness.runtime, {
         clientFactory: () => harness.client,
@@ -184,7 +185,7 @@ function generationFixture(
       },
     },
   );
-  harness.runtime.state.openKeyedStore = <T>(storeOptions: OpenKeyedStoreOptions) => {
+  harness.runtime.state.openKeyedStore = <T>(storeOptions: OpenAsyncKeyedStoreOptions) => {
     const store = createPluginStateKeyedStoreForTests<T>("clickclack", { ...storeOptions, env });
     return {
       ...store,

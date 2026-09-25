@@ -133,7 +133,8 @@ describe("Google Meet startup ownership", () => {
         launch({
           runtime,
           config,
-          fullConfig: {},
+          // Missing-provider rollback must not start unrelated provider runtimes.
+          fullConfig: { plugins: { enabled: false } },
           mode: "bidi",
           meetingSessionId: "startup-owner",
           url: MEET_URL,

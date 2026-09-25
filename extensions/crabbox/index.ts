@@ -9,7 +9,9 @@ import {
 } from "./src/crabbox-sandbox-backend.js";
 import { resolveCrabboxSandboxConfig } from "./src/crabbox-sandbox-config.js";
 import { mintCrabboxSandboxLeaseId } from "./src/crabbox-sandbox-lease.js";
-import { createCrabboxWorkerProvider, resolveOpenClawRoot } from "./src/crabbox-worker-provider.js";
+import { createCrabboxTool } from "./src/crabbox-tool.js";
+import { resolveOpenClawRoot } from "./src/crabbox-worker-profile.js";
+import { createCrabboxWorkerProvider } from "./src/crabbox-worker-provider.js";
 import { resolveCrabboxWarmImagePolicy } from "./src/crabbox-worker-warm-image-policy.js";
 
 const workerWallpaperPath = fileURLToPath(
@@ -21,17 +23,29 @@ export default definePluginEntry({
   name: "Crabbox Worker Provider",
   description: "Cloud worker provider and lease-backed sandbox backend for the Crabbox CLI",
   register(api) {
+    api.registerTool((context) => createCrabboxTool({ context, gateway: api.runtime.gateway }), {
+      name: "crabbox",
+    });
+    api.registerToolMetadata({
+      toolName: "crabbox",
+      displayName: "Crabbox",
+      description: "Run and present apps on a temporary machine attached to this conversation.",
+      risk: "high",
+      tags: ["cloud", "desktop"],
+    });
     api.registerCli(
-      async ({ program }) => {
+      async ({ program, config }) => {
         const { registerCrabboxWarmImageCommands } =
           await import("./src/crabbox-worker-warm-image-cli.js");
         registerCrabboxWarmImageCommands(program, api.runtime.state);
+        const { registerCrabboxModelRunCommand } = await import("./src/crabbox-model-run-cli.js");
+        registerCrabboxModelRunCommand({ program, config });
       },
       {
         descriptors: [
           {
             name: "crabbox",
-            description: "Inspect and recover Crabbox warm images",
+            description: "Run model-backed commands and manage Crabbox warm images",
             hasSubcommands: true,
           },
         ],

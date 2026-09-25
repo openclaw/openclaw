@@ -1,7 +1,10 @@
 import { NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE } from "../../infra/node-commands.js";
 import type { SpawnResult } from "../../process/exec.js";
 import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
-import type { NodeWorkerWorkspaceSeedInput } from "../../worker/node-workspace-protocol.js";
+import type {
+  NodeWorkerWorkspaceSeedInput,
+  NodeWorkerWorkspaceProcessInput,
+} from "../../worker/node-workspace-protocol.js";
 import type { NodeWorkerWorkspaceTransferInput } from "../../worker/node-workspace-transfer-protocol.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type {
@@ -76,6 +79,7 @@ export type WorkerWorkspaceCommand = {
   signal?: AbortSignal;
   transfer?: NodeWorkerWorkspaceTransferInput;
   seed?: NodeWorkerWorkspaceSeedInput;
+  process?: NodeWorkerWorkspaceProcessInput;
 };
 
 export type WorkerLocalWorkspaceSyncRequest = {
@@ -158,6 +162,7 @@ export type WorkerLocalWorkspaceReconcileRequest = {
   remoteWorkspaceDir: string;
   baseManifestRef: string;
   journal: WorkerWorkspaceReconciliationJournalAdapter;
+  assertCurrent?: () => void;
   stagedResult?: {
     ref: string;
     record(ref: string): void;
@@ -172,6 +177,7 @@ export type WorkerWorkspaceReconcileRequest = {
         kind: "local";
         path: string;
         journal: WorkerWorkspaceReconciliationJournalAdapter;
+        assertCurrent?: () => void;
         stagedResult?: WorkerLocalWorkspaceReconcileRequest["stagedResult"];
       }
     | {

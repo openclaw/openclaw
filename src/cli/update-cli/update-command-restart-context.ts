@@ -1,17 +1,16 @@
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
 import { resolveManagedGatewayServiceProcessEnv } from "../../daemon/service-types.js";
-import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
+import { resolveGatewayService } from "../../daemon/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { prepareRestartScript } from "./restart-helper.js";
 import type { UpdateRestartParams } from "./update-command-service-context-types.js";
 import {
   resolveServiceRefreshEnv,
   stripGatewayServiceMarkerEnv,
 } from "./update-command-service-env.js";
 import {
-  assertGatewayServiceManagementAllowedForUpdate,
   GatewayServiceUpdateOwnershipError,
   isGatewayServiceManagementAllowedForUpdate,
+  readGatewayServiceStateForUpdate,
   resolveGatewayServiceManagementBlockMessageForUpdate,
 } from "./update-command-service-plan.js";
 import {
@@ -25,7 +24,6 @@ export async function prepareUpdateRestart(
   params: UpdateRestartParams,
   restartConfigSnapshot: ConfigFileSnapshot,
 ) {
-  let restartScriptPath: string | null = null;
   let refreshGatewayServiceEnv = false;
   let gatewayServiceEnv: NodeJS.ProcessEnv | undefined;
   let gatewayServiceInstallEnv: NodeJS.ProcessEnv | null | undefined;
@@ -56,13 +54,11 @@ export async function prepareUpdateRestart(
   });
   if (params.shouldRestart && serviceMutationAllowed && !skipLegacyServiceRestart) {
     try {
-      const serviceState = await readGatewayServiceState(resolveGatewayService(), {
-        env: serviceStateReadEnv,
-        requireEffective: true,
-        requireLoadedCommand: true,
-        validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
-        timeoutMs: params.updateStepTimeoutMs,
-      });
+      const serviceState = await readGatewayServiceStateForUpdate(
+        resolveGatewayService(),
+        serviceStateReadEnv,
+        params.updateStepTimeoutMs,
+      );
       serviceUpdateVerdict = await revalidateManagedGatewayServiceAfterUpdate({
         state: serviceState,
         root: params.result.root ?? params.root,
@@ -112,17 +108,13 @@ export async function prepareUpdateRestart(
         serviceEnv: gatewayServiceEnv,
         serviceCommand:
           serviceUpdateVerdict.kind === "unresolved" ||
-          (serviceUpdateVerdict.kind === "owned" && !serviceUpdateVerdict.refreshDefinition)
+          (serviceUpdateVerdict.kind === "owned" &&
+            (!serviceUpdateVerdict.refreshDefinition ||
+              (serviceUpdateVerdict.requiresInstallRootRefresh &&
+                restartConfigSnapshot.config.gateway?.port === undefined)))
             ? serviceState.command
             : undefined,
       });
-      if (refreshGatewayServiceEnv) {
-        restartScriptPath = await prepareRestartScript(
-          serviceState.env,
-          gatewayPort,
-          serviceState.command?.programArguments,
-        );
-      }
     } catch (err) {
       if (params.preManagedServiceStop?.stopped) {
         const message =
@@ -147,7 +139,6 @@ export async function prepareUpdateRestart(
     );
   }
   return {
-    restartScriptPath,
     refreshGatewayServiceEnv,
     gatewayServiceEnv,
     gatewayServiceInstallEnv,

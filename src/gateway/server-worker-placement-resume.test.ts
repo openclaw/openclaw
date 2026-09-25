@@ -8,6 +8,7 @@ vi.mock("./worker-environments/workspace-sync-preflight.js", () => ({
   preflightWorkerWorkspace: workspace.preflight,
 }));
 
+import { getRuntimeConfig } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -88,6 +89,7 @@ describe("reclaimed worker automatic resume", () => {
           : replacement.environments.get(environmentId),
     };
     const runtime = createGatewayWorkerPlacementRuntime({
+      getCommittedRuntimeConfig: getRuntimeConfig,
       placements,
       environments,
       gatewayNamespace: "gateway-resume-test",
@@ -170,7 +172,7 @@ describe("reclaimed worker automatic resume", () => {
           payloads: [{ text: "The resumed workspace is ready." }],
         });
         expect(runLocal).toHaveBeenCalledOnce();
-        expect(replacement.environments.createFromProfileSnapshot).toHaveBeenCalledOnce();
+        expect(replacement.environments.createWithRequest).toHaveBeenCalledOnce();
         expect(placements.get(REQUEST.sessionId)).toMatchObject({
           state: "active",
           environmentId: replacement.ready.environmentId,
@@ -181,8 +183,7 @@ describe("reclaimed worker automatic resume", () => {
         expect(controller.signal.aborted).toBe(false);
       } else {
         expect(await pending).toBe(termination);
-        expect(replacement.environments.create).not.toHaveBeenCalled();
-        expect(replacement.environments.createFromProfileSnapshot).not.toHaveBeenCalled();
+        expect(replacement.environments.createWithRequest).not.toHaveBeenCalled();
         expect(runLocal).not.toHaveBeenCalled();
         expect(placements.get(REQUEST.sessionId)).toMatchObject({
           state: "reclaimed",

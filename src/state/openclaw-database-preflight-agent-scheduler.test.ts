@@ -18,6 +18,52 @@ function createResult(): OpenClawDatabaseSchemaPreflight {
 }
 
 describe("bounded agent database preflight scheduling", () => {
+  it("keeps deferred inspections alive until the Gateway owner stops", async () => {
+    vi.useFakeTimers();
+    const budget = vi.spyOn(sqliteInspection, "readSqliteInspectionBudget").mockReturnValue({
+      timeoutMs: 1,
+      size: "fixture",
+    });
+    const gateway = new AbortController();
+    const released = createDeferred();
+    const tracked: Promise<unknown>[] = [];
+    let inspectionSignal: AbortSignal | undefined;
+    try {
+      await sqliteInspection.withSqliteReadOnlyWorkerScope(async () => {
+        const foreground = preflightAgentDatabasesBounded(
+          ["slow.sqlite"],
+          async () => {
+            inspectionSignal = sqliteInspection.resolveSqliteInspectionSignal();
+            await released.promise;
+            inspectionSignal?.throwIfAborted();
+          },
+          createResult(),
+          undefined,
+          {
+            signal: gateway.signal,
+            path: (pathname) => pathname,
+            track: (work) => {
+              tracked.push(work);
+            },
+            defer: () => [],
+          },
+        );
+        await vi.advanceTimersByTimeAsync(1);
+        await foreground;
+      });
+      expect(inspectionSignal?.aborted).toBe(false);
+      gateway.abort(new Error("Gateway stopped"));
+      expect(inspectionSignal?.aborted).toBe(true);
+      expect(inspectionSignal?.reason).toBe(gateway.signal.reason);
+    } finally {
+      gateway.abort();
+      released.resolve();
+      await Promise.allSettled(tracked);
+      budget.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("rejects an expired inspection failure before background ownership is established", async () => {
     vi.useFakeTimers();
     const budget = vi

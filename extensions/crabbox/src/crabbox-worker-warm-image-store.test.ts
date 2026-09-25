@@ -1,5 +1,5 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { crabboxState } from "./crabbox-state.test-support.js";
 import {
@@ -36,7 +36,7 @@ function observeComparisons(before: () => void | Promise<void>, after?: () => vo
   const open = crabboxState.openKeyedStore;
   let attempts = 0;
   vi.spyOn(crabboxState, "openKeyedStore").mockImplementation(
-    <T>(options: OpenKeyedStoreOptions) => {
+    <T>(options: OpenAsyncKeyedStoreOptions) => {
       const store = open<T>(options);
       const compareAndApply = store.compareAndApply!;
       return {

@@ -12,6 +12,7 @@ import {
   type BranchSummaryDetails,
   type FileOperations,
 } from "../../runtime/index.js";
+import { normalizeBranchSummaryResult } from "../agent-session-utils.js";
 import type { SessionEntry, ReadonlySessionManager } from "../session-manager.js";
 import { createCompactionRuntime, type SessionModelUsageSink } from "./runtime.js";
 
@@ -63,15 +64,10 @@ export async function generateBranchSummary(
   options: GenerateBranchSummaryOptions,
 ): Promise<BranchSummaryResult> {
   const { usageSink, ...summaryOptions } = options;
-  const result = await generateBranchSummaryCore(entries, {
-    runtime: createCompactionRuntime(usageSink),
-    ...summaryOptions,
-  });
-  if (result.ok) {
-    return result.value;
-  }
-  if (result.error.code === "aborted") {
-    return { aborted: true, error: result.error.message };
-  }
-  return { error: result.error.message };
+  return normalizeBranchSummaryResult(
+    await generateBranchSummaryCore(entries, {
+      runtime: createCompactionRuntime(usageSink),
+      ...summaryOptions,
+    }),
+  );
 }

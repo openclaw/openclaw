@@ -3,7 +3,8 @@ import type { TeamReportsConfig, resolveTeamReportsConfig } from "./config.js";
 import { describePeriod } from "./periods.js";
 import { renderMarkdown } from "./render/markdown.js";
 import { buildRoster } from "./roster.js";
-import { createDiscordSource, createGithubSource } from "./sources/index.js";
+import { createDiscordSource } from "./sources/discord/index.js";
+import { createGithubSource } from "./sources/github/index.js";
 import type { TeamReportsStore } from "./store.js";
 import { generateSummaries, type SummaryLlm } from "./summaries.js";
 import type {
@@ -83,9 +84,18 @@ export async function generateReportPeriods(params: {
   const roster = buildRoster(resolved.people, loaded.people);
   params.onRoster([...new Set(roster.byLogin.values())]);
   const statuses: Record<string, SourceStatus> = {};
+  const rejectedDays: PeriodDescriptor[] = [];
   for (const period of params.periods) {
     runtime.signal.throwIfAborted();
-    const previous = await store.getPeriod(period.period, period.key);
+    // runPeriods orders days before rollups. A rejected acquisition must also
+    // preserve its parents during this generation, even if an older day exists.
+    if (
+      period.period !== "day" &&
+      rejectedDays.some((day) => day.sinceMs < period.untilMs && day.untilMs > period.sinceMs)
+    ) {
+      continue;
+    }
+    const previous = await store.getPeriodDocument(period.period, period.key);
     runtime.signal.throwIfAborted();
     let report;
     if (period.period === "day") {
@@ -134,6 +144,12 @@ export async function generateReportPeriods(params: {
     statuses[`${period.period}/${period.key}/github`] = report.sources.github;
     if (report.sources.discord) {
       statuses[`${period.period}/${period.key}/discord`] = report.sources.discord;
+    }
+    // Failed recollection is diagnostic evidence, not a replacement activity
+    // snapshot. Keep accepted counts/prose; the run still records these failures.
+    if (period.period === "day" && Object.values(report.sources).some((source) => !source.ok)) {
+      rejectedDays.push(period);
+      continue;
     }
     // Commit collected evidence before the model call, including deterministic text for readers.
     const fallback = await generateSummaries({

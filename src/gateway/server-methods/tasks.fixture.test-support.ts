@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import {
   type HeartbeatWakeRequest,
   requestHeartbeat,
@@ -12,13 +13,19 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
-import {
-  resetTaskRegistryControlRuntimeForTests,
-  resetTaskRegistryForTests,
-  setTaskRegistryControlRuntimeForTests,
-} from "../../tasks/task-runtime.test-helpers.js";
+import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { runTaskHandler } from "./tasks.test-helpers.js";
+
+const cancelSessionMock = vi.hoisted(() => vi.fn());
+vi.mock("../../tasks/task-registry-control.runtime.js", () => ({
+  cancelBackgroundExecSession: () => false,
+  cancelActiveCronTaskRun: () => false,
+  getAcpSessionManager: () => ({ cancelSession: cancelSessionMock }),
+  killSubagentRunAdmin: async () => {
+    throw new Error("Unexpected subagent cancellation in task handler fixture");
+  },
+}));
 
 export const mainSessionTaskScope = {
   requesterSessionKey: "agent:main:main",
@@ -28,7 +35,6 @@ export const mainSessionTaskScope = {
 
 export function useTaskGatewayFixture() {
   const stateDirEnvSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
-  const cancelSessionMock = vi.fn();
   let heartbeatWakeRequests: HeartbeatWakeRequest[] = [];
   let disposeHeartbeatWakeHandler: (() => void) | undefined;
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -44,7 +50,6 @@ export function useTaskGatewayFixture() {
         disposeHeartbeatWakeHandler?.();
         disposeHeartbeatWakeHandler = undefined;
         resetSystemEventsForTest();
-        resetTaskRegistryControlRuntimeForTests();
         resetTaskRegistryForTests();
         stateDirEnvSnapshot.restore();
         closeOpenClawAgentDatabasesForTest();
@@ -55,8 +60,12 @@ export function useTaskGatewayFixture() {
     }),
   );
 
-  beforeEach(() => {
+  beforeEach(async () => {
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-gateway-tasks-"));
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: mainSessionTaskScope.requesterSessionKey },
+      { sessionId: "session-main", updatedAt: 1 },
+    );
     resetTaskRegistryForTests();
     heartbeatWakeRequests = [];
     disposeHeartbeatWakeHandler = setHeartbeatWakeHandler(async (request) => {
@@ -64,13 +73,6 @@ export function useTaskGatewayFixture() {
       return { status: "ran", durationMs: 0 };
     });
     cancelSessionMock.mockReset();
-    setTaskRegistryControlRuntimeForTests({
-      cancelActiveCronTaskRun: () => false,
-      getAcpSessionManager: () => ({ cancelSession: cancelSessionMock }),
-      killSubagentRunAdmin: async () => {
-        throw new Error("Unexpected subagent cancellation in task handler fixture");
-      },
-    });
   });
 
   return { cancelSessionMock };

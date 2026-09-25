@@ -1,4 +1,3 @@
-// Matrix plugin module implements sqlite state behavior.
 import os from "node:os";
 import { getMatrixRuntime } from "../runtime.js";
 

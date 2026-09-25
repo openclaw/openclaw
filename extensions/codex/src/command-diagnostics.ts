@@ -43,11 +43,12 @@ type CodexDiagnosticsCandidate = Omit<
 
 export async function handleCodexDiagnosticsFeedback(
   deps: CodexCommandDeps,
-  ctx: PluginCommandContext,
+  context: PluginCommandContext,
   pluginConfig: unknown,
   args: string,
   commandPrefix: string,
 ): Promise<PluginCommandResult> {
+  const ctx = { ...context };
   if (ctx.senderIsOwner !== true) {
     return { text: "Only an owner can send Codex diagnostics." };
   }
@@ -210,7 +211,7 @@ async function confirmCodexDiagnosticsFeedback(
   }
   const scopeMismatch = readCodexDiagnosticsScopeMismatch(pending, ctx);
   if (scopeMismatch) {
-    return scopeMismatch.confirmMessage;
+    return scopeMismatch;
   }
   deletePendingCodexDiagnosticsConfirmation(token);
   if (!pending.privateRouted && !(await hasAnyCodexDiagnosticsIdentity(ctx))) {
@@ -248,7 +249,7 @@ function cancelCodexDiagnosticsFeedback(ctx: PluginCommandContext, token: string
   }
   const scopeMismatch = readCodexDiagnosticsScopeMismatch(pending, ctx);
   if (scopeMismatch) {
-    return scopeMismatch.cancelMessage;
+    return scopeMismatch;
   }
   deletePendingCodexDiagnosticsConfirmation(token);
   return [
@@ -303,6 +304,7 @@ async function sendCodexDiagnosticsFeedbackForTargets(
   const failed: Array<{ target: CodexDiagnosticsTarget; error: string }> = [];
   for (const target of targets) {
     const assertCurrent = () => {
+      ctx.assertOwnerCurrent?.();
       const current = resolvePendingCodexDiagnosticsTargets(deps, [target], ctx.config);
       if (!codexDiagnosticsTargetsMatch([target], current)) {
         throw new Error("The Codex diagnostics session changed before upload; request it again.");

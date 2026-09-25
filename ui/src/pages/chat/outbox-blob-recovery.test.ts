@@ -2,7 +2,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { ChatQueueItem, ChatSelectionAnnotation } from "../../lib/chat/chat-types.ts";
+import type {
+  ChatAttachment,
+  ChatQueueItem,
+  ChatSelectionAnnotation,
+} from "../../lib/chat/chat-types.ts";
 import * as payloadStore from "../../lib/chat/outbox-payload-store.runtime.ts";
 import {
   captureChatOutboxRecoveryDestination,
@@ -44,6 +48,7 @@ async function prepare(
   id: string,
   sessionKey = "global",
   selectionAnnotation?: ChatSelectionAnnotation,
+  attachmentOrigin?: "paste" | "file",
 ) {
   const item: ChatQueueItem = {
     id,
@@ -61,6 +66,7 @@ async function prepare(
         mimeType: "text/plain",
         fileName: "source.txt",
         sizeBytes: 21,
+        ...(attachmentOrigin ? { origin: attachmentOrigin } : {}),
         dataUrl,
         ...(selectionAnnotation ? { selectionAnnotation } : {}),
       },
@@ -74,18 +80,22 @@ async function prepare(
   const { attachmentStorageError: _, ...stored } = { ...item, ...result.update };
   return {
     ...stored,
-    attachments: item.attachments?.map(({ id: attachmentId, mimeType, fileName, sizeBytes }) => ({
-      id: attachmentId,
-      mimeType,
-      fileName,
-      sizeBytes,
-    })),
+    attachments: item.attachments?.map(
+      ({ id: attachmentId, mimeType, fileName, sizeBytes, origin }) => {
+        const metadata: ChatAttachment = { id: attachmentId, mimeType, fileName, sizeBytes };
+        if (origin) {
+          metadata.origin = origin;
+        }
+        return metadata;
+      },
+    ),
   };
 }
 function seed(items: ChatQueueItem[], sessionKey = "global", version = 3) {
   const key = `openclaw.control.chatComposer.v${version}:${encodeURIComponent(gatewayUrl)}`;
   const raw = JSON.stringify({
     version,
+    ...(version === 4 ? { recovery: {} } : {}),
     gatewayOwner: gatewayUrl,
     sessions: {
       [storedChatOutboxScopeKey({ sessionKey, agentId: "main" })]: {
@@ -363,6 +373,18 @@ describe("Blob-preserving metadata migration", () => {
       }
       expect(cleanup).not.toHaveBeenCalled();
       await expectBytes(host, item);
+    },
+  );
+  it.each(["paste", "file", undefined] as const)(
+    "preserves %s origin and bytes after durable queue reload",
+    async (origin) => {
+      const host = hostFor();
+      const item = await prepare(host, `origin-${origin}`, "agent:main:review", undefined, origin);
+      seed([item], "agent:main:review", 4);
+      const store = readStoredOutboxStore(sessionStorage, target);
+      const restoredItem = Object.values(store.sessions)[0]?.queue?.[0];
+      const restored = await expectBytes(host, expectDefined(restoredItem, "stored queue item"));
+      expect(restored?.origin).toBe(origin);
     },
   );
 });

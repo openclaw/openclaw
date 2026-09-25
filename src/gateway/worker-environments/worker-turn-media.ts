@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import { pruneProcessedHistoryImages } from "../../agents/embedded-agent-runner/run/history-image-prune.js";
 import {
@@ -17,7 +18,6 @@ import { resolveImageSanitizationLimits } from "../../agents/image-sanitization.
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../agents/tool-fs-policy.js";
-import { tempWorkspace } from "../../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { logWarn } from "../../logger.js";
 import { readLocalMediaFile } from "../../media/local-media-access.js";
@@ -38,10 +38,8 @@ import {
 } from "../../worker/transcript-message.js";
 import type { WorkerSessionWorkspace } from "./session-workspace.js";
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
-import {
-  MAX_RECONCILIATION_TOTAL_BYTES,
-  MAX_RECONCILIATION_ENTRIES,
-} from "./workspace-manifest.js";
+const MAX_WORKER_ATTACHMENT_BYTES = 256 * 1024 * 1024;
+const MAX_WORKER_ATTACHMENT_FILES = 25_000;
 
 function prepareInput(
   content: Extract<AgentMessage, { role: "user" }>["content"],
@@ -179,10 +177,7 @@ export async function prepareWorkerTurnMedia(params: {
         return remotePath;
       }
       bytes += data.length;
-      if (
-        bytes > MAX_RECONCILIATION_TOTAL_BYTES ||
-        stagedPaths.size >= MAX_RECONCILIATION_ENTRIES
-      ) {
+      if (bytes > MAX_WORKER_ATTACHMENT_BYTES || stagedPaths.size >= MAX_WORKER_ATTACHMENT_FILES) {
         throw new Error(
           "Cloud worker attachments exceed the workspace transfer budget; send fewer or smaller files.",
         );

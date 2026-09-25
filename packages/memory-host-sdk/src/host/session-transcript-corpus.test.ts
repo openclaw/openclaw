@@ -8,6 +8,8 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import { upsertSessionEntryCore } from "../../../../src/config/sessions/session-accessor.js";
 import { registerOpenClawAgentDatabase } from "../../../../src/state/openclaw-agent-db-registry.js";
+import { getOpenClawAgentDatabaseIfOpen } from "../../../../src/state/openclaw-agent-db.js";
+import { tableExists } from "../../../../src/state/openclaw-state-db-schema-helpers.js";
 import { withOpenClawTestState } from "../../../../src/test-utils/openclaw-test-state.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { listSessionTranscriptCorpusEntriesForAgent } from "./session-files.js";
@@ -30,9 +32,13 @@ function pauseDirectoryDiscovery(sessionsDir: string) {
 }
 
 describe("listSessionTranscriptCorpusEntriesForAgent", () => {
-  it.each([true, false])(
-    "preserves synchronous corpus results with content revisions %s",
-    async (includeContentRevision) => {
+  it.each([
+    { includeContentRevision: true, archiveTablePresent: true },
+    { includeContentRevision: false, archiveTablePresent: true },
+    { includeContentRevision: false, archiveTablePresent: false },
+  ])(
+    "preserves corpus selection with content revisions $includeContentRevision and archive table $archiveTablePresent",
+    async ({ includeContentRevision, archiveTablePresent }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const sessionsDir = state.sessionsDir();
         await fs.mkdir(sessionsDir, { recursive: true });
@@ -49,6 +55,11 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
           },
           { sessionId: "cron-thread", updatedAt: 1 },
         );
+        const { db } = getOpenClawAgentDatabaseIfOpen({ agentId: "main", env: state.env })!;
+        if (!archiveTablePresent) {
+          db.exec("DROP TABLE session_transcript_archives");
+        }
+        expect(tableExists(db, "session_transcript_archives")).toBe(archiveTablePresent);
 
         const options = { includeContentRevision };
         const expected = listSessionTranscriptCorpusEntriesForAgentSync("main", options);
@@ -64,6 +75,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
           sessionKind: "cron",
         });
         expect(archive?.contentRevision !== undefined).toBe(includeContentRevision);
+        expect(tableExists(db, "session_transcript_archives")).toBe(archiveTablePresent);
       });
     },
   );

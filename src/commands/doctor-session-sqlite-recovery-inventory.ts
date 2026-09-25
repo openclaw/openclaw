@@ -5,7 +5,7 @@ import { listAgentIds } from "../agents/agent-scope-config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { isMigrationArchiveArtifactName } from "../config/sessions/artifacts.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target-paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isPathInside } from "../infra/path-guards.js";
 import {
@@ -13,9 +13,11 @@ import {
   sameMigrationArtifact,
   statMigrationPath,
   type MigrationArtifact,
-} from "./doctor-session-sqlite-artifact.js";
+} from "../infra/session-sqlite-migration-artifact.js";
+import { isSessionSqliteMigrationWarning } from "../infra/session-sqlite-migration-issues.js";
 import {
   canonicalMigrationFilePath,
+  collectRecordedConsumedArchives,
   hasSymbolicLinkInDirectoryPath,
   listSessionSqliteMigrationManifestPaths,
   readSessionSqliteMigrationManifest,
@@ -24,9 +26,7 @@ import {
   type ActiveSessionSqliteMigrationRun,
   type SessionSqliteMigrationMove,
   type SessionSqliteMigrationTargetManifest,
-} from "./doctor-session-sqlite-migration-run.js";
-import { collectRecordedConsumedArchives } from "./doctor-session-sqlite-restore.js";
-import { isSessionSqliteMigrationWarning } from "./doctor-session-sqlite-types.js";
+} from "../infra/session-sqlite-migration-manifest.js";
 
 type Outcome =
   | "candidate"

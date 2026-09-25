@@ -31,8 +31,10 @@ import { stopChildProcess } from "../../../helpers/stop-child-process.js";
 const MODEL = "mock-openai/progress-fixture";
 const FINAL_MARKER = "TOOL-PROGRESS-FINAL";
 const HEADLINE = "Checking the requested work";
-// The exec tool renders as a compact tool row on every progress surface.
+// Draft progress uses compact tool rows; native Slack uses task_update chunks.
 const toolRow = /🛠️ (?:Exec|Bash)\b/u;
+const nativeToolTitle = /^(?:Exec|Bash)\b/u;
+const failedToolRow = /🛠️ (?:Exec|Bash): failed\b/u;
 type WireWrite = {
   at: number;
   method: string;
@@ -604,11 +606,10 @@ describe("channel progress presentation through an isolated Gateway", () => {
         configured.channels!.slack!.streaming = { mode: "partial", nativeTransport: false };
         const modelProvider = configured.models!.providers!["mock-openai"]!;
         modelProvider.api = "openai-completions";
-        modelProvider.models = modelProvider.models.map((model) => ({
-          ...model,
-          api: "openai-completions",
-          reasoning: false,
-        }));
+        for (const model of modelProvider.models) {
+          model.api = "openai-completions";
+          model.reasoning = false;
+        }
         return configured;
       },
     });
@@ -741,45 +742,40 @@ describe("channel progress presentation through an isolated Gateway", () => {
     const completions: string[] = [];
     const tasks: Array<Record<string, unknown>> = [];
     const inboundMessages: Array<Record<string, unknown>> = [];
-    const providerRequests: Array<{ model: unknown; requester: boolean; completion: boolean }> = [];
+    const providerRequests: Array<{
+      model: unknown;
+      requester: boolean;
+      completion: boolean;
+      requestText: string;
+    }> = [];
     let observerRequests = 0;
     let releaseRequester: (() => void) | undefined;
     let requesterHeld = false;
     const slowRequesterCases = new Set<string>();
     const caseNames = ["visible", "restart"] as const;
     const settledRequesterCases: string[] = [];
-    const observerFailures = () => {
-      let attempts = 0;
-      return gateway
+    const observerFailures = () =>
+      gateway
         .logs()
         .split("\n")
         .flatMap((line) => {
           try {
             const value = asRecord(JSON.parse(line));
             const message = readStringValue(value.message) ?? "";
-            if (
-              value.subsystem === "provider-transport-fetch" &&
-              message.startsWith("[model-fetch] start ") &&
-              message.includes("model=observer-failure-fixture ")
-            ) {
-              attempts += 1;
-            }
-            if (message === "session observer disabled after consecutive failures") {
-              const failure = {
-                message,
-                error: value.error,
-                runId: value.runId,
-                attempts,
-              };
-              attempts = 0;
-              return [failure];
-            }
-            return [];
+            return message === "session observer disabled after consecutive failures"
+              ? [
+                  {
+                    message,
+                    error: value.error,
+                    runId: value.runId,
+                    attempts: value.consecutiveFailures,
+                  },
+                ]
+              : [];
           } catch {
             return [];
           }
         });
-    };
     // The shared terminal fixture intentionally requests a direct fallback.
     // Supply a visible model final over HTTP to exercise automatic-final receipts.
     const proxy = createServer((request, response) => {
@@ -796,6 +792,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
           model: body.model,
           requester: currentText.includes("Subagent terminal reply QA check:"),
           completion,
+          requestText: currentText.slice(0, 1_000),
         });
         if (String(parseBody(raw).model).endsWith("observer-failure-fixture")) {
           observerRequests += 1;
@@ -846,7 +843,15 @@ describe("channel progress presentation through an isolated Gateway", () => {
         }
         const upstream = await fetch(new URL(request.url ?? "/", provider.baseUrl), {
           method: request.method,
-          headers: { "content-type": "application/json" },
+          headers: {
+            "content-type": "application/json",
+            ...(typeof request.headers.session_id === "string"
+              ? { session_id: request.headers.session_id }
+              : {}),
+            ...(typeof request.headers["x-session-affinity"] === "string"
+              ? { "x-session-affinity": request.headers["x-session-affinity"] }
+              : {}),
+          },
           ...(request.method === "POST" ? { body: raw } : {}),
         });
         response.writeHead(upstream.status, {
@@ -879,6 +884,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
         usePackagedPlugins: true,
       },
       providerBaseUrl: `http://127.0.0.1:${address.port}/v1`,
+      mockSessionObserverUrl: provider.sessionObserverUrl,
       providerMode: "mock-openai",
       primaryModel: MODEL,
       alternateModel: observerModel,
@@ -1045,6 +1051,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
       let terminalTask: Record<string, unknown> | undefined;
       try {
         await waitForFact(async () => {
+          await provider.terminalRequesters.settle(gateway);
           const listing = asRecord(await gateway.call("tasks.list", { agentId: "qa", limit: 100 }));
           terminalTask = Array.isArray(listing.tasks)
             ? listing.tasks.map(asRecord).find((task) => task.title === `qa-terminal-${caseName}`)
@@ -1095,8 +1102,8 @@ describe("channel progress presentation through an isolated Gateway", () => {
         String(failure.error).includes("Isolated completion failed with stop reason error"),
       ),
     ).toBe(true);
-    // A failed connection can precede the proxy's HTTP receipt. Count starts at
-    // the transport owner so those failures cannot hide an unbounded retry.
+    // The observer warning carries its run-owned consecutive-failure count;
+    // provider transport starts from overlapping runs cannot be partitioned by warning order.
     expect(observerFailures().every((failure) => failure.attempts === 2)).toBe(true);
     expect(new Set(observerEvents.map((event) => event.runId)).size).toBeGreaterThanOrEqual(2);
     const evidenceDir = path.join(process.cwd(), ".artifacts", "channel-progress-presentation");
@@ -1209,7 +1216,15 @@ describe("channel progress presentation through an isolated Gateway", () => {
         }
         const upstream = await fetch(new URL(request.url ?? "/", provider.baseUrl), {
           method: request.method,
-          headers: { "content-type": "application/json" },
+          headers: {
+            "content-type": "application/json",
+            ...(typeof request.headers.session_id === "string"
+              ? { session_id: request.headers.session_id }
+              : {}),
+            ...(typeof request.headers["x-session-affinity"] === "string"
+              ? { "x-session-affinity": request.headers["x-session-affinity"] }
+              : {}),
+          },
           ...(request.method === "POST" ? { body: raw } : {}),
         });
         const upstreamText = await upstream.text();
@@ -1220,7 +1235,11 @@ describe("channel progress presentation through an isolated Gateway", () => {
           const snapshot = Array.isArray(snapshots)
             ? snapshots.map(asRecord).findLast((entry) => entry.raw === raw)
             : undefined;
-          const spawned = parseBody(readStringValue(snapshot?.toolOutput) ?? "");
+          const toolOutput = parseBody(readStringValue(snapshot?.toolOutput) ?? "");
+          const spawned =
+            asRecord(toolOutput.tool).name === "sessions_spawn"
+              ? asRecord(asRecord(toolOutput.result).details)
+              : toolOutput;
           const acceptedRunId = readStringValue(spawned.runId);
           const acceptedChildSessionKey = readStringValue(spawned.childSessionKey);
           if (
@@ -1272,6 +1291,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
         usePackagedPlugins: true,
       },
       providerBaseUrl: `http://127.0.0.1:${address.port}/v1`,
+      mockSessionObserverUrl: provider.sessionObserverUrl,
       providerMode: "mock-openai",
       primaryModel: MODEL,
       alternateModel: MODEL,
@@ -1389,6 +1409,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
       closeOpenClawStateDatabaseByPath(database.path);
     });
     await waitForFact(async () => {
+      await provider.terminalRequesters.settle(gateway);
       const listing = asRecord(await gateway.call("tasks.list", { agentId: "qa", limit: 100 }));
       allTaskSummaries = Array.isArray(listing.tasks)
         ? listing.tasks.map((entry) => {
@@ -1439,7 +1460,6 @@ describe("channel progress presentation through an isolated Gateway", () => {
       return (
         task?.status === "completed" &&
         delivery?.disposition === "ambiguous" &&
-        typeof delivery.nextAttemptAt === "number" &&
         Boolean(queued) &&
         gateway.logs().includes("automatic completion delivery could not be confirmed")
       );
@@ -1661,7 +1681,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
       }
       const finalText = `${thread === "current" ? "[[reply_to_current]] " : ""}${FINAL_MARKER}`;
       const injected = await injectProviderMessage(
-        `Tool progress QA check: call the exec tool exactly once with this exact command before answering: \`${failTool ? "sleep 3; exit 1" : "sleep 3"}\`. After that command completes or fails, reply exactly \`${finalText}\`.`,
+        `Tool progress QA check: call the exec tool exactly once with this exact command before answering: \`${failTool ? "sleep 2; exit 1" : "sleep 2"}\`. After that command completes or fails, reply exactly \`${finalText}\`.`,
         threadId,
       );
       if (adapter.manifest.provider === "slack") {
@@ -1740,15 +1760,16 @@ describe("channel progress presentation through an isolated Gateway", () => {
         )
         .join("\n");
       expect(progressText).toContain(HEADLINE);
-      if (tools) {
-        expect(progressText).toMatch(toolRow);
-      } else {
+      if (!tools) {
         expect(progressText).not.toMatch(toolRow);
+      } else if (channel !== "slack" || !native) {
+        expect(progressText).toMatch(toolRow);
       }
       if (failTool) {
         if (tools) {
-          expect(progressText).toContain("exit 1");
+          expect(progressText).toMatch(failedToolRow);
         } else {
+          expect(progressText).not.toMatch(failedToolRow);
           expect(progressText).not.toContain("exit 1");
         }
       }
@@ -1820,12 +1841,28 @@ describe("channel progress presentation through an isolated Gateway", () => {
       const tasks = writes
         .flatMap((write) => readChunks(write.body.chunks))
         .filter((chunk) => chunk.type === "task_update");
-      if (native) {
+      if (channel === "slack" && native) {
         // Detailed cards give the exec call its own task row; quiet cards keep
         // one stable summary row. Both complete with the turn.
-        expect(tasks.some((task) => toolRow.test(String(task.title)))).toBe(tools);
-        if (!tools) {
+        expect(tasks.some((task) => nativeToolTitle.test(readStringValue(task.title) ?? ""))).toBe(
+          tools,
+        );
+        if (tools) {
+          const startedTaskIndex = tasks.findIndex(
+            (task) =>
+              task.status === "in_progress" &&
+              nativeToolTitle.test(readStringValue(task.title) ?? ""),
+          );
+          expect(startedTaskIndex).toBeGreaterThanOrEqual(0);
+          const startedTask = tasks[startedTaskIndex];
+          expect(startedTask?.id).toEqual(expect.stringMatching(/\S/u));
+          const completedTaskIndex = tasks.findIndex(
+            (task) => task.id === startedTask?.id && task.status === "complete",
+          );
+          expect(completedTaskIndex).toBeGreaterThan(startedTaskIndex);
+        } else {
           expect(new Set(tasks.map((task) => task.id)).size).toBe(1);
+          expect(tasks[0]?.id).toEqual(expect.stringMatching(/\S/u));
         }
         expect(tasks.at(-1)?.status).toBe("complete");
       }

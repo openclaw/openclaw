@@ -6,16 +6,16 @@ import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   createPluginStateKeyedStoreForTests,
-  createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import { withZalouserIngressTestQueue } from "./ingress.test-support.js";
 import { monitorZalouserProvider } from "./monitor.js";
 import { setZalouserRuntime } from "./runtime.js";
-import { loadStoredZaloCredentialsAsync, saveStoredZaloCredentials } from "./session-state.js";
+import { loadStoredZaloCredentials, saveStoredZaloCredentials } from "./session-state.js";
 import { createDefaultResolvedZalouserAccount, createZalouserRuntimeEnv } from "./test-helpers.js";
 import type { API } from "./zca-client.js";
 
@@ -43,13 +43,13 @@ function sessionApi(
 }
 
 async function seedSession() {
-  saveStoredZaloCredentials("default", {
+  await saveStoredZaloCredentials("default", {
     imei: "fixture",
     userAgent: "openclaw-test",
     cookie: [],
     createdAt: new Date().toISOString(),
   });
-  expect(await loadStoredZaloCredentialsAsync("default")).not.toBeNull();
+  expect(await loadStoredZaloCredentials("default")).not.toBeNull();
 }
 
 beforeEach(() => {
@@ -57,8 +57,6 @@ beforeEach(() => {
   const runtime = createPluginRuntimeMock();
   runtime.state.openKeyedStore = (options) =>
     createPluginStateKeyedStoreForTests("zalouser", options);
-  runtime.state.openSyncKeyedStore = (options) =>
-    createPluginStateSyncKeyedStoreForTests("zalouser", options);
   setZalouserRuntime(runtime);
   createZaloMock.mockReset();
 });
@@ -117,6 +115,9 @@ describe("Zalo listener startup lifecycle", () => {
             }
             handle.stop();
           }
+          // Storage has its own idle actor timer; retire it before asserting
+          // that listener startup left no timeout or reconnect work behind.
+          await closeOpenClawStateDatabaseAsync();
           expect(vi.getTimerCount()).toBe(0);
           expect(listener.eventNames()).toEqual([]);
           const next = new TestListener();

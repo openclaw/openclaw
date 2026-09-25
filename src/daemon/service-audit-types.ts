@@ -1,6 +1,11 @@
-import type { GatewayServiceCommandConfig } from "./service-types.js";
+import type { GatewayServiceCommandConfig, GatewayServiceInstallArgs } from "./service-types.js";
 
 export type GatewayServiceCommand = GatewayServiceCommandConfig | null;
+
+export type GatewayServiceExpectedCommand = Pick<
+  GatewayServiceInstallArgs,
+  "programArguments" | "workingDirectory" | "environment" | "environmentValueSources"
+>;
 
 export type ServiceDefinitionDrift = {
   key: string;
@@ -13,6 +18,7 @@ export type ServiceDefinitionDrift = {
       expected: string | number | boolean;
     }
   | { kind: "unknown-edit"; reason: string }
+  | { kind: "preserved" }
 );
 
 export type ServiceConfigIssue = {

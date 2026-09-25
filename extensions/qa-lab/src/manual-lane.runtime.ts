@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements manual lane behavior.
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -44,12 +43,7 @@ async function stopManualLaneAuxiliaryResources(resources: {
   return failed ? toQaError(failed.reason) : undefined;
 }
 
-function resolveManualLaneTimeoutMs(params: {
-  providerMode: QaProviderMode;
-  primaryModel: string;
-  alternateModel: string;
-  timeoutMs?: number;
-}) {
+function resolveManualLaneTimeoutMs(params: QaManualLaneParams) {
   if (
     typeof params.timeoutMs === "number" &&
     Number.isFinite(params.timeoutMs) &&
@@ -57,15 +51,7 @@ function resolveManualLaneTimeoutMs(params: {
   ) {
     return params.timeoutMs;
   }
-  return resolveQaLiveTurnTimeoutMs(
-    {
-      providerMode: params.providerMode,
-      primaryModel: params.primaryModel,
-      alternateModel: params.alternateModel,
-    },
-    120_000,
-    params.primaryModel,
-  );
+  return resolveQaLiveTurnTimeoutMs(params, 120_000, params.primaryModel);
 }
 
 export async function runQaManualLane(params: QaManualLaneParams) {
@@ -109,12 +95,7 @@ export async function runQaManualLane(params: QaManualLaneParams) {
       controlUiEnabled: false,
     });
 
-    const timeoutMs = resolveManualLaneTimeoutMs({
-      providerMode: params.providerMode,
-      primaryModel: params.primaryModel,
-      alternateModel: params.alternateModel,
-      timeoutMs: params.timeoutMs,
-    });
+    const timeoutMs = resolveManualLaneTimeoutMs(params);
     const delivery = transport.buildAgentDelivery({
       target: "dm:qa-operator",
     });

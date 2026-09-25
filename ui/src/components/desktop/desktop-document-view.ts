@@ -36,6 +36,7 @@ type DesktopDocumentViewOptions = {
   recovery: TemplateResult;
   keyboardInputValue: string;
   pictureInPictureControl: TemplateResult;
+  audioControl?: TemplateResult;
   onControlToggle: () => void;
   onKeyboardFocus: (event: MouseEvent) => void;
   onKeyboardEvent: (event: KeyboardEvent) => void;
@@ -67,12 +68,13 @@ export function renderDesktopDocumentView(options: DesktopDocumentViewOptions) {
         @input=${options.onKeyboardInput}
       ></textarea>
       <nav class="desktop-touch-toolbar" aria-label=${t("desktop.touchControls")}>
-        ${options.pictureInPictureControl}
+        ${options.audioControl ?? nothing} ${options.pictureInPictureControl}
         <button
           class="desktop-touch-action"
           type="button"
           aria-label=${t(options.controlling ? "desktop.switchToViewOnly" : "desktop.takeControl")}
           aria-pressed=${options.controlling ? "true" : "false"}
+          ?disabled=${options.state !== "connected"}
           @click=${options.onControlToggle}
         >
           <span class="desktop-touch-action__icon" aria-hidden="true">

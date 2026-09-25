@@ -1,4 +1,3 @@
-// QA Lab Matrix plugin module implements scenario runtime room behavior.
 import { randomUUID } from "node:crypto";
 import {
   MATRIX_QA_BLOCK_ROOM_KEY,

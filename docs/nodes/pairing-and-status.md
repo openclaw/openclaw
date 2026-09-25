@@ -49,9 +49,10 @@ Pending command-surface requests do not expire merely with time; they follow the
 [capability approval lifecycle](/gateway/pairing#how-capability-approval-works).
 
 - `nodes status` marks a node as **paired** when its device pairing role includes `node`.
-- A connected native Mac can opt in to coalesced physical-input activity from
-  **Settings -> Permissions -> Active computer detection**. Accessibility is
-  also required. The Gateway marks the freshest eligible Mac as
+- A connected native Mac reports coalesced activity from interaction with
+  OpenClaw without extra permissions. Optional **Settings -> Permissions ->
+  System-wide presence detection** also includes physical input in other apps
+  and requires Accessibility. The Gateway marks the freshest eligible Mac as
   `active`, gives the agent a stable node-id hint, and routes node connection
   alerts there before a delayed fallback. See
   [Active computer presence](/nodes/presence) for setup, privacy, timing, and

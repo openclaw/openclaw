@@ -163,6 +163,24 @@ workflow instead.
 
 ## Troubleshooting
 
+Maintainers can set `OPENCLAW_PR_TOOLING_ROOT` to a full checkout of this repository
+to source materialized `scripts/pr` dependencies independently of a canonical checkout parked
+on another branch. The environment setting takes precedence over
+`git config openclaw.pr.toolingRoot /path/to/tooling-checkout` in the canonical
+checkout; without either, dependency sourcing stays unchanged. Versions must
+match the wrapper's trust-anchor manifest. On mismatch, a separate clean `main`
+tooling checkout is fetched, fast-forwarded, and installed with
+`pnpm install --frozen-lockfile` once, then rechecked. Dirty or non-main tooling
+checkouts are refused with repair guidance; the canonical checkout is never
+refreshed. The setting applies at both dependency materialization handoffs;
+in-place wrappers keep their checkout's dependency context. Wrapper code selection
+and trust stay unchanged.
+
+Set `OPENCLAW_PR_GIT` to an absolute Git executable path if the host's default Git
+is broken. The wrapper checks Git with a 10-second deadline and prints the selected
+path and Xcode recovery hint on failure. API rate-limit failures identify the
+resource used and show both GraphQL and REST core balances and reset times.
+
 If ClawSweeper does not respond immediately, wait before retrying. The service is
 queue-based, and repeated comments or label changes can make the thread harder
 to review without making the queue faster.

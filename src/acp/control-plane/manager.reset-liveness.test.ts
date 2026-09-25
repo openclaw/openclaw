@@ -19,8 +19,10 @@ import { resolveAcpSessionTarget } from "./manager.utils.js";
 
 afterEach(async () => {
   const maintenance = await import("../../tasks/task-registry.maintenance.js");
-  maintenance.stopTaskRegistryMaintenance();
-  maintenance.resetTaskRegistryMaintenanceRuntimeForTests();
+  await maintenance.stopTaskRegistryMaintenance();
+  const { resetTaskRegistryMaintenanceMocks } =
+    await import("../../tasks/task-registry.maintenance.test-support.js");
+  resetTaskRegistryMaintenanceMocks();
 });
 
 describe("ACP reset successor task liveness", () => {
@@ -95,10 +97,11 @@ describe("ACP reset successor task liveness", () => {
         const successor = requireTaskByRunId("successor-turn");
         expect(successor.status).toBe("running");
         const staleAt = Date.now() - 10 * 60_000;
+        const isTurnActive = isAcpTurnActive;
         const { currentTasks } = createTaskRegistryMaintenanceHarness({
           tasks: [{ ...successor, createdAt: staleAt, startedAt: staleAt, lastEventAt: staleAt }],
           hasActiveAcpTurn: (key, agentId) =>
-            isAcpTurnActive(resolveAcpSessionTarget({ cfg: baseCfg, sessionKey: key, agentId })),
+            isTurnActive(resolveAcpSessionTarget({ cfg: baseCfg, sessionKey: key, agentId })),
         });
         releaseOld.resolve();
         await oldSettled;

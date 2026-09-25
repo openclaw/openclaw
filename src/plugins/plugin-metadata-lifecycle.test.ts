@@ -1,6 +1,10 @@
 import { expect, it, onTestFinished, vi } from "vitest";
+import { withTestTimeout } from "../../test/helpers/promise.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { setGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import {
+  setGatewayPluginMetadataSnapshot,
+  withPluginMetadataSnapshotScope,
+} from "./current-plugin-metadata-snapshot.js";
 import {
   getCurrentPluginMetadataSnapshotState,
   selectCurrentPluginMetadataCache,
@@ -11,6 +15,7 @@ import {
   getPluginCache,
   getProcessPluginCache,
   retainPluginCache,
+  retirePluginCache,
   withPluginCache,
 } from "./plugin-cache.js";
 import { PluginInstance } from "./plugin-instance.js";
@@ -19,10 +24,57 @@ import {
   registerPluginMetadataProcessMemoLifecycleClear,
   retainGatewayPluginMetadata,
 } from "./plugin-metadata-lifecycle.js";
+import { snapshotReaderSlot } from "./plugin-metadata-snapshot-readers.js";
+import { getCurrentPluginMetadataSnapshotRequiredRuntime } from "./plugin-metadata-snapshot-required.js";
 import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
 
 const clearMemo = vi.fn();
 registerPluginMetadataProcessMemoLifecycleClear(clearMemo);
+
+it("retains running metadata readers through the final Gateway close after package replacement", async () => {
+  const readers = { ...snapshotReaderSlot };
+  const first = retainGatewayPluginMetadata();
+  const second = retainGatewayPluginMetadata();
+  const snapshot = first.runBootstrap(() => createPluginMetadataSnapshotFixture());
+  const scoped = first.runBootstrap(() => createPluginMetadataSnapshotFixture());
+  const replacementReader = () => {
+    throw new TypeError("replacement installation cannot read the running scope state");
+  };
+  const closing = createDeferredCore();
+  const releaseClose = createDeferredCore();
+  let finalClose: Promise<unknown> | undefined;
+  try {
+    first.publish(snapshot);
+    second.publish(snapshot);
+    setGatewayPluginMetadataSnapshot(snapshot);
+    // Released modules register by assigning the shared slot directly.
+    Object.assign(snapshotReaderSlot, { getCurrentPluginMetadataSnapshot: replacementReader });
+    expect(getCurrentPluginMetadataSnapshotRequiredRuntime({})).toBe(snapshot);
+    expect(
+      withPluginMetadataSnapshotScope(scoped, () =>
+        getCurrentPluginMetadataSnapshotRequiredRuntime({}),
+      ),
+    ).toBe(scoped);
+    await first.close();
+    finalClose = second.close(async () => {
+      closing.resolve();
+      await releaseClose.promise;
+    });
+    await closing.promise;
+    Object.assign(snapshotReaderSlot, { getCurrentPluginMetadataSnapshot: replacementReader });
+    expect(getCurrentPluginMetadataSnapshotRequiredRuntime({})).toBe(snapshot);
+    releaseClose.resolve();
+    await finalClose;
+    Object.assign(snapshotReaderSlot, { getCurrentPluginMetadataSnapshot: replacementReader });
+    expect(() => getCurrentPluginMetadataSnapshotRequiredRuntime({})).toThrow(
+      "replacement installation cannot read the running scope state",
+    );
+  } finally {
+    releaseClose.resolve();
+    await Promise.all([first.close(), finalClose ?? second.close()]);
+    Object.assign(snapshotReaderSlot, readers);
+  }
+});
 
 it("joins owned cleanup and final shared teardown before admitting another Gateway", async () => {
   const cache = getPluginCache();
@@ -168,9 +220,9 @@ it.each([true, false])(
         deferredPluginIds: ["turn-owner"],
       });
       expect(cache.retirement).toBeUndefined();
-      owner.beginClose();
+      await owner.beginClose();
       let joined = false;
-      const shutdown = owner.waitForRetirement().then((result) => {
+      const shutdown = owner.close().then((result) => {
         joined = true;
         return result;
       });
@@ -188,10 +240,73 @@ it.each([true, false])(
   },
 );
 
+it.each([false, true])(
+  "settles publication and reports cleanup failures (released before final close: %s)",
+  async (releasedBeforeClose) => {
+    const cache = getPluginCache();
+    const instance = new PluginInstance("retained-publication");
+    const failure = new Error("retained consumer cleanup failed");
+    const dispose = vi.fn();
+    instance.lifecycle.onDispose(dispose);
+    cache.setupModules.set("retained-publication", instance);
+    const release = retainPluginCache(cache);
+    const owner = retainGatewayPluginMetadata();
+    owner.publish(owner.runBootstrap(() => createPluginMetadataSnapshotFixture()));
+    owner.publish(
+      withPluginCache(createPluginCache(), () => createPluginMetadataSnapshotFixture()),
+      new Set(["retained-publication"]),
+      async (options) =>
+        options?.deferConsumers
+          ? { cleanupCount: 0, failures: [], deferredPluginIds: ["retained-publication"] }
+          : {
+              cleanupCount: 1,
+              failures: [{ pluginId: "retained-publication", hookId: "instance", error: failure }],
+            },
+    );
+    await owner.beginClose();
+    const publication = owner.waitForRetirement();
+    let closing: Promise<unknown> | undefined;
+    try {
+      await withTestTimeout(publication, 1_000, "Publication waited for its retained consumer");
+      expect(dispose).not.toHaveBeenCalled();
+      if (releasedBeforeClose) {
+        release();
+        await retirePluginCache(cache);
+        expect(dispose).toHaveBeenCalledOnce();
+      }
+      const finalEntered = createDeferredCore();
+      let closed = false;
+      closing = owner
+        .close(async (retire) => {
+          finalEntered.resolve();
+          await retire();
+        })
+        .then(() => {
+          closed = true;
+        });
+      await finalEntered.promise;
+      expect(closed).toBe(false);
+      if (!releasedBeforeClose) {
+        expect(dispose).not.toHaveBeenCalled();
+      }
+      release();
+      await closing;
+      expect((await owner.close()).failures).toEqual([
+        expect.objectContaining({ pluginId: "retained-publication", error: failure }),
+      ]);
+      expect(dispose).toHaveBeenCalledOnce();
+    } finally {
+      release();
+      await Promise.allSettled([publication, closing ?? owner.close()]);
+    }
+  },
+);
+
 it("fences admission before retirement while an admitted sibling stays usable", async () => {
   const cache = getPluginCache();
-  const first = retainGatewayPluginMetadata();
-  const sibling = retainGatewayPluginMetadata();
+  const stopProducers = vi.fn(async () => {});
+  const first = retainGatewayPluginMetadata(stopProducers);
+  const sibling = retainGatewayPluginMetadata(stopProducers);
   const instance = new PluginInstance("sibling-inventory");
   const callback = instance.wrap(() => "still-live");
   cache.setupModules.set("sibling-inventory", instance);
@@ -201,11 +316,12 @@ it("fences admission before retirement while an admitted sibling stays usable", 
   sibling.publish(snapshot);
   setGatewayPluginMetadataSnapshot(snapshot);
   clearMemo.mockClear();
-  first.beginClose();
+  await first.beginClose();
   try {
     expect(() => retainGatewayPluginMetadata()).toThrow(/shut/i);
     expect(cache.retirement).toBeUndefined();
     expect(callback()).toBe("still-live");
+    expect(stopProducers).not.toHaveBeenCalled();
     clearPluginMetadataLifecycleCaches();
     await first.close(finalCleanup);
     expect(finalCleanup).not.toHaveBeenCalled();
@@ -215,11 +331,46 @@ it("fences admission before retirement while an admitted sibling stays usable", 
     expect(callback()).toBe("still-live");
     const newcomer = retainGatewayPluginMetadata();
     await newcomer.close();
+    expect(stopProducers).not.toHaveBeenCalled();
+    const prelude = sibling.beginClose();
+    expect(sibling.beginClose()).toBe(prelude);
     await sibling.close();
+    expect(stopProducers).toHaveBeenCalledOnce();
     expect(clearMemo).toHaveBeenCalledOnce();
     expect(() => callback()).toThrow();
   } finally {
     await Promise.all([first.close(), sibling.close()]);
+  }
+});
+
+it("joins the shared producer stop when the last admitted bootstrap closes", async () => {
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const stopProducers = vi.fn(async () => {
+    entered.resolve();
+    await release.promise;
+  });
+  const running = retainGatewayPluginMetadata(stopProducers);
+  const booting = retainGatewayPluginMetadata(stopProducers);
+  let closing: Promise<unknown> | undefined;
+  let closed = false;
+  try {
+    expect(running.beginClose()).toBeUndefined();
+    expect(stopProducers).not.toHaveBeenCalled();
+    closing = booting.close().finally(() => {
+      closed = true;
+    });
+    await entered.promise;
+    expect(closed).toBe(false);
+    expect(running.beginClose()).toBe(booting.beginClose());
+    release.resolve();
+    await closing;
+    await running.close();
+    expect(stopProducers).toHaveBeenCalledOnce();
+    expect(running.beginClose()).toBeUndefined();
+  } finally {
+    release.resolve();
+    await Promise.allSettled([closing, running.close(), booting.close()]);
   }
 });
 
@@ -300,7 +451,7 @@ it("selects a closing sibling's still-bound cache until its retirement begins", 
   secondCache.setupModules.set("closing-sibling", instance);
   const useDependency = instance.wrap(() => "available");
   selectCurrentPluginMetadataCache(firstCache);
-  second.beginClose();
+  await second.beginClose();
   const finalCleanup = vi.fn();
   try {
     await first.close(finalCleanup);

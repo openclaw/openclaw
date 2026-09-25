@@ -34,7 +34,7 @@ type FailoverUserCopyContext = {
   authMode?: string;
 };
 
-type FailoverBaseCopyRenderer = (context: FailoverUserCopyContext) => string | undefined;
+type FailoverBaseCopyRenderer = (context: FailoverUserCopyContext) => string;
 
 const RATE_LIMIT_ERROR_USER_MESSAGE = "⚠️ API rate limit reached. Please try again later.";
 export const AUTH_INVALID_TOKEN_USER_TEXT =
@@ -144,7 +144,7 @@ const FAILOVER_REASON_BASE_COPY = {
 function renderFailoverBaseCopy(
   reason: FailoverReason,
   context: FailoverUserCopyContext = {},
-): string | undefined {
+): string {
   return FAILOVER_REASON_BASE_COPY[reason](context);
 }
 
@@ -153,9 +153,7 @@ export function renderRateLimitOrOverloadedCopy(params: {
   reason: Extract<FailoverReason, "rate_limit" | "overloaded">;
   raw?: string;
 }): string {
-  return (
-    renderFailoverBaseCopy(params.reason, { raw: params.raw }) ?? RATE_LIMIT_ERROR_USER_MESSAGE
-  );
+  return renderFailoverBaseCopy(params.reason, { raw: params.raw });
 }
 
 export function formatDiskSpaceErrorCopy(raw: string): string | undefined {
@@ -261,23 +259,19 @@ export function renderSanitizedUserFacingText(
       ERROR_PREFIX_RE.test(trimmed) ||
       CONTEXT_OVERFLOW_ERROR_HEAD_RE.test(trimmed))
   ) {
-    return renderFailoverBaseCopy("context_overflow") ?? trimmed;
+    return renderFailoverBaseCopy("context_overflow");
   }
   if (reason === "billing" || reason === "rate_limit" || reason === "overloaded") {
-    return renderFailoverBaseCopy(reason, { raw: trimmed }) ?? trimmed;
+    return renderFailoverBaseCopy(reason, { raw: trimmed });
   }
-  // Reason-level provider copy is surface-independent: the channel reply path renders
-  // it from failover facts, while session transcripts, run status, and the TUI read
-  // this renderer. Facets stay null so the rate-limit/overload branches above keep
-  // provider retry detail; labeled statuses ("unexpected status 401 ...") never carry
-  // a leading code, so the status is re-read from the full error grammar here.
-  const providerRequestCopy = renderProviderRequestFailureCopy({
+  // Labeled HTTP statuses require the full grammar; keep provider retry detail above.
+  const providerRequestCode = resolveProviderRequestFailureCode({
     classification: reason ? { kind: "reason", reason } : null,
     facet: null,
     status: extractErrorHttpStatus(trimmed)?.code,
   });
-  if (providerRequestCopy) {
-    return providerRequestCopy;
+  if (providerRequestCode) {
+    return PROVIDER_REQUEST_COPY[providerRequestCode];
   }
   if (isGenericProviderInternalError(trimmed)) {
     return formatRawAssistantErrorForUi(trimmed);
@@ -300,7 +294,7 @@ export function renderSanitizedUserFacingText(
       return formatRawAssistantErrorForUi(trimmed);
     }
     if (reason === "timeout") {
-      return renderFailoverBaseCopy("timeout") ?? trimmed;
+      return renderFailoverBaseCopy("timeout");
     }
     return formatRawAssistantErrorForUi(trimmed);
   }
@@ -330,37 +324,43 @@ const PROVIDER_INTERNAL_ERROR_USER_MESSAGE =
   "⚠️ The model provider returned a temporary internal error before replying. Try again in a moment, or switch to another model if it keeps happening.";
 const PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE = `⚠️ ${AUTH_INVALID_TOKEN_USER_TEXT}`;
 const PROVIDER_MODEL_UNAVAILABLE_USER_MESSAGE =
-  "⚠️ The configured model is unavailable from the provider — it may have been renamed, retired, or is not offered on this account. This needs a config update (agents.defaults.model); retrying or starting a new session won't fix it.";
+  "⚠️ The selected model is unavailable from the provider — it may have been renamed, retired, or is not offered on this account. Select an available model or update the model configuration, then try again.";
 
 const PROVIDER_REQUEST_COPY = {
-  "quota-429": PROVIDER_RATE_LIMIT_OR_QUOTA_ERROR_USER_MESSAGE,
-  "conversation-state": PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE,
-  "provider-internal": PROVIDER_INTERNAL_ERROR_USER_MESSAGE,
-  "provider-internal-503": PROVIDER_INTERNAL_ERROR_USER_MESSAGE,
-} satisfies Record<ProviderRequestFacet, string>;
+  provider_authentication_error: PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE,
+  provider_conversation_state_error: PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE,
+  provider_internal_error: PROVIDER_INTERNAL_ERROR_USER_MESSAGE,
+  provider_model_unavailable: PROVIDER_MODEL_UNAVAILABLE_USER_MESSAGE,
+  provider_rate_limit_or_quota_error: PROVIDER_RATE_LIMIT_OR_QUOTA_ERROR_USER_MESSAGE,
+};
 
-function renderProviderRequestFailureCopy(params: {
+type ProviderRequestErrorCode = keyof typeof PROVIDER_REQUEST_COPY;
+
+function resolveProviderRequestFailureCode(params: {
   classification: FailoverClassification | null;
   facet: ProviderRequestFacet | null;
   status?: number;
-}): string | undefined {
+}): ProviderRequestErrorCode | undefined {
   const reason =
     params.classification?.kind === "reason" ? params.classification.reason : undefined;
   if (reason === "auth" && params.status === 401) {
-    return PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE;
+    return "provider_authentication_error";
   }
   if (reason === "model_not_found") {
-    return PROVIDER_MODEL_UNAVAILABLE_USER_MESSAGE;
+    return "provider_model_unavailable";
   }
-  return params.facet ? PROVIDER_REQUEST_COPY[params.facet] : undefined;
+  switch (params.facet) {
+    case "quota-429":
+      return "provider_rate_limit_or_quota_error";
+    case "conversation-state":
+      return "provider_conversation_state_error";
+    case "provider-internal":
+    case "provider-internal-503":
+      return "provider_internal_error";
+    default:
+      return undefined;
+  }
 }
-
-type ProviderRequestErrorCode =
-  | "provider_authentication_error"
-  | "provider_conversation_state_error"
-  | "provider_internal_error"
-  | "provider_model_unavailable"
-  | "provider_rate_limit_or_quota_error";
 
 export function resolveProviderRequestFailureCopy(params: {
   classification: FailoverClassification | null;
@@ -368,25 +368,13 @@ export function resolveProviderRequestFailureCopy(params: {
   status?: number;
   technicalMessage: string;
 }) {
-  const userMessage = renderProviderRequestFailureCopy(params);
-  if (!userMessage) {
+  const code = resolveProviderRequestFailureCode(params);
+  if (!code) {
     return undefined;
   }
-  const reason =
-    params.classification?.kind === "reason" ? params.classification.reason : undefined;
-  const code: ProviderRequestErrorCode =
-    reason === "auth" && params.status === 401
-      ? "provider_authentication_error"
-      : reason === "model_not_found"
-        ? "provider_model_unavailable"
-        : params.facet === "quota-429"
-          ? "provider_rate_limit_or_quota_error"
-          : params.facet === "conversation-state"
-            ? "provider_conversation_state_error"
-            : "provider_internal_error";
   return {
     code,
-    userMessage,
+    userMessage: PROVIDER_REQUEST_COPY[code],
     technicalMessage: params.technicalMessage,
   };
 }
@@ -493,8 +481,7 @@ export function renderBillingReplyCopy(params: {
       : params.authMode === "oauth" || params.authMode === "token"
         ? params
         : undefined;
-  return billingFailure &&
-    (billingFailure.authMode === "oauth" || billingFailure.authMode === "token")
+  return billingFailure
     ? formatBillingErrorMessage(
         billingFailure.provider,
         billingFailure.model,
@@ -579,12 +566,14 @@ type AuthProfileFailureCopyParams = {
   recoveryHint?: string;
 };
 
+const authProfileUnavailableCopy = (provider: string) =>
+  `Couldn't reach ${provider} with any of your saved logins right now.`;
+
 const AUTH_PROFILE_COOLDOWN_COPY = {
   auth: (provider: string) =>
     `Couldn't sign in to ${provider}. Your saved login looks expired or no longer works.`,
   auth_permanent: (provider: string) => `${provider} isn't accepting your saved login anymore.`,
-  format: (provider: string) =>
-    `Couldn't reach ${provider} with any of your saved logins right now.`,
+  format: authProfileUnavailableCopy,
   rate_limit: (provider: string) =>
     `${provider} is asking us to slow down. Please wait a moment before trying again.`,
   overloaded: (provider: string) =>
@@ -595,62 +584,44 @@ const AUTH_PROFILE_COOLDOWN_COPY = {
     `${provider} is having issues right now. Please wait a moment before trying again.`,
   timeout: (provider: string) =>
     `${provider} hasn't been responding. Please wait a moment before trying again.`,
-  tls_certificate: (provider: string) =>
-    `Couldn't reach ${provider} with any of your saved logins right now.`,
-  context_overflow: (provider: string) =>
-    `Couldn't reach ${provider} with any of your saved logins right now.`,
+  tls_certificate: authProfileUnavailableCopy,
+  context_overflow: authProfileUnavailableCopy,
   model_not_found: (provider: string) => `${provider} can't find the model you're using right now.`,
   session_expired: (provider: string) =>
     `Couldn't sign in to ${provider}. Your saved login looks expired or no longer works.`,
-  empty_response: (provider: string) =>
-    `Couldn't reach ${provider} with any of your saved logins right now.`,
-  no_error_details: (provider: string) =>
-    `Couldn't reach ${provider} with any of your saved logins right now.`,
-  unclassified: (provider: string) =>
-    `Couldn't reach ${provider} with any of your saved logins right now.`,
-  unknown: (provider: string) =>
-    `Couldn't reach ${provider} with any of your saved logins right now.`,
+  empty_response: authProfileUnavailableCopy,
+  no_error_details: authProfileUnavailableCopy,
+  unclassified: authProfileUnavailableCopy,
+  unknown: authProfileUnavailableCopy,
 } satisfies Record<FailoverReason, (provider: string) => string>;
 
-type AuthProfileReasonPolicy = {
-  direct: ((provider: string) => string) | undefined;
-  recovery: boolean;
+const AUTH_PROFILE_DIRECT_COPY: Partial<Record<FailoverReason, (provider: string) => string>> = {
+  auth: AUTH_PROFILE_COOLDOWN_COPY.auth,
+  auth_permanent: (provider) => `${provider} isn't accepting your saved login.`,
+  billing: AUTH_PROFILE_COOLDOWN_COPY.billing,
+  session_expired: AUTH_PROFILE_COOLDOWN_COPY.session_expired,
 };
 
-const AUTH_PROFILE_REASON_POLICY = {
-  auth: { direct: AUTH_PROFILE_COOLDOWN_COPY.auth, recovery: true },
-  auth_permanent: {
-    direct: (provider) => `${provider} isn't accepting your saved login.`,
-    recovery: true,
-  },
-  format: { direct: undefined, recovery: false },
-  rate_limit: { direct: undefined, recovery: false },
-  overloaded: { direct: undefined, recovery: false },
-  billing: { direct: AUTH_PROFILE_COOLDOWN_COPY.billing, recovery: true },
-  server_error: { direct: undefined, recovery: false },
-  timeout: { direct: undefined, recovery: false },
-  tls_certificate: { direct: undefined, recovery: false },
-  context_overflow: { direct: undefined, recovery: true },
-  model_not_found: { direct: undefined, recovery: false },
-  session_expired: { direct: AUTH_PROFILE_COOLDOWN_COPY.session_expired, recovery: true },
-  empty_response: { direct: undefined, recovery: true },
-  no_error_details: { direct: undefined, recovery: true },
-  unclassified: { direct: undefined, recovery: true },
-  unknown: { direct: undefined, recovery: true },
-} satisfies Record<FailoverReason, AuthProfileReasonPolicy>;
+const AUTH_PROFILE_RECOVERY_REASONS = new Set<FailoverReason>([
+  "auth",
+  "auth_permanent",
+  "billing",
+  "context_overflow",
+  "session_expired",
+  "empty_response",
+  "no_error_details",
+  "unclassified",
+  "unknown",
+]);
 
 export function renderAuthProfileFailoverCopy(params: AuthProfileFailureCopyParams): string {
-  const policy = AUTH_PROFILE_REASON_POLICY[params.reason];
   const description = params.allInCooldown
     ? AUTH_PROFILE_COOLDOWN_COPY[params.reason](params.provider)
-    : policy.direct?.(params.provider);
+    : AUTH_PROFILE_DIRECT_COPY[params.reason]?.(params.provider);
   if (!description) {
-    return params.causeText
-      ? params.causeText.trim() ||
-          `Couldn't reach ${params.provider} with any of your saved logins right now.`
-      : `Couldn't reach ${params.provider} with any of your saved logins right now.`;
+    return params.causeText?.trim() || authProfileUnavailableCopy(params.provider);
   }
-  const hint = policy.recovery ? params.recoveryHint : null;
+  const hint = AUTH_PROFILE_RECOVERY_REASONS.has(params.reason) ? params.recoveryHint : null;
   const causeText = params.causeText?.trim() ?? "";
   const suffix = causeText && !description.includes(causeText) ? ` (${causeText})` : "";
   return `${[description, hint].filter(Boolean).join(" ")}${suffix}`;

@@ -113,6 +113,14 @@ export function readGatewayLastShutdown(
   }
 }
 
+export function readGatewayLastInstallationReplacement(env: NodeJS.ProcessEnv = process.env) {
+  const lastShutdown = readGatewayLastShutdown(env);
+  if (!lastShutdown?.reason?.startsWith("gateway.installation_replaced:")) {
+    return undefined;
+  }
+  return { reason: lastShutdown.reason, completedAtMs: lastShutdown.completedAtMs };
+}
+
 function buildGatewayCrashLoopBreakerDecision(params: {
   uncleanBoots: number;
   windowMs?: number;

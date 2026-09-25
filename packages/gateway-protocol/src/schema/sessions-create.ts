@@ -1,4 +1,4 @@
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { HumanMentionsSchema } from "./human-mentions.js";
 import { ChatAttachmentsSchema } from "./logs-chat.js";
@@ -124,3 +124,5 @@ export const SessionsCreateParamsSchema = closedObject({
     }),
   ),
 });
+
+export type SessionsCreateParams = Static<typeof SessionsCreateParamsSchema>;

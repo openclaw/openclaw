@@ -1,6 +1,7 @@
 name: Docs
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
     paths:
@@ -13,7 +14,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ format('{0}-{1}', github.workflow, github.ref) }}
+  group: ${{ format('{0}-{1}-{2}', github.workflow, github.event_name, github.ref) }}
   cancel-in-progress: true
 
 env:
@@ -21,6 +22,8 @@ env:
 
 jobs:
   docs:
+    # Hourly CI owns scheduled docs validation, including its RunsOn route.
+    if: github.event_name != 'push' || github.ref != 'refs/heads/main' || vars.OPENCLAW_CI_ON_PUSH == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:

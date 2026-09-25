@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements cli behavior.
 import {
   runMantisDesktopBrowserSmoke,
   type MantisDesktopBrowserSmokeOptions,
@@ -16,10 +15,29 @@ import {
   type MantisVisualTaskOptions,
 } from "./visual-task.runtime.js";
 
+function reportMantisArtifacts(
+  label: string,
+  result: {
+    status: "pass" | "fail";
+    reportPath: string;
+    summaryPath: string;
+    screenshotPath?: string;
+    videoPath?: string;
+  },
+) {
+  process.stdout.write(`${label} report: ${result.reportPath}\n`);
+  process.stdout.write(`${label} summary: ${result.summaryPath}\n`);
+  if (result.screenshotPath) {
+    process.stdout.write(`${label} screenshot: ${result.screenshotPath}\n`);
+  }
+  if (result.videoPath) {
+    process.stdout.write(`${label} video: ${result.videoPath}\n`);
+  }
+}
+
 export async function runMantisDiscordSmokeCommand(opts: MantisDiscordSmokeOptions) {
   const result = await runMantisDiscordSmoke(opts);
-  process.stdout.write(`Mantis Discord smoke report: ${result.reportPath}\n`);
-  process.stdout.write(`Mantis Discord smoke summary: ${result.summaryPath}\n`);
+  reportMantisArtifacts("Mantis Discord smoke", result);
   if (result.status === "fail") {
     process.exitCode = 1;
   }
@@ -36,14 +54,7 @@ export async function runMantisBeforeAfterCommand(opts: MantisBeforeAfterOptions
 
 export async function runMantisDesktopBrowserSmokeCommand(opts: MantisDesktopBrowserSmokeOptions) {
   const result = await runMantisDesktopBrowserSmoke(opts);
-  process.stdout.write(`Mantis desktop browser report: ${result.reportPath}\n`);
-  process.stdout.write(`Mantis desktop browser summary: ${result.summaryPath}\n`);
-  if (result.screenshotPath) {
-    process.stdout.write(`Mantis desktop browser screenshot: ${result.screenshotPath}\n`);
-  }
-  if (result.videoPath) {
-    process.stdout.write(`Mantis desktop browser video: ${result.videoPath}\n`);
-  }
+  reportMantisArtifacts("Mantis desktop browser", result);
   if (result.status === "fail") {
     process.exitCode = 1;
   }
@@ -51,14 +62,7 @@ export async function runMantisDesktopBrowserSmokeCommand(opts: MantisDesktopBro
 
 export async function runMantisSlackDesktopSmokeCommand(opts: MantisSlackDesktopSmokeOptions) {
   const result = await runMantisSlackDesktopSmoke(opts);
-  process.stdout.write(`Mantis Slack desktop report: ${result.reportPath}\n`);
-  process.stdout.write(`Mantis Slack desktop summary: ${result.summaryPath}\n`);
-  if (result.screenshotPath) {
-    process.stdout.write(`Mantis Slack desktop screenshot: ${result.screenshotPath}\n`);
-  }
-  if (result.videoPath) {
-    process.stdout.write(`Mantis Slack desktop video: ${result.videoPath}\n`);
-  }
+  reportMantisArtifacts("Mantis Slack desktop", result);
   for (const screenshotPath of result.approvalCheckpointScreenshotPaths ?? []) {
     process.stdout.write(
       `Mantis Slack desktop approval checkpoint screenshot: ${screenshotPath}\n`,
@@ -80,14 +84,7 @@ export async function runMantisVisualDriverCommand(opts: MantisVisualDriverOptio
 
 export async function runMantisVisualTaskCommand(opts: MantisVisualTaskOptions) {
   const result = await runMantisVisualTask(opts);
-  process.stdout.write(`Mantis visual task report: ${result.reportPath}\n`);
-  process.stdout.write(`Mantis visual task summary: ${result.summaryPath}\n`);
-  if (result.screenshotPath) {
-    process.stdout.write(`Mantis visual task screenshot: ${result.screenshotPath}\n`);
-  }
-  if (result.videoPath) {
-    process.stdout.write(`Mantis visual task video: ${result.videoPath}\n`);
-  }
+  reportMantisArtifacts("Mantis visual task", result);
   if (result.status === "fail") {
     process.exitCode = 1;
   }

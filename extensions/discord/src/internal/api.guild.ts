@@ -1,4 +1,3 @@
-// Discord plugin module implements api.guild behavior.
 import {
   Routes,
   type APIChannel,
@@ -12,7 +11,8 @@ import {
 } from "discord-api-types/v10";
 import { Type } from "typebox";
 import { Check } from "typebox/value";
-import type { RequestClient, RequestData } from "./rest.js";
+import type { RequestData } from "./rest-body.js";
+import type { RequestClient } from "./rest.js";
 
 const discordGuildEmojiListSchema = Type.Array(
   Type.Object(

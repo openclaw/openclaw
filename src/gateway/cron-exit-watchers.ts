@@ -92,13 +92,9 @@ export function createCronExitWatchers(
     params.retryBackoffMs && params.retryBackoffMs.length > 0
       ? params.retryBackoffMs
       : ON_EXIT_WATCH_RETRY_BACKOFF_MS;
-  // jobId -> watcher state. `armToken` identifies the current arm so an async
-  // spawn/wait that loses ownership (the job was cancelled or re-armed for a
-  // changed command) becomes a no-op. The slot is reserved synchronously in
-  // arm() BEFORE the spawn awaits, so a concurrent cancel can act on an
-  // in-flight spawn. `fired` marks one-shot completion.
+  // Reserving the slot before spawn lets cancel/replace retire an in-flight arm.
+  // Async continuations publish only while this exact slot remains current.
   type WatcherSlot = {
-    armToken: object;
     job: OnExitCronJob;
     run: ManagedRun | undefined;
     fired: boolean;
@@ -157,14 +153,12 @@ export function createCronExitWatchers(
   const arm = (job: OnExitCronJob, consecutiveFailures = 0) => {
     const command = job.schedule.command;
     const cwd = job.schedule.cwd;
-    const armToken: object = {};
     const predecessors = Array.from(settlingCancelledSlots)
       .filter((previous) => previous.job.id === job.id)
       .map((previous) => previous.settlement.promise);
     // Reserve the slot synchronously so a concurrent cancel/replace can observe
     // and act on this arm before the child is spawned.
     const slot: WatcherSlot = {
-      armToken,
       job,
       run: undefined,
       fired: false,
@@ -179,7 +173,7 @@ export function createCronExitWatchers(
       retryTimer: undefined,
     };
     active.set(job.id, slot);
-    const owns = () => active.get(job.id) === slot && slot.armToken === armToken;
+    const owns = () => active.get(job.id) === slot;
     const persistWatcherState = async (
       patch: Pick<CronJob["state"], "lastError" | "consecutiveErrors">,
     ) => {

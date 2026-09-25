@@ -1,13 +1,11 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import {
-  cleanupPreparedModelRuntimeHarness,
-  getPreparedModelRuntimeMocks,
   getPreparedModelRuntimeTestApi,
-  resetPreparedModelRuntimeHarness,
+  usePreparedModelRuntimeHarness,
 } from "./prepared-model-runtime.test-harness.js";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { dispatchLowLevelChannelReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
@@ -25,10 +23,6 @@ import { refreshModelRuntimeAfterHotReload } from "../gateway/server-reload-mode
 import { PluginRuntimeApplicationError } from "../plugins/lifecycle.js";
 import { PluginInstanceUnavailableError } from "../plugins/plugin-instance-error.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
 import { PreparedModelCatalogConfigReplacedError } from "./prepared-model-catalog.errors.js";
 import { loadPreparedModelCatalogOwnerSnapshot } from "./prepared-model-catalog.js";
 import { withPreparedModelRuntimePluginGenerationScope } from "./prepared-model-runtime-generation-scope.js";
@@ -44,18 +38,14 @@ import {
 } from "./prepared-model-runtime.js";
 import { getPreparedModelRuntimeStartupStatus } from "./prepared-model-runtime.startup-status.js";
 
-const mocks = getPreparedModelRuntimeMocks();
-let state: OpenClawTestState;
+const fixture = usePreparedModelRuntimeHarness(
+  { label: "hot-reload-dispatch" },
+  clearRuntimeConfigSnapshot,
+);
+const { mocks } = fixture;
 
-beforeEach(async () => {
-  state = await createOpenClawTestState({ label: "hot-reload-dispatch" });
-  await resetPreparedModelRuntimeHarness(state);
+beforeEach(() => {
   mocks.configuredAgentIds = ["default"];
-});
-
-afterEach(async ({ task }) => {
-  clearRuntimeConfigSnapshot();
-  await cleanupPreparedModelRuntimeHarness(state, task.result?.state === "fail");
 });
 
 function config(enabled: boolean): OpenClawConfig {
@@ -63,7 +53,7 @@ function config(enabled: boolean): OpenClawConfig {
 }
 
 function ownerInput(cfg: OpenClawConfig) {
-  return { config: cfg, agentId: "default", agentDir: state.agentDir("default") };
+  return { config: cfg, agentId: "default", agentDir: fixture.state.agentDir("default") };
 }
 
 async function publish(cfg: OpenClawConfig) {
@@ -83,7 +73,7 @@ function createPluginReloadHandler(
     heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() } as never,
     cronState: {
       cron: { start: vi.fn(), stop: vi.fn() } as never,
-      storePath: state.path("cron.sqlite"),
+      storePath: fixture.state.path("cron.sqlite"),
       cronEnabled: false,
       reconcileExitWatchers: vi.fn(async () => {}),
       reconcileStreamWatchers: vi.fn(async () => {}),
@@ -119,7 +109,7 @@ function createPluginReloadHandler(
 describe("Gateway plugin reload run admission", () => {
   it("cancels degraded startup acquisition before plugin drain and publishes only its replacement", async () => {
     mocks.configuredAgentIds = ["default", "held"];
-    const heldWorkspace = state.path("held-workspace");
+    const heldWorkspace = fixture.state.path("held-workspace");
     mocks.configuredWorkspaces.set("held", heldWorkspace);
     const modelConfig = (id: string): OpenClawConfig => ({
       agents: { defaults: { model: `custom/${id}` } },
@@ -193,7 +183,7 @@ describe("Gateway plugin reload run admission", () => {
       const snapshot = getPreparedModelRuntimeSnapshot({
         config: committed,
         agentId: "held",
-        agentDir: state.agentDir("held"),
+        agentDir: fixture.state.agentDir("held"),
       });
       if (snapshot) {
         publications.push({
@@ -329,7 +319,7 @@ describe("Gateway plugin reload run admission", () => {
         pluginIds: ["synthetic"],
         reason: "reload",
       };
-      const input = { ...ownerInput(retained), workspaceDir: state.path("run-workspace") };
+      const input = { ...ownerInput(retained), workspaceDir: fixture.state.path("run-workspace") };
       let settled = false;
       let requestSettled = false;
       let admission: ReturnType<typeof acquireAgentRunPreparedModelRuntime> | undefined;
@@ -432,7 +422,7 @@ describe("retained config and committed model publication", () => {
       });
       const admission = acquireAgentRunPreparedModelRuntime({
         ...ownerInput(retained),
-        workspaceDir: state.path("failed-run-workspace"),
+        workspaceDir: fixture.state.path("failed-run-workspace"),
       });
       const result = admission.catch((error: unknown) => error);
       try {

@@ -80,6 +80,7 @@ describe("resident catalog cursor stability", () => {
     const readNative = vi.fn(async () =>
       projectCodexCatalogPage({ data: threads }, { sanitize: sanitizeTerminalText }),
     );
+    const nativeReads = vi.spyOn(harness.client, "request");
     const index = new CodexCatalogIndex({
       homeId: await codexCatalogResidentHomeKey({ startOptions }),
       readNative,
@@ -99,6 +100,8 @@ describe("resident catalog cursor stability", () => {
         method: "turn/started",
         params: { threadId: "bravo", turn: { id: "new-turn", startedAt: recencyAt, items: [] } },
       });
+      await harness.waitForWrite(0);
+      await nativeReads.mock.results[0]!.value;
       await vi.waitFor(async () => {
         expect((await index.list({ limit: 1 })).sessions[0]?.threadId).toBe("bravo");
       });
@@ -113,7 +116,7 @@ describe("resident catalog cursor stability", () => {
       expect(harness.writes).toHaveLength(1);
     } finally {
       harness.client.close();
-      await index.close();
+      await Promise.all([index.close(), harness.client.closeAndWait()]);
     }
   });
 });

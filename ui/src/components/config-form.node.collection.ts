@@ -30,7 +30,6 @@ import { renderMapField } from "./config-form.node.collection-map.ts";
 import {
   renderCollectionDefaultDescription,
   renderFieldRow,
-  schemaWithDefault,
   type ConfigNodeRenderer,
   type ConfigNodeRenderParams,
 } from "./config-form.node.shared.ts";
@@ -135,7 +134,7 @@ export function resolveConfigObjectFields(params: ConfigNodeRenderParams) {
     fields: sorted.map(([propertyKey, node]) => {
       const hasInheritedChild = inherited && Object.hasOwn(objectValue, propertyKey);
       return {
-        schema: hasInheritedChild ? schemaWithDefault(node, objectValue[propertyKey]) : node,
+        schema: hasInheritedChild ? { ...node, default: objectValue[propertyKey] } : node,
         value: inherited ? undefined : objectValue[propertyKey],
         path: [...path, propertyKey],
         hints,
@@ -359,7 +358,7 @@ function renderArrayContent(
             showHeaderMeta && help ? html`<span class="settings-row__desc">${help}</span>` : nothing
           }
           ${
-            showHeaderMeta && schema.default !== undefined
+            showHeaderMeta && defaultDescription !== nothing
               ? html`<span class="settings-row__desc">${defaultDescription}</span>`
               : nothing
           }
@@ -381,7 +380,8 @@ function renderArrayContent(
           }
           <button
             type="button"
-            class="btn btn--sm"
+            class=${params.compact ? "btn btn--sm btn--icon" : "btn btn--sm"}
+            aria-label=${t("configForm.add")}
             aria-controls=${draftId}
             ?disabled=${disabled || (!canAppend && atomicCandidate === undefined)}
             @click=${(event: Event) => {
@@ -402,7 +402,7 @@ function renderArrayContent(
               }
             }}
           >
-            ${t("configForm.add")}
+            ${params.compact ? icons.plus : t("configForm.add")}
           </button>
         </div>
       </div>
@@ -480,7 +480,7 @@ function renderArrayContent(
                       </button>
                     </openclaw-tooltip>`;
                     const valueControl = renderNode({
-                      schema: inherited ? schemaWithDefault(itemSchema, item) : itemSchema,
+                      schema: inherited ? { ...itemSchema, default: item } : itemSchema,
                       value: inherited ? undefined : item,
                       path: [...path, index],
                       hints,

@@ -44,6 +44,7 @@ export function runManagedTaskInFlowInDatabase(
   input: ManagedTaskInFlowInput,
   write: <T>(operation: () => T) => T,
   onCommitted: (result: ManagedTaskInFlowReceipt) => void,
+  admission?: { assertCurrent: () => void; retainTaskCommit: (taskId: string) => void },
 ): ManagedTaskInFlowReceipt {
   const { params } = input;
   const readManagedFlow = () => {
@@ -143,6 +144,7 @@ export function runManagedTaskInFlowInDatabase(
       taskMutation: receipt.mutation,
     });
     const created = createTaskRecordInDatabase(db, { ...input, params: createParams }, write, {
+      retainTaskCommit: admission?.retainTaskCommit,
       assertCurrent: (existing) => {
         readManagedFlow();
         const currentBacking = readBacking();
@@ -162,6 +164,7 @@ export function runManagedTaskInFlowInDatabase(
             flow,
           });
         }
+        admission?.assertCurrent();
       },
       onCommitted: (commit) => {
         if (commit.kind === "task") {

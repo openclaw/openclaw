@@ -29,6 +29,8 @@ const UNDICI_REQUIRE_BOOTSTRAP = [
   'return (undiciModule ??= requireUndici("undici/index.js") as typeof import("undici"));',
 ] as const;
 const WORKER_UNDICI_IMPORT = 'import * as bundledUndici from "undici/index.js";';
+const FACADE_ACTIVATION_LOADER =
+  "function loadFacadeActivationCheckRuntime(): FacadeActivationCheckRuntimeModule {";
 const WS_DIRECT_RUNTIME_FRAGMENTS = [
   'require.resolve("ws/package.json")',
   '"lib/websocket.js"',
@@ -83,6 +85,7 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
   const browserRuntimeBridgePath = fs.realpathSync(
     path.resolve("src/worker/worker-deploy-browser-runtime.ts"),
   );
+  const facadeRuntimePath = fs.realpathSync(path.resolve("src/plugin-sdk/facade-runtime.ts"));
   const playwrightRuntimePath = fs.realpathSync(
     path.resolve("extensions/browser/src/browser/playwright-core.runtime.ts"),
   );
@@ -144,6 +147,22 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
       }
       if (resolvedId === browserRuntimeBridgePath) {
         return WORKER_BROWSER_RUNTIME_COMPOSITION;
+      }
+      if (resolvedId === facadeRuntimePath) {
+        if (code.split(FACADE_ACTIVATION_LOADER).length !== 2) {
+          this.error("facade activation loader changed; update the worker deploy transform");
+        }
+        // Workers ship no activation sidecar. A literal require keeps activation
+        // lazy inside the sealed graph instead of resolving a host module.
+        return code.replace(
+          FACADE_ACTIVATION_LOADER,
+          `${FACADE_ACTIVATION_LOADER}
+  try {
+    return require("./facade-activation-check.runtime.js");
+  } catch (error) {
+    return throwFacadeActivationCheckRuntimeUnavailable(error);
+  }`,
+        );
       }
       if (resolvedId === playwrightRuntimePath) {
         return WORKER_PLAYWRIGHT_RUNTIME;

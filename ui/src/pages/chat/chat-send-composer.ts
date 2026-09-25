@@ -13,7 +13,8 @@ import {
   retainChatComposerMemoryFallback,
   type ChatComposerMemoryFallbackOwnership,
 } from "./chat-composer-memory-fallback.ts";
-import { excludeComposerAttachments, removeQueuedMessageWithoutReleasing } from "./chat-queue.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
+import { excludeComposerAttachments } from "./chat-queue.ts";
 import type { ChatComposerRecoveryOwner, ChatHost } from "./chat-send-contract.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { chatAttachmentDraftSignature } from "./durable-composer-persistence.ts";
@@ -38,7 +39,7 @@ export function clearSubmittedComposerState(
   submittedDraft: string,
   submittedAttachments: ChatAttachment[],
   submittedMentions: readonly HumanMention[] | undefined,
-  preserveAnnotations = false,
+  retainAttachments: "none" | "annotations" | "all" = "none",
 ) {
   if (
     chatAttachmentDraftSignature(
@@ -53,11 +54,14 @@ export function clearSubmittedComposerState(
   }
   host.chatMessage = "";
   host.chatMentions = [];
-  host.chatAttachments = preserveAnnotations
-    ? host.chatAttachments.filter(
-        (attachment) => attachment.browserAnnotation || attachment.selectionAnnotation,
-      )
-    : [];
+  if (retainAttachments !== "all") {
+    host.chatAttachments =
+      retainAttachments === "annotations"
+        ? host.chatAttachments.filter(
+            (attachment) => attachment.browserAnnotation || attachment.selectionAnnotation,
+          )
+        : [];
+  }
   resetChatInputHistoryNavigation(host);
   return {
     previousAttachments: submittedAttachments,
@@ -130,7 +134,7 @@ export function captureChatCommandComposerRecovery(
   };
 }
 
-export function submittedCommandConnectionIsCurrent(
+function submittedCommandConnectionIsCurrent(
   host: ChatHost,
   recovery: ChatCommandComposerRecovery,
 ): boolean {
@@ -151,7 +155,7 @@ export function submittedCommandScopeIsVisible(
   );
 }
 
-export function clearOwnedCommandComposerFallback(
+function clearOwnedCommandComposerFallback(
   host: ChatHost,
   recovery: ChatCommandComposerRecovery,
 ): boolean {
@@ -168,7 +172,7 @@ export function clearOwnedCommandComposerFallback(
   return fallbackHost ? clearChatComposerMemoryFallback(fallbackHost, ownership) : false;
 }
 
-export function commandComposerFallbackRetainsAttachments(
+function commandComposerFallbackRetainsAttachments(
   host: ChatHost,
   recovery: ChatCommandComposerRecovery,
 ): boolean {
@@ -180,7 +184,7 @@ export function commandComposerFallbackRetainsAttachments(
   );
 }
 
-export function releaseCommandComposerAttachments(
+function releaseCommandComposerAttachments(
   host: ChatHost,
   recovery: ChatCommandComposerRecovery,
   attachments: readonly ChatAttachment[] | undefined,
@@ -221,7 +225,7 @@ function composerRetainsSubmittedAnnotations(
   );
 }
 
-export function restoreFailedCommandComposer(
+function restoreFailedCommandComposer(
   host: ChatHost,
   recovery: ChatCommandComposerRecovery,
 ): boolean {
@@ -288,6 +292,26 @@ export function restoreFailedCommandComposer(
   return retained;
 }
 
+export function settleChatCommandComposer(
+  host: ChatHost,
+  recovery: ChatCommandComposerRecovery,
+  completed: boolean,
+  attachments: readonly ChatAttachment[] | undefined,
+): void {
+  if (!completed) {
+    if (!restoreFailedCommandComposer(host, recovery)) {
+      releaseCommandComposerAttachments(host, recovery, attachments);
+    }
+    return;
+  }
+  if (submittedCommandConnectionIsCurrent(host, recovery)) {
+    clearOwnedCommandComposerFallback(host, recovery);
+  }
+  if (!commandComposerFallbackRetainsAttachments(host, recovery)) {
+    releaseCommandComposerAttachments(host, recovery, attachments);
+  }
+}
+
 type PendingComposerSnapshot = {
   previousAttachments?: ChatAttachment[];
   previousDraft?: string;
@@ -318,7 +342,7 @@ export function cancelChatDelivery(
   snapshot: PendingComposerSnapshot,
 ): boolean {
   const plan = strictComposerRestore(host, snapshot);
-  const removed = removeQueuedMessageWithoutReleasing(host, item.id);
+  const removed = chatOutboxOwner(host).remove(host, item.id);
   if (!removed) {
     return false;
   }

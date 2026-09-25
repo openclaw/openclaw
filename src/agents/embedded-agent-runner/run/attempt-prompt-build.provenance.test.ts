@@ -1,8 +1,10 @@
 // #143821: prompt-build hook context must carry the turn's typed input provenance so
 // plugins can distinguish inter-session deliveries from human messages.
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import type { PluginHookBeforePromptBuildResult } from "../../../plugins/hook-before-agent-start.types.js";
 import type { PluginHookAgentContext } from "../../../plugins/hook-types.js";
 import { createHookRunner } from "../../../plugins/hooks.js";
+import { matchesTranscriptEvent } from "../../../sessions/transcript-visible-record.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import { buildAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import {
@@ -40,10 +42,10 @@ vi.mock("../../subagents/registry/subagent-registry-lifecycle-cleanup.js", () =>
   completeTerminalEffects: vi.fn(async () => {}),
 }));
 
-vi.mock("../../../tasks/detached-task-runtime.js", () => ({
-  completeTaskRunByRunId: vi.fn(() => []),
-  failTaskRunByRunId: vi.fn(() => []),
-  setDetachedTaskDeliveryStatusByRunId: vi.fn(() => []),
+vi.mock("../../../tasks/detached-task-runtime.async.js", () => ({
+  completeTaskRunByRunIdAsync: vi.fn(async () => []),
+  failTaskRunByRunIdAsync: vi.fn(async () => []),
+  setDetachedTaskDeliveryStatusByRunIdAsync: vi.fn(async () => []),
 }));
 
 registerAgentSessionLoopTestLifecycle();
@@ -61,6 +63,15 @@ afterEach(() => {
 async function assembleWithCapturedHookCtx(
   runId: string,
   attemptOverrides?: Partial<EmbeddedRunAttemptParams>,
+  promptPolicy: {
+    hookResult?: PluginHookBeforePromptBuildResult;
+    applyPromptBuildToolsAllow?: Parameters<
+      typeof prepareEmbeddedAttemptPromptAssembly
+    >[0]["applyPromptBuildToolsAllow"];
+    prepareSystemPrompt?: Parameters<
+      typeof prepareEmbeddedAttemptPromptAssembly
+    >[0]["prepareSystemPrompt"];
+  } = {},
 ) {
   const { session, sessionManager, modelRegistry } = await createTestSession();
   const admission = prepareSystemAgentRunAdmission({}, runId, "main", "provenance-hook-test");
@@ -101,12 +112,15 @@ async function assembleWithCapturedHookCtx(
         source: "test",
         handler: async (_event: unknown, ctx: PluginHookAgentContext) => {
           captured.push(ctx);
+          return promptPolicy.hookResult;
         },
       },
     ],
   });
   const setLeasedSteering =
     vi.fn<Parameters<typeof prepareEmbeddedAttemptPromptAssembly>[0]["setLeasedSteering"]>();
+  const setSystemPrompt = vi.fn<(prompt: string) => void>();
+  const priorMessages = structuredClone(session.messages);
   const prompt = await prepareEmbeddedAttemptPromptAssembly({
     attempt,
     activeSession: session,
@@ -118,14 +132,53 @@ async function assembleWithCapturedHookCtx(
     sessionAgentId: "main",
     runtimeModel: testModel.id,
     systemPromptText: "Base system prompt",
-    applyPromptBuildToolsAllow: () => [],
-    setActiveSessionSystemPrompt: vi.fn(),
+    applyPromptBuildToolsAllow: promptPolicy.applyPromptBuildToolsAllow ?? (() => []),
+    prepareSystemPrompt: promptPolicy.prepareSystemPrompt,
+    setActiveSessionSystemPrompt: setSystemPrompt,
     setLeasedSteering,
   });
-  return { captured, prompt, setLeasedSteering };
+  expect(session.messages).toEqual(priorMessages);
+  return { captured, prompt, setLeasedSteering, setSystemPrompt };
 }
 
 describe("prompt-build hook context input provenance", () => {
+  it("prepares the restricted prompt once before composing the original hook additions", async () => {
+    const order: string[] = [];
+    const applyPolicy = vi.fn((names: string[] | undefined) => {
+      order.push("policy");
+      expect(names).toEqual(["read"]);
+      return ["read"];
+    });
+    const prepareSystemPrompt = vi.fn(async (current: string) => {
+      order.push("prompt");
+      expect(current).toBe("Base system prompt");
+      return "Filtered capability guidance";
+    });
+    const { captured, setSystemPrompt } = await assembleWithCapturedHookCtx(
+      "prompt-policy-composition",
+      undefined,
+      {
+        hookResult: {
+          toolsAllow: ["read"],
+          prependSystemContext: "Hook prefix",
+          appendSystemContext: "Hook suffix",
+        },
+        applyPromptBuildToolsAllow: applyPolicy,
+        prepareSystemPrompt,
+      },
+    );
+    expect(order).toEqual(["policy", "prompt"]);
+    expect(captured).toHaveLength(1);
+    expect(prepareSystemPrompt).toHaveBeenCalledOnce();
+    const finalPrompt = setSystemPrompt.mock.calls.at(-1)?.[0] ?? "";
+    expect(finalPrompt).toContain("Filtered capability guidance");
+    expect(finalPrompt).toContain("Hook prefix");
+    expect(finalPrompt).toContain("Hook suffix");
+    expect(finalPrompt).not.toContain("Base system prompt");
+    expect(finalPrompt.match(/Hook prefix/g)).toHaveLength(1);
+    expect(finalPrompt.match(/Hook suffix/g)).toHaveLength(1);
+  });
+
   it("exposes inter-session provenance on the before_prompt_build context", async () => {
     const { captured } = await assembleWithCapturedHookCtx("provenance-hook-inter-session", {
       inputProvenance: {
@@ -192,6 +245,7 @@ it("injects complete lifecycle results into requester prompts and acknowledges o
     getLatestRunForChildSession: () => null,
     suppressAnnounceForSteerRestart: () => false,
     resolveSubagentTask: () => ({ lookup: "available" }),
+    resolveSubagentTaskAsync: async () => ({ lookup: "available" }),
     shouldEmitEndedHookForRun: () => false,
     emitSubagentEndedHookForRun: vi.fn(async () => {}),
     emitSubagentProgressEndedForRun: vi.fn(async () => {}),
@@ -247,7 +301,9 @@ it("injects complete lifecycle results into requester prompts and acknowledges o
   const storedCompletion = structuredClone(first.completion);
   announceTesting.setDepsForTest({
     findTranscriptEvent: async ({ sessionId }, match) => {
-      const event = transcripts.get(sessionId)?.findLast(match);
+      const event = transcripts
+        .get(sessionId)
+        ?.findLast((candidate) => matchesTranscriptEvent(candidate, match));
       return event === undefined ? undefined : { event };
     },
   });

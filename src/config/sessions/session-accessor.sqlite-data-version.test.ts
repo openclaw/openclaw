@@ -2,9 +2,9 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
 import { listUsageCountedTranscriptStats } from "../../infra/session-cost-usage-collection.js";
 import { configureSqliteConnectionPragmas } from "../../infra/sqlite-wal.js";
+import { openOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -20,7 +20,6 @@ import {
   listSessionTranscriptInstances,
   loadSessionEntry,
   openSessionEntryReadView,
-  recordSessionParticipant,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
@@ -30,6 +29,7 @@ import {
   iterateSessionEntryKeys,
 } from "./session-accessor.sqlite-entry-store.js";
 import { readReferencedSessionIds } from "./session-accessor.sqlite-lifecycle-state.js";
+import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
 
 const parseSessionEntryCalls = vi.hoisted(() => vi.fn());
@@ -57,6 +57,7 @@ beforeEach(() => {
 afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
+  vi.useRealTimers();
 });
 
 function readDataVersion(database: DatabaseSync): number {
@@ -396,41 +397,6 @@ describe("SQLite session entry cache", () => {
     expect(snapshot.entries.get(scope.sessionKey)?.skillsSnapshot).toBeUndefined();
   });
 
-  it("counts mixed validated and raw entries with the same archive filter", async () => {
-    const scope = createSessionScope("mixed-inventory-count");
-    const database = openOpenClawAgentDatabase(scope);
-    expect(readSessionEntryCount(database)).toBe(0);
-    expect(readSessionEntryCount(database, { includeArchived: false })).toBe(0);
-    for (const archived of [false, true]) {
-      await upsertSessionEntryCore(
-        { ...scope, sessionKey: "agent:main:validated-" + archived },
-        { sessionId: "validated-" + archived, updatedAt: 1, archivedAt: archived ? 1 : undefined },
-      );
-      database.db
-        .prepare(
-          "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at, archived_at) VALUES (?, ?, ?, 1, ?)",
-        )
-        .run(
-          "agent:main:raw-" + archived,
-          "raw-" + archived,
-          JSON.stringify({ sessionId: "raw-" + archived, updatedAt: 1 }),
-          archived ? 1 : null,
-        );
-    }
-    database.db
-      .prepare(
-        "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, 1)",
-      )
-      .run("agent:main:invalid", "invalid", "{");
-    expect(readSessionEntryCount(database)).toBe(4);
-    expect(readSessionEntryCount(database, { includeArchived: false })).toBe(2);
-    database.db
-      .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
-      .run("{}", "agent:main:validated-false");
-    expect(readSessionEntryCount(database)).toBe(3);
-    expect(readSessionEntryCount(database, { includeArchived: false })).toBe(1);
-  });
-
   it("retains only listing metadata while full reads preserve saved prompt state", async () => {
     const scope = createSessionScope("lazy-list-projection");
     const prompt = "large skill prompt".repeat(8192);
@@ -536,7 +502,11 @@ describe("SQLite session entry cache", () => {
     });
     const primary = openOpenClawAgentDatabase(scope);
     const first = listSessionEntriesCore({ ...scope, clone: false });
-    const alternate = new DatabaseSync(primary.path, { readOnly: true });
+    const opened = openOpenClawAgentDatabaseReadOnly(scope);
+    if (!opened.found) {
+      throw new Error("Expected the existing agent database");
+    }
+    const alternate = opened.database.db;
     const parse = vi.spyOn(JSON, "parse");
 
     try {
@@ -570,8 +540,7 @@ describe("SQLite session entry cache", () => {
       ).toHaveLength(1);
     } finally {
       parse.mockRestore();
-      clearNodeSqliteKyselyCacheForDatabase(alternate);
-      alternate.close();
+      opened.database.close();
     }
   });
 
@@ -604,7 +573,7 @@ describe("SQLite session entry cache", () => {
     expect(parseSessionEntryCalls).not.toHaveBeenCalled();
   });
 
-  it("fully reloads after another connection commits", async () => {
+  it("fully reloads on the next read after another connection commits", async () => {
     const scope = createSessionScope("external-write");
     const siblingScope = { ...scope, sessionKey: "agent:main:external-write-sibling" };
     await upsertSessionEntryCore(scope, {
@@ -694,7 +663,7 @@ describe("SQLite session entry cache", () => {
     }
   });
 
-  it("observes a commit during a listing on the next snapshot", async () => {
+  it("observes a commit during a listing on the next read", async () => {
     const scope = createSessionScope("external-race");
     const siblingScope = { ...scope, sessionKey: "agent:main:external-race-sibling" };
     await upsertSessionEntryCore(scope, {

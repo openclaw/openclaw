@@ -1,9 +1,18 @@
-import { vi } from "vitest";
+import { vi, type Mock } from "vitest";
+import {
+  createPluginExecutionFrame,
+  getPluginExecutionFrame,
+} from "../../plugins/plugin-instance-invocation.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import type {
   PreparedModelRuntimeInput,
   PreparedModelRuntimeLeaseOptions,
 } from "../prepared-model-runtime.types.js";
+
+export type CompactHooksQueuedCompaction = (
+  params: Parameters<typeof import("./compact.queued.js").compactEmbeddedAgentSession>[0],
+  host?: Partial<Parameters<typeof import("./compact.queued.js").compactEmbeddedAgentSession>[1]>,
+) => ReturnType<typeof import("./compact.queued.js").compactEmbeddedAgentSession>;
 
 const emptyPluginIndex: PluginMetadataSnapshot["index"] = {
   version: 1,
@@ -49,6 +58,22 @@ export const emptyPluginMetadataSnapshot: PluginMetadataSnapshot = {
   },
 };
 
+export const getCurrentPluginMetadataSnapshotMock: Mock<
+  typeof import("../../plugins/current-plugin-metadata-snapshot.js").getCurrentPluginMetadataSnapshot
+> = vi.fn(() => emptyPluginMetadataSnapshot);
+
+export function mockCompactHooksPluginMetadata(): void {
+  vi.doMock("../../plugins/current-plugin-metadata-snapshot.js", () => ({
+    getCurrentPluginMetadataSnapshot: getCurrentPluginMetadataSnapshotMock,
+    isCurrentPluginMetadataSnapshotRuntimeGeneration: () => false,
+    resolvePluginMetadataControlPlaneFingerprint: vi.fn(() => "test-plugin-fingerprint"),
+    createPluginMetadataSnapshotFrame: () =>
+      getPluginExecutionFrame() ?? createPluginExecutionFrame({}, undefined),
+    withPluginMetadataSnapshotScope: (_snapshot: unknown, run: () => unknown) => run(),
+    runOutsidePluginMetadataSnapshotScope: <T>(run: () => T): T => run(),
+  }));
+}
+
 export async function acquireCompactHooksPreparedModelRuntime(
   input: PreparedModelRuntimeInput,
   _options?: PreparedModelRuntimeLeaseOptions,
@@ -85,3 +110,19 @@ export function createCompactHooksPreparedModelRuntime(input: {
     createStores: () => ({ authStorage: {}, modelRegistry: {} }),
   };
 }
+
+export type MockResolvedModel = {
+  logicalRef: { provider: string; model: string };
+  model: {
+    provider: string;
+    api: string;
+    baseUrl?: string;
+    id: string;
+    input: unknown[];
+    contextWindow?: number;
+    requestTimeoutMs?: number;
+  };
+  error: null;
+  authStorage: Pick<import("../sessions/auth-storage.js").AuthStorage, "setRuntimeApiKey">;
+  modelRegistry: Record<string, never> | import("../sessions/model-registry.js").ModelRegistry;
+};

@@ -30,20 +30,17 @@ function sameUpdateAvailable(a: UpdateAvailable | null, b: UpdateAvailable | nul
     a.currentSha === b.currentSha &&
     a.upstreamRef === b.upstreamRef &&
     a.upstreamSha === b.upstreamSha &&
+    a.repositoryUrl === b.repositoryUrl &&
     a.commitsBehind === b.commitsBehind &&
     JSON.stringify(a.commits) === JSON.stringify(b.commits)
   );
-}
-
-function sameUpdateSchedule(a: UpdateScheduleState | null, b: UpdateScheduleState): boolean {
-  return JSON.stringify(a) === JSON.stringify(b);
 }
 
 export function setUpdateScheduleCache(params: {
   next: UpdateScheduleState;
   onUpdateScheduleChange?: (schedule: UpdateScheduleState) => void;
 }): void {
-  if (sameUpdateSchedule(updateScheduleCache, params.next)) {
+  if (JSON.stringify(updateScheduleCache) === JSON.stringify(params.next)) {
     return;
   }
   updateScheduleCache = params.next;

@@ -3,7 +3,6 @@
  * Exercises raw error coercion, remediation hints, timeout/auth/billing/rate-limit cases.
  */
 import { describe, expect, it, vi } from "vitest";
-import { createAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
 import { attachErrorDiagnostic, formatErrorMessageForDisplay } from "../infra/error-diagnostics.js";
 import { getFailoverErrorCode } from "./failover/error.js";
 import { AgentHarnessPreflightError } from "./harness/errors.js";
@@ -29,7 +28,6 @@ import {
   FailoverError,
   findCliTimeoutError,
   hasProviderRequestSizeCeiling,
-  isNonProviderRuntimeCoordinationError,
   isSignalTimeoutReason,
   isTimeoutError,
   resolveFailoverReasonFromError,
@@ -227,8 +225,11 @@ describe("failover-error", () => {
         },
       }),
     ).toBe("format");
-    for (const status of [500, 502, 503, 504, 520, 521, 522, 523, 524]) {
+    for (const status of [504, 522, 524]) {
       expect(resolveFailoverReasonFromError({ status })).toBe("timeout");
+    }
+    for (const status of [500, 502, 503, 520, 521, 523]) {
+      expect(resolveFailoverReasonFromError({ status })).toBe("server_error");
     }
     expect(resolveFailoverReasonFromError({ status: 529 })).toBe("overloaded");
   });
@@ -372,7 +373,7 @@ describe("failover-error", () => {
         status: 503,
         message: "Internal database error",
       }),
-    ).toBe("timeout");
+    ).toBe("server_error");
     expect(
       resolveFailoverReasonFromError({
         status: 503,
@@ -796,10 +797,9 @@ describe("failover-error", () => {
     expect(err?.provider).toBe("anthropic");
   });
 
-  it("preserves a selected-profile error code in the auth failover lane", () => {
+  it("keeps local profile absence in auth failover without inventing a provider response", () => {
     const err = coerceToFailoverError(
       Object.assign(new Error("selected profile missing"), {
-        status: 401,
         code: "selected_auth_profile_unavailable",
       }),
       { provider: "openai", model: "gpt-5.6-sol" },
@@ -807,9 +807,11 @@ describe("failover-error", () => {
 
     expect(err).toMatchObject({
       reason: "auth",
-      status: 401,
       code: "selected_auth_profile_unavailable",
+      message: "selected profile missing",
     });
+    expect(err?.status).toBeUndefined();
+    expect(buildFailoverRemediationHint(err)).toBeUndefined();
   });
 
   it("permission_error with organization denial stays auth_permanent", () => {
@@ -848,7 +850,7 @@ describe("failover-error", () => {
       sessionId: "session:browser-abcd",
       lane: "answer",
       status: 429,
-      code: "selected_auth_profile_unavailable",
+      code: "rate_limit_exceeded",
     });
     expect(err.sessionId).toBe("session:browser-abcd");
     expect(err.lane).toBe("answer");
@@ -861,7 +863,7 @@ describe("failover-error", () => {
     expect(description.lane).toBe("answer");
     expect(description.reason).toBe("rate_limit");
     expect(description.status).toBe(429);
-    expect(description.code).toBe("selected_auth_profile_unavailable");
+    expect(description.code).toBe("rate_limit_exceeded");
   });
 
   it("coerceToFailoverError carries sessionId/lane from context (#42713)", () => {
@@ -875,75 +877,6 @@ describe("failover-error", () => {
     expect(err?.sessionId).toBe("session:browser-1234");
     expect(err?.lane).toBe("draft");
     expect(err?.provider).toBe("openai");
-  });
-
-  describe("isNonProviderRuntimeCoordinationError", () => {
-    it("returns true for stale gateway lifecycle ownership loss", () => {
-      const staleLifecycle = createAgentRunStaleLifecycleError();
-      expect(isNonProviderRuntimeCoordinationError(staleLifecycle)).toBe(true);
-      expect(
-        isNonProviderRuntimeCoordinationError(new Error("wrapper", { cause: staleLifecycle })),
-      ).toBe(true);
-    });
-
-    it.each([
-      ["availability", "WorkerRunnerUnavailableError", "The device runner is offline"],
-      ["capacity", "WorkerRunnerCapacityError", "device worker capacity remained full"],
-      [
-        "workspace reconciliation",
-        "WorkerWorkspaceReconciliationError",
-        "cloud worker workspace result could not be reconciled",
-      ],
-      ["active turn claim", "ActiveTurnClaimError", "session already has an active turn claim"],
-    ])("returns true for direct and nested runner %s failures", (_label, name, message) => {
-      const coordination = new Error(message);
-      coordination.name = name;
-      for (const error of [
-        coordination,
-        new Error("worker turn failed", { cause: coordination }),
-      ]) {
-        expect(isNonProviderRuntimeCoordinationError(error)).toBe(true);
-        expect(resolveModelFallbackError(error)).toEqual({ kind: "coordination", error });
-      }
-    });
-
-    it("returns true for Codex missing tool-result local execution failures", () => {
-      const missingToolResultMessage =
-        "OpenClaw recorded a native Codex tool.call without a matching tool.result before the turn completed.";
-      expect(isNonProviderRuntimeCoordinationError({ reason: "missing_tool_result" })).toBe(true);
-      expect(
-        isNonProviderRuntimeCoordinationError({
-          message: "codex app-server turn failed",
-          cause: { result: { reason: "missing_tool_result" } },
-        }),
-      ).toBe(true);
-      expect(resolveFailoverReasonFromError(new Error(missingToolResultMessage))).toBeNull();
-    });
-
-    it("returns false for plain timeouts and provider errors", () => {
-      const timeoutErr = Object.assign(new Error("operation timed out"), { name: "TimeoutError" });
-      expect(isNonProviderRuntimeCoordinationError(timeoutErr)).toBe(false);
-      expect(
-        isNonProviderRuntimeCoordinationError({
-          status: 503,
-          message: "upstream overloaded",
-          cause: { result: { reason: "missing_tool_result" } },
-        }),
-      ).toBe(false);
-      expect(
-        isNonProviderRuntimeCoordinationError({
-          status: 503,
-          message: "upstream overloaded",
-          cause: createAgentRunStaleLifecycleError(),
-        }),
-      ).toBe(false);
-      expect(isNonProviderRuntimeCoordinationError(null)).toBe(false);
-      expect(isNonProviderRuntimeCoordinationError(undefined)).toBe(false);
-    });
-
-    it("does not suppress provider fallback for unrelated free text mentioning the marker", () => {
-      expect(isNonProviderRuntimeCoordinationError("reason=missing_tool_result")).toBe(false);
-    });
   });
 });
 

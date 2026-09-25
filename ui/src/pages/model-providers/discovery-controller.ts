@@ -1,6 +1,9 @@
 import { html, nothing, type ReactiveControllerHost, type ReactiveController } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
+import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
+
+registerModelSetupEnglish();
 
 function renderModelProviderDiscovery(props: {
   state: "closed" | "loading" | "ready";

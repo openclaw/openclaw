@@ -6,12 +6,13 @@ import { resolveGitCoauthorAttribution } from "./git-coauthor-attribution.js";
 
 const log = createSubsystemLogger("agents/system-prompt");
 
-export function resolveSessionGitCoauthorPrompt(params: {
+export async function resolveSessionGitCoauthorPrompt(params: {
   config?: OpenClawConfig;
   agentId?: string;
   sessionKey?: string;
+  sessionId?: string;
   storePath?: string;
-}): string | undefined {
+}): Promise<string | undefined> {
   if (!params.config || !params.agentId || !params.sessionKey) {
     return undefined;
   }
@@ -24,12 +25,14 @@ export function resolveSessionGitCoauthorPrompt(params: {
     return undefined;
   }
   try {
-    const trailers = resolveGitCoauthorAttribution({
+    const attribution = await resolveGitCoauthorAttribution({
       config: params.config,
       agentId: params.agentId,
       sessionKey: params.sessionKey,
+      ...(params.sessionId ? { sessionId: params.sessionId } : {}),
       storePath: params.storePath,
-    })?.trailers;
+    });
+    const trailers = attribution?.trailers;
     return trailers?.length
       ? [
           "Git co-authors: add these exact trailers to every commit you make from this session.",

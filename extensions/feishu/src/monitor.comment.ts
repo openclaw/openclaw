@@ -1,4 +1,3 @@
-// Feishu plugin module implements monitor.comment behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   asBoolean as readBoolean,
@@ -1202,32 +1201,9 @@ function buildDriveCommentSurfacePrompt(params: {
   return lines.join("\n");
 }
 
-async function resolveDriveCommentEventCore(params: ResolveDriveCommentEventParams): Promise<{
-  eventId: string;
-  commentId: string;
-  replyId?: string;
-  noticeType: "add_comment" | "add_reply";
-  fileToken: string;
-  fileType: CommentFileType;
-  isWholeComment?: boolean;
-  senderId: string;
-  senderUserId?: string;
-  timestamp?: string;
-  isMentioned?: boolean;
-  context: {
-    documentTitle?: string;
-    documentUrl?: string;
-    quoteText?: string;
-    rootCommentText?: string;
-    targetReplyText?: string;
-    rootCommentContent?: ParsedCommentContent;
-    targetReplyContent?: ParsedCommentContent;
-    currentCommentThreadReplies: ResolvedCommentReplyContext[];
-    wholeCommentTimeline: ResolvedWholeCommentTimelineEntry[];
-    nearestBotWholeCommentAfter?: ResolvedWholeCommentTimelineEntry;
-    nearestBotWholeCommentBefore?: ResolvedWholeCommentTimelineEntry;
-  };
-} | null> {
+export async function resolveDriveCommentEventTurn(
+  params: ResolveDriveCommentEventParams,
+): Promise<ResolvedDriveCommentEventTurn | null> {
   const {
     cfg,
     accountId,
@@ -1295,8 +1271,18 @@ async function resolveDriveCommentEventCore(params: ResolveDriveCommentEventPara
     accountId,
     abortSignal,
   });
+  const prompt = buildDriveCommentSurfacePrompt({
+    noticeType,
+    fileType,
+    fileToken,
+    commentId,
+    replyId,
+    isMentioned: event.is_mentioned,
+    ...context,
+  });
   return {
     eventId,
+    messageId: `drive-comment:${eventId}`,
     commentId,
     replyId,
     noticeType,
@@ -1307,7 +1293,13 @@ async function resolveDriveCommentEventCore(params: ResolveDriveCommentEventPara
     senderUserId,
     timestamp: event.timestamp,
     isMentioned: event.is_mentioned,
-    context,
+    documentTitle: context.documentTitle,
+    documentUrl: context.documentUrl,
+    quoteText: context.quoteText,
+    rootCommentText: context.rootCommentText,
+    targetReplyText: context.targetReplyText,
+    prompt,
+    preview: truncateUtf16Safe(prompt.replace(/\s+/g, " "), 160),
   };
 }
 
@@ -1349,54 +1341,4 @@ export function parseFeishuDriveCommentNoticeEventPayload(
   };
 }
 
-export async function resolveDriveCommentEventTurn(
-  params: ResolveDriveCommentEventParams,
-): Promise<ResolvedDriveCommentEventTurn | null> {
-  const resolved = await resolveDriveCommentEventCore(params);
-  if (!resolved) {
-    return null;
-  }
-  const prompt = buildDriveCommentSurfacePrompt({
-    noticeType: resolved.noticeType,
-    fileType: resolved.fileType,
-    fileToken: resolved.fileToken,
-    commentId: resolved.commentId,
-    replyId: resolved.replyId,
-    isWholeComment: resolved.isWholeComment,
-    isMentioned: resolved.isMentioned,
-    documentTitle: resolved.context.documentTitle,
-    documentUrl: resolved.context.documentUrl,
-    quoteText: resolved.context.quoteText,
-    rootCommentText: resolved.context.rootCommentText,
-    targetReplyText: resolved.context.targetReplyText,
-    rootCommentContent: resolved.context.rootCommentContent,
-    targetReplyContent: resolved.context.targetReplyContent,
-    currentCommentThreadReplies: resolved.context.currentCommentThreadReplies,
-    wholeCommentTimeline: resolved.context.wholeCommentTimeline,
-    nearestBotWholeCommentAfter: resolved.context.nearestBotWholeCommentAfter,
-    nearestBotWholeCommentBefore: resolved.context.nearestBotWholeCommentBefore,
-  });
-  const preview = truncateUtf16Safe(prompt.replace(/\s+/g, " "), 160);
-  return {
-    eventId: resolved.eventId,
-    messageId: `drive-comment:${resolved.eventId}`,
-    commentId: resolved.commentId,
-    replyId: resolved.replyId,
-    noticeType: resolved.noticeType,
-    fileToken: resolved.fileToken,
-    fileType: resolved.fileType,
-    isWholeComment: resolved.isWholeComment,
-    senderId: resolved.senderId,
-    senderUserId: resolved.senderUserId,
-    timestamp: resolved.timestamp,
-    isMentioned: resolved.isMentioned,
-    documentTitle: resolved.context.documentTitle,
-    documentUrl: resolved.context.documentUrl,
-    quoteText: resolved.context.quoteText,
-    rootCommentText: resolved.context.rootCommentText,
-    targetReplyText: resolved.context.targetReplyText,
-    prompt,
-    preview,
-  };
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

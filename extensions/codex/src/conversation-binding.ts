@@ -14,8 +14,8 @@ import { normalizeCodexAppServerBindingModelProvider } from "./app-server/auth-p
 import {
   consumeCodexAppServerLiveThread,
   isCodexAppServerClientRuntimeLive,
-  type CodexAppServerLiveThreadOwnership,
 } from "./app-server/client-runtime.js";
+import type { CodexAppServerLiveThreadOwnership } from "./app-server/client-thread-owner.js";
 import {
   isCodexAppServerIndeterminateRequestCancellationError,
   isCodexAppServerOverloadError,
@@ -389,6 +389,7 @@ async function runBoundTurn(params: {
         activeTurnCleanup = trackCodexConversationActiveTurn({
           identity,
           client,
+          requestTimeoutMs: runtime.requestTimeoutMs,
           threadId,
           turnId: activeTurnId,
         });

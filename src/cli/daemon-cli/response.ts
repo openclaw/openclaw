@@ -1,5 +1,7 @@
 // JSON/text response helpers for Gateway service lifecycle commands.
 import { Writable } from "node:stream";
+import { currentGatewayServiceRebindReceipt } from "../../daemon/service-rebind.js";
+import type { GatewayServiceDefinitionBackupReceipt } from "../../daemon/service-stage.js";
 import type { GatewayService } from "../../daemon/service.js";
 import {
   isSystemdUnavailableDetail,
@@ -38,16 +40,13 @@ type DaemonActionResponse = {
   hints?: string[];
   hintItems?: DaemonHintItem[];
   warnings?: string[];
-  service?: {
-    label: string;
-    loaded: boolean;
-    loadedText: string;
-    notLoadedText: string;
-  };
+  definitionBackup?: GatewayServiceDefinitionBackupReceipt;
+  service?: ReturnType<typeof buildDaemonServiceSnapshot>;
 };
 
 function emitDaemonActionJson(payload: DaemonActionResponse) {
-  defaultRuntime.writeJson(payload);
+  const rebind = currentGatewayServiceRebindReceipt();
+  defaultRuntime.writeJson({ ...payload, ...(rebind ? { rebind } : {}) });
 }
 
 function classifyDaemonHintText(text: string): DaemonHintKind {
@@ -99,64 +98,42 @@ export function buildDaemonServiceSnapshot(service: GatewayService, loaded: bool
 
 type DaemonEmit = (payload: Omit<DaemonActionResponse, "action">) => void;
 
-/** Emit a lifecycle result and mirror its message to text output. */
-function emitDaemonActionMessage(params: {
-  json: boolean;
-  emit: DaemonEmit;
-  payload: Omit<DaemonActionResponse, "action">;
-}): void {
-  params.emit(params.payload);
-  if (!params.json && params.payload.message) {
-    defaultRuntime.log(params.payload.message);
-  }
-}
-
 /** Emit the no-op success returned when a service is already running. */
 export function emitDaemonAlreadyRunning(params: {
   serviceNoun: string;
   service: GatewayService;
   pid?: number;
-  json: boolean;
   warnings: string[];
-  emit: DaemonEmit;
+  emitMessage: DaemonEmit;
 }): void {
   const message =
     params.pid === undefined
       ? `${params.serviceNoun} service already running.`
       : `${params.serviceNoun} service already running (pid ${params.pid}).`;
-  emitDaemonActionMessage({
-    json: params.json,
-    emit: params.emit,
-    payload: {
-      ok: true,
-      result: "already-running",
-      message,
-      service: buildDaemonServiceSnapshot(params.service, true),
-      warnings: params.warnings.length ? params.warnings : undefined,
-    },
+  params.emitMessage({
+    ok: true,
+    result: "already-running",
+    message,
+    service: buildDaemonServiceSnapshot(params.service, true),
+    warnings: params.warnings.length ? params.warnings : undefined,
   });
 }
 
 /** Emit a service-manager restart that has been accepted but not completed. */
 export function emitDaemonScheduledRestart(params: {
-  json: boolean;
-  emit: DaemonEmit;
+  emitMessage: DaemonEmit;
   result: string;
   message: string;
   service: GatewayService;
   loaded: boolean;
   warnings: string[];
 }): true {
-  emitDaemonActionMessage({
-    json: params.json,
-    emit: params.emit,
-    payload: {
-      ok: true,
-      result: params.result,
-      message: params.message,
-      service: buildDaemonServiceSnapshot(params.service, params.loaded),
-      warnings: params.warnings.length ? params.warnings : undefined,
-    },
+  params.emitMessage({
+    ok: true,
+    result: params.result,
+    message: params.message,
+    service: buildDaemonServiceSnapshot(params.service, params.loaded),
+    warnings: params.warnings.length ? params.warnings : undefined,
   });
   return true;
 }
@@ -171,26 +148,38 @@ export function createNullWriter(): Writable {
 }
 
 /** Create stdout/warning/emit/fail helpers for one daemon lifecycle action. */
-export function createDaemonActionContext(params: { action: DaemonAction; json: boolean }): {
-  stdout: Writable;
-  warnings: string[];
-  emit: (payload: Omit<DaemonActionResponse, "action">) => void;
-  fail: (message: string, hints?: string[], result?: "restart-health-failed") => void;
-} {
+export function createDaemonActionContext(params: {
+  action: DaemonAction;
+  json: boolean;
+  definitionBackup?: () => GatewayServiceDefinitionBackupReceipt | undefined;
+}) {
   const warnings: string[] = [];
   const stdout = params.json ? createNullWriter() : process.stdout;
   const emit = (payload: Omit<DaemonActionResponse, "action">) => {
     if (!params.json) {
       return;
     }
+    const definitionBackup = params.definitionBackup?.();
     emitDaemonActionJson({
       action: params.action,
+      ...(definitionBackup ? { definitionBackup } : {}),
       ...payload,
       hintItems: payload.hintItems ?? buildDaemonHintItems(payload.hints),
       warnings: payload.warnings ?? (warnings.length ? warnings : undefined),
     });
   };
-  const fail = (message: string, hints?: string[], result?: "restart-health-failed") => {
+  // Message-bearing successes opt into text; emit remains JSON-only.
+  const emitMessage: DaemonEmit = (payload) => {
+    emit(payload);
+    if (!params.json && payload.message) {
+      defaultRuntime.log(payload.message);
+    }
+  };
+  const fail = (
+    message: string,
+    hints?: string[],
+    result?: "restart-health-failed" | "still-starting",
+  ) => {
     if (params.json) {
       emit({
         ok: false,
@@ -206,10 +195,10 @@ export function createDaemonActionContext(params: { action: DaemonAction; json: 
         }
       }
     }
-    defaultRuntime.exit(1);
+    defaultRuntime.exit(result === "still-starting" ? 2 : 1);
   };
 
-  return { stdout, warnings, emit, fail };
+  return { stdout, warnings, emit, emitMessage, fail };
 }
 
 async function buildInstallFailureHints(error: unknown): Promise<string[] | undefined> {
@@ -231,6 +220,8 @@ export async function installDaemonServiceAndEmit(params: {
   emit: (payload: Omit<DaemonActionResponse, "action">) => void;
   fail: (message: string, hints?: string[]) => void;
   install: () => Promise<void>;
+  /** Distinguishes successful registration from application readiness. */
+  successMessage?: string;
   /**
    * Runs only after the service has been written AND verified as loaded, but
    * before the success payload is emitted. Use this for post-success
@@ -278,6 +269,7 @@ export async function installDaemonServiceAndEmit(params: {
   params.emit({
     ok: true,
     result: "installed",
+    ...(params.successMessage ? { message: params.successMessage } : {}),
     service: buildDaemonServiceSnapshot(params.service, installed),
     warnings: params.warnings.length ? params.warnings : undefined,
   });

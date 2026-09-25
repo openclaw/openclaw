@@ -527,12 +527,10 @@ function createPreparedTraceMessage(scenario: SlackTraceScenarioName): PreparedS
       textLimit: 4000,
       typingReaction: "",
       allowFrom: [],
-      setSlackSessionStatus: (p: {
-        channelId: string;
-        threadTs?: string;
-        status: "processing" | "active" | "suspended";
-        title?: string;
-      }) => setSlackSessionStatus({ ...p, client: client as unknown as WebClient }),
+      setSlackSessionStatus: ((p) =>
+        setSlackSessionStatus({ ...p, client: client as unknown as WebClient }).then(
+          ({ ok }) => ok,
+        )) satisfies PreparedSlackMessage["ctx"]["setSlackSessionStatus"],
     },
     account: {
       accountId: "default",
@@ -588,7 +586,6 @@ function createPreparedTraceMessage(scenario: SlackTraceScenarioName): PreparedS
     requireMention: true,
     isDirectMessage: false,
     isRoomish: true,
-    historyKey: "slack:trace",
     preview: "",
     ackReactionValue: "eyes",
     ackReactionPromise: null,

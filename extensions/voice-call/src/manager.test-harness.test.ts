@@ -3,15 +3,23 @@ import fs from "node:fs";
 import { setImmediate } from "node:timers/promises";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { expect, it, onTestFinished } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { createManagerHarness, markCallAnswered } from "./manager.test-harness.js";
 import type { CallRecord } from "./types.js";
 
 it("finalizes fixture calls and releases their timers, database workers, and directories", async () => {
   const ownership = new AsyncLocalStorage<"duration" | "transcript">();
+  const timerMs = { duration: 317_000, transcript: 43_100 };
+  const timerDelay = new AsyncLocalStorage<number | undefined>();
+  const schedule = globalThis.setTimeout;
+  const scheduling = vi
+    .spyOn(globalThis, "setTimeout")
+    .mockImplementation((callback, delay, ...args) =>
+      timerDelay.run(delay, () => schedule(callback, delay, ...args)),
+    );
   const allocated = { duration: 0, transcript: 0 };
   let allocatedWorkers = 0;
-  const pending = new Map<number, "duration" | "transcript" | "database">();
+  const pending = new Map<number, "duration" | "transcript" | "database" | "database-timer">();
   const observer = createHook({
     init(id, type) {
       const owner = ownership.getStore();
@@ -21,8 +29,14 @@ it("finalizes fixture calls and releases their timers, database workers, and dir
         allocatedWorkers++;
         pending.set(id, "database");
       } else if (type === "Timeout" && owner) {
-        allocated[owner]++;
-        pending.set(id, owner);
+        // Database operations inherit caller context too. Keep their idle
+        // timers under observation without miscounting them as call timers.
+        if (timerDelay.getStore() === timerMs[owner]) {
+          allocated[owner]++;
+          pending.set(id, owner);
+        } else {
+          pending.set(id, "database-timer");
+        }
       }
     },
     destroy(id) {
@@ -69,13 +83,18 @@ it("finalizes fixture calls and releases their timers, database workers, and dir
         }
       } finally {
         observer.disable();
+        scheduling.mockRestore();
+        timerDelay.disable();
         ownership.disable();
       }
     }
   });
 
   for (let index = 0; index < 2; index++) {
-    const fixture = await createManagerHarness();
+    const fixture = await createManagerHarness({
+      maxDurationSeconds: timerMs.duration / 1000,
+      transcriptTimeoutMs: timerMs.transcript,
+    });
     fixtures.push(fixture);
     const started = await fixture.manager.initiateCall("+15550000001");
     expect(started.success).toBe(true);
@@ -96,6 +115,8 @@ it("finalizes fixture calls and releases their timers, database workers, and dir
   }
   await setImmediate();
   expect(allocated).toEqual({ duration: 2, transcript: 1 });
-  expect(pending.size).toBe(3 + allocatedWorkers);
+  expect([...pending.values()].filter((owner) => owner !== "database-timer")).toHaveLength(
+    3 + allocatedWorkers,
+  );
   expect(turnResult).toBeUndefined();
 });

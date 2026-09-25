@@ -1,9 +1,7 @@
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveContextWindowInfo, type ContextWindowInfo } from "../context-window-guard.js";
 import { resolveContextTokensForModel } from "../context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
-import { findModelCatalogEntry, type loadManifestModelCatalog } from "../model-catalog.js";
 import type { ModelCatalogEntry } from "../model-catalog.types.js";
 import { resolveModelContextWindowProfile } from "../model-context-window.js";
 import { isClaudeCliBackendId } from "./helpers.js";
@@ -27,34 +25,22 @@ function resolveClaudeCliContextModelId(modelId: string): string {
   return CLAUDE_CLI_CONTEXT_MODEL_ALIASES[lower] ?? trimmed;
 }
 
-function findSelectableContextWindowEntry(params: {
-  catalog: ModelCatalogEntry[];
-  providers: string[];
-  models: string[];
-}): ModelCatalogEntry | undefined {
-  for (const provider of params.providers) {
-    for (const model of params.models) {
-      const entry = findModelCatalogEntry(params.catalog, { provider, modelId: model });
-      if (entry?.contextWindows?.length) {
-        return entry;
-      }
-    }
-  }
-  return undefined;
-}
-
 export function resolveCliRunContextBudget(params: {
   config: OpenClawConfig | undefined;
   provider: string;
   backendModelProvider: string | undefined;
   modelId: string;
   normalizedCatalogModel: string;
-  workspaceDir: string;
   /** The session-selected catalog `contextWindows` option id, when any. */
   selectedContextWindow: string | undefined;
+  /**
+   * The catalog entry that owns selectable `contextWindows` for this run's
+   * logical/native identity, already selected by the caller so the catalog is
+   * read once for both this budget and the run's thinking level.
+   */
+  selectableContextEntry: ModelCatalogEntry | undefined;
   modelContextWindow: number | undefined;
   modelContextTokens: number | undefined;
-  loadManifestModelCatalog: typeof loadManifestModelCatalog;
 }): CliRunContextBudget {
   const { modelId, normalizedCatalogModel } = params;
   const isClaudeCli = isClaudeCliBackendId(params.provider);
@@ -96,23 +82,9 @@ export function resolveCliRunContextBudget(params: {
   // resolveAnthropicFixedContextWindow deliberately ignores catalog scalars,
   // so the selected (or default) option must apply after it or a 200k session
   // would auto-compact against a 1M budget.
-  const selectableContextEntry = findSelectableContextWindowEntry({
-    catalog: params.config
-      ? params.loadManifestModelCatalog({
-          config: params.config,
-          workspaceDir: params.workspaceDir,
-        })
-      : [],
-    providers: uniqueStrings(
-      [params.provider, params.backendModelProvider].filter(
-        (provider): provider is string => typeof provider === "string" && provider.length > 0,
-      ),
-    ),
-    models: uniqueStrings([modelId, normalizedCatalogModel]),
-  });
-  if (selectableContextEntry) {
+  if (params.selectableContextEntry) {
     const contextWindowProfile = resolveModelContextWindowProfile({
-      catalogEntry: selectableContextEntry,
+      catalogEntry: params.selectableContextEntry,
       selected: params.selectedContextWindow,
     });
     // Only an effective option caps the window; the bare catalog scalar stays

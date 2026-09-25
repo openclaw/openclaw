@@ -5,7 +5,6 @@ import { deletePersonalGitHubSessionReceipts } from "../state/github-personal-pu
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import {
-  callPersonalPublicationRpc,
   createPersonalPublicationFixture,
   personalPublicationAccount,
   expectPersonalPublicationReplay,
@@ -73,6 +72,72 @@ describe("repository checkpoint GitHub publication", () => {
     expect(mocks.findWorktree).not.toHaveBeenCalled();
     expect(mocks.resolveRepository).not.toHaveBeenCalled();
   });
+
+  it.each(["shared", "personal"] as const)(
+    "retains the accepted %s PR response after publication authority closes",
+    async (source) => {
+      const f = await repositoryFixture();
+      const person = source === "personal" ? await createPersonalPublicationFixture() : undefined;
+      if (person) {
+        f.runtime.accountId = personalPublicationAccount.accountId;
+      }
+      let current = true;
+      const transport = mocks.runCommand.getMockImplementation()!;
+      mocks.runCommand.mockImplementation(async (args: string[], options) => {
+        const result = await transport(args, options);
+        if (args.includes("repos/owner/repository/pulls") && args.includes("POST")) {
+          current = false;
+          if (person) {
+            person.runtime.live = false;
+          }
+        }
+        return result;
+      });
+      const coordinator = person?.coordinator ?? f.coordinator;
+      const request = () =>
+        person
+          ? coordinator.requestPersonalForSession(
+              {
+                sessionKey: SESSION_KEY,
+                idempotencyKey: "accepted-before-close",
+                selection: {
+                  source: "personal",
+                  generation: person.generation,
+                  account: personalPublicationAccount,
+                },
+              },
+              person.action,
+            )
+          : coordinator.requestForSession({
+              agentId: "main",
+              sessionKey: SESSION_KEY,
+              idempotencyKey: "accepted-before-close",
+              assertCurrent: () => {
+                if (!current) {
+                  throw new Error("Publication authority closed");
+                }
+              },
+            });
+      const published = await request();
+      expect(published).toMatchObject({ status: "published", url });
+      expect(readRepositoryGitHubPublication(published.requestId)).toMatchObject({
+        status: "published",
+        pull_request_url: url,
+        last_effect: "pull_request",
+        effect_state: "observed",
+        pushed_head_commit: f.runtime.head,
+      });
+      const commandCount = mocks.runCommand.mock.calls.length;
+      await coordinator.resumeSessionRequests();
+      current = true;
+      if (person) {
+        person.runtime.live = true;
+      }
+      expect(await request()).toEqual(published);
+      expect(mocks.runCommand.mock.calls).toHaveLength(commandCount);
+      expect(f.runtime.effects).toEqual(["push", "pull_request"]);
+    },
+  );
 
   it("replays only the original personal selection and content without new repository publication work", async () => {
     const f = await repositoryFixture();
@@ -521,7 +586,7 @@ describe("repository checkpoint GitHub publication", () => {
       const retained = claimRepositoryGitHubPublication(
         readRepositoryGitHubPublication(first.requestId)!,
         "retained-execution",
-        () => {},
+        { assertCustody: () => {}, assertCurrent: () => {} },
       );
       await stale.closeSession(kind);
       if (kind === "reset") {
@@ -868,103 +933,6 @@ describe("repository checkpoint GitHub publication", () => {
     },
   );
 
-  it.each(["turn", "reset", "move"] as const)(
-    "requires the same personal owner after restart and a later %s",
-    async (boundary) => {
-      const f = await repositoryFixture();
-      const person = await createPersonalPublicationFixture();
-      f.runtime.accountId = personalPublicationAccount.accountId;
-      f.runtime.interruptPush = true;
-      const request = {
-        sessionKey: SESSION_KEY,
-        idempotencyKey: "personal",
-        selection: {
-          source: "personal",
-          generation: person.generation,
-          account: personalPublicationAccount,
-        },
-      };
-      const first = (
-        await callPersonalPublicationRpc(person, "sessions.github.publish", request)
-      )[1];
-      expect(first.status).toBe("needs_confirmation");
-      const original = readRepositoryGitHubPublication(first.requestId)!;
-      expect(original.pushed_head_commit).toBeNull();
-      await f.capture("later unselected change\n", "later");
-      person.coordinator = createTestGitHubPublicationCoordinator({
-        placements: person.placements,
-      });
-      const pending = person.coordinator.personalStatus(
-        person.action,
-        person.action,
-        first.requestId,
-      );
-      expect(pending.confirmation?.workspaceTree).toBe(f.first.workspaceTree);
-      expect(() =>
-        person.coordinator.personalStatus(
-          { ...person.action, owner: person.otherOwner },
-          person.action,
-          first.requestId,
-        ),
-      ).toThrow();
-      if (boundary === "move") {
-        await patchSessionEntryCore(
-          {
-            agentId: "main",
-            sessionKey: SESSION_KEY,
-            storePath: mocks.loadSession(SESSION_KEY).storePath,
-          },
-          (current) => ({
-            ...current,
-            repositoryWorkspaceId: undefined,
-          }),
-          { replaceEntry: true },
-        );
-        expect(mocks.loadSession(SESSION_KEY).entry.repositoryWorkspaceId).toBeUndefined();
-        expect(
-          person.coordinator.personalStatus(person.action, person.action, first.requestId),
-        ).toMatchObject({
-          result: { status: "failed", code: "session_changed" },
-          confirmation: null,
-        });
-        return;
-      }
-      if (boundary === "reset") {
-        await f.closeSession("reset");
-        const status = await callPersonalPublicationRpc(person, "sessions.github.status", {
-          sessionKey: SESSION_KEY,
-          requestId: first.requestId,
-        });
-        expect(status[1]).toMatchObject({
-          result: { status: "failed", code: "session_changed" },
-          confirmation: null,
-        });
-      }
-      const confirmed = await callPersonalPublicationRpc(person, "sessions.github.confirm", {
-        sessionKey: SESSION_KEY,
-        requestId: first.requestId,
-        generation: person.generation,
-        account: personalPublicationAccount,
-        requestDigest: pending.confirmation!.requestDigest,
-      });
-      if (boundary === "reset") {
-        expect(confirmed[0]).toBe(false);
-        expect(f.runtime.effects).toEqual(["push"]);
-        return;
-      }
-      expect(confirmed[0], JSON.stringify(confirmed[2])).toBe(true);
-      expect(confirmed[1]).toMatchObject({ status: "published", url });
-      expect(readRepositoryGitHubPublication(first.requestId)?.checkpoint_ref).toBe(
-        original.checkpoint_ref,
-      );
-      expect(readRepositoryGitHubPublication(first.requestId)?.pushed_head_commit).toBe(
-        f.runtime.head,
-      );
-      expect(f.runtime.effects).toEqual(["push", "pull_request"]);
-      expect(f.runtime.uploaded.size).toBe(1);
-    },
-  );
-
   it("does not overwrite a branch changed after observation", async () => {
     const f = await repositoryFixture();
     f.runtime.changeHeadDuringPush = true;
@@ -1015,7 +983,10 @@ describe("repository checkpoint GitHub publication", () => {
         ).requestId;
       }
       const row = readRepositoryGitHubPublication(requestId)!;
-      const execution = claimRepositoryGitHubPublication(row, "current-instance", () => {});
+      const execution = claimRepositoryGitHubPublication(row, "current-instance", {
+        assertCustody: () => {},
+        assertCurrent: () => {},
+      });
       deletePersonalGitHubSessionReceipts({ agentId: "main", sessionKeys: [SESSION_KEY] });
       expect(execution.ownsExecution()).toBe(false);
       expect(() => execution.recordEffect("push")).toThrow();

@@ -3,6 +3,7 @@
 The watch is a paired-phone companion. It never asks for, receives, or stores Gateway credentials, TLS pins, or device-signing identity.
 
 - Given a reachable paired phone and connected Gateway, opening the watch app lists recent non-global sessions. Selecting one shows the latest bounded text transcript.
+- Given a long assistant reply, Read full reply opens an uncapped scrollable reader with bounded Next/Previous parts. Complete loaded text stays local; truncated Chat replies use the canonical transcript entry through the phone and Gateway visibility checks, while Talk text belongs to the active relay. Every page is tied to its source and revision. Changed, oversized, unavailable, and older-peer responses remain explicit rather than being presented as complete text. Live Chat remains labeled as a preview until a stored reply is available. Closing the reader cancels its watch-side read; changing phone, agent, session, or message retires it.
 - Given multiple reachable phones, RPC responses and events are accepted only from the currently preferred phone. A preferred-phone change reloads canonical state before replaying live events.
 - Given an unavailable phone or offline Gateway, the app shows one clear recovery state and a refresh action. It does not fall back to direct Gateway access.
 - Given a paired phone that advertises agent and Gateway controls, the watch can select the phone's active agent and connect or disconnect its Gateway. Older phones omit those controls and continue serving the original companion surface.

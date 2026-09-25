@@ -199,22 +199,12 @@ openclaw-chat-session-rail {
   flex: 0 0 auto;
 }
 
-.chat-session-rail__digest {
-  flex: 0 0 auto;
-  padding: 0 14px;
-}
-
-.chat-session-rail__assessment {
-  margin: 11px 0 0;
-  color: var(--text);
-  font-size: 12.5px;
-  line-height: 1.45;
-}
-
 .chat-session-rail__prs {
+  flex: 0 0 auto;
   flex-wrap: wrap;
   gap: 6px;
   margin-top: 11px;
+  padding: 0 14px;
 }
 
 .chat-session-rail__pr {
@@ -252,7 +242,7 @@ openclaw-chat-session-rail {
   overscroll-behavior-y: contain;
 }
 
-/* No digest or embedded header means the thread would otherwise open with a
+/* No PR links or embedded header means the thread would otherwise open with a
    hanging divider and 12px gap. */
 .chat-session-rail__header + .chat-session-rail__thread,
 .chat-session-rail--embedded > .chat-session-rail__thread {
@@ -358,16 +348,6 @@ openclaw-chat-session-rail {
 .chat-session-rail__prompt {
   min-width: 0;
   flex: 1 1 auto;
-}
-
-/* The docked form: a real column in the pane's flex row. It claims layout space
-   instead of painting over the thread, so nothing here may float, shadow, or
-   blur — those cues would read as an overlay again. */
-.chat-main--rail-docked .chat-session-rail--expanded {
-  position: static;
-  width: 100%;
-  height: 100%;
-  border-left-width: 0;
 }
 
 @media (max-width: 768px) {

@@ -40,6 +40,7 @@ import {
 } from "./src/app-server/session-binding-store.js";
 import { retireSharedCodexAppServerClientsBeforeDesktopGeneration } from "./src/app-server/shared-client-lifecycle.js";
 import { createCodexAppServerProcessReaperService } from "./src/app-server/transport-process-registration.js";
+import { codexNativeProfileRecoveryService } from "./src/auth-profile-health.js";
 import type { CodexPluginsConfigBlock } from "./src/command-plugin-config.js";
 import { createCodexCommand } from "./src/commands.js";
 import {
@@ -88,6 +89,7 @@ export default definePluginEntry({
   },
   register(api) {
     registerCodexAccountUsage(api);
+    api.registerService(codexNativeProfileRecoveryService);
     // Bundled modules may execute from a shared dist chunk, so import.meta.url
     // cannot identify the owning plugin package or its pinned dependencies.
     setManagedCodexPluginRoot(api.rootDir);
@@ -315,7 +317,9 @@ export default definePluginEntry({
       risk: "low",
       tags: ["codex", "plugins", "discovery"],
     });
-    for (const command of createCodexCliSessionNodeHostCommands()) {
+    for (const command of createCodexCliSessionNodeHostCommands((agentId) =>
+      sessionCatalogControlFactory.forNode(agentId),
+    )) {
       api.registerNodeHostCommand(command);
     }
     for (const policy of createCodexCliSessionNodeInvokePolicies()) {
@@ -367,9 +371,10 @@ export default definePluginEntry({
                 plugins: declared as Record<string, never>,
               });
             },
-            mutate: async (update) => {
+            mutate: async (update, assertCurrent) => {
               const { mutateConfigFile } = await import("openclaw/plugin-sdk/config-mutation");
               await mutateConfigFile({
+                writeOptions: { assertCurrent },
                 mutate: (draft) => {
                   // Create the nested plugin config path on demand so codex
                   // plugin commands can enable/update Codex-managed plugins.

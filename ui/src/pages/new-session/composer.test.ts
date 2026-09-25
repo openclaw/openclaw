@@ -1,6 +1,6 @@
 import { html, render } from "lit";
 /* @vitest-environment jsdom */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommandsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -527,7 +527,7 @@ describe("new-session composer keyboard submission", () => {
     const start = composer.querySelector<HTMLButtonElement>(".new-session-page__start-submit");
 
     expect(notice?.getAttribute("role")).toBe("status");
-    expect(notice?.classList.contains("agent-chat__composer-underlaps")).toBe(true);
+    expect(notice?.classList.contains("agent-chat__composer-status")).toBe(true);
     expect(notice?.getAttribute("data-tone")).toBe("info");
     expect(notice?.querySelector(".agent-chat__composer-status-band")).not.toBeNull();
     expect(notice?.textContent?.trim()).toBe("Restoring your last session setup…");
@@ -595,6 +595,8 @@ describe("new-session composer start control", () => {
 });
 
 describe("new-session composer sizing lifecycle", () => {
+  beforeEach(() => vi.spyOn(CSS, "supports").mockReturnValue(false));
+
   it("keeps the shared fallback for non-pixel CSS caps", () => {
     const textarea = document.createElement("textarea");
     Object.defineProperty(textarea, "scrollHeight", { configurable: true, value: 500 });

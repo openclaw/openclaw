@@ -40,6 +40,7 @@ it.each(["", " \r\n"])("explains an empty exit-2 result: %j", (output) => {
   expect(probeScheduledTaskState("OpenClaw Gateway")).toEqual({
     status: "unknown",
     detail: "Scheduled Task probe failed (exit 2): no output from PowerShell.",
+    diagnostic: { kind: "native", exitCode: 2 },
   });
 });
 
@@ -49,6 +50,8 @@ describe("Scheduled Task probe timeout", () => {
     { budget: 0, expected: 5_000 },
     { budget: -1, expected: 5_000 },
     { budget: Number.POSITIVE_INFINITY, expected: 5_000 },
+    { budget: 457.0681, expected: 457 },
+    { budget: 0.5, expected: 1 },
     { budget: 200, expected: 200 },
     { budget: 30_000, expected: 30_000 },
   ])("uses a bounded caller budget: $budget -> $expected ms", ({ budget, expected }) => {
@@ -69,6 +72,7 @@ describe("Scheduled Task probe timeout", () => {
       status: "unknown",
       detail: `Scheduled Task probe timed out after ${expected} ms (ETIMEDOUT).`,
       timeoutMs: expected,
+      diagnostic: { kind: "timeout", timeoutMs: expected },
     });
     expect(spawnSync).toHaveBeenCalledTimes(1);
   });

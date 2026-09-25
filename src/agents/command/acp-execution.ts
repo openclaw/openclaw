@@ -24,7 +24,7 @@ import {
   classifyAgentRunTerminalOutcome,
 } from "../agent-run-terminal-outcome.js";
 import { prepareInternalSessionEffectsSession } from "../internal-session-effects.js";
-import type { AgentRunSessionTarget } from "../run-session-target.js";
+import type { AgentRunSessionTarget } from "../run-session-target.types.js";
 import { isAgentRunRestartAbortReason } from "../run-termination.js";
 import { applyAgentRunAbortMetadata } from "./lifecycle.js";
 import type { PreparedAgentCommandExecution } from "./prepare.js";
@@ -179,7 +179,12 @@ export async function runAcpAgentCommand(params: {
         if (recorder && !recorder.hasPersisted() && !(await recorder.persistApproved())) {
           throw new Error("ACP input could not enter the session transcript");
         }
-        params.opts.onExecutionStarted?.();
+        await params.opts.onExecutionStarted?.();
+        assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
+        params.opts.abortSignal?.throwIfAborted();
+        if (!getAdmittedRunDelegatedAuthority(admittedRunContext)) {
+          throw new Error("ACP run authority is no longer active");
+        }
       },
       onLifecycle: (event) => {
         if (event.type === "prompt_submitted") {
@@ -347,6 +352,7 @@ export async function runAcpAgentCommand(params: {
     }),
     params.opts.abortSignal,
   );
+  await params.opts.beforeTerminalDelivery?.();
   const { deliverAgentCommandResult } = await loadDeliveryRuntime();
   const deliveryResult = await deliverAgentCommandResult({
     cfg: params.cfg,

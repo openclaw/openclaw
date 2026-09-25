@@ -1,5 +1,8 @@
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
-import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+import {
+  deferSqliteWorkerCommitReceipt,
+  requestSqliteWorkerOperationAdmission,
+} from "../infra/sqlite-worker-operation-admission.js";
 import { getSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
@@ -15,6 +18,11 @@ import type {
   TaskInitialWorkerCommand,
   TaskInitialWorkerOperations,
 } from "./task-initial-worker.types.js";
+import {
+  acknowledgeTaskStateNotificationInDatabase,
+  updateTaskNotificationDeliveryInDatabase,
+} from "./task-notification.kernel.js";
+import { captureTaskCreationEventTarget } from "./task-registry-agent-event-target.js";
 import { createTaskRecordInDatabase } from "./task-registry-create.kernel.js";
 import { transitionTaskRecordInDatabase } from "./task-registry-transition.kernel.js";
 import { readTaskRecord } from "./task-registry.store.kernel.js";
@@ -34,7 +42,7 @@ export function executeTaskInitialMutation(
     requestSqliteWorkerOperationAdmission({
       stage: "transaction",
       facts: {
-        kind: "task-initial-mutation",
+        kind: "task-registry-mutation",
         operation: command.type,
         taskId: command.input.taskId,
       },
@@ -49,9 +57,30 @@ export function executeTaskInitialMutation(
     return withSharedStateWriteCoordinator(
       { databasePath: database.path, existing: database.db, operationLabel: command.type },
       () => {
+        if (command.type === "tasks.updateNotificationDelivery") {
+          return updateTaskNotificationDeliveryInDatabase(database.db, command.input, write, {
+            assertCurrent,
+            onCommitted: accept,
+          });
+        }
+        if (command.type === "tasks.acknowledgeStateChange") {
+          return acknowledgeTaskStateNotificationInDatabase(database.db, command.input, write, {
+            assertCurrent,
+            onCommitted: accept,
+          });
+        }
         if (command.type === "tasks.createRecord") {
           return createTaskRecordInDatabase(database.db, command.input, write, {
             assertCurrent,
+            retainTaskCommit(taskId) {
+              const task = readTaskRecord(database.db, taskId);
+              if (task?.runId) {
+                deferSqliteWorkerCommitReceipt(
+                  database.db,
+                  captureTaskCreationEventTarget(task, command.type, command.input.taskId),
+                );
+              }
+            },
             onCommitted(commit) {
               if (commit.kind === "task") {
                 accept(commit.result);
@@ -62,6 +91,33 @@ export function executeTaskInitialMutation(
         return write(() => {
           let result: Result;
           switch (command.type) {
+            case "tasks.transitionRunRow": {
+              result = transitionTaskRecordInDatabase(
+                database.db,
+                command.input,
+                (operation) => operation(),
+                { assertCurrent, onCommitted() {} },
+              );
+              break;
+            }
+            case "tasks.bindRunOwner": {
+              result = transitionTaskRecordInDatabase(
+                database.db,
+                { kind: "run-owner", ...command.input },
+                (operation) => operation(),
+                { assertCurrent, onCommitted() {} },
+              );
+              break;
+            }
+            case "tasks.finalizeActive": {
+              result = transitionTaskRecordInDatabase(
+                database.db,
+                { kind: "state", ...command.input },
+                (operation) => operation(),
+                { assertCurrent, onCommitted() {} },
+              );
+              break;
+            }
             case "tasks.settleUnstarted": {
               const task = readTaskRecord(database.db, command.input.taskId);
               result =

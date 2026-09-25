@@ -114,14 +114,18 @@ describe("cli json stdout contract", () => {
               : []),
           ].join("\n"),
         ).toString("base64");
-        const result = runBuiltCli(tempHome, testCase.args, {
-          NODE_OPTIONS: `--import=data:text/javascript;base64,${preload}`,
-          OPENCLAW_CONFIG_PATH: configPath,
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-          OPENCLAW_STATE_DIR: stateDir,
-          ...("commander" in testCase ? { OPENCLAW_DISABLE_ROUTE_FIRST: "1" } : {}),
-          ...("tty" in testCase ? { FORCE_COLOR: "1", NO_COLOR: undefined } : {}),
-        });
+        const result = runBuiltCli(
+          tempHome,
+          testCase.args,
+          {
+            OPENCLAW_CONFIG_PATH: configPath,
+            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+            OPENCLAW_STATE_DIR: stateDir,
+            ...("commander" in testCase ? { OPENCLAW_DISABLE_ROUTE_FIRST: "1" } : {}),
+            ...("tty" in testCase ? { FORCE_COLOR: "1", NO_COLOR: undefined } : {}),
+          },
+          { execArgv: [`--import=data:text/javascript;base64,${preload}`] },
+        );
 
         expect(result.status, result.stderr).toBe(1);
         expect(result.stdout, result.stderr).not.toContain("\u001B");
@@ -196,13 +200,18 @@ describe("cli json stdout contract", () => {
         const preload = `data:text/javascript,${encodeURIComponent(
           'Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true }); Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });',
         )}`;
-        const result = runBuiltCli(tempHome, testCase.args, {
-          OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
-          OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
-          OPENCLAW_GATEWAY_PORT: "29791",
-          ...("commander" in testCase ? { OPENCLAW_DISABLE_ROUTE_FIRST: "1" } : {}),
-          ...("tty" in testCase ? { NODE_OPTIONS: `--import=${preload}`, FORCE_COLOR: "1" } : {}),
-        });
+        const result = runBuiltCli(
+          tempHome,
+          testCase.args,
+          {
+            OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+            OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
+            OPENCLAW_GATEWAY_PORT: "29791",
+            ...("commander" in testCase ? { OPENCLAW_DISABLE_ROUTE_FIRST: "1" } : {}),
+            ...("tty" in testCase ? { FORCE_COLOR: "1" } : {}),
+          },
+          { execArgv: "tty" in testCase ? [`--import=${preload}`] : [] },
+        );
         const message = "--timeout must be a positive integer (milliseconds)";
 
         expect(result.status, result.stderr).toBe(1);
@@ -287,15 +296,20 @@ describe("cli json stdout contract", () => {
            net.Socket.prototype.connect = function () { throw new Error("AUTOQA_NETWORK_FORBIDDEN"); };
            globalThis.fetch = async () => { throw new Error("AUTOQA_NETWORK_FORBIDDEN"); };`,
         ).toString("base64");
-        const result = runBuiltCli(tempHome, testCase.args, {
-          // Startup probes SQLite in a worker; filesystem writes remain denied in the CLI.
-          NODE_OPTIONS: `--permission --allow-fs-read=* --allow-worker --import=data:text/javascript;base64,${denyNetwork}`,
-          NODE_DISABLE_COMPILE_CACHE: "1",
-          OPENCLAW_NO_RESPAWN: "1",
-          OPENCLAW_LOG_LEVEL: "silent",
-          OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
-          OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
-        });
+        const result = runBuiltCli(
+          tempHome,
+          testCase.args,
+          {
+            // Startup probes SQLite in a worker; filesystem writes remain denied in the CLI.
+            NODE_OPTIONS: "--permission --allow-fs-read=* --allow-worker",
+            NODE_DISABLE_COMPILE_CACHE: "1",
+            OPENCLAW_NO_RESPAWN: "1",
+            OPENCLAW_LOG_LEVEL: "silent",
+            OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+            OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
+          },
+          { execArgv: [`--import=data:text/javascript;base64,${denyNetwork}`] },
+        );
 
         expect(result.status, result.stderr).toBe(1);
         if ("human" in testCase && testCase.human) {

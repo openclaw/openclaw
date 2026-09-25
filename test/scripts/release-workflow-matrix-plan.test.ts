@@ -14,6 +14,7 @@ import {
   createReleaseWorkflowMatrixPlan,
 } from "../../scripts/plan-release-workflow-matrix.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { resolveWorkflowBash } from "../helpers/workflow-bash.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -74,6 +75,10 @@ function requiredJob(definition: WorkflowDocument, name: string): WorkflowJob {
 // Direct dispatches build from the selected ref. Only trusted workflow callers
 // may provide the complete immutable package artifact tuple.
 const WORKFLOW_CALL_ONLY_INPUTS = new Set([
+  "runner_group",
+  "package_sha256",
+  "prepublish_plugin_registry_manifest_sha256",
+  "shared_image_archive_sha256",
   "published_upgrade_survivor_baseline_scope",
   "prepare_only",
   "emit_candidate_evidence",
@@ -471,6 +476,7 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
 
   it("builds provider owners used by every direct and Gateway Docker live lane", () => {
     const definition = workflow();
+    const bash = process.platform === "darwin" ? resolveWorkflowBash() : "bash";
     const outputDir = tempDirs.make("openclaw-live-image-selection-");
     const outputPath = path.join(outputDir, "outputs");
     symlinkSync(path.resolve("scripts"), path.join(outputDir, "scripts"), "dir");
@@ -502,7 +508,7 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
       "live image planner step",
     );
     expect(steps.indexOf(setup)).toBeLessThan(steps.indexOf(planner));
-    const planned = spawnSync("bash", ["-c", expectDefined(planner.run, "planner command")], {
+    const planned = spawnSync(bash, ["-c", expectDefined(planner.run, "planner command")], {
       cwd: outputDir,
       encoding: "utf8",
       env,
@@ -515,7 +521,7 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
       ),
       "live image selection step",
     );
-    const result = spawnSync("bash", ["-c", expectDefined(step.run, "selection command")], {
+    const result = spawnSync(bash, ["-c", expectDefined(step.run, "selection command")], {
       encoding: "utf8",
       env: {
         ...env,
@@ -588,14 +594,6 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
       expect(definition.on.workflow_call.inputs).toHaveProperty(input);
       expect(definition.on.workflow_dispatch.inputs).not.toHaveProperty(input);
     }
-    expect(definition.on.workflow_dispatch.inputs.live_advisory).toEqual(
-      definition.on.workflow_call.inputs.live_advisory,
-    );
-    expect(definition.on.workflow_dispatch.inputs.live_advisory).toMatchObject({
-      default: false,
-      required: false,
-      type: "boolean",
-    });
     expect(definition.on.workflow_dispatch.inputs.allow_unreleased_changelog).toEqual(
       definition.on.workflow_call.inputs.allow_unreleased_changelog,
     );
@@ -774,7 +772,7 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
     });
   });
 
-  it("keeps stable Anthropic Docker proof blocking and full proof advisory", () => {
+  it("keeps stable and full Anthropic Docker proof blocking", () => {
     const jobs = workflow().jobs;
     const dockerLiveJob = expectDefined(
       jobs.validate_live_docker_provider_suites,
@@ -802,8 +800,8 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
         suiteId: "live-gateway-anthropic-docker",
       },
       {
-        advisory: true,
-        label: "Docker live gateway Anthropic (full advisory)",
+        advisory: undefined,
+        label: "Docker live gateway Anthropic (full)",
         profiles: "full",
         suiteId: "live-gateway-anthropic-docker-full",
       },

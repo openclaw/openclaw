@@ -198,20 +198,14 @@ function riskBeforeStepExecutable(risk: CommandRisk, step: CommandStep): boolean
   return riskInsideStep(risk, step) && risk.span.endIndex <= step.executableSpan.startIndex;
 }
 
-function stepReasons(step: CommandStep, risks: readonly CommandRisk[]): string[] {
+function stepReasons(
+  step: CommandStep,
+  risks: readonly CommandRisk[],
+  kinds: ReadonlySet<CommandRisk["kind"]> = PROMPT_ONLY_RISKS,
+): string[] {
   const reasons: string[] = [];
   for (const risk of risks) {
-    if (PROMPT_ONLY_RISKS.has(risk.kind) && riskInsideStep(risk, step)) {
-      reasons.push(risk.kind);
-    }
-  }
-  return uniqueStrings(reasons);
-}
-
-function nonReusableStepReasons(step: CommandStep, risks: readonly CommandRisk[]): string[] {
-  const reasons: string[] = [];
-  for (const risk of risks) {
-    if (NON_REUSABLE_RISKS.has(risk.kind) && riskInsideStep(risk, step)) {
+    if (kinds.has(risk.kind) && riskInsideStep(risk, step)) {
       reasons.push(risk.kind);
     }
   }
@@ -411,7 +405,7 @@ function createCandidate(params: {
     params.transport.kind === "direct" &&
     extractBindableShellWrapperInlineCommand(params.segment.argv);
   const stepPromptReasons = stepReasons(params.step, params.risks);
-  const stepNonReusableReasons = nonReusableStepReasons(params.step, params.risks);
+  const stepNonReusableReasons = stepReasons(params.step, params.risks, NON_REUSABLE_RISKS);
   const preludeReasons = hasCommandPrelude(params.step)
     ? shellWrapperPreludeReasons({ step: params.step, risks: params.risks })
     : [];
@@ -621,22 +615,8 @@ function wrapperPayloadPlan(params: {
     return null;
   }
   const carriedSteps = positionalCarrierSteps({ wrapper, context: params.context });
-  if (carriedSteps) {
-    const transport: ExecAuthorizationTransport = {
-      kind: "shell-wrapper",
-      wrapperSegment: wrapper.segment,
-      wrapperArgv: wrapper.segment.argv,
-      wrapperPrefix: wrapperPrefixForStep(wrapper.step),
-      inlineCommand: wrapperRisk.payload,
-    };
-    const groups = groupsFromSteps({
-      steps: carriedSteps,
-      transport,
-      risks: params.risks,
-    });
-    return groups.length > 0 ? applyWrapperPayloadPersistenceBoundary({ wrapper, groups }) : null;
-  }
   if (
+    !carriedSteps &&
     !shouldUseWrapperPayload({
       wrapperCommandId: wrapper.step.id,
       topLevelSteps: params.topLevelSteps,
@@ -660,8 +640,8 @@ function wrapperPayloadPlan(params: {
     ? params.operators.filter((operator) => operator.parentCommandId === wrapper.step.id)
     : params.operators;
   const groups = groupsFromSteps({
-    steps: nestedStepsForWrapper,
-    operators: operatorsForWrapper,
+    steps: carriedSteps ?? nestedStepsForWrapper,
+    operators: carriedSteps ? undefined : operatorsForWrapper,
     transport,
     risks: params.risks,
   });

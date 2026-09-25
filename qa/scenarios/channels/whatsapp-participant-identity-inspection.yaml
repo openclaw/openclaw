@@ -1,0 +1,149 @@
+title: WhatsApp DM and group participant identity inspection
+
+scenario:
+  id: whatsapp-participant-identity-inspection
+  surface: channels
+  coverage:
+    primary:
+      - gateway.identity-and-presence-apis
+    secondary:
+      - whatsapp.outbound-text-sends
+  objective: Verify one real WhatsApp participant keeps the same pseudonym across admitted DM and group turns, with distinct executions and exact audit inspection across restart.
+  gatewayConfigPatch:
+    logging:
+      audit:
+        executionIdentity: true
+  successCriteria:
+    - A leased driver account receives a marker reply through both the DM and mentioned group paths.
+    - Each turn resolves to one new run and exact execution with a present person invoker and channel ingress.
+    - The participant pseudonym stays equal across routes; phone numbers, native JIDs, and logical rooms are absent from inspection.
+    - Generic decision facts remain unverified, and exact JSON plus human inspection survives Gateway restart.
+  docsRefs:
+    - docs/gateway/audit.md
+    - docs/cli/audit.md
+    - docs/concepts/qa-e2e-automation/whatsapp-and-credentials.md
+  codeRefs:
+    - extensions/qa-lab/src/live-transports/whatsapp/adapter.runtime.ts
+    - extensions/whatsapp/src/inbound/access-control.ts
+  execution:
+    kind: flow
+    channel: whatsapp
+    suiteIsolation: isolated
+    isolationReason: Enables identity before admission and inspects the same isolated audit database across a Gateway replacement restart.
+    timeoutMs: 300000
+    retryCount: 0
+    summary: Run with the live WhatsApp driver and mock-openai provider. Requires two dedicated linked Web sessions, their distinct E.164 numbers, and a dedicated groupJid containing both accounts. No live model is needed.
+    config:
+      requiredChannelDriver: live
+      requiredProviderMode: mock-openai
+      turns:
+        - conversation: { id: qa-whatsapp-identity-dm, kind: direct }
+          prefix: ""
+          marker: QA-WHATSAPP-IDENTITY-DM-OK
+        - conversation: { id: qa-whatsapp-identity-group, kind: group }
+          prefix: "openclawqa "
+          marker: QA-WHATSAPP-IDENTITY-GROUP-OK
+
+flow:
+  steps:
+    - name: inspects one WhatsApp person across DM and group executions
+      actions:
+        - assert:
+            expr: "transport.id === 'whatsapp' && env.providerMode === config.requiredProviderMode"
+            message: WhatsApp participant identity proof requires the live WhatsApp adapter and mock-openai provider
+        - assert:
+            expr: "typeof whatsappScenarioContext.runtimeEnv.groupJid === 'string' && whatsappScenarioContext.runtimeEnv.groupJid.length > 0"
+            message: WhatsApp participant identity proof requires groupJid in the credential payload
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 60000]
+        - call: waitForTransportReady
+          args: [{ ref: env }, 60000]
+        - resetTransport: true
+        - set: proofs
+          value: []
+        - set: privateReferences
+          value:
+            expr: "[whatsappScenarioContext.runtimeEnv.driverPhoneE164, whatsappScenarioContext.runtimeEnv.sutPhoneE164, whatsappScenarioContext.runtimeEnv.groupJid, ...config.turns.map((turn) => turn.conversation.id)].flatMap((value) => [value, value.replace(/^\\+/, '')])"
+        - forEach:
+            items: { ref: config.turns }
+            item: turn
+            actions:
+              - set: runsBefore
+                value:
+                  expr: "[...new Set((await runQaCli(env, ['audit', '--kind', 'agent_run', '--limit', '500', '--json'], { timeoutMs: 60000, json: true })).events.map((event) => event.runId).filter((id) => typeof id === 'string'))]"
+              - sendInbound:
+                  conversation: { ref: turn.conversation }
+                  senderId: qa-whatsapp-identity-driver
+                  senderName: QA WhatsApp Driver
+                  text: { expr: "`${turn.prefix}Reply exactly: ${turn.marker}`" }
+              - waitForOutbound:
+                  conversation: { ref: turn.conversation }
+                  textIncludes: { ref: turn.marker }
+                  timeoutMs: 60000
+              - call: waitForCondition
+                saveAs: newRunIds
+                args:
+                  - lambda:
+                      async: true
+                      expr: "(ids => ids.length ? ids : undefined)([...new Set((await runQaCli(env, ['audit', '--kind', 'agent_run', '--limit', '500', '--json'], { timeoutMs: 60000, json: true })).events.map((event) => event.runId).filter((id) => typeof id === 'string' && !runsBefore.includes(id)))])"
+                  - 60000
+                  - 250
+              - assert:
+                  expr: "newRunIds.length === 1"
+                  message: WhatsApp turn must produce exactly one newly admitted run
+              - call: waitForCondition
+                saveAs: runInspection
+                args:
+                  - lambda:
+                      async: true
+                      expr: "runQaCli(env, ['audit', '--run', newRunIds[0], '--explain', '--json'], { timeoutMs: 60000, json: true }).then((value) => value.identity?.state === 'present' && value.decisionDisplays.some((receipt) => receipt.action.family === 'decision') ? value : undefined)"
+                  - 60000
+                  - 250
+              - assert:
+                  expr: "runInspection.identity.context.runId === newRunIds[0] && typeof runInspection.identity.context.executionId === 'string' && runInspection.identity.context.invoker.state === 'present' && runInspection.identity.context.invoker.principal?.kind === 'person' && typeof runInspection.identity.context.invoker.principal.principalRef === 'string' && runInspection.identity.context.ingress.kind === 'channel' && runInspection.identity.context.ingress.state === 'present'"
+                  message: WhatsApp audit inspection must retain the admitted person and channel ingress for this run
+              - set: exactInspection
+                value:
+                  expr: "await runQaCli(env, ['audit', '--execution', runInspection.identity.context.executionId, '--explain', '--json'], { timeoutMs: 60000, json: true })"
+              - set: humanInspection
+                value:
+                  expr: "await runQaCli(env, ['audit', '--execution', runInspection.identity.context.executionId, '--explain'], { timeoutMs: 60000 })"
+              - assert:
+                  expr: "exactInspection.identity.state === 'present' && JSON.stringify(exactInspection.identity.context) === JSON.stringify(runInspection.identity.context) && humanInspection.includes('Invoker [present]') && humanInspection.includes('Decisions')"
+                  message: WhatsApp exact execution JSON and human inspection must agree with run discovery
+              - assert:
+                  expr: "exactInspection.decisionDisplays.some((receipt) => receipt.action.family === 'decision' && receipt.provenance.state === 'unverified') && exactInspection.decisionDisplays.filter((receipt) => receipt.action.family === 'decision').every((receipt) => receipt.provenance.state === 'unverified') && privateReferences.every((value) => !JSON.stringify(exactInspection).includes(value) && !humanInspection.includes(value))"
+                  message: WhatsApp inspection must exclude raw route and participant references and keep generic decisions unverified
+              - set: proofs
+                value:
+                  expr: "[...proofs, exactInspection.identity.context]"
+        - assert:
+            expr: "proofs.length === 2 && new Set(proofs.map((proof) => proof.executionId)).size === 2 && new Set(proofs.map((proof) => proof.contextId)).size === 2 && new Set(proofs.map((proof) => proof.invoker.principal.principalRef)).size === 1"
+            message: WhatsApp DM and group must have distinct execution contexts for the same participant
+      detailsExpr: "proofs.map((proof) => `run=${proof.runId}; execution=${proof.executionId}`).join('; ')"
+
+    - name: preserves exact WhatsApp identity across Gateway restart
+      actions:
+        - call: env.gateway.restartAfterStateMutation
+          args:
+            - lambda:
+                async: true
+                expr: Promise.resolve()
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 60000]
+        - call: waitForTransportReady
+          args: [{ ref: env }, 60000]
+        - forEach:
+            items: { ref: proofs }
+            item: proof
+            actions:
+              - set: restartedInspection
+                value:
+                  expr: "await runQaCli(env, ['audit', '--execution', proof.executionId, '--explain', '--json'], { timeoutMs: 60000, json: true })"
+              - set: restartedHuman
+                value:
+                  expr: "await runQaCli(env, ['audit', '--execution', proof.executionId, '--explain'], { timeoutMs: 60000 })"
+              - assert:
+                  expr: "restartedInspection.identity.state === 'present' && JSON.stringify(restartedInspection.identity.context) === JSON.stringify(proof) && restartedHuman.includes('Invoker [present]') && restartedHuman.includes('Decisions') && privateReferences.every((value) => !JSON.stringify(restartedInspection).includes(value) && !restartedHuman.includes(value))"
+                  message: WhatsApp exact participant identity changed or exposed private references after restart
+      detailsExpr: "`restart-stable executions=${proofs.length}`"

@@ -79,6 +79,8 @@ export type OpenClawCodingToolsOptions = {
   delegationCapability?: DelegationCapability;
   /** Model API for the current provider (used for provider-native tool arbitration). */
   modelApi?: string;
+  /** Resolved endpoint for provider-native tool eligibility. */
+  modelBaseUrl?: string;
   /** Model context window in tokens (used to scale read-tool output budget). */
   modelContextWindowTokens?: number;
   /** Resolved runtime model compatibility hints. */
@@ -96,6 +98,8 @@ export type OpenClawCodingToolsOptions = {
   memberRoleIds?: string[];
   /** True when runtimeToolAllowlist is real parent authority that child sessions inherit. */
   inheritRuntimeToolAllowlist?: boolean;
+  /** Plugin-owned optional tools granted to this run (e.g. subagent toolsAlsoAllow). */
+  runtimePluginToolGrant?: import("../plugins/runtime/tool-grant.js").RuntimePluginToolGrant;
   /** Mutable spawn capability snapshot refreshed after late-bound runtime tools are authorized. */
   inheritedToolAllowlistRef?: string[];
   /** Mutable cron creator cap ref for callers that append final runtime tools later. */

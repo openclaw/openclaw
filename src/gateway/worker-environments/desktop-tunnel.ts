@@ -7,7 +7,6 @@ import type {
   WorkerDesktopEndpoint,
   WorkerSshEndpoint,
 } from "../../plugins/types.js";
-import type { DesktopRfbAttachment } from "../desktop/attachment.js";
 import {
   createDesktopSessionRegistry,
   DesktopSessionStaleOwnerError,
@@ -42,11 +41,10 @@ type DesktopAcquireRequest = {
   resolveIdentity: WorkerSshIdentityResolver;
 };
 
-type DesktopAcquireResult = { attachment: DesktopRfbAttachment; vncPassword?: string };
+type DesktopAcquireResult = Awaited<ReturnType<DesktopSessionRegistry["acquire"]>>;
 
 type DesktopAppLaunchEntry = {
   environmentId: string;
-  appId: WorkerDesktopApp["id"];
   ownerEpoch: number;
   abortController: AbortController;
   operation: Promise<void>;
@@ -177,8 +175,11 @@ export function createWorkerDesktopTunnels(deps: {
           ],
           workerSshCommandOptions({ timeoutMs: PASSWORD_READ_TIMEOUT_MS }),
         );
+        if (!isCurrent()) {
+          throw new Error("Worker desktop tunnel stopped before connecting");
+        }
         if (!successful(result)) {
-          throw workerSshProcessError(result.stderr || result.stdout);
+          throw workerSshProcessError(result.stderr);
         }
         vncPassword = result.stdout.replace(/(?:\r?\n)+$/u, "");
         if (!vncPassword) {
@@ -205,6 +206,11 @@ export function createWorkerDesktopTunnels(deps: {
   };
 
   async function acquire(request: DesktopAcquireRequest): Promise<DesktopAcquireResult> {
+    if (request.desktop.username) {
+      throw new Error(
+        "Managed desktop account authentication requires the worker node transport; reprovision with node enrollment",
+      );
+    }
     if (platform === "win32") {
       throw new WorkerDesktopUnsupportedError();
     }
@@ -308,7 +314,7 @@ export function createWorkerDesktopTunnels(deps: {
             String(prepared.port),
             "--",
             prepared.sshTarget,
-            workerSshRemoteCommand([request.app.executablePath]),
+            workerSshRemoteCommand([request.app.executablePath, ...(request.app.args ?? [])]),
           ],
           workerSshCommandOptions({
             timeoutMs: remainingLaunchMs,
@@ -333,7 +339,6 @@ export function createWorkerDesktopTunnels(deps: {
     });
     const completeEntry: DesktopAppLaunchEntry = {
       environmentId: request.environmentId,
-      appId: request.app.id,
       ownerEpoch: request.ownerEpoch,
       abortController,
       operation,

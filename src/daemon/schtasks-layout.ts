@@ -12,8 +12,10 @@ import {
 import { parseCmdScriptCommandLine, quoteCmdScriptArg } from "./cmd-argv.js";
 import { assertNoCmdLineBreak, parseCmdSetAssignment, renderCmdSetAssignment } from "./cmd-set.js";
 import { resolveGatewayWindowsTaskName } from "./constants.js";
-import { resolveGatewayTaskScriptPath } from "./paths.js";
-import { probeScheduledTaskExists } from "./schtasks-state-probe.js";
+import { resolveGatewayTaskScriptPath as resolveTaskScriptPath } from "./paths.js";
+import { probeScheduledTaskState } from "./schtasks-state-probe.js";
+import { ServiceInspectionError } from "./service-inspection-error.js";
+import { publishServiceFile } from "./service-stage.js";
 import type {
   GatewayServiceCommandConfig,
   GatewayServiceEnv,
@@ -150,10 +152,6 @@ export function shouldFallbackToStartupEntry(params: { code: number; detail: str
   );
 }
 
-export function resolveTaskScriptPath(env: GatewayServiceEnv): string {
-  return resolveGatewayTaskScriptPath(env);
-}
-
 function resolveWindowsStartupDir(env: GatewayServiceEnv): string {
   const appData = env.APPDATA?.trim();
   if (appData) {
@@ -281,7 +279,11 @@ export async function writeTaskXmlTempFile(xml: string): Promise<string> {
   // Task Scheduler `/XML` expects UTF-16 LE with a BOM on every locale.
   const bom = Buffer.from([0xff, 0xfe]);
   const body = Buffer.from(xml, "utf16le");
-  await fs.writeFile(xmlPath, Buffer.concat([bom, body]));
+  await publishServiceFile({
+    filePath: xmlPath,
+    contents: Buffer.concat([bom, body]),
+    mode: 0o600,
+  });
   return xmlPath;
 }
 
@@ -389,7 +391,14 @@ export async function readScheduledTaskCommand(
     }
     if (
       hasErrnoCode(error, "ENOENT") &&
-      (await isScheduledTaskDefinitionAbsent(env, options.timeoutMs).catch(() => false))
+      (await isScheduledTaskDefinitionAbsent(env, options.timeoutMs).catch(
+        (inspectionError: unknown) => {
+          if (inspectionError instanceof ServiceInspectionError) {
+            throw inspectionError;
+          }
+          return false;
+        },
+      ))
     ) {
       return null;
     }
@@ -403,7 +412,11 @@ async function isScheduledTaskDefinitionAbsent(
   timeoutMs?: number,
 ): Promise<boolean> {
   // A missing script can still belong to a registered task or Startup login item.
-  if (probeScheduledTaskExists(resolveTaskName(env), timeoutMs) !== false) {
+  const probe = probeScheduledTaskState(resolveTaskName(env), timeoutMs);
+  if (probe.status === "unknown") {
+    throw new ServiceInspectionError("windows-task-inspection-failed", probe.diagnostic);
+  }
+  if (probe.status !== "missing") {
     return false;
   }
   for (const pathname of [resolveTaskScriptPath(env), ...resolveStartupEntryPaths(env)]) {
@@ -488,10 +501,6 @@ function quoteVbsString(value: string): string {
   return `"${value.replace(/"/g, '""')}"`;
 }
 
-function quoteVbsRunCommand(scriptPath: string): string {
-  return quoteVbsString(`"${scriptPath}"`);
-}
-
 export function buildHiddenLauncherScript(params: {
   description?: string;
   scriptPath: string;
@@ -509,8 +518,8 @@ export function buildHiddenLauncherScript(params: {
       `shell.Environment("Process")("${WINDOWS_TASK_LAUNCHER_ENV}") = "${WINDOWS_TASK_LAUNCHER_ACTIVE}"`,
     );
   }
-  lines.push(`WScript.Quit shell.Run(${quoteVbsRunCommand(params.scriptPath)}, 0, True)`);
+  lines.push(`WScript.Quit shell.Run(${quoteVbsString(`"${params.scriptPath}"`)}, 0, True)`);
   return `${lines.join("\r\n")}\r\n`;
 }
 
-export { encodeWindowsLauncherScript };
+export { encodeWindowsLauncherScript, resolveTaskScriptPath };

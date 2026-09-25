@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements message line behavior.
 import {
   getPrimaryIdentityId,
   getReplyContext,
@@ -18,10 +17,6 @@ function formatReplyTarget(replyTo: WhatsAppReplyContext | null) {
   return `[Replying to ${sender}${idPart}]\n${replyTo.body}\n[/Replying]`;
 }
 
-function formatReplyContext(msg: AdmittedWebInboundMessage) {
-  return formatReplyTarget(getReplyContext(msg));
-}
-
 export function buildInboundLine(params: {
   msg: AdmittedWebInboundMessage;
   previousTimestamp?: number;
@@ -32,10 +27,9 @@ export function buildInboundLine(params: {
   const admission = requireWhatsAppInboundAdmission(msg);
   const conversationId = admission.conversation.id;
   const conversationKind = admission.conversation.kind;
-  const replyContext =
-    params.visibleReplyTo === undefined
-      ? formatReplyContext(msg)
-      : formatReplyTarget(params.visibleReplyTo);
+  const replyContext = formatReplyTarget(
+    params.visibleReplyTo === undefined ? getReplyContext(msg) : params.visibleReplyTo,
+  );
   const baseLine = `${msg.payload.body}${replyContext ? `\n\n${replyContext}` : ""}`;
   const sender = getSenderIdentity(msg);
 

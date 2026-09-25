@@ -1,6 +1,5 @@
 import { ContextProvider } from "@lit/context";
 import type { GatewayEventFrame, GatewayEventListener } from "../api/gateway.ts";
-import type { RouteId } from "../app-route-paths.ts";
 import {
   applicationContext,
   type ApplicationContext,
@@ -35,9 +34,9 @@ const emptySidebarAttentionStore = {
   dispose: () => undefined,
 } satisfies ApplicationContext["sidebarAttention"];
 
-export function createApplicationContextProvider(context: ApplicationContext<RouteId>) {
+export function createApplicationContextProvider(context: ApplicationContext) {
   const host = document.createElement("div");
-  const normalize = (value: ApplicationContext<RouteId>) => {
+  const normalize = (value: ApplicationContext) => {
     if (!value.sidebarAttention) {
       Object.assign(value, { sidebarAttention: emptySidebarAttentionStore });
     }
@@ -48,13 +47,25 @@ export function createApplicationContextProvider(context: ApplicationContext<Rou
     initialValue: normalize(context),
   });
   return Object.assign(host, {
-    setContext: (value: ApplicationContext<RouteId>) => provider.setValue(normalize(value)),
+    setContext: (value: ApplicationContext) => provider.setValue(normalize(value)),
   });
 }
 
 export type ApplicationContextProvider = ReturnType<typeof createApplicationContextProvider>;
 
-export function createApplicationGateway(initial: ApplicationGatewaySnapshot) {
+export function createApplicationGateway(
+  initial: ApplicationGatewaySnapshot = {
+    client: null,
+    phase: "stopped",
+    offlineStable: false,
+    hello: null,
+    canvasPluginSurfaceUrl: null,
+    assistantAgentId: null,
+    sessionKey: "",
+    lastError: null,
+    lastErrorCode: null,
+  },
+) {
   let snapshot = initial;
   const listeners = new Set<(value: ApplicationGatewaySnapshot) => void>();
   const eventListeners = new Set<GatewayEventListener>();

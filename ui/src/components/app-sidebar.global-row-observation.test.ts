@@ -330,6 +330,7 @@ describe("sidebar global row observation", () => {
           slowResponse = client.request<{ session: GatewaySessionRow }>("sessions.describe", {
             key: route.sessionKey,
           });
+          await import("./session-organizer-operations.runtime.ts");
           action = sidebar.sessionOrganizer.patchSession(visibleRow(), { pinned: true });
           await waitForFast(() =>
             expect(request).toHaveBeenCalledWith(

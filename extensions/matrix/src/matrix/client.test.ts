@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import * as runtimeEnv from "openclaw/plugin-sdk/runtime-env";
 // Matrix tests cover client plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -840,6 +841,14 @@ describe("resolveMatrixAuth", () => {
   });
 
   it("stops waiting on whoami retry backoff when startup backfill is aborted", async () => {
+    vi.useFakeTimers();
+    const retryStarted = createDeferred<void>();
+    const sleepWithAbort = runtimeEnv.sleepWithAbort;
+    vi.spyOn(runtimeEnv, "sleepWithAbort").mockImplementation((...args) => {
+      const sleeping = sleepWithAbort(...args);
+      retryStarted.resolve();
+      return sleeping;
+    });
     matrixDoRequestMock.mockRejectedValueOnce(
       Object.assign(new TypeError("fetch failed"), {
         cause: Object.assign(new Error("read ECONNRESET"), {
@@ -848,7 +857,6 @@ describe("resolveMatrixAuth", () => {
       }),
     );
     const abortController = new AbortController();
-    const startedAt = Date.now();
     const backfillPromise = backfillMatrixAuthDeviceIdAfterStartup({
       auth: {
         accountId: "default",
@@ -860,17 +868,21 @@ describe("resolveMatrixAuth", () => {
       abortSignal: abortController.signal,
     });
 
-    await vi.waitFor(() => {
-      expect(matrixDoRequestMock).toHaveBeenCalledTimes(1);
-    });
-    abortController.abort();
+    try {
+      await retryStarted.promise;
+      expect(vi.getTimerCount()).toBe(1);
+      abortController.abort();
 
-    // The first retry backoff starts at 250ms; an honored abort returns long before it elapses.
-    await expect(backfillPromise).resolves.toBeUndefined();
-    expect(Date.now() - startedAt).toBeLessThan(200);
-    expect(matrixDoRequestMock).toHaveBeenCalledTimes(1);
-    expect(repairCurrentTokenStorageMetaDeviceIdMock).not.toHaveBeenCalled();
-    expect(saveBackfilledMatrixDeviceIdMock).not.toHaveBeenCalled();
+      // Cancellation must settle the backoff without advancing its clock.
+      await expect(backfillPromise).resolves.toBeUndefined();
+      expect(vi.getTimerCount()).toBe(0);
+      expect(matrixDoRequestMock).toHaveBeenCalledTimes(1);
+      expect(repairCurrentTokenStorageMetaDeviceIdMock).not.toHaveBeenCalled();
+      expect(saveBackfilledMatrixDeviceIdMock).not.toHaveBeenCalled();
+    } finally {
+      abortController.abort();
+      vi.useRealTimers();
+    }
   });
 
   it("resolves configured accessToken SecretRefs during Matrix auth", async () => {
