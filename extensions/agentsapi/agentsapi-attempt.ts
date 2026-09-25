@@ -377,15 +377,20 @@ export async function runAgentsApiAttempt(
     } else {
       const items = await client.items(remoteSessionId, result.turn.id, controller.signal);
       assertCurrent();
-      outputMedia = await collectOutputs(
-        client,
-        remoteSessionId,
-        result.turn.id,
-        assertCurrent,
-        controller.signal,
-      );
-      await projection.commit(result.turn, items);
-      assertCurrent();
+      try {
+        outputMedia = await collectOutputs(
+          client,
+          remoteSessionId,
+          result.turn.id,
+          assertCurrent,
+          controller.signal,
+        );
+      } finally {
+        // Transfer failure must not discard the completed reply. The projection
+        // still requires current authority before publishing or persisting it.
+        await projection.commit(result.turn, items);
+        assertCurrent();
+      }
     }
   } catch (error) {
     terminal = timeout
