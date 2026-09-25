@@ -5,6 +5,50 @@ import {
 
 const GOOGLE_TTS_SAMPLE_RATE = 24_000;
 
+const GOOGLE_TTS_DIALOGUE_CONTINUATION_LABELS = new Set([
+  "action",
+  "context",
+  "date",
+  "deadline",
+  "error",
+  "eta",
+  "example",
+  "from",
+  "fyi",
+  "info",
+  "issue",
+  "location",
+  "next",
+  "note",
+  "notes",
+  "priority",
+  "ps",
+  "re",
+  "reminder",
+  "result",
+  "status",
+  "steps",
+  "subject",
+  "summary",
+  "time",
+  "tip",
+  "to",
+  "todo",
+  "update",
+  "usage",
+  "warning",
+  "when",
+  "where",
+  "wip",
+]);
+
+function isGoogleTtsUnknownSpeakerLabel(label: string, names: Set<string>): boolean {
+  if (names.has(label) || GOOGLE_TTS_DIALOGUE_CONTINUATION_LABELS.has(label.toLowerCase())) {
+    return false;
+  }
+  return /^[A-Za-z][A-Za-z0-9_-]{0,31}$/u.test(label);
+}
+
 export type GoogleTtsDialogueSpeaker = {
   speaker: string;
   voice: string;
@@ -74,6 +118,11 @@ export function splitGoogleTtsDialogue(
         turns.push({ speaker, text: spoken });
       }
       continue;
+    }
+    if (labeled && speaker && isGoogleTtsUnknownSpeakerLabel(speaker, names)) {
+      throw new Error(
+        `Unknown Google TTS speaker "${speaker}". Use one of the two configured speaker names.`,
+      );
     }
     if (sawLabel) {
       const previous = turns.at(-1);

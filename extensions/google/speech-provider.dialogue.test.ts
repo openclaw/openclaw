@@ -228,6 +228,30 @@ describe("Google speech dialogue", () => {
     });
   });
 
+  it("rejects an unconfigured speaker label before synthesis", async () => {
+    const requestMock = installGoogleTtsRequestMock();
+    const provider = buildGoogleSpeechProvider();
+
+    await expect(
+      provider.synthesize({
+        text: ["Puck: Hello from the gate.", "Alice: Hi.", "Kore: I will be there."].join("\n"),
+        cfg: {},
+        providerConfig: {
+          apiKey: "***",
+          model: "gemini-3.8-flash-tts",
+          speakers: [
+            { speaker: "Puck", voice: "Puck" },
+            { speaker: "Kore", voice: "Kore" },
+          ],
+        },
+        target: "audio-file",
+        timeoutMs: 10_000,
+      }),
+    ).rejects.toThrow(/Unknown Google TTS speaker "Alice"/u);
+
+    expect(requestMock).not.toHaveBeenCalled();
+  });
+
   it("speaks unlabeled text before the first speaker label", async () => {
     const requestMock = installGoogleTtsRequestMock();
     const provider = buildGoogleSpeechProvider();
