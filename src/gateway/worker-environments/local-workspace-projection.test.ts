@@ -279,14 +279,13 @@ describe("local sandbox workspace reconciliation", () => {
       if (when === "later index") {
         await withLocalWorkspaceProjection(owner, (state) => state.prepare());
       }
-      const raw = Buffer.concat([
-        Buffer.from(owner.worktree.path + "/private-"),
-        Buffer.from([0xff]),
-      ]);
-      await fs.writeFile(raw, "ordinary source with an invalid filename");
-      if (when === "later index") {
-        await git(owner.worktree.path, "add", "-A");
-      }
+      // Git indexes preserve raw path bytes even when the host filesystem rejects them.
+      const blob = await requireGit(owner.worktree.path, ["hash-object", "-w", "--stdin"], {
+        input: "ordinary source with an invalid filename",
+      });
+      await requireGit(owner.worktree.path, ["update-index", "-z", "--index-info"], {
+        input: Buffer.concat([Buffer.from(`100644 ${blob}\tprivate-`), Buffer.from([0xff, 0])]),
+      });
       await expect(withLocalWorkspaceProjection(owner, (state) => state.prepare())).rejects.toThrow(
         "UTF-8",
       );
