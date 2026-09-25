@@ -371,16 +371,25 @@ export function createApplicationUpdateOverlays(
       updateCampaignPoller.sync();
     },
     onError: (error, mode) => {
-      if (mode === "completion" && snapshot.updateStatusCheckBanner?.mode === "manual") {
-        return;
-      }
-      if (error === null && snapshot.updateStatusCheckBanner === null) {
+      const externalSupervisorGuidance =
+        error === null ? snapshot.externalSupervisorGuidance : null;
+      const updateStatusCheckBanner =
+        mode === "background" ||
+        (mode === "completion" && snapshot.updateStatusCheckBanner?.mode === "manual")
+          ? snapshot.updateStatusCheckBanner
+          : error === null
+            ? null
+            : { ...resolveUpdateStatusCheckBanner(error), mode };
+      if (
+        externalSupervisorGuidance === snapshot.externalSupervisorGuidance &&
+        updateStatusCheckBanner === snapshot.updateStatusCheckBanner
+      ) {
         return;
       }
       snapshot = {
         ...snapshot,
-        updateStatusCheckBanner:
-          error === null ? null : { ...resolveUpdateStatusCheckBanner(error), mode },
+        externalSupervisorGuidance,
+        updateStatusCheckBanner,
       };
       publish();
     },

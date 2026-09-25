@@ -243,6 +243,46 @@ describe("application update campaign overlays", () => {
     }
   });
 
+  it.each(["manual", "background", "completion"] as const)(
+    "clears supervisor guidance after a failed current %s status read",
+    async (mode) => {
+      const externalSupervisorGuidance = {
+        version: 1,
+        action: "update",
+        name: "Example Fleet",
+        command: "fleet update example",
+      };
+      let unavailable = false;
+      const request = vi.fn<RequestFn>(async (method) => {
+        if (method !== "update.status") {
+          return {};
+        }
+        if (unavailable) {
+          throw new Error("Current deployment status unavailable");
+        }
+        return { externalSupervisorGuidance };
+      });
+      const harness = createGatewayHarness(client(request));
+      const overlays = createApplicationOverlays(harness.gateway);
+      try {
+        await flushMicrotasks();
+        expect(overlays.snapshot.externalSupervisorGuidance).toEqual(externalSupervisorGuidance);
+        unavailable = true;
+        expect(await overlays.refreshUpdateStatus(mode)).toBe(false);
+        expect(overlays.snapshot.externalSupervisorGuidance).toBeNull();
+        if (mode === "background") {
+          expect(overlays.snapshot.updateStatusCheckBanner).toBeNull();
+        } else {
+          expect(overlays.snapshot.updateStatusCheckBanner?.text).toContain(
+            "Current deployment status unavailable",
+          );
+        }
+      } finally {
+        overlays.dispose();
+      }
+    },
+  );
+
   it("retires supervisor guidance across a same-client reconnect and failed status read", async () => {
     const externalSupervisorGuidance = {
       version: 1,

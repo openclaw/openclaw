@@ -217,7 +217,7 @@ export function createUpdateStatusRefresher(params: {
   onRefreshing: (refreshing: boolean) => void;
   onStatus: (response: UpdateRestartStatusResponse, preserveInstall?: boolean) => void;
   onCheckout: (response: UpdateRestartStatusResponse, preserveSchedule: boolean) => void;
-  onError: (error: unknown, mode: "manual" | "completion") => void;
+  onError: (error: unknown, mode: "manual" | "background" | "completion") => void;
 }) {
   let generation = 0;
   let checkoutGeneration = 0;
@@ -252,7 +252,7 @@ export function createUpdateStatusRefresher(params: {
           refreshCheckout ? undefined : { timeoutMs: 5_000 },
         )
         .catch((error: unknown) => {
-          if (mode !== "background" && isCurrent()) {
+          if (isCurrent()) {
             params.onError(error, mode);
           }
           return null;
