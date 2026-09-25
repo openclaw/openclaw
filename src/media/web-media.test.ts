@@ -1022,6 +1022,28 @@ describe("loadWebMedia", () => {
     );
   });
 
+  it.each(["book.mobi", "book.azw", "book.azw3"])(
+    "allows buffer-verified host-read Kindle documents for %s",
+    async (fileName) => {
+      // MOBI/AZW/AZW3 are PalmDOC containers carrying the BOOKMOBI signature at
+      // offset 60, so file-type's sniff is the same buffer-verified signal as EPUB.
+      const mobi = Buffer.alloc(128);
+      mobi.write("BOOKMOBI", 60, "latin1");
+
+      const result = await loadDocumentWithHostRead(fileName, mobi);
+
+      expect(result.kind).toBe("document");
+      expect(result.contentType).toBe("application/x-mobipocket-ebook");
+    },
+  );
+
+  it("rejects a Kindle-extension file without the BOOKMOBI signature", async () => {
+    await expectLoadWebMediaErrorCode(
+      loadDocumentWithHostRead("fake.mobi", Buffer.from("not a mobi file")),
+      "path-not-allowed",
+    );
+  });
+
   it("keeps the host-read XLSM root boundary and byte limit", async () => {
     const body = await createXlsmMimeFixture();
     const filePath = path.join(fixtureRoot, "bounded.xlsm");

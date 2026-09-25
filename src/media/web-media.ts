@@ -186,6 +186,7 @@ const HOST_READ_ALLOWED_DOCUMENT_MIMES = new Set([
   "application/x-7z-compressed",
   "application/x-tar",
   "application/zip",
+  "application/x-mobipocket-ebook",
   "text/csv",
   "text/markdown",
   "text/plain",
@@ -589,7 +590,7 @@ function assertHostReadMediaAllowed(params: {
     );
   }
   throw new HostReadMediaTypeError(
-    `Host-local media sends only allow buffer-verified images, audio, video, PDF, Office documents, archives, and validated plain-text documents (got ${sniffedMime ?? normalizedMime ?? "unknown"}).`,
+    `Host-local media sends only allow buffer-verified images, audio, video, PDF, Office documents, Kindle documents, archives, and validated plain-text documents (got ${sniffedMime ?? normalizedMime ?? "unknown"}).`,
   );
 }
 
