@@ -530,17 +530,20 @@ export function buildOpenAICompletionsRequest(
             `model=${model.id} requested=${effectiveMaxTokens} output=${clampedMaxTokens} ` +
             `effectiveContext=${effectiveContextTokens} estimatedInput=${estimatedInputTokens}`,
         );
-        if (
-          model.reasoning &&
-          thinkingEnabled !== false &&
-          remainingBudget < MIN_USEFUL_OUTPUT_TOKENS
-        ) {
-          throw Object.assign(
-            new Error(
-              `Context window exceeded: estimated input ${estimatedInputTokens} leaves only ` +
-                `${remainingBudget} output tokens within the ${effectiveContextTokens}-token context.`,
-            ),
-            { code: "context_length_exceeded" },
+        if (remainingBudget < MIN_USEFUL_OUTPUT_TOKENS) {
+          if (model.reasoning && thinkingEnabled !== false) {
+            throw Object.assign(
+              new Error(
+                `Context window exceeded: estimated input ${estimatedInputTokens} leaves only ` +
+                  `${remainingBudget} output tokens within the ${effectiveContextTokens}-token context.`,
+              ),
+              { code: "context_length_exceeded" },
+            );
+          }
+          log.warn(
+            `[completions] insufficient_output_budget provider=${model.provider} api=${model.api} ` +
+              `model=${model.id} output=${clampedMaxTokens} ` +
+              `effectiveContext=${effectiveContextTokens} estimatedInput=${estimatedInputTokens}`,
           );
         }
       }

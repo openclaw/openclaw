@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { getAiTransportHost } from "../host.js";
 import { FAILED_ASSISTANT_REPLAY_TEXT } from "../replay-turn-classification.js";
 import type { Model } from "../types.js";
 import { createZeroUsage } from "../usage.test-support.js";
@@ -304,6 +305,32 @@ describe("openai completions params", () => {
       ).toBe(expected);
     }
   });
+
+  it.each([false, true])(
+    "warns when a short non-thinking request proceeds (reasoning=%s)",
+    (reasoning) => {
+      const model = makeCompletionsModel({
+        baseUrl: "http://localhost:8000/v1",
+        reasoning,
+        contextWindow: 1000,
+        maxTokens: 1000,
+      });
+      const warning = vi.spyOn(getAiTransportHost(), "logWarn");
+      try {
+        const params = buildOpenAICompletionsParams(model, emptyContext("x".repeat(3200)), {
+          reasoning: "off",
+        });
+        expect(params.max_completion_tokens).toBe(1);
+        expect(warning).toHaveBeenCalledWith(
+          "openai-transport",
+          expect.stringContaining("insufficient_output_budget"),
+          undefined,
+        );
+      } finally {
+        warning.mockRestore();
+      }
+    },
+  );
 
   it("preserves useful clamping and intentionally short completions", () => {
     const model = makeCompletionsModel({
