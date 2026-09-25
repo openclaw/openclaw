@@ -142,7 +142,6 @@ extensions/migrate-hermes/secrets.test.ts
 extensions/msteams/src/channel.actions.test.ts
 extensions/msteams/src/channel.ts
 extensions/mxc/test/mxc-backend.test.ts
-extensions/oc-path/src/oc-path/find.ts
 extensions/oc-path/src/oc-path/universal.ts
 extensions/ollama/index.test.ts
 extensions/ollama/index.ts
