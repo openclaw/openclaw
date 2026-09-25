@@ -146,8 +146,15 @@ describe("Agents API attempt environment selection", () => {
 
       expect(result.terminal).toEqual({ kind: "ok" });
       expect(
-        mocks.fetch.mock.calls.map(([request]) => new Request(request.url, request.init).method),
-      ).toEqual(["PATCH", "POST", "GET"]);
+        mocks.fetch.mock.calls.map(([request]) => ({
+          method: new Request(request.url, request.init).method,
+          pathname: new URL(request.url).pathname,
+        })),
+      ).toEqual([
+        { method: "POST", pathname: "/v1/agents/sessions/session-fixture" },
+        { method: "POST", pathname: "/v1/agents/sessions/session-fixture/events" },
+        { method: "GET", pathname: "/v1/agents/sessions/session-fixture/items" },
+      ]);
       expect(bind).not.toHaveBeenCalled();
       expect(await requestBody(1)).toMatchObject({
         events: [{ type: "agent.session.input.message" }],
@@ -198,7 +205,10 @@ describe("Agents API attempt environment selection", () => {
     expect(bind).toHaveBeenCalledWith(savedBinding(undefined));
     expect(
       new Request(mocks.fetch.mock.calls[0]![0].url, mocks.fetch.mock.calls[0]![0].init).method,
-    ).toBe("PATCH");
+    ).toBe("POST");
+    expect(new URL(mocks.fetch.mock.calls[0]![0].url).pathname).toBe(
+      "/v1/agents/sessions/session-fixture",
+    );
   });
 
   it("rejects an invalid runtime environment setting before native writes", async () => {
