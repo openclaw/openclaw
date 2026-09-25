@@ -195,7 +195,7 @@ inter-session user turns that only have provenance metadata.
 
 **Anthropic / Minimax (Anthropic-compatible)**
 
-- Prefix-binding Claude models, such as Fable 5.1, persist runtime-context carriers
+- Prefix-binding Claude models, such as Fable 5.1 and Opus 5.5, persist runtime-context carriers
   as hidden custom messages immediately after their user turn and replay them in
   place. Inline inbound metadata on older user turns is also retained. This
   model-scoped append-only policy includes Bedrock, Vertex, and Foundry routes.

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bindsClaudeThinkingPrefix } from "./anthropic.js";
+import { bindsClaudeThinkingPrefix, resolveClaudeOpus55ModelIdentity } from "./anthropic.js";
 
 describe("bindsClaudeThinkingPrefix", () => {
   it.each([
@@ -15,6 +15,12 @@ describe("bindsClaudeThinkingPrefix", () => {
     [{ id: "claude-fable-5" }, false],
     [{ id: "claude-mythos-5" }, false],
     [{ id: "claude-opus-5" }, false],
+    [{ id: "claude-opus-5-5" }, true],
+    [{ id: "anthropic/claude-opus-5.5" }, true],
+    [{ id: "us.anthropic.claude-opus-5-5-v1:0" }, true],
+    [{ id: "deployment", params: { canonicalModelId: "claude-opus-5-5" } }, true],
+    [{ id: "claude-opus-5-5", params: { canonicalModelId: "claude-opus-5" } }, false],
+    [{ id: "claude-opus-5-50" }, false],
     [{ id: "claude-sonnet-5" }, false],
     [{ id: "claude-opus-4-8" }, false],
     [{ id: "claude-sonnet-4-6" }, false],
@@ -26,5 +32,18 @@ describe("bindsClaudeThinkingPrefix", () => {
     [{}, false],
   ])("resolves %j to %s", (ref, expected) => {
     expect(bindsClaudeThinkingPrefix(ref)).toBe(expected);
+  });
+});
+
+describe("resolveClaudeOpus55ModelIdentity", () => {
+  it.each([
+    ["claude-opus-5-5", "claude-opus-5-5"],
+    ["opus", undefined],
+    ["opus-5.5", "claude-opus-5-5"],
+    ["opus-5-5", "claude-opus-5-5"],
+    ["us.anthropic.claude-opus-5-5-v1:0", "claude-opus-5-5-v1:0"],
+    ["claude-opus-5-50", undefined],
+  ])("resolves %s to %s", (id, expected) => {
+    expect(resolveClaudeOpus55ModelIdentity({ id })).toBe(expected);
   });
 });

@@ -92,7 +92,7 @@ export function buildStrictAnthropicReplayPolicy(
         }
       : {}),
     preserveSignatures: true,
-    appendOnlyRuntimeContext: options.appendOnlyRuntimeContext ?? false,
+    appendOnlyRuntimeContext: options.appendOnlyRuntimeContext ?? true,
     repairToolUseResultPairing: true,
     validateAnthropicTurns: true,
     allowSyntheticToolResults: true,

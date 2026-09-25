@@ -100,13 +100,17 @@ describe("provider replay helpers", () => {
 
   it("builds strict anthropic replay policy", () => {
     expectFields(buildStrictAnthropicReplayPolicy({ dropThinkingBlocks: true }), {
-      appendOnlyRuntimeContext: false,
+      appendOnlyRuntimeContext: true,
       sanitizeMode: "full",
       preserveSignatures: true,
       repairToolUseResultPairing: true,
       allowSyntheticToolResults: true,
       dropThinkingBlocks: true,
     });
+    expect(
+      buildStrictAnthropicReplayPolicy({ appendOnlyRuntimeContext: false })
+        .appendOnlyRuntimeContext,
+    ).toBe(false);
   });
 
   it.each([
@@ -116,6 +120,7 @@ describe("provider replay helpers", () => {
     ["claude-fable-5", false],
     ["claude-mythos-5", false],
     ["claude-opus-5", false],
+    ["claude-opus-5-5", true],
     ["claude-sonnet-5", false],
     ["claude-opus-4-8", false],
     ["claude-sonnet-4-6", false],

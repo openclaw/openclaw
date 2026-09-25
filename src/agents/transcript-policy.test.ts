@@ -745,6 +745,7 @@ describe("resolveTranscriptPolicy", () => {
     ["claude-fable-5", false],
     ["claude-mythos-5", false],
     ["claude-opus-5", false],
+    ["claude-opus-5-5", true],
     ["claude-sonnet-5", false],
     ["claude-opus-4-8", false],
     ["claude-sonnet-4-6", false],
@@ -779,7 +780,7 @@ describe("resolveTranscriptPolicy", () => {
     }
   });
 
-  it.each(["claude-fable-5-1", "claude-mythos-5-1", "claude-opus-5"])(
+  it.each(["claude-fable-5-1", "claude-mythos-5-1", "claude-opus-5", "claude-opus-5-5"])(
     "uses canonical deployment identity for unowned %s replay",
     (canonicalModelId) => {
       const policy = resolveTranscriptPolicy({
@@ -788,7 +789,9 @@ describe("resolveTranscriptPolicy", () => {
         modelId: "deployment",
         model: makeOpenAiCompatibleReasoningModel({ params: { canonicalModelId } }),
       });
-      expect(policy.appendOnlyRuntimeContext).toBe(canonicalModelId === "claude-fable-5-1");
+      expect(policy.appendOnlyRuntimeContext).toBe(
+        canonicalModelId === "claude-fable-5-1" || canonicalModelId === "claude-opus-5-5",
+      );
     },
   );
 

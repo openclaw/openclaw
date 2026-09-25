@@ -1035,6 +1035,12 @@ jobs:
             sleep $((attempt * 15))
           done
 
+      - name: Verify embedded Anthropic carrier policies
+        run: |
+          timeout --foreground --kill-after=30s 10m pnpm test \
+            src/agents/embedded-agent-runner.cache.live.test.ts \
+            -t "keeps cache reuse ahead of changing transient runtime context|replays retained runtime context with signed thinking"
+
   validate_repo_e2e:
     name: Repo E2E (${{ matrix.name }})
     needs: validate_selected_ref

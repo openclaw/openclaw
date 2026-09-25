@@ -78,13 +78,24 @@ export function resolveClaudeMythos5ModelIdentity(ref: ClaudeModelRef): string |
   return normalized.slice((match.index ?? 0) + (match[0].startsWith("-") ? 1 : 0));
 }
 
+/** Resolve the Opus 5.5 contract without matching other Opus 5 generations. */
+export function resolveClaudeOpus55ModelIdentity(ref: ClaudeModelRef): string | undefined {
+  const normalized = resolveClaudeModelIdentity(ref);
+  if (normalized === "opus-5-5") {
+    return "claude-opus-5-5";
+  }
+  return /^claude-opus-5-5(?=$|[^a-z0-9])/.test(normalized) ? normalized : undefined;
+}
+
 /**
- * Anthropic binds thinking to the conversation prefix starting with Fable 5.1 and
- * plans to enforce it on later models. Extend only with live replay proof for the
- * new model (Mythos 5.1 is unregistered here and unproven).
+ * Prefix-bound thinking requires append-only runtime context. Extend this list
+ * only with live replay proof for the model (Mythos 5.1 remains unproven).
  */
 export function bindsClaudeThinkingPrefix(ref: ClaudeModelRef): boolean {
-  return /^claude-fable-5-1(?=$|[^a-z0-9])/.test(resolveClaudeModelIdentity(ref));
+  return (
+    resolveClaudeOpus55ModelIdentity(ref) !== undefined ||
+    /^claude-fable-5-1(?=$|[^a-z0-9])/.test(resolveClaudeModelIdentity(ref))
+  );
 }
 
 /** Return whether a Claude model requires adaptive thinking instead of manual budgets. */

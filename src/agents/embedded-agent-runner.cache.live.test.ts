@@ -2,11 +2,16 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { configureAiTransportHost, getAiTransportHost } from "@openclaw/ai";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AssistantMessage, Message, Tool } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { loadTranscriptEvents } from "../config/sessions/session-accessor.js";
+import {
+  loadTranscriptEvents,
+  replaceTranscriptEvents,
+} from "../config/sessions/session-accessor.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
@@ -17,6 +22,8 @@ import { extractEmbeddedAssistantText } from "./embedded-agent-utils.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
+  OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
+  OPENCLAW_RUNTIME_CONTEXT_NOTICE,
 } from "./internal-runtime-context.js";
 import {
   buildAssistantHistoryTurn as buildTypedAssistantHistoryTurn,
@@ -55,6 +62,10 @@ type CacheRun = {
   suffix: string;
   text: string;
   usage: AssistantMessage["usage"];
+};
+type AnthropicWireCapture = {
+  inputTransformations: unknown[][];
+  requestMessages: unknown[][];
 };
 type CacheTraceEvent = {
   runId?: string;
@@ -179,19 +190,116 @@ async function readEmbeddedSessionMessages(sessionId: string): Promise<Record<st
     );
 }
 
-function hasSignedThinking(messages: Record<string, unknown>[]): boolean {
-  return messages.some((message) =>
-    Array.isArray(message.content)
-      ? message.content.some(
-          (block) =>
-            block !== null &&
-            typeof block === "object" &&
-            (block as { type?: unknown }).type === "thinking" &&
-            typeof (block as { thinkingSignature?: unknown }).thinkingSignature === "string" &&
-            (block as { thinkingSignature: string }).thinkingSignature.trim().length > 0,
-        )
-      : false,
+async function rewriteFirstRuntimeCarrierAsPreBackport(sessionId: string): Promise<void> {
+  const sessionTarget = buildRunnerSessionPaths(sessionId).sessionTarget;
+  const events = await loadTranscriptEvents(sessionTarget);
+  const carrierIndex = events.findIndex((event) => {
+    const message = isRecord(event) && isRecord(event.message) ? event.message : undefined;
+    return message?.customType === OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE;
+  });
+  expect(carrierIndex).toBeGreaterThanOrEqual(0);
+  const carrierEvent = events[carrierIndex];
+  if (
+    !isRecord(carrierEvent) ||
+    !isRecord(carrierEvent.message) ||
+    typeof carrierEvent.message.content !== "string"
+  ) {
+    throw new Error("persisted runtime-context carrier missing string content");
+  }
+  const carrierMessage = carrierEvent.message;
+  const legacyContent = [
+    "OpenClaw runtime context for the active user request in this turn. Do not reply to or describe this context. Use it to continue answering the active user request now. Do not wait for another message.",
+    OPENCLAW_RUNTIME_CONTEXT_NOTICE,
+    "",
+    carrierMessage.content,
+  ].join("\n");
+  const rewrittenEvents = events.with(carrierIndex, {
+    ...carrierEvent,
+    message: { ...carrierMessage, content: legacyContent },
+  });
+  await replaceTranscriptEvents(sessionTarget, rewrittenEvents);
+  // Force the replay turn through a fresh database/session open, as an upgrade would.
+  disposeOpenClawAgentDatabaseByPath(sessionTarget.storePath);
+}
+
+function countSignedThinking(messages: Record<string, unknown>[]): number {
+  return messages.reduce(
+    (count, message) =>
+      count +
+      (Array.isArray(message.content)
+        ? message.content.filter(
+            (block) =>
+              isRecord(block) &&
+              block.type === "thinking" &&
+              typeof block.thinkingSignature === "string" &&
+              block.thinkingSignature.trim().length > 0,
+          ).length
+        : 0),
+    0,
   );
+}
+
+function captureAnthropicResponseEvents(body: string, capture: AnthropicWireCapture): void {
+  for (const line of body.split("\n")) {
+    if (!line.startsWith("data:")) {
+      continue;
+    }
+    const data = line.slice("data:".length).trim();
+    if (!data || data === "[DONE]") {
+      continue;
+    }
+    try {
+      const event: unknown = JSON.parse(data);
+      if (!isRecord(event)) {
+        continue;
+      }
+      const message = isRecord(event.message) ? event.message : undefined;
+      const transformations = message?.input_transformations ?? event.input_transformations;
+      if (Array.isArray(transformations)) {
+        capture.inputTransformations.push(transformations);
+      }
+    } catch {
+      // Ignore non-JSON keepalive events; provider events remain independently parsed below.
+    }
+  }
+}
+
+async function withAnthropicWireCapture<T>(run: () => Promise<T>): Promise<{
+  capture: AnthropicWireCapture;
+  result: T;
+}> {
+  const host = getAiTransportHost();
+  const capture: AnthropicWireCapture = { inputTransformations: [], requestMessages: [] };
+  configureAiTransportHost({
+    ...host,
+    buildModelFetch: (model, timeoutMs, options) => {
+      const modelFetch = host.buildModelFetch(model, timeoutMs, options) ?? fetch;
+      return async (input, init) => {
+        const request = new Request(input, init);
+        try {
+          const payload: unknown = JSON.parse(await request.clone().text());
+          if (isRecord(payload) && Array.isArray(payload.messages)) {
+            capture.requestMessages.push(payload.messages);
+          }
+        } catch {
+          // The live assertion below requires a captured Anthropic JSON request.
+        }
+        const response = await modelFetch(input, init);
+        captureAnthropicResponseEvents(await response.clone().text(), capture);
+        return response;
+      };
+    },
+  });
+  try {
+    return { capture, result: await run() };
+  } finally {
+    configureAiTransportHost(host);
+  }
+}
+
+function expectRuntimeContextOnWire(capture: AnthropicWireCapture, runtimeContext: string): void {
+  expect(capture.requestMessages.length).toBeGreaterThan(0);
+  expect(JSON.stringify(capture.requestMessages.at(-1))).toContain(runtimeContext);
 }
 
 function resolveDefaultProviderBaseUrl(model: LiveResolvedModel["model"]): string {
@@ -379,6 +487,7 @@ async function runEmbeddedCacheProbe(params: {
   // Full-runner probes own a real admission through settlement, just like production callers.
   const preparedRunAdmission = prepareSystemAgentRunAdmission(config, runId, "main", "live-cache");
   try {
+    const transcriptPrompt = buildEmbeddedCachePrompt(params.suffix, params.promptSections);
     const result = await withLiveCacheHeartbeat(
       runEmbeddedAgent({
         preparedRunAdmission,
@@ -388,13 +497,14 @@ async function runEmbeddedCacheProbe(params: {
         agentDir: sessionPaths.agentDir,
         config,
         prompt: [
-          buildEmbeddedCachePrompt(params.suffix, params.promptSections),
+          transcriptPrompt,
           params.runtimeContext
             ? `${INTERNAL_RUNTIME_CONTEXT_BEGIN}\n${params.runtimeContext}\n${INTERNAL_RUNTIME_CONTEXT_END}`
             : undefined,
         ]
           .filter((value): value is string => value !== undefined)
           .join("\n\n"),
+        ...(params.runtimeContext ? { transcriptPrompt } : {}),
         provider: params.model.provider,
         model: params.model.id,
         timeoutMs: params.providerTag === "openai" ? OPENAI_TIMEOUT_MS : ANTHROPIC_TIMEOUT_MS,
@@ -1387,15 +1497,19 @@ describeCacheLive("embedded agent runner prompt caching (live)", () => {
       "keeps cache reuse ahead of changing transient runtime context",
       async () => {
         const sessionId = `${ANTHROPIC_SESSION_ID}-transient-context`;
-        const warmup = await runEmbeddedCacheProbe({
-          ...fixture,
-          cacheRetention: "short",
-          prefix: ANTHROPIC_PREFIX,
-          providerTag: "anthropic",
-          runtimeContext: "Transient live context for the warmup turn.",
-          sessionId,
-          suffix: "transient-context-warmup",
-        });
+        const warmupContext = "Transient live context for the warmup turn.";
+        const { capture: warmupCapture, result: warmup } = await withAnthropicWireCapture(() =>
+          runEmbeddedCacheProbe({
+            ...fixture,
+            cacheRetention: "short",
+            prefix: ANTHROPIC_PREFIX,
+            providerTag: "anthropic",
+            runtimeContext: warmupContext,
+            sessionId,
+            suffix: "transient-context-warmup",
+          }),
+        );
+        expectRuntimeContextOnWire(warmupCapture, warmupContext);
         expect(warmup.usage.cacheWrite ?? 0).toBeGreaterThan(0);
 
         const hitA = await runEmbeddedCacheProbe({
@@ -1431,33 +1545,49 @@ describeCacheLive("embedded agent runner prompt caching (live)", () => {
       "replays retained runtime context with signed thinking",
       async () => {
         const sessionId = `${ANTHROPIC_SESSION_ID}-retained-context`;
-        await runEmbeddedCacheProbe({
-          ...retainedThinkingFixture,
-          cacheRetention: "short",
-          prefix: ANTHROPIC_PREFIX,
-          providerTag: "anthropic",
-          runtimeContext: "Retained live context for the first turn.",
-          sessionId,
-          suffix: "retained-context-first",
-          thinkLevel: "low",
-        });
-        expect(hasSignedThinking(await readEmbeddedSessionMessages(sessionId))).toBe(true);
+        const firstContext = "Retained live context for the first turn.";
+        const { capture: firstCapture } = await withAnthropicWireCapture(() =>
+          runEmbeddedCacheProbe({
+            ...retainedThinkingFixture,
+            cacheRetention: "short",
+            prefix: ANTHROPIC_PREFIX,
+            providerTag: "anthropic",
+            runtimeContext: firstContext,
+            sessionId,
+            suffix: "retained-context-first",
+            thinkLevel: "low",
+          }),
+        );
+        expectRuntimeContextOnWire(firstCapture, firstContext);
+        const firstSignedThinkingCount = countSignedThinking(
+          await readEmbeddedSessionMessages(sessionId),
+        );
+        expect(firstSignedThinkingCount).toBeGreaterThan(0);
 
-        const replay = await runEmbeddedCacheProbe({
-          ...retainedThinkingFixture,
-          cacheRetention: "short",
-          prefix: ANTHROPIC_PREFIX,
-          providerTag: "anthropic",
-          runtimeContext: "Retained live context for the replay turn.",
-          sessionId,
-          suffix: "retained-context-replay",
-          thinkLevel: "low",
-        });
+        await rewriteFirstRuntimeCarrierAsPreBackport(sessionId);
+
+        const replayContext = "Retained live context for the replay turn.";
+        const { capture: replayCapture, result: replay } = await withAnthropicWireCapture(() =>
+          runEmbeddedCacheProbe({
+            ...retainedThinkingFixture,
+            cacheRetention: "short",
+            prefix: ANTHROPIC_PREFIX,
+            providerTag: "anthropic",
+            runtimeContext: replayContext,
+            sessionId,
+            suffix: "retained-context-replay",
+            thinkLevel: "low",
+          }),
+        );
+        expectRuntimeContextOnWire(replayCapture, replayContext);
         logLiveCache(
           `anthropic retained-context replay cacheWrite=${replay.usage.cacheWrite} cacheRead=${replay.usage.cacheRead} input=${replay.usage.input} rate=${replay.hitRate.toFixed(3)}`,
         );
 
-        expect(hasSignedThinking(await readEmbeddedSessionMessages(sessionId))).toBe(true);
+        expect(replayCapture.inputTransformations).toContainEqual([]);
+        expect(countSignedThinking(await readEmbeddedSessionMessages(sessionId))).toBeGreaterThan(
+          firstSignedThinkingCount,
+        );
         expect(replay.usage.cacheRead ?? 0).toBeGreaterThan(0);
       },
       8 * 60_000,
