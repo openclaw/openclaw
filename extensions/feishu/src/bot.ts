@@ -648,6 +648,7 @@ export async function handleFeishuMessage(params: {
         conversationId: ctx.chatId,
         senderId: ctx.senderOpenId,
         receiverId: localBotOpenId,
+        eventId: ctx.messageId,
         defaultsConfig: cfg.channels?.defaults?.botLoopProtection,
         defaultEnabled: true,
       });

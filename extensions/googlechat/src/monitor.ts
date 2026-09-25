@@ -181,6 +181,7 @@ async function processGoogleChatEvent(
       conversationId: spaceId,
       senderId,
       receiverId: appUserId,
+      eventId: message.name,
       config: mergePairLoopGuardConfig(account.config.botLoopProtection, groupBotLoopProtection),
       defaultsConfig: config.channels?.defaults?.botLoopProtection,
       defaultEnabled: true,
