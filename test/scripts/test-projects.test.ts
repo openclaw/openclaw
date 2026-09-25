@@ -126,6 +126,9 @@ describe("test runtime prerequisites", () => {
     ["all plugins", ["extensions"], "private-qa"],
     ["full local suite", [], "private-qa"],
     ["ACP CLI process", ["src/cli/acp-cli-exit.process.test.ts"], "runtime"],
+    ["Windows Claude CLI process", ["src/process/exec.windows.integration.test.ts"], "runtime"],
+    ["process config", ["test/vitest/vitest.process.config.ts"], "runtime"],
+    ["ordinary process unit", ["src/process/exec.windows.test.ts"], undefined],
     ["update CLI process", ["src/cli/update-dry-run-state.process.test.ts"], "runtime"],
     ["migrated update process", ["src/cli/update-cli/update-command-migrated.test.ts"], "runtime"],
     ["update rollback", ["src/cli/update-cli/update-command-rollback.test.ts"], "runtime"],
@@ -2861,6 +2864,10 @@ describe("scripts/test-projects changed-target routing", () => {
       "src/agents/embedded-agent-runner/run/model-setup.selected-model.test.ts",
     ],
     [
+      "test/vitest/vitest.unit-fast.config.ts",
+      "test/e2e/qa-lab/runtime/gateway-loopback-lan-access.test.ts",
+    ],
+    [
       "test/vitest/vitest.unit-fast-isolated.config.ts",
       "src/state/openclaw-agent-execution-cleanup.test.ts",
     ],
@@ -5364,16 +5371,69 @@ describe("test selector native source facts", () => {
     );
   });
 
+  it("preserves literal matches and whole-token references across a native source batch", () => {
+    const sources = {
+      "empty.txt": "",
+      "overlap.txt": "ushers ababa",
+      "paths.txt": "scripts/tool.mts @scope/name+tag_value-1.0 xabcdy abcd",
+      "unicode.txt": "éabcd😀foo/bar中 abc😀xyz",
+      "embedded.txt": "xabcdy scripts/tool.mts scripts/tool abcd",
+      "binary.txt": "null\0abcd\0tail",
+      "repeated.txt": "aaaaaaaaa aba aaa aaaa",
+      "late-references.txt":
+        "ushers ababa xabcdy scripts/tool.mts @scope/name+tag_value-1.0 xfoo/bary 😀 null\0 aaaaaa absent\n abcd scripts/tool foo/bar aaaa",
+    };
+    const terms = [
+      "",
+      "he",
+      "she",
+      "hers",
+      "aba",
+      "ba",
+      "aba",
+      "abcd",
+      "bcd",
+      "scripts/tool",
+      "scripts/tool.mts",
+      "@scope/name+tag_value-1.0",
+      "foo/bar",
+      "😀",
+      "\ud83d",
+      "\ude00",
+      "null\0",
+      "aaa",
+      "aaaa",
+      "absent",
+    ];
+    withTinyFileTree(sources, (cwd) => {
+      const files = Object.keys(sources).map((file) => ({ file, parseImports: false }));
+      const expected = Object.entries(sources).map(([file, source]) => {
+        const tokens = new Set(source.match(/[A-Za-z0-9_.@+/-]{4,}/gu));
+        return {
+          file,
+          imports: [],
+          typeOnlyImports: [],
+          matches: terms.filter((term) => source.includes(term)),
+          references: terms.filter((term) => tokens.has(term)),
+        };
+      });
+      expect(readTestSelectorSourceFacts(cwd, files, terms, 1024 * 1024)).toEqual(expected);
+    });
+  });
+
   it("reads complete files without installed packages, inherited hooks, or reparsing cached imports", () => {
     withTinyFileTree(
       {
+        "unterminated.ts": '// "\nconst value = "\\u{000',
         "large.mts": `${"// padding\n".repeat(220_000)}export type {\n Value\n } from "./barrel.js";\nimport(\n "./dynamic.mjs"\n);\nconst fixture = "scripts/tool.mts";\nnew URL(\n "./native-fixture.mjs?generation=1#child", import.meta.url,\n);\nnew URL("./other-base.mjs", "file:///elsewhere/");\nrequire("dependency/runtime");\nrequire.resolve("dependency/package.json");\nimport.meta.resolve("other-dependency");`,
       },
       (cwd) => {
         const files = [
           { file: "large.mts", parseImports: true },
+          { file: "unterminated.ts", parseImports: true },
           { file: "deleted.ts", parseImports: true },
         ];
+        const unterminatedFacts = { imports: [], typeOnlyImports: [], matches: [], references: [] };
         const expectedFacts = {
           imports: [
             "./barrel.js",
@@ -5389,6 +5449,7 @@ describe("test selector native source facts", () => {
         };
         for (const file of [
           "scripts/lib/test-selector-source-facts.mts",
+          "scripts/lib/test-source-term-matcher.mts",
           "src/infra/node-runtime-executable.ts",
         ]) {
           const target = path.join(cwd, file);
@@ -5403,10 +5464,12 @@ describe("test selector native source facts", () => {
           cwd,
           input: JSON.stringify({ files, terms: ["scripts/tool.mts", "scripts/tool"] }),
           encoding: "utf8",
+          // A malformed escape must not rewind the scanner's cursor forever.
+          timeout: 5_000,
         });
         expect(native.error).toBeUndefined();
         expect(native.status, native.stderr).toBe(0);
-        expect(JSON.parse(native.stdout)).toEqual([expectedFacts, null]);
+        expect(JSON.parse(native.stdout)).toEqual([expectedFacts, unterminatedFacts, null]);
         vi.stubEnv(
           "NODE_OPTIONS",
           "--import=data:text/javascript,throw%20Error('inherited-loader')",
@@ -5419,7 +5482,10 @@ describe("test selector native source facts", () => {
               ["scripts/tool.mts", "scripts/tool"],
               16 * 1024 * 1024,
             ),
-          ).toEqual([{ file: "large.mts", ...expectedFacts }]);
+          ).toEqual([
+            { file: "large.mts", ...expectedFacts },
+            { file: "unterminated.ts", ...unterminatedFacts },
+          ]);
           expect(
             readTestSelectorSourceFacts(
               cwd,

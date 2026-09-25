@@ -14,7 +14,34 @@ export type PluginDoctorStateMigrationDetection = {
   preview: string[];
 };
 
+export type PluginDoctorCronJob = {
+  storeKey: string;
+  id: string;
+  sortOrder: number;
+  /** Exact persisted definition; runtime state remains host-owned. */
+  definitionJson: string;
+  definition: Record<string, unknown> | null;
+  invalidReason?: string;
+};
+
+export type PluginDoctorCronInventory = {
+  jobs: PluginDoctorCronJob[];
+};
+
+export type PluginDoctorCronChange = {
+  job: PluginDoctorCronJob;
+  /** null retires the row; replacements preserve its ID, order, and runtime state. */
+  definition: Record<string, unknown> | null;
+};
+
 export type PluginDoctorStateMigrationContext = {
+  /** Trusted plugins only; non-creating inspection includes inactive cron partitions. */
+  inspectCronJobs?: () => Promise<PluginDoctorCronInventory>;
+  /** Offline repair only. Backs up first, then compares inspected rows before one commit. */
+  repairCronJobs?: (
+    inventory: PluginDoctorCronInventory,
+    changes: readonly PluginDoctorCronChange[],
+  ) => Promise<{ changed: number; backupPath?: string }>;
   /** Non-creating canonical ACP claims for this backend, including incomplete evidence. */
   inspectAcpSessionClaims?: () => Promise<{
     claims: PluginDoctorAcpSessionClaim[];

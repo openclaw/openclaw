@@ -97,6 +97,13 @@ function createAncestorWatcher(
 function observeAncestorWatcher(current: AncestorWatcher): void {
   const { watcher, subscriptions } = current;
   const isCurrent = () => current.watcher === watcher && !current.retiring && !watcher.closed;
+  const publish = (notify: (target: AncestorSubscription) => void) => {
+    for (const target of Array.from(subscriptions)) {
+      if (isCurrent() && subscriptions.has(target)) {
+        notify(target);
+      }
+    }
+  };
   watcher.on("ready", () => {
     // Chokidar can emit ready after failing to install its native watch. Keep
     // that generation failed so a later acquisition retries the physical watch.
@@ -104,35 +111,17 @@ function observeAncestorWatcher(current: AncestorWatcher): void {
       return;
     }
     current.ready = true;
-    for (const target of Array.from(subscriptions)) {
-      if (isCurrent() && subscriptions.has(target)) {
-        target.ready();
-      }
-    }
+    publish((target) => target.ready());
   });
   watcher.on("all", (event: string, changedPath: string) => {
-    if (!isCurrent()) {
-      return;
-    }
-    for (const target of Array.from(subscriptions)) {
-      if (
-        isCurrent() &&
-        subscriptions.has(target) &&
-        (isPathInside(changedPath, target.path) || isPathInside(target.path, changedPath))
-      ) {
+    publish((target) => {
+      if (isPathInside(changedPath, target.path) || isPathInside(target.path, changedPath)) {
         target.changed(event, changedPath);
       }
-    }
+    });
   });
   watcher.on("raw", (event: string, rawPath: unknown, details: unknown) => {
-    if (!isCurrent()) {
-      return;
-    }
-    for (const target of Array.from(subscriptions)) {
-      if (isCurrent() && subscriptions.has(target)) {
-        target.raw(event, rawPath, details);
-      }
-    }
+    publish((target) => target.raw(event, rawPath, details));
   });
   watcher.on("error", (error: unknown) => {
     if (!isCurrent()) {
@@ -141,11 +130,7 @@ function observeAncestorWatcher(current: AncestorWatcher): void {
     current.ready = false;
     const watchError = toErrorObject(error, "Skills ancestor watcher failed");
     current.error = watchError;
-    for (const target of Array.from(subscriptions)) {
-      if (isCurrent() && subscriptions.has(target)) {
-        target.error(watchError, current.observationRoot);
-      }
-    }
+    publish((target) => target.error(watchError, current.observationRoot));
   });
 }
 

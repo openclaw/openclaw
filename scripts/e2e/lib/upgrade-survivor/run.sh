@@ -46,7 +46,7 @@ if [ "$SCENARIO" = "mobile-pairing-reconnect" ]; then
     node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("hex"))'
   )"
 fi
-if [ "$SCENARIO" = "watchos-direct-node" ] || [ "$SCENARIO" = "mobile-pairing-reconnect" ] || [ "$WORKER_CELL" = "1" ]; then
+if [ "$SCENARIO" = "watchos-direct-node" ] || [ "$SCENARIO" = "mobile-pairing-reconnect" ] || [ "$SCENARIO" = "dreaming-cron-doctor" ] || [ "$WORKER_CELL" = "1" ]; then
   unset OPENAI_API_KEY ANTHROPIC_API_KEY GEMINI_API_KEY DISCORD_BOT_TOKEN TELEGRAM_BOT_TOKEN
 else
   export OPENAI_API_KEY="sk-openclaw-upgrade-survivor"
@@ -69,7 +69,7 @@ chmod 700 "$RUNTIME_ROOT"
 export TMPDIR="${OPENCLAW_UPGRADE_SURVIVOR_TMPDIR:-$RUNTIME_ROOT/tmp}"
 export OPENCLAW_TEST_STATE_TMPDIR="${OPENCLAW_UPGRADE_SURVIVOR_TEST_STATE_TMPDIR:-$RUNTIME_ROOT/state-tmp}"
 mkdir -p "$TMPDIR" "$OPENCLAW_TEST_STATE_TMPDIR"
-if [ "$WORKER_CELL" = "1" ]; then
+if [ "$WORKER_CELL" = "1" ] || [ "$SCENARIO" = "dreaming-cron-doctor" ]; then
   export XDG_CACHE_HOME="$RUNTIME_ROOT/xdg-cache"
   export OPENCLAW_SKIP_CRON=1
   export OPENCLAW_SKIP_STARTUP_MODEL_PREWARM=1
@@ -1534,6 +1534,10 @@ update_candidate() {
     update_env+=("OPENCLAW_UPGRADE_SURVIVOR_WORKSHOP_STATE_DIR=$OPENCLAW_STATE_DIR")
     update_env+=("OPENCLAW_UPGRADE_SURVIVOR_WORKSHOP_LEGACY_FIXTURE=$ARTIFACT_ROOT/workshop-legacy-seeded.json")
   fi
+  if [ "$SCENARIO" = "dreaming-cron-doctor" ]; then
+    update_node_options+=" --import=$PWD/scripts/e2e/lib/upgrade-survivor/dreaming-cron.mjs"
+    update_env+=("OPENCLAW_UPGRADE_SURVIVOR_DREAMING_CRON_FIXTURE=$ARTIFACT_ROOT/dreaming-cron-fixture.json")
+  fi
   if [ "$SCENARIO" = "legacy-operator-state" ] && [ "$UPDATE_RESTART_MODE" = "manual" ] &&
     { [ "${baseline_version:-}" = "2026.9.3" ] || [ "${baseline_version:-}" = "2026.9.4" ]; }; then
     update_node_options+=" --import=$PWD/scripts/e2e/lib/upgrade-survivor/legacy-operator-cron-history.mjs"
@@ -1568,6 +1572,11 @@ update_candidate() {
     update_outcome="success"
   else
     echo "openclaw update failed before the recoverable post-core boundary" >&2
+    if [ "$SCENARIO" = "dreaming-cron-doctor" ]; then
+      node scripts/e2e/lib/upgrade-survivor/dreaming-cron.mjs \
+        report-update-failure "$update_json" "$(package_root)" ||
+        echo "Dreaming cron candidate Gateway startup diagnostics unavailable." >&2
+    fi
     local validate_status=0
     openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw config validate --json >"$POST_UPDATE_VALIDATE_JSON" 2>"$POST_UPDATE_VALIDATE_ERR" || validate_status=$?
     echo "post-update config validation probe status=$validate_status" >&2
@@ -2176,6 +2185,44 @@ phase validate-worker-cell validate_worker_cell
 phase reset-run-state reset_run_state
 phase install-baseline install_baseline
 phase initialize-state initialize_state
+if [ "$SCENARIO" = "dreaming-cron-doctor" ]; then
+  if [ "$baseline_spec" != "openclaw@2026.9.6" ] || [ "$CANDIDATE_KIND" != "tarball" ] ||
+    [ "$UPDATE_RESTART_MODE" != "manual" ] || [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_ENABLED" != "0" ]; then
+    echo "dreaming-cron-doctor requires published openclaw@2026.9.6, a candidate tarball, isolated manual restart, and no live provider" >&2
+    exit 2
+  fi
+  phase configure-dreaming-baseline node scripts/e2e/lib/upgrade-survivor/dreaming-cron.mjs configure
+  phase prepare-dreaming-baseline openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" \
+    openclaw doctor --repair --non-interactive >"$BASELINE_DOCTOR_LOG" 2>&1
+  phase resolve-dreaming-candidate resolve_candidate_version
+  # Baseline Doctor must finish before the legacy specimen exists.
+  phase seed-dreaming-cron node scripts/e2e/lib/upgrade-survivor/dreaming-cron.mjs \
+    seed "$(package_root)" "$CANDIDATE_SPEC"
+  phase update-dreaming-candidate update_candidate
+  # Read SQLite directly before any standalone candidate Doctor or Gateway.
+  phase assert-dreaming-update-child node scripts/e2e/lib/upgrade-survivor/dreaming-cron.mjs \
+    assert-updated "$last_update_observation_root" "$(package_root)" "$CANDIDATE_SPEC"
+  if [ "$update_outcome" != "success" ] || [ "$update_repair_required" != "0" ]; then
+    echo "dreaming-cron-doctor requires the original updater to finish without follow-up repair" >&2
+    exit 1
+  fi
+  phase dreaming-cron-repeat-doctor openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" \
+    openclaw doctor --repair --non-interactive >"$DOCTOR_LOG" 2>&1
+  phase assert-dreaming-idempotence node scripts/e2e/lib/upgrade-survivor/dreaming-cron.mjs assert-idempotent
+  phase prepare-dreaming-runtime node scripts/e2e/lib/upgrade-survivor/dreaming-cron.mjs prepare-runtime
+  OPENCLAW_SKIP_CRON=0 phase dreaming-runtime-gateway-start start_gateway
+  phase dreaming-runtime-gateway-probes check_gateway_probes
+  phase wait-dreaming-runtime node scripts/e2e/lib/upgrade-survivor/dreaming-cron.mjs wait-runtime
+  phase reload-dreaming-runtime openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" \
+    openclaw plugins reload memory-core --json \
+    >"$ARTIFACT_ROOT/dreaming-cron-runtime-reload.json" 2>"$ARTIFACT_ROOT/dreaming-cron-runtime-reload.err"
+  phase dreaming-runtime-gateway-stop stop_gateway
+  phase assert-dreaming-runtime node scripts/e2e/lib/upgrade-survivor/dreaming-cron.mjs \
+    assert-runtime "$GATEWAY_LOG"
+  run_completed="1"
+  echo "Dreaming cron survivor passed: published updater child repaired active and inactive partitions, retained a verified backup, repeated Doctor made no cron changes, and the installed Gateway converged despite an authored tagged row."
+  exit 0
+fi
 if [ "$WORKER_CELL" = "1" ]; then
   phase worker-baseline-identity node scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs baseline "$(package_root)"
   if [ "$SCENARIO" = "projects-doctor" ]; then
@@ -2351,6 +2398,11 @@ phase validate-baseline-config validate_baseline_config
 run_missing_load_path_fixture baseline
 phase resolve-candidate resolve_candidate_version
 phase resolve-candidate-install-mode resolve_candidate_install_mode
+if [ "$CANDIDATE_KIND" = "tarball" ] && [ -n "${OPENCLAW_DOCKER_E2E_SELECTED_SHA:-}" ] &&
+  { [ "$SCENARIO" = "base" ] || [ "$SCENARIO" = "sqlite-volume" ]; }; then
+  phase candidate-package-identity node scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs \
+    candidate "$(package_root)" "$CANDIDATE_SPEC"
+fi
 if [ "$SCENARIO" = "missing-configured-plugin-migration" ]; then
   source scripts/e2e/lib/upgrade-survivor/missing-configured-plugin-migration.sh
   run_missing_configured_plugin_migration
@@ -2399,6 +2451,14 @@ if [ "$SCENARIO" = "recovery-cleanup" ]; then
 fi
 run_plugin_fixture_phase configure-plugin-registry configure_plugin_registry
 if [ "$SCENARIO" = "legacy-operator-state" ]; then
+  if [ "$baseline_version" = "2026.9.4" ] && [ "$UPDATE_RESTART_MODE" = "manual" ]; then
+    phase seed-restored-index node scripts/e2e/lib/upgrade-survivor/legacy-operator-restored-index.mjs seed "$(package_root)" "$CANDIDATE_SPEC"
+    phase start-restored-index-baseline start_gateway
+    phase patch-restored-index node scripts/e2e/lib/upgrade-survivor/legacy-operator-restored-index.mjs patch
+    phase stop-restored-index-baseline stop_gateway
+    phase restore-baseline-index node scripts/e2e/lib/upgrade-survivor/legacy-operator-restored-index.mjs restore
+    # Do not restart the published Gateway after restoring stale metadata over its current SQLite state.
+  fi
   phase prepare-schema-expectation prepare_schema_expectation
   phase capture-backup-rollback capture_backup_rollback
   if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
@@ -2418,11 +2478,23 @@ if [ "$SCENARIO" = "legacy-operator-state" ] && [ "$UPDATE_RESTART_MODE" = "manu
     seed "$(package_root)" "$CANDIDATE_SPEC"
 fi
 phase update-candidate update_candidate_for_install_mode
+if [ "$CANDIDATE_KIND" = "tarball" ] && [ -n "${OPENCLAW_DOCKER_E2E_SELECTED_SHA:-}" ] &&
+  { [ "$SCENARIO" = "base" ] || [ "$SCENARIO" = "sqlite-volume" ]; }; then
+  phase installed-package-identity node scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs \
+    installed "$(package_root)" "$CANDIDATE_SPEC"
+fi
+if [ "$SCENARIO" = "legacy-operator-state" ] && [ "$UPDATE_RESTART_MODE" = "manual" ] && [ "$baseline_version" = "2026.9.4" ]; then
+  # Inspect the first hop before any candidate CLI can repair a failed migration.
+  phase assert-restored-index-update node scripts/e2e/lib/upgrade-survivor/legacy-operator-restored-index.mjs post-update "$(package_root)"
+fi
 if [ "$SCENARIO" = "legacy-operator-state" ] && [ "$UPDATE_RESTART_MODE" = "manual" ] &&
   { [ "${baseline_version:-}" = "2026.9.3" ] || [ "${baseline_version:-}" = "2026.9.4" ]; }; then
   # Native read-only inspection precedes every candidate CLI/Gateway probe.
   phase assert-retained-cron-doctor node scripts/e2e/lib/upgrade-survivor/legacy-operator-cron-history.mjs \
     assert "$last_update_observation_root"
+fi
+if [ "$SCENARIO" = "legacy-operator-state" ] && [ "$UPDATE_RESTART_MODE" = "manual" ] && [ "$baseline_version" = "2026.9.4" ]; then
+  phase reimport-restored-index node scripts/e2e/lib/upgrade-survivor/legacy-operator-restored-index.mjs candidate-import "$(package_root)"
 fi
 run_missing_load_path_fixture post-update
 if [ "$SCENARIO" = "legacy-operator-state" ]; then
@@ -2547,6 +2619,9 @@ if [ "$LIVE_ENABLED" = "1" ]; then
 fi
 if [ "$SCENARIO" = "legacy-operator-state" ]; then
   phase verify-backup-rollback verify_backup_rollback
+  if [ "$baseline_version" = "2026.9.4" ] && [ "$UPDATE_RESTART_MODE" = "manual" ]; then
+    phase assert-restored-index-rollback node scripts/e2e/lib/upgrade-survivor/legacy-operator-restored-index.mjs rollback "$ARTIFACT_ROOT/backup-rollback.json"
+  fi
 fi
 
 run_completed="1"

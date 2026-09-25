@@ -78,6 +78,7 @@ import {
 import { saveSubagentRegistryChangesToSqlite } from "./subagent-registry.store.sqlite.js";
 import {
   registerProvisionalKillCompletionSettlementTest,
+  registerReplacedGenerationTaskSettlementTest,
   registerRestoredRunningTaskSettlementTest,
   registerRestoredTaskSettlementTest,
 } from "./subagent-registry.task-settlement.test-support.js";
@@ -1069,6 +1070,8 @@ describe("subagent registry seam flow", () => {
     mocks,
     hydrateAndActivateRegistry,
   });
+
+  registerReplacedGenerationTaskSettlementTest({ getRegistry: () => mod, mocks });
 
   it.each([
     { name: "exact retired orphan", retired: true, sameRun: true, aborted: false, waits: false },

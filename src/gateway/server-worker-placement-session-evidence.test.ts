@@ -393,6 +393,9 @@ describe("worker placement session evidence", () => {
         const read = vi.fn(async () => ({
           result: { status: "unavailable" as const },
           assertCurrent() {},
+          followRegistration() {
+            throw new Error("Unavailable placement registry reads cannot follow registration");
+          },
         }));
         const registry = vi
           .spyOn(registryListing, "prepareOpenClawAgentDatabaseRegistrySnapshotRead")

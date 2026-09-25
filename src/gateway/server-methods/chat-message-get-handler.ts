@@ -14,6 +14,7 @@ import {
   projectChatDisplayMessage,
 } from "../chat-display-projection.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
+import { projectOperatorModelRead } from "../operator-model-presentation.js";
 import { MAX_PAYLOAD_BYTES } from "../server-constants.js";
 import { readChatHistoryMessageId } from "../session-history-tail.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
@@ -244,7 +245,10 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
       true,
       jsonUtf8Bytes(projected) > MAX_PAYLOAD_BYTES - 1024
         ? { ok: false, unavailableReason: "oversized" }
-        : { ok: true, message: projected },
+        : projectOperatorModelRead(
+            { context, client, agentId: sessionAgentId },
+            { ok: true, message: projected },
+          ),
     );
   },
 };
