@@ -3,8 +3,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import * as providerPolicy from "../plugins/provider-policy-surface.js";
 import { orderModelCatalogForPicker } from "./model-catalog-order.js";
-import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { buildPreparedModelCatalogSnapshot } from "./model-catalog.js";
+import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { createModelVisibilityPolicy } from "./model-visibility-policy.js";
 import { prepareCapturedRuntimeFacts } from "./prepared-model-runtime.configured-catalog.js";
 import type { PreparedConfiguredRuntimeModel } from "./prepared-model-runtime.types.js";
@@ -75,7 +75,9 @@ describe("configured catalog registry composition", () => {
       const expected = manifest
         ? ["z-strong", "m-current", "a-small"]
         : ["a-small", "m-current", "z-strong"];
-      expect(orderModelCatalogForPicker(modelCatalog.entries).map(({ id }) => id)).toEqual(expected);
+      expect(orderModelCatalogForPicker(modelCatalog.entries).map(({ id }) => id)).toEqual(
+        expected,
+      );
       expect(orderModelCatalogForPicker(refreshed.entries).map(({ id }) => id)).toEqual(expected);
     },
   );
