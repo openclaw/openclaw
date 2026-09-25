@@ -520,6 +520,48 @@ function runReleaseFallbackHistoryFixture(options: {
     console.info("fallback-fixture-cleanup", JSON.stringify({ ...options, remaining: 0 }));
   }
 }
+describe("release fast lane label", () => {
+  it("reads PR labels without subscribing to label-change events", () => {
+    const workflow = readCiWorkflow();
+    const manifestStep = workflow.jobs.preflight.steps.find(
+      (step: WorkflowStep) => step.name === "Build CI manifest",
+    );
+    expect(manifestStep.env.OPENCLAW_CI_RELEASE_FAST_LANE_LABEL).toBe(
+      "${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'release-fast-lane') && 'true' || 'false' }}",
+    );
+    expect(workflow.jobs.preflight.outputs.release_fast_lane).toBe(
+      "${{ steps.manifest.outputs.release_fast_lane }}",
+    );
+    expect(workflow.on.pull_request.types).toEqual([
+      "opened",
+      "reopened",
+      "synchronize",
+      "ready_for_review",
+      "converted_to_draft",
+    ]);
+  });
+
+  it("shows admission at the gate while preserving all 32 lane results", () => {
+    const gate = readCiWorkflow().jobs["ci-gate"];
+    const step = gate.steps.find(
+      (candidate: WorkflowStep) => candidate.name === "Verify selected CI lanes",
+    );
+    expect(step.env.RELEASE_FAST_LANE).toBe("${{ needs.preflight.outputs.release_fast_lane }}");
+    expect(
+      step.run.startsWith(
+        'set -euo pipefail\necho "release fast lane: ${RELEASE_FAST_LANE:-false}"\n',
+      ),
+    ).toBe(true);
+    const rows: string[] = step.env.JOB_RESULTS.trim().split("\n");
+    expect(rows).toHaveLength(32);
+    expect(rows.map((row) => row.split("=")[0])).toEqual(gate.needs);
+    for (const row of rows) {
+      const name = row.split("=")[0];
+      expect(row).toContain(`${name}=\${{ needs.${name}.result }}|`);
+    }
+  });
+});
+
 describe("ci workflow guards", () => {
   it("isolates mutations between workflow fixtures", () => {
     const workflow = readCiWorkflow();

@@ -661,6 +661,31 @@ it still explicitly cancels queued non-release runs, but no longer reserves
 capacity or pauses newly arriving work. Runner capacity and normal GitHub Actions
 queueing determine when release and CI jobs start.
 
+### Release tooling fast lane
+
+Add the `release-fast-lane` label to a pull request before the push that should
+use it; PR CI reads labels from the triggering event, and label events do not
+start CI. For an already-pushed head, `gh pr ready --undo` then `gh pr ready`
+re-triggers PR CI with the current labels. The label narrows `openclaw/ci-gate`
+only on a canonical pull request whose changed paths are all release tooling:
+`.github/workflows/**`, `scripts/**`, `test/scripts/**`,
+`.agents/skills/release-*/**`, `docs/reference/RELEASING.md`, or independently
+checked documentation. Admitted runs keep `security-fast`, `check-shard` (lint,
+prod/test types, guards, dependencies, npm lock), `check-docs` when docs
+changed, and the changed Node rows; the compact packing-policy full-plan proof
+for planner edits is relaxed to those rows. Contracts, baseline ratchets,
+bundled protocol, Bun launcher, additional checks, build artifacts (unless a
+changed row needs `dist`), Control UI, Windows, macOS, iOS, Android, i18n, and
+skills lanes are skipped and listed under "Release fast lane" in the preflight
+step summary. A declined label (out-of-scope path, global Node input, fork,
+push, dispatch, docs-only) logs a warning and leaves ordinary selection
+untouched. The gate stays complete: every selected lane must pass, and hourly
+full main CI covers the merged result. ClawSweeper review is advisory for
+labelled PRs: record an open P1 in the PR before landing. `scripts/pr merge-run`
+still waits for a completed review, so use
+`gh pr merge <n> --squash --admin --delete-branch --match-head-commit <sha>` when
+that wait blocks the release window.
+
 ## Stable main closeout
 
 Stable publication is not complete until `main` carries the actual shipped release state.

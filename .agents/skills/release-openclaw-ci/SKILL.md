@@ -48,6 +48,11 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   release branch. If the required main landing policy is blocked by unrelated
   main failures, report that blocker and keep independent release work moving
   instead of healing broader main.
+- Land tooling-only fixes on `main` with the `release-fast-lane` label added
+  before the push (RELEASING.md "Release tooling fast lane"): `openclaw/ci-gate`
+  then runs lint, types, guards, dependencies, docs, and the changed Node rows
+  only. ClawSweeper findings are advisory for that label; record open P1s in
+  the PR and use the admin merge when the completed-review wait blocks landing.
 - `OPENCLAW_RELEASE_RUNNER_GROUP` optionally routes validation parents and workers
   to reserved capacity with unchanged labels. Configure eligible runners and repo
   access first; unset preserves ordinary routing. Shared workers inherit the
