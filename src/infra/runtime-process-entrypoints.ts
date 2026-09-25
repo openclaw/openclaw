@@ -21,6 +21,7 @@ export const runtimeProcessEntrypoints = {
   nativeHookRelayClient: runtimeProcessEntrypoint("agents/harness/native-hook-relay-client.worker"),
   computerHost: runtimeProcessEntrypoint("gateway/desktop/computer.worker"),
   imageProcessor: runtimeProcessEntrypoint("media/image-processor.worker"),
+  attachmentProcessor: runtimeProcessEntrypoint("media/attachment-processor.worker"),
   gitOperations: runtimeProcessEntrypoint("infra/git-operation.worker"),
   fsSafeCopy: runtimeProcessEntrypoint("infra/fs-safe-copy.worker"),
   sharedStateStore: runtimeProcessEntrypoint("state/openclaw-state.worker"),
