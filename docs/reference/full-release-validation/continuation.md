@@ -135,9 +135,9 @@ operations and never run as an automatic response to a test outcome.
 
 Published artifacts may contain empty `knownFlakyJobs` and `automaticRetries`
 fields. Readers retain their original plan digest and reject nonempty allowances
-or retry records. Historical advisory descriptions must match the recorded child
-jobs; current qualification still requires passing outcomes or the existing
-explicit operator waiver.
+or retry records. Current qualification requires successful selected child
+results. Evidence carrying retired waivers or advisory failure allowances must
+be replaced with a fresh qualifying run; it cannot authorize publication.
 
 ### Read publication observations
 
