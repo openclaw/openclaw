@@ -1,4 +1,5 @@
 import { expect, it, onTestFinished, vi } from "vitest";
+import { withTestTimeout } from "../../test/helpers/promise.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   setGatewayPluginMetadataSnapshot,
@@ -14,6 +15,7 @@ import {
   getPluginCache,
   getProcessPluginCache,
   retainPluginCache,
+  retirePluginCache,
   withPluginCache,
 } from "./plugin-cache.js";
 import { PluginInstance } from "./plugin-instance.js";
@@ -262,18 +264,14 @@ it.each([false, true])(
             },
     );
     owner.beginClose();
-    let published = false;
-    const publication = owner.waitForRetirement().then(() => {
-      published = true;
-    });
+    const publication = owner.waitForRetirement();
     let closing: Promise<unknown> | undefined;
     try {
-      await expect.poll(() => published).toBe(true);
+      await withTestTimeout(publication, 1_000, "Publication waited for its retained consumer");
       expect(dispose).not.toHaveBeenCalled();
       if (releasedBeforeClose) {
         release();
-        await expect.poll(() => cache.retirement).toBeDefined();
-        await cache.retirement;
+        await retirePluginCache(cache);
         expect(dispose).toHaveBeenCalledOnce();
       }
       const finalEntered = createDeferredCore();
