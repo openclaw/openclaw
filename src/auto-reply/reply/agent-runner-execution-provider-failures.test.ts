@@ -92,7 +92,7 @@ describe("executeAgentTurn: provider failures", () => {
     expect(result.kind).toBe("success");
     if (result.kind === "success") {
       expect(result.runResult.payloads?.[0]).toBe(payload);
-      expect(getReplyPayloadMetadata(result.runResult.payloads![0])).toMatchObject({
+      expect(getReplyPayloadMetadata(payload)).toMatchObject({
         toolFailureExplanation: true,
         assistantTranscriptOwned: true,
       });
