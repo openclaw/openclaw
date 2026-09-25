@@ -135,14 +135,24 @@ files on Node (`chat-pane-retained-presentation.test.ts` and
 `usage-page-details.test.ts`) and runs the remaining files on Bun.
 Other families retain Node until they pass on the pinned fork within their
 existing CI resource budgets. Precise PR targets use the existing
-test-project planner to find their owners. Mixed or ambiguous selections retain
-Node, and no tests are removed from the selected inventory.
+test-project planner to find their owners. The runtime owner admits only qualified
+configs, exact files, and partitions; ambiguous selections retain Node. No tests
+are removed from the selected inventory.
 
 Worktree removal recovery (`src/agents/worktrees/service.removal-recovery.test.ts`)
 also supports Bun when it is the entire exact selection in `agents-support`.
 Mixed and broad PR selections retain their original Node invocation. Dual-runtime
 validation keeps that complete Node selection and adds only the qualified recovery
 file when the original include patterns select it.
+
+The gateway-client leaf config also supports Bun. Its existing ordered
+gateway-core/gateway-client stripes run the core portion on Node and the client
+portion on Bun, sequentially in the original worker slot. Both retain the original
+include patterns and worker limits. Explicit project-parallel overrides other
+than one retain the complete Node stripe. Dual-runtime validation keeps the
+complete original stripe on Node and adds the client portion on Bun. The shared
+Vitest config resolves `ws` to the installed package so its imports and mocks use
+the same module identity on both runtimes.
 
 Pull requests and their release-gate fallback run compatible selections on Bun.
 Ordinary manual CI, including Full Release Validation's `normal_ci` child, runs
