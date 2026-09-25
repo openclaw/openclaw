@@ -61,51 +61,55 @@ export function resolveRatchetBase(root: string, options: { base?: string; stage
     return resolved ?? null;
   }
 
+  const resolvedSha = readGitText(root, ["rev-parse", resolved]).trim();
+  const headParents = readGitText(root, ["rev-list", "--parents", "-n", "1", "HEAD"])
+    .trim()
+    .split(/\s+/u)
+    .slice(1);
+  if (headParents.includes(resolvedSha)) {
+    // CI PR checkouts verify this exact prepared base as the first merge parent.
+    // Prefer the verified parent before asking merge-base to walk a shallow graph.
+    return resolved;
+  }
+
   // Branches own their grandfathered debt from the fork. Comparing against a
   // moving base tip turns unrelated cleanup there into a local expansion.
-  // A supplied base can also be unreachable in a fork (for example when the
-  // workflow reports an upstream commit that is not in the fork's history).
-  // Never compare ratchet debt across unrelated histories: that turns existing
-  // assertions into false "new" violations.
   try {
-    return readGitText(root, ["merge-base", "HEAD", resolved]).trim();
+    const mergeBase = readGitText(root, ["merge-base", "HEAD", resolved]).trim();
+    if (mergeBase) {
+      return mergeBase;
+    }
   } catch {
-    // Shallow PR checkouts can contain a prepared base as a direct merge parent
-    // while Git cannot walk a merge-base through the shallow boundary.
-    try {
-      for (const parent of ["HEAD^1", "HEAD^2"]) {
-        if (
-          readGitText(root, ["rev-parse", "--verify", parent + "^{commit}"]).trim() ===
-          readGitText(root, ["rev-parse", resolved]).trim()
-        ) {
-          return resolved;
-        }
-      }
-    } catch {
-      // Fall through to the disconnected-history recovery below.
-    }
-
-    // CI can report a base outside the checkout's history (for example after a
-    // fork history is recreated). Prefer the second parent of the most recent
-    // first-parent merge: a branch-sync merge preserves the complete local change
-    // range, unlike HEAD^1 which can already contain an earlier baseline expansion.
-    try {
-      const merge = readGitText(root, [
-        "rev-list",
-        "--first-parent",
-        "--merges",
-        "-n",
-        "1",
-        "HEAD",
-      ]).trim();
-      if (merge) {
-        return readGitText(root, ["rev-parse", merge + "^2"]).trim();
-      }
-    } catch {
-      // No usable merge parent means there is no trustworthy disconnected-history base.
-    }
-    return null;
+    // Continue with disconnected-history recovery below.
   }
+
+  // A disconnected base is recoverable only when the history records that exact
+  // base as the second parent of a first-parent sync merge. Do not guess from the
+  // newest merge: feature/maintenance merges are equally valid Git merges.
+  try {
+    const merges = readGitText(root, [
+      "rev-list",
+      "--first-parent",
+      "--merges",
+      "--parents",
+      "HEAD",
+    ])
+      .trim()
+      .split(/\r?\n/u)
+      .filter(Boolean);
+    for (const line of merges) {
+      const parents = line.split(/\s+/u);
+      if (parents.length >= 3 && parents[2] === resolvedSha) {
+        return resolved;
+      }
+    }
+  } catch {
+    // Fall through to the explicit failure below.
+  }
+
+  throw new Error(
+    `Ratchet base ${resolved} (${resolvedSha}) is disconnected from HEAD; no verified sync merge was found.`,
+  );
 }
 
 export function loadRatchetSnapshot<T>(
