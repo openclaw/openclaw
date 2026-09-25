@@ -876,7 +876,7 @@ extensions/qa-lab/src/cron-run-wait.ts	1
 extensions/qa-lab/src/discovery-eval.ts	1
 extensions/qa-lab/src/docker-up.runtime.ts	1
 extensions/qa-lab/src/evidence-gallery.ts	2
-extensions/qa-lab/src/fixture-utils.ts	9
+extensions/qa-lab/src/fixture-utils.ts	5
 extensions/qa-lab/src/gateway-child-artifacts.ts	1
 extensions/qa-lab/src/gateway-process-boundary.ts	1
 extensions/qa-lab/src/harness-parity.ts	1
@@ -888,7 +888,7 @@ extensions/qa-lab/src/live-transports/discord/discord-live.runtime.ts	1
 extensions/qa-lab/src/live-transports/discord/scenario-environment.ts	3
 extensions/qa-lab/src/live-transports/matrix/adapter.runtime.ts	3
 extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-environment.ts	7
-extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-approval.ts	3
+extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-approval.ts	2
 extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-account.ts	7
 extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-config.ts	1
 extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-gateway.ts	2
@@ -903,7 +903,7 @@ extensions/qa-lab/src/live-transports/matrix/substrate/config.ts	8
 extensions/qa-lab/src/live-transports/matrix/substrate/e2ee-client.ts	8
 extensions/qa-lab/src/live-transports/matrix/substrate/events.ts	6
 extensions/qa-lab/src/live-transports/matrix/substrate/fault-proxy.ts	1
-extensions/qa-lab/src/live-transports/matrix/substrate/recording-proxy.ts	4
+extensions/qa-lab/src/live-transports/matrix/substrate/recording-proxy.ts	3
 extensions/qa-lab/src/live-transports/matrix/substrate/request.ts	3
 extensions/qa-lab/src/live-transports/shared/credential-lease.runtime.ts	1
 extensions/qa-lab/src/live-transports/shared/live-approval-result.ts	2
@@ -934,7 +934,7 @@ extensions/qa-lab/src/model-catalog.runtime.ts	2
 extensions/qa-lab/src/multipass.runtime.ts	4
 extensions/qa-lab/src/parity-shared.ts	1
 extensions/qa-lab/src/posix-process-group.ts	3
-extensions/qa-lab/src/providers/aimock/server.ts	6
+extensions/qa-lab/src/providers/aimock/server.ts	5
 extensions/qa-lab/src/providers/index.ts	1
 extensions/qa-lab/src/providers/live-config.ts	1
 extensions/qa-lab/src/providers/mock-openai/mock-anthropic-wire.ts	1
@@ -945,7 +945,6 @@ extensions/qa-lab/src/providers/mock-openai/mock-openai-events.ts	1
 extensions/qa-lab/src/providers/mock-openai/mock-openai-input.ts	6
 extensions/qa-lab/src/providers/mock-openai/mock-openai-responses-websocket.ts	1
 extensions/qa-lab/src/providers/mock-openai/server.ts	6
-extensions/qa-lab/src/providers/shared/auth-store.ts	1
 extensions/qa-lab/src/qa-transport.ts	1
 extensions/qa-lab/src/run-config.ts	2
 extensions/qa-lab/src/runtime-parity.ts	3
@@ -958,17 +957,17 @@ extensions/qa-lab/src/suite-launch.runtime.ts	2
 extensions/qa-lab/src/suite-planning.ts	2
 extensions/qa-lab/src/suite-run-standard.ts	1
 extensions/qa-lab/src/suite-runtime-agent-media.ts	3
-extensions/qa-lab/src/suite-runtime-agent-process.ts	7
+extensions/qa-lab/src/suite-runtime-agent-process.ts	6
 extensions/qa-lab/src/suite-runtime-agent-session.ts	5
 extensions/qa-lab/src/suite-runtime-agent-tools.ts	1
 extensions/qa-lab/src/suite-runtime-gateway.ts	2
 extensions/qa-lab/src/suite-summary.ts	4
 extensions/qa-lab/src/test-file-scenario-script-evidence.ts	2
 extensions/qa-lab/src/test-file-scenario-vitest-report.ts	1
-extensions/qa-lab/src/tool-search-gateway.fixture.ts	13
+extensions/qa-lab/src/tool-search-gateway.fixture.ts	4
 extensions/qa-lab/src/web-runtime.ts	1
-extensions/qa-lab/web/src/app.ts	39
-extensions/qa-lab/web/src/capture-saved-view.ts	7
+extensions/qa-lab/web/src/app.ts	7
+extensions/qa-lab/web/src/capture-saved-view.ts	1
 extensions/qa-lab/web/src/http.ts	1
 extensions/qa-lab/web/src/ui-render-capture-controls.ts	1
 extensions/qa-lab/web/src/ui-render-utils.ts	1

@@ -87,12 +87,6 @@ function parseQaRunnerModelOptionsOutput(stdout: string): QaRunnerModelOption[] 
   return selectQaRunnerModelOptions(Array.isArray(rows) ? rows.filter(isModelRow) : []);
 }
 
-const CATALOG_ABORT_ERROR_MESSAGE = "qa model catalog aborted";
-
-function createCatalogAbortError() {
-  return new Error(CATALOG_ABORT_ERROR_MESSAGE);
-}
-
 export async function loadQaRunnerModelOptions(params: { repoRoot: string; signal?: AbortSignal }) {
   const tempRoot = await fs.mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-qa-model-catalog-"),
@@ -153,7 +147,7 @@ export async function loadQaRunnerModelOptions(params: { repoRoot: string; signa
       params.signal?.aborted ||
       (result.termination === "signal" && !result.outputLimitExceeded)
     ) {
-      throw createCatalogAbortError();
+      throw new Error("qa model catalog aborted");
     }
     if (result.outputLimitExceeded || result.stdoutTruncatedBytes) {
       throw new Error(

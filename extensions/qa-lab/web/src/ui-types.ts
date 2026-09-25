@@ -1,5 +1,7 @@
 import type {
   CaptureQueryPreset as StoredCaptureQueryPreset,
+  CaptureQueryRow,
+  DebugProxyCaptureStore,
   CaptureSessionSummary,
 } from "openclaw/plugin-sdk/proxy-capture";
 import type {
@@ -21,6 +23,7 @@ import type {
   QaEvidenceProducerContext,
   QaEvidenceProducerContextFile,
 } from "../../shared/evidence-gallery-types.js";
+import type { QaRunnerModelOption } from "../../src/model-catalog.runtime.js";
 
 export type ReportEnvelope = {
   report: QaLabLatestReport | null;
@@ -75,13 +78,7 @@ export type RunnerSelection = QaLabRunSelection;
 export type RunnerResolvedPlan = QaLabResolvedRunPlan;
 type RunnerSnapshot = QaLabRunnerSnapshot;
 
-export type RunnerModelOption = {
-  key: string;
-  name: string;
-  provider: string;
-  input: string;
-  preferred: boolean;
-};
+export type RunnerModelOption = QaRunnerModelOption;
 
 export type OutcomesEnvelope = {
   run: ScenarioRun | null;
@@ -122,24 +119,10 @@ export type CaptureEventsEnvelope = {
 };
 
 export type CaptureQueryEnvelope = {
-  rows: Array<Record<string, string | number | null>>;
+  rows: CaptureQueryRow[];
 };
 
-type CaptureObservedDimension = {
-  value: string;
-  count: number;
-};
-
-type CaptureCoverageSummary = {
-  sessionId: string;
-  totalEvents: number;
-  unlabeledEventCount: number;
-  providers: CaptureObservedDimension[];
-  apis: CaptureObservedDimension[];
-  models: CaptureObservedDimension[];
-  hosts: CaptureObservedDimension[];
-  localPeers: CaptureObservedDimension[];
-};
+type CaptureCoverageSummary = ReturnType<DebugProxyCaptureStore["summarizeSessionCoverage"]>;
 
 export type CaptureCoverageEnvelope = {
   coverage: CaptureCoverageSummary;
@@ -206,7 +189,7 @@ export type UiState = {
   captureSessions: CaptureSessionSummary[];
   captureEvents: CaptureEventView[];
   captureQueryPreset: CaptureQueryPreset;
-  captureQueryRows: Array<Record<string, string | number | null>>;
+  captureQueryRows: CaptureQueryRow[];
   captureKindFilter: string[];
   captureProviderFilter: string[];
   captureHostFilter: string[];
