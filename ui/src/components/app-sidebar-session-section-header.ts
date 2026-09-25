@@ -5,6 +5,7 @@ import { renderSidebarReorderMenu } from "./sidebar-reorder.ts";
 export function renderSidebarSessionSectionHeader(params: {
   sectionId: string;
   content: TemplateResult;
+  status?: TemplateResult;
   draggable?: boolean;
   disabledReason?: string;
   onStartDrag: (sectionId: string) => void;
@@ -61,6 +62,7 @@ export function renderSidebarSessionSectionHeader(params: {
       <span class="sidebar-session-group-drag-handle" aria-hidden="true"></span>
       ${params.content}
       ${draggable && params.reorder ? renderSidebarReorderMenu({ ...params.reorder, kind: "section" }) : nothing}
+      ${params.status ? html`<span class="sidebar-session-group-status">${params.status}</span>` : nothing}
     </div>
   `;
 }

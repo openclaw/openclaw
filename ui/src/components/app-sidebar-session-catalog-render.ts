@@ -195,7 +195,6 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
     const sectionClass = [
       "sidebar-recent-sessions__group",
       "sidebar-recent-sessions__group--zone-coding",
-      canCreateSession ? "sidebar-recent-sessions__group--catalog-can-create" : "",
       collapsed ? "sidebar-recent-sessions__group--collapsed" : "",
       params.draggingSectionId === sectionId ? "sidebar-recent-sessions__group--dragging" : "",
       params.sectionDropTarget?.sectionId === sectionId
@@ -226,6 +225,18 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
       >
         ${renderSidebarSessionSectionHeader({
           sectionId,
+          status: html`${
+            hasError || (collapsed && rows.length > 0)
+              ? html`<span
+                  class="sidebar-session-group-count ${
+                    hasError ? "sidebar-session-group-count--error" : ""
+                  }"
+                  data-session-catalog-error=${hasError ? catalog.id : nothing}
+                  aria-hidden="true"
+                  >${hasError ? icons.alertTriangle : rows.length}</span
+                >`
+              : nothing
+          }`,
           disabledReason: params.sectionDragDisabledReason,
           onStartDrag: params.onStartSectionDrag,
           onFinishDrag: params.onFinishSectionDrag,
@@ -271,19 +282,6 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
               </span>
               ${renderHoverMarquee(catalog.label, "sidebar-recent-sessions__label-text")}
               ${renderCatalogHeaderStatus(hasActiveRun, hasUnread)}
-              <span class="sidebar-session-catalog-action-reserve" aria-hidden="true"></span>
-              ${
-                hasError || (collapsed && rows.length > 0)
-                  ? html`<span
-                      class="sidebar-session-group-count ${
-                        hasError ? "sidebar-session-group-count--error" : ""
-                      }"
-                      data-session-catalog-error=${hasError ? catalog.id : nothing}
-                      aria-hidden="true"
-                      >${hasError ? icons.alertTriangle : rows.length}</span
-                    >`
-                  : nothing
-              }
             </button>
             <button
               type="button"
@@ -314,7 +312,7 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
                     disabledReason: params.newSessionDisabledReason,
                     onOpen: params.onOpenNewSession,
                   })
-                : html`<span class="sidebar-session-catalog-new-spacer" aria-hidden="true"></span>`
+                : nothing
             }
           `,
         })}

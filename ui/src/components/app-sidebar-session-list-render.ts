@@ -255,6 +255,7 @@ export function renderSessionSection(params: {
         section.renderHeader
           ? renderSidebarSessionSectionHeader({
               sectionId: section.id,
+              status: headerStatus,
               draggable: !derivedSection,
               disabledReason: groupWriteAccess.allowed ? undefined : groupWriteAccess.reason,
               onStartDrag: (sectionId) => host.sessionOrganizer.startSidebarSectionDrag(sectionId),
@@ -298,8 +299,7 @@ export function renderSessionSection(params: {
                           aria-describedby=${presenceId ?? nothing}
                         >
                           ${ownerAvatar}${labelText}
-                        </button>
-                        ${headerStatus}`
+                        </button> `
                     : html`<button
                         type="button"
                         class="sidebar-session-group-toggle"
@@ -308,7 +308,7 @@ export function renderSessionSection(params: {
                         title=${section.project?.path ?? nothing}
                         @click=${() => host.toggleSection(section.id)}
                       >
-                        ${chevron}${ownerAvatar}${labelText}${headerStatus}
+                        ${chevron}${ownerAvatar}${labelText}
                       </button>`
                 }
                 ${
