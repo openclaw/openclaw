@@ -322,14 +322,20 @@ describe("check-max-lines-ratchet", () => {
     expect(main(root, ["--base", "origin/main"])).toBe(0);
   });
 
-  it("falls back to main when no merge base is available", () => {
+  it("keeps baseline growth rejection when no merge base is available", () => {
     const root = tempDirs.make("openclaw-max-lines-disconnected-", os.tmpdir());
     fs.mkdirSync(path.join(root, "config"), { recursive: true });
     fs.mkdirSync(path.join(root, "src"), { recursive: true });
+    fs.writeFileSync(path.join(root, "config/max-lines-baseline.txt"), "");
+    fs.writeFileSync(path.join(root, "src/a.ts"), "export const a = 1;\n");
+    commitFixture(root, "release base");
+    git(root, ["branch", "-m", "release"]);
+
     fs.writeFileSync(path.join(root, "config/max-lines-baseline.txt"), "src/a.ts\n");
     fs.writeFileSync(path.join(root, "src/a.ts"), "/* oxlint-disable max-lines */\n");
-    commitFixture(root, "release");
-    git(root, ["branch", "-m", "release"]);
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "grow release baseline"]);
+
     git(root, ["checkout", "--orphan", "main"]);
     fs.writeFileSync(path.join(root, "config/max-lines-baseline.txt"), "");
     fs.writeFileSync(path.join(root, "src/a.ts"), "export const a = 1;\n");
