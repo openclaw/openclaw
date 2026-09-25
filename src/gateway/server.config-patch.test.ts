@@ -4,6 +4,23 @@ import fsNode from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import {
+  configRpcWorkspacePath,
+  getConfigHash,
+  getCurrentConfigObject,
+  installConfigWriteGatewayHooks,
+  installReadOnlyConfigGatewayHooks,
+  installSharedConfigWriteGatewayHooks,
+  requireClient,
+  requireConfigObject,
+  resetTempDir,
+  restoreConfigFileForTest,
+  rpcReq,
+  sendConfigApply,
+  sendConfigSet,
+  writeJsonFile,
+  writeUnresolvedAuthProfileTokenRef,
+} from "../../test/helpers/gateway/config-rpc-gateway.js";
 import { withTestTimeout } from "../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
@@ -23,23 +40,6 @@ import {
   makeRouteBinding,
   withConfigFileFixture,
 } from "./server.config-patch.test-support.js";
-import {
-  configRpcWorkspacePath,
-  getConfigHash,
-  getCurrentConfigObject,
-  installConfigWriteGatewayHooks,
-  installReadOnlyConfigGatewayHooks,
-  installSharedConfigWriteGatewayHooks,
-  requireClient,
-  requireConfigObject,
-  resetTempDir,
-  restoreConfigFileForTest,
-  rpcReq,
-  sendConfigApply,
-  sendConfigSet,
-  writeJsonFile,
-  writeUnresolvedAuthProfileTokenRef,
-} from "./server.config-rpc-gateway.test-support.js";
 
 const reloadBarrier = vi.hoisted(() => ({ wait: undefined as Promise<void> | undefined }));
 
