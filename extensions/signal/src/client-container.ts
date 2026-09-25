@@ -794,4 +794,3 @@ export async function containerRpcRequest<T = unknown>(
       throw new Error(`Unsupported container RPC method: ${method}`);
   }
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

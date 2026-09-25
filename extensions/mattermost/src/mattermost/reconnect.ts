@@ -41,7 +41,6 @@ export async function runWithReconnect(
     let error: unknown;
     try {
       await connectFn();
-      retryDelay = initialDelayMs;
     } catch (err) {
       if (opts.abortSignal?.aborted) {
         return;
@@ -52,6 +51,9 @@ export async function runWithReconnect(
     }
     if (opts.abortSignal?.aborted) {
       return;
+    }
+    if (outcome === "resolved") {
+      retryDelay = initialDelayMs;
     }
     const delayMs = withJitter(retryDelay, jitterRatio, random);
     const shouldReconnect =
