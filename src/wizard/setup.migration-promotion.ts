@@ -1,9 +1,10 @@
 // Setup migration promotion owns durable journals, rollback, and path validation.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { probePathCaseInsensitiveSync } from "@openclaw/fs-safe/advanced";
+import { isNotFoundPathError, isPathInside } from "@openclaw/fs-safe/path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readDurableJsonFile, writeJsonAtomic } from "../infra/json-files.js";
-import { isNotFoundPathError, isPathInside } from "../infra/path-guards.js";
 import type { MigrationApplyResult, MigrationPlan } from "../plugins/types.js";
 import { hashSetupMigrationConfig } from "./setup.migration-canonical.js";
 import { SetupMigrationTargetChangedError } from "./setup.migration-snapshot.js";
@@ -384,25 +385,6 @@ export async function moveRecordedEmptyTarget(component: PromotionComponent): Pr
   }
 }
 
-async function usesCaseInsensitivePaths(directory: string): Promise<boolean> {
-  const probe = await fs.mkdtemp(path.join(directory, ".openclaw-case-probe-"));
-  try {
-    const alias = path.join(path.dirname(probe), path.basename(probe).toUpperCase());
-    if (alias === probe) {
-      return false;
-    }
-    await fs.access(alias);
-    return true;
-  } catch (error) {
-    if (isNotFoundPathError(error)) {
-      return false;
-    }
-    throw error;
-  } finally {
-    await fs.rm(probe, { recursive: true, force: true });
-  }
-}
-
 async function usesNormalizationInsensitivePaths(directory: string): Promise<boolean> {
   const probe = await fs.mkdtemp(path.join(directory, ".openclaw-normalization-é-"));
   try {
@@ -433,9 +415,15 @@ async function canonicalizePromotionPath(
       const probeDirectory = (await fs.stat(ancestor)).isDirectory()
         ? ancestor
         : path.dirname(ancestor);
+      const caseInsensitive = probePathCaseInsensitiveSync(
+        path.join(probeDirectory, ".openclaw-migration-target"),
+      );
+      if (caseInsensitive === undefined) {
+        throw new Error(`Could not determine filesystem case behavior for ${candidate}.`);
+      }
       return {
         path: path.join(ancestor, ...suffix.toReversed()),
-        caseInsensitive: await usesCaseInsensitivePaths(probeDirectory),
+        caseInsensitive,
         normalizationInsensitive: await usesNormalizationInsensitivePaths(probeDirectory),
       };
     } catch (error) {

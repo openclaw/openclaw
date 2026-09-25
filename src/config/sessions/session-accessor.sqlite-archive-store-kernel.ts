@@ -10,6 +10,7 @@ import {
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import { resolveRegisteredSqliteTranscriptArchiveName } from "./session-accessor.sqlite-archive-artifact.js";
 import type {
+  MaterializedSessionStateDeletePlan,
   TranscriptArchivePublishPlan,
   TranscriptArchivePublishResult,
 } from "./session-accessor.sqlite-archive-types.js";
@@ -144,5 +145,73 @@ export function recordSessionTranscriptArchivePublishResults(
         .where("session_id", "=", result.sessionId)
         .where("generation", "=", result.generation),
     );
+  }
+}
+
+/** Inserts the canonical archive row inside the lifecycle deletion transaction. */
+export function persistSessionTranscriptArchive(
+  database: OpenClawAgentDatabase,
+  plan: MaterializedSessionStateDeletePlan,
+): void {
+  const archive = plan.archive;
+  const generation = plan.snapshot.generation;
+  const sessionKey = plan.snapshot.sessionKey;
+  if (!archive || !generation || !sessionKey) {
+    throw new Error(
+      `Cannot persist SQLite transcript archive without an owner generation for ${plan.sessionId}`,
+    );
+  }
+  ensureSessionTranscriptArchiveSchema(database.db);
+  const db = getSessionKysely(database.db);
+  const inserted = executeSqliteQuerySync(
+    database.db,
+    db
+      .insertInto("session_transcript_archives")
+      .values({
+        archive_blob: archive.bytes,
+        archive_name: archive.archiveName,
+        archive_sha256: archive.sha256,
+        created_at: archive.createdAt,
+        encoding: archive.encoding,
+        generation,
+        last_publish_attempt_at: null,
+        last_publish_error: null,
+        published_at: null,
+        reason: plan.reason,
+        session_id: plan.sessionId,
+        session_key: sessionKey,
+      })
+      .onConflict((conflict) => conflict.columns(["session_id", "generation"]).doNothing()),
+  );
+  if (inserted.numAffectedRows === 1n) {
+    return;
+  }
+  const persisted = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db
+      .selectFrom("session_transcript_archives")
+      .select([
+        "archive_blob",
+        "archive_name",
+        "archive_sha256",
+        "created_at",
+        "encoding",
+        "reason",
+        "session_key",
+      ])
+      .where("session_id", "=", plan.sessionId)
+      .where("generation", "=", generation),
+  );
+  if (
+    !persisted ||
+    persisted.archive_name !== archive.archiveName ||
+    persisted.archive_sha256 !== archive.sha256 ||
+    persisted.created_at !== archive.createdAt ||
+    persisted.encoding !== archive.encoding ||
+    persisted.reason !== plan.reason ||
+    persisted.session_key !== sessionKey ||
+    !Buffer.from(persisted.archive_blob).equals(Buffer.from(archive.bytes))
+  ) {
+    throw new Error(`Conflicting SQLite transcript archive for ${plan.sessionId}`);
   }
 }

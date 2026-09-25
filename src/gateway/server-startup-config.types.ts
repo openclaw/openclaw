@@ -1,10 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-
-export type PrepareRuntimeSecretsSnapshot =
-  typeof import("../secrets/runtime.js").prepareSecretsRuntimeSnapshot;
-export type ActivateRuntimeSecretsSnapshot =
-  typeof import("../secrets/runtime.js").activateSecretsRuntimeSnapshot;
-export type PreparedRuntimeSecretsSnapshot = Awaited<ReturnType<PrepareRuntimeSecretsSnapshot>>;
+import type { PreparedSecretsRuntimeSnapshot } from "../secrets/runtime-state.js";
 
 export type RuntimeSecretsActivationParams = {
   reason: "startup" | "reload" | "restart-check";
@@ -27,13 +22,13 @@ export type RuntimeSecretsActivationParams = {
 export type ActivateRuntimeSecrets = ((
   config: OpenClawConfig,
   params: RuntimeSecretsActivationParams,
-) => Promise<PreparedRuntimeSecretsSnapshot>) & {
+) => Promise<PreparedSecretsRuntimeSnapshot>) & {
   activatePreparedSnapshot: (
-    snapshot: PreparedRuntimeSecretsSnapshot,
+    snapshot: PreparedSecretsRuntimeSnapshot,
     params: RuntimeSecretsActivationParams,
-  ) => Promise<PreparedRuntimeSecretsSnapshot>;
+  ) => Promise<PreparedSecretsRuntimeSnapshot>;
   activatePreparedSnapshotIfCurrent: (
-    snapshot: PreparedRuntimeSecretsSnapshot,
+    snapshot: PreparedSecretsRuntimeSnapshot,
     expectedRevision: number,
     params: RuntimeSecretsActivationParams,
     onActivated?: (
@@ -41,15 +36,15 @@ export type ActivateRuntimeSecrets = ((
     ) => void | Promise<void>,
     canActivate?: () => boolean,
     checkpoint?: () => Promise<void>,
-  ) => Promise<PreparedRuntimeSecretsSnapshot | null>;
+  ) => Promise<PreparedSecretsRuntimeSnapshot | null>;
   restoreSnapshotIfCurrent: (
-    snapshot: PreparedRuntimeSecretsSnapshot | null,
+    snapshot: PreparedSecretsRuntimeSnapshot | null,
     expectedRevision: number,
-    ownedSnapshot: PreparedRuntimeSecretsSnapshot,
+    ownedSnapshot: PreparedSecretsRuntimeSnapshot,
     options?: { onActivated?: () => void; runtimeSourceConfig?: OpenClawConfig },
   ) => Promise<boolean>;
   publishStateTransition: (
-    snapshot: PreparedRuntimeSecretsSnapshot,
+    snapshot: PreparedSecretsRuntimeSnapshot,
     options?: { sourceOnly?: boolean; expectedRevision?: number },
   ) => void;
 };

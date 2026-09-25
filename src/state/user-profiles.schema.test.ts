@@ -10,11 +10,11 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
-import { resolveUserChannelAuthorizationPolicy } from "./user-channel-authorization.js";
 import {
   linkUserChannelIdentity,
   authorizeUserChannelIdentityInDatabase,
   publishUserChannelPolicyInDatabase,
+  resolveUserChannelAuthorizationPolicy,
 } from "./user-channel-identities.js";
 import {
   listUserProfilesSync,

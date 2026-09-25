@@ -20,7 +20,7 @@ import {
   sendConfigSet,
   writeJsonFile,
   writeUnresolvedAuthProfileTokenRef,
-} from "../../test/helpers/gateway-config-rpc.js";
+} from "../../test/helpers/gateway/config-rpc-gateway.js";
 import { withTestTimeout } from "../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";

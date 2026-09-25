@@ -27,6 +27,7 @@ import type {
 } from "./session-accessor.sqlite-archive-types.js";
 import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
 import { sqliteSessionStateDeleteSnapshotsEqual } from "./session-accessor.sqlite-delete-snapshot.js";
+import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
 import { withSqliteMutationWorkerCoordination } from "./session-accessor.sqlite-worker-coordination.js";
 import {
   runSqliteMutationWorkerRequest,
@@ -242,11 +243,12 @@ function runSqliteTranscriptArchiveWorker(
 
 export function runSqliteTranscriptArchivePublishWorker(
   plans: readonly TranscriptArchivePublishPlan[],
+  signal?: AbortSignal,
 ): Promise<TranscriptArchivePublishResult[]> {
   const scoped = runScopedSqliteArchiveOperation(
     { operation: "publish", plans },
     createSqliteTranscriptArchiveWorker,
-    runExclusiveSqliteTranscriptArchiveWorker,
+    (run) => runExclusiveSqliteTranscriptArchiveWorker(run, signal),
   );
   if (scoped) {
     return scoped.then((result) => {
@@ -257,9 +259,50 @@ export function runSqliteTranscriptArchivePublishWorker(
     });
   }
   return runSqliteTranscriptArchiveWorkerOperation<TranscriptArchivePublishResult>({
+    signal,
     expectedMessageType: "published",
     workerData: { operation: "publish", type: "sqlite-transcript-archive-v2", plans },
   });
+}
+
+/** Probe pending publication without creating a writable database or archive schema. */
+export async function readPendingSqliteTranscriptArchivesInWorker(
+  plan: {
+    agentId: string;
+    databasePath: string;
+    env: NodeJS.ProcessEnv;
+  },
+  signal: AbortSignal,
+): Promise<boolean> {
+  const scoped = runScopedSqliteArchiveOperation(
+    { operation: "pending", plans: [{ agentId: plan.agentId, databasePath: plan.databasePath }] },
+    createSqliteTranscriptArchiveWorker,
+    (run) =>
+      runExclusiveSqliteTranscriptArchiveWorker(
+        () =>
+          runExclusiveSqliteSessionWrite(
+            { agentId: plan.agentId, path: plan.databasePath, env: plan.env },
+            run,
+            "session.archive.publish-prepare",
+            undefined,
+            "foreground",
+            signal,
+          ),
+        signal,
+      ),
+  );
+  if (!scoped) {
+    throw new Error("SQLite archive pending reads require their captured database scope");
+  }
+  const result = await scoped;
+  if (
+    result.type !== "pending" ||
+    result.results.length !== 1 ||
+    typeof result.results[0] !== "boolean"
+  ) {
+    throw new Error("SQLite archive Worker omitted its pending-publication result");
+  }
+  return result.results[0];
 }
 
 export async function runSqliteTranscriptArchiveReadWorker(

@@ -402,7 +402,7 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
         let inputRoot, pid, leafPid, commandResult, lateResult, readyObserved=false, closed=false;
         const lateMarker=${JSON.stringify(path.join(directory, "late-launch"))};
         aroundEach(async runTest=>{try {await runTest();} finally {await lifetime.cleanup();}});
-        it.fails('failed body with an unfinished sibling',${fault === "timeout" ? "{timeout:3000}," : ""}({signal,onTestFinished})=>lifetime.run(async()=>{
+        it.fails('failed body with an unfinished sibling',${fault === "timeout" ? "{timeout:1500}," : ""}({signal,onTestFinished})=>lifetime.run(async()=>{
           inputRoot=lifetime.createTempDir('body-input-',${JSON.stringify(directory)});
           const input=path.join(inputRoot,'input');fs.writeFileSync(input,'still owned');
           const readyFile=path.join(inputRoot,'ready'), script=path.join(inputRoot,'child.mjs');

@@ -7,6 +7,7 @@ import {
 } from "../config/runtime-snapshot.js";
 import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { PluginRuntimeApplicationError } from "../plugins/lifecycle.js";
 import {
   activateSecretsRuntimeSnapshotStateIfCurrent,
   getActiveSecretsRuntimeSnapshotState,
@@ -88,7 +89,11 @@ function expectAuthoredSource(source: OpenClawConfig) {
   ).toBe("none");
 }
 
-async function createReload(commit: () => Promise<void>, beforePublication?: () => Promise<void>) {
+async function createReload(
+  commit: () => Promise<void>,
+  beforePublication?: () => Promise<void>,
+  wrapPublicationError?: (error: unknown) => unknown,
+) {
   const initial = configPair("openclaw");
   activateSecretsRuntimeSnapshotWithSource(await prepare(initial.config), initial.source);
   expectAuthoredSource(initial.source);
@@ -115,13 +120,17 @@ async function createReload(commit: () => Promise<void>, beforePublication?: () 
     applyHotReload: async (_plan, _config, publication) => {
       await beforePublication?.();
       let committed = false;
-      await publication!.publish(
-        async () => {
-          await commit();
-          committed = true;
-        },
-        () => committed,
-      );
+      try {
+        await publication!.publish(
+          async () => {
+            await commit();
+            committed = true;
+          },
+          () => committed,
+        );
+      } catch (error) {
+        throw wrapPublicationError ? wrapPublicationError(error) : error;
+      }
       return "applied";
     },
   });
@@ -343,6 +352,57 @@ describe("managed reload authored source", () => {
     expect(getActiveSecretsRuntimeSnapshotRevision()).toBe(revision);
     expectAuthoredSource(initial.source);
   });
+
+  it.each(["direct", "plugin restored", "plugin committed", "plugin cleanup failed"] as const)(
+    "retries stale secret publication only after safe recovery: %s",
+    async (recovery) => {
+      const refreshed = configPair("openclaw");
+      refreshed.source.models.providers.openai.models[0]!.name = "Refreshed model";
+      refreshed.config.models!.providers!.openai!.models[0]!.name = "Refreshed model";
+      const snapshot = await prepare(refreshed.config);
+      const commit = vi.fn(async () => {});
+      let publicationAttempts = 0;
+      const { next, run } = await createReload(
+        commit,
+        async () => {
+          if (publicationAttempts++ === 0) {
+            activateSecretsRuntimeSnapshotWithSource(snapshot, refreshed.source);
+          }
+        },
+        recovery === "direct"
+          ? undefined
+          : (error) => {
+              return new PluginRuntimeApplicationError(
+                "Plugin activation failed",
+                {
+                  operationId: "secret-publication",
+                  generation: 1,
+                  pluginIds: ["fixture"],
+                  phase: "activate",
+                  committed: recovery === "plugin committed",
+                },
+                {
+                  cause:
+                    recovery === "plugin cleanup failed"
+                      ? new AggregateError([error, new Error("Plugin cleanup failed")])
+                      : error,
+                },
+              );
+            },
+      );
+      if (recovery === "plugin cleanup failed" || recovery === "plugin committed") {
+        await expect(run()).rejects.toBeInstanceOf(PluginRuntimeApplicationError);
+        expect(commit).not.toHaveBeenCalled();
+        expect(publicationAttempts).toBe(1);
+        expectAuthoredSource(refreshed.source);
+      } else {
+        await expect(run()).resolves.toBe("applied");
+        expect(commit).toHaveBeenCalledOnce();
+        expect(publicationAttempts).toBe(2);
+        expectAuthoredSource(next.source);
+      }
+    },
+  );
 
   it("preserves generated model metadata across a successful hot reload", async () => {
     const { next, run } = await createReload(async () => {});

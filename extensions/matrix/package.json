@@ -10,6 +10,7 @@
   "dependencies": {
     "@matrix-org/matrix-sdk-crypto-nodejs": "0.6.6",
     "@matrix-org/matrix-sdk-crypto-wasm": "18.8.0",
+    "@openclaw/fs-safe": "0.18.2",
     "fake-indexeddb": "6.2.5",
     "markdown-it": "15.0.2",
     "matrix-js-sdk": "42.4.0",

@@ -75,18 +75,35 @@ describe("skills watcher churn", () => {
       refreshModule.ensureSkillsWatcher({ workspaceDir, config });
       const first = watchForSkillRoot(firstRoot).watcher;
       expect(watchForSkillRoot(secondRoot).watcher).toBe(first);
+      for (const watcher of createdWatchers) {
+        watcher.emit("ready");
+      }
+      await vi.advanceTimersByTimeAsync(0);
       const before = loadWorkspaceSkills(workspaceDir, options);
       expect(before.map((entry) => entry.skill.name)).toEqual(["guide"]);
       const publications: Array<{
         version: number;
         entries: ReturnType<typeof loadWorkspaceSkills>;
       }> = [];
+      const { pathWatchers } = await import("./refresh-watch-registry.js");
+      const unavailable = new Set(
+        [...pathWatchers].filter(([, state]) => state.unavailable).map(([root]) => root),
+      );
+      const outages: string[][] = [];
       refreshModule.registerSkillsChangeListener((event) => {
         if (event.workspaceDir === workspaceDir && event.reason === "watch") {
           publications.push({
-            version: getSkillsSourceVersion(workspaceDir),
+            version: getSkillsSnapshotVersion(workspaceDir),
             entries: loadWorkspaceSkills(workspaceDir, options),
           });
+        } else if (event.workspaceDir === workspaceDir && event.reason === "watch-unavailable") {
+          const lost = [...pathWatchers]
+            .filter(([root, state]) => state.unavailable && !unavailable.has(root))
+            .map(([root]) => root);
+          outages.push(lost);
+          for (const root of lost) {
+            unavailable.add(root);
+          }
         }
       });
       for (const [root, name, description] of [
@@ -104,9 +121,48 @@ describe("skills watcher churn", () => {
       first.emit("raw", "rename", undefined, { watchedPath: ancestor });
       await vi.advanceTimersByTimeAsync(250);
       expect(publications).toHaveLength(1);
-      expect(getSkillsSourceVersion(workspaceDir)).toBe(publications[0]!.version);
+      const publication = publications[0]!;
+      expect(outages.map((lost) => lost.length)).toEqual([1, 1, 1, 1]);
+      expect(outages.flat().toSorted()).toEqual(
+        [firstRoot, secondRoot]
+          .flatMap((root) => [root, path.join(root, "skills")])
+          .map((root) => root.replaceAll("\\", "/"))
+          .toSorted(),
+      );
+      // The observed content publishes before replacement records these distinct
+      // outages. Neither later readiness nor repeated scans may add another revision.
+      const publishedVersion = getSkillsSnapshotVersion(workspaceDir);
+      for (const [index, [, watchOptions]] of watchMock.mock.calls.entries()) {
+        if (watchOptions.depth === 0) {
+          createdWatchers[index]!.emit("ready");
+        }
+      }
+      await vi.advanceTimersByTimeAsync(0);
+      expect(publications).toEqual([publication]);
+      expect(getSkillsSnapshotVersion(workspaceDir)).toBe(publishedVersion);
+      const verifiers = [firstRoot, secondRoot].map((root) => {
+        const observer = watchForSkillRoot(root).watcher;
+        observer.emit("ready");
+        const verifier = watchForSkillRoot(root).watcher;
+        expect(verifier).not.toBe(observer);
+        return verifier;
+      });
+      expect(publications).toEqual([publication]);
+      expect(getSkillsSnapshotVersion(workspaceDir)).toBe(publishedVersion);
+      for (const verifier of verifiers) {
+        verifier.emit("ready");
+      }
+      expect(publications).toHaveLength(1);
+      expect(getSkillsSnapshotVersion(workspaceDir)).toBe(publishedVersion);
+      const settledSource = getSkillsSourceVersion(workspaceDir);
+      for (const verifier of verifiers) {
+        verifier.emit("ready");
+      }
+      await vi.advanceTimersByTimeAsync(250);
+      expect(getSkillsSourceVersion(workspaceDir)).toBe(settledSource);
+      expect(publications).toHaveLength(1);
       const entries = loadWorkspaceSkills(workspaceDir, options);
-      expect(entries).toEqual(publications[0]!.entries);
+      expect(entries).toEqual(publication.entries);
       expect(entries.find((entry) => entry.skill.name === "guide")).toEqual(before[0]);
       expect(entries.map((entry) => entry.skill.name).toSorted()).toEqual(["guide", "new-guide"]);
       const snapshot = await buildSkillSnapshot(workspaceDir, options);

@@ -3,15 +3,15 @@ import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-co
 import {
   parseUserChannelAuthorizationReference,
   resolveUserChannelAuthorizationPolicy,
-  type UserChannelAuthorization,
-  type UserChannelAuthorizationReference,
-} from "../state/user-channel-authorization.js";
-import { resolveUserChannelIdentity } from "../state/user-channel-identities.js";
+  resolveUserChannelIdentity,
+} from "../state/user-channel-identities.js";
 import {
   authorizeCanonicalUserChannelIdentity,
   prepareUserChannelIdentityAuthority,
 } from "../state/user-channel-identity-operations.js";
 import type {
+  UserChannelAuthorization,
+  UserChannelAuthorizationReference,
   UserChannelIdentity,
   UserChannelIdentityAuthorityFacts,
 } from "../state/user-profiles.types.js";

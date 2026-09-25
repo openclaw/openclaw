@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { movePathWithCopyFallback } from "@openclaw/fs-safe/atomic";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { formatErrorMessage, isErrno } from "./errors.js";
 import {
@@ -39,7 +40,6 @@ import {
   type StagedPackageSwapParams,
 } from "./package-update-swap-contract.js";
 import { runPackagePostInstallVerification } from "./package-update-verification-step.js";
-import { movePathWithCopyFallback } from "./replace-file.js";
 import { createUpdateErrorFact, createUpdateFailureFact } from "./update-failure-facts.js";
 import {
   createFreeBsdPkgOwnershipInspection,

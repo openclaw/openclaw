@@ -47,9 +47,6 @@ import {
 } from "./server-startup-config-helpers.js";
 import type {
   ActivateRuntimeSecrets,
-  ActivateRuntimeSecretsSnapshot,
-  PreparedRuntimeSecretsSnapshot,
-  PrepareRuntimeSecretsSnapshot,
   RuntimeSecretsActivationParams,
 } from "./server-startup-config.types.js";
 import {
@@ -64,6 +61,12 @@ export {
 } from "./server-startup-config-helpers.js";
 
 type GatewaySecretsStateEventCode = "SECRETS_RELOADER_DEGRADED" | "SECRETS_RELOADER_RECOVERED";
+
+type PrepareRuntimeSecretsSnapshot =
+  typeof import("../secrets/runtime.js").prepareSecretsRuntimeSnapshot;
+type ActivateRuntimeSecretsSnapshot =
+  typeof import("../secrets/runtime.js").activateSecretsRuntimeSnapshot;
+type PreparedRuntimeSecretsSnapshot = Awaited<ReturnType<PrepareRuntimeSecretsSnapshot>>;
 
 type DeferredSecretsStateTransition = {
   activationRevision: number;
