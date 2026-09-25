@@ -57,6 +57,7 @@ type TurnDelegation = {
 
 type RepairDiagnostics = {
   record: (event: string) => void;
+  stdoutTail: string;
   stderrTail: string;
 };
 
@@ -81,9 +82,10 @@ async function runRepairEnvelope(
               configPath: params.target.configPath,
               defaultWorkspaceDir: params.target.workspaceDir,
             })),
+        OPENCLAW_TEST_CONSOLE: "1",
       },
       detached: Boolean(delegation) && process.platform !== "win32",
-      stdio: ["ignore", "ignore", "pipe", "ipc"],
+      stdio: ["ignore", "pipe", "pipe", "ipc"],
     },
   );
   const controller = new AbortController();
@@ -94,6 +96,11 @@ async function runRepairEnvelope(
     controller.abort(failure);
     child.kill("SIGKILL");
   }, 90_000);
+  let stdoutTail = Buffer.alloc(0);
+  child.stdout?.on("data", (chunk: Buffer) => {
+    stdoutTail = Buffer.from(Buffer.concat([stdoutTail, chunk]).subarray(-16 * 1024));
+    diagnostics.stdoutTail = stdoutTail.toString("utf8");
+  });
   let stderrTail = Buffer.alloc(0);
   child.stderr?.on("data", (chunk: Buffer) => {
     stderrTail = Buffer.from(Buffer.concat([stderrTail, chunk]).subarray(-16 * 1024));
@@ -246,6 +253,7 @@ describe("update repair with a local model provider", () => {
       const events: Array<{ event: string; elapsedMs: number }> = [];
       let droppedEvents = 0;
       const diagnostics: RepairDiagnostics = {
+        stdoutTail: "",
         stderrTail: "",
         record(event) {
           if (events.length < 64) {
@@ -310,6 +318,7 @@ describe("update repair with a local model provider", () => {
             async (baseUrl) => {
               const modelRef = "repair-test/repair-model";
               const config: OpenClawConfig = {
+                logging: { level: "silent", consoleLevel: "trace" },
                 commands: { ownerAllowFrom: ["owner"] },
                 plugins: { slots: { memory: "none" } },
                 tools: { exec: { mode: "ask", safeBins: ["cat"] }, fs: { workspaceOnly: false } },
@@ -546,6 +555,7 @@ describe("update repair with a local model provider", () => {
             entry,
             events,
             droppedEvents,
+            workerStdoutTail: diagnostics.stdoutTail,
             workerStderrTail: diagnostics.stderrTail,
           })}\n`,
         );
