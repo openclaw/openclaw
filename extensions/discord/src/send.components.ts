@@ -231,108 +231,33 @@ export async function sendDiscordComponentMessage(
   spec: DiscordComponentMessageSpec,
   opts: DiscordComponentSendOpts,
 ): Promise<DiscordSendResult> {
-  return await withDiscordRequestAuthority(opts.assertPlatformSendAuthorized, () =>
-    sendDiscordComponentMessageInternal(to, spec, opts),
-  );
-}
-
-async function sendDiscordComponentMessageInternal(
-  to: string,
-  spec: DiscordComponentMessageSpec,
-  opts: DiscordComponentSendOpts,
-): Promise<DiscordSendResult> {
-  const classicMessage = opts.mediaUrl ? resolveClassicDiscordMessage(spec) : undefined;
-  if (classicMessage) {
-    return await sendMessageDiscord(to, classicMessage.text, {
-      cfg: opts.cfg,
-      accountId: opts.accountId,
-      token: opts.token,
-      rest: opts.rest,
-      mediaUrl: opts.mediaUrl,
-      filename: opts.filename?.trim() || classicMessage.filename,
-      mediaLocalRoots: opts.mediaLocalRoots,
-      mediaReadFile: opts.mediaReadFile,
-      mediaAccess: opts.mediaAccess,
-      reply: opts.reply,
-      silent: opts.silent,
-      textLimit: opts.textLimit,
-      maxLinesPerMessage: opts.maxLinesPerMessage,
-      tableMode: opts.tableMode,
-      chunkMode: opts.chunkMode,
-      onDeliveryResult: opts.onDeliveryResult,
-      onPlatformSendDispatch: opts.onPlatformSendDispatch,
-      assertPlatformSendAuthorized: opts.assertPlatformSendAuthorized,
-      ...(opts.suppressEmbeds === undefined ? {} : { suppressEmbeds: opts.suppressEmbeds }),
-    });
-  }
-
-  const cfg = requireRuntimeConfig(opts.cfg, "Discord component send");
-  const { token, rest, request, account: accountInfo } = createDiscordClient({ ...opts, cfg });
-  const recipient = await parseAndResolveChannelRecipient(to, cfg, accountInfo.accountId);
-  const { channelId } = await resolveChannelId(rest, recipient, request);
-
-  const channel = await resolveDiscordChannel(rest, channelId);
-
-  if (channel && DISCORD_FORUM_LIKE_TYPES.has(channel.type)) {
-    throw new Error("Discord components are not supported in forum-style channels");
-  }
-
-  const { body: componentBody, buildResult } = await buildDiscordComponentPayload({
-    spec,
-    opts,
-    accountId: accountInfo.accountId,
+  return await withDiscordRequestAuthority(opts.assertPlatformSendAuthorized, async () => {
+    const classicMessage = opts.mediaUrl ? resolveClassicDiscordMessage(spec) : undefined;
+    if (classicMessage) {
+      return await sendMessageDiscord(to, classicMessage.text, {
+        cfg: opts.cfg,
+        accountId: opts.accountId,
+        token: opts.token,
+        rest: opts.rest,
+        mediaUrl: opts.mediaUrl,
+        filename: opts.filename?.trim() || classicMessage.filename,
+        mediaLocalRoots: opts.mediaLocalRoots,
+        mediaReadFile: opts.mediaReadFile,
+        mediaAccess: opts.mediaAccess,
+        reply: opts.reply,
+        silent: opts.silent,
+        textLimit: opts.textLimit,
+        maxLinesPerMessage: opts.maxLinesPerMessage,
+        tableMode: opts.tableMode,
+        chunkMode: opts.chunkMode,
+        onDeliveryResult: opts.onDeliveryResult,
+        onPlatformSendDispatch: opts.onPlatformSendDispatch,
+        assertPlatformSendAuthorized: opts.assertPlatformSendAuthorized,
+        ...(opts.suppressEmbeds === undefined ? {} : { suppressEmbeds: opts.suppressEmbeds }),
+      });
+    }
+    return await writeDiscordComponentMessage(to, spec, opts);
   });
-  // Nonce enforcement belongs to Create Message; the shared builder also serves edits.
-  const body = {
-    ...componentBody,
-    nonce: createDiscordMessageNonce(),
-    enforce_nonce: true,
-  };
-
-  let result: { id: string; channel_id: string };
-  try {
-    result = (await request(
-      async () => {
-        await opts.onPlatformSendDispatch?.();
-        opts.assertPlatformSendAuthorized?.();
-        return createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, {
-          body,
-        });
-      },
-      "components",
-      { safety: "nonce-protected-create" },
-    )) as { id: string; channel_id: string };
-  } catch (err) {
-    throw await buildDiscordSendError(err, {
-      channelId,
-      cfg,
-      rest,
-      token,
-      hasMedia: Boolean(opts.mediaUrl),
-    });
-  }
-
-  const deliveryResult = createDiscordSendResult({
-    result,
-    fallbackChannelId: channelId,
-    kind: "card",
-    ...(opts.reply ? { reply: opts.reply } : {}),
-  });
-  await opts.onDeliveryResult?.(deliveryResult);
-
-  await registerBuiltDiscordComponentMessage({
-    buildResult,
-    messageId: result.id,
-    ttlMs: resolveDiscordComponentRegistryTtlMs(accountInfo.config),
-  });
-
-  recordChannelActivity({
-    channel: "discord",
-    accountId: accountInfo.accountId,
-    direction: "outbound",
-  });
-
-  return deliveryResult;
 }
 
 export async function editDiscordComponentMessage(
@@ -341,25 +266,52 @@ export async function editDiscordComponentMessage(
   spec: DiscordComponentMessageSpec,
   opts: DiscordComponentSendOpts,
 ): Promise<DiscordSendResult> {
-  const cfg = requireRuntimeConfig(opts.cfg, "Discord component edit");
+  return await writeDiscordComponentMessage(to, spec, opts, messageId);
+}
+
+async function writeDiscordComponentMessage(
+  to: string,
+  spec: DiscordComponentMessageSpec,
+  opts: DiscordComponentSendOpts,
+  messageId?: string,
+): Promise<DiscordSendResult> {
+  const creating = messageId === undefined;
+  const cfg = requireRuntimeConfig(
+    opts.cfg,
+    creating ? "Discord component send" : "Discord component edit",
+  );
   const { token, rest, request, account: accountInfo } = createDiscordClient({ ...opts, cfg });
   const recipient = await parseAndResolveChannelRecipient(to, cfg, accountInfo.accountId);
   const { channelId } = await resolveChannelId(rest, recipient, request);
-  const { body, buildResult } = await buildDiscordComponentPayload({
+  if (creating) {
+    const channel = await resolveDiscordChannel(rest, channelId);
+    if (channel && DISCORD_FORUM_LIKE_TYPES.has(channel.type)) {
+      throw new Error("Discord components are not supported in forum-style channels");
+    }
+  }
+  const { body: componentBody, buildResult } = await buildDiscordComponentPayload({
     spec,
     opts,
     accountId: accountInfo.accountId,
   });
-
+  // Nonce enforcement belongs to Create Message, not edits.
+  const body = creating
+    ? { ...componentBody, nonce: createDiscordMessageNonce(), enforce_nonce: true }
+    : componentBody;
   let result: { id: string; channel_id: string };
   try {
-    result = (await request(
-      () =>
-        editChannelMessage(rest, channelId, messageId, {
-          body,
-        }) as Promise<{ id: string; channel_id: string }>,
+    result = await request(
+      async () => {
+        if (messageId !== undefined) {
+          return editChannelMessage(rest, channelId, messageId, { body });
+        }
+        await opts.onPlatformSendDispatch?.();
+        opts.assertPlatformSendAuthorized?.();
+        return createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, { body });
+      },
       "components",
-    )) as { id: string; channel_id: string };
+      creating ? { safety: "nonce-protected-create" } : undefined,
+    );
   } catch (err) {
     throw await buildDiscordSendError(err, {
       channelId,
@@ -370,25 +322,26 @@ export async function editDiscordComponentMessage(
     });
   }
 
+  const toDeliveryResult = () =>
+    createDiscordSendResult({
+      result: creating ? result : { id: result.id ?? messageId, channel_id: result.channel_id },
+      fallbackChannelId: channelId,
+      kind: "card",
+      ...(opts.reply ? { reply: opts.reply } : {}),
+    });
+  const deliveryResult = creating ? toDeliveryResult() : undefined;
+  if (deliveryResult) {
+    await opts.onDeliveryResult?.(deliveryResult);
+  }
   await registerBuiltDiscordComponentMessage({
     buildResult,
     messageId: result.id ?? messageId,
     ttlMs: resolveDiscordComponentRegistryTtlMs(accountInfo.config),
   });
-
   recordChannelActivity({
     channel: "discord",
     accountId: accountInfo.accountId,
     direction: "outbound",
   });
-
-  return createDiscordSendResult({
-    result: {
-      id: result.id ?? messageId,
-      channel_id: result.channel_id,
-    },
-    fallbackChannelId: channelId,
-    kind: "card",
-    ...(opts.reply ? { reply: opts.reply } : {}),
-  });
+  return deliveryResult ?? toDeliveryResult();
 }

@@ -9,7 +9,6 @@ import {
   createCodexAppServerToolResultExtensionRunner,
   extractMessagingToolSend,
   extractMessagingToolSendResult,
-  extractMessagingToolSourceReplyPayload,
   finalizeToolTerminalPresentation,
   formatToolExecutionErrorMessage,
   getBeforeToolCallFailureDisposition,
@@ -34,12 +33,12 @@ import {
   setBeforeToolCallDiagnosticsEnabled,
   type AnyAgentTool,
   type MessagingToolSend,
-  type MessagingToolSourceReplyPayload,
   wrapToolWithBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   copyInternalToolResultState,
   createAgentHarnessToolExecutionBoundaryRegistry,
+  extractMessagingToolSourceReplyPayload,
   getCoreTtsToolResultMediaUrls,
   normalizeAcceptedSessionSpawnResult,
   recordAgentHarnessToolResultTelemetry,
@@ -172,10 +171,6 @@ function applyCurrentMessageProvider(
   return { ...args, provider };
 }
 
-export type CodexConfirmedMediaDelivery = {
-  sourceUrls: readonly string[];
-} & ({ kind: "outbound"; target: MessagingToolSend } | { kind: "sourceReply" });
-
 /** Runtime bridge returned to Codex app-server attempt code. */
 export type CodexDynamicToolBridge = {
   /** Final executable tools after schema projection and hook-wrapper quarantine. */
@@ -200,19 +195,8 @@ export type CodexDynamicToolBridge = {
   /** Bind the authenticated app-server client once remote thread startup completes. */
   setRemoteWorkspaceFileReader?: (reader: CodexRemoteWorkspaceFileReader) => void;
   telemetry: AgentHarnessToolResultTelemetry & {
-    didSendViaMessagingTool: boolean;
     didDeliverSourceReplyViaMessageTool: boolean;
     sourceReplyDelivered?: true;
-    messagingToolSentTexts: string[];
-    messagingToolSentMediaUrls: string[];
-    messagingToolSentTargets: MessagingToolSend[];
-    messagingToolSourceReplyPayloads: MessagingToolSourceReplyPayload[];
-    confirmedMediaDeliveries: CodexConfirmedMediaDelivery[];
-    toolMediaUrls: string[];
-    toolAutoDeliveryMediaUrls: string[];
-    coreTtsToolResults: object[];
-    toolAudioAsVoice: boolean;
-    successfulCronAdds?: number;
     acceptedSessionSpawns: AcceptedSessionSpawn[];
     quarantinedTools: CodexDynamicToolSchemaQuarantine[];
   };

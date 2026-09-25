@@ -230,6 +230,7 @@ export function createStateStartupCorpusFixture() {
               const startup = await loadGatewayStartupConfigSnapshot({
                 initialSnapshotRead,
                 minimalTestGateway: false,
+                ambientEnvTriggers: "suppress",
                 log: console,
               });
               const config = startup.snapshot.config;

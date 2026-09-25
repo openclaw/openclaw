@@ -307,6 +307,9 @@ that click. Hiding, disconnecting, or replacing the desktop stops playback; a ne
 connection starts muted. Audio authorization is tied to the authenticated screen
 connection and is revoked with it.
 
+The standalone Desktop view also exposes Unmute/Mute in its touch toolbar,
+with the same playback lifecycle and muted-start rules as the embedded panel.
+
 This first path uses uncompressed 48 kHz stereo PCM over a separate authenticated
 WebSocket (about 1.5 Mbit/s while listening). Buffering is bounded; a connection
 that cannot keep up stops instead of accumulating delayed sound. It is intended

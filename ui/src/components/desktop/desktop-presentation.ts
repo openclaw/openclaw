@@ -83,6 +83,7 @@ export function renderDesktopPresentation(view: DesktopPresentation) {
       sizing: view.sizing,
       keyboardInputValue: view.mobileKeyboard.value,
       pictureInPictureControl: view.pictureInPictureControl,
+      audioControl: view.audioControl,
       onControlToggle: view.onControlToggle,
       onKeyboardFocus: (event) => view.mobileKeyboard.focus(event),
       onKeyboardEvent: (event) => view.mobileKeyboard.handleKeyboardEvent(event),

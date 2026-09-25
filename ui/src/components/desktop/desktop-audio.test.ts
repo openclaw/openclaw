@@ -2,12 +2,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
-  AudioContextMock,
   AudioSocketMock,
   desktopAudioStream,
   stubDesktopAudio,
 } from "./desktop-audio.test-support.ts";
 import { DesktopAudio } from "./desktop-audio.ts";
+import { AudioContextMock } from "./desktop-pcm-queue.test-support.ts";
 
 describe("desktop audio connection", () => {
   let audio: DesktopAudio;

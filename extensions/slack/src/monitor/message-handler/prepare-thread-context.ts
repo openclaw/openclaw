@@ -7,11 +7,14 @@ import {
   filterSupplementalContextItems,
   shouldIncludeSupplementalContext,
 } from "openclaw/plugin-sdk/security-runtime";
+import {
+  readSessionUpdatedAt,
+  resolveChannelResetConfig,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import type { SlackMessageEvent } from "../../types.js";
 import { resolveSlackUserAllowed } from "../allow-list.js";
-import { readSessionUpdatedAt, resolveChannelResetConfig } from "../config.runtime.js";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackEventScope } from "../event-scope.js";
 import type { SlackMediaResult } from "../media-types.js";

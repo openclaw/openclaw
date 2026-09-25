@@ -43,6 +43,9 @@ const desktopPanelStyles = css`
   .desktop-audio-button:disabled {
     opacity: 0.5;
   }
+  .desktop-touch-toolbar .desktop-audio-label {
+    display: none;
+  }
   .desktop-fullscreen-icon > svg {
     width: 15px;
     height: 15px;

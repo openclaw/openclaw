@@ -11,11 +11,9 @@ import type {
   DiscordAutoPresenceConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 import { warn } from "openclaw/plugin-sdk/runtime-env";
-import type { Activity, UpdatePresenceData } from "../internal/gateway.js";
+import type { UpdatePresenceData } from "../internal/gateway.js";
 import { resolveDiscordPresenceUpdate } from "./presence.js";
 
-const DEFAULT_CUSTOM_ACTIVITY_TYPE = 4;
-const CUSTOM_STATUS_NAME = "Custom Status";
 const DEFAULT_INTERVAL_MS = 30_000;
 const DEFAULT_MIN_UPDATE_INTERVAL_MS = 15_000;
 const MIN_INTERVAL_MS = 5_000;
@@ -62,14 +60,6 @@ function resolveAutoPresenceConfig(
   };
 }
 
-function buildCustomStatusActivity(text: string): Activity {
-  return {
-    name: CUSTOM_STATUS_NAME,
-    type: DEFAULT_CUSTOM_ACTIVITY_TYPE,
-    state: text,
-  };
-}
-
 function isExhaustedUnavailableReason(reason: AuthProfileFailureReason | null): boolean {
   if (!reason) {
     return false;
@@ -110,29 +100,6 @@ function resolveAuthAvailability(params: {
   return isExhaustedUnavailableReason(unavailableReason) ? "exhausted" : "degraded";
 }
 
-function resolvePresenceActivities(params: {
-  state: DiscordAutoPresenceState;
-  basePresence: UpdatePresenceData | null;
-}): Activity[] {
-  if (params.state === "healthy") {
-    return params.basePresence?.activities ?? [];
-  }
-
-  return [
-    buildCustomStatusActivity(params.state === "degraded" ? "runtime degraded" : "token exhausted"),
-  ];
-}
-
-function resolvePresenceStatus(state: DiscordAutoPresenceState): UpdatePresenceData["status"] {
-  if (state === "healthy") {
-    return "online";
-  }
-  if (state === "exhausted") {
-    return "dnd";
-  }
-  return "idle";
-}
-
 function resolveDiscordAutoPresenceUpdate(params: {
   discordConfig: Pick<
     DiscordAccountConfig,
@@ -156,17 +123,12 @@ function resolveDiscordAutoPresenceUpdate(params: {
   });
   const state = params.gatewayConnected ? availability : "degraded";
 
-  const activities = resolvePresenceActivities({
-    state,
-    basePresence,
-  });
-
-  return {
-    since: null,
-    activities,
-    status: resolvePresenceStatus(state),
-    afk: false,
-  };
+  return state === "healthy"
+    ? { since: null, activities: basePresence.activities, status: "online", afk: false }
+    : resolveDiscordPresenceUpdate({
+        activity: state === "degraded" ? "runtime degraded" : "token exhausted",
+        status: state === "degraded" ? "idle" : "dnd",
+      });
 }
 
 function stablePresenceSignature(payload: UpdatePresenceData): string {
