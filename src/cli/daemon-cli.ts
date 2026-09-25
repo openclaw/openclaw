@@ -27,7 +27,7 @@ export {
   recordUpdateRunStep,
   recordUpdateRunVerification,
 } from "../infra/update-run-ledger.js";
-export { finishUpdateRun } from "./daemon-cli/update-run.js";
+export { finishDaemonUpdateRun as finishUpdateRun } from "./daemon-cli/update-run.js";
 
 export {
   createManagedUpdateRequesterAuthority,

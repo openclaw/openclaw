@@ -5,7 +5,7 @@ import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 import { finishUpdateRun as finishLedgerRun } from "../../infra/update-run-write.js";
 
 /** Stable recovery entry used by installed managed-update drivers. */
-export async function finishUpdateRun(
+export async function finishDaemonUpdateRun(
   runId: string,
   result: Parameters<typeof finishLedgerRun>[1],
   options: UpdateRunLedgerOptions = {},
