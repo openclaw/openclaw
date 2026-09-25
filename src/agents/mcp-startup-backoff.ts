@@ -3,6 +3,7 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { redactMcpDiagnosticError } from "./mcp-error.js";
 
 type StartupState = {
+  owner: AbortSignal;
   delayMs: number;
   retryAfterMs: number;
   message: string;
@@ -19,13 +20,12 @@ export class McpStartupBackoffError extends Error {
   constructor(
     state: StartupState,
     readonly reportFailure: boolean,
+    readonly retryAfterMs: number,
   ) {
     super(
-      `${state.message}; server unavailable; retry after ${new Date(state.retryAfterMs).toISOString()}. Check server reachability or reload MCP after fixing it.`,
+      `${state.message}; server unavailable; retry after ${new Date(retryAfterMs).toISOString()}. Check server reachability or reload MCP after fixing it.`,
     );
-    this.retryAfterMs = state.retryAfterMs;
   }
-  readonly retryAfterMs: number;
 }
 
 export function resetMcpStartupBackoff(key?: string): void {
@@ -40,6 +40,7 @@ export async function connectWithMcpStartupBackoff(
   key: string,
   signal: AbortSignal,
   connect: () => Promise<void>,
+  recoveryRetryMs: number,
 ): Promise<void> {
   // Serialize startup, not transport ownership: healthy sessions still connect independently.
   while (startups.get(key)?.pending) {
@@ -49,9 +50,20 @@ export async function connectWithMcpStartupBackoff(
     );
   }
   signal.throwIfAborted();
-  const state = startups.get(key) ?? { delayMs: 15_000, retryAfterMs: 0, message: "" };
-  if (Date.now() < state.retryAfterMs) {
-    throw new McpStartupBackoffError(state, false);
+  const state = startups.get(key) ?? {
+    owner: signal,
+    delayMs: 15_000,
+    retryAfterMs: 0,
+    message: "",
+  };
+  // Only the first failing runtime gets its normal catalog retry after retirement.
+  // New runtimes share the cooldown; a second failure applies it to the owner too.
+  const retryAfterMs = () =>
+    state.owner === signal && state.delayMs === 30_000
+      ? state.retryAfterMs - state.delayMs + recoveryRetryMs
+      : state.retryAfterMs;
+  if (Date.now() < retryAfterMs()) {
+    throw new McpStartupBackoffError(state, false, retryAfterMs());
   }
   startups.set(key, state);
   try {
@@ -70,7 +82,7 @@ export async function connectWithMcpStartupBackoff(
     state.delayMs = Math.min(state.delayMs * 2, 600_000);
     state.retryAfterMs = Date.now() + state.delayMs;
     state.message = redactMcpDiagnosticError(error);
-    throw new McpStartupBackoffError(state, true);
+    throw new McpStartupBackoffError(state, true, retryAfterMs());
   } finally {
     state.pending = undefined;
     // Bound retired configurations without evicting an active startup admission.

@@ -117,7 +117,7 @@ it("remembers a startup timeout across runs and reports unavailable without repe
     expect(catalog.tools).toEqual([]);
     expect(catalog.diagnostics?.[0]?.message).toContain("timed out");
     expect(catalog.diagnostics?.[0]?.message).toContain(
-      "server unavailable; retry after 2026-01-01T00:01:00.000Z. Check server reachability",
+      `server unavailable; retry after ${run === 0 ? "2026-01-01T00:00:35.000Z" : "2026-01-01T00:01:00.000Z"}. Check server reachability`,
     );
     await runtime.dispose();
   }
@@ -134,17 +134,41 @@ it("remembers a startup timeout across runs and reports unavailable without repe
   expect(warn).toHaveBeenCalledTimes(1);
 });
 
+it("allows only the first failing runtime one early catalog retry before backing off", async () => {
+  const runtime = makeRuntime();
+  await discover(runtime);
+  expect((await discover(makeRuntime())).waitedMs).toBe(0);
+  await vi.advanceTimersByTimeAsync(4_999);
+  await discover(runtime);
+  expect(initializes).toBe(1);
+
+  await vi.advanceTimersByTimeAsync(1);
+  await runtime.getCatalog();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(initializes).toBe(2);
+  await vi.advanceTimersByTimeAsync(30_000);
+  expect((await runtime.getCatalog()).diagnostics?.[0]?.message).toContain(
+    new Date(Date.now() + 60_000).toISOString(),
+  );
+
+  await vi.advanceTimersByTimeAsync(5_000);
+  await discover(runtime);
+  expect((await discover(makeRuntime())).waitedMs).toBe(0);
+  expect(initializes).toBe(2);
+  expect(warn).toHaveBeenCalledTimes(2);
+});
+
 it("doubles the retry interval to ten minutes and resets it after recovery", async () => {
   for (const delay of [30_000, 60_000, 120_000, 240_000, 480_000, 600_000, 600_000]) {
     const runtime = makeRuntime();
     const failed = await discover(runtime);
     expect(failed.waitedMs).toBe(30_000);
     expect(failed.catalog.diagnostics?.[0]?.message).toContain(
-      new Date(Date.now() + delay).toISOString(),
+      new Date(Date.now() + (delay === 30_000 ? 5_000 : delay)).toISOString(),
     );
+    await runtime.dispose();
     const attempts = initializes;
     await vi.advanceTimersByTimeAsync(delay - 1);
-    expect((await discover(runtime)).waitedMs).toBe(0);
     expect((await discover(makeRuntime())).waitedMs).toBe(0);
     expect(initializes).toBe(attempts);
     expect(warn).toHaveBeenCalledTimes(attempts);
@@ -158,7 +182,7 @@ it("doubles the retry interval to ten minutes and resets it after recovery", asy
   const failedAgain = await discover(makeRuntime());
   expect(failedAgain.waitedMs).toBe(30_000);
   expect(failedAgain.catalog.diagnostics?.[0]?.message).toContain(
-    new Date(Date.now() + 30_000).toISOString(),
+    new Date(Date.now() + 5_000).toISOString(),
   );
 });
 
@@ -209,7 +233,7 @@ it("invalidates a startup failure that completes after config publication", asyn
     expect(initializes).toBe(2);
     await vi.advanceTimersByTimeAsync(30_000);
     expect((await pending).diagnostics?.[0]?.message).toContain(
-      new Date(Date.now() + 30_000).toISOString(),
+      new Date(Date.now() + 5_000).toISOString(),
     );
     await manager.reloadConfig({ cfg });
     reachable = true;

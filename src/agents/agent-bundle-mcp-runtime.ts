@@ -781,8 +781,11 @@ function createServerMcpRuntime(
         failIfDisposed();
         if (!session.connected) {
           const connectingSession = session;
-          await connectWithMcpStartupBackoff(startupKey, lifecycleAbortController.signal, () =>
-            ensureSessionConnected(connectingSession, resolved.connectionTimeoutMs),
+          await connectWithMcpStartupBackoff(
+            startupKey,
+            lifecycleAbortController.signal,
+            () => ensureSessionConnected(connectingSession, resolved.connectionTimeoutMs),
+            BUNDLE_MCP_CATALOG_FAILURE_RETRY_MS,
           );
         }
         startupRetryAfterMs = undefined;
