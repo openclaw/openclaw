@@ -49,12 +49,7 @@ const { deviceIdentityState, createDeviceIdentityState } = vi.hoisted(() => {
       scopes: ["operator.read"],
       updatedAtMs: 1,
     } as Record<string, unknown> | null,
-    cachedOriginToken: {
-      token: "cached-origin-operator-token",
-      role: "operator",
-      scopes: ["operator.read"],
-      updatedAtMs: 1,
-    } as Record<string, unknown> | null,
+    cachedOriginToken: null as Record<string, unknown> | null,
     identityPaths: [] as unknown[],
     tokenParams: [] as unknown[],
     originTokenParams: [] as unknown[],
@@ -451,6 +446,12 @@ describe("probeGateway", () => {
   });
 
   it("keeps device identity enabled for remote probes", async () => {
+    deviceIdentityState.cachedOriginToken = {
+      token: "cached-origin-operator-token",
+      role: "operator",
+      scopes: ["operator.read"],
+      updatedAtMs: 1,
+    };
     await runTokenProbe({
       url: "wss://gateway.example/ws",
     });

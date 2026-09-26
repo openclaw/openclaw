@@ -133,14 +133,6 @@ function hasProbeAuth(auth: GatewayProbeAuth | undefined): boolean {
   return Boolean(auth?.token?.trim() || auth?.password?.trim());
 }
 
-function resolveProbeDeviceAuthScope(url: string): string | undefined {
-  try {
-    return isLoopbackHost(new URL(url).hostname) ? undefined : gatewayOriginScope(url);
-  } catch {
-    return undefined;
-  }
-}
-
 function shouldShortCircuitDeviceRequiredProbe(cacheKey: string, nowMs: number): boolean {
   // Repeated unauthenticated probes can trigger pairing/device-required closes.
   // Short-circuit briefly so status checks do not spam the gateway.
@@ -272,7 +264,7 @@ function resolveGatewayProbeCapability(params: {
 
 export async function probeGateway(opts: {
   url: string;
-  /** Treat an explicitly remote loopback URL as a stable origin-scoped auth target. */
+  /** Remote targets may use origin tokens only on non-loopback transports. */
   originScopedDeviceAuth?: boolean;
   /** Disable persisted device auth when the transport does not identify a stable Gateway origin. */
   suppressStoredDeviceAuth?: boolean;
@@ -298,15 +290,16 @@ export async function probeGateway(opts: {
   let authMetadataPresent = false;
 
   const detailLevel = opts.includeDetails === false ? "none" : (opts.detailLevel ?? "full");
-  const deviceAuthScope = opts.suppressStoredDeviceAuth
-    ? undefined
-    : opts.originScopedDeviceAuth
-      ? gatewayOriginScope(opts.url)
-      : resolveProbeDeviceAuthScope(opts.url);
+  let deviceAuthScope = opts.suppressStoredDeviceAuth ? undefined : gatewayOriginScope(opts.url);
 
   const deviceIdentity = await (async () => {
     try {
-      if (!URL.canParse(opts.url)) {
+      if (!deviceAuthScope || !URL.canParse(opts.url)) {
+        return null;
+      }
+      const loopback = isLoopbackHost(new URL(opts.url).hostname);
+      // A remote loopback URL can be a reused SSH port, not the cached token's Gateway.
+      if (opts.originScopedDeviceAuth && loopback) {
         return null;
       }
       const { loadDeviceIdentityIfPresent } = await import("../infra/device-identity.js");
@@ -317,20 +310,19 @@ export async function probeGateway(opts: {
       // Keep probes non-mutating: only attach a device identity when this CLI
       // already has a cached operator device token. Fresh diagnostics should not
       // create a read-only pairing baseline that later blocks admin commands.
-      const cachedOperatorToken = opts.suppressStoredDeviceAuth
-        ? null
-        : deviceAuthScope
-          ? await loadOriginDeviceTokenReadOnly({
-              gatewayScope: deviceAuthScope,
-              deviceId: identity.deviceId,
-              role: "operator",
-              env: opts.env,
-            })
-          : await loadDeviceAuthTokenReadOnly({
-              deviceId: identity.deviceId,
-              role: "operator",
-              env: opts.env,
-            });
+      const lookup = { deviceId: identity.deviceId, role: "operator", env: opts.env };
+      let cachedOperatorToken = await loadOriginDeviceTokenReadOnly({
+        ...lookup,
+        gatewayScope: deviceAuthScope,
+      });
+      if (!cachedOperatorToken && loopback) {
+        // Default local clients still cache unscoped tokens. Keep this fallback
+        // local-only and select the same store for the subsequent client handshake.
+        cachedOperatorToken = await loadDeviceAuthTokenReadOnly(lookup);
+        if (cachedOperatorToken) {
+          deviceAuthScope = undefined;
+        }
+      }
       return cachedOperatorToken ? identity : null;
     } catch {
       // Read-only or restricted environments should still be able to run

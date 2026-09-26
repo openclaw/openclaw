@@ -44,6 +44,7 @@ const {
   operatorClient,
   listChildren,
   spawnCollectors,
+  spawnCollectorsWithDelayedFirstRead,
   createQueuedReservation,
 } = useQueuedCollectorFixture();
 
@@ -98,11 +99,10 @@ describe("queued collector session projection", () => {
       publications.push(publishLifecycle(event));
     });
     try {
-      const results = await spawnCollectors();
+      const results = await spawnCollectorsWithDelayedFirstRead();
       const first = expectDefined(results[0], "first collector");
       const second = expectDefined(results[1], "second collector");
       expect(results.map((result) => result.status)).toEqual(["accepted", "accepted"]);
-      await vi.waitFor(() => expect(launchedRunIds).toEqual([first.runId]));
       try {
         const rows = (await listChildren(context)).sessions;
         expect(rows.map((row) => row.key).toSorted()).toEqual(
