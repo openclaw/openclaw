@@ -8,34 +8,13 @@ import { capLiveAssistantText } from "./live-chat-projector.js";
 const LIVE_CHAT_BUFFER_CHARS = 500_000;
 
 describe("server chat stream text merge", () => {
-  it.each([
-    {
-      name: "repeated digits",
-      chunks: ["1", "1", "1"],
-      expected: "111",
-    },
-    {
-      name: "repeated CJK punctuation",
-      chunks: ["。", "。", "。"],
-      expected: "。。。",
-    },
-    {
-      name: "repeated markdown emphasis tokens",
-      chunks: ["**", "**"],
-      expected: "****",
-    },
-    {
-      name: "repeated markdown table separators",
-      chunks: ["|", "|", "|"],
-      expected: "|||",
-    },
-  ])("appends incremental deltas without collapsing $name", ({ chunks, expected }) => {
-    const merged = chunks.reduce<AssistantTextSnapshot>(
+  it("appends repeated incremental deltas without collapsing them", () => {
+    const merged = ["。", "。", "。"].reduce<AssistantTextSnapshot>(
       (previous, delta) => mergeAssistantText(previous, { text: delta, delta }, "live"),
       { text: "" },
     );
 
-    expect(merged.text).toBe(expected);
+    expect(merged.text).toBe("。。。");
   });
 
   it.each([

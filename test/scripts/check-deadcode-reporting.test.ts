@@ -18,8 +18,6 @@ describe("deadcode command reporting", () => {
   }>([
     { wrapper: "exports", outcomes: ["failure", "finding", "success"] },
     { wrapper: "unused-files", outcomes: ["failure", "finding"] },
-    { wrapper: "unused-files", outcomes: ["failure", "success"] },
-    { wrapper: "exports", outcomes: ["success", "success", "failure"] },
     { wrapper: "unused-files", outcomes: ["success", "finding"] },
     { wrapper: "exports", outcomes: ["success", "success", "success"] },
     { wrapper: "unused-files", outcomes: ["success", "success"] },

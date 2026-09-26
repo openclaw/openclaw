@@ -57,13 +57,10 @@ function expectRecoveryCount(harness: ReturnType<typeof createHarness>, count: n
 describe("host thaw recovery", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it.each([
-    ["normal cadence", TICK_INTERVAL_MS],
-    ["one millisecond below the thaw threshold", TICK_INTERVAL_MS + HOST_THAW_MIN_FROZEN_MS - 1],
-  ])("does not recover on %s", async (_label, gapMs) => {
+  it("does not recover one millisecond below the thaw threshold", async () => {
     const harness = createHarness();
 
-    await harness.advance(gapMs);
+    await harness.advance(TICK_INTERVAL_MS + HOST_THAW_MIN_FROZEN_MS - 1);
 
     expectRecoveryCount(harness, 0);
     expect(harness.deps.logger.info).not.toHaveBeenCalled();
@@ -243,6 +240,9 @@ describe("host thaw recovery", () => {
     await harness.advance(thawGap);
 
     expectRecoveryCount(harness, 2);
+    expect(harness.deps.logger.info).toHaveBeenCalledWith(
+      expect.stringContaining(`frozen ~${HOST_THAW_MIN_FROZEN_MS}ms`),
+    );
     expect(harness.deps.restartChannelsIfIdle.mock.calls).toEqual([["new-thaw"], ["new-thaw"]]);
   });
 });

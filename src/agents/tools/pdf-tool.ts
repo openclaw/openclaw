@@ -1,8 +1,3 @@
-/**
- * pdf built-in tool.
- *
- * Loads local/web PDFs, extracts pages/text, and analyzes them with native or fallback media-understanding models.
- */
 import { normalizeMimeType } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
@@ -27,7 +22,10 @@ import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { resolveModelAsync } from "../embedded-agent-runner/model.js";
 import { abortable } from "../embedded-agent-runner/run/abortable.js";
 import { requireApiKey } from "../model-auth.js";
-import { resolveAllowedImageFallbackCandidates } from "../model-fallback-image.js";
+import {
+  resolveAllowedImageFallbackCandidates,
+  runWithImageModelFallback,
+} from "../model-fallback-image.js";
 import type { ModelRef } from "../model-selection.js";
 import {
   acquireAgentRunPreparedModelRuntime,
@@ -35,10 +33,12 @@ import {
 } from "../prepared-model-runtime.js";
 import { retainPreparedModelRuntimeSnapshotResources } from "../prepared-model-runtime.resources.js";
 import { getModelProviderRequestTransport } from "../provider-request-config.js";
+import { createSandboxBridgeReadFile } from "../sandbox-media-paths.js";
 import { optionalFiniteNumberSchema } from "../schema/typebox.js";
 import { completeWithPreparedSimpleCompletionModel } from "../simple-completion-execution.js";
 import { prepareSimpleCompletionModel } from "../simple-completion-runtime.js";
-import { readFiniteNumberParam, ToolInputError } from "./common.js";
+import type { ToolFsPolicy } from "../tool-fs-policy.js";
+import { readFiniteNumberParam, ToolInputError, type AnyAgentTool } from "./common.js";
 import { coerceImageModelConfig, type ImageModelConfig } from "./image-tool.helpers.js";
 import {
   buildMediaReferenceDetails,
@@ -61,12 +61,6 @@ import {
   resolvePdfToolMaxTokens,
 } from "./pdf-tool.helpers.js";
 import { resolvePdfModelConfigForTool } from "./pdf-tool.model-config.js";
-import {
-  createSandboxBridgeReadFile,
-  runWithImageModelFallback,
-  type AnyAgentTool,
-  type ToolFsPolicy,
-} from "./tool-runtime.helpers.js";
 
 const DEFAULT_PROMPT = "Analyze this PDF document.";
 const DEFAULT_MAX_PDFS = 10;
@@ -100,10 +94,6 @@ function hasExplicitPdfToolModelConfig(config?: OpenClawConfig): boolean {
     hasToolModelConfig(coerceImageModelConfig(config))
   );
 }
-
-// ---------------------------------------------------------------------------
-// Run PDF prompt with model fallback
-// ---------------------------------------------------------------------------
 
 async function runPdfPrompt(params: {
   cfg?: OpenClawConfig;
@@ -355,11 +345,7 @@ async function runPdfPrompt(params: {
   });
 
   return {
-    text: result.result.text,
-    provider: result.result.provider,
-    model: result.result.model,
-    native: result.result.native,
-    extractions: result.result.extractions,
+    ...result.result,
     attempts: result.attempts.map((a) => ({
       provider: a.provider,
       model: a.model,
@@ -367,10 +353,6 @@ async function runPdfPrompt(params: {
     })),
   };
 }
-
-// ---------------------------------------------------------------------------
-// PDF tool factory
-// ---------------------------------------------------------------------------
 
 export function createPdfTool(options?: {
   config?: OpenClawConfig;
@@ -433,10 +415,8 @@ export function createPdfTool(options?: {
     assertResourcesOpen: (() => void) | undefined,
     operatorAuthority: AdmittedRunOperatorAuthority | undefined,
   ): Promise<Awaited<ReturnType<AnyAgentTool["execute"]>>> => {
-    // MARK: - Normalize pdf + pdfs input
     const pdfInputs = resolvePdfInputs(record);
 
-    // Enforce max PDFs cap
     if (pdfInputs.length > DEFAULT_MAX_PDFS) {
       return {
         content: [
@@ -465,7 +445,6 @@ export function createPdfTool(options?: {
       }) ?? configuredMaxBytesMb;
     const maxBytes = Math.floor(maxBytesMb * 1024 * 1024);
 
-    // Parse page range
     const pagesRaw = normalizeOptionalString(record.pages);
     const pageSelection = pagesRaw ? parsePageRange(pagesRaw, configuredMaxPages) : undefined;
     const pageNumbers = pageSelection?.pages;
@@ -494,7 +473,6 @@ export function createPdfTool(options?: {
       options?.fsPolicy?.workspaceOnly,
     );
 
-    // MARK: - Load each PDF
     const loadedPdfs: Array<{
       buffer: Buffer;
       filename: string;

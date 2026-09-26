@@ -1,8 +1,3 @@
-/**
- * web_fetch extraction utilities.
- *
- * Converts lightweight HTML into bounded markdown/text without pulling in a full renderer.
- */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   RAW_TEXT_TAGS,
@@ -19,7 +14,6 @@ import { stripInvisibleUnicode } from "../../infra/unicode-visibility.js";
 import { decodeHtmlEntities } from "../../shared/html-entities.js";
 import { sanitizeHtml } from "./web-fetch-visibility.js";
 
-/** Output mode requested by web_fetch extraction. */
 export type ExtractMode = "markdown" | "text";
 
 const BLOCK_BREAK_TAGS = new Set([
@@ -176,29 +170,24 @@ function closeContext(
   }
 }
 
-function closeTopContext(stack: RenderContext[], state: { title?: string }): boolean {
-  if (stack.length < 2) {
-    return false;
-  }
+function closeTopContext(stack: RenderContext[], state: { title?: string }): void {
   const context = stack.pop()!;
   closeContext(context, stack[stack.length - 1]!, state);
-  return true;
 }
 
 function closeThroughContext(
   stack: RenderContext[],
   kind: RenderContext["kind"],
   state: { title?: string },
-): boolean {
+): void {
   for (let i = stack.length - 1; i > 0; i -= 1) {
     if (stack[i]?.kind === kind) {
       while (stack.length > i) {
         closeTopContext(stack, state);
       }
-      return true;
+      return;
     }
   }
-  return false;
 }
 
 function pushContext(
@@ -228,7 +217,6 @@ function closeOpenAnchorWithText(stack: RenderContext[], state: { title?: string
   return false;
 }
 
-/** Converts sanitized HTML into coarse markdown plus an optional title. */
 export function htmlToMarkdown(html: string): { text: string; title?: string } {
   const root: RenderContext = { kind: "root", parts: [] };
   const stack: RenderContext[] = [root];
@@ -337,7 +325,6 @@ export function htmlToMarkdown(html: string): { text: string; title?: string } {
   };
 }
 
-/** Collapses display whitespace while preserving paragraph breaks. */
 export function normalizeWhitespace(value: string): string {
   return value
     .replace(/\r/g, "")
@@ -347,7 +334,6 @@ export function normalizeWhitespace(value: string): string {
     .trim();
 }
 
-/** Removes markdown decoration for plain text extraction. */
 export function markdownToText(markdown: string): string {
   let text = markdown;
   text = text.replace(/!\[[^\]]*]\([^)]+\)/g, "");
@@ -380,7 +366,6 @@ export function markdownToText(markdown: string): string {
   return normalizeWhitespace(text);
 }
 
-/** Truncates text by characters and reports whether truncation occurred. */
 export function truncateWebFetchText(
   value: string,
   maxChars: number,
@@ -391,20 +376,17 @@ export function truncateWebFetchText(
   return { text: truncateUtf16Safe(value, maxChars), truncated: true };
 }
 
-/** Sanitizes HTML and extracts either markdown or plain text content. */
 export async function extractBasicHtmlContent(params: {
   html: string;
   extractMode: ExtractMode;
 }): Promise<{ text: string; title?: string } | null> {
   const cleanHtml = await sanitizeHtml(params.html);
   const rendered = htmlToMarkdown(cleanHtml);
-  if (params.extractMode === "text") {
-    const text =
-      stripInvisibleUnicode(markdownToText(rendered.text)) ||
-      stripInvisibleUnicode(rendered.title ?? "") ||
-      stripInvisibleUnicode(rendered.text);
-    return text ? { text, title: rendered.title } : null;
-  }
-  const text = stripInvisibleUnicode(rendered.text) || stripInvisibleUnicode(rendered.title ?? "");
+  const text =
+    stripInvisibleUnicode(
+      params.extractMode === "text" ? markdownToText(rendered.text) : rendered.text,
+    ) ||
+    stripInvisibleUnicode(rendered.title ?? "") ||
+    stripInvisibleUnicode(rendered.text);
   return text ? { text, title: rendered.title } : null;
 }

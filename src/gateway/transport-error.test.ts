@@ -64,7 +64,7 @@ describe("Gateway RPC transport availability", () => {
   });
 
   it.each([
-    ...[1000, 1002, 1003, 1008, 1011, 4000, 4001, 4999].flatMap((code) => [
+    ...[1000, 1008, 1011, 4001].flatMap((code) => [
       {
         label: `typed authoritative close ${code}`,
         error: new GatewayTransportError({

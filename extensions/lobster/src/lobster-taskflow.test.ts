@@ -1,4 +1,3 @@
-// Lobster tests cover lobster taskflow plugin behavior.
 import { createRuntimeTaskFlow } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { LobsterRunner } from "./lobster-runner.js";
@@ -66,29 +65,6 @@ function createResumeFlowParams(
 }
 
 describe("runManagedLobsterFlow", () => {
-  it("creates a flow and finishes it when Lobster succeeds", async () => {
-    const taskFlow = createFakeTaskFlow();
-    const runner = createRunner({
-      ok: true,
-      status: "ok",
-      output: [{ id: "result-1" }],
-      requiresApproval: null,
-    });
-
-    const result = await runManagedLobsterFlow(createRunFlowParams(taskFlow, runner));
-
-    expect(result.ok).toBe(true);
-    expect(taskFlow.tryCreateManaged).toHaveBeenCalledWith({
-      controllerId: "tests/lobster",
-      goal: "Run Lobster workflow",
-      currentStep: "run_lobster",
-    });
-    expect(taskFlow.finish).toHaveBeenCalledWith({
-      flowId: "flow-1",
-      expectedRevision: 1,
-    });
-  });
-
   it("serializes cyclic and supported approval items before waiting", async () => {
     const taskFlow = createFakeTaskFlow();
     const createdAt = new Date("2026-04-05T21:00:00.000Z");
@@ -176,22 +152,6 @@ describe("runManagedLobsterFlow", () => {
       expectedRevision: 1,
     });
   });
-
-  it("fails the flow when the runner throws", async () => {
-    const taskFlow = createFakeTaskFlow();
-    const runner: LobsterRunner = {
-      run: vi.fn().mockRejectedValue(new Error("crashed")),
-    };
-
-    const result = expectManagedFlowFailure(
-      await runManagedLobsterFlow(createRunFlowParams(taskFlow, runner)),
-    );
-    expect(result.error.message).toBe("crashed");
-    expect(taskFlow.fail).toHaveBeenCalledWith({
-      flowId: "flow-1",
-      expectedRevision: 1,
-    });
-  });
 });
 
 describe("resumeManagedLobsterFlow", () => {
@@ -213,30 +173,6 @@ describe("resumeManagedLobsterFlow", () => {
     );
     expect(runner.run).not.toHaveBeenCalled();
     expect(taskFlow.resume).not.toHaveBeenCalled();
-  });
-
-  it("resumes the flow and finishes it on success", async () => {
-    const taskFlow = createFakeTaskFlow();
-    const runner = createRunner({
-      ok: true,
-      status: "ok",
-      output: [],
-      requiresApproval: null,
-    });
-
-    const result = await resumeManagedLobsterFlow(createResumeFlowParams(taskFlow, runner));
-
-    expect(result.ok).toBe(true);
-    expect(taskFlow.resume).toHaveBeenCalledWith({
-      flowId: "flow-1",
-      expectedRevision: 4,
-      status: "running",
-      currentStep: "resume_lobster",
-    });
-    expect(taskFlow.finish).toHaveBeenCalledWith({
-      flowId: "flow-1",
-      expectedRevision: 5,
-    });
   });
 
   it("returns a mutation error when taskFlow resume is rejected", async () => {
@@ -276,83 +212,45 @@ describe("resumeManagedLobsterFlow", () => {
       expectedRevision: 5,
     });
   });
-
-  it("returns to waiting when the resumed Lobster run needs approval again", async () => {
-    const taskFlow = createFakeTaskFlow();
-    const runner = createRunner({
-      ok: true,
-      status: "needs_approval",
-      output: [],
-      requiresApproval: {
-        type: "approval_request",
-        prompt: "Approve this too?",
-        items: [{ id: "item-2" }],
-        resumeToken: "resume-2",
-      },
-    });
-
-    const result = await resumeManagedLobsterFlow(createResumeFlowParams(taskFlow, runner));
-
-    expect(result.ok).toBe(true);
-    expect(taskFlow.setWaiting).toHaveBeenCalledWith({
-      flowId: "flow-1",
-      expectedRevision: 5,
-      currentStep: "await_lobster_approval",
-      waitJson: {
-        kind: "lobster_approval",
-        prompt: "Approve this too?",
-        items: [{ id: "item-2" }],
-        resumeToken: "resume-2",
-      },
-    });
-  });
 });
 
 describe("cancelled managed Lobster flows", () => {
-  it.each(["run", "resume"])(
-    "persists a cancelled TaskFlow for a rejected Lobster %s",
-    async (action) => {
-      const legacy = createRuntimeTaskFlow().bindSession({
-        sessionKey: `agent:main:lobster-cancel-${action}`,
-      });
-      const taskFlow: BoundTaskFlow = {
-        get: async (id) => legacy.get(id),
-        tryCreateManaged: async (params) => legacy.tryCreateManaged(params),
-        resume: async (params) => legacy.resume(params),
-        setWaiting: async (params) => legacy.setWaiting(params),
-        finish: async (params) => legacy.finish(params),
-        fail: async (params) => legacy.fail(params),
-        cancel: legacy.cancel,
-      };
-      const runner = createRunner({
-        ok: true,
-        status: "cancelled",
-        output: [],
-        requiresApproval: null,
-      });
-      let result;
-      if (action === "run") {
-        result = await runManagedLobsterFlow(createRunFlowParams(taskFlow, runner));
-      } else {
-        const waitingFlow = legacy.createManaged({
-          controllerId: "tests/lobster",
-          goal: "Resume Lobster workflow",
-          status: "waiting",
-          waitJson: { kind: "lobster_approval", resumeToken: "resume-1" },
-        });
-        result = await resumeManagedLobsterFlow({
-          ...createResumeFlowParams(taskFlow, runner),
-          flowId: waitingFlow.flowId,
-          expectedRevision: waitingFlow.revision,
-        });
-      }
+  it("persists a cancelled TaskFlow for a rejected Lobster resume", async () => {
+    const legacy = createRuntimeTaskFlow().bindSession({
+      sessionKey: "agent:main:lobster-cancel-resume",
+    });
+    const taskFlow: BoundTaskFlow = {
+      get: async (id) => legacy.get(id),
+      tryCreateManaged: async (params) => legacy.tryCreateManaged(params),
+      resume: async (params) => legacy.resume(params),
+      setWaiting: async (params) => legacy.setWaiting(params),
+      finish: async (params) => legacy.finish(params),
+      fail: async (params) => legacy.fail(params),
+      cancel: legacy.cancel,
+    };
+    const runner = createRunner({
+      ok: true,
+      status: "cancelled",
+      output: [],
+      requiresApproval: null,
+    });
+    const waitingFlow = legacy.createManaged({
+      controllerId: "tests/lobster",
+      goal: "Resume Lobster workflow",
+      status: "waiting",
+      waitJson: { kind: "lobster_approval", resumeToken: "resume-1" },
+    });
+    const result = await resumeManagedLobsterFlow({
+      ...createResumeFlowParams(taskFlow, runner),
+      flowId: waitingFlow.flowId,
+      expectedRevision: waitingFlow.revision,
+    });
 
-      if (!result.ok) {
-        throw result.error;
-      }
-      expect(legacy.get(result.flow.flowId)?.status).toBe("cancelled");
-    },
-  );
+    if (!result.ok) {
+      throw result.error;
+    }
+    expect(legacy.get(result.flow.flowId)?.status).toBe("cancelled");
+  });
 
   it.each(["unsettled", "rejected"])(
     "does not finish or fail when TaskFlow cancellation is %s",

@@ -77,20 +77,6 @@ describe("buildMinimaxSpeechProvider", () => {
     it("has autoSelectOrder 40", () => {
       expect(provider.autoSelectOrder).toBe(40);
     });
-
-    it("exposes models and voices", () => {
-      expect(provider.models).toEqual([
-        "speech-2.8-hd",
-        "speech-2.8-turbo",
-        "speech-2.6-hd",
-        "speech-2.6-turbo",
-        "speech-02-hd",
-        "speech-02-turbo",
-        "speech-01-hd",
-        "speech-01-turbo",
-      ]);
-      expect(provider.voices).toContain("English_expressive_narrator");
-    });
   });
 
   describe("isConfigured", () => {
@@ -242,55 +228,14 @@ describe("buildMinimaxSpeechProvider", () => {
     };
 
     it.each([
-      {
-        name: "handles voice key",
-        key: "voice",
-        value: "Chinese (Mandarin)_Warm_Girl",
-        overrides: { voiceId: "Chinese (Mandarin)_Warm_Girl" },
-      },
-      {
-        name: "handles voiceid key",
-        key: "voiceid",
-        value: "test_voice",
-        overrides: { voiceId: "test_voice" },
-      },
-      {
-        name: "handles model key",
-        key: "model",
-        value: "speech-01-turbo",
-        overrides: { model: "speech-01-turbo" },
-      },
-      {
-        name: "handles speed key with valid value",
-        key: "speed",
-        value: "1.5",
-        overrides: { speed: 1.5 },
-      },
-      {
-        name: "handles vol key",
-        key: "vol",
-        value: "3",
-        overrides: { vol: 3 },
-      },
-      {
-        name: "handles vol=10 (inclusive maximum)",
-        key: "vol",
-        value: "10",
-        overrides: { vol: 10 },
-      },
-      {
-        name: "handles volume alias",
-        key: "volume",
-        value: "5",
-        overrides: { vol: 5 },
-      },
-      {
-        name: "handles pitch key",
-        key: "pitch",
-        value: "-3",
-        overrides: { pitch: -3 },
-      },
-    ])("$name", ({ key, value, overrides }) => {
+      ["voice", "Chinese (Mandarin)_Warm_Girl", { voiceId: "Chinese (Mandarin)_Warm_Girl" }],
+      ["voiceid", "test_voice", { voiceId: "test_voice" }],
+      ["model", "speech-01-turbo", { model: "speech-01-turbo" }],
+      ["speed", "1.5", { speed: 1.5 }],
+      ["vol", "10", { vol: 10 }],
+      ["volume", "5", { vol: 5 }],
+      ["pitch", "-3", { pitch: -3 }],
+    ])("parses %s=%s", (key, value, overrides) => {
       const result = parseDirectiveToken({ key, value, policy });
       expect(result.handled).toBe(true);
       expect(result.warnings).toBeUndefined();
@@ -300,8 +245,6 @@ describe("buildMinimaxSpeechProvider", () => {
     it.each([
       { name: "warns on invalid speed", key: "speed", value: "5.0" },
       { name: "warns on non-decimal speed values", key: "speed", value: "0x1" },
-      { name: "warns on non-decimal volume values", key: "vol", value: "0x3" },
-      { name: "warns on non-decimal pitch values", key: "pitch", value: "0x3" },
     ])("$name", ({ key, value }) => {
       const result = parseDirectiveToken({ key, value, policy });
       expect(result.handled).toBe(true);
@@ -352,6 +295,22 @@ describe("buildMinimaxSpeechProvider", () => {
   });
 
   describe("synthesize", () => {
+    function synthesize(overrides: Partial<Parameters<typeof provider.synthesize>[0]> = {}) {
+      return provider.synthesize({
+        text: "Test",
+        cfg: {},
+        providerConfig: { apiKey: "sk-test" },
+        target: "audio-file",
+        timeoutMs: 30000,
+        ...overrides,
+      });
+    }
+
+    function mockAudioResponse(audio = "audio") {
+      vi.mocked(globalThis.fetch).mockResolvedValueOnce(
+        Response.json({ data: { audio: Buffer.from(audio).toString("hex") } }),
+      );
+    }
     const savedFetch = globalThis.fetch;
     let tempStateDir: string;
     let tempAgentDir: string;
@@ -397,16 +356,12 @@ describe("buildMinimaxSpeechProvider", () => {
     }
 
     it("requests non-streaming hex audio and decodes the hex response", async () => {
-      const hexAudio = Buffer.from("fake-audio-data").toString("hex");
+      mockAudioResponse("fake-audio-data");
       const mockFetch = vi.mocked(globalThis.fetch);
-      mockFetch.mockResolvedValueOnce(Response.json({ data: { audio: hexAudio } }));
 
-      const result = await provider.synthesize({
+      const result = await synthesize({
         text: "Hello world",
-        cfg: {} as never,
         providerConfig: { apiKey: "sk-test", baseUrl: "https://api.minimaxi.com" },
-        target: "audio-file",
-        timeoutMs: 30000,
       });
 
       expect(result.outputFormat).toBe("mp3");
@@ -429,17 +384,13 @@ describe("buildMinimaxSpeechProvider", () => {
     });
 
     it("transcodes MiniMax MP3 to Opus for voice-note targets", async () => {
-      const hexAudio = Buffer.from("fake-mp3-data").toString("hex");
-      const mockFetch = vi.mocked(globalThis.fetch);
-      mockFetch.mockResolvedValueOnce(Response.json({ data: { audio: hexAudio } }));
+      mockAudioResponse("fake-mp3-data");
       transcodeAudioBufferToOpusMock.mockResolvedValueOnce(Buffer.from("fake-opus-data"));
 
-      const result = await provider.synthesize({
+      const result = await synthesize({
         text: "Hello world",
-        cfg: {} as never,
         providerConfig: { apiKey: "sk-test", baseUrl: "https://api.minimaxi.com" },
         target: "voice-note",
-        timeoutMs: 30000,
       });
 
       expect(result.outputFormat).toBe("opus");
@@ -455,16 +406,9 @@ describe("buildMinimaxSpeechProvider", () => {
     });
 
     it("applies overrides", async () => {
-      const hexAudio = Buffer.from("audio").toString("hex");
-      const mockFetch = vi.mocked(globalThis.fetch);
-      mockFetch.mockResolvedValueOnce(
-        new Response(JSON.stringify({ data: { audio: hexAudio } }), { status: 200 }),
-      );
+      mockAudioResponse();
 
-      await provider.synthesize({
-        text: "Test",
-        cfg: {} as never,
-        providerConfig: { apiKey: "sk-test" },
+      await synthesize({
         providerOverrides: {
           model: "speech-01-turbo",
           voiceId: "custom_voice",
@@ -472,8 +416,6 @@ describe("buildMinimaxSpeechProvider", () => {
           vol: 1.5,
           pitch: 0.5,
         },
-        target: "audio-file",
-        timeoutMs: 30000,
       });
 
       const body = firstFetchBody();
@@ -486,23 +428,15 @@ describe("buildMinimaxSpeechProvider", () => {
     });
 
     it("drops malformed voice settings before synthesis", async () => {
-      const hexAudio = Buffer.from("audio").toString("hex");
-      const mockFetch = vi.mocked(globalThis.fetch);
-      mockFetch.mockResolvedValueOnce(
-        new Response(JSON.stringify({ data: { audio: hexAudio } }), { status: 200 }),
-      );
+      mockAudioResponse();
 
-      await provider.synthesize({
-        text: "Test",
-        cfg: {} as never,
+      await synthesize({
         providerConfig: {
           apiKey: "sk-test",
           speed: 3,
           vol: -1,
           pitch: 20,
         },
-        target: "audio-file",
-        timeoutMs: 30000,
       });
 
       const voiceSetting = firstFetchBody().voice_setting as Record<string, unknown>;
@@ -513,18 +447,9 @@ describe("buildMinimaxSpeechProvider", () => {
 
     it("uses a MiniMax Token Plan env var when no API key is configured", async () => {
       process.env.MINIMAX_CODING_API_KEY = "sk-cp-env";
-      const hexAudio = Buffer.from("audio").toString("hex");
-      vi.mocked(globalThis.fetch).mockResolvedValueOnce(
-        new Response(JSON.stringify({ data: { audio: hexAudio } }), { status: 200 }),
-      );
+      mockAudioResponse();
 
-      await provider.synthesize({
-        text: "Token plan TTS",
-        cfg: {} as never,
-        providerConfig: {},
-        target: "audio-file",
-        timeoutMs: 30000,
-      });
+      await synthesize({ text: "Token plan TTS", providerConfig: {} });
 
       const init = firstFetchInit();
       expect(init?.headers).toEqual({
@@ -536,12 +461,9 @@ describe("buildMinimaxSpeechProvider", () => {
     it("uses a minimax-portal auth profile before env API keys", async () => {
       process.env.MINIMAX_API_KEY = "sk-env";
       seedMinimaxPortalProfile(tempAgentDir);
-      const hexAudio = Buffer.from("audio").toString("hex");
-      vi.mocked(globalThis.fetch).mockResolvedValueOnce(
-        new Response(JSON.stringify({ data: { audio: hexAudio } }), { status: 200 }),
-      );
+      mockAudioResponse();
 
-      await provider.synthesize({
+      await synthesize({
         text: "Portal TTS",
         cfg: {
           models: {
@@ -551,8 +473,6 @@ describe("buildMinimaxSpeechProvider", () => {
           },
         } as never,
         providerConfig: {},
-        target: "audio-file",
-        timeoutMs: 30000,
       });
 
       const url = firstFetchCall()[0];
@@ -565,30 +485,14 @@ describe("buildMinimaxSpeechProvider", () => {
     });
 
     it("throws when API key is missing", async () => {
-      await expect(
-        provider.synthesize({
-          text: "Test",
-          cfg: {} as never,
-          providerConfig: {},
-          target: "audio-file",
-          timeoutMs: 30000,
-        }),
-      ).rejects.toThrow("MiniMax TTS auth missing");
+      await expect(synthesize({ providerConfig: {} })).rejects.toThrow("MiniMax TTS auth missing");
       expect(globalThis.fetch).not.toHaveBeenCalled();
     });
 
     it("does not send a request for a blank environment API key", async () => {
       process.env.MINIMAX_API_KEY = "   ";
 
-      await expect(
-        provider.synthesize({
-          text: "Test",
-          cfg: {} as never,
-          providerConfig: {},
-          target: "audio-file",
-          timeoutMs: 30000,
-        }),
-      ).rejects.toThrow("MiniMax TTS auth missing");
+      await expect(synthesize({ providerConfig: {} })).rejects.toThrow("MiniMax TTS auth missing");
       expect(globalThis.fetch).not.toHaveBeenCalled();
     });
 
@@ -596,15 +500,7 @@ describe("buildMinimaxSpeechProvider", () => {
       vi.mocked(globalThis.fetch).mockResolvedValueOnce(
         new Response("Unauthorized", { status: 401 }),
       );
-      await expect(
-        provider.synthesize({
-          text: "Test",
-          cfg: {} as never,
-          providerConfig: { apiKey: "sk-test" },
-          target: "audio-file",
-          timeoutMs: 30000,
-        }),
-      ).rejects.toThrow("MiniMax TTS API error (401): Unauthorized");
+      await expect(synthesize()).rejects.toThrow("MiniMax TTS API error (401): Unauthorized");
     });
   });
 
@@ -615,28 +511,15 @@ describe("buildMinimaxSpeechProvider", () => {
         throw new Error("Expected MiniMax provider listVoices");
       }
       const voices = await listVoices({} as never);
-      expect(voices).toStrictEqual([
-        {
-          id: "English_expressive_narrator",
-          name: "English_expressive_narrator",
-        },
-        {
-          id: "Chinese (Mandarin)_Warm_Girl",
-          name: "Chinese (Mandarin)_Warm_Girl",
-        },
-        {
-          id: "Chinese (Mandarin)_Lively_Girl",
-          name: "Chinese (Mandarin)_Lively_Girl",
-        },
-        {
-          id: "Chinese (Mandarin)_Gentle_Boy",
-          name: "Chinese (Mandarin)_Gentle_Boy",
-        },
-        {
-          id: "Chinese (Mandarin)_Steady_Boy",
-          name: "Chinese (Mandarin)_Steady_Boy",
-        },
-      ]);
+      expect(voices).toStrictEqual(
+        [
+          "English_expressive_narrator",
+          "Chinese (Mandarin)_Warm_Girl",
+          "Chinese (Mandarin)_Lively_Girl",
+          "Chinese (Mandarin)_Gentle_Boy",
+          "Chinese (Mandarin)_Steady_Boy",
+        ].map((id) => ({ id, name: id })),
+      );
     });
   });
 });

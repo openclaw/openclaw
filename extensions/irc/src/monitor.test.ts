@@ -182,6 +182,26 @@ async function startReconnectingReplyIrcServer(): Promise<ReconnectingReplyIrcSe
   };
 }
 
+function monitorConfig(
+  port: number,
+  nick = "bot",
+  extra: Partial<NonNullable<NonNullable<CoreConfig["channels"]>["irc"]>> = {},
+): CoreConfig {
+  return {
+    channels: {
+      irc: {
+        host: "127.0.0.1",
+        port,
+        tls: false,
+        nick,
+        username: "bot",
+        realname: "OpenClaw",
+        ...extra,
+      },
+    },
+  };
+}
+
 function installMonitorRuntime() {
   const activityRecord = vi.fn();
   setIrcRuntime({
@@ -420,19 +440,7 @@ describe("irc monitor reconnect", () => {
       installMonitorRuntime();
       const { statusSink, reconnected } = observeReconnect();
       const server = await startDisconnectingIrcServer();
-      const config = {
-        channels: {
-          irc: {
-            host: "127.0.0.1",
-            port: server.port,
-            tls: false,
-            nick: "bot",
-            username: "bot",
-            realname: "OpenClaw",
-            channels: ["#openclaw"],
-          },
-        },
-      } as CoreConfig;
+      const config = monitorConfig(server.port, "bot", { channels: ["#openclaw"] });
       let monitor: { stop: () => Promise<void> } | undefined;
 
       try {
@@ -483,19 +491,7 @@ describe("irc monitor reconnect", () => {
       let monitor: { stop: () => Promise<void> } | undefined;
       try {
         monitor = await monitorIrcProvider({
-          config: {
-            channels: {
-              irc: {
-                host: "127.0.0.1",
-                port: server.port,
-                tls: false,
-                nick: "receipt-bot",
-                username: "bot",
-                realname: "OpenClaw",
-                dmPolicy: "pairing",
-              },
-            },
-          } as CoreConfig,
+          config: monitorConfig(server.port, "receipt-bot", { dmPolicy: "pairing" }),
           ingressQueue,
           statusSink,
         });
@@ -562,18 +558,7 @@ describe("irc monitor inbound target", () => {
         let monitor: { stop: () => Promise<void> } | undefined;
         try {
           monitor = await monitorIrcProvider({
-            config: {
-              channels: {
-                irc: {
-                  host: "127.0.0.1",
-                  port: server.port,
-                  tls: false,
-                  nick: "bot",
-                  username: "bot",
-                  realname: "OpenClaw",
-                },
-              },
-            } as CoreConfig,
+            config: monitorConfig(server.port),
             ingressQueue,
             onMessage: (message) => {
               messages.push(message);
@@ -621,18 +606,7 @@ describe("irc monitor inbound target", () => {
       let monitor: { stop: () => Promise<void> } | undefined;
       try {
         monitor = await monitorIrcProvider({
-          config: {
-            channels: {
-              irc: {
-                host: "127.0.0.1",
-                port: server.port,
-                tls: false,
-                nick: "reconnected-bot",
-                username: "bot",
-                realname: "OpenClaw",
-              },
-            },
-          } as CoreConfig,
+          config: monitorConfig(server.port, "reconnected-bot"),
           ingressQueue,
           onMessage,
         });
@@ -672,18 +646,7 @@ describe("irc monitor inbound target", () => {
       let monitor: { stop: () => Promise<void> } | undefined;
       try {
         monitor = await monitorIrcProvider({
-          config: {
-            channels: {
-              irc: {
-                host: "127.0.0.1",
-                port: server.port,
-                tls: false,
-                nick: "receipt-bot",
-                username: "bot",
-                realname: "OpenClaw",
-              },
-            },
-          } as CoreConfig,
+          config: monitorConfig(server.port, "receipt-bot"),
           ingressQueue,
           onMessage,
         });
@@ -710,18 +673,7 @@ describe("irc monitor inbound target", () => {
       let monitor: { stop: () => Promise<void> } | undefined;
       try {
         monitor = await monitorIrcProvider({
-          config: {
-            channels: {
-              irc: {
-                host: "127.0.0.1",
-                port: server.port,
-                tls: false,
-                nick: "bot",
-                username: "bot",
-                realname: "OpenClaw",
-              },
-            },
-          } as CoreConfig,
+          config: monitorConfig(server.port),
           ingressQueue,
           onMessage,
         });

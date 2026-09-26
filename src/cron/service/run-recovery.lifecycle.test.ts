@@ -5,6 +5,10 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../../test-utils/gateway-scheduler-clock.js";
+import {
   advanceCronActiveJobGeneration,
   clearCronJobActive,
   isCronJobActive,
@@ -86,12 +90,13 @@ describe("one-shot recovery", () => {
       });
       const onEvent = vi.fn();
       const sendCronFailureAlert = vi.fn(async () => undefined);
-      const freshState = () =>
+      const freshState = (clock = createGatewaySchedulerClock(nowMs)) =>
         createCronServiceState({
           storePath,
           cronEnabled: true,
           log: logger,
-          nowMs: Date.now,
+          scheduler: createTestGatewayScheduler(clock.clock),
+          nowMs: clock.clock.now,
           enqueueSystemEvent: vi.fn(),
           requestHeartbeat: vi.fn(),
           runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
@@ -225,21 +230,15 @@ describe("one-shot recovery", () => {
           ]);
         }
         for (let restart = 0; restart < 3; restart += 1) {
-          const next = freshState();
+          const clock = createGatewaySchedulerClock(nowMs);
+          const next = freshState(clock);
           try {
             await start(next);
             if (mode === "manual-delayed-force") {
-              await vi.advanceTimersByTimeAsync(MIN_REFIRE_GAP_MS);
-              await vi.waitFor(
-                async () => {
-                  expect(runCommandJob).toHaveBeenCalledTimes(2);
-                  expect(
-                    (await loadCronStore(storePath)).jobs[0]?.state.runningAtMs,
-                  ).toBeUndefined();
-                  expect(next.activeTimerTicks).toBe(0);
-                },
-                { interval: 0 },
-              );
+              await clock.advanceBy(MIN_REFIRE_GAP_MS);
+              expect(runCommandJob).toHaveBeenCalledTimes(2);
+              expect((await loadCronStore(storePath)).jobs[0]?.state.runningAtMs).toBeUndefined();
+              expect(next.activeTimerTicks).toBe(0);
             }
             // A force run reserved before the slot borrows it; once due, its
             // distinct scheduled occurrence still runs exactly once.

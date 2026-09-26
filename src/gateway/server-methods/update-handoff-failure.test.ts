@@ -22,6 +22,29 @@ import {
 } from "./update.test-harness.js";
 
 describe("update.run handoff refusal diagnostics", () => {
+  it("publishes a recovery action without restarting when the original Node is gone", async () => {
+    detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
+    mockGlobalInstallSurface();
+    startManagedServiceUpdateHandoffMock.mockRejectedValueOnce(
+      new UpdatePreMutationError(
+        "managed-service-handoff-failed",
+        "The Gateway's Node executable was removed. Refresh its service definition with `openclaw gateway install --force`. The serving Gateway has not been stopped.",
+      ),
+    );
+
+    const payload = await captureUpdateRunPayload();
+    const run = getUpdateRun(expectDefined(payload, "update response").runId);
+    expect(payload).toMatchObject({
+      ok: false,
+      result: { status: "error", reason: "managed-service-handoff-failed" },
+    });
+    expect(scheduleGatewayRestartMock).not.toHaveBeenCalled();
+    expect(run?.origin.nextAction).toContain("openclaw gateway install --force");
+    expect(renderUpdateRunReport(expectDefined(run, "update run")).markdown).toContain(
+      "The serving Gateway has not been stopped.",
+    );
+  });
+
   it.each(["helper-start", "sentinel-write"] as const)(
     "cancels its exact helper when admission ends during %s",
     async (boundary) => {

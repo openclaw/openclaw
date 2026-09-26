@@ -15,7 +15,7 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import { buildDeclaredProviderOwnerIndex } from "../plugins/provider-owner-index.js";
 import { listKnownProviderAuthEnvVarNamesCore } from "../secrets/provider-env-vars.js";
 import { captureFullEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
-import { loadDotEnv, loadWorkspaceDotEnvFile } from "./dotenv.js";
+import { loadDotEnv, loadDotEnvAsync, loadWorkspaceDotEnvFile } from "./dotenv.js";
 
 type DotEnvFixture = {
   base: string;
@@ -96,6 +96,54 @@ function createManifestBackedProviderSnapshot(
 }
 
 describe("workspace .env blocklist completeness", () => {
+  it.each(["sync", "async"])(
+    "keeps OCM launch context trusted with the %s loader",
+    async (mode) => {
+      await withIsolatedEnvAndCwd(async () => {
+        await withDotEnvFixture(async ({ base, cwdDir, stateDir }) => {
+          try {
+            await writeEnvFile(
+              path.join(cwdDir, ".env"),
+              [
+                "OCM_SELF=workspace-executable",
+                "OCM_HOME=workspace-home",
+                "OCM_ACTIVE_ENV=workspace-environment",
+                "OCM_ACTIVE_ENV_ROOT=workspace-root",
+                "OCM_SUPERVISOR_MODE=workspace-supervisor",
+                "PROJECT_NAME=allowed",
+              ].join("\n"),
+            );
+            await writeEnvFile(
+              path.join(stateDir, ".env"),
+              "OCM_SELF=global-executable\nOCM_HOME=global-home\n",
+            );
+            const env: NodeJS.ProcessEnv = {
+              HOME: base,
+              OPENCLAW_STATE_DIR: stateDir,
+              OCM_ACTIVE_ENV: "inherited-environment",
+            };
+            vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
+
+            if (mode === "async") {
+              await loadDotEnvAsync({ env, cwd: cwdDir, quiet: true });
+            } else {
+              loadDotEnv({ env, quiet: true });
+            }
+
+            expect(env.OCM_SELF).toBe("global-executable");
+            expect(env.OCM_HOME).toBe("global-home");
+            expect(env.OCM_ACTIVE_ENV).toBe("inherited-environment");
+            expect(env.OCM_ACTIVE_ENV_ROOT).toBeUndefined();
+            expect(env.OCM_SUPERVISOR_MODE).toBeUndefined();
+            expect(env.PROJECT_NAME).toBe("allowed");
+          } finally {
+            await fs.rm(base, { recursive: true, force: true });
+          }
+        });
+      });
+    },
+  );
+
   it("keeps trusted global dotenv for global plugin provider auth vars", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ cwdDir, stateDir }) => {
