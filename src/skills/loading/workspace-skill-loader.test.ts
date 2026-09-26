@@ -646,19 +646,19 @@ describe("loadWorkspaceSkills", () => {
         expect(reads(executionDir)).toBe(1);
       }
       expect(reads(workspaceDir)).toBe(1);
-      const executionDir = executionDirs[0];
+      const changedExecutionDir = executionDirs[0];
       const version = getSkillsSnapshotVersion(workspaceDir);
-      await writeWorkspaceSkills(executionDir, [
+      await writeWorkspaceSkills(changedExecutionDir, [
         { name: "cached-skill", description: "Changed loser" },
       ]);
       bumpSkillsSnapshotVersion({
         workspaceDir,
         reason: "watch",
-        sourceScopes: [scoped(executionDir)],
+        sourceScopes: [scoped(changedExecutionDir)],
       });
       expect(getSkillsSnapshotVersion(workspaceDir)).toBe(version);
       expect(reads(workspaceDir)).toBe(1);
-      expect(reads(executionDir)).toBe(2);
+      expect(reads(changedExecutionDir)).toBe(2);
       expect(reads(executionDirs[1])).toBe(1);
       await writeWorkspaceSkills(workspaceDir, [
         { name: "fresh-skill", description: "Fresh skill" },
