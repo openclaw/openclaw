@@ -1,5 +1,4 @@
 /** CLI entrypoint for non-mutating Doctor lint health checks. */
-import type { HealthFinding } from "../flows/health-checks.js";
 import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import type { DoctorLintCliOptions } from "./doctor-lint-options.js";
@@ -20,12 +19,4 @@ export async function runDoctorLintCli(
   }
   const { runDoctorLintCliInProcess } = await import("./doctor-lint-runner.js");
   return runDoctorLintCliInProcess(runtime, opts);
-}
-
-/** Collect advisory findings without writing output or repairing operator state. */
-export async function collectDoctorFindings(
-  runtime: RuntimeEnv,
-): Promise<readonly HealthFinding[]> {
-  const { collectDoctorFindings: collect } = await import("./doctor-lint-runner.js");
-  return collect(runtime);
 }
