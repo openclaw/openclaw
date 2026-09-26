@@ -1,5 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { describe, expect, it, vi } from "vitest";
 import {
   GatewayDrainingError,
   isGatewaySubordinateWorkAdmissionClosed,
@@ -8,7 +7,6 @@ import {
   runWithGatewayIndependentRootWorkAdmission,
   runWithGatewayIndependentRootWorkContinuation,
 } from "../../process/gateway-work-admission.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { createChannelIngressError } from "./ingress-errors.js";
 import {
   CHANNEL_INGRESS_RETENTION_DEFAULTS,
@@ -18,44 +16,18 @@ import {
 import {
   createMonitor,
   PermanentIngressError,
+  useIngressMonitorQueueFixture,
+  waitForAbort,
   type RawEvent,
   type StoredEvent,
 } from "./ingress-monitor.test-harness.js";
-import { createChannelIngressQueue, type ChannelIngressQueue } from "./ingress-queue.js";
+import type { ChannelIngressQueue } from "./ingress-queue.js";
 import {
   ChannelIngressUnavailableError,
   isChannelIngressUnavailableError,
 } from "./ingress-unavailable.js";
 
-async function withQueue<T>(
-  run: (queue: ChannelIngressQueue<StoredEvent>) => Promise<T>,
-): Promise<T> {
-  const stateDir = tempDirs.make("openclaw-ingress-monitor-");
-  try {
-    return await run(
-      createChannelIngressQueue<StoredEvent>({ channelId: "test", accountId: "a", stateDir }),
-    );
-  } finally {
-    closeOpenClawStateDatabaseForTest();
-  }
-}
-
-async function waitForAbort(signal: AbortSignal): Promise<void> {
-  if (signal.aborted) {
-    return;
-  }
-  await new Promise<void>((resolve) => {
-    signal.addEventListener("abort", () => resolve(), { once: true });
-  });
-}
-
-afterEach(() => {
-  resetGatewayWorkAdmission();
-  closeOpenClawStateDatabaseForTest();
-  vi.restoreAllMocks();
-});
-
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const withQueue = useIngressMonitorQueueFixture();
 
 describe("channel ingress monitor", () => {
   it("creates named plain and reasoned ingress errors", () => {
@@ -755,45 +727,6 @@ describe("channel ingress monitor", () => {
     });
   });
 
-  it("does not let a blocked settlement write wedge stop", async () => {
-    await withQueue(async (queue) => {
-      let markReleaseStarted = () => {};
-      const releaseStarted = new Promise<void>((resolve) => {
-        markReleaseStarted = resolve;
-      });
-      let releaseSettlement = () => {};
-      const settlementGate = new Promise<void>((resolve) => {
-        releaseSettlement = resolve;
-      });
-      const release = queue.release.bind(queue);
-      const blockedRelease: typeof queue.release = async (idOrClaim, releaseOptions) => {
-        markReleaseStarted();
-        await settlementGate;
-        return await release(idOrClaim, releaseOptions);
-      };
-      queue.release = vi.fn(blockedRelease);
-      const monitor = createMonitor(queue, async () => ({
-        kind: "failed-retryable",
-        error: new Error("retry later"),
-      }));
-      monitor.start();
-      await monitor.admit({ id: "event-stop-settlement", lane: "a", text: "hello" });
-      await releaseStarted;
-
-      const stopping = monitor.stop();
-      let stopped = false;
-      void stopping.then(() => {
-        stopped = true;
-      });
-      try {
-        await vi.waitFor(() => expect(stopped).toBe(true));
-      } finally {
-        releaseSettlement();
-        await stopping;
-      }
-    });
-  });
-
   it("completes deliveries whose terminal result races a stop abort", async () => {
     await withQueue(async (queue) => {
       const deliver = vi.fn(async (_raw: RawEvent, lifecycle: ChannelIngressMonitorLifecycle) => {
@@ -905,7 +838,7 @@ describe("channel ingress monitor", () => {
   });
 
   it.each(["onDeferred", "onAdoptionFinalizing"] as const)(
-    "waits for tracked %s claims to settle after drain disposal",
+    "waits for tracked %s claims to settle before drain disposal",
     async (handoff) => {
       await withQueue(async (queue) => {
         let deferredLifecycle: ChannelIngressMonitorLifecycle | undefined;

@@ -4,6 +4,7 @@ import OpenAI from "openai";
 import type {
   AgentReasoningParam,
   AgentSessionEvent,
+  AgentToolParam,
   HostedEnvironmentFileParam,
 } from "openai/resources/beta/agents/agents";
 import type { EventCreateParams } from "openai/resources/beta/agents/sessions/events";
@@ -131,13 +132,6 @@ const eventSchema = z.looseObject({
 export type AgentsApiEvent = z.infer<typeof eventSchema>;
 export type AgentsApiItem = z.infer<typeof itemSchema>;
 export type AgentsApiFunctionCall = z.infer<typeof functionCallSchema>;
-export type AgentsApiFunctionDeclaration = {
-  type: "function";
-  name: string;
-  description: string;
-  parameters: Record<string, unknown>;
-  defer_loading?: boolean;
-};
 export type AgentsApiInputFile = HostedEnvironmentFileParam.HostedEnvironmentFileParamInline;
 export type AgentsApiArtifact = z.infer<typeof artifactSchema>;
 export type AgentsApiFunctionResult =
@@ -191,7 +185,7 @@ export class AgentsApiClient {
     instructions: string,
     model: string,
     options?: {
-      functions?: AgentsApiFunctionDeclaration[];
+      functions?: AgentToolParam.AgentToolConfigParamFunction[];
       files?: AgentsApiInputFile[];
       reasoning?: AgentReasoningParam;
     },

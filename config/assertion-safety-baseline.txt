@@ -245,7 +245,7 @@ extensions/diagnostics-otel/src/service-trace-context.ts	1
 extensions/diagnostics-otel/src/service.ts	1
 extensions/diagnostics-prometheus/src/service.ts	1
 extensions/diffs/src/config.ts	4
-extensions/diffs/src/language-hints.ts	9
+extensions/diffs/src/language-hints.ts	6
 extensions/diffs/src/plugin.ts	4
 extensions/diffs/src/store.ts	3
 extensions/diffs/src/tool.ts	2
@@ -428,7 +428,7 @@ extensions/file-transfer/src/tools/file-fetch-tool.ts	2
 extensions/file-transfer/src/tools/file-write-tool.ts	1
 extensions/firecrawl/index.ts	2
 extensions/firecrawl/src/config.ts	3
-extensions/firecrawl/src/firecrawl-client.ts	2
+extensions/firecrawl/src/firecrawl-client.ts	1
 extensions/firecrawl/src/firecrawl-fetch-provider-shared.ts	5
 extensions/fish-audio-speech/speech-provider.ts	1
 extensions/github-copilot/connection-bound-ids.ts	1
@@ -784,8 +784,7 @@ extensions/ollama/src/setup.runtime.ts	1
 extensions/ollama/src/stream-compat.ts	1
 extensions/ollama/src/stream.runtime.ts	6
 extensions/onepassword/index.ts	2
-extensions/onepassword/src/op-client.ts	2
-extensions/onepassword/src/tool.ts	1
+extensions/onepassword/src/op-client.ts	1
 extensions/openai/embedding-batch.ts	2
 extensions/openai/image-generation-provider.ts	1
 extensions/openai/index.ts	2
