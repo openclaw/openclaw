@@ -30,6 +30,11 @@ Use the current template and a real body file. Preserve human credit and keep
 branches editable by maintainers when safe. For a fork, consider GitHub's
 Actions/secrets warning before enabling edits.
 
+Apply the [agent-assisted credit checks](attribution.md#credit-for-agent-assisted-work)
+to the task's eligible humans and the actual published commits, including any
+publisher-generated commit. A correct PR acknowledgment or implementation commit
+does not prove that the publication retained recognized co-author credit.
+
 Create as draft, wait for non-null `mergeable`, then mark ready. Confirm CI
 attached to the pushed head. A merge-ref startup failure cannot be rerun; the
 hourly PR CI sweeper can re-fire it, or use an authorized close/reopen after
@@ -88,6 +93,12 @@ stamps or separate scheduled Testbox proof. Merge submits one pinned squash or
 auto-merge request, rejecting known failed required checks without admin bypass.
 GitHub waits for `openclaw/ci-gate` (CI plus applicable security review) and
 required reviews; a clean, mergeable PR lands immediately.
+
+Before submission, check the native composer's final squash message for the
+expected Git-recognized human trailers; keep primary authorship and explicit
+credit exclusions distinct. After landing, verify the actual merge commit's
+credit. Source trailers, the proposed message, and a PR-body correction are not
+substitutes for that final readback.
 
 Once GitHub accepts auto-merge, keep the task active until the merge and closeout
 are verified, the user pauses it, or a concrete blocker requires user input.
