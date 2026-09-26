@@ -162,4 +162,76 @@ export function registerMattermostOrderingTests<Socket extends OrderingSocket>(h
       clearRuntimeConfigSnapshot();
     }
   });
+
+  it("keeps a different-sender arrival waiting on an already-flushing batch's admission, not just its onFlush start", async () => {
+    // onFlush firing only means the debounce timer elapsed; the earlier
+    // batch's own preparation (here, a slow dispatchInboundMessage) can still
+    // be in flight. A later different-key arrival must wait for that flush's
+    // admission, not skip ahead the moment onFlush starts.
+    const cfg = { ...testConfig, messages: { inbound: { debounceMs: 20 } } };
+    setRuntimeConfigSnapshot(cfg, cfg);
+    let releaseA1!: () => void;
+    const a1Gate = new Promise<void>((resolve) => {
+      releaseA1 = resolve;
+    });
+    mockState.dispatchInboundMessage.mockImplementation(
+      async (params: { ctx: { BodyForAgent?: string } }) => {
+        if (params.ctx.BodyForAgent === "A1") {
+          await a1Gate;
+        }
+      },
+    );
+    mockState.runtimeCore = createRuntimeCore(cfg, undefined, {
+      createInboundDebouncer,
+      resolveInboundDebounceMs,
+    });
+    const socket = new FakeWebSocket();
+    const abort = new AbortController();
+    const socketFactory = vi.fn(() => socket);
+    const monitor = monitorMattermostProvider({
+      config: cfg,
+      runtime: testRuntime(),
+      abortSignal: abort.signal,
+      webSocketFactory: socketFactory,
+    });
+    await vi.waitFor(() => expect(socket.openListenerCount).toBeGreaterThan(0));
+    socket.emitOpen();
+    const bodies = () =>
+      mockState.dispatchInboundMessage.mock.calls.map(([params]) => params.ctx.BodyForAgent);
+    try {
+      await emitMattermostChannelPost(socket, {
+        id: "gap-a1",
+        message: "A1",
+        senderId: "user-a",
+      });
+      await vi.waitFor(() => expect(mockState.dispatchInboundMessage).toHaveBeenCalledTimes(1));
+      // A1's flush has started (onFlush fired) and is now blocked inside its
+      // own dispatch on a1Gate, so its admission has not settled yet.
+      let b1Settled = false;
+      const b1Emit = emitMattermostChannelPost(socket, {
+        id: "gap-b1",
+        message: "B1",
+        senderId: "user-b",
+      }).then(() => {
+        b1Settled = true;
+      });
+      await new Promise((resolve) => {
+        setTimeout(resolve, 50);
+      });
+      expect(b1Settled).toBe(false);
+      expect(bodies()).toEqual(["A1"]);
+      releaseA1();
+      await b1Emit;
+      expect(b1Settled).toBe(true);
+      // B1 still has its own debounce timer pending (real, unref'd); let it
+      // fire and settle before teardown so it cannot leak a dispatch call
+      // into a later test sharing this mock.
+      await vi.waitFor(() => expect(bodies()).toContain("B1"));
+    } finally {
+      abort.abort();
+      socket.emitClose(1000);
+      await monitor;
+      clearRuntimeConfigSnapshot();
+    }
+  });
 }
