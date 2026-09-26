@@ -1,4 +1,3 @@
-// Capability-token helpers for plugin-hosted node surfaces.
 import { randomBytes } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import {
@@ -7,6 +6,7 @@ import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ConnectParams } from "../../packages/gateway-protocol/src/schema/frames.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
@@ -18,17 +18,14 @@ import {
 /** Path marker used to scope plugin-hosted node URLs with one-time capabilities. */
 export const PLUGIN_NODE_CAPABILITY_PATH_PREFIX = "/__openclaw__/cap";
 const PLUGIN_NODE_CAPABILITY_QUERY_PARAM = "oc_cap";
-/** Default lifetime for plugin-node capability tokens. */
 export const DEFAULT_PLUGIN_NODE_CAPABILITY_TTL_MS = 10 * 60_000;
 
-/** Declared plugin surface that may receive scoped node capabilities. */
 export type PluginNodeCapabilitySurface = {
   surface: string;
   ttlMs?: number;
   scopeKey?: string;
 };
 
-/** Client state used to authorize plugin-node surface capabilities. */
 export type PluginNodeCapabilityClient = {
   /** Retired clients cannot back HTTP capability auth or its renewal while close is pending. */
   invalidated?: boolean;
@@ -103,7 +100,7 @@ export function indexPluginNodeCapabilitySurfaces(
 ): Record<string, PluginNodeCapabilitySurface> {
   const indexed: Record<string, PluginNodeCapabilitySurface> = {};
   for (const entry of surfaces) {
-    const surface = normalizeSurface(entry.surface);
+    const surface = normalizeOptionalString(entry.surface);
     if (!surface) {
       continue;
     }
@@ -147,7 +144,6 @@ export function reconcileClientPluginNodeCapabilities(
   return false;
 }
 
-/** Parsed URL details after extracting path/query capability tokens. */
 export type NormalizedPluginNodeCapabilityUrl = {
   pathname: string;
   capability?: string;
@@ -156,18 +152,8 @@ export type NormalizedPluginNodeCapabilityUrl = {
   malformedScopedPath: boolean;
 };
 
-function normalizeCapability(raw: string | null | undefined) {
-  const trimmed = raw?.trim();
-  return trimmed ? trimmed : undefined;
-}
-
-function normalizeSurface(raw: string | undefined) {
-  const trimmed = raw?.trim();
-  return trimmed ? trimmed : undefined;
-}
-
 function resolvePluginNodeCapabilityStorageKey(surface: PluginNodeCapabilitySurface) {
-  const normalizedSurface = normalizeSurface(surface.surface);
+  const normalizedSurface = normalizeOptionalString(surface.surface);
   if (!normalizedSurface) {
     return undefined;
   }
@@ -175,12 +161,10 @@ function resolvePluginNodeCapabilityStorageKey(surface: PluginNodeCapabilitySurf
   return scopeKey ? `${normalizedSurface}\0${scopeKey}` : normalizedSurface;
 }
 
-/** Resolve a positive TTL for a plugin-node capability surface. */
 export function resolvePluginNodeCapabilityTtlMs(surface: PluginNodeCapabilitySurface) {
   return asPositiveSafeInteger(surface.ttlMs) ?? DEFAULT_PLUGIN_NODE_CAPABILITY_TTL_MS;
 }
 
-/** Resolve the expiration timestamp for a capability minted against a surface. */
 export function resolvePluginNodeCapabilityExpiresAtMs(
   surface: PluginNodeCapabilitySurface,
   nowMs: number = Date.now(),
@@ -188,17 +172,15 @@ export function resolvePluginNodeCapabilityExpiresAtMs(
   return resolveExpiresAtMsFromDurationMs(resolvePluginNodeCapabilityTtlMs(surface), { nowMs });
 }
 
-/** Mint an opaque capability token for plugin-node surface access. */
 export function mintPluginNodeCapabilityToken(): string {
   return randomBytes(18).toString("base64url");
 }
 
-/** Append a capability path segment to a plugin host URL. */
 export function buildPluginNodeCapabilityScopedHostUrl(
   baseUrl: string,
   capability: string,
 ): string | undefined {
-  const normalizedCapability = normalizeCapability(capability);
+  const normalizedCapability = normalizeOptionalString(capability);
   if (!normalizedCapability) {
     return undefined;
   }
@@ -215,12 +197,11 @@ export function buildPluginNodeCapabilityScopedHostUrl(
   }
 }
 
-/** Replace the capability segment in an already scoped host URL. */
 function replacePluginNodeCapabilityInScopedHostUrl(
   scopedUrl: string,
   capability: string,
 ): string | undefined {
-  const normalizedCapability = normalizeCapability(capability);
+  const normalizedCapability = normalizeOptionalString(capability);
   if (!normalizedCapability) {
     return undefined;
   }
@@ -263,7 +244,9 @@ function pluginNodeCapabilityFromScopedHostUrl(rawUrl: string): string | undefin
     if (capabilityEnd <= capabilityStart) {
       return undefined;
     }
-    return normalizeCapability(decodeURIComponent(pathname.slice(capabilityStart, capabilityEnd)));
+    return normalizeOptionalString(
+      decodeURIComponent(pathname.slice(capabilityStart, capabilityEnd)),
+    );
   } catch {
     return undefined;
   }
@@ -334,7 +317,7 @@ export function normalizePluginNodeCapabilityScopedUrl(
       } catch {
         malformedScopedPath = true;
       }
-      capabilityFromPath = normalizeCapability(decoded);
+      capabilityFromPath = normalizeOptionalString(decoded);
       if (!capabilityFromPath || !canonicalPath.startsWith("/")) {
         malformedScopedPath = true;
       } else {
@@ -349,7 +332,7 @@ export function normalizePluginNodeCapabilityScopedUrl(
 
   const capability =
     capabilityFromPath ??
-    normalizeCapability(url.searchParams.get(PLUGIN_NODE_CAPABILITY_QUERY_PARAM));
+    normalizeOptionalString(url.searchParams.get(PLUGIN_NODE_CAPABILITY_QUERY_PARAM));
   return {
     pathname: url.pathname,
     capability,
@@ -359,14 +342,13 @@ export function normalizePluginNodeCapabilityScopedUrl(
   };
 }
 
-/** Store a minted capability on a client under the surface/scope storage key. */
 export function setClientPluginNodeCapability(params: {
   client: PluginNodeCapabilityClient;
   surface: PluginNodeCapabilitySurface;
   capability: string;
   expiresAtMs: number;
 }) {
-  const surface = normalizeSurface(params.surface.surface);
+  const surface = normalizeOptionalString(params.surface.surface);
   const storageKey = resolvePluginNodeCapabilityStorageKey(params.surface);
   const expiresAtMs = asDateTimestampMs(params.expiresAtMs);
   if (!surface || !storageKey || expiresAtMs === undefined) {
@@ -391,7 +373,7 @@ export function refreshClientPluginNodeCapability(params: {
       scopedUrl: string;
     }
   | undefined {
-  const surface = normalizeSurface(params.surface.surface);
+  const surface = normalizeOptionalString(params.surface.surface);
   if (!surface) {
     return undefined;
   }
@@ -432,7 +414,7 @@ export function hasAuthorizedPluginNodeCapability(params: {
   capability: string;
   nowMs?: number;
 }) {
-  const surface = normalizeSurface(params.surface.surface);
+  const surface = normalizeOptionalString(params.surface.surface);
   const storageKey = resolvePluginNodeCapabilityStorageKey(params.surface);
   if (!surface || !storageKey) {
     return false;

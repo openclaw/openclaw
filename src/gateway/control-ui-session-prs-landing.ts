@@ -1,8 +1,3 @@
-// Landing resolution for a session's working branch: which merged PRs count
-// as landed on the checkout's default branch, the newest known-published
-// baseline for working-tree stats, and whether new pushed work is provable
-// (the Create PR gate). Pure local-git reasoning; GitHub facts come in as
-// MergedPullHead records.
 import fs from "node:fs";
 import path from "node:path";
 import { runGit } from "../agents/worktrees/git.js";
@@ -169,14 +164,7 @@ async function isAncestor(root: string, ancestor: string, descendant: string): P
   }
 }
 
-/**
- * Picks the newest of the known-published baseline candidates. Two candidates
- * (the dominant case) stay a single ancestry call; larger sets batch through
- * one `merge-base --independent`. Among incomparable maxima, a candidate
- * containing the first entry (the merge base) is preferred — any such pick is
- * sound because it covers everything the merge base covers — and otherwise
- * the earliest candidate wins, keeping the merge base as the safe default.
- */
+/** Prefer a maximal published baseline containing the merge base, then input order. */
 async function maximalCommit(root: string, candidates: readonly string[]): Promise<string | null> {
   const unique = [...new Set(candidates)];
   const first = unique[0];
@@ -190,8 +178,7 @@ async function maximalCommit(root: string, candidates: readonly string[]): Promi
   if (unique.length === 2 && second !== undefined) {
     return (await isAncestor(root, first, second)) ? second : first;
   }
-  // Candidates are verified local objects, so a failed call is unexpected;
-  // fall back to the merge base rather than guessing.
+  // A failed lookup retains the merge base, the first candidate.
   const out = await gitOutput(root, ["merge-base", "--independent", ...unique]);
   if (!out) {
     return first;
@@ -203,8 +190,6 @@ async function maximalCommit(root: string, candidates: readonly string[]): Promi
       .filter(Boolean),
   );
   const maxima = unique.filter((candidate) => independent.has(candidate));
-  // A sole survivor is also the fallback, so probing its ancestry cannot
-  // change the choice. Keep competing survivors in their original order.
   for (const candidate of maxima) {
     if (candidate === first || maxima.length === 1 || (await isAncestor(root, first, candidate))) {
       return candidate;
@@ -237,12 +222,8 @@ export async function resolveBranchLanding(
     (head) =>
       head.baseRef === params.defaultBranch || Boolean(params.defaultBranch && head.mergeCommitSha),
   );
-  // Only merges whose content reached this checkout's default branch prove
-  // the tip landed there: a direct default-base merge, or a landing through
-  // another branch (feature -> release -> main) whose merge commit is now
-  // contained in the default branch. A PR merged into an unpropagated
-  // release/staging branch must not hide Create PR. Filtered here, not in
-  // the snapshot cache, because the cache key has no default branch.
+  // Indirect landings count only after their merge reaches this checkout's default
+  // branch. The shared snapshot cache cannot filter these: its key has no default branch.
   const landedHeads: MergedPullHead[] = [];
   for (const head of possibleLandings) {
     if (head.baseRef === params.defaultBranch) {
@@ -259,14 +240,8 @@ export async function resolveBranchLanding(
   const landedShas = new Set(landedHeads.map((head) => head.sha));
   const mergeBase =
     defaultSha && headSha ? await gitOutput(root, ["merge-base", defaultSha, headSha]) : null;
-  // The stats base is the newest commit whose content is known-published:
-  // the ordinary default-branch merge base, or a merged PR head related to
-  // HEAD by ancestry (a HEAD trailing the merged tip is fully landed, so
-  // HEAD itself is the baseline). Diffing against anything older would
-  // replay landed work as pending — squash-merged commits are never
-  // ancestors of the default branch, so the merge base alone cannot see
-  // them. Ancestry is best-effort: a merged head never fetched locally
-  // cannot be proven related and falls back to the merge base.
+  // Squashed PR heads may not be ancestors of the default branch. A related
+  // published head avoids replaying landed work; unreadable ancestry keeps the merge base.
   const baselines: string[] = mergeBase ? [mergeBase] : [];
   if (headSha) {
     for (const merged of landedShas) {
@@ -278,15 +253,8 @@ export async function resolveBranchLanding(
     }
   }
   const statsBase = await maximalCommit(root, baselines);
-  // Squash merges leave origin/<branch> "ahead" of the default branch
-  // forever, so local git alone would keep offering Create PR after the work
-  // landed. Once merged PRs exist, the link returns only when the merge base
-  // provably contains EVERY known landing — a squash landing is visible via
-  // its merge commit (checked first: the common case), a merge-commit landing
-  // via the head itself, and an older landing must not vouch for a newer one
-  // whose diff a new PR would replay. A tip merely descending from a squashed
-  // head or a fetch-stale tracking ref proves nothing, so those states keep
-  // the row stats-only until a rebase or fetch.
+  // Squashed branches stay ahead of the default branch. Offer Create PR again
+  // only when the merge base contains every known landing, by merge commit or head.
   let provenNewPushedWork = false;
   if (pushedSha && mergeBase && !landedShas.has(pushedSha.toLowerCase())) {
     provenNewPushedWork = landedHeads.length > 0;

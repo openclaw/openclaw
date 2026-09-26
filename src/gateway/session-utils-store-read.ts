@@ -13,16 +13,7 @@ import type {
 } from "../config/sessions/session-accessor.types.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 
-/**
- * Request-scoped store reuse.
- *
- * Sharing resolution runs once per listed row, and each run materialized every
- * entry of a candidate store, making `sessions.list` quadratic in entries. A
- * caller that resolves many keys against the same stores passes one cache so
- * each store is materialized once. Entries are shared across rows within that
- * request, so cached stores are read-only to their holder; the cache is never
- * process-global, so it cannot serve a later request stale rows.
- */
+/** Request-local, read-only views avoid rematerializing a store for each sharing lookup. */
 type GatewaySessionStoreView = {
   store: Record<string, SessionEntry>;
   readSource?: SessionEntryReadSource;

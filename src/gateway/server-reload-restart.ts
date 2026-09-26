@@ -13,6 +13,7 @@ import {
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { createAppliedConfigHashPublisher } from "./applied-config-hash-publisher.js";
 import type { GatewayReloadPlan } from "./config-reload.js";
+import type { createGatewayActiveWorkTracker } from "./server-reload-active-work.js";
 import {
   GatewayConfigReloadSupersededError,
   type AcceptedRestartTarget,
@@ -25,16 +26,6 @@ import {
 import { isCurrentGatewayReloadGeneration } from "./server-reload-generation.js";
 
 const RESTART_EMISSION_RETRY_MS = 1_000;
-
-type GatewayActiveCounts = {
-  queueSize: number;
-  pendingReplies: number;
-  embeddedRuns: number;
-  backgroundExecSessions: number;
-  rootRequests: number;
-  activeTasks: number;
-  totalActive: number;
-};
 
 type RestartRequestDetails = {
   plan: GatewayReloadPlan;
@@ -76,11 +67,10 @@ type GatewayRestartCoordinatorOptions = {
   params: GatewayRestartCoordinatorParams;
   myGeneration: number;
   restartRecoveryAvailable: boolean;
-  getActiveCounts: () => GatewayActiveCounts;
-  formatActiveDetails: (counts: GatewayActiveCounts) => string[];
-  formatDeferredWorkStatus: (status: "active" | "still active") => string;
-  formatTaskBlockers: () => string | null;
-};
+} & Pick<
+  ReturnType<typeof createGatewayActiveWorkTracker>,
+  "getActiveCounts" | "formatActiveDetails" | "formatDeferredWorkStatus" | "formatTaskBlockers"
+>;
 
 class GatewayRestartTransaction {
   private retryStopped = false;
@@ -503,7 +493,6 @@ class GatewayRestartTransaction {
       setGatewayRestartPolicy({ allowExternal: isRestartEnabled(nextConfig) });
       return true;
     }
-    // No active operations or pending replies, restart immediately
     params.logReload.warn(`config change requires gateway restart (${reasons})`);
     // The managed reloader owns independent root admission until onRestart
     // returns. Extend that fence across signal delivery until the run loop
@@ -534,27 +523,16 @@ class GatewayRestartTransaction {
 export function createGatewayRestartCoordinator(options: GatewayRestartCoordinatorOptions) {
   const transaction = new GatewayRestartTransaction(options);
   return {
-    acceptRestartConfig: (config?: OpenClawConfig) => transaction.acceptConfig(config),
+    acceptRestartConfig: transaction.acceptConfig.bind(transaction),
     ...transaction.appliedConfigHashPublisher,
-    beginGatewayRestartLifecycle: () => transaction.beginLifecycle(),
-    pauseGatewayRestartForConfigCandidate: () => transaction.pauseForConfigCandidate(),
-    publishAcceptedRestartTarget: (target: AcceptedRestartTarget) =>
-      transaction.publishAcceptedTarget(target),
-    recordAcceptedRestartTarget: (target: AcceptedRestartTarget) =>
-      transaction.recordAcceptedTarget(target),
-    requestGatewayRestart: (
-      plan: GatewayReloadPlan,
-      nextConfig: OpenClawConfig,
-      requestOptions?: GatewayRestartRequestOptions,
-    ) => transaction.request(plan, nextConfig, requestOptions),
-    restoreConservativeRestartDebt: (debt: RestartRequestDetails) =>
-      transaction.restoreConservativeDebt(debt),
-    stopRestartRetries: () => transaction.stop(),
-    deferGatewayRestartDebt: (
-      plan: GatewayReloadPlan,
-      nextConfig: OpenClawConfig,
-      requestOptions?: GatewayRestartRequestOptions,
-    ) => transaction.deferDebt(plan, nextConfig, requestOptions),
+    beginGatewayRestartLifecycle: transaction.beginLifecycle.bind(transaction),
+    pauseGatewayRestartForConfigCandidate: transaction.pauseForConfigCandidate.bind(transaction),
+    publishAcceptedRestartTarget: transaction.publishAcceptedTarget.bind(transaction),
+    recordAcceptedRestartTarget: transaction.recordAcceptedTarget.bind(transaction),
+    requestGatewayRestart: transaction.request.bind(transaction),
+    restoreConservativeRestartDebt: transaction.restoreConservativeDebt.bind(transaction),
+    stopRestartRetries: transaction.stop.bind(transaction),
+    deferGatewayRestartDebt: transaction.deferDebt.bind(transaction),
     getLatestAcceptedRestartTarget: transaction.getAcceptedTarget,
     hasConfigCandidatePending: transaction.hasPendingConfigCandidate,
     hasRestartRequestTransaction: transaction.hasOperation,

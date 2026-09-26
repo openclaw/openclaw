@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentRunAbortLifecycleFields } from "../../agents/run-termination.js";
 import type { TurnAdoptionLifecycle } from "../../auto-reply/get-reply-options.types.js";
 import type { QueuedFollowupReplyDelivery } from "../../auto-reply/reply/queue/types.js";
@@ -14,7 +15,6 @@ import type { WebchatReplyMediaRequesterContext } from "./chat-reply-media.js";
 import { createChatSendLateFollowupDisposition } from "./chat-send-late-followup.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import { createChatSendLateReplyFinalizer } from "./chat-send-source-finalization.js";
-import { normalizeOptionalChatText } from "./chat-text-normalization.js";
 import type { GatewayRequestContext } from "./types.js";
 
 export function createChatSendTurnAdoptionLifecycle(params: {
@@ -119,8 +119,8 @@ export function createChatSendTurnAdoptionLifecycle(params: {
         sessionId: params.sessionBinding.sessionId,
         sessionKey: params.sessionKey,
         agentId: params.agentId,
-        ownerConnId: normalizeOptionalChatText(params.ownerConnId),
-        ownerDeviceId: normalizeOptionalChatText(params.ownerDeviceId),
+        ownerConnId: normalizeOptionalString(params.ownerConnId),
+        ownerDeviceId: normalizeOptionalString(params.ownerDeviceId),
         // Queue cancellation supersedes the source run's earlier custody acknowledgement.
         onAborted: () => recordQueuedTerminal("aborted"),
       });

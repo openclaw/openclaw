@@ -189,60 +189,24 @@ type TerminalPlacementMetadata = {
   terminalAtMs: number | null;
 };
 
-type LocalPlacementRecord = LocalClaimablePlacementRecordBase &
-  EmptyWorkerPlacementMetadata & {
-    state: "local";
-  };
-type RequestedPlacementRecord = LocalClaimablePlacementRecordBase &
-  EmptyWorkerPlacementMetadata & {
-    state: "requested";
-  };
-type ProvisioningPlacementRecord = UnclaimedPlacementRecordBase &
-  ProvisioningPlacementMetadata & {
-    state: "provisioning";
-  };
-type SyncingPlacementRecord = UnclaimedPlacementRecordBase &
-  SyncingPlacementMetadata & {
-    state: "syncing";
-  };
-type StartingPlacementRecord = UnclaimedPlacementRecordBase &
-  StartingPlacementMetadata & {
-    state: "starting";
-  };
-type ActivePlacementRecord = PlacementRecordBase<PersistedTurnClaim | null> &
-  OwnedWorkerPlacementMetadata & {
-    state: "active";
-  };
-type DrainingPlacementRecord = PlacementRecordBase<PersistedTurnClaim | null> &
-  OwnedWorkerPlacementMetadata & {
-    state: "draining";
-  };
-type ReconcilingPlacementRecord = UnclaimedPlacementRecordBase &
-  OwnedWorkerPlacementMetadata & {
-    state: "reconciling";
-  };
-type ReclaimedPlacementRecord = UnclaimedPlacementRecordBase &
-  Omit<OwnedWorkerPlacementMetadata, "terminalReason" | "terminalAtMs"> &
-  TerminalPlacementMetadata & {
-    state: "reclaimed";
-  };
-type FailedPlacementRecord = LocalClaimablePlacementRecordBase &
-  TerminalPlacementMetadata & {
-    state: "failed";
-    recoveryError: string;
-  };
+type PlacementRecordsByState = {
+  local: LocalClaimablePlacementRecordBase & EmptyWorkerPlacementMetadata;
+  requested: LocalClaimablePlacementRecordBase & EmptyWorkerPlacementMetadata;
+  provisioning: UnclaimedPlacementRecordBase & ProvisioningPlacementMetadata;
+  syncing: UnclaimedPlacementRecordBase & SyncingPlacementMetadata;
+  starting: UnclaimedPlacementRecordBase & StartingPlacementMetadata;
+  active: PlacementRecordBase<PersistedTurnClaim | null> & OwnedWorkerPlacementMetadata;
+  draining: PlacementRecordBase<PersistedTurnClaim | null> & OwnedWorkerPlacementMetadata;
+  reconciling: UnclaimedPlacementRecordBase & OwnedWorkerPlacementMetadata;
+  reclaimed: UnclaimedPlacementRecordBase &
+    Omit<OwnedWorkerPlacementMetadata, "terminalReason" | "terminalAtMs"> &
+    TerminalPlacementMetadata;
+  failed: LocalClaimablePlacementRecordBase & TerminalPlacementMetadata & { recoveryError: string };
+};
 
-export type WorkerSessionPlacementRecord =
-  | LocalPlacementRecord
-  | RequestedPlacementRecord
-  | ProvisioningPlacementRecord
-  | SyncingPlacementRecord
-  | StartingPlacementRecord
-  | ActivePlacementRecord
-  | DrainingPlacementRecord
-  | ReconcilingPlacementRecord
-  | ReclaimedPlacementRecord
-  | FailedPlacementRecord;
+export type WorkerSessionPlacementRecord = {
+  [State in WorkerSessionPlacementState]: PlacementRecordsByState[State] & { state: State };
+}[WorkerSessionPlacementState];
 
 export type WorkerSessionTurnClaimFacts = Pick<
   WorkerSessionPlacementRecord,

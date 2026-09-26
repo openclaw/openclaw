@@ -78,6 +78,11 @@ export function startManagedGatewayConfigReloader(
     };
   }
 
+  const applyRuntimeConfigOverrides = (config: OpenClawConfig): OpenClawConfig => {
+    const applied = params.applyRuntimeConfigOverrides?.(config) ?? config;
+    copyConfigResolutionFacts(config, applied);
+    return applied;
+  };
   const prepareRuntimeCandidate = (
     runtimeConfig: OpenClawConfig,
     sourceConfig: OpenClawConfig,
@@ -86,14 +91,7 @@ export function startManagedGatewayConfigReloader(
     const canonicalConfig = restoreCanonicalSecretRefs(runtimeConfig, sourceConfig);
     copyConfigResolutionFacts(sourceConfig, canonicalConfig);
     const candidateConfig = ownership?.reapplyRuntimeOverlays(canonicalConfig) ?? canonicalConfig;
-    const prepared = params.applyRuntimeConfigOverrides?.(candidateConfig) ?? candidateConfig;
-    copyConfigResolutionFacts(candidateConfig, prepared);
-    return prepared;
-  };
-  const applyRuntimeConfigOverrides = (config: OpenClawConfig): OpenClawConfig => {
-    const applied = params.applyRuntimeConfigOverrides?.(config) ?? config;
-    copyConfigResolutionFacts(config, applied);
-    return applied;
+    return applyRuntimeConfigOverrides(candidateConfig);
   };
   const restartRecoveryAvailable =
     params.restartRecoveryAvailable !== false && params.requestRecoveryRestart !== undefined;
@@ -504,11 +502,7 @@ export function startManagedGatewayConfigReloader(
     },
     onHotReload,
     onRestart: runManagedRestart,
-    log: {
-      info: (msg) => params.logReload.info(msg),
-      warn: (msg) => params.logReload.warn(msg),
-      error: (msg) => params.logReload.error(msg),
-    },
+    log: params.logReload,
     watchPath: params.watchPath,
   });
   return {

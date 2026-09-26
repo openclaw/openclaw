@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -61,7 +62,6 @@ import { handleChatMetadataRequest } from "./chat-metadata-handler.js";
 import { readChatPendingInputs } from "./chat-pending-inputs.js";
 import { handleChatStartupRequest } from "./chat-startup-handler.js";
 import { prepareChatStartupRequester } from "./chat-startup-requester.js";
-import { normalizeOptionalChatText as normalizeOptionalText } from "./chat-text-normalization.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import { resolveGatewayModelSelectionPolicy } from "./session-model-selection-policy.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
@@ -117,7 +117,7 @@ export async function handleChatHistoryRequest({
     await prepareOptionalSubagentSessionListReadCache();
   }
   signal?.throwIfAborted();
-  const agentIdOverride = normalizeOptionalText(params.agentId);
+  const agentIdOverride = normalizeOptionalString(params.agentId);
   const selection = await prepareChatHistorySessionRead({
     context,
     sessionMutationAuthorization,

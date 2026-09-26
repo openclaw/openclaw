@@ -10,14 +10,17 @@ import { isExactSemverVersion } from "../../infra/npm-registry-spec.js";
 import { normalizeScpRemotePath } from "../../infra/scp-host.js";
 import type { WorkerSshEndpoint, WorkerSshIdentity } from "../../plugins/types.js";
 import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
-import { WORKER_BUNDLE_ARTIFACT_PATHS } from "../../shared/worker-bundle-hash.js";
+import {
+  WORKER_BUNDLE_ARTIFACT_PATHS,
+  WORKER_BUNDLE_MANIFEST_VERSION,
+} from "../../shared/worker-bundle-hash.js";
 import {
   commandFailure,
   isSuccess,
   runSshScript,
   type WorkerBootstrapCommandRunner,
 } from "./bootstrap-command.js";
-import { WORKER_BUNDLE_MANIFEST_VERSION, type WorkerInstallationArtifact } from "./bundle.js";
+import type { WorkerInstallationArtifact } from "./bundle.js";
 import {
   prepareWorkerSsh,
   type PreparedWorkerSsh,
@@ -538,10 +541,6 @@ function parseReceiptJson(
   return parsed;
 }
 
-function workerUploadFilename(bundleHash: string, operationToken: string): string {
-  return `openclaw-upload-${bundleHash}.tgz.${operationToken}`;
-}
-
 const CLEANUP_UPLOAD_SCRIPT = String.raw`set -eu
 hash=$1
 operation_token=$2
@@ -660,7 +659,7 @@ export async function bootstrapWorker(
       : timeoutMs;
   const receipt = normalizeHandshake(artifact);
   const operationToken = createHash("sha256").update(request.operationId).digest("hex");
-  const uploadFilename = workerUploadFilename(receipt.bundleHash, operationToken);
+  const uploadFilename = `openclaw-upload-${receipt.bundleHash}.tgz.${operationToken}`;
   const run = dependencies.runCommand ?? runCommandWithTimeout;
   let needsUploadCleanup = false;
   const assertCurrent = () => {

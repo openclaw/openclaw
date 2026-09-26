@@ -1,4 +1,3 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import type { resolveGitHubPublicationWorktreeOwner } from "./github-publication-availability.js";
@@ -58,7 +57,7 @@ export async function prepareGitHubPublicationTarget(params: {
   );
   assertCurrent();
   const value: unknown = JSON.parse(raw);
-  const target = isRecord(value) ? resolveGitHubRepositoryTarget(value, remote) : undefined;
+  const target = resolveGitHubRepositoryTarget(value, remote);
   if (!target) {
     throw new Error("GitHub repository response omitted its publication target.");
   }

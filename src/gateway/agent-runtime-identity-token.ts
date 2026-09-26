@@ -1,4 +1,3 @@
-// Purpose-scoped local agent runtime identity token for Gateway clients.
 import { createHmac } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
@@ -100,25 +99,17 @@ const gatewayUiCommandTargetSchema = z.object({
   connId: normalizedRequiredStringSchema,
   profileId: normalizedRequiredStringSchema.optional(),
 });
-const workerTurnClaimSchema = z
-  .object({
-    sessionId: normalizedRequiredStringSchema,
-    claimId: normalizedRequiredStringSchema,
-    runId: normalizedRequiredStringSchema,
-    placementGeneration: safeNonNegativeIntegerSchema,
-    owner: z.object({
-      kind: z.literal("worker"),
-      environmentId: normalizedRequiredStringSchema,
-      ownerEpoch: safeNonNegativeIntegerSchema,
-    }),
-  })
-  .transform((claim): WorkerSessionTurnClaim => ({
-    sessionId: claim.sessionId,
-    claimId: claim.claimId,
-    runId: claim.runId,
-    placementGeneration: claim.placementGeneration,
-    owner: claim.owner,
-  }));
+const workerTurnClaimSchema = z.object({
+  sessionId: normalizedRequiredStringSchema,
+  claimId: normalizedRequiredStringSchema,
+  runId: normalizedRequiredStringSchema,
+  placementGeneration: safeNonNegativeIntegerSchema,
+  owner: z.object({
+    kind: z.literal("worker"),
+    environmentId: normalizedRequiredStringSchema,
+    ownerEpoch: safeNonNegativeIntegerSchema,
+  }),
+});
 const delegatedAuthoritySchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("local"),
@@ -173,12 +164,10 @@ const sessionSpawnContextSchema = z
       ? { spawnModelAutoSelection: context.spawnModelAutoSelection }
       : {}),
   }));
-const cronCreatorAuthorityGrantSchema = z
-  .object({
-    runId: normalizedRequiredStringSchema,
-    token: normalizedRequiredStringSchema,
-  })
-  .transform((grant): CronCreatorAuthorityGrant => grant);
+const cronCreatorAuthorityGrantSchema = z.object({
+  runId: normalizedRequiredStringSchema,
+  token: normalizedRequiredStringSchema,
+});
 const messageActionToolContextSchema = z
   .object({
     currentChannelId: ignoredOptionalStringSchema,
@@ -251,12 +240,7 @@ function decodeDelegatedAuthority(
 ): AgentRuntimeDelegatedAuthority | undefined {
   const { lifecycleGeneration, claimId } = value;
   const { instanceId, runId } = value.operationalRunInstance;
-  if (
-    !lifecycleGeneration ||
-    !claimId ||
-    instanceId !== operationalRunInstance.instanceId ||
-    runId !== operationalRunInstance.runId
-  ) {
+  if (instanceId !== operationalRunInstance.instanceId || runId !== operationalRunInstance.runId) {
     return undefined;
   }
   const owner = {
@@ -362,7 +346,7 @@ function parsePayload(value: unknown, nowMs: number): AgentRuntimeIdentityTokenP
     }
     const turnSourceTo = normalizeOptionalString(raw.turnSourceTo);
     const turnSourceThreadId = raw.turnSourceThreadId;
-    if (!agentId || !sessionKey || !operationalInstanceId || !operationalRunId) {
+    if (!agentId || !sessionKey) {
       return undefined;
     }
     const operationalRunInstance = Object.freeze({
@@ -657,38 +641,17 @@ function resolveAgentRuntimeIdentityPayload(
   }
   const executionIdentity = handoff?.executionIdentity ?? payload.executionIdentity;
   const sessionSpawnContext = handoff?.sessionSpawnContext ?? payload.sessionSpawnContext;
+  const {
+    kind: _kind,
+    executionLineageHandoffId: _handoffId,
+    executionIdentity: _executionIdentity,
+    sessionSpawnContext: _sessionSpawnContext,
+    ...admitted
+  } = payload;
   const identity: AgentRuntimeIdentity = {
+    ...admitted,
     kind: "agentRuntime",
-    agentId: payload.agentId,
-    sessionKey: payload.sessionKey,
-    operationalRunInstance: payload.operationalRunInstance,
-    delegatedAuthority: payload.delegatedAuthority,
-    ...(payload.approvalOwnerPluginId
-      ? { approvalOwnerPluginId: payload.approvalOwnerPluginId }
-      : {}),
     ...(executionIdentity ? { executionIdentity } : {}),
-    ...(payload.turnSourceChannel ? { turnSourceChannel: payload.turnSourceChannel } : {}),
-    ...(payload.turnSourceLocal === true ? { turnSourceLocal: true } : {}),
-    ...(payload.turnSourceTo ? { turnSourceTo: payload.turnSourceTo } : {}),
-    ...(payload.turnSourceAccountId ? { turnSourceAccountId: payload.turnSourceAccountId } : {}),
-    ...(payload.turnSourceThreadId !== undefined
-      ? { turnSourceThreadId: payload.turnSourceThreadId }
-      : {}),
-    ...(payload.gatewayUiCommandTarget
-      ? { gatewayUiCommandTarget: payload.gatewayUiCommandTarget }
-      : {}),
-    ...(payload.messageActionContext ? { messageActionContext: payload.messageActionContext } : {}),
-    ...(payload.cronSelfManagementContext
-      ? { cronSelfManagementContext: payload.cronSelfManagementContext }
-      : {}),
-    ...(payload.cronToolsAllowCapture
-      ? { cronToolsAllowCapture: payload.cronToolsAllowCapture }
-      : {}),
-    ...(payload.cronExecToolTarget ? { cronExecToolTarget: payload.cronExecToolTarget } : {}),
-    ...(payload.cronManagementGrant ? { cronManagementGrant: payload.cronManagementGrant } : {}),
-    ...(payload.cronCreatorAuthorityGrant
-      ? { cronCreatorAuthorityGrant: payload.cronCreatorAuthorityGrant }
-      : {}),
     ...(sessionSpawnContext ? { sessionSpawnContext } : {}),
   };
   return handoff

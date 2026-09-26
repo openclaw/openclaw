@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { ReplyToolAuthorityOverlay } from "../../auto-reply/reply/reply-run-registry.contracts.js";
-import { readErrorName } from "../../infra/errors.js";
+import { formatErrorMessage as formatError, readErrorName } from "../../infra/errors.js";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   resolveRealtimeVoiceAgentConsultToolsAllow,
@@ -27,7 +27,6 @@ import type { TalkEvent } from "../../talk/talk-events.js";
 import { ADMIN_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
 import { resolveChatSendCallerContext } from "../server-methods/gateway-client-identity.js";
 import type { GatewayRequestContext } from "../server-methods/shared-types.js";
-import { formatError } from "../server-utils.js";
 import type {
   LifecycleBoundTalkAgentConsult,
   ReusableTalkAgentConsult,

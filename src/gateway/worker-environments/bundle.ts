@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, type Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import * as tar from "tar";
 import { resolveStateDir } from "../../config/paths.js";
@@ -18,33 +19,26 @@ import {
   compareWorkerBundlePaths,
   hashWorkerBundleManifest,
   WORKER_BUNDLE_ARTIFACT_MODE,
-  WORKER_BUNDLE_MANIFEST_VERSION,
   type WorkerBundleHashEntry,
 } from "../../shared/worker-bundle-hash.js";
 import { VERSION } from "../../version.js";
+import type { ExpectedWorkerBuild } from "../../worker/worker-build-identity.js";
 import { collectWorkerBundleManifest } from "./bundle-staging.js";
 
-export { WORKER_BUNDLE_MANIFEST_VERSION };
 const OPENCLAW_NPM_REGISTRY = "https://registry.npmjs.org/";
 const NPM_RELEASE_PROOF_TIMEOUT_MS = 60_000;
 const NPM_SHA512_INTEGRITY_PATTERN = /^sha512-[A-Za-z0-9+/]{86}==$/u;
 const BUNDLE_TARBALL_NAME_PATTERN = /^([a-f0-9]{64})\.tgz$/u;
 const BUNDLE_STAGING_NAME_PATTERN = /^\.staging-[A-Za-z0-9_-]+$/u;
 const BUNDLE_TEMP_NAME_PATTERN = /^[a-f0-9]{64}\.tgz\.[0-9]+\.[0-9a-f-]{36}\.tmp$/u;
-type WorkerInstallationArtifactBase = {
-  bundleHash: string;
-  openclawVersion: string;
-  protocolFeatures: readonly string[];
-};
-
-type WorkerBundleArtifact = WorkerInstallationArtifactBase & {
+type WorkerBundleArtifact = ExpectedWorkerBuild & {
   install: "bundle";
   tarballBytes: number;
   tarballSha256: string;
   tarballPath: string;
 };
 
-export type WorkerNpmArtifact = WorkerInstallationArtifactBase & {
+export type WorkerNpmArtifact = ExpectedWorkerBuild & {
   install: "npm";
   packageIntegrity: string;
   packageSpec: string;
@@ -120,15 +114,14 @@ type NpmPackageIdentity = {
 };
 
 function parseNpmPackageIdentity(value: unknown): NpmPackageIdentity | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return undefined;
   }
-  const record = value as Record<string, unknown>;
-  const name = normalizeOptionalString(record.name);
-  const version = normalizeOptionalString(record.version);
+  const name = normalizeOptionalString(value.name);
+  const version = normalizeOptionalString(value.version);
   const integrity =
-    normalizeOptionalString(record.integrity) ?? normalizeOptionalString(record["dist.integrity"]);
-  const filename = normalizeOptionalString(record.filename);
+    normalizeOptionalString(value.integrity) ?? normalizeOptionalString(value["dist.integrity"]);
+  const filename = normalizeOptionalString(value.filename);
   return name && version && integrity ? { name, version, integrity, filename } : undefined;
 }
 

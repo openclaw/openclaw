@@ -353,9 +353,7 @@ export async function claimWorkerTurn(params: {
       const refreshed = params.placements.get(params.identity.sessionId);
       if (
         refreshed?.state !== "active" ||
-        refreshed.environmentId !== params.placement.environmentId ||
-        refreshed.activeOwnerEpoch !== params.placement.activeOwnerEpoch ||
-        refreshed.generation !== params.placement.generation ||
+        !matchesWorkerPlacementTarget(refreshed, params.placement) ||
         refreshed.turnClaim
       ) {
         throw error;
@@ -368,12 +366,7 @@ export async function claimWorkerTurn(params: {
     ...(params.signal ? { signal: params.signal } : {}),
   });
   const refreshed = params.placements.get(params.identity.sessionId);
-  if (
-    refreshed?.state !== "active" ||
-    refreshed.environmentId !== params.placement.environmentId ||
-    refreshed.activeOwnerEpoch !== params.placement.activeOwnerEpoch ||
-    refreshed.generation !== params.placement.generation
-  ) {
+  if (refreshed?.state !== "active" || !matchesWorkerPlacementTarget(refreshed, params.placement)) {
     throw new Error("Cloud worker placement changed while waiting for the previous turn");
   }
   return { placement: refreshed, turnClaim: await claim() };

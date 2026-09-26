@@ -50,6 +50,28 @@ function abortReason(signal: AbortSignal): Error {
     : new Error("RFB authentication negotiation aborted");
 }
 
+export function writeRfbPreauthFrame(
+  signal: AbortSignal,
+  send: (done: (error?: Error | null) => void) => void,
+): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const cleanup = () => signal.removeEventListener("abort", onAbort);
+    const onAbort = () => {
+      cleanup();
+      reject(abortReason(signal));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    send((error) => {
+      cleanup();
+      if (error) {
+        reject(error);
+      } else {
+        resolve();
+      }
+    });
+  });
+}
+
 /** Exact-byte queue shared by stream and WebSocket handshake adapters. */
 export class RfbPreauthBuffer {
   private buffered = Buffer.alloc(0);
@@ -114,48 +136,28 @@ export class RfbPreauthBuffer {
   }
 }
 
-class StreamRfbPreauthPeer implements RfbPreauthPeer {
-  private readonly reader = new RfbPreauthBuffer();
-
-  private readonly onData = (chunk: Buffer) => this.reader.push(chunk);
+class StreamRfbPreauthPeer extends RfbPreauthBuffer implements RfbPreauthPeer {
+  private readonly onData = (chunk: Buffer) => this.push(chunk);
   private readonly onEnd = () => {
-    this.reader.fail(new Error("RFB peer closed during authentication negotiation"));
+    this.fail(new Error("RFB peer closed during authentication negotiation"));
   };
   private readonly onError = (error: Error) => {
-    this.reader.fail(error);
+    this.fail(error);
   };
 
   constructor(private readonly stream: Duplex) {
+    super();
     stream.on("data", this.onData);
     stream.once("end", this.onEnd);
     stream.once("close", this.onEnd);
     stream.once("error", this.onError);
   }
 
-  async readExactly(length: number, signal: AbortSignal): Promise<Buffer> {
-    return await this.reader.readExactly(length, signal);
-  }
-
   async write(buffer: Buffer, signal: AbortSignal): Promise<void> {
     if (signal.aborted) {
       throw abortReason(signal);
     }
-    await new Promise<void>((resolve, reject) => {
-      const cleanup = () => signal.removeEventListener("abort", onAbort);
-      const onAbort = () => {
-        cleanup();
-        reject(abortReason(signal));
-      };
-      signal.addEventListener("abort", onAbort, { once: true });
-      this.stream.write(buffer, (error) => {
-        cleanup();
-        if (error) {
-          reject(error);
-        } else {
-          resolve();
-        }
-      });
-    });
+    await writeRfbPreauthFrame(signal, (done) => this.stream.write(buffer, done));
   }
 
   dispose(): void {

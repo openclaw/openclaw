@@ -39,6 +39,18 @@ type WorkerNodeEnrollmentManagerOptions = {
   now?: () => number;
 };
 
+function isProvisioningOwner(
+  current: WorkerEnvironmentRecord | undefined,
+  owner: WorkerEnvironmentRecord,
+): current is WorkerEnvironmentRecord {
+  return (
+    current?.state === "provisioning" &&
+    current.destroyRequestedAtMs === null &&
+    current.provisionOperationId === owner.provisionOperationId &&
+    current.ownerEpoch === owner.ownerEpoch
+  );
+}
+
 export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentManagerOptions) {
   const now = options.now ?? Date.now;
   const controller = new AbortController();
@@ -90,12 +102,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
     signal.throwIfAborted();
     operationSignal?.throwIfAborted();
     const admission = options.store.get(record.environmentId);
-    if (
-      admission?.state !== "provisioning" ||
-      admission.destroyRequestedAtMs !== null ||
-      admission.provisionOperationId !== record.provisionOperationId ||
-      admission.ownerEpoch !== record.ownerEpoch
-    ) {
+    if (!isProvisioningOwner(admission, record)) {
       throw new Error("Worker node enrollment is no longer provisioning");
     }
     // Reserve the generation before asynchronous preparation, so a stale completion
@@ -119,13 +126,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
     const current = () => {
       enrollmentSignal.throwIfAborted();
       const live = options.store.get(record.environmentId);
-      if (
-        active.get(record.environmentId) !== binding ||
-        live?.state !== "provisioning" ||
-        live.destroyRequestedAtMs !== null ||
-        live.provisionOperationId !== record.provisionOperationId ||
-        live.ownerEpoch !== record.ownerEpoch
-      ) {
+      if (active.get(record.environmentId) !== binding || !isProvisioningOwner(live, record)) {
         throw new Error("Worker node enrollment is no longer provisioning");
       }
       return live;
@@ -211,12 +212,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
       requireCurrent();
       let current = await options.store.ensureNodeEnrollment(record.environmentId);
       requireCurrent();
-      if (
-        current.state !== "provisioning" ||
-        current.destroyRequestedAtMs !== null ||
-        current.provisionOperationId !== record.provisionOperationId ||
-        current.ownerEpoch !== record.ownerEpoch
-      ) {
+      if (!isProvisioningOwner(current, record)) {
         throw new Error("Worker node enrollment is no longer provisioning");
       }
       let mode:
@@ -276,10 +272,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
         return (
           active.get(owner.environmentId) === binding &&
           !enrollmentSignal.aborted &&
-          live?.state === "provisioning" &&
-          live.destroyRequestedAtMs === null &&
-          live.provisionOperationId === record.provisionOperationId &&
-          live.ownerEpoch === record.ownerEpoch &&
+          isProvisioningOwner(live, record) &&
           live.nodeSetupId === owner.nodeSetupId &&
           live.nodeDeviceId === owner.nodeDeviceId
         );
@@ -300,12 +293,8 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
             enrollmentSignal.throwIfAborted();
             const live = options.store.get(owner.environmentId);
             if (
-              !live ||
-              live.destroyRequestedAtMs !== null ||
-              live.state !== "provisioning" ||
-              live.provisionOperationId !== owner.provisionOperationId ||
+              !isProvisioningOwner(live, owner) ||
               live.nodeSetupId !== owner.nodeSetupId ||
-              live.ownerEpoch !== owner.ownerEpoch ||
               active.get(owner.environmentId) !== binding
             ) {
               throw new Error("Worker node enrollment is no longer current");
@@ -315,11 +304,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
               enrollmentSignal.throwIfAborted();
               const latest = options.store.get(owner.environmentId);
               if (
-                !latest ||
-                latest.state !== "provisioning" ||
-                latest.destroyRequestedAtMs !== null ||
-                latest.provisionOperationId !== owner.provisionOperationId ||
-                latest.ownerEpoch !== owner.ownerEpoch ||
+                !isProvisioningOwner(latest, owner) ||
                 latest.nodeSetupId !== owner.nodeSetupId ||
                 latest.nodeDeviceId !== live.nodeDeviceId ||
                 active.get(owner.environmentId) !== binding

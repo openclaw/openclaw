@@ -86,29 +86,18 @@ export type QuestionObservation = {
   refreshRequester: () => void;
 };
 
-function unrefTimer(timer: ReturnType<typeof setTimeout>): void {
-  timer.unref?.();
-}
-
 function waitResult(entry: QuestionEntry, includeResolutionId: boolean): QuestionWaitAnswerResult {
   const { record, resolutionId } = entry;
-  switch (record.status) {
-    case "pending":
-      return { status: "pending" };
-    case "answered":
-      // Legacy native decoders reject extra fields. Correlation is opt-in per
-      // waiter, never exposed on records/events or used as resolution authority.
-      return {
-        status: "answered",
-        answers: record.answers ?? { answers: {} },
-        ...(includeResolutionId && resolutionId ? { resolutionId } : {}),
-      };
-    case "cancelled":
-      return { status: "cancelled" };
-    case "expired":
-      return { status: "expired" };
+  if (record.status !== "answered") {
+    return { status: record.status };
   }
-  return record.status satisfies never;
+  // Legacy native decoders reject extra fields. Correlation is opt-in per
+  // waiter, never exposed on records/events or used as resolution authority.
+  return {
+    status: "answered",
+    answers: record.answers ?? { answers: {} },
+    ...(includeResolutionId && resolutionId ? { resolutionId } : {}),
+  };
 }
 
 function resolvedEvent(record: QuestionRecord): QuestionResolvedEvent | null {
@@ -189,7 +178,7 @@ export class QuestionManager {
     entry.releaseHumanInputWait = params.registerHumanInputWait?.(
       () => this.get(id)?.status === "pending" && this.entries.get(id) === entry,
     );
-    unrefTimer(entry.expiryTimer);
+    entry.expiryTimer.unref?.();
     return record;
   }
 
@@ -319,7 +308,7 @@ export class QuestionManager {
       signal?.addEventListener("abort", waiter, { once: true });
       if (timeoutMs !== undefined) {
         timer = setTimeout(waiter, resolveTimerTimeoutMs(timeoutMs, 1));
-        unrefTimer(timer);
+        timer.unref?.();
       }
     });
   }
@@ -545,7 +534,7 @@ export class QuestionManager {
               }
             }, QUESTION_RESOLVED_ENTRY_GRACE_MS);
             entry.cleanupTimer = cleanupTimer;
-            unrefTimer(cleanupTimer);
+            cleanupTimer.unref?.();
           }
         }
       })

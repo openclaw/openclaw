@@ -38,6 +38,22 @@ export type WorkerWorkspacePendingResult = {
   repositoryWorkspaceId?: string;
 };
 
+export function findPendingWorkerWorkspaceResult(
+  placements: {
+    listPendingWorkspaceResults(sessionId?: string): WorkerWorkspacePendingResult[];
+  },
+  claim: WorkerSessionTurnClaim,
+): WorkerWorkspacePendingResult | undefined {
+  return placements
+    .listPendingWorkspaceResults(claim.sessionId)
+    .find(
+      (pending) =>
+        pending.sessionId === claim.sessionId &&
+        pending.claimId === claim.claimId &&
+        pending.runId === claim.runId,
+    );
+}
+
 function matchesWorkspaceResultGeneration(
   placement: WorkerSessionPlacementRecord,
   generation: number,
