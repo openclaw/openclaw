@@ -184,6 +184,21 @@ function normalizeTaskTimeoutMs(value: number | undefined): number | undefined {
   return clampPositiveTimerTimeoutMs(value);
 }
 
+/**
+ * Normalizes the abort-grace timeout while preserving `0` as "reject the task
+ * immediately once the abort signal fires" (armTimer treats delayMs <= 0 as an
+ * immediate timeout). Only omission falls back to the full task budget.
+ */
+function normalizeTaskTimeoutAbortGraceMs(value: number | undefined, fallbackMs: number): number {
+  if (value === undefined) {
+    return fallbackMs;
+  }
+  if (value === 0) {
+    return 0;
+  }
+  return normalizeTaskTimeoutMs(value) ?? fallbackMs;
+}
+
 function resolveQueuePriority(priority: CommandQueueEnqueueOptions["priority"]): QueuePriority {
   switch (priority) {
     case "foreground":
@@ -211,8 +226,10 @@ async function runQueueEntryTask(
     return await taskPromise;
   }
 
-  const taskTimeoutAbortGraceMs =
-    normalizeTaskTimeoutMs(entry.taskTimeoutAbortGraceMs) ?? taskTimeoutMs;
+  const taskTimeoutAbortGraceMs = normalizeTaskTimeoutAbortGraceMs(
+    entry.taskTimeoutAbortGraceMs,
+    taskTimeoutMs,
+  );
   const startedAtMs = Date.now();
   const readLastProgressAtMs = () => {
     let value: number | undefined;
@@ -597,7 +614,10 @@ export function enqueueCommandInLane<T>(
       taskTimeoutProgressAtMs: opts?.taskTimeoutProgressAtMs,
       taskTimeoutSubscribe: opts?.taskTimeoutSubscribe,
       taskTimeoutAbortSignal: opts?.taskTimeoutAbortSignal,
-      taskTimeoutAbortGraceMs: normalizeTaskTimeoutMs(opts?.taskTimeoutAbortGraceMs),
+      taskTimeoutAbortGraceMs:
+        opts?.taskTimeoutAbortGraceMs === 0
+          ? 0
+          : normalizeTaskTimeoutMs(opts?.taskTimeoutAbortGraceMs),
       taskTimeoutReleaseSignal: opts?.taskTimeoutReleaseSignal,
       onWait: opts?.onWait,
     };
