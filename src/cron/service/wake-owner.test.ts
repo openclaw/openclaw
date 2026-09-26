@@ -14,6 +14,7 @@ import {
   peekSystemEventEntries,
   resetSystemEventsForTest,
 } from "../../infra/system-events.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import type { CronJob } from "../types.js";
 import { createCronServiceState } from "./state.js";
 import { executeJobCore } from "./timer-execution.js";
@@ -37,6 +38,7 @@ afterEach(async () => {
 function createHarness(handler: HeartbeatWakeHandler) {
   setHeartbeatWakeHandler(handler);
   const state = createCronServiceState({
+    scheduler: createTestGatewayScheduler(),
     cronEnabled: true,
     storePath: path.join(tempDirs.make("cron-wake-owner-"), "jobs.json"),
     log: { debug() {}, info() {}, warn() {}, error() {} },

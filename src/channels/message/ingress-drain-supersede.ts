@@ -1,5 +1,5 @@
 import { activeClaimKey, type ActiveHandlerState } from "./ingress-drain-state.js";
-import type { ChannelIngressQueueClaim, ChannelIngressQueueRecord } from "./ingress-queue.js";
+import type { ChannelIngressQueueClaim, ChannelIngressQueueRecord } from "./ingress-queue.types.js";
 
 export type IngressSupersedeDecision = boolean | (() => boolean);
 
@@ -61,11 +61,7 @@ export async function supersedeActiveStatesIfNeeded<TPayload, TMetadata>(
     }
     pending.superseded = true;
     params.clearStallTimer(pending);
-    try {
-      pending.abortController.abort(new Error("ingress-superseded"));
-    } catch {
-      // ignore
-    }
+    pending.abortController.abort(new Error("ingress-superseded"));
     try {
       await pending.settleOnce(async () => {
         await params.completeClaim(pending.claim);

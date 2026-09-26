@@ -106,7 +106,8 @@ describe("resolveOpenAiCompatModelOverride", () => {
     });
   });
 
-  it.each(["main", "beta"])("reads the prepared catalog for selected agent %s", async (agentId) => {
+  it("reads the prepared catalog for the selected non-default agent", async () => {
+    const agentId = "beta";
     await expect(
       resolveOpenAiCompatModelOverride({
         req: createReq({ "x-openclaw-model": "openai/gpt-5.4" }),

@@ -268,32 +268,21 @@ export async function resetSessionEntryLifecycle(
             // disk-budget cleanup owns durable extraction before reclaiming them.
             return readOpenClawAgentDatabaseIdentity(transactionDb).identity;
           }, toDatabaseOptions(resolved));
-          if (current) {
-            emitSessionIdentityMutation({
-              agentId: resolved.agentId,
-              databaseIdentity,
-              kind: "reset",
-              previous: {
-                ...(current.entry.sessionId ? { sessionId: current.entry.sessionId } : {}),
-                sessionKeys: targetSnapshot.map((row) => row.sessionKey),
-              },
-              current: {
-                ...(nextEntry.sessionId ? { sessionId: nextEntry.sessionId } : {}),
-                sessionKeys: [params.target.canonicalKey],
-              },
-            });
-          } else {
-            emitSessionIdentityMutation({
-              agentId: resolved.agentId,
-              databaseIdentity,
-              kind: "create",
-              previous: { sessionKeys: [] },
-              current: {
-                ...(nextEntry.sessionId ? { sessionId: nextEntry.sessionId } : {}),
-                sessionKeys: [params.target.canonicalKey],
-              },
-            });
-          }
+          emitSessionIdentityMutation({
+            agentId: resolved.agentId,
+            databaseIdentity,
+            kind: current ? "reset" : "create",
+            previous: current
+              ? {
+                  ...(current.entry.sessionId ? { sessionId: current.entry.sessionId } : {}),
+                  sessionKeys: targetSnapshot.map((row) => row.sessionKey),
+                }
+              : { sessionKeys: [] },
+            current: {
+              ...(nextEntry.sessionId ? { sessionId: nextEntry.sessionId } : {}),
+              sessionKeys: [params.target.canonicalKey],
+            },
+          });
           await params.afterEntryMutation?.(mutation);
           return {
             ...mutation,

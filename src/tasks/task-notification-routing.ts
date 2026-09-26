@@ -6,6 +6,7 @@ import { withSystemEventOwner } from "../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
+import { readTaskBackingInstance } from "./task-backing-records.js";
 import {
   formatTaskBlockedFollowupMessage,
   shouldUseParentReviewTaskTerminalMessage,
@@ -27,15 +28,21 @@ export function getPeerTasksForDelivery(task: TaskRecord): TaskRecord[] {
   if (!task.runId?.trim()) {
     return [];
   }
-  return getTasksByRunId(task.runId).filter(
-    (candidate) =>
+  const backing = task.runtime === "acp" ? readTaskBackingInstance(task.detail) : undefined;
+  const instanceId = backing?.runtime === "acp" ? backing.instanceId : undefined;
+  return getTasksByRunId(task.runId).filter((candidate) => {
+    const candidateBacking =
+      task.runtime === "acp" ? readTaskBackingInstance(candidate.detail) : undefined;
+    return (
       candidate.runtime === task.runtime &&
       candidate.scopeKind === task.scopeKind &&
       (normalizeOptionalString(candidate.ownerKey) ?? "") ===
         (normalizeOptionalString(task.ownerKey) ?? "") &&
       (normalizeOptionalString(candidate.childSessionKey) ?? "") ===
-        (normalizeOptionalString(task.childSessionKey) ?? ""),
-  );
+        (normalizeOptionalString(task.childSessionKey) ?? "") &&
+      (candidateBacking?.runtime === "acp" ? candidateBacking.instanceId : undefined) === instanceId
+    );
+  });
 }
 
 export function resolveTaskDeliveryOwner(

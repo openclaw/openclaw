@@ -26,14 +26,19 @@ enum ExecEnvInvocationUnwrapper {
         self.unwrapWithMetadata(command)?.command
     }
 
-    static func unwrapWithMetadata(_ command: [String]) -> UnwrapResult? {
+    static func unwrapWithMetadata(
+        _ command: [String],
+        skippingEmptyArguments: Bool = false) -> UnwrapResult?
+    {
         var idx = 1
         var expectsOptionValue = false
         var usesModifiers = false
         while idx < command.count {
             let token = command[idx].trimmingCharacters(in: .whitespacesAndNewlines)
             if token.isEmpty {
-                return nil
+                guard skippingEmptyArguments else { return nil }
+                idx += 1
+                continue
             }
             if expectsOptionValue {
                 expectsOptionValue = false
@@ -82,7 +87,7 @@ enum ExecEnvInvocationUnwrapper {
         }
         guard !expectsOptionValue,
               idx < command.count,
-              !command[idx].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+              skippingEmptyArguments || !command[idx].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else { return nil }
         return UnwrapResult(command: Array(command[idx...]), usesModifiers: usesModifiers)
     }

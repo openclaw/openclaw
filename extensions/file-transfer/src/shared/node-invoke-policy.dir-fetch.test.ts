@@ -40,32 +40,40 @@ afterAll(() => {
   vi.resetModules();
 });
 
+function directoryContext(
+  root: string,
+  nodePolicy?: Record<string, unknown>,
+  overrides: Parameters<typeof createCtx>[0] = {},
+) {
+  return createCtx({
+    command: "dir.fetch",
+    params: { path: root },
+    ...(nodePolicy ? { pluginConfig: { nodes: { "node-1": nodePolicy } } } : {}),
+    ...overrides,
+  });
+}
+
+function nodePayload(root: string, fields: Record<string, unknown>) {
+  return {
+    ok: true as const,
+    payload: { ok: true, binding: EXISTING_BINDING, path: root, ...fields },
+  };
+}
+
 describe("file-transfer dir.fetch archive policy", () => {
   it("checks every dir.fetch preflight entry before requesting the archive", async () => {
     const policy = createFileTransferNodeInvokePolicy();
-    const { ctx, invokeNode } = createCtx({
-      command: "dir.fetch",
-      params: { path: "/home/me" },
-      pluginConfig: {
-        nodes: {
-          "node-1": {
-            allowReadPaths: ["/home/me", "/home/me/**"],
-            denyPaths: ["**/.ssh/**"],
-          },
-        },
-      },
+    const { ctx, invokeNode } = directoryContext("/home/me", {
+      allowReadPaths: ["/home/me", "/home/me/**"],
+      denyPaths: ["**/.ssh/**"],
     });
-    invokeNode.mockResolvedValueOnce({
-      ok: true,
-      payload: {
-        ok: true,
-        binding: EXISTING_BINDING,
-        path: "/home/me",
+    invokeNode.mockResolvedValueOnce(
+      nodePayload("/home/me", {
         entries: ["ok.txt", ".ssh/id_rsa"],
         fileCount: 2,
         preflightOnly: true,
-      },
-    });
+      }),
+    );
 
     const result = await policy.handle(ctx);
 
@@ -80,91 +88,53 @@ describe("file-transfer dir.fetch archive policy", () => {
     });
   });
 
-  it.each(["allow-once", "allow-always"] as const)(
-    "%s approval covers one validated dir.fetch tree while deny rules still apply",
-    async (decision) => {
-      const policy = createFileTransferNodeInvokePolicy();
-      const approvals = {
-        request: vi.fn(async (_request: unknown) => ({ id: "approval-1", decision })),
-      };
-      const tarBase64 = tarEntries({ "a.txt": "a", "sub/b.txt": "b" });
-      const { ctx, invokeNode } = createCtx({
-        command: "dir.fetch",
-        params: { path: "/home/project" },
-        pluginConfig: {
-          nodes: {
-            "node-1": {
-              ask: "on-miss",
-              denyPaths: ["**/.ssh/**"],
-            },
-          },
-        },
-        approvals,
-      });
-      invokeNode
-        .mockResolvedValueOnce({
-          ok: true,
-          payload: {
-            ok: true,
-            binding: EXISTING_BINDING,
-            path: "/home/project",
-            entries: ["a.txt", "sub/b.txt"],
-            preflightOnly: true,
-          },
-        })
-        .mockResolvedValueOnce({
-          ok: true,
-          payload: {
-            ok: true,
-            binding: EXISTING_BINDING,
-            path: "/home/project",
-            tarBase64,
-            ...archiveMetadata(tarBase64),
-          },
-        });
+  it("allow-always approval covers one validated dir.fetch tree while deny rules still apply", async () => {
+    const decision = "allow-always" as const;
+    const policy = createFileTransferNodeInvokePolicy();
+    const approvals = {
+      request: vi.fn(async (_request: unknown) => ({ id: "approval-1", decision })),
+    };
+    const tarBase64 = tarEntries({ "a.txt": "a", "sub/b.txt": "b" });
+    const { ctx, invokeNode } = directoryContext(
+      "/home/project",
+      {
+        ask: "on-miss",
+        denyPaths: ["**/.ssh/**"],
+      },
+      { approvals },
+    );
+    invokeNode
+      .mockResolvedValueOnce(
+        nodePayload("/home/project", { entries: ["a.txt", "sub/b.txt"], preflightOnly: true }),
+      )
+      .mockResolvedValueOnce(
+        nodePayload("/home/project", { tarBase64, ...archiveMetadata(tarBase64) }),
+      );
 
-      const result = await policy.handle(ctx);
+    const result = await policy.handle(ctx);
 
-      expect(result.ok).toBe(true);
-      expect(approvals.request).toHaveBeenCalledTimes(1);
-      const request = requireRecord(approvals.request.mock.calls[0]?.[0], "approval request");
-      expect(request.description).toContain("This fetch includes descendants");
-      expect(invokeNode).toHaveBeenCalledTimes(2);
-      if (decision === "allow-always") {
-        expect(persistLiteralGrant).toHaveBeenCalledWith({
-          nodeId: "node-1",
-          command: "dir.fetch",
-          requestedPath: "/home/project",
-          canonicalPath: "/home/project",
-          pendingReapprovalSelector: undefined,
-        });
-      }
-    },
-  );
+    expect(result.ok).toBe(true);
+    expect(approvals.request).toHaveBeenCalledTimes(1);
+    const request = requireRecord(approvals.request.mock.calls[0]?.[0], "approval request");
+    expect(request.description).toContain("This fetch includes descendants");
+    expect(invokeNode).toHaveBeenCalledTimes(2);
+    expect(persistLiteralGrant).toHaveBeenCalledWith({
+      nodeId: "node-1",
+      command: "dir.fetch",
+      requestedPath: "/home/project",
+      canonicalPath: "/home/project",
+      pendingReapprovalSelector: undefined,
+    });
+  });
 
   it("rejects dir.fetch preflight responses without an entry list", async () => {
     const policy = createFileTransferNodeInvokePolicy();
-    const { ctx, invokeNode } = createCtx({
-      command: "dir.fetch",
-      params: { path: "/home/me" },
-      pluginConfig: {
-        nodes: {
-          "node-1": {
-            allowReadPaths: ["/home/me", "/home/me/**"],
-          },
-        },
-      },
+    const { ctx, invokeNode } = directoryContext("/home/me", {
+      allowReadPaths: ["/home/me", "/home/me/**"],
     });
-    invokeNode.mockResolvedValueOnce({
-      ok: true,
-      payload: {
-        ok: true,
-        binding: EXISTING_BINDING,
-        path: "/home/me",
-        fileCount: 2,
-        preflightOnly: true,
-      },
-    });
+    invokeNode.mockResolvedValueOnce(
+      nodePayload("/home/me", { fileCount: 2, preflightOnly: true }),
+    );
 
     const result = await policy.handle(ctx);
 
@@ -174,28 +144,16 @@ describe("file-transfer dir.fetch archive policy", () => {
 
   it("rejects invalid dir.fetch preflight entries before requesting the archive", async () => {
     const policy = createFileTransferNodeInvokePolicy();
-    const { ctx, invokeNode } = createCtx({
-      command: "dir.fetch",
-      params: { path: "/home/me" },
-      pluginConfig: {
-        nodes: {
-          "node-1": {
-            allowReadPaths: ["/home/me", "/home/me/**"],
-          },
-        },
-      },
+    const { ctx, invokeNode } = directoryContext("/home/me", {
+      allowReadPaths: ["/home/me", "/home/me/**"],
     });
-    invokeNode.mockResolvedValueOnce({
-      ok: true,
-      payload: {
-        ok: true,
-        binding: EXISTING_BINDING,
-        path: "/home/me",
+    invokeNode.mockResolvedValueOnce(
+      nodePayload("/home/me", {
         entries: ["ok.txt", "/etc/passwd"],
         fileCount: 2,
         preflightOnly: true,
-      },
-    });
+      }),
+    );
 
     const result = await policy.handle(ctx);
 
@@ -206,28 +164,12 @@ describe("file-transfer dir.fetch archive policy", () => {
   it("rejects oversized dir.fetch preflight entry lists before requesting the archive", async () => {
     const policy = createFileTransferNodeInvokePolicy();
     const entries = Array.from({ length: 5001 }, (_, index) => `file-${index}.txt`);
-    const { ctx, invokeNode } = createCtx({
-      command: "dir.fetch",
-      params: { path: "/home/me" },
-      pluginConfig: {
-        nodes: {
-          "node-1": {
-            allowReadPaths: ["/home/me", "/home/me/**"],
-          },
-        },
-      },
+    const { ctx, invokeNode } = directoryContext("/home/me", {
+      allowReadPaths: ["/home/me", "/home/me/**"],
     });
-    invokeNode.mockResolvedValueOnce({
-      ok: true,
-      payload: {
-        ok: true,
-        binding: EXISTING_BINDING,
-        path: "/home/me",
-        entries,
-        fileCount: entries.length,
-        preflightOnly: true,
-      },
-    });
+    invokeNode.mockResolvedValueOnce(
+      nodePayload("/home/me", { entries, fileCount: entries.length, preflightOnly: true }),
+    );
 
     const result = await policy.handle(ctx);
 
@@ -243,34 +185,25 @@ describe("file-transfer dir.fetch archive policy", () => {
         "a.txt": "a",
         "sub/b.txt": "b",
       });
-      const { ctx, invokeNode } = createCtx({
-        command: "dir.fetch",
+      const { ctx, invokeNode } = directoryContext("/tmp/project", undefined, {
         params: { path: "/tmp/project", preflightOnly: true },
       });
       invokeNode
-        .mockResolvedValueOnce({
-          ok: true,
-          payload: {
-            ok: true,
-            binding: EXISTING_BINDING,
-            path: "/tmp/project",
+        .mockResolvedValueOnce(
+          nodePayload("/tmp/project", {
             entries: ["a.txt", "sub/b.txt"],
             fileCount: 2,
             preflightOnly: true,
-          },
-        })
-        .mockResolvedValueOnce({
-          ok: true,
-          payload: {
-            ok: true,
-            binding: EXISTING_BINDING,
-            path: "/tmp/project",
+          }),
+        )
+        .mockResolvedValueOnce(
+          nodePayload("/tmp/project", {
             tarBase64,
             ...archiveMetadata(tarBase64),
             fileCount: 2,
             entries: ["a.txt", "sub/b.txt"],
-          },
-        });
+          }),
+        );
 
       const result = await policy.handle(ctx);
 
@@ -291,35 +224,15 @@ describe("file-transfer dir.fetch archive policy", () => {
       "a.txt": "a",
     });
     const { tarBytes, sha256 } = archiveMetadata(tarBase64);
-    const { ctx } = createCtx({
-      command: "dir.fetch",
-      params: { path: "/tmp/project" },
-    });
+    const { ctx } = directoryContext("/tmp/project");
     const invokeNode = vi.mocked(ctx.invokeNode);
     invokeNode
-      .mockResolvedValueOnce({
-        ok: true,
-        payload: {
-          ok: true,
-          binding: EXISTING_BINDING,
-          path: "/tmp/project",
-          entries: ["a.txt"],
-          fileCount: 1,
-          preflightOnly: true,
-        },
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        payload: {
-          ok: true,
-          binding: EXISTING_BINDING,
-          path: "/tmp/project",
-          tarBase64,
-          tarBytes,
-          sha256,
-          fileCount: 1,
-        },
-      });
+      .mockResolvedValueOnce(
+        nodePayload("/tmp/project", { entries: ["a.txt"], fileCount: 1, preflightOnly: true }),
+      )
+      .mockResolvedValueOnce(
+        nodePayload("/tmp/project", { tarBase64, tarBytes, sha256, fileCount: 1 }),
+      );
 
     const result = await policy.handle(ctx);
 
@@ -339,34 +252,19 @@ describe("file-transfer dir.fetch archive policy", () => {
   testUnlessWindows("rejects mismatched dir.fetch archive integrity metadata", async () => {
     const policy = createFileTransferNodeInvokePolicy();
     const tarBase64 = tarEntries({ "a.txt": "a" });
-    const { ctx, invokeNode } = createCtx({
-      command: "dir.fetch",
-      params: { path: "/tmp/project" },
-    });
+    const { ctx, invokeNode } = directoryContext("/tmp/project");
     invokeNode
-      .mockResolvedValueOnce({
-        ok: true,
-        payload: {
-          ok: true,
-          binding: EXISTING_BINDING,
-          path: "/tmp/project",
-          entries: ["a.txt"],
-          fileCount: 1,
-          preflightOnly: true,
-        },
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        payload: {
-          ok: true,
-          binding: EXISTING_BINDING,
-          path: "/tmp/project",
+      .mockResolvedValueOnce(
+        nodePayload("/tmp/project", { entries: ["a.txt"], fileCount: 1, preflightOnly: true }),
+      )
+      .mockResolvedValueOnce(
+        nodePayload("/tmp/project", {
           tarBase64,
           tarBytes: 1,
           sha256: "c".repeat(64),
           fileCount: 1,
-        },
-      });
+        }),
+      );
 
     const result = await policy.handle(ctx);
 
@@ -388,41 +286,17 @@ describe("file-transfer dir.fetch archive policy", () => {
         "ok.txt": "ok",
         ".ssh/id_rsa": "secret",
       });
-      const { ctx, invokeNode } = createCtx({
-        command: "dir.fetch",
-        params: { path: "/home/me" },
-        pluginConfig: {
-          nodes: {
-            "node-1": {
-              allowReadPaths: ["/home/me", "/home/me/**"],
-              denyPaths: ["**/.ssh/**"],
-            },
-          },
-        },
+      const { ctx, invokeNode } = directoryContext("/home/me", {
+        allowReadPaths: ["/home/me", "/home/me/**"],
+        denyPaths: ["**/.ssh/**"],
       });
       invokeNode
-        .mockResolvedValueOnce({
-          ok: true,
-          payload: {
-            ok: true,
-            binding: EXISTING_BINDING,
-            path: "/home/me",
-            entries: ["ok.txt"],
-            fileCount: 1,
-            preflightOnly: true,
-          },
-        })
-        .mockResolvedValueOnce({
-          ok: true,
-          payload: {
-            ok: true,
-            binding: EXISTING_BINDING,
-            path: "/home/me",
-            tarBase64,
-            ...archiveMetadata(tarBase64),
-            fileCount: 2,
-          },
-        });
+        .mockResolvedValueOnce(
+          nodePayload("/home/me", { entries: ["ok.txt"], fileCount: 1, preflightOnly: true }),
+        )
+        .mockResolvedValueOnce(
+          nodePayload("/home/me", { tarBase64, ...archiveMetadata(tarBase64), fileCount: 2 }),
+        );
 
       const result = await policy.handle(ctx);
 
@@ -444,12 +318,11 @@ describe("file-transfer dir.fetch archive policy", () => {
       const approvals = {
         request: vi.fn(async () => ({ id: "approval-1", decision: "allow-always" as const })),
       };
-      const { ctx, invokeNode } = createCtx({
-        command: "dir.fetch",
-        params: { path: root },
-        pluginConfig: { nodes: { "node-1": { ask: "always", denyPaths: [deniedPath] } } },
-        approvals,
-      });
+      const { ctx, invokeNode } = directoryContext(
+        root,
+        { ask: "always", denyPaths: [deniedPath] },
+        { approvals },
+      );
       // The untrusted final response has no directory headers; preflight remains enabled.
       mockDirFetchArchive(invokeNode, root, { "private/nested/value.txt": "value" });
       vi.mocked(appendFileTransferAudit).mockClear();
@@ -475,10 +348,8 @@ describe("file-transfer dir.fetch archive policy", () => {
     const entries = Object.fromEntries(
       Array.from({ length: 5000 }, (_, index) => [`file-${index}.txt`, ""]),
     );
-    const { ctx, invokeNode } = createCtx({
-      command: "dir.fetch",
-      params: { path: "/home/me" },
-      pluginConfig: { nodes: { "node-1": { allowReadPaths: ["/home/me", "/home/me/**"] } } },
+    const { ctx, invokeNode } = directoryContext("/home/me", {
+      allowReadPaths: ["/home/me", "/home/me/**"],
     });
     // The real producer archives "."; its root directory header is one member.
     mockDirFetchArchive(invokeNode, "/home/me", entries, { producerRoot: true });
@@ -509,10 +380,8 @@ describe("file-transfer dir.fetch archive policy", () => {
         "",
       ]),
     );
-    const { ctx, invokeNode } = createCtx({
-      command: "dir.fetch",
-      params: { path: "/home/me" },
-      pluginConfig: { nodes: { "node-1": { allowReadPaths: ["/home/me", "/home/me/**"] } } },
+    const { ctx, invokeNode } = directoryContext("/home/me", {
+      allowReadPaths: ["/home/me", "/home/me/**"],
     });
     mockDirFetchArchive(invokeNode, "/home/me", entries);
 
@@ -531,40 +400,16 @@ describe("file-transfer dir.fetch archive policy", () => {
     const tarBase64 = tarEntries(
       Object.fromEntries(Array.from({ length: 5001 }, (_, index) => [`file-${index}.txt`, "x"])),
     );
-    const { ctx, invokeNode } = createCtx({
-      command: "dir.fetch",
-      params: { path: "/tmp/project" },
-      pluginConfig: {
-        nodes: {
-          "node-1": {
-            allowReadPaths: ["/tmp/project", "/tmp/project/**"],
-          },
-        },
-      },
+    const { ctx, invokeNode } = directoryContext("/tmp/project", {
+      allowReadPaths: ["/tmp/project", "/tmp/project/**"],
     });
     invokeNode
-      .mockResolvedValueOnce({
-        ok: true,
-        payload: {
-          ok: true,
-          binding: EXISTING_BINDING,
-          path: "/tmp/project",
-          entries: ["file-0.txt"],
-          fileCount: 1,
-          preflightOnly: true,
-        },
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        payload: {
-          ok: true,
-          binding: EXISTING_BINDING,
-          path: "/tmp/project",
-          tarBase64,
-          ...archiveMetadata(tarBase64),
-          fileCount: 5001,
-        },
-      });
+      .mockResolvedValueOnce(
+        nodePayload("/tmp/project", { entries: ["file-0.txt"], fileCount: 1, preflightOnly: true }),
+      )
+      .mockResolvedValueOnce(
+        nodePayload("/tmp/project", { tarBase64, ...archiveMetadata(tarBase64), fileCount: 5001 }),
+      );
 
     const result = await policy.handle(ctx);
 
@@ -574,33 +419,14 @@ describe("file-transfer dir.fetch archive policy", () => {
 
   it("rejects final dir.fetch archive responses without readable archive entries", async () => {
     const policy = createFileTransferNodeInvokePolicy();
-    const { ctx, invokeNode } = createCtx({
-      command: "dir.fetch",
-      params: { path: "/tmp/project" },
-    });
+    const { ctx, invokeNode } = directoryContext("/tmp/project");
     invokeNode
-      .mockResolvedValueOnce({
-        ok: true,
-        payload: {
-          ok: true,
-          binding: EXISTING_BINDING,
-          path: "/tmp/project",
-          entries: ["a.txt"],
-          fileCount: 1,
-          preflightOnly: true,
-        },
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        payload: {
-          ok: true,
-          binding: EXISTING_BINDING,
-          path: "/tmp/project",
-          tarBytes: 7,
-          sha256: "c".repeat(64),
-          fileCount: 1,
-        },
-      });
+      .mockResolvedValueOnce(
+        nodePayload("/tmp/project", { entries: ["a.txt"], fileCount: 1, preflightOnly: true }),
+      )
+      .mockResolvedValueOnce(
+        nodePayload("/tmp/project", { tarBytes: 7, sha256: "c".repeat(64), fileCount: 1 }),
+      );
 
     const result = await policy.handle(ctx);
 

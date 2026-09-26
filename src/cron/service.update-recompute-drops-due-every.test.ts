@@ -1,4 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { CronService } from "./service.js";
 import {
   createCronStoreHarness,
@@ -9,12 +13,16 @@ import {
 
 const noopLogger = createNoopLogger();
 const { makeStorePath } = createCronStoreHarness();
-installCronTestHooks({ logger: noopLogger });
+installCronTestHooks({ logger: noopLogger, fakeTimers: false });
 
-function createCronFixture(storePath: string) {
+function createCronFixture(
+  storePath: string,
+  clock: ReturnType<typeof createGatewaySchedulerClock>,
+) {
   const finished = createFinishedBarrier();
   const schedulerTurns: Promise<unknown>[] = [];
   const cron = new CronService({
+    scheduler: createTestGatewayScheduler(clock.clock),
     storePath,
     cronEnabled: true,
     log: noopLogger,
@@ -52,8 +60,9 @@ describe("update() must not drop a due every-job's pending run", () => {
   it("preserves a due every-job nextRunAtMs on an idempotent schedule re-save", async () => {
     const store = await makeStorePath();
     const base = Date.parse("2025-12-13T00:00:00.000Z");
+    const clock = createGatewaySchedulerClock(base);
 
-    const { cron, finished, joinSchedulerTurns } = createCronFixture(store.storePath);
+    const { cron, finished, joinSchedulerTurns } = createCronFixture(store.storePath, clock);
 
     try {
       await cron.start();
@@ -70,9 +79,8 @@ describe("update() must not drop a due every-job's pending run", () => {
       expect(job.state.nextRunAtMs).toBe(base + 10_000);
 
       // Fire once so the job carries lastRunAtMs and a real next due slot.
-      vi.setSystemTime(new Date(base + 10_000 + 5));
       const firstRun = finished.waitForOk(jobId);
-      await vi.runOnlyPendingTimersAsync();
+      await clock.advanceTo(base + 10_000 + 5);
       await firstRun;
       await joinSchedulerTurns();
 
@@ -82,7 +90,7 @@ describe("update() must not drop a due every-job's pending run", () => {
       expect(dueSlot).toBe(lastRunAtMs + 10_000);
 
       // Advance past the next slot so it is now due, before the timer services it.
-      vi.setSystemTime(new Date(dueSlot + 50));
+      clock.setTime(dueSlot + 50);
       const nowDue = dueSlot + 50;
 
       // User edits the job and the control UI resubmits the unchanged schedule
@@ -128,8 +136,9 @@ describe("update() must not drop a due every-job's pending run", () => {
     async ({ previousEveryMs, nextEveryMs, completedRun, futureAnchorOffsetMs }) => {
       const store = await makeStorePath();
       const base = Date.parse("2025-12-13T00:00:00.000Z");
+      const clock = createGatewaySchedulerClock(base);
 
-      const { cron, finished, joinSchedulerTurns } = createCronFixture(store.storePath);
+      const { cron, finished, joinSchedulerTurns } = createCronFixture(store.storePath, clock);
 
       try {
         await cron.start();
@@ -147,9 +156,8 @@ describe("update() must not drop a due every-job's pending run", () => {
 
         let editTime = base + 3_000;
         if (completedRun) {
-          vi.setSystemTime(new Date(base + previousEveryMs + 5));
           const firstRun = finished.waitForOk(jobId);
-          await vi.runOnlyPendingTimersAsync();
+          await clock.advanceTo(base + previousEveryMs + 5);
           await firstRun;
           await joinSchedulerTurns();
           const completedJob = (await cron.list({ includeDisabled: true })).find(
@@ -158,7 +166,7 @@ describe("update() must not drop a due every-job's pending run", () => {
           editTime = completedJob.state.lastRunAtMs! + 3_000;
         }
 
-        vi.setSystemTime(new Date(editTime));
+        clock.setTime(editTime);
         const futureAnchorMs =
           futureAnchorOffsetMs === undefined ? undefined : editTime + futureAnchorOffsetMs;
         await cron.update(jobId, {
@@ -185,9 +193,9 @@ describe("update() must not drop a due every-job's pending run", () => {
 
   it("preserves a due cron-job nextRunAtMs on an idempotent schedule re-save", async () => {
     const store = await makeStorePath();
-    vi.setSystemTime(new Date("2025-12-13T08:59:00.000Z"));
+    const clock = createGatewaySchedulerClock(Date.parse("2025-12-13T08:59:00.000Z"));
 
-    const { cron, joinSchedulerTurns } = createCronFixture(store.storePath);
+    const { cron, joinSchedulerTurns } = createCronFixture(store.storePath, clock);
 
     try {
       await cron.start();
@@ -204,7 +212,7 @@ describe("update() must not drop a due every-job's pending run", () => {
       const dueSlot = job.state.nextRunAtMs!;
 
       // Advance past the 09:00 slot so it is now due, before the timer fires it.
-      vi.setSystemTime(new Date(dueSlot + 50));
+      clock.setTime(dueSlot + 50);
       const nowDue = dueSlot + 50;
 
       await cron.update(jobId, { schedule: { kind: "cron", expr: "0 9 * * *" } });

@@ -188,7 +188,13 @@ describe("write-unified-entry-dts", () => {
           '\nexport const pluginRevision = "fixture_zeta";',
           'export function literalOrder(flag: boolean) { return flag ? "fixture_alpha" as const : "fixture_zeta" as const; }',
           'export { typedRuntime } from "./typed-runtime.js";',
-          'export type { Schema as ArrowSchema } from "apache-arrow";',
+        ].join("\n"),
+      );
+      // Keep external type compatibility in a cached group during the isolated edit.
+      fs.appendFileSync(
+        path.join(root, "extensions/fixture-b/index.ts"),
+        [
+          '\nexport type { Schema as ArrowSchema } from "apache-arrow";',
           'export type { Message as ArrowMessage } from "apache-arrow/ipc/metadata/message";',
         ].join("\n"),
       );
@@ -207,7 +213,7 @@ describe("write-unified-entry-dts", () => {
         [
           'import type { Schema } from "apache-arrow";',
           'import type { Message } from "apache-arrow/ipc/metadata/message";',
-          'import type { ArrowSchema, ArrowMessage } from "./dist/extensions/fixture-a/index.js";',
+          'import type { ArrowSchema, ArrowMessage } from "./dist/extensions/fixture-b/index.js";',
           "declare const schema: Schema; const projectedSchema: ArrowSchema = schema;",
           "const originalSchema: Schema = projectedSchema; void originalSchema;",
           "declare const message: Message; const projectedMessage: ArrowMessage = message;",

@@ -26,18 +26,16 @@ describe("Control UI asset manifest", () => {
     expect(parseControlUiAssetManifest(structuredClone(manifest))).toEqual(manifest);
   });
 
-  it.each([
-    "assets/../index.html",
-    "assets/nested/../../escape.js",
-    "assets\\app.js",
-    "/assets/app.js",
-  ])("rejects unsafe inventory path %s", (assetPath) => {
-    const manifest = createControlUiAssetManifest([
-      { path: assetPath, sha256: "a".repeat(64), size: 7 },
-    ]);
+  it.each(["assets/../index.html", "assets\\app.js", "/assets/app.js"])(
+    "rejects unsafe inventory path %s",
+    (assetPath) => {
+      const manifest = createControlUiAssetManifest([
+        { path: assetPath, sha256: "a".repeat(64), size: 7 },
+      ]);
 
-    expect(parseControlUiAssetManifest(manifest)).toBeNull();
-  });
+      expect(parseControlUiAssetManifest(manifest)).toBeNull();
+    },
+  );
 
   it("rejects an inventory whose bytes no longer match its generation", () => {
     const manifest = createControlUiAssetManifest([

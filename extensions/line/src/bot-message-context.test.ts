@@ -816,7 +816,8 @@ describe("buildLineMessageContext", () => {
 
   it("routes LINE conversations through active ACP session bindings", async () => {
     const userId = "U1234567890abcdef1234567890abcdef";
-    await getSessionBindingService().bind({
+    const bindingService = getSessionBindingService();
+    await bindingService.bind({
       targetSessionKey: "agent:codex:acp:binding:line:default:test123",
       targetKind: "session",
       conversation: {
@@ -829,21 +830,69 @@ describe("buildLineMessageContext", () => {
         agentId: "codex",
       },
     });
+    const touchAsync = vi.spyOn(bindingService, "touchAsync").mockImplementation(async () => {});
 
-    const event = createMessageEvent({ type: "user", userId });
-    const context = await buildMessageContext(event);
+    try {
+      const event = createMessageEvent({ type: "user", userId });
+      const context = await buildMessageContext(event);
 
-    expect(context?.route.agentId).toBe("codex");
-    expect(context?.route.sessionKey).toBe("agent:codex:acp:binding:line:default:test123");
-    expect(context?.route.matchedBy).toBe("binding.channel");
-    if (!context) {
-      throw new Error("expected a bound LINE message context");
+      expect(context?.route.agentId).toBe("codex");
+      expect(context?.route.sessionKey).toBe("agent:codex:acp:binding:line:default:test123");
+      expect(context?.route.matchedBy).toBe("binding.channel");
+      if (!context) {
+        throw new Error("expected a bound LINE message context");
+      }
+      const routeMetadataKeys = Object.getOwnPropertySymbols(context.route);
+      expect(routeMetadataKeys).not.toHaveLength(0);
+      for (const key of routeMetadataKeys) {
+        expect(Reflect.get(context.ctxPayload, key)).toBe(Reflect.get(context.route, key));
+      }
+      expect(touchAsync).toHaveBeenCalledOnce();
+    } finally {
+      touchAsync.mockRestore();
     }
-    const routeMetadataKeys = Object.getOwnPropertySymbols(context.route);
-    expect(routeMetadataKeys).not.toHaveLength(0);
-    for (const key of routeMetadataKeys) {
-      expect(Reflect.get(context.ctxPayload, key)).toBe(Reflect.get(context.route, key));
+  });
+
+  it("routes a runtime-bound LINE conversation when ordinary routing is ambiguous", async () => {
+    cfg = {
+      ...cfg,
+      agents: { list: [{ id: "main" }, { id: "codex" }] },
+      bindings: [],
+    };
+    const userId = "U1234567890abcdef1234567890abcdef";
+    const bindingService = getSessionBindingService();
+    await bindingService.bind({
+      targetSessionKey: "agent:codex:acp:binding:line:default:test123",
+      targetKind: "session",
+      conversation: { channel: "line", accountId: "default", conversationId: userId },
+      placement: "current",
+      metadata: { agentId: "codex" },
+    });
+    const touchAsync = vi.spyOn(bindingService, "touchAsync").mockImplementation(async () => {});
+
+    try {
+      const context = await buildMessageContext(createMessageEvent({ type: "user", userId }));
+
+      expect(context?.route.agentId).toBe("codex");
+      expect(context?.route.sessionKey).toBe("agent:codex:acp:binding:line:default:test123");
+      expect(touchAsync).toHaveBeenCalledOnce();
+    } finally {
+      touchAsync.mockRestore();
     }
+  });
+
+  it("keeps ambiguous LINE routing rejected without an active conversation binding", async () => {
+    cfg = {
+      ...cfg,
+      agents: { list: [{ id: "main" }, { id: "codex" }] },
+      bindings: [],
+    };
+
+    await expect(
+      buildMessageContext(
+        createMessageEvent({ type: "user", userId: "U1234567890abcdef1234567890abcdef" }),
+      ),
+    ).rejects.toMatchObject({ code: "AGENT_SELECTION_REQUIRED" });
   });
 
   it("gives the agent the sender's and the group's name instead of their ids", async () => {

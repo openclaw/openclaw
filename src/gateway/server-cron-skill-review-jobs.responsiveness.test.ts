@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { CronService } from "../cron/service.js";
 import { resolveSkillCollectionReviewMonitorSpecs } from "../cron/skill-collection-review-monitor.js";
 import * as providerRuntime from "../plugins/providers.runtime.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { reconcileSkillCollectionReviewJobs } from "./server-cron-skill-review-jobs.js";
 import { AUTH_NONE, createTestGatewayServer } from "./server-http.test-harness.js";
@@ -53,6 +54,7 @@ describe("skill review reconciliation responsiveness", () => {
   it("serves health and commits an agent before projecting the remaining fleet", async () => {
     const state = await createOpenClawTestState({ label: "review-projection-responsiveness" });
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
       storePath: state.statePath("cron", "jobs.json"),
       cronEnabled: false,
       log: logger,
