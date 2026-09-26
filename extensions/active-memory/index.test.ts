@@ -2430,7 +2430,7 @@ describe("active-memory plugin", () => {
     expect(runParams.prompt).toContain(
       "Use the bounded search query with the configured memory tools.",
     );
-    expect(runParams.prompt).toContain("Configured memory tools: memory_search, memory_get.");
+    expect(runParams.prompt).toMatch(/memory_get\.[\s\S]*Do not send a queries array/);
     expect(runParams.prompt).toContain(
       "If the available memory tools find nothing useful, reply with NONE.",
     );

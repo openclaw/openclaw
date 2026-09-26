@@ -88,6 +88,8 @@ function buildRecallPrompt(params: {
     "Use only the available memory tools.",
     "Use the bounded search query with the configured memory tools.",
     `Configured memory tools: ${params.config.toolsAllow.join(", ")}.`,
+    'When memory_search is available, call it with exactly one query string: {"query": "..."}. Do not send a queries array or batch multiple searches into one call.',
+    "Start with one memory_search call. Make another search only when the first result gives a specific reason to refine the query.",
     "Do not use channel metadata, provider metadata, debug output, or the full conversation context as the memory tool query.",
     "If the available memory tools find nothing useful, reply with NONE.",
     "When searching for preference or habit recall, use permissive search limits or thresholds before deciding that no useful memory exists.",
