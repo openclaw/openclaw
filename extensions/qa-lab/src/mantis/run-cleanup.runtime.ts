@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { sameFileIdentity, withTimeout } from "@openclaw/fs-safe/advanced";
+import { withTimeout } from "@openclaw/fs-safe/advanced";
 import { assertNoSymlinkParents } from "openclaw/plugin-sdk/security-runtime";
 import {
   MantisCommandCleanupError,
@@ -139,7 +139,7 @@ async function verifyMantisDirectoryOwnershipBeforeDeadline(params: {
       }
       throw error;
     }
-    matches &&= sameFileIdentity(stat, { dev, ino });
+    matches &&= stat.dev === dev && stat.ino === ino;
   }
   if (!matches) {
     throw new Error(`Mantis worktree path was replaced before cleanup: ${params.worktreeDir}`);

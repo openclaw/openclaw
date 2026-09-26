@@ -101,6 +101,37 @@ describe("Mantis worktree cleanup", () => {
     await expect(fs.stat(displacedPath)).resolves.toBeDefined();
   });
 
+  it.each(["parentDevice", "parentInode", "targetDevice", "targetInode"] as const)(
+    "preserves a worktree when its Windows ownership receipt has unknown %s",
+    async (field) => {
+      const ownership = await captureMantisDirectoryOwnership({
+        directoryPath: worktreeDir,
+        repoRoot,
+      });
+      const sentinelPath = path.join(worktreeDir, "preserve-me.txt");
+      await fs.writeFile(sentinelPath, "preserve", "utf8");
+      const runner = vi.fn(async () => successfulCommandResult());
+      const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+      Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+      try {
+        await expect(
+          removeMantisWorktree({
+            commandTimeouts,
+            lane: "baseline",
+            ownership: { ...ownership, [field]: 0n },
+            repoRoot,
+            runner,
+            worktreeDir,
+          }),
+        ).rejects.toThrow("replaced before cleanup");
+        expect(runner).not.toHaveBeenCalled();
+        await expect(fs.readFile(sentinelPath, "utf8")).resolves.toBe("preserve");
+      } finally {
+        Object.defineProperty(process, "platform", platform);
+      }
+    },
+  );
+
   it("does not remove an unregistered partial path without an ownership receipt", async () => {
     const sentinelPath = path.join(worktreeDir, "partial.txt");
     await fs.writeFile(sentinelPath, "partial", "utf8");
