@@ -87,35 +87,33 @@ suite.define(() => {
       defaultBranch: "main",
       repositoryStatus: "git",
     };
-    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "fs.listDir": {
-          path: groupCwd,
-          parent: "/home/peter",
-          home: "/home/peter",
-          entries: [],
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "fs.listDir": {
+            path: groupCwd,
+            parent: "/home/peter",
+            home: "/home/peter",
+            entries: [],
+          },
+          "sessions.create": { key: "agent:main:client-work", runStarted: true },
+          "sessions.list": sessionsListResponse([]),
+          "worktrees.branches": {
+            cases: [
+              {
+                match: { repoRoot: initialGroupCwd },
+                response: { branches: [], repositoryStatus: "not_git" },
+              },
+              { match: { repoRoot: groupCwd }, response: gitRepository },
+            ],
+          },
         },
-        "sessions.create": { key: "agent:main:client-work", runStarted: true },
-        "sessions.list": sessionsListResponse([]),
-        "worktrees.branches": {
-          cases: [
-            {
-              match: { repoRoot: initialGroupCwd },
-              response: { branches: [], repositoryStatus: "not_git" },
-            },
-            { match: { repoRoot: groupCwd }, response: gitRepository },
-          ],
-        },
-      },
-      sessionGroups: ["Client work"],
-      sessionGroupDefaults: { "Client work": { cwd: initialGroupCwd, worktree: false } },
-      workspace,
-      workspaceGit: true,
-    });
+        sessionGroups: ["Client work"],
+        sessionGroupDefaults: { "Client work": { cwd: initialGroupCwd, worktree: false } },
+        workspace,
+        workspaceGit: true,
+      });
 
-    try {
       await page.goto(`${suite.server.baseUrl}chat`);
       const group = page.locator('[data-session-section="category:Client work"]');
       await group.waitFor({ state: "visible", timeout: 10_000 });
@@ -242,9 +240,7 @@ suite.define(() => {
         message: "prepare the client release",
         worktree: true,
       });
-    } finally {
-      await context.close();
-    }
+    });
   });
 
   it.each(["/home/peter/client-work", ""])(
