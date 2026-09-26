@@ -5,6 +5,7 @@ import type { GatewayScheduledJob } from "../../infra/gateway-scheduler.js";
 import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import type { WorkerExecutionMode } from "../../plugins/types.js";
+import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { workerBootstrapOperationTimeoutMs } from "./bootstrap.js";
 import { createWorkerEnvironmentBuildPreparation } from "./build-preparation.js";
@@ -453,7 +454,12 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       id: "worker-environments:reconcile",
       atMs: scheduler.now() + everyMs,
       everyMs,
-      run: () => reconcileOnce().catch(() => warn("Worker environment reconcile sweep failed")),
+      run: () => {
+        // The service joins its work; slow inspection must not hold the other maintenance duties.
+        runOutsideAsyncWorkScope(() => {
+          void reconcileOnce().catch(() => warn("Worker environment reconcile sweep failed"));
+        });
+      },
     });
     void reconcileOnce().catch(() => warn("Worker environment startup reconcile failed"));
   };

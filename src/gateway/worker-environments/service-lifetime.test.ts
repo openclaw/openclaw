@@ -502,6 +502,7 @@ describe("worker environment service", () => {
     workerService.start();
     await workerService.reconcileOnce();
     await time.advanceBy(25);
+    await workerService.reconcileOnce();
     expect(guardedEnvironmentIds).toEqual([environmentId, environmentId, environmentId]);
     expect(inspect).toHaveBeenCalledTimes(3);
     await uninstallGuard();
