@@ -1781,6 +1781,9 @@ importers:
 
   extensions/nextcloud-talk:
     dependencies:
+      saxes:
+        specifier: 6.0.0
+        version: 6.0.0
       zod:
         specifier: 4.6.5
         version: 4.6.5

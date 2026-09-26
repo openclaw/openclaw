@@ -27,6 +27,7 @@ import {
   implicitMentionKindWhen,
   resolveInboundMentionDecision,
 } from "../channel-mention-gating.js";
+import { createPluginRuntimeMediaMock } from "./plugin-runtime-media-mock.js";
 import {
   mergePluginRuntimeMockOverrides,
   type PluginRuntimeMockOverrides,
@@ -35,6 +36,9 @@ import { createPluginModelRuntimeMock } from "./plugin-runtime-model-mock.js";
 import { createPluginStateRuntimeMock } from "./plugin-runtime-state-mock.js";
 import { createPluginTasksRuntimeMock } from "./plugin-runtime-tasks-mock.js";
 import { createPluginThreadBindingsRuntimeMock } from "./plugin-runtime-thread-bindings-mock.js";
+
+export { createPluginRuntimeMediaMock } from "./plugin-runtime-media-mock.js";
+export type { PluginRuntimeMediaMock } from "./plugin-runtime-media-mock.js";
 
 type InboundDebounceFlush = ReturnType<InboundDebounceCreateParams<unknown>["onFlush"]>;
 type InboundDebounceFlushFactory = Parameters<InboundDebounceCreateParams<unknown>["onFlush"]>[1];
@@ -115,8 +119,6 @@ function resolveMockChannelStructuredContext(
   return contextProvided ? { kind: "present", entries } : { kind: "absent" };
 }
 
-export type PluginRuntimeMediaMock = PluginRuntime["channel"]["media"];
-
 const TEST_CONFIG_SNAPSHOT = {
   path: "/tmp/openclaw.json",
   exists: true,
@@ -131,33 +133,6 @@ const TEST_CONFIG_SNAPSHOT = {
   warnings: [],
   legacyIssues: [],
 } satisfies ConfigFileSnapshot;
-
-const TEST_SAVED_MEDIA = {
-  id: "test-media.jpg",
-  path: "/tmp/test-media.jpg",
-  size: 0,
-  contentType: "image/jpeg",
-} satisfies Awaited<ReturnType<PluginRuntimeMediaMock["saveMediaBuffer"]>>;
-
-export function createPluginRuntimeMediaMock(
-  overrides: Partial<PluginRuntimeMediaMock> = {},
-): PluginRuntimeMediaMock {
-  const readRemoteMediaBuffer = vi.fn<PluginRuntimeMediaMock["readRemoteMediaBuffer"]>();
-  return {
-    readRemoteMediaBuffer,
-    fetchRemoteMedia: readRemoteMediaBuffer,
-    saveRemoteMedia: vi
-      .fn<PluginRuntimeMediaMock["saveRemoteMedia"]>()
-      .mockResolvedValue(TEST_SAVED_MEDIA),
-    saveResponseMedia: vi
-      .fn<PluginRuntimeMediaMock["saveResponseMedia"]>()
-      .mockResolvedValue(TEST_SAVED_MEDIA),
-    saveMediaBuffer: vi
-      .fn<PluginRuntimeMediaMock["saveMediaBuffer"]>()
-      .mockResolvedValue(TEST_SAVED_MEDIA),
-    ...overrides,
-  };
-}
 
 export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = {}): PluginRuntime {
   const runtimeContexts = createChannelRuntimeContextRegistry();
