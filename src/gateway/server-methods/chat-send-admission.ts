@@ -58,12 +58,7 @@ import {
   withCurrentChatSendSession,
   type PreparedChatSendSession,
 } from "./chat-send-session.js";
-import {
-  assertChatSendExclusiveAdmission,
-  createChatSendWorkAdmission,
-  interruptChatSendWork,
-  releaseChatSendCallerAuthority,
-} from "./chat-send-work-admission.js";
+import * as chatSendWork from "./chat-send-work-admission.js";
 import { normalizeOptionalChatText, normalizeUnknownChatText } from "./chat-text-normalization.js";
 import type { GatewayRequestHandlerOptions, SessionMutationAuthorization } from "./types.js";
 
@@ -244,7 +239,7 @@ export async function admitChatSend(
             expectedPermissionMode: p.expectedPermissionMode,
             expectedToolOverrides: p.expectedToolOverrides,
           });
-          assertChatSendExclusiveAdmission(request, session);
+          chatSendWork.assertChatSendExclusiveAdmission(request, session);
           if (entry && !latestEntry) {
             throw new Error(`Session "${sessionKey}" was deleted while starting work. Retry.`);
           }
@@ -555,7 +550,7 @@ export async function admitChatSend(
       entry: activeRunAbort.entry,
     });
     releaseCallerAuthority = () =>
-      releaseChatSendCallerAuthority({ operator: capturedOperator, request, session });
+      chatSendWork.releaseChatSendCallerAuthority({ operator: capturedOperator, request, session });
     // Authority stays fresh per segment; effects check cancellation themselves.
     // A cancelled admission callback must still reach the handler's abort settlement.
     const consumeCurrent = async <T>(consume: () => T): Promise<T | undefined> => {
@@ -580,18 +575,20 @@ export async function admitChatSend(
     };
     if (runInterruptTarget || p.queueMode === "interrupt") {
       const pending = await consumeCurrent(() => ({
-        interruption: interruptChatSendWork({
-          target: runInterruptTarget,
-          signal: activeRunAbort.controller.signal,
-          admission: acquiredGatewayWorkAdmission,
-          storePath,
-          identities: [sessionKey, backingSessionId, admittedSessionId],
-        }),
+        interruption: chatSendWork.observeChatSendWork(
+          chatSendWork.interruptChatSendWork({
+            target: runInterruptTarget,
+            signal: activeRunAbort.controller.signal,
+            admission: acquiredGatewayWorkAdmission,
+            storePath,
+            identities: [sessionKey, backingSessionId, admittedSessionId],
+          }),
+        ),
       }));
       if (!pending) {
         return { ok: false as const };
       }
-      const interruption = await pending.interruption;
+      const interruption = await pending.interruption();
       interruptedActiveRun = interruption.interrupted;
       if (!interruption.settled) {
         cleanupPreDispatchAdmission();
@@ -613,7 +610,9 @@ export async function admitChatSend(
       releaseGatewayRootContinuation = retainGatewayRootWorkAdmissionContinuation() ?? (() => {});
       return {
         admission: params.onAdmissionOwned
-          ? acquiredGatewayWorkAdmission.run(params.onAdmissionOwned)
+          ? chatSendWork.observeChatSendWork(
+              acquiredGatewayWorkAdmission.run(params.onAdmissionOwned),
+            )
           : undefined,
       };
     });
@@ -621,7 +620,7 @@ export async function admitChatSend(
       return { ok: false as const };
     }
     if (pending.admission) {
-      if (!(await pending.admission)) {
+      if (!(await pending.admission())) {
         cleanupPreDispatchAdmission();
         return { ok: false as const };
       }
@@ -644,7 +643,7 @@ export async function admitChatSend(
     admission: acquiredGatewayWorkAdmission,
     progressRefresh,
   });
-  const retainedWork = createChatSendWorkAdmission({
+  const retainedWork = chatSendWork.createChatSendWorkAdmission({
     admission: acquiredGatewayWorkAdmission,
     releaseCallerAuthority,
     logGateway: context.logGateway,
