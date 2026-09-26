@@ -841,7 +841,17 @@ fi
     expect(result.stdout).toContain("2026.7.3-beta.1:2026.7.2=0");
   });
 
-  it("rejects an incompatible channel before replacing an existing managed CLI", () => {
+  it.each([
+    {
+      candidate: "2026.7.1-2",
+      message: "OpenClaw 2026.7.1-2 is older than config writer 2026.7.2",
+    },
+    {
+      candidate: "invalid-version",
+      message:
+        "Cannot compare resolved OpenClaw version 'invalid-version' with config writer '2026.7.2'.",
+    },
+  ])("rejects $candidate before replacing an existing managed CLI", ({ candidate, message }) => {
     const tmp = tempDirs.make("openclaw-install-cli-compatible-");
     const prefix = join(tmp, "prefix");
     const bin = join(prefix, "bin");
@@ -859,7 +869,7 @@ fi
       npm_bin() { printf 'npm\\n'; }
       npm_config_has_raw_key() { return 1; }
       npm() {
-        if [[ "$1" == "view" ]]; then printf '2026.7.1-2\\n'; return 0; fi
+        if [[ "$1" == "view" ]]; then printf '%s\\n' '${candidate}'; return 0; fi
         if [[ "$1" == "config" ]]; then printf 'null\\n'; return 0; fi
         printf 'unexpected mutation: %s\\n' "$*" >&2
         return 99
@@ -868,7 +878,7 @@ fi
     `);
 
     expect(result.status).toBe(1);
-    expect(result.stdout).toContain("OpenClaw 2026.7.1-2 is older than config writer 2026.7.2");
+    expect(result.stdout).toContain(message);
     expect(result.stderr).not.toContain("unexpected mutation");
     expect(readFileSync(openclaw, "utf8")).toBe("existing-managed-cli\n");
   });

@@ -92,11 +92,6 @@ function assertionOperatorPosition(sourceFile: ts.SourceFile, node: AssertionNod
     : node.getStart(sourceFile);
 }
 
-function isUnknownAssertion(node: AssertionNode) {
-  // Casting exactly to unknown strengthens evidence; oxlint still rejects chained assertions such as `x as unknown as T`.
-  return node.type.kind === ts.SyntaxKind.UnknownKeyword;
-}
-
 export function countUnsafeAssertions(
   source: string,
   filePath: string,
@@ -123,7 +118,8 @@ export function countUnsafeAssertions(
         ts.isIdentifier(node.type.typeName) &&
         node.type.typeName.text === "const" &&
         !node.type.typeArguments;
-      if (!isConstAssertion && !isUnknownAssertion(node)) {
+      // Casting exactly to unknown strengthens evidence; oxlint rejects chained assertions.
+      if (!isConstAssertion && node.type.kind !== ts.SyntaxKind.UnknownKeyword) {
         const operatorLine = sourceFile.getLineAndCharacterOfPosition(
           assertionOperatorPosition(sourceFile, node),
         ).line;
@@ -286,14 +282,9 @@ export function main(root = process.cwd(), argv: string[] = process.argv.slice(2
       : null;
     const current = collectCurrentAssertionSafetyCounts(root, { staged: args.staged });
 
-    let baselineSource;
+    let baseline;
     try {
-      baselineSource = loadRatchetSnapshot(
-        root,
-        BASELINE_PATH,
-        args.staged,
-        parseAssertionBaseline,
-      );
+      baseline = loadRatchetSnapshot(root, BASELINE_PATH, args.staged, parseAssertionBaseline);
     } catch {
       if (args.prune && !args.staged && baseBaseline === null) {
         writeBaseline(root, current);
@@ -305,7 +296,6 @@ export function main(root = process.cwd(), argv: string[] = process.argv.slice(2
       throw new Error("Missing " + BASELINE_PATH + (args.staged ? " in the index" : ""));
     }
 
-    const baseline = baselineSource;
     if (args.prune && !args.staged && baseBaseline === null) {
       writeBaseline(root, current);
       reportRatchetSuccess(

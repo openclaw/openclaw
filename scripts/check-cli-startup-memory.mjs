@@ -22,6 +22,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { reportLimitViolations } from "./lib/check-limits.mts";
+import { parsePositiveNumber } from "./lib/numeric-options.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 const repoRoot = resolveRepoRoot(import.meta.url);
 const tmpDir = process.env.TMPDIR || process.env.TEMP || process.env.TMP || os.tmpdir();
@@ -52,15 +53,7 @@ function readPositiveNumberEnv(name, fallback, env = process.env) {
   if (raw === undefined || raw === "") {
     return fallback;
   }
-  const text = raw.trim();
-  if (!/^(?:\d+(?:\.\d+)?|\.\d+)$/u.test(text)) {
-    throw new Error(`${name} must be a positive number`);
-  }
-  const value = Number(text);
-  if (!Number.isFinite(value) || value <= 0) {
-    throw new Error(`${name} must be a positive number`);
-  }
-  return value;
+  return parsePositiveNumber(raw, name);
 }
 function readNonEmptyEnv(name) {
   const value = process.env[name];

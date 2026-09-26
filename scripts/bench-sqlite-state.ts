@@ -620,64 +620,53 @@ function runHotQueries(params: {
   const db = getSessionKysely(params.agentDb);
   const transcriptBytes = transcriptEventReadBytesSql("event").compile(db).sql;
   const transcriptPayload = transcriptEventJsonSql(params.agentDb, "event").compile(db).sql;
-  return [
-    runTimedQuery({
+  const queries: Array<Omit<Parameters<typeof runTimedQuery>[0], "db" | "requestedRuns">> = [
+    {
       database: "state",
-      db: params.stateDb,
       id: "cron.store.load",
       queryParams: ["/state/cron/jobs-0.json"],
-      requestedRuns: params.config.queryRuns,
       sql: `SELECT *
          FROM cron_jobs
         WHERE store_key = ?
         ORDER BY sort_order ASC, updated_at ASC, job_id ASC`,
-    }),
-    runTimedQuery({
+    },
+    {
       database: "state",
-      db: params.stateDb,
       fullLoad: true,
       id: "task-runs.cron.list",
       queryParams: ["cron"],
-      requestedRuns: params.config.queryRuns,
       sql: taskRunSelectSql("runtime = ?"),
-    }),
-    runTimedQuery({
+    },
+    {
       database: "state",
-      db: params.stateDb,
       fullLoad: true,
       id: "task-runs.cron-source.list",
       queryParams: ["cron", "job-00000000"],
-      requestedRuns: params.config.queryRuns,
       sql: taskRunSelectSql("runtime = ? AND source_id = ?"),
-    }),
-    runTimedQuery({
+    },
+    {
       database: "state",
-      db: params.stateDb,
       fullLoad: true,
       id: "delivery.pending.load",
       queryParams: ["outbound", "pending"],
-      requestedRuns: params.config.queryRuns,
       sql: `SELECT id, entry_json, enqueued_at, retry_count, last_attempt_at, last_error,
                 platform_send_started_at, recovery_state
          FROM delivery_queue_entries
         WHERE queue_name = ? AND status = ?
         ORDER BY enqueued_at ASC, id ASC`,
-    }),
-    runTimedQuery({
+    },
+    {
       database: "state",
-      db: params.stateDb,
       id: "ingress.pending.first-page",
       queryParams: [SQLITE_PERF_INGRESS_QUEUE, "pending", SQLITE_PERF_PAGE_SIZE],
-      requestedRuns: params.config.queryRuns,
       sql: `SELECT *
          FROM channel_ingress_events
         WHERE queue_name = ? AND status = ?
         ORDER BY received_at ASC, event_id ASC
         LIMIT ?`,
-    }),
-    runTimedQuery({
+    },
+    {
       database: "state",
-      db: params.stateDb,
       id: "ingress.pending.seek-page",
       queryParams: [
         SQLITE_PERF_INGRESS_QUEUE,
@@ -687,68 +676,57 @@ function runHotQueries(params: {
         "event-00000500",
         SQLITE_PERF_PAGE_SIZE,
       ],
-      requestedRuns: params.config.queryRuns,
       sql: `SELECT *
          FROM channel_ingress_events
         WHERE queue_name = ? AND status = ?
           AND (received_at > ? OR (received_at = ? AND event_id > ?))
         ORDER BY received_at ASC, event_id ASC
         LIMIT ?`,
-    }),
-    runTimedQuery({
+    },
+    {
       database: "state",
-      db: params.stateDb,
       id: "ingress.pending.id-page",
       queryParams: [SQLITE_PERF_INGRESS_QUEUE, "pending", SQLITE_PERF_PAGE_SIZE],
-      requestedRuns: params.config.queryRuns,
       sql: `SELECT *
          FROM channel_ingress_events
         WHERE queue_name = ? AND status = ?
         ORDER BY event_id ASC
         LIMIT ?`,
-    }),
-    runTimedQuery({
+    },
+    {
       database: "state",
-      db: params.stateDb,
       id: "ingress.pending.id-seek-page",
       queryParams: [SQLITE_PERF_INGRESS_QUEUE, "pending", "event-00000500", SQLITE_PERF_PAGE_SIZE],
-      requestedRuns: params.config.queryRuns,
       sql: `SELECT *
          FROM channel_ingress_events
         WHERE queue_name = ? AND status = ? AND event_id > ?
         ORDER BY event_id ASC
         LIMIT ?`,
-    }),
-    runTimedQuery({
+    },
+    {
       database: "state",
-      db: params.stateDb,
       fullLoad: true,
       id: "plugin-state.namespace.live",
       queryParams: [SQLITE_PERF_PLUGIN_ID, SQLITE_PERF_PLUGIN_NAMESPACE, SQLITE_PERF_PLUGIN_NOW],
-      requestedRuns: params.config.queryRuns,
       sql: `SELECT plugin_id, namespace, entry_key, value_json, created_at, expires_at
          FROM plugin_state_entries
         WHERE plugin_id = ? AND namespace = ?
           AND (expires_at IS NULL OR expires_at > ?)
         ORDER BY created_at ASC, entry_key ASC`,
-    }),
-    runTimedQuery({
+    },
+    {
       database: "agent",
-      db: params.agentDb,
       id: "agent-cache.plugin-model-catalog.list",
       queryParams: [SQLITE_PERF_CATALOG_SCOPE],
-      requestedRuns: params.config.queryRuns,
       sql: `SELECT key, value_json
          FROM cache_entries
         WHERE scope = ?
         ORDER BY key ASC`,
-    }),
-    runTimedQuery({
+    },
+    {
       database: "agent",
-      db: params.agentDb,
       id: "transcript.tail.metadata",
       queryParams: [SQLITE_PERF_TRANSCRIPT_SESSION_ID, ...transcriptPositions],
-      requestedRuns: params.config.queryRuns,
       sql: `SELECT active.message_position,
                    ${transcriptBytes} + 1 AS serialized_bytes
               FROM session_transcript_active_events AS active
@@ -757,13 +735,11 @@ function runHotQueries(params: {
              WHERE active.session_id = ?
                AND active.message_position IN (${transcriptPlaceholders})
              ORDER BY active.message_position DESC`,
-    }),
-    runTimedQuery({
+    },
+    {
       database: "agent",
-      db: params.agentDb,
       id: "transcript.tail.payload",
       queryParams: [SQLITE_PERF_TRANSCRIPT_SESSION_ID, ...transcriptPositions],
-      requestedRuns: params.config.queryRuns,
       sql: `SELECT active.message_position, ${transcriptPayload} AS event_json
               FROM session_transcript_active_events AS active
               JOIN transcript_events AS event
@@ -771,8 +747,15 @@ function runHotQueries(params: {
              WHERE active.session_id = ?
                AND active.message_position IN (${transcriptPlaceholders})
              ORDER BY active.message_position ASC`,
-    }),
+    },
   ];
+  return queries.map((query) =>
+    runTimedQuery({
+      ...query,
+      db: query.database === "agent" ? params.agentDb : params.stateDb,
+      requestedRuns: params.config.queryRuns,
+    }),
+  );
 }
 
 function printProofLines(report: BenchmarkReport): void {

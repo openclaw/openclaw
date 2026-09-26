@@ -1,8 +1,8 @@
-// Control Ui I18N Report script supports OpenClaw repository automation.
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { requireOptionArgument } from "./lib/arg-utils.mts";
 
 const ROOT = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const I18N_ASSETS_DIR = path.join(ROOT, "ui/src/i18n/.i18n");
@@ -104,15 +104,15 @@ export function parseArgs(argv: string[]): ReportArgs {
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--surface") {
-      args.surface = readOptionValue(argv, (index += 1), arg);
+      args.surface = requireOptionArgument(argv, index++, arg);
       continue;
     }
     if (arg === "--locale") {
-      args.locale = parseLocale(readOptionValue(argv, (index += 1), arg));
+      args.locale = parseLocale(requireOptionArgument(argv, index++, arg));
       continue;
     }
     if (arg === "--top") {
-      const raw = readOptionValue(argv, (index += 1), arg);
+      const raw = requireOptionArgument(argv, index++, arg);
       if (!/^[1-9][0-9]*$/.test(raw)) {
         throw new Error(`--top must be a positive integer: ${raw}`);
       }
@@ -126,14 +126,6 @@ export function parseArgs(argv: string[]): ReportArgs {
     throw new Error(`unknown argument: ${arg}\n${usage()}`);
   }
   return args;
-}
-
-function readOptionValue(argv: string[], index: number, flag: string) {
-  const value = argv[index];
-  if (!value || value.startsWith("-")) {
-    throw new Error(`${flag} requires a value`);
-  }
-  return value;
 }
 
 function parseLocale(locale: string) {
@@ -162,18 +154,13 @@ export function summarizeRawCopy(entries: RawCopyBaselineEntry[], top: number): 
 
   const rankedPaths = [...byPath.entries()]
     .map(([entryPath, count]) => ({ count, path: entryPath }))
-    .toSorted(compareCountThenName((entry) => entry.path));
+    .toSorted((left, right) => right.count - left.count || left.path.localeCompare(right.path));
 
   return {
     entries: entries.length,
     occurrences,
     topPaths: rankedPaths.slice(0, top),
   };
-}
-
-function compareCountThenName<T>(nameOf: (value: T) => string) {
-  return (left: T & { count: number }, right: T & { count: number }) =>
-    right.count - left.count || nameOf(left).localeCompare(nameOf(right));
 }
 
 function pathTokens(repoPath: string) {

@@ -406,6 +406,22 @@ export function parseArgs(argv: string[]) {
     dryRun: false,
     inputs,
   };
+  const valueOptions = [
+    ["--sha", "sha"],
+    ["--request-file", "requestFile"],
+    ["--reconcile-request", "reconcileRequest"],
+    ["--workflow-sha", "workflowSha"],
+    ["--trusted-workflow-ref", "trustedWorkflowRef"],
+    ["--target-ref", "targetRef"],
+  ] as const;
+  const assignInput = (assignment: string, errorMessage: string) => {
+    const [key, ...valueParts] = assignment.split("=");
+    if (!key || valueParts.length === 0) {
+      throw new Error(errorMessage);
+    }
+    args.inputs[key] = valueParts.join("=");
+    args.specifiedInputs.push(key);
+  };
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i]!;
@@ -413,32 +429,9 @@ export function parseArgs(argv: string[]) {
       usage();
       process.exit(0);
     }
-    if (arg === "--sha") {
-      args.sha = requireOptionArgument(argv, i, arg);
-      i += 1;
-      continue;
-    }
-    if (arg === "--request-file" || arg === "--reconcile-request") {
-      args[arg === "--request-file" ? "requestFile" : "reconcileRequest"] = requireOptionArgument(
-        argv,
-        i,
-        arg,
-      );
-      i += 1;
-      continue;
-    }
-    if (arg === "--workflow-sha") {
-      args.workflowSha = requireOptionArgument(argv, i, arg);
-      i += 1;
-      continue;
-    }
-    if (arg === "--trusted-workflow-ref") {
-      args.trustedWorkflowRef = requireOptionArgument(argv, i, arg);
-      i += 1;
-      continue;
-    }
-    if (arg === "--target-ref") {
-      args.targetRef = requireOptionArgument(argv, i, arg);
+    const valueKey = valueOptions.find(([flag]) => flag === arg)?.[1];
+    if (valueKey) {
+      args[valueKey] = requireOptionArgument(argv, i, arg);
       i += 1;
       continue;
     }
@@ -461,34 +454,19 @@ export function parseArgs(argv: string[]) {
         } else {
           assignment = extra.startsWith("-f") ? extra.slice(2).trim() : extra;
         }
-        const [key, ...valueParts] = assignment.split("=");
-        if (!key || valueParts.length === 0) {
-          throw new Error(`Unsupported extra argument after --: ${extra}`);
-        }
-        args.inputs[key] = valueParts.join("=");
-        args.specifiedInputs.push(key);
+        assignInput(assignment, `Unsupported extra argument after --: ${extra}`);
       }
       break;
     }
     if (arg === "-f") {
       const assignment = requireOptionArgument(argv, i, arg);
       i += 1;
-      const [key, ...valueParts] = assignment.split("=");
-      if (!key || valueParts.length === 0) {
-        throw new Error(`Invalid -f assignment: ${assignment}`);
-      }
-      args.inputs[key] = valueParts.join("=");
-      args.specifiedInputs.push(key);
+      assignInput(assignment, `Invalid -f assignment: ${assignment}`);
       continue;
     }
     if (arg.startsWith("-f") && arg.includes("=")) {
       const assignment = arg.slice(2).trim();
-      const [key, ...valueParts] = assignment.split("=");
-      if (!key || valueParts.length === 0) {
-        throw new Error(`Invalid -f assignment: ${arg}`);
-      }
-      args.inputs[key] = valueParts.join("=");
-      args.specifiedInputs.push(key);
+      assignInput(assignment, `Invalid -f assignment: ${arg}`);
       continue;
     }
     throw new Error(`Unknown argument: ${arg}`);

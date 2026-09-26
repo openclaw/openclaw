@@ -143,15 +143,6 @@ function assertFiniteNonNegative(value: unknown, field: string): asserts value i
   }
 }
 
-const MEMORY_FIELDS = [
-  "heapUsedBytes",
-  "heapTotalBytes",
-  "rssBytes",
-  "externalBytes",
-  "arrayBuffersBytes",
-  "processPeakRssBytes",
-] as const;
-
 const RETAINED_MEMORY_FIELDS = [
   "heapUsedBytes",
   "heapTotalBytes",
@@ -159,6 +150,8 @@ const RETAINED_MEMORY_FIELDS = [
   "externalBytes",
   "arrayBuffersBytes",
 ] as const;
+
+const MEMORY_FIELDS = [...RETAINED_MEMORY_FIELDS, "processPeakRssBytes"] as const;
 
 const LIFECYCLE_COUNT_FIELDS = [
   "taskCount",

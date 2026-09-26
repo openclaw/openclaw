@@ -75,6 +75,15 @@ function ensurePathInsideRoot(rootDir: string, rawPath: string): string {
   throw new Error(`path escapes plugin root: ${rawPath}`);
 }
 
+function assertRealOutputParents(targetPath: string, rootDir: string): void {
+  const stopAt = path.dirname(path.resolve(rootDir));
+  let directory = path.dirname(path.resolve(targetPath));
+  while (directory !== stopAt) {
+    assertRealOutputRoot(directory);
+    directory = path.dirname(directory);
+  }
+}
+
 function normalizeManifestRelativePath(rawPath: string): string {
   return rawPath.replaceAll("\\", "/").replace(/^\.\//u, "");
 }
@@ -174,6 +183,7 @@ function copyDeclaredPluginSkillPaths(params: SkillPathParams): string[] {
       continue;
     }
     const targetPath = ensurePathInsideRoot(params.distPluginDir, target.outputPath);
+    assertRealOutputParents(targetPath, params.distPluginDir);
     const shouldExcludeNestedNodeModules = /^node_modules(?:\/|$)/u.test(
       normalizeManifestRelativePath(raw),
     );
@@ -210,6 +220,7 @@ function copyPresentationAsset(
 ): void {
   const source = path.join(pluginDir, relativePath);
   const target = path.join(distPluginDir, relativePath);
+  assertRealOutputParents(target, distPluginDir);
   let sourceIsFile = false;
   try {
     sourceIsFile = fs.lstatSync(source).isFile();
@@ -274,6 +285,7 @@ export function copyBundledPluginMetadata(params: CopyMetadataParams = {}): void
   // Fail closed before any dist/extensions removal: a symlinked dist root
   // would redirect recursive deletes into the link target.
   assertRealOutputRoot(path.join(repoRoot, "dist"));
+  assertRealOutputRoot(distExtensionsRoot);
 
   const buildEntries = new Map(
     collectSourceCheckoutPluginBuildEntries({ cwd: repoRoot, env }).map((entry) => [
@@ -291,6 +303,7 @@ export function copyBundledPluginMetadata(params: CopyMetadataParams = {}): void
     const pluginDir = path.join(extensionsRoot, dirent.name);
     const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
     const distPluginDir = path.join(distExtensionsRoot, dirent.name);
+    assertRealOutputRoot(distPluginDir);
     const packageJsonPath = path.join(pluginDir, "package.json");
     const parsedPackageJson: unknown = fs.existsSync(packageJsonPath)
       ? JSON.parse(fs.readFileSync(packageJsonPath, "utf8"))
@@ -311,6 +324,8 @@ export function copyBundledPluginMetadata(params: CopyMetadataParams = {}): void
 
     const distManifestPath = path.join(distPluginDir, "openclaw.plugin.json");
     const distPackageJsonPath = path.join(distPluginDir, "package.json");
+    assertRealOutputRoot(distManifestPath);
+    assertRealOutputRoot(distPackageJsonPath);
 
     if (fs.existsSync(manifestPath)) {
       const manifest: unknown = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
@@ -362,11 +377,7 @@ export function copyBundledPluginMetadata(params: CopyMetadataParams = {}): void
         }
         const target = path.join(distPluginDir, relativePath);
         // Declared paths are relative; reject generated directory links as well.
-        let directory = path.dirname(target);
-        while (directory !== path.dirname(distExtensionsRoot)) {
-          assertRealOutputRoot(directory);
-          directory = path.dirname(directory);
-        }
+        assertRealOutputParents(target, distPluginDir);
         removePathIfExists(target);
         if (contents) {
           fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -375,6 +386,7 @@ export function copyBundledPluginMetadata(params: CopyMetadataParams = {}): void
       }
     } else {
       removeFileIfExists(distManifestPath);
+      assertRealOutputParents(path.join(distPluginDir, PORTABLE_PLUGIN_ICON_PATH), distPluginDir);
       removeFileIfExists(path.join(distPluginDir, PORTABLE_PLUGIN_ICON_PATH));
       removePathIfExists(path.join(distPluginDir, PLUGIN_ACTIVITY_ICON_PATH));
       removePathIfExists(path.join(distPluginDir, PLUGIN_TOOL_ACTIVITY_ICON_DIR));

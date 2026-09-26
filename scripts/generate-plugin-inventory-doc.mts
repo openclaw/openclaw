@@ -81,9 +81,8 @@ const RELATED_DOC_PRODUCT_IDS = new Set([
 
 type DocLink = { label: string; href: string };
 
-function createPluginRecord(entry: PluginSourceEntry, excludedDirs: Set<string>) {
+function createPluginRecord(entry: PluginSourceEntry, status: PluginStatus) {
   const { id, manifest, packageJson } = entry;
-  const status = resolvePluginStatus(entry, excludedDirs);
   return {
     description: resolveDescription(entry),
     docs: resolveDocs(entry),
@@ -344,23 +343,13 @@ function resolveDocs({ dirName, manifest, packageJson }: PluginSourceEntry) {
     if (typeof candidate !== "string") {
       continue;
     }
-    if (fileExists(`docs/channels/${candidate}.md`)) {
-      pushUniqueDocLink(links, {
-        href: `/channels/${candidate}`,
-        label: relatedDocLabel(candidate),
-      });
-    }
-    if (fileExists(`docs/providers/${candidate}.md`)) {
-      pushUniqueDocLink(links, {
-        href: `/providers/${candidate}`,
-        label: relatedDocLabel(candidate),
-      });
-    }
-    if (fileExists(`docs/plugins/${candidate}.md`)) {
-      pushUniqueDocLink(links, {
-        href: `/plugins/${candidate}`,
-        label: relatedDocLabel(candidate),
-      });
+    for (const section of ["channels", "providers", "plugins"]) {
+      if (fileExists(`docs/${section}/${candidate}.md`)) {
+        pushUniqueDocLink(links, {
+          href: `/${section}/${candidate}`,
+          label: relatedDocLabel(candidate),
+        });
+      }
     }
   }
 
@@ -615,28 +604,15 @@ function collectPluginRecords() {
   const excludedDirs = collectExcludedPackagedExtensionDirs(rootPackageJson);
   const sourceEntries = collectPluginSourceEntries(ROOT);
   assertPluginInventoryCoverage(sourceEntries, enumerateTopLevelPluginManifests());
-  const records = sourceEntries.map((entry) => createPluginRecord(entry, excludedDirs));
+  const records = sourceEntries.map((entry) =>
+    createPluginRecord(entry, resolvePluginStatus(entry, excludedDirs)),
+  );
 
   const sourceIds = new Set(sourceEntries.map((entry) => entry.id));
-  for (const {
-    dirName,
-    id,
-    manifest,
-    packageJson,
-  } of collectExternalPluginDocsInventoryEntries()) {
-    if (sourceIds.has(id)) {
-      continue;
+  for (const entry of collectExternalPluginDocsInventoryEntries()) {
+    if (!sourceIds.has(entry.id)) {
+      records.push(createPluginRecord(entry, "external"));
     }
-    records.push({
-      description: resolveDescription({ dirName, id, manifest, packageJson }),
-      docs: resolveDocs({ dirName, id, manifest, packageJson }),
-      id,
-      installRoute: resolveInstallRoute(packageJson, "external"),
-      name: humanizeId(id),
-      packageName: packageJson.name ?? "-",
-      status: "external",
-      surface: resolvePluginSurface(manifest),
-    });
   }
   return records.toSorted((left, right) => left.id.localeCompare(right.id));
 }

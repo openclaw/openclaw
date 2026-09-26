@@ -823,79 +823,62 @@ function printSection(title, jobs, metric) {
  * Parses CI run timing CLI arguments.
  */
 export function parseRunTimingArgs(args) {
-  let compareHours = DEFAULT_TREND_COMPARE_HOURS;
-  let compareHoursSpecified = false;
-  let detailRuns = DEFAULT_TREND_DETAIL_RUNS;
-  let detailRunsSpecified = false;
-  let explicitRunId;
-  let json = false;
-  let limit = 15;
-  let limitSpecified = false;
-  let outputPath = null;
-  let recentLimit = null;
-  let trendHours = null;
-  let useLatestMain = false;
+  /** @type {{ compareHours: number; detailRuns: number; explicitRunId: string | undefined; json: boolean; limit: number; outputPath: string | null; recentLimit: number | null; trendHours: number | null; useLatestMain: boolean }} */
+  const options = {
+    compareHours: DEFAULT_TREND_COMPARE_HOURS,
+    detailRuns: DEFAULT_TREND_DETAIL_RUNS,
+    explicitRunId: undefined,
+    json: false,
+    limit: 15,
+    outputPath: null,
+    recentLimit: null,
+    trendHours: null,
+    useLatestMain: false,
+  };
+  const numericFlags = [
+    ["--limit", "limit"],
+    ["--recent", "recentLimit"],
+    ["--trend-hours", "trendHours"],
+    ["--compare-hours", "compareHours"],
+    ["--detail-runs", "detailRuns"],
+  ];
+  const specified = new Set();
 
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--") {
       continue;
     }
-    if (arg === "--latest-main") {
-      useLatestMain = true;
+    if (arg === "--latest-main" || arg === "--json") {
+      options[arg === "--json" ? "json" : "useLatestMain"] = true;
       continue;
     }
-    if (arg === "--json") {
-      json = true;
-      continue;
-    }
-    const limitOption = consumePositiveIntFlag(args, index, "--limit");
-    if (limitOption) {
-      limit = limitOption.value;
-      limitSpecified = true;
-      index = limitOption.nextIndex;
-      continue;
-    }
-    const recentOption = consumePositiveIntFlag(args, index, "--recent");
-    if (recentOption) {
-      recentLimit = recentOption.value;
-      index = recentOption.nextIndex;
-      continue;
-    }
-    const trendOption = consumePositiveIntFlag(args, index, "--trend-hours");
-    if (trendOption) {
-      trendHours = trendOption.value;
-      index = trendOption.nextIndex;
-      continue;
-    }
-    const compareOption = consumePositiveIntFlag(args, index, "--compare-hours");
-    if (compareOption) {
-      compareHours = compareOption.value;
-      compareHoursSpecified = true;
-      index = compareOption.nextIndex;
-      continue;
-    }
-    const detailOption = consumePositiveIntFlag(args, index, "--detail-runs");
-    if (detailOption) {
-      detailRuns = detailOption.value;
-      detailRunsSpecified = true;
-      index = detailOption.nextIndex;
+    const numericFlag = numericFlags.find(([flag]) => arg === flag || arg.startsWith(`${flag}=`));
+    if (numericFlag) {
+      const [flag, key] = numericFlag;
+      const parsed = consumePositiveIntFlag(args, index, flag);
+      options[key] = parsed.value;
+      specified.add(flag);
+      index = parsed.nextIndex;
       continue;
     }
     const outputOption = consumeStringFlag(args, index, "--output");
     if (outputOption) {
-      outputPath = outputOption.value;
+      options.outputPath = outputOption.value;
       index = outputOption.nextIndex;
       continue;
     }
     if (arg.startsWith("-")) {
       throw new Error(`Unknown CI run timing option: ${arg}`);
     }
-    if (explicitRunId) {
+    if (options.explicitRunId) {
       throw new Error(`Unexpected CI run id argument: ${arg}`);
     }
-    explicitRunId = arg;
+    options.explicitRunId = arg;
   }
+
+  const { compareHours, explicitRunId, json, outputPath, recentLimit, trendHours, useLatestMain } =
+    options;
 
   if (recentLimit !== null && (explicitRunId || useLatestMain)) {
     throw new Error("--recent cannot be combined with a run id or --latest-main");
@@ -904,27 +887,22 @@ export function parseRunTimingArgs(args) {
     throw new Error("A run id cannot be combined with --latest-main");
   }
   if (trendHours !== null) {
-    if (explicitRunId || useLatestMain || recentLimit !== null || limitSpecified) {
+    if (explicitRunId || useLatestMain || recentLimit !== null || specified.has("--limit")) {
       throw new Error("--trend-hours cannot be combined with single-run or --recent options");
     }
     if (trendHours < compareHours * 2) {
       throw new Error("--trend-hours must cover at least two --compare-hours windows");
     }
-  } else if (compareHoursSpecified || detailRunsSpecified || json || outputPath !== null) {
+  } else if (
+    specified.has("--compare-hours") ||
+    specified.has("--detail-runs") ||
+    json ||
+    outputPath !== null
+  ) {
     throw new Error("--compare-hours, --detail-runs, --json, and --output require --trend-hours");
   }
 
-  return {
-    compareHours,
-    detailRuns,
-    explicitRunId,
-    json,
-    limit,
-    outputPath,
-    recentLimit,
-    trendHours,
-    useLatestMain,
-  };
+  return options;
 }
 
 function consumePositiveIntFlag(args, index, flag) {

@@ -15,6 +15,7 @@ import { isDeepStrictEqual, parseArgs } from "node:util";
 import {
   CLAWHUB_CHILD_WORKFLOW,
   readPackedClawHubTransaction,
+  resolvePackedClawHubArtifactDir,
 } from "./clawhub-parent-authorization.mjs";
 import {
   downloadExactActionsArtifactArchive,
@@ -379,16 +380,6 @@ export async function resolvePreparedClawHubMatrix(options) {
   }
   return matrix;
 }
-function expectedTransaction(entry, artifactName) {
-  return {
-    name: entry.packageName,
-    version: entry.version,
-    inventoryDigest: entry.inventoryDigest,
-    artifactName,
-    artifactSha256: entry.tarballSha256,
-    artifactSize: entry.tarballSizeBytes,
-  };
-}
 function verifyRestoredPackage(directory, entry, artifactName) {
   const actual = readPackedClawHubTransaction({
     artifactDir: directory,
@@ -398,7 +389,14 @@ function verifyRestoredPackage(directory, entry, artifactName) {
   });
   same(
     actual,
-    expectedTransaction(entry, artifactName),
+    {
+      name: entry.packageName,
+      version: entry.version,
+      inventoryDigest: entry.inventoryDigest,
+      artifactName,
+      artifactSha256: entry.tarballSha256,
+      artifactSize: entry.tarballSizeBytes,
+    },
     "Restored ClawHub package bytes and inventory",
   );
 }
@@ -427,35 +425,24 @@ export async function restorePreparedClawHubPackage(options) {
   });
   // Publish only after a complete, checked transfer. A failed download never
   // leaves a tarball in the directory consumed by the upload/publication step.
-  let existing;
-  try {
-    existing = lstatSync(outputDir);
-  } catch (error) {
-    if (!error || typeof error !== "object" || error.code !== "ENOENT") {
-      throw error;
-    }
-  }
+  const existing = lstatSync(outputDir, { throwIfNoEntry: false });
   if (existing) {
     if (!existing.isDirectory() || existing.isSymbolicLink()) {
       throw new Error("Restored ClawHub output must be a regular directory.");
     }
     verifyRestoredPackage(outputDir, entry, artifactName);
-    return {
-      packageName: entry.packageName,
-      tarballSha256: entry.tarballSha256,
-      inventoryDigest: entry.inventoryDigest,
-    };
-  }
-  const staging = mkdtempSync(`${outputDir}.download-`);
-  try {
-    writeFileSync(join(staging, entry.tarballName), files.get(entry.tarballName), {
-      flag: "wx",
-      mode: 0o600,
-    });
-    verifyRestoredPackage(staging, entry, artifactName);
-    renameSync(staging, outputDir);
-  } finally {
-    rmSync(staging, { recursive: true, force: true });
+  } else {
+    const staging = mkdtempSync(`${outputDir}.download-`);
+    try {
+      writeFileSync(join(staging, entry.tarballName), files.get(entry.tarballName), {
+        flag: "wx",
+        mode: 0o600,
+      });
+      verifyRestoredPackage(staging, entry, artifactName);
+      renameSync(staging, outputDir);
+    } finally {
+      rmSync(staging, { recursive: true, force: true });
+    }
   }
   return {
     packageName: entry.packageName,
@@ -505,7 +492,11 @@ export function createPreparedClawHubManifest({
       workflowRun: workflowRunForProducer(workflowRun, producer),
     });
     validateActionsArtifactProducerJob({ expected, workflowJobs });
-    const artifactDir = join(directory, entry.artifactName);
+    const artifactDir = resolvePackedClawHubArtifactDir({
+      directory,
+      artifactName: entry.artifactName,
+      matrixSize: matrix.length,
+    });
     const transaction = readPackedClawHubTransaction({
       artifactDir,
       artifactName: entry.artifactName,

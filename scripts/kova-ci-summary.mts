@@ -5,12 +5,7 @@ import path from "node:path";
 import { isRecord } from "./lib/record-shared.mjs";
 
 const knownArgKeys = new Set(["report", "output", "lane", "reporturl", "artifacturl"]);
-const rawArgs = process.argv.slice(2);
-if (shouldPrintHelp(rawArgs)) {
-  usage("", 0);
-}
-
-const args = parseArgs(rawArgs);
+const args = parseArgs(process.argv.slice(2));
 if (!args.report) {
   usage("missing --report");
 }
@@ -300,6 +295,9 @@ function parseArgs(argv: string[]) {
   const parsed: Record<string, string> = {};
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
+    if (arg === "--help" || arg === "-h") {
+      usage("", 0);
+    }
     if (!arg?.startsWith("--")) {
       usage(`unexpected argument: ${arg}`);
     }
@@ -321,28 +319,6 @@ function parseArgs(argv: string[]) {
     reportUrl: parsed.reporturl,
     artifactUrl: parsed.artifacturl,
   };
-}
-
-function shouldPrintHelp(argv: string[]) {
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (arg === "--help" || arg === "-h") {
-      return true;
-    }
-    if (!arg?.startsWith("--")) {
-      return false;
-    }
-    const key = arg.slice(2).replaceAll("-", "");
-    if (!knownArgKeys.has(key)) {
-      return false;
-    }
-    const optionValue = argv[index + 1];
-    if (!optionValue || optionValue.startsWith("-")) {
-      return false;
-    }
-    index += 1;
-  }
-  return false;
 }
 
 function usage(message: string, status = 2): never {

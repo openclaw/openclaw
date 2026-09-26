@@ -102,9 +102,7 @@ function resolveImportedReference(
   }
   const namespaceName = ts.isPropertyAccessExpression(target)
     ? target.name.text
-    : ts.isElementAccessExpression(target) &&
-        target.argumentExpression &&
-        ts.isStringLiteral(target.argumentExpression)
+    : ts.isStringLiteral(target.argumentExpression)
       ? target.argumentExpression.text
       : null;
   if (!namespaceName || !ts.isIdentifier(target.expression)) {
@@ -782,40 +780,33 @@ export function findExportNameCollisions(modules: SourceModule[]): ExportNameCol
 
 async function collectRepositoryModules(repoRoot: string) {
   const ignoredDirNames = new Set(["node_modules", "test", "__fixtures__"]);
-  const [collectedFiles, collectedSupportFiles] = await Promise.all([
-    collectSourceFileContents({
-      repoRoot,
+  const scans = [
+    {
       scanRoots: ["src"],
       scanExtensions: new Set([".ts", ".mts", ".js", ".mjs"]),
-      ignoredDirNames,
-    }),
+      includeDefinitions: true,
+    },
     // Package modules are resolution-only: Plugin SDK barrels can export their
     // names, but the collision rule itself remains scoped to src/ definitions.
-    collectSourceFileContents({
-      repoRoot,
+    {
       scanRoots: ["packages"],
       scanExtensions: new Set([".ts", ".mts"]),
-      ignoredDirNames,
-    }),
-  ]);
-  const files = collectedFiles.filter(
-    ({ relativeFile }) => !isExcludedExportCollisionSource(relativeFile),
-  );
-  const supportFiles = collectedSupportFiles.filter(
-    ({ relativeFile }) => !isExcludedExportCollisionSource(relativeFile),
-  );
-  return [
-    ...files.map(({ content, relativeFile }) => ({
-      content,
-      includeDefinitions: true,
-      path: relativeFile,
-    })),
-    ...supportFiles.map(({ content, relativeFile }) => ({
-      content,
       includeDefinitions: false,
-      path: relativeFile,
-    })),
+    },
   ];
+  return (
+    await Promise.all(
+      scans.map(async ({ includeDefinitions, ...scan }) =>
+        (await collectSourceFileContents({ repoRoot, ignoredDirNames, ...scan }))
+          .filter(({ relativeFile }) => !isExcludedExportCollisionSource(relativeFile))
+          .map(({ content, relativeFile }) => ({
+            content,
+            includeDefinitions,
+            path: relativeFile,
+          })),
+      ),
+    )
+  ).flat();
 }
 
 async function collectRepositoryExportAnalysis(repoRoot: string) {
