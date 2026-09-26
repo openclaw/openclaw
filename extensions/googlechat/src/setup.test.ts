@@ -23,7 +23,7 @@ import {
   tempWorkspaceSync,
   type TempWorkspaceSync,
 } from "openclaw/plugin-sdk/temp-path";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   listGoogleChatAccountIds,
   resolveGoogleChatAccount,
@@ -91,6 +91,12 @@ async function waitForGoogleChatMonitorStarted() {
 }
 
 describe("googlechat setup", () => {
+  // startAccount loads the mocked channel runtime lazily. Loading it here keeps its cold
+  // transform, including the real monitor module, out of the 1s vi.waitFor budget.
+  beforeAll(async () => {
+    await import("./channel.runtime.js");
+  });
+
   afterEach(() => {
     vi.clearAllMocks();
     vi.unstubAllEnvs();
