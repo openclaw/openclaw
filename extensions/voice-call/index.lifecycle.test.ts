@@ -203,6 +203,26 @@ describe("voice-call runtime lifecycle", () => {
     expect(runtimeB.initiateCall).toHaveBeenCalledTimes(2);
   });
 
+  it("rejects a disabled registration before reusing the predecessor's live runtime", async () => {
+    const runtimeA = createRuntime("call-a", "+15550000001");
+    vi.mocked(createVoiceCallRuntime).mockResolvedValue(runtimeA.runtime);
+    const generationA = registerVoiceCall({ registrationMode: "full" });
+    await executeCall(generationA.tool());
+    expect(runtimeA.initiateCall).toHaveBeenCalledTimes(1);
+
+    const disabledB = registerVoiceCall({ config: { enabled: false }, registrationMode: "full" });
+    const respond = await executeGatewayCall(disabledB);
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringContaining("disabled") }),
+    );
+    // The predecessor's runtime manager must not have received a second call attempt.
+    expect(runtimeA.initiateCall).toHaveBeenCalledTimes(1);
+    expect(createVoiceCallRuntime).toHaveBeenCalledTimes(1);
+  });
+
   it("waits for A stopping before creating B with B config", async () => {
     const aStopEntered = createDeferred<void>();
     const releaseAStop = createDeferred<void>();
