@@ -1,5 +1,7 @@
 // Covers identifier-preservation instructions through single and staged
 // compaction summarization paths.
+import "./compaction-planning-single-pass.test-support.js";
+import "./compaction-planning-transport-budget.test-support.js";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type { ExtensionContext } from "openclaw/plugin-sdk/agent-sessions";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -97,6 +99,7 @@ describe("compaction identifier-preservation instructions", () => {
       maxChunkTokens: 1000,
       parts: 2,
       minMessagesForSplit: 4,
+      contextWindow: 1_000,
     });
 
     expect(mockGenerateSummary).toHaveBeenCalledTimes(3);
@@ -118,6 +121,7 @@ describe("compaction identifier-preservation instructions", () => {
       maxChunkTokens: 1000,
       parts: 2,
       minMessagesForSplit: 4,
+      contextWindow: 1_000,
       customInstructions: "Prioritize customer-visible regressions.",
     });
 
@@ -188,6 +192,7 @@ describe("compaction staged summarization failures", () => {
       maxChunkTokens: 1000,
       parts: 3,
       minMessagesForSplit: 2,
+      contextWindow: 1_000,
     });
 
   beforeEach(() => {

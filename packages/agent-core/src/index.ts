@@ -44,7 +44,7 @@ export {
   type CompactionPreparation,
   type CompactionResult,
   type CompactionSettings,
-  type CompactionSummaryPrompt,
   type ContextUsageEstimate,
 } from "./harness/compaction/compaction.js";
+export type { CompactionSummaryPrompt } from "./harness/compaction/summarization-budget.js";
 export * from "./harness/utils/truncate.js";

@@ -50,10 +50,18 @@ export interface SummarizationCompletionParams {
   errorLabel: string;
 }
 
-/** Runs one summarization completion and maps abort/error stops to CompactionError. */
-export async function runSummarizationCompletion(
-  params: SummarizationCompletionParams,
-): Promise<Result<string, CompactionError>> {
+/**
+ * Assembles the exact user-turn text this runner sends.
+ *
+ * Exported so single-pass budgeting can size the real request instead of
+ * re-deriving the layout, which would drift from what actually gets sent.
+ */
+export function buildSummarizationPromptText(params: {
+  messages: AgentMessage[];
+  prompt: string;
+  customInstructions?: string;
+  previousSummary?: string;
+}): string {
   const conversationText = serializeConversation(convertToLlm(params.messages));
   let promptText = `<conversation>\n${conversationText}\n</conversation>\n\n`;
   if (params.previousSummary) {
@@ -64,6 +72,14 @@ export async function runSummarizationCompletion(
   if (params.customInstructions) {
     promptText += `\n\nAdditional focus: ${params.customInstructions}`;
   }
+  return promptText;
+}
+
+/** Runs one summarization completion and maps abort/error stops to CompactionError. */
+export async function runSummarizationCompletion(
+  params: SummarizationCompletionParams,
+): Promise<Result<string, CompactionError>> {
+  const promptText = buildSummarizationPromptText(params);
   const context = {
     systemPrompt: SUMMARIZATION_SYSTEM_PROMPT,
     messages: [
