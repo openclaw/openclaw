@@ -113,13 +113,12 @@ export async function admitChatSend(
     request,
     session,
   });
-  const readPendingReservation = pendingReservation.read;
   const inspectRetryAndReserve = () => {
     const goalRetry = chatSendReservation.inspectGoalChatSendRetry(params);
     if (goalRetry.kind !== "new") {
       return { goalReservationConflict: false, goalRetry, retrySettled: false };
     }
-    if (!request.goalOperation && readPendingReservation()?.payload.goalFingerprint) {
+    if (!request.goalOperation && pendingReservation.read()?.payload.goalFingerprint) {
       return { goalReservationConflict: true, goalRetry, retrySettled: false };
     }
     if (!request.goalOperation && respondChatSendRetry(params)) {
@@ -184,7 +183,7 @@ export async function admitChatSend(
           if (context.chatRunState.hasAbortMarker(clientRunId)) {
             return;
           }
-          const currentReservation = readPendingReservation();
+          const currentReservation = pendingReservation.read();
           if (
             currentReservation &&
             normalizeUnknownChatText(currentReservation.payload.attemptId) !== pendingAttemptId
@@ -557,15 +556,14 @@ export async function admitChatSend(
     });
     releaseCallerAuthority = () =>
       releaseChatSendCallerAuthority({ operator: capturedOperator, request, session });
-    // Each synchronous segment consumes one current authority read. Only actual
-    // interrupt/admission work creates another boundary that needs a fresh read.
+    // Authority stays fresh per segment; effects check cancellation themselves.
+    // A cancelled admission callback must still reach the handler's abort settlement.
     const consumeCurrent = async <T>(consume: () => T): Promise<T | undefined> => {
       if (!params.withCurrent && params.assertCurrentAsync) {
         await params.assertCurrentAsync();
       }
       const consumeAuthorized = () => {
         params.assertCurrent?.();
-        activeRunAbort.controller.signal.throwIfAborted();
         capturedOperator.authority?.assertCurrent();
         if (
           !assertChatSendSessionTargetOrRespond({
@@ -584,6 +582,7 @@ export async function admitChatSend(
       const pending = await consumeCurrent(() => ({
         interruption: interruptChatSendWork({
           target: runInterruptTarget,
+          signal: activeRunAbort.controller.signal,
           admission: acquiredGatewayWorkAdmission,
           storePath,
           identities: [sessionKey, backingSessionId, admittedSessionId],
@@ -609,6 +608,7 @@ export async function admitChatSend(
       }
     }
     const pending = await consumeCurrent(() => {
+      activeRunAbort.controller.signal.throwIfAborted();
       // Detached dispatch retains the request root until terminal persistence.
       releaseGatewayRootContinuation = retainGatewayRootWorkAdmissionContinuation() ?? (() => {});
       return {

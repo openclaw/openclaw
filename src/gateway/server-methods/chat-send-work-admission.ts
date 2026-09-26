@@ -35,18 +35,18 @@ export function releaseChatSendCallerAuthority(params: {
 }
 
 /** Interrupt the captured run, or competing admissions, without ever targeting this admission. */
-export async function interruptChatSendWork(params: {
+export function interruptChatSendWork(params: {
   target: ReturnType<typeof replyRunRegistry.resolveCurrentInterruptTarget>;
+  signal: AbortSignal;
   admission: Pick<SessionWorkAdmissionLease, "run">;
   storePath: string;
   identities: Array<string | undefined>;
 }) {
+  params.signal.throwIfAborted();
   if (params.target) {
-    const { settled } = await interruptReplyRunTarget(
-      params.target,
-      REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
+    return interruptReplyRunTarget(params.target, REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS).then(
+      ({ settled }) => ({ interrupted: true, settled }),
     );
-    return { interrupted: true, settled };
   }
   return params.admission.run(async () => {
     if (!isCompetingSessionWorkAdmissionActive(params.storePath, params.identities)) {
