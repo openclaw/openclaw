@@ -13,7 +13,7 @@ export const IOS_RELEASE_TESTS = [
 ] as const;
 export const MODEL_REF = "openai/ios-e2e";
 export const IOS_RELEASE_CHAT_FAILURE =
-  /IOS_RELEASE_CHAT_FAILURE (seed-[0-2]|final) (submission|reply) draft=(true|false) keyboard=(true|false) reply=(true|false) writing=(true|false) jump=(true|false)/u;
+  /IOS_RELEASE_CHAT_FAILURE (seed-[0-2]|final) (submission|reply) draft=(true|false) keyboard=(true|false) reply=(true|false) writing=(true|false) jump=(true|false) foreground=(true|false) input=(true|false) transcript=(true|false) send=(true|false)/u;
 export const IOS_RELEASE_TEST_FAILURE_LOCATION =
   /(?:^|\/)OpenClawSnapshotUITests\.swift:([1-9][0-9]{0,4})(?::[0-9]+)?: error:/gmu;
 export const SAMPLE_INTERVAL_MS = 1_000;
@@ -41,6 +41,7 @@ export type Operation =
   | "gateway-start"
   | "setup-code"
   | "native-test"
+  | "app-diagnostics"
   | "provider-rpc"
   | "test-results"
   | "simulator-measure"
@@ -97,6 +98,10 @@ export class OperationError extends Error {
           `chat-reply-present:${chatFailure[5]}`,
           `chat-writing:${chatFailure[6]}`,
           `chat-jump:${chatFailure[7]}`,
+          `chat-app-foreground:${chatFailure[8]}`,
+          `chat-input-present:${chatFailure[9]}`,
+          `chat-transcript-present:${chatFailure[10]}`,
+          `chat-send-present:${chatFailure[11]}`,
         );
       }
       for (const status of ["started", "passed", "failed"] as const) {

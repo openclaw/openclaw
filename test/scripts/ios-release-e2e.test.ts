@@ -1,5 +1,5 @@
 import { spawnSync, type ChildProcess } from "node:child_process";
-import { readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
@@ -539,6 +539,7 @@ describe("native command adapter", () => {
     "reply-failure-history-error",
     "reply-failure-submission",
     "reply-failure-source-only",
+    "reply-failure-app-log-error",
   ])("owns admission, build, test and cleanup for %s", async (scenario) => {
     const temp = tempDirs.make("ios-release-e2e-adapter-");
     vi.spyOn(os, "tmpdir").mockReturnValue(temp);
@@ -599,6 +600,7 @@ describe("native command adapter", () => {
       return instance;
     });
     let created = 0;
+    let appContainer = "";
     let selectedTest: string = IOS_RELEASE_TESTS[0];
     let joinedMocks = 0;
     nativeMocks.command.mockImplementation(async (options) => {
@@ -720,6 +722,10 @@ describe("native command adapter", () => {
         );
         stdout.write(`11111111-2222-3333-4444-${String(++created).padStart(12, "0")}`);
       } else if (args.includes("build-for-testing")) {
+        appContainer = path.join(
+          path.dirname(args[args.indexOf("-derivedDataPath") + 1]!),
+          "app-container",
+        );
         if (scenario === "build-unjoined") {
           throw Object.assign(new Error("private build termination failure"), {
             code: "ETIMEDOUT",
@@ -739,7 +745,7 @@ describe("native command adapter", () => {
           const failureMessage =
             scenario === "reply-failure-source-only"
               ? ""
-              : `IOS_RELEASE_CHAT_FAILURE final ${scenario === "reply-failure-submission" ? "submission" : "reply"} draft=false keyboard=true reply=false writing=false jump=true`;
+              : `IOS_RELEASE_CHAT_FAILURE final ${scenario === "reply-failure-submission" ? "submission" : "reply"} draft=false keyboard=true reply=false writing=false jump=true foreground=true input=true transcript=true send=false`;
           stdout.write(
             "Test Case '-[OpenClawUITests.OpenClawSnapshotUITests testLiveGatewayChatRoundTripAndControlOverview]' started.\n" +
               `/private/checkout/OpenClawSnapshotUITests.swift:1913: error: private ${failureMessage}\n` +
@@ -776,6 +782,31 @@ describe("native command adapter", () => {
         selectedTest = args
           .find((arg) => arg.startsWith("-only-testing:"))!
           .slice("-only-testing:".length);
+      } else if (options.bin === "/usr/bin/plutil") {
+        stdout.write("ai.synthetic.private\n");
+      } else if (args.includes("get_app_container")) {
+        expect(args).toEqual([
+          "simctl",
+          "get_app_container",
+          "11111111-2222-3333-4444-000000000002",
+          "ai.synthetic.private",
+          "data",
+        ]);
+        expect(options.timeoutMs).toBe(5_000);
+        if (scenario === "reply-failure-app-log-error") {
+          throw new Error("private app container failure");
+        }
+        mkdirSync(path.join(appContainer, "Library/Caches"), { recursive: true });
+        writeFileSync(
+          path.join(appContainer, "Library/Caches/openclaw-gateway.log"),
+          "[2026-09-26T00:00:00Z] chat.ui send invoked sessionKey=private inputLen=100\n" +
+            "[2026-09-26T00:00:00Z] chat.ui send queued sessionKey=private localRunId=private\n" +
+            "[2026-09-26T00:00:00Z] chat.ui transport send start sessionKey=private\n" +
+            "[2026-09-26T00:00:00Z] chat.ui send failed sessionKey=private error=private\n" +
+            "[2026-09-26T00:00:00Z] chat.send skipped before dispatch: route changed\n" +
+            "[2026-09-26T00:00:00Z] unknown event private credential\n",
+        );
+        stdout.write(appContainer);
       } else if (args.includes("xcresulttool")) {
         stdout.write(JSON.stringify(result(selectedTest)));
       }
@@ -872,6 +903,10 @@ describe("native command adapter", () => {
                   "chat-reply-present:false",
                   "chat-writing:false",
                   "chat-jump:true",
+                  "chat-app-foreground:true",
+                  "chat-input-present:true",
+                  "chat-transcript-present:true",
+                  "chat-send-present:false",
                 ]),
             "provider-latest-user:final",
             "provider-body-tail:seed-0",
@@ -879,12 +914,23 @@ describe("native command adapter", () => {
             "model-any-request-stage:start",
             "model-any-request-stage:completed",
             expect.stringMatching(/^failure-evidence-at-ms:\d+$/),
+            ...(scenario === "reply-failure-app-log-error"
+              ? ["app-evidence-unavailable"]
+              : [
+                  "app-evidence-read",
+                  "app-send-stage:invoked",
+                  "app-send-stage:optimistic-message",
+                  "app-send-stage:transport-start",
+                  "app-send-stage:failed",
+                  "app-send-stage:dispatch-route-changed",
+                ]),
             ...(scenario === "reply-failure-history-error"
               ? ["history-evidence-unavailable"]
               : ["history-user:final", "history-assistant:seed-0"]),
           ]),
         );
         expect(context).not.toContain("provider-marker-match:true");
+        expect(context).not.toContain("app-send-stage:transport-accepted");
         expect(historyReadBeforeCommandExit).toBe(true);
         expect(instances.every((instance) => instance.cleanup.mock.calls.length === 1)).toBe(true);
         expect(JSON.stringify(report)).not.toMatch(/private|OPENCLAW_E2E_|metadata/);

@@ -440,7 +440,7 @@ export async function createNativeDependencies(options: {
                               facts.add(`model-any-request-stage:${stage}`);
                             }
                           }
-                          const [requests, history] = await Promise.allSettled([
+                          const [requests, history, appLog] = await Promise.allSettled([
                             readFile(requestLog, "utf8"),
                             callGateway<unknown>({
                               config: {},
@@ -455,7 +455,63 @@ export async function createNativeDependencies(options: {
                               timeoutMs: 5_000,
                               signal: options.signal,
                             }),
+                            (async () => {
+                              const bundleID = await command(
+                                "app-diagnostics",
+                                "/usr/bin/plutil",
+                                [
+                                  "-extract",
+                                  "CFBundleIdentifier",
+                                  "raw",
+                                  "-o",
+                                  "-",
+                                  path.join(
+                                    root,
+                                    "DerivedData/Build/Products/Debug-iphonesimulator/OpenClaw.app/Info.plist",
+                                  ),
+                                ],
+                                { timeoutMs: 5_000 },
+                              );
+                              const container = await command(
+                                "app-diagnostics",
+                                "xcrun",
+                                ["simctl", "get_app_container", udid!, bundleID, "data"],
+                                { timeoutMs: 5_000 },
+                              );
+                              return readFile(
+                                path.join(container, "Library/Caches/openclaw-gateway.log"),
+                                "utf8",
+                              );
+                            })(),
                           ]);
+                          if (appLog.status === "fulfilled") {
+                            if (
+                              appLog.value.includes(
+                                "] chat.send skipped before dispatch: route changed",
+                              )
+                            ) {
+                              facts.add("app-send-stage:dispatch-route-changed");
+                            }
+                            for (const [event, stage] of [
+                              ["send invoked", "invoked"],
+                              ["send ignored", "ignored"],
+                              ["send queued offline", "offline-outbox"],
+                              ["send routed behind outbox", "ordered-outbox"],
+                              ["send queued sessionKey=", "optimistic-message"],
+                              ["transport send start", "transport-start"],
+                              ["transport send accepted", "transport-accepted"],
+                              ["send delivery unconfirmed", "delivery-unconfirmed"],
+                              ["send queued after route change", "route-changed"],
+                              ["send failed", "failed"],
+                            ]) {
+                              if (appLog.value.includes(`] chat.ui ${event}`)) {
+                                facts.add(`app-send-stage:${stage}`);
+                              }
+                            }
+                            facts.add("app-evidence-read");
+                          } else {
+                            facts.add("app-evidence-unavailable");
+                          }
                           try {
                             if (requests.status !== "fulfilled") {
                               throw new Error("request-log-unavailable");

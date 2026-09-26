@@ -1912,7 +1912,9 @@ extension OpenClawSnapshotUITests {
         let failureContext = { (checkpoint: String) in
             "IOS_RELEASE_CHAT_FAILURE \(stage) \(checkpoint) draft=\(input.value as? String == text) " +
                 "keyboard=\(app.keyboards.firstMatch.exists) reply=\(app.staticTexts[replyMarker].exists) " +
-                "writing=\(app.staticTexts["Writing"].exists) jump=\(app.buttons["Jump to latest reply"].exists)"
+                "writing=\(app.staticTexts["Writing"].exists) jump=\(app.buttons["Jump to latest reply"].exists) " +
+                "foreground=\(app.state == .runningForeground) input=\(input.exists) " +
+                "transcript=\(app.scrollViews["chat-transcript"].exists) send=\(send.exists)"
         }
         let submittedText = app.staticTexts.matching(NSPredicate(format: "label == %@", text)).firstMatch
         XCTAssertTrue(submittedText.waitForExistence(timeout: 5), failureContext("submission"))
