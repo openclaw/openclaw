@@ -1,6 +1,6 @@
 // Contained reads of active-run lifecycle probes. A handle probe that throws must
 // never escape into steering, supersede, or cancellation callers.
-import { diagnosticLogger as diag } from "../../logging/diagnostic.js";
+import { diagnosticLogger as diag } from "../../logging/diagnostic-runtime.js";
 import type { EmbeddedAgentQueueHandle } from "./run-state.js";
 
 type CompactionProbe = { isCompacting?: () => boolean };
