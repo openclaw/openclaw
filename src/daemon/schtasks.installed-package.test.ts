@@ -3,12 +3,68 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import { z } from "zod";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveEnvironmentValue } from "../infra/process-env.js";
+import { inspectInstalledUpdateFailure } from "./schtasks.installed-diagnostics.test-support.js";
 import {
   boundedEnv,
   resolveInstalledCellBodyTimeoutMs,
   keys,
 } from "./schtasks.installed-package.test-support.js";
+
+const temporary = useAutoCleanupTempDirTracker(afterEach);
+
+it("captures failed installed update progress without changing the ledger or retaining payloads", async () => {
+  const { createUpdateRun, getUpdateRun, recordUpdateRunPhase, recordUpdateRunStep } =
+    await import("../infra/update-run-ledger.js");
+  const { closeOpenClawStateDatabaseAsync } = await import("../state/openclaw-state-db.js");
+  const env = { OPENCLAW_STATE_DIR: temporary.make("installed-update-progress-") };
+  const options = { env };
+  const privatePayload = "synthetic-private-update-payload";
+  try {
+    const run = createUpdateRun(
+      { trigger: "cli", origin: { nextAction: privatePayload } },
+      options,
+    );
+    recordUpdateRunPhase(run.runId, "validating", {}, options);
+    recordUpdateRunStep(
+      run.runId,
+      {
+        step: "global update",
+        status: "completed",
+        startedAtMs: 100,
+        endedAtMs: 200,
+        detail: privatePayload,
+      },
+      options,
+    );
+    const before = getUpdateRun(run.runId, options);
+    const observed = await inspectInstalledUpdateFailure({ env, stateDir: env.OPENCLAW_STATE_DIR });
+    expect(observed).toMatchObject({ phase: "validating", status: "running" });
+    expect(observed).toHaveProperty(
+      "steps",
+      expect.arrayContaining([
+        { step: "global update", status: "completed", startedAtMs: 100, endedAtMs: 200 },
+      ]),
+    );
+    expect(JSON.stringify(observed)).not.toContain(privatePayload);
+    expect(observed).not.toHaveProperty("origin");
+    expect(getUpdateRun(run.runId, options)).toEqual(before);
+  } finally {
+    await closeOpenClawStateDatabaseAsync();
+  }
+});
+
+it("reports unavailable installed progress without creating a missing database", async () => {
+  const { readdir } = await import("node:fs/promises");
+  const root = temporary.make("installed-update-no-ledger-");
+  await expect(
+    inspectInstalledUpdateFailure({ env: { OPENCLAW_STATE_DIR: root }, stateDir: root }),
+  ).resolves.toEqual({
+    unavailable: "No recorded update run",
+  });
+  expect(await readdir(root)).toEqual([]);
+});
 
 afterEach(() => {
   vi.restoreAllMocks();

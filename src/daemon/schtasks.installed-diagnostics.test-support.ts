@@ -5,6 +5,8 @@ import path from "node:path";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { z } from "zod";
 import { hashFile, hashInstall } from "../../scripts/lib/gateway-bench-installed-package.ts";
+import { listUpdateRunsAsync } from "../infra/update-run-reader.js";
+import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
 import { run, type CommandRecord } from "./schtasks.installed-command.test-support.js";
 import {
   packageRoot,
@@ -34,6 +36,35 @@ export type InstalledTask = {
   entry: string;
   env: NodeJS.ProcessEnv;
 };
+
+export async function inspectInstalledUpdateFailure({
+  env,
+  stateDir,
+}: Pick<InstalledTask, "env" | "stateDir">) {
+  try {
+    const [record] = await listUpdateRunsAsync({ limit: 1 }, { env });
+    if (!record) {
+      return { unavailable: "No recorded update run" };
+    }
+    // The installed driver owns this ledger; retain only diagnostic progress, never its payloads.
+    return {
+      phase: record.phase,
+      status: record.status,
+      createdAtMs: record.createdAtMs,
+      updatedAtMs: record.updatedAtMs,
+      finishedAtMs: record.finishedAtMs,
+      steps: record.steps.map(({ step, status, startedAtMs, endedAtMs }) => ({
+        step: redactSupportString(step, { env, stateDir }),
+        status,
+        startedAtMs,
+        endedAtMs,
+      })),
+    };
+  } catch {
+    return { unavailable: "Recorded update progress could not be read" };
+  }
+}
+
 export async function inspectDisabledDiscoveryTasks(params: {
   selected: InstalledTask;
   preview: (task: InstalledTask) => Promise<ReturnType<typeof parseInstalledPreview>>;
