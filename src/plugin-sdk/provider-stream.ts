@@ -3,6 +3,10 @@ import { createGoogleThinkingPayloadWrapper } from "../llm/providers/stream-wrap
 import { createMinimaxFastModeWrapper } from "../llm/providers/stream-wrappers/minimax.js";
 import { resolveMoonshotThinkingKeep } from "../llm/providers/stream-wrappers/moonshot-thinking.js";
 import {
+  createOpenAISafetyIdentifierWrapper,
+  resolveOpenAISafetyIdentifier,
+} from "../llm/providers/stream-wrappers/openai-safety-identifier.js";
+import {
   createCodexNativeWebSearchWrapper,
   createOpenAIAttributionHeadersWrapper,
   createOpenAIFastModeWrapper,
@@ -141,6 +145,11 @@ export function buildProviderStreamFamilyHooks(
 
           if (serviceTier) {
             nextStreamFn = createOpenAIServiceTierWrapper(nextStreamFn, serviceTier);
+          }
+
+          const safetyIdentifier = resolveOpenAISafetyIdentifier(ctx.extraParams);
+          if (safetyIdentifier) {
+            nextStreamFn = createOpenAISafetyIdentifierWrapper(nextStreamFn, safetyIdentifier);
           }
 
           const textVerbosity = resolveOpenAITextVerbosity(ctx.extraParams);
