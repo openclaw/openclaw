@@ -21,7 +21,7 @@ export function readPreparedActivity(message: unknown): AgentActivityItem[] {
     : [];
 }
 
-export function describeToolGroup(items: readonly AgentActivityItem[]) {
+export function describeToolGroup(items: Parameters<typeof summarizeAgentActivity>[0]) {
   const summary = summarizeAgentActivity(items);
   const label = Object.entries(summary.counts)
     .filter(([, count]) => count > 0)
