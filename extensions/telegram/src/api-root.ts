@@ -74,3 +74,37 @@ export function extractTelegramApiMethod(input: unknown): string | null {
     return null;
   }
 }
+
+// Bot API methods that create or copy a message in the chat. Each call has a
+// visible, non-idempotent effect: Telegram can accept the request and lose the
+// response, so it may not be replayed, and it may not borrow a pooled idle
+// socket the server retired before the request started. Control-plane calls
+// (polling, edits, deletes, sendChatAction) stay pooled.
+const TELEGRAM_MESSAGE_SENDING_METHODS = new Set([
+  "sendmessage",
+  "sendrichmessage",
+  "sendphoto",
+  "sendaudio",
+  "senddocument",
+  "sendvideo",
+  "sendanimation",
+  "sendvoice",
+  "sendvideonote",
+  "sendmediagroup",
+  "sendpaidmedia",
+  "sendlocation",
+  "sendvenue",
+  "sendcontact",
+  "sendpoll",
+  "senddice",
+  "sendsticker",
+  "sendinvoice",
+  "sendgame",
+  "forwardmessage",
+  "copymessage",
+  "copymessages",
+]);
+
+export function isTelegramMessageSendingMethod(method: string | null): boolean {
+  return method !== null && TELEGRAM_MESSAGE_SENDING_METHODS.has(method);
+}

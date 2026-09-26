@@ -32,7 +32,7 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 // The installed package retains dispatcher composition under Bun.
 import { Agent, fetch as undiciFetch } from "undici/index.js";
-import { extractTelegramApiMethod } from "./api-root.js";
+import { extractTelegramApiMethod, isTelegramMessageSendingMethod } from "./api-root.js";
 import {
   resolveTelegramAutoSelectFamilyDecision,
   resolveTelegramDnsResultOrderDecision,
@@ -681,10 +681,10 @@ export function resolveTelegramTransport(
       throw new TelegramRequestNotStartedError("Telegram transport is closed");
     }
     const method = extractTelegramApiMethod(input);
-    const freshConnection = method === "sendmessage" || method === "sendrichmessage";
+    const messageSending = isTelegramMessageSendingMethod(method);
     const shouldRetryRequest = (error: unknown) =>
       shouldRetryTelegramTransportFallback(error) &&
-      (!freshConnection || isSafeToRetrySendError(error));
+      (!messageSending || isSafeToRetrySendError(error));
     const requestFetch = bindTelegramTransportAuthority(
       sourceFetch,
       getTelegramRequestAuthority(init),
@@ -755,7 +755,7 @@ export function resolveTelegramTransport(
         continue;
       }
       try {
-        const response = await requestFetch(input, init, attempt.createDispatcher(freshConnection));
+        const response = await requestFetch(input, init, attempt.createDispatcher(messageSending));
         signal?.throwIfAborted();
         captureHttpExchange({
           url: resolveRequestUrl(input),
