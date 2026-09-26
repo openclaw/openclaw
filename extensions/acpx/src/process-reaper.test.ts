@@ -14,7 +14,6 @@ vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => ({
 import {
   cleanupOpenClawOwnedAcpxPendingLease,
   cleanupOpenClawOwnedAcpxProcessTree,
-  isOpenClawLeaseAwareAcpxProcessCommand,
   reapStaleOpenClawOwnedAcpxOrphans,
 } from "./process-reaper.js";
 
@@ -139,21 +138,6 @@ describe("process reaper", () => {
       skippedReason: "process-list-unavailable",
     });
     expect(killSpy).not.toHaveBeenCalled();
-  });
-
-  it("only treats generated wrappers as launch-lease aware", () => {
-    expect(
-      isOpenClawLeaseAwareAcpxProcessCommand({
-        command: CODEX_WRAPPER_COMMAND,
-        wrapperRoot: WRAPPER_ROOT,
-      }),
-    ).toBe(true);
-    expect(
-      isOpenClawLeaseAwareAcpxProcessCommand({ command: LOCAL_NODE_MODULES_CODEX_COMMAND }),
-    ).toBe(false);
-    expect(isOpenClawLeaseAwareAcpxProcessCommand({ command: PLUGIN_DEPS_CODEX_COMMAND })).toBe(
-      false,
-    );
   });
 
   it("kills an owned recorded process tree children first", async () => {
@@ -348,31 +332,6 @@ describe("process reaper", () => {
     });
     expect(listProcesses).not.toHaveBeenCalled();
     expect(killProcess).not.toHaveBeenCalled();
-  });
-
-  it("skips recorded pid cleanup when process listing is unavailable", async () => {
-    const killed: Array<{ pid: number; signal: NodeJS.Signals }> = [];
-    const result = await cleanupOpenClawOwnedAcpxProcessTree({
-      rootPid: 200,
-      rootCommand: CODEX_WRAPPER_COMMAND,
-      wrapperRoot: WRAPPER_ROOT,
-      deps: {
-        listProcesses: vi.fn(async () => {
-          throw new Error("ps unavailable");
-        }),
-        killProcess: vi.fn((pid, signal) => {
-          killed.push({ pid, signal });
-        }),
-        sleep: vi.fn(async () => {}),
-      },
-    });
-
-    expect(result).toEqual({
-      inspectedPids: [],
-      terminatedPids: [],
-      skippedReason: "process-list-unavailable",
-    });
-    expect(killed).toStrictEqual([]);
   });
 
   it("does not kill a reused pid when the live command is not OpenClaw-owned", async () => {

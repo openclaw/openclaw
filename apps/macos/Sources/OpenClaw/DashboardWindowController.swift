@@ -103,8 +103,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private var updateBridgeEnabled: Bool
     private let requestBrowserProfileImportOffer:
         @MainActor (@escaping @MainActor () -> Bool) async -> Bool
-    private var canGoBackObservation: NSKeyValueObservation?
-    private var canGoForwardObservation: NSKeyValueObservation?
+    private var historyObservations: [NSKeyValueObservation] = []
     private var didRequestBrowserProfileImportOffer = false
     private var browserProfileImportOfferIsArmed = false
     private var browserProfileImportOfferRequestIsInFlight = false
@@ -704,20 +703,11 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     }
 
     private func installHistoryStateBridge() {
-        self.canGoBackObservation = self.webView.observe(\.canGoBack, options: [
-            .initial,
-            .new,
-        ]) { [weak self] _, _ in
-            Task { @MainActor in
-                self?.publishNativeHistoryState()
-            }
-        }
-        self.canGoForwardObservation = self.webView.observe(\.canGoForward, options: [
-            .initial,
-            .new,
-        ]) { [weak self] _, _ in
-            Task { @MainActor in
-                self?.publishNativeHistoryState()
+        self.historyObservations = [\DashboardWebView.canGoBack, \.canGoForward].map { keyPath in
+            self.webView.observe(keyPath, options: [.initial, .new]) { [weak self] _, _ in
+                Task { @MainActor in
+                    self?.publishNativeHistoryState()
+                }
             }
         }
     }

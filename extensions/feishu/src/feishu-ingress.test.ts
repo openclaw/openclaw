@@ -21,7 +21,7 @@ import {
   type FeishuIngressLifecycle,
 } from "./feishu-ingress.js";
 import { monitorWebhook } from "./monitor.transport.js";
-import { getFreePort, waitUntilServerReady } from "./monitor.webhook.test-helpers.js";
+import { getGatewayPort, waitForWebhookRoute } from "./monitor.webhook.test-helpers.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
 type FeishuIngressQueue = NonNullable<Parameters<typeof createFeishuDurableIngress>[0]["queue"]>;
@@ -174,13 +174,13 @@ async function withWebhook(
   ingress: Pick<ReturnType<typeof createFeishuDurableIngress>, "invoke" | "invokeWebhook">,
   run: (url: string) => Promise<void>,
 ) {
-  const port = await getFreePort();
+  const port = await getGatewayPort();
   const webhookPath = "/feishu-ingress-test";
   const encryptKey = "feishu-ingress-test-key";
   const account = {
     accountId: "default",
     encryptKey,
-    config: { webhookHost: "127.0.0.1", webhookPort: port, webhookPath },
+    config: { webhookPath },
   } as ResolvedFeishuAccount;
   const abortController = new AbortController();
   const monitor = monitorWebhook({
@@ -193,7 +193,7 @@ async function withWebhook(
   });
   const url = `http://127.0.0.1:${port}${webhookPath}`;
   try {
-    await waitUntilServerReady(url);
+    await waitForWebhookRoute(url);
     await run(url);
   } finally {
     abortController.abort();

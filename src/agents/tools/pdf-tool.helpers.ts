@@ -1,8 +1,3 @@
-/**
- * PDF tool parsing and response helpers.
- *
- * Normalizes PDF inputs, page ranges, provider native support, model config, and assistant text output.
- */
 import {
   filterStringEntries,
   normalizeUniqueTrimmedStringList,
@@ -98,21 +93,18 @@ export function coercePdfAssistantText(params: {
 }): string {
   const label = `${params.provider}/${params.model}`;
   const errorMessage = params.message.errorMessage?.trim();
-  const fail = (message?: string) => {
+  if (
+    params.message.stopReason === "error" ||
+    params.message.stopReason === "aborted" ||
+    errorMessage
+  ) {
     throw new Error(
-      message ? `PDF model failed (${label}): ${message}` : `PDF model failed (${label})`,
+      errorMessage ? `PDF model failed (${label}): ${errorMessage}` : `PDF model failed (${label})`,
     );
-  };
-  if (params.message.stopReason === "error" || params.message.stopReason === "aborted") {
-    fail(errorMessage);
   }
-  if (errorMessage) {
-    fail(errorMessage);
-  }
-  const text = extractEmbeddedAssistantText(params.message);
-  const trimmed = text.trim();
-  if (trimmed) {
-    return trimmed;
+  const text = extractEmbeddedAssistantText(params.message).trim();
+  if (text) {
+    return text;
   }
   throw new Error(`PDF model returned no text (${label}).`);
 }
@@ -159,7 +151,6 @@ export function buildPdfExtractionContext(
     { type: "text"; text: string } | { type: "image"; data: string; mimeType: string }
   > = [];
 
-  // Add extracted text and images
   for (const [i, extraction] of extractions.entries()) {
     const notice = renderDocumentTruncationNotice(extraction.metadata, explicitSelectionLimit);
     if (extraction.text.trim() || notice) {
@@ -177,7 +168,6 @@ export function buildPdfExtractionContext(
     }
   }
 
-  // Add the user prompt
   content.push({ type: "text", text: prompt });
 
   const systemPrompt =

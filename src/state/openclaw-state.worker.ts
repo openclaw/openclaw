@@ -39,6 +39,9 @@ const loadPluginState = createLazyRuntimeModule(
 );
 let pluginState: typeof import("../plugin-state/plugin-state.worker.js") | undefined;
 
+const loadCapture = createLazyRuntimeModule(() => import("../proxy-capture/store.worker.js"));
+let capture: typeof import("../proxy-capture/store.worker.js") | undefined;
+
 const loadRuntime = createLazyRuntimeModule(() => import("./openclaw-state-worker-runtime.js"));
 let runtime: typeof import("./openclaw-state-worker-runtime.js") | undefined;
 
@@ -105,6 +108,14 @@ function createSharedStateWorkerBackend(
   };
   return {
     [SQLITE_WORKER_PREPARE_COMMAND](commandType) {
+      if (commandType.startsWith("capture.")) {
+        if (capture) {
+          return undefined;
+        }
+        return loadCapture().then((loaded) => {
+          capture = loaded;
+        });
+      }
       if (commandType === "agentDatabases.releaseExitedLease") {
         if (agentCleanup) {
           return undefined;
@@ -145,6 +156,25 @@ function createSharedStateWorkerBackend(
     execute(command) {
       if (closed) {
         throw new Error("Shared-state worker is closed");
+      }
+      if (
+        command.type === "capture.upsertSession" ||
+        command.type === "capture.endSession" ||
+        command.type === "capture.persistPayload" ||
+        command.type === "capture.recordEvent" ||
+        command.type === "capture.recordEventWithPayload" ||
+        command.type === "capture.listSessions" ||
+        command.type === "capture.getSessionEvents" ||
+        command.type === "capture.summarizeSessionCoverage" ||
+        command.type === "capture.readBlob" ||
+        command.type === "capture.queryPreset" ||
+        command.type === "capture.deleteSessions" ||
+        command.type === "capture.purgeAll"
+      ) {
+        if (!capture) {
+          throw new Error("Capture worker command runtime is not prepared");
+        }
+        return capture.executeCaptureCommand(command, open());
       }
       if (command.type === "deviceIdentity.read") {
         return loadDeviceIdentityIfPresent({

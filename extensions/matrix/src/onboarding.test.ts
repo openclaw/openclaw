@@ -26,48 +26,6 @@ vi.mock("./matrix/deps.js", () => ({
 describe("matrix onboarding", () => {
   installMatrixOnboardingEnvRestoreHooks();
 
-  it("offers env shortcut for non-default account when scoped env vars are present", async () => {
-    installMatrixTestRuntime();
-    installMatrixScopedEnvShortcut();
-
-    const confirmMessages: string[] = [];
-    const prompter = createMatrixEnvShortcutAddAccountPrompter({
-      onConfirm: (message) => {
-        confirmMessages.push(message);
-        return message.startsWith("Matrix env vars detected");
-      },
-    });
-
-    const result = await runMatrixInteractiveConfigure({
-      cfg: createConfiguredMatrixDefaultAccountConfig(),
-      prompter,
-      shouldPromptAccountIds: true,
-      configured: true,
-    });
-
-    expect(result).not.toBe("skip");
-    if (result !== "skip") {
-      const opsAccount = result.cfg.channels?.["matrix"]?.accounts?.ops as
-        | {
-            enabled?: boolean;
-            homeserver?: string;
-            accessToken?: string;
-          }
-        | undefined;
-      expect(result.accountId).toBe("ops");
-      expect(opsAccount?.enabled).toBe(true);
-      expect(opsAccount?.homeserver).toBeUndefined();
-      expect(opsAccount?.accessToken).toBeUndefined();
-    }
-    expect(
-      confirmMessages.some((message) =>
-        message.startsWith(
-          "Matrix env vars detected (MATRIX_OPS_HOMESERVER (+ auth vars)). Use env values?",
-        ),
-      ),
-    ).toBe(true);
-  });
-
   it("routes env-shortcut add-account flow through Matrix invite auto-join setup", async () => {
     installMatrixTestRuntime();
     installMatrixScopedEnvShortcut();
@@ -105,6 +63,8 @@ describe("matrix onboarding", () => {
     expect(result.accountId).toBe("ops");
     const opsAccount = result.cfg.channels?.matrix?.accounts?.ops;
     expect(opsAccount?.enabled).toBe(true);
+    expect(opsAccount?.homeserver).toBeUndefined();
+    expect(opsAccount?.accessToken).toBeUndefined();
     expect(opsAccount?.groupPolicy).toBe("allowlist");
     expect(opsAccount?.groups?.["!ops-room:example.org"]?.enabled).toBe(true);
     expect(opsAccount?.autoJoin).toBe("allowlist");

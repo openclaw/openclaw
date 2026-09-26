@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { isDefaultStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
@@ -53,11 +53,9 @@ export function resolveSkillsWatchSourceRoots(
         source: "agents-skills-personal",
       });
     }
-    const extraDirsRaw = config?.skills?.load?.extraDirs ?? [];
-    extraDirs = extraDirsRaw
-      .map((d) => normalizeOptionalString(d) ?? "")
-      .filter(Boolean)
-      .map((dir) => resolveUserPath(dir));
+    extraDirs = normalizeTrimmedStringList(config?.skills?.load?.extraDirs).map((dir) =>
+      resolveUserPath(dir),
+    );
     const pluginSkillRoots = pluginMetadataSnapshot
       ? resolvePluginSkillRootsFromMetadata({
           workspaceDir,

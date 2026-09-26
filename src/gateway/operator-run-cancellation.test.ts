@@ -193,6 +193,7 @@ describe("operator access cancellation", () => {
           expect(drained).toBe(false);
           expect(sourceClosedAtAbort).toBe(true);
           expect(guest.controller.signal.aborted).toBe(true);
+          expect(guest.entry.abortDiagnosticReason).toBe("authority-revoked");
           expect(staff.controller.signal.aborted).toBe(false);
           terminalWrite.resolve();
           await drain;
@@ -304,6 +305,7 @@ describe("operator access cancellation", () => {
           logGateway: f.context.logGateway,
         });
         const releaseQueue = work.retain();
+        const onGuestAborted = vi.fn();
         for (const [runId, registration] of [
           ["queued-guest", guest],
           ["queued-staff", staff],
@@ -314,6 +316,7 @@ describe("operator access cancellation", () => {
               ...f.scope,
               runId,
               controller: registration.controller,
+              ...(runId === "queued-guest" ? { onAborted: onGuestAborted } : {}),
             }),
           ).toBe(true);
           if (!activeAdmission) {
@@ -333,6 +336,7 @@ describe("operator access cancellation", () => {
           source.abort();
           await f.settle();
           expect(guest.controller.signal.aborted).toBe(!collect);
+          expect(onGuestAborted.mock.calls).toEqual(collect ? [] : [["authority-revoked"]]);
           expect(f.context.chatQueuedTurns.has("queued-guest")).toBe(collect);
           expect(staff.controller.signal.aborted).toBe(false);
           expect(f.context.chatQueuedTurns.has("queued-staff")).toBe(true);

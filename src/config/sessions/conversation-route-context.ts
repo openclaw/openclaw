@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
@@ -130,12 +131,7 @@ export function parseStoredConversationRouteContext(
   if (!value || value.length > MAX_STORED_ROUTE_CONTEXT_LENGTH) {
     return undefined;
   }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value) as unknown;
-  } catch {
-    return undefined;
-  }
+  const parsed = safeParseJson(value);
   if (
     !isRecord(parsed) ||
     parsed.version !== 1 ||

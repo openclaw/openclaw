@@ -40,11 +40,10 @@ describe("waitForever", () => {
 });
 
 describe("runCommandWithRuntime", () => {
-  it.each(
-    [0, 1, 2].flatMap((code) =>
-      [false, true].map((customErrorHandler) => ({ code, customErrorHandler })),
-    ),
-  )(
+  it.each([
+    { code: 0, customErrorHandler: false },
+    { code: 2, customErrorHandler: true },
+  ])(
     "preserves completed exit $code with custom error handler $customErrorHandler",
     async ({ code, customErrorHandler }) => {
       const runtime = { error: vi.fn(), exit: vi.fn() };

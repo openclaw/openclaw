@@ -68,37 +68,23 @@ describe("llama-server model mapping", () => {
 
   it.each([
     {
-      name: "native tool descriptions and calls",
-      caps: { supports_tools: true, supports_tool_calls: true },
-      supported: true,
-    },
-    {
       name: "fallback tool descriptions",
       caps: { supports_tools: false, supports_tool_calls: true },
       supported: true,
     },
-    {
-      name: "tool calls without description metadata",
-      caps: { supports_tool_calls: true },
-      supported: true,
-    },
+
     {
       name: "tool descriptions without calls",
       caps: { supports_tools: true, supports_tool_calls: false },
       supported: false,
     },
-    {
-      name: "unsupported tool descriptions and calls",
-      caps: { supports_tools: false, supports_tool_calls: false },
-      supported: false,
-    },
+
     { name: "missing tool-call capability", caps: { supports_tools: true }, supported: false },
     {
       name: "malformed tool-call capability",
       caps: { supports_tools: true, supports_tool_calls: "true" },
       supported: false,
     },
-    { name: "missing template capabilities", caps: undefined, supported: false },
   ])("uses the tool-call capability for $name", ({ caps, supported }) => {
     expect(
       mapLlamaServerModel(

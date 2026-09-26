@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { setupCronServiceSuite } from "../service.test-harness.js";
 import type { CronJobCreate, CronJobPatch, CronPacing } from "../types.js";
 import { add, update } from "./ops-mutations.js";
@@ -23,6 +24,7 @@ async function withState(run: (state: ReturnType<typeof createCronServiceState>)
   const { storePath } = await makeStorePath();
   await run(
     createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
       storePath,
       cronEnabled: true,
       log: logger,

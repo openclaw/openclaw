@@ -175,14 +175,10 @@ class SidebarAttention extends OpenClawLightDomElement {
 
   private readonly syncOverflowCue = () => {
     const list = this.querySelector<HTMLElement>(".sidebar-issues-panel__list");
-    const above = Boolean(list && list.scrollTop > 2);
-    const below = Boolean(list && list.scrollHeight - list.scrollTop - list.clientHeight > 2);
-    if (above !== this.overflowAbove) {
-      this.overflowAbove = above;
-    }
-    if (below !== this.overflowBelow) {
-      this.overflowBelow = below;
-    }
+    this.overflowAbove = Boolean(list && list.scrollTop > 2);
+    this.overflowBelow = Boolean(
+      list && list.scrollHeight - list.scrollTop - list.clientHeight > 2,
+    );
   };
 
   private selectTab(tab: IssueTab) {

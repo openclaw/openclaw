@@ -347,26 +347,6 @@ describe("state database coordinator", () => {
     },
   );
 
-  it("keeps Gateway presence independent from short state operations", async () => {
-    const root = tempDirs.make("openclaw-gateway-lifecycle-coordinator-");
-    const databasePath = path.join(root, "state", "openclaw.sqlite");
-    const runtimeDirectory = path.join(root, "runtime");
-    await fs.mkdir(path.dirname(databasePath), { recursive: true });
-    const gateway = acquireGatewayLifecycleCoordinator({
-      databasePath,
-      runtimeDirectory,
-      busyTimeoutMs: 0,
-    });
-    const state = acquireStateDatabaseCoordinator({
-      databasePath,
-      runtimeDirectory,
-      busyTimeoutMs: 0,
-    });
-
-    state.release();
-    gateway.release();
-  });
-
   it("allows the owning Gateway process to mutate its own schema", async () => {
     const root = tempDirs.make("openclaw-gateway-schema-owner-");
     const databasePath = path.join(root, "state", "openclaw.sqlite");

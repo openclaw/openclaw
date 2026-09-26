@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   detectAndLoadPromptImages,
   materializeProviderContext,
@@ -27,12 +28,7 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
-import {
-  killPidIfAlive,
-  readPidFile,
-  waitForPidFile,
-  waitForPidToExit,
-} from "../../test-utils/process-tree.js";
+import { killPidIfAlive, readPidFile } from "../../test-utils/process-tree.js";
 import { pinConfigDir } from "../../utils.js";
 import type { RuntimeMsgContext, TemplateContext } from "../templating.js";
 import { stageSandboxMedia } from "./stage-sandbox-media.js";
@@ -685,7 +681,7 @@ describe("stageSandboxMedia SCP", () => {
 
   it.runIf(process.platform !== "win32")(
     "owns the real SCP tree through cancellation and cleanup",
-    async () => {
+    async ({ signal }) => {
       await withOpenClawTestState({ label: "scp-process-tree" }, async (state) => {
         const params = remoteStageParams(state);
         const before = structuredClone([params.ctx, params.sessionCtx]);
@@ -718,7 +714,7 @@ describe("stageSandboxMedia SCP", () => {
             "process.on('SIGTERM', () => {});",
             `const child = spawn(process.execPath, ['-e', ${JSON.stringify(descendantSource)}], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });`,
             `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(child.pid));`,
-            `child.once('message', () => fs.writeFileSync(${JSON.stringify(readyPath)}, String(process.pid)));`,
+            `child.once('message', () => { fs.writeFileSync(${JSON.stringify(readyPath)}, String(process.pid)); process.stdout.write('R'); });`,
             "setInterval(() => {}, 1000);",
           ].join("\n"),
           { mode: 0o700 },
@@ -729,8 +725,24 @@ describe("stageSandboxMedia SCP", () => {
           async () => {
             const controller = new AbortController();
             const reason = "synthetic operator cancellation";
-            params.abortSignal = controller.signal;
-            const spawn = vi.spyOn(execSpawn, "spawnCommandWithInvocation");
+            params.abortSignal = AbortSignal.any([controller.signal, signal]);
+            const ready = createDeferred<string>();
+            const cancelled = createDeferred<never>();
+            const onTestAbort = () => cancelled.reject(signal.reason);
+            signal.throwIfAborted();
+            signal.addEventListener("abort", onTestAbort, { once: true });
+            const realSpawn = execSpawn.spawnCommandWithInvocation;
+            const spawn = vi
+              .spyOn(execSpawn, "spawnCommandWithInvocation")
+              .mockImplementation((...args) => {
+                const result = realSpawn(...args);
+                if (args[0][0] === "scp") {
+                  result.child.nodeChildProcess.stdout?.once("data", (chunk: Buffer) => {
+                    ready.resolve(chunk.toString("utf8"));
+                  });
+                }
+                return result;
+              });
             let parentPid: number | undefined;
             let descendantPid: number | undefined;
             const alive = () =>
@@ -742,17 +754,26 @@ describe("stageSandboxMedia SCP", () => {
             let exitedBeforeCleanup: boolean[] = [];
             let temporaryDirectoryRemoved = false;
             try {
-              parentPid = await waitForPidFile(parentPidPath);
-              descendantPid = await waitForPidFile(descendantPidPath);
-              expect(await waitForPidFile(readyPath)).toBe(parentPid);
+              // Readiness follows the descendant's signal handlers, not a wall-clock startup budget.
+              expect(
+                await Promise.race([
+                  ready.promise,
+                  cancelled.promise,
+                  settled.then(() => {
+                    throw new Error("SCP settled before the fixture became ready");
+                  }),
+                ]),
+              ).toBe("R");
+              parentPid = await readPidFile(parentPidPath);
+              descendantPid = await readPidFile(descendantPidPath);
+              expect(await readPidFile(readyPath)).toBe(parentPid);
               expect(isPidAlive(parentPid)).toBe(true);
               expect(isPidAlive(descendantPid)).toBe(true);
               controller.abort(reason);
-              exitedBeforeCleanup = await Promise.all([
-                waitForPidToExit(parentPid),
-                waitForPidToExit(descendantPid),
-              ]);
+              await Promise.race([settled, cancelled.promise]);
+              exitedBeforeCleanup = [parentPid, descendantPid].map((pid) => !isPidAlive(pid));
             } finally {
+              signal.removeEventListener("abort", onTestAbort);
               // Stop any late attempt, then drain the owner before removing its fixture.
               await fs.writeFile(cleanupPath, "cleanup");
               for (const [index, result] of spawn.mock.results.entries()) {

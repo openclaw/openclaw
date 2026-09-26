@@ -69,8 +69,8 @@ export function bindSessionWindowEntryProjection(params: {
     ended_at: finiteSqliteNumber(params.entry.endedAt),
     status: normalizeStatus(params.entry.status),
     chat_type: normalizeSessionRowChatType(params.entry.chatType),
-    channel: resolveSqliteSessionChannel(params.entry),
-    account_id: resolveSqliteSessionAccountId(params.entry),
+    channel: normalizeText(sessionDeliveryChannel(params.entry)),
+    account_id: normalizeText(deliveryContextFromSession(params.entry)?.accountId),
     model_provider: normalizeText(params.entry.modelProvider),
     model: normalizeText(params.entry.model),
     agent_harness_id: normalizeText(params.entry.agentHarnessId),
@@ -161,14 +161,6 @@ function resolveSqliteSessionCreatedAt(entry: SessionEntry, updatedAt: number): 
 
 function finiteSqliteNumber(value: unknown): number | null {
   return asFiniteNumber(value) ?? null;
-}
-
-function resolveSqliteSessionChannel(entry: SessionEntry): string | null {
-  return normalizeText(sessionDeliveryChannel(entry));
-}
-
-function resolveSqliteSessionAccountId(entry: SessionEntry): string | null {
-  return normalizeText(deliveryContextFromSession(entry)?.accountId);
 }
 
 function resolveSqliteSessionDisplayName(entry: SessionEntry): string | null {

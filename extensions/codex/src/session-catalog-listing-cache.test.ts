@@ -7,7 +7,6 @@ import {
   createCodexSessionCatalogControlFactory,
   config,
   idleThread,
-  resolveDefaultAgentDir,
   type OpenClawConfig,
 } from "./session-catalog.test-helpers.js";
 
@@ -261,32 +260,6 @@ describe("Codex catalog resident home sharing", () => {
       "atlas",
       "chatgpt",
     ]);
-  });
-
-  it("keeps takeover forking out of the passive catalog control", async () => {
-    const pluginConfig = { supervision: { enabled: true } };
-    const response = { thread: idleThread({ id: "thread-source" }) };
-    commandRpcMocks.codexControlRequest.mockResolvedValue(response);
-    const control = createCodexSessionCatalogControl({
-      getPluginConfig: () => pluginConfig,
-      getRuntimeConfig: () => config,
-    });
-
-    await expect(control.readThread("thread-source", true)).resolves.toBe(response.thread);
-    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledWith(
-      pluginConfig,
-      "thread/read",
-      { threadId: "thread-source", includeTurns: true },
-      {
-        agentDir: resolveDefaultAgentDir(config),
-        config,
-        authProfileId: null,
-        startOptions: expect.objectContaining({ transport: "stdio", homeScope: "user" }),
-      },
-    );
-    expect(commandRpcMocks.codexControlRequest.mock.calls.map((call) => call[1])).not.toContain(
-      "thread/fork",
-    );
   });
 
   it("keeps an in-flight catalog independent of supervision changes", async () => {

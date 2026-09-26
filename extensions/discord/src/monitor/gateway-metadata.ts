@@ -1,7 +1,7 @@
 import type { APIGatewayBotInfo } from "discord-api-types/v10";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
-import { captureHttpExchange } from "openclaw/plugin-sdk/proxy-capture";
+import { captureHttpExchangeAsync } from "openclaw/plugin-sdk/proxy-capture";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -292,7 +292,8 @@ export async function fetchDiscordGatewayMetadataGuarded(
     await guarded.release();
   }
   if (options?.capture) {
-    captureHttpExchange({
+    // Finalization retains capture failures; observe the Promise returned by the SDK view.
+    void captureHttpExchangeAsync({
       url: input,
       method: (init?.method as string | undefined) ?? "GET",
       requestHeaders: init?.headers as Headers | Record<string, string> | undefined,
@@ -300,7 +301,7 @@ export async function fetchDiscordGatewayMetadataGuarded(
       response,
       flowId: options.capture.flowId,
       meta: options.capture.meta,
-    });
+    }).catch(() => {});
   }
   return response;
 }

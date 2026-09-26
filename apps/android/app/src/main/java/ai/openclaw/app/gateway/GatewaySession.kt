@@ -623,10 +623,6 @@ class GatewaySession(
       )
     }
 
-  internal suspend fun refreshCanvasHostUrl(): String? = refreshCanvasHostUrl(observedSurfaceUrl = null, requireObservedMatch = false)
-
-  internal suspend fun refreshCanvasHostUrlIfCurrent(observedSurfaceUrl: String?): String? = refreshCanvasHostUrl(observedSurfaceUrl = observedSurfaceUrl, requireObservedMatch = true)
-
   internal suspend fun refreshCanvasHostRouteIfCurrent(observedSurfaceUrl: String?): GatewayCanvasHostRoute? {
     refreshCanvasHostUrlIfCurrent(observedSurfaceUrl)
     // Pair the URL with the currently installed connection after suspension;
@@ -634,14 +630,11 @@ class GatewaySession(
     return currentCanvasHostRoute()
   }
 
-  private suspend fun refreshCanvasHostUrl(
-    observedSurfaceUrl: String?,
-    requireObservedMatch: Boolean,
-  ): String? {
+  internal suspend fun refreshCanvasHostUrlIfCurrent(observedSurfaceUrl: String?): String? {
     val (lease, target, requestObservedSurfaceUrl) =
       synchronized(lifecycleLock) {
         val current = pluginSurfaceUrls["canvas"]
-        if (requireObservedMatch && current != observedSurfaceUrl) return current
+        if (current != observedSurfaceUrl) return current
         val capturedLease = captureRequestLease() ?: return null
         val capturedTarget =
           desired
@@ -683,7 +676,7 @@ class GatewaySession(
       lease.commitIfCurrent {
         val current = pluginSurfaceUrls["canvas"]
         result =
-          if (requireObservedMatch && current != observedSurfaceUrl) {
+          if (current != observedSurfaceUrl) {
             current
           } else {
             pluginSurfaceUrls = pluginSurfaceUrls + ("canvas" to refreshed)
@@ -742,12 +735,6 @@ class GatewaySession(
   }
 
   /** Sends node.event and preserves the gateway RPC error shape for callers that need diagnostics. */
-  suspend fun sendNodeEventDetailed(
-    event: String,
-    payloadJson: String?,
-    timeoutMs: Long = 8_000,
-  ): RpcResult = sendNodeEventDetailedForEndpoint(null, event, payloadJson, timeoutMs)
-
   internal suspend fun sendNodeEventDetailedForEndpoint(
     expectedEndpointStableId: String?,
     event: String,
@@ -789,11 +776,7 @@ class GatewaySession(
     method: String,
     paramsJson: String?,
     timeoutMs: Long = 15_000,
-  ): String {
-    val res = requestDetailed(method = method, paramsJson = paramsJson, timeoutMs = timeoutMs)
-    if (res.ok) return res.payloadJson ?: ""
-    throw GatewayRequestRejected(res.error ?: ErrorShape("UNAVAILABLE", "request failed"))
-  }
+  ): String = requestDetailed(method = method, paramsJson = paramsJson, timeoutMs = timeoutMs).payloadOrThrow()
 
   suspend fun loadImageArtifact(
     expectedEndpointStableId: String?,
@@ -882,10 +865,11 @@ class GatewaySession(
     method: String,
     paramsJson: String?,
     timeoutMs: Long = 15_000,
-  ): String {
-    val res = requestDetailed(expectedEndpointStableId, method, paramsJson, timeoutMs)
-    if (res.ok) return res.payloadJson ?: ""
-    throw GatewayRequestRejected(res.error ?: ErrorShape("UNAVAILABLE", "request failed"))
+  ): String = requestDetailed(expectedEndpointStableId, method, paramsJson, timeoutMs).payloadOrThrow()
+
+  private fun RpcResult.payloadOrThrow(): String {
+    if (!ok) throw GatewayRequestRejected(error ?: ErrorShape("UNAVAILABLE", "request failed"))
+    return payloadJson ?: ""
   }
 
   /** Captures the current physical connection; requests never resolve a replacement socket. */
@@ -907,11 +891,7 @@ class GatewaySession(
           }
         },
       ) { method, paramsJson, timeoutMs, withEnqueue ->
-        val res = requestDetailed(conn, method, paramsJson, timeoutMs, withEnqueue)
-        if (!res.ok) {
-          throw GatewayRequestRejected(res.error ?: ErrorShape("UNAVAILABLE", "request failed"))
-        }
-        res.payloadJson ?: ""
+        requestDetailed(conn, method, paramsJson, timeoutMs, withEnqueue).payloadOrThrow()
       }
     }
 
@@ -975,14 +955,6 @@ class GatewaySession(
     }
 
   /** Sends an RPC request frame and reports errors asynchronously through [onError]. */
-  suspend fun sendRequestFrame(
-    method: String,
-    paramsJson: String?,
-    timeoutMs: Long = 15_000,
-    withEnqueue: (() -> Unit) -> Unit = { it() },
-    onError: (ErrorShape) -> Unit = {},
-  ) = sendRequestFrameForEndpoint(null, method, paramsJson, timeoutMs, withEnqueue, onError)
-
   internal suspend fun sendRequestFrameForEndpoint(
     expectedEndpointStableId: String?,
     method: String,

@@ -80,7 +80,7 @@ export function narrowIncludePatterns(
   return [...narrowed];
 }
 
-function isPlainRepoRelativePath(value: string): boolean {
+export function isPlainRepoRelativePath(value: string): boolean {
   if (!/^[A-Za-z0-9_./-]+$/u.test(value) || path.isAbsolute(value)) {
     return false;
   }

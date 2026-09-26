@@ -199,6 +199,7 @@ export function createApplicationUpdateOverlays(
       ...snapshot,
       diagnosableUpdateFailureId:
         currentFailure &&
+        snapshot.updateRun?.target.installationMethod !== "ocm" &&
         activeClient &&
         isCurrentClient(activeClient) &&
         !snapshot.updateRunning &&
@@ -206,7 +207,9 @@ export function createApplicationUpdateOverlays(
           ? currentFailure.id
           : null,
       reportableUpdateFailureId:
-        snapshot.updateRunning || snapshot.updateReconciliationPending
+        snapshot.updateRunning ||
+        snapshot.updateReconciliationPending ||
+        snapshot.updateRun?.target.installationMethod === "ocm"
           ? null
           : snapshot.updateRun
             ? !isAcknowledgedAbandonedUpdateRun(snapshot.updateRun) &&
@@ -258,6 +261,7 @@ export function createApplicationUpdateOverlays(
       updateStatusBanner: failure?.banner ?? null,
     };
     publish();
+    updateCampaignPoller.sync();
   };
 
   const refreshRun = async () => {
@@ -384,11 +388,20 @@ export function createApplicationUpdateOverlays(
       publish();
     },
   });
+  const hasPendingOcmRun = () => runId?.startsWith("ocm:") && snapshot.updateReconciliationPending;
   const updateCampaignPoller = createUpdateCampaignStatusPoller({
     canPoll: () =>
-      Boolean(activeClient && isCurrentClient(activeClient) && snapshot.updateSchedule?.campaign),
+      Boolean(
+        activeClient &&
+        isCurrentClient(activeClient) &&
+        (snapshot.updateSchedule?.campaign || hasPendingOcmRun()),
+      ),
     refresh: async () => {
-      await refreshUpdateStatus("background");
+      if (hasPendingOcmRun()) {
+        await refreshRun();
+      } else {
+        await refreshUpdateStatus("background");
+      }
     },
   });
   const runConnectionBootstrap = (key: string, task: () => Promise<unknown>) =>
@@ -645,6 +658,7 @@ export function createApplicationUpdateOverlays(
         if (isCurrent()) {
           updateRequestRunning = false;
           publish();
+          updateCampaignPoller.sync();
         }
       }
     },

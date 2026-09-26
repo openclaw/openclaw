@@ -9,6 +9,7 @@ import {
 import type { OpenClawConfig } from "../config/config.js";
 import { createAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
 import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   loadRunCronIsolatedAgentTurn,
@@ -93,6 +94,8 @@ async function runPersistedDiagnosticCase(params: {
       const events: CronEvent[] = [];
       const storePath = state.path("cron", "jobs.json");
       const cron = new CronService({
+        scheduler: createTestGatewayScheduler(),
+        nowMs: () => Date.now(),
         storePath,
         cronEnabled: true,
         cronConfig: { triggers: { enabled: true } },

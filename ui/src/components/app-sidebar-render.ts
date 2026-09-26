@@ -490,7 +490,6 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
     : gateway
       ? `${gateway.name}${gatewayPrimaryTag ? `, ${gatewayPrimaryTag}` : ""}`
       : buildSubtitle;
-  const accessibleDetail = identityDetail;
   const announcement = statusLabel ?? (host.connected ? t("nav.gateway.connected") : "");
   return html`
     <div class="sidebar-footer-bar sidebar-footer-bar--one-action">
@@ -499,7 +498,7 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
         class="sidebar-identity-card"
         aria-haspopup="menu"
         aria-expanded=${String(host.sidebarMenus.identityMenuPosition !== null)}
-        aria-label=${accessibleDetail ? `${identityMenuLabel}: ${accessibleDetail}` : identityMenuLabel}
+        aria-label=${identityDetail ? `${identityMenuLabel}: ${identityDetail}` : identityMenuLabel}
         @click=${(event: MouseEvent) =>
           host.sidebarMenus.toggleIdentityMenu(event.currentTarget as HTMLElement)}
       >
@@ -545,7 +544,11 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
               >`
             : nothing
         }
-        ${renderAppSidebarAttention(host)}
+        <openclaw-sidebar-attention
+          .activeRouteId=${host.activeRouteId}
+          .onNavigate=${host.onNavigate}
+          .watchUpdateProgress=${host.watchUpdateProgress}
+        ></openclaw-sidebar-attention>
       </span>
     </div>
   `;
@@ -638,12 +641,4 @@ function renderAppSidebarPluginTab(host: AppSidebarRenderHost, tab: GatewayContr
         active: host.activeRouteId === "plugin" && host.activePluginTabId === key,
         onNavigate: (location) => host.onNavigate?.("plugin", location),
       });
-}
-
-function renderAppSidebarAttention(host: AppSidebarRenderHost) {
-  return html`<openclaw-sidebar-attention
-    .activeRouteId=${host.activeRouteId}
-    .onNavigate=${host.onNavigate}
-    .watchUpdateProgress=${host.watchUpdateProgress}
-  ></openclaw-sidebar-attention>`;
 }

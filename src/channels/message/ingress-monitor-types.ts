@@ -1,4 +1,5 @@
 import type { ChannelIngressDispatchLifecycle } from "./ingress-drain-lifecycle.js";
+import type { ChannelIngressDrainDispatchResult } from "./ingress-drain-state.js";
 import type { CreateChannelIngressDrainOptions } from "./ingress-drain.js";
 import type { ChannelIngressQueue, ChannelIngressQueueClaim } from "./ingress-queue.js";
 
@@ -14,10 +15,7 @@ export type ChannelIngressMonitorLifecycle = ChannelIngressDispatchLifecycle & {
 };
 
 /** Optional explicit outcome from a channel delivery. */
-export type ChannelIngressMonitorDeliveryResult =
-  | { kind: "completed" }
-  | { kind: "deferred" }
-  | { kind: "failed-retryable"; error: unknown };
+export type ChannelIngressMonitorDeliveryResult = ChannelIngressDrainDispatchResult;
 
 type ChannelIngressMonitorInspectionContext =
   | { phase: "admission" }

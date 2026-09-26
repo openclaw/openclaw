@@ -48,8 +48,7 @@ final class ExecApprovalsGatewayPrompter {
         guard evt.event == "exec.approval.requested" || evt.event == "openclaw.approval.requested" else { return }
         guard let payload = evt.payload else { return }
         do {
-            let data = try JSONEncoder().encode(payload)
-            let request = try JSONDecoder().decode(GatewayApprovalRequest.self, from: data)
+            let request = try GatewayPayloadDecoding.decode(payload, as: GatewayApprovalRequest.self)
             // The Gateway emitted this event because its own policy requires a
             // decision. If this Mac cannot present UI, leave the request
             // unresolved so the Gateway applies its current timeout fallback.
@@ -83,8 +82,8 @@ final class ExecApprovalsGatewayPrompter {
 
     private func shouldPresent(request: GatewayApprovalRequest) -> Bool {
         let mode = AppStateStore.shared.connectionMode
-        let activeSession = WebChatManager.shared.activeSessionKey?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let requestSession = request.request.sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let activeSession = WebChatManager.shared.activeSessionKey
+        let requestSession = request.request.sessionKey
         return Self.shouldPresent(
             mode: mode,
             activeSession: activeSession,
@@ -93,12 +92,12 @@ final class ExecApprovalsGatewayPrompter {
             thresholdSeconds: 120)
     }
 
-    private static func shouldPresent(
+    static func shouldPresent(
         mode: AppState.ConnectionMode,
         activeSession: String?,
         requestSession: String?,
         lastInputSeconds: Int?,
-        thresholdSeconds: Int) -> Bool
+        thresholdSeconds: Int = 120) -> Bool
     {
         let active = activeSession?.trimmingCharacters(in: .whitespacesAndNewlines)
         let requested = requestSession?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -126,22 +125,3 @@ final class ExecApprovalsGatewayPrompter {
         return Int(seconds.rounded())
     }
 }
-
-#if DEBUG
-extension ExecApprovalsGatewayPrompter {
-    static func _testShouldPresent(
-        mode: AppState.ConnectionMode,
-        activeSession: String?,
-        requestSession: String?,
-        lastInputSeconds: Int?,
-        thresholdSeconds: Int = 120) -> Bool
-    {
-        self.shouldPresent(
-            mode: mode,
-            activeSession: activeSession,
-            requestSession: requestSession,
-            lastInputSeconds: lastInputSeconds,
-            thresholdSeconds: thresholdSeconds)
-    }
-}
-#endif

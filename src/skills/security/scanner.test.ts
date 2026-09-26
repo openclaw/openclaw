@@ -126,28 +126,31 @@ spawn("node", ["second.js"]); execFile("node", ["third.js"]);
     expect(findings.map((finding) => finding.line)).toEqual([3, 4, 4]);
   });
 
-  it("bounds dense line-rule findings and reports truncation", () => {
-    const source = [
-      `import { spawn } from "node:child_process";`,
-      ...Array.from({ length: 40 }, (_, index) => `spawn("node", ["${index}.js"]);`),
-    ].join("\n");
+  it.each(["spawn", "execFile as spawn"])(
+    "bounds dense line-rule findings and reports truncation for %s",
+    (binding) => {
+      const source = [
+        `import { ${binding} } from "node:child_process";`,
+        ...Array.from({ length: 40 }, (_, index) => `spawn("node", ["${index}.js"]);`),
+      ].join("\n");
 
-    const findings = scanSource(source, "plugin.ts").filter((candidate) =>
-      candidate.ruleId.startsWith("dangerous-exec"),
-    );
+      const findings = scanSource(source, "plugin.ts").filter((candidate) =>
+        candidate.ruleId.startsWith("dangerous-exec"),
+      );
 
-    expect(findings).toHaveLength(33);
-    expect(findings.slice(0, -1).every((finding) => finding.ruleId === "dangerous-exec")).toBe(
-      true,
-    );
-    expect(findings.at(-1)).toMatchObject({
-      ruleId: "dangerous-exec-truncated",
-      severity: "critical",
-      line: 41,
-      message: "8 additional dangerous-exec matches omitted after 32 findings",
-      evidence: "[8 additional matches omitted after 32 findings]",
-    });
-  });
+      expect(findings).toHaveLength(33);
+      expect(findings.slice(0, -1).every((finding) => finding.ruleId === "dangerous-exec")).toBe(
+        true,
+      );
+      expect(findings.at(-1)).toMatchObject({
+        ruleId: "dangerous-exec-truncated",
+        severity: "critical",
+        line: 41,
+        message: "8 additional dangerous-exec matches omitted after 32 findings",
+        evidence: "[8 additional matches omitted after 32 findings]",
+      });
+    },
+  );
 
   it("keeps bounded evidence free of lone surrogates", () => {
     const source = `${"a".repeat(119)}😀 child_process.exec("echo unsafe")`;

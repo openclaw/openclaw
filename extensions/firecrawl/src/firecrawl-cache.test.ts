@@ -2,13 +2,9 @@ import { createServer, type Server } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  createFirecrawlFreeWebSearchProvider,
-  createFirecrawlWebSearchProvider,
-} from "./firecrawl-search-provider.js";
 import { createFirecrawlSearchTool } from "./firecrawl-search-tool.js";
 
-describe.each(["keyed", "free", "standalone"] as const)("Firecrawl %s search cache", (kind) => {
+describe("Firecrawl search cache", () => {
   let server: Server;
   let baseUrl: string;
   let networkCalls: number;
@@ -54,21 +50,12 @@ describe.each(["keyed", "free", "standalone"] as const)("Firecrawl %s search cac
         },
       },
     };
-    if (kind === "standalone") {
-      const tool = createFirecrawlSearchTool(createTestPluginApi({ config }));
-      return (await tool.execute("cache-test", { query })).details;
-    }
-    const provider =
-      kind === "free" ? createFirecrawlFreeWebSearchProvider() : createFirecrawlWebSearchProvider();
-    const tool = provider.createTool({ config, searchConfig: config.tools?.web?.search });
-    if (!tool) {
-      throw new Error("expected Firecrawl search tool");
-    }
-    return await tool.execute({ query });
+    const tool = createFirecrawlSearchTool(createTestPluginApi({ config }));
+    return (await tool.execute("cache-test", { query })).details;
   }
 
   it.each([0, 15])("bypasses reads and writes after starting with TTL %i", async (initialTtl) => {
-    const query = `${kind} cache disable from ${initialTtl}`;
+    const query = `cache disable from ${initialTtl}`;
     expect(await search(query, initialTtl)).toMatchObject({
       results: [{ url: "https://example.com/original" }],
     });
@@ -96,7 +83,7 @@ describe.each(["keyed", "free", "standalone"] as const)("Firecrawl %s search cac
   it("honors a shorter reader TTL and does not extend the replacement entry's expiry", async () => {
     let now = Date.now();
     vi.spyOn(Date, "now").mockImplementation(() => now);
-    const query = `${kind} shorter cache TTL`;
+    const query = "shorter cache TTL";
     await search(query, 15);
     now += 59_999;
     expect(await search(query, 1)).toMatchObject({ cached: true });

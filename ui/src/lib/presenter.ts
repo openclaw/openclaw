@@ -1,4 +1,3 @@
-// Control UI module implements presenter behavior.
 import { resolveExactDurationParts } from "../../../src/infra/format-time/format-duration-exact.ts";
 import type { CronJob, GatewaySessionRow } from "../api/types.ts";
 import { t } from "../i18n/index.ts";

@@ -59,14 +59,7 @@ export type MSTeamsChannelConfig = {
 };
 
 /** Team-level config for MS Teams. */
-export type MSTeamsTeamConfig = {
-  /** Default requireMention for channels in this team. */
-  requireMention?: boolean;
-  /** Default tool policy for channels in this team. */
-  tools?: GroupToolPolicyConfig;
-  toolsBySender?: GroupToolPolicyBySenderConfig;
-  /** Default reply style for channels in this team. */
-  replyStyle?: MSTeamsReplyStyle;
+export type MSTeamsTeamConfig = MSTeamsChannelConfig & {
   /** Per-channel overrides. Key is conversation ID (e.g., "19:...@thread.tacv2"). */
   channels?: Record<string, MSTeamsChannelConfig>;
 };

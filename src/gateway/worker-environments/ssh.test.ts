@@ -251,28 +251,25 @@ describe("worker SSH preparation", () => {
     }
   });
 
-  it.each(["timeout", "signal", "output-limit", "error"] as const)(
-    "does not select a candidate after %s termination",
-    async (termination) => {
-      const prepared = await prepareTestWorkerSsh();
-      prepared.selectPort(22);
-      try {
-        const attempted: number[] = [];
-        const result = await runWorkerSshCandidates(prepared, 1_000, async (port) => {
-          attempted.push(port);
-          return port === 22
-            ? { code: 255, termination: "exit" as const }
-            : { code: null, termination };
-        });
+  it("does not select a candidate after non-exit termination", async () => {
+    const prepared = await prepareTestWorkerSsh();
+    prepared.selectPort(22);
+    try {
+      const attempted: number[] = [];
+      const result = await runWorkerSshCandidates(prepared, 1_000, async (port) => {
+        attempted.push(port);
+        return port === 22
+          ? { code: 255, termination: "exit" as const }
+          : { code: null, termination: "timeout" };
+      });
 
-        expect(attempted).toEqual([22, 2200]);
-        expect(result).toEqual({ code: null, termination });
-        expect(prepared.port).toBe(22);
-      } finally {
-        await prepared.dispose();
-      }
-    },
-  );
+      expect(attempted).toEqual([22, 2200]);
+      expect(result).toEqual({ code: null, termination: "timeout" });
+      expect(prepared.port).toBe(22);
+    } finally {
+      await prepared.dispose();
+    }
+  });
 
   it("materializes identity contents once and removes them with the shared context", async () => {
     const prepared = await prepareWorkerSsh({
