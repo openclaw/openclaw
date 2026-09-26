@@ -56,7 +56,7 @@ export function createStateDatabaseWalOwner(
       const unregister = asyncResources.register({
         async close(selected) {
           if (selected && selected.key !== identity.key) {
-            return undefined;
+            return;
           }
           cancel();
           // The broker retains native cleanup; this owner joins accepted work before retirement.
@@ -109,7 +109,7 @@ export function createStateDatabaseWalOwner(
             (isStateDatabaseReadAdmissionInvalidatedError(error) ||
               (controller.signal.aborted && isAbortError(error)))
           ) {
-            return;
+            return undefined;
           }
           throw error;
         } finally {
