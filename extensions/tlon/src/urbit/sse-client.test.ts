@@ -98,7 +98,6 @@ describe("UrbitSSEClient", () => {
 
       expect(client.cookie).toBe("urbauth-~zod=456");
     });
-
   });
 
   describe("openStream", () => {
@@ -526,6 +525,13 @@ describe("UrbitSSEClient", () => {
   });
 
   describe("constructor", () => {
+    it("generates unique channel ID", () => {
+      const client1 = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
+      const client2 = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
+
+      expect(client1.channelId).not.toBe(client2.channelId);
+    });
+
     it("normalizes cookie in constructor", () => {
       const client = new UrbitSSEClient(
         "https://example.com",

@@ -1,4 +1,4 @@
-import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 /**
  * Security Tests for Tlon Plugin
  *
@@ -8,8 +8,7 @@ import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runt
  * - Ship normalization consistency
  * - Bot mention detection boundaries
  */
-
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveChannelAuthorization } from "./monitor/authorization.js";
 import { createTlonCitationResolver } from "./monitor/cites.js";

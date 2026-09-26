@@ -60,7 +60,11 @@ describe("uploadImageFromUrl", () => {
         contentType: "image/jpeg",
       });
 
-      const result = await uploadImageFromUrl("https://example.com/path/to/my-image.jpg", clientConfig, cap);
+      const result = await uploadImageFromUrl(
+        "https://example.com/path/to/my-image.jpg",
+        clientConfig,
+        cap,
+      );
 
       expect(result).toBe("https://memex.tlon.network/uploaded.png");
       expect(mockReadRemoteMediaBuffer).toHaveBeenCalledWith({
@@ -132,7 +136,7 @@ describe("uploadImageFromUrl", () => {
     await setupSuccessfulUpload();
     mockUploadFile.mockRejectedValue(new Error("Upload failed"));
 
-      const result = await uploadImageFromUrl("https://example.com/image.png", clientConfig, 1024);
+    const result = await uploadImageFromUrl("https://example.com/image.png", clientConfig, 1024);
 
     expect(result).toBe("https://example.com/image.png");
   });
