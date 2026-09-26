@@ -460,11 +460,15 @@ export async function createBackupArchive(
   const tempDir = scratch.directory;
   let publication: BackupArchivePublication;
   try {
-    publication = await createBackupArchivePublication(outputPath);
+    publication = await createBackupArchivePublication(outputPath, opts.log);
   } catch (error) {
     await finishBackupScratch(scratch, opts.log);
     throw formatBackupOutputFailure(error, outputPath, "publication");
   }
+  if (publication.warnings.length) {
+    result.warnings = [...(result.warnings ?? []), ...publication.warnings];
+  }
+  const initialPublicationWarningCount = publication.warnings.length;
   const tempArchivePath = publication.tempArchivePath;
   let snapshotFacts: readonly BackupSqliteSnapshotFact[] = [];
   try {
@@ -719,6 +723,10 @@ export async function createBackupArchive(
   } finally {
     try {
       await cleanupBackupArchivePublication(publication, opts.log);
+      const cleanupWarnings = publication.warnings.slice(initialPublicationWarningCount);
+      if (cleanupWarnings.length) {
+        result.warnings = [...(result.warnings ?? []), ...cleanupWarnings];
+      }
     } finally {
       const warning = await finishBackupScratch(scratch, opts.log);
       if (warning) {

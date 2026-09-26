@@ -1,5 +1,4 @@
-import { randomUUID } from "node:crypto";
-import type { BigIntStats, Stats } from "node:fs";
+import type { BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
@@ -9,12 +8,22 @@ import {
   type PreparedBackupArchive,
 } from "./backup-create-stream.js";
 import {
+  createBackupScratchDirectory,
+  finishBackupScratch,
+  maintainBackupScratch,
+  type BackupScratch,
+} from "./backup-scratch.js";
+import { BACKUP_ARCHIVE_STAGING_BASENAME } from "./backup-tar-retry.js";
+import {
   getPublishFileExclusiveFailureDetails,
   isHardlinkFallbackError,
   publishFileExclusive,
   requireDirectorySync,
   syncDirectoryIfSupported,
 } from "./directory-durability.js";
+import { isSqliteLockError, isSqliteNativeOpenFailure } from "./sqlite-error-diagnostics.js";
+import { createPrivateSqliteTempDirectory } from "./sqlite-private-directory.js";
+import { SqliteStagingOwnershipUnknownError } from "./sqlite-staging-token.js";
 
 type BackupArchiveLogger = (message: string) => void;
 
@@ -26,8 +35,10 @@ export type BackupArchivePublication = {
   requestedOutputPath: string;
   requestedParentPath: string;
   stagingDir: string;
-  stagingIdentity: Stats;
+  stagingIdentity: BigIntStats;
+  scratch?: BackupScratch;
   tempArchivePath: string;
+  warnings: string[];
 };
 
 function pathsEqual(left: string, right: string): boolean {
@@ -52,14 +63,19 @@ async function assertTargetAbsent(targetPath: string): Promise<void> {
 
 async function removeDirectoryIfOwned(
   directoryPath: string,
-  expectedIdentity: Stats,
+  expectedIdentity: BigIntStats,
 ): Promise<boolean> {
   // This is a cooperative same-user fence, not hostile local-user isolation;
   // SECURITY.md treats co-equal host mutation as inside the operator boundary.
-  const currentIdentity = await fs.lstat(directoryPath).catch(() => undefined);
+  const currentIdentity = await fs.lstat(directoryPath, { bigint: true }).catch(() => undefined);
   if (
     !currentIdentity ||
     !currentIdentity.isDirectory() ||
+    (process.platform === "win32" &&
+      (expectedIdentity.dev === 0n ||
+        expectedIdentity.ino === 0n ||
+        currentIdentity.dev === 0n ||
+        currentIdentity.ino === 0n)) ||
     !sameFileIdentity(expectedIdentity, currentIdentity)
   ) {
     return false;
@@ -72,8 +88,35 @@ async function removeDirectoryIfOwned(
   }
 }
 
+async function removeStagingDirectoryIfOwned(plan: BackupArchivePublication): Promise<boolean> {
+  if (plan.scratch) {
+    // Archive receipts are settled by the publication owner, before the scratch
+    // owner retires its controls. Never reinterpret an unresolved receipt.
+    if (
+      plan.pendingCleanupArchives.length ||
+      (await fs.lstat(plan.tempArchivePath).then(
+        () => true,
+        (error: unknown) => (error as NodeJS.ErrnoException).code !== "ENOENT",
+      ))
+    ) {
+      plan.scratch.release();
+      return false;
+    }
+    const warning = await finishBackupScratch(plan.scratch);
+    if (!warning) {
+      plan.scratch = undefined;
+      return true;
+    }
+    if (!plan.warnings.includes(warning)) {
+      plan.warnings.push(warning);
+    }
+    return false;
+  }
+  return await removeDirectoryIfOwned(plan.stagingDir, plan.stagingIdentity);
+}
 export async function createBackupArchivePublication(
   outputPath: string,
+  log?: BackupArchiveLogger,
 ): Promise<BackupArchivePublication> {
   const requestedOutputPath = path.resolve(outputPath);
   const requestedParentPath = path.dirname(requestedOutputPath);
@@ -84,12 +127,43 @@ export async function createBackupArchivePublication(
   }
   const canonicalOutputPath = path.join(canonicalParentPath, path.basename(requestedOutputPath));
   await assertTargetAbsent(canonicalOutputPath);
-  const stagingDir = await fs.mkdtemp(
-    path.join(canonicalParentPath, `.openclaw-backup-publish-${randomUUID()}-`),
-  );
-  let stagingIdentity: Stats | undefined;
+  const maintenance = await maintainBackupScratch({
+    roots: [canonicalParentPath],
+    repair: true,
+    kind: "publication",
+    log,
+  });
+  const warnings = [...maintenance.warnings];
+  let scratch: BackupScratch | undefined;
+  let stagingDir: string;
   try {
-    stagingIdentity = await fs.lstat(stagingDir);
+    scratch = await createBackupScratchDirectory(canonicalParentPath, "publication");
+    stagingDir = scratch.directory;
+  } catch (error) {
+    if (error instanceof SqliteStagingOwnershipUnknownError) {
+      throw new Error(
+        `Backup publication staging requires stable file identity in ${canonicalParentPath}; choose a destination that reports file identities reliably.`,
+        { cause: error },
+      );
+    }
+    if (!isSqliteNativeOpenFailure(error) && !isSqliteLockError(error)) {
+      throw error;
+    }
+    // Destinations without usable SQLite locking cannot authorize recovery.
+    // Continue in a private, deliberately unregistered directory; never
+    // reclaim it by name. Unknown file identity fails explicitly above because
+    // this fallback could not safely remove a full staged archive after publish.
+    stagingDir = await createPrivateSqliteTempDirectory(
+      canonicalParentPath,
+      ".openclaw-backup-publish-unowned-",
+    );
+    const warning = `Backup destination does not support recoverable SQLite staging; automatic recovery is disabled for ${stagingDir}.`;
+    warnings.push(warning);
+    log?.(warning);
+  }
+  let stagingIdentity: BigIntStats | undefined;
+  try {
+    stagingIdentity = await fs.lstat(stagingDir, { bigint: true });
     await fs.chmod(stagingDir, 0o700);
     return {
       canonicalOutputPath,
@@ -104,10 +178,14 @@ export async function createBackupArchivePublication(
       requestedParentPath,
       stagingDir,
       stagingIdentity,
-      tempArchivePath: path.join(stagingDir, "archive.tar.gz.tmp"),
+      scratch,
+      tempArchivePath: path.join(stagingDir, BACKUP_ARCHIVE_STAGING_BASENAME),
+      warnings,
     };
   } catch (error) {
-    if (stagingIdentity) {
+    if (scratch) {
+      await finishBackupScratch(scratch, log);
+    } else if (stagingIdentity) {
       await removeDirectoryIfOwned(stagingDir, stagingIdentity);
     }
     throw error;
@@ -143,11 +221,12 @@ async function removePendingBackupArchive(
     return false;
   }
   if (receipt.identity) {
+    // SAFETY: an identity-bearing cleanup receipt satisfies PreparedBackupArchive.
     return removePreparedBackupArchive(receipt as PreparedBackupArchive);
   }
-  let currentIdentity: Stats;
+  let currentIdentity: BigIntStats;
   try {
-    currentIdentity = await fs.lstat(receipt.archivePath);
+    currentIdentity = await fs.lstat(receipt.archivePath, { bigint: true });
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === "ENOENT";
   }
@@ -170,7 +249,7 @@ export async function cleanupBackupArchivePublication(
       retainArchiveForCleanup(plan, receipt);
     }
   }
-  if (await removeDirectoryIfOwned(plan.stagingDir, plan.stagingIdentity)) {
+  if (await removeStagingDirectoryIfOwned(plan)) {
     await syncDirectoryIfSupported(plan.canonicalParentPath).catch(() => undefined);
     return;
   }
@@ -228,7 +307,7 @@ export async function publishPreparedBackupArchive(params: {
       retainArchiveForCleanup(plan, prepared);
       params.log?.(`Backup archiver preserved changed staging file ${prepared.archivePath}.`);
     }
-    if (!(await removeDirectoryIfOwned(plan.stagingDir, plan.stagingIdentity))) {
+    if (!(await removeStagingDirectoryIfOwned(plan))) {
       params.log?.(
         `Backup archiver preserved changed or non-empty staging directory ${plan.stagingDir}.`,
       );
@@ -250,7 +329,7 @@ export async function publishPreparedBackupArchive(params: {
       if (!removePreparedBackupArchive(prepared)) {
         retainArchiveForCleanup(plan, prepared);
       }
-      await removeDirectoryIfOwned(plan.stagingDir, plan.stagingIdentity);
+      await removeStagingDirectoryIfOwned(plan);
     }
     throw error;
   }
