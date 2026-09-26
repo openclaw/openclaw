@@ -3359,6 +3359,139 @@ fi
     }
   });
 
+  it("binds beta Fastlane execution to each candidate lockfile", () => {
+    type Step = {
+      env?: Record<string, string>;
+      name: string;
+      run?: string;
+      uses?: string;
+      with?: Record<string, unknown>;
+      "working-directory"?: string;
+    };
+    const contracts = [
+      {
+        file: ".github/workflows/ios-beta-release.yml",
+        installName: "Install locked Fastlane bundle",
+        jobName: "release",
+        lockReceipt: "ios-fastlane-lock.sha",
+        setupName: "Setup Ruby",
+        uploadName: "Upload and distribute iOS beta",
+        workingDirectory: "apps/ios",
+      },
+      {
+        file: ".github/workflows/ios-beta-release.yml",
+        installName: "Install locked inspection Fastlane bundle",
+        jobName: "inspect",
+        lockReceipt: "ios-inspection-fastlane-lock.sha",
+        setupName: "Setup trusted Ruby",
+        uploadName: "Inspect iOS plan and exact build relationships",
+        workingDirectory: ".ios-inspection-candidate/apps/ios",
+      },
+      {
+        file: ".github/workflows/android-beta-release.yml",
+        installName: "Install locked Fastlane bundle",
+        jobName: "release",
+        lockReceipt: "android-fastlane-lock.sha",
+        setupName: "Setup Ruby",
+        uploadName: "Upload Android beta",
+        workingDirectory: "apps/android",
+      },
+    ] as const;
+
+    for (const contract of contracts) {
+      const source = fs.readFileSync(contract.file, "utf8");
+      const workflow = parse(source) as {
+        jobs: Record<string, { env?: Record<string, string>; steps: Step[] }>;
+      };
+      const job = workflow.jobs[contract.jobName];
+      if (!job) {
+        throw new Error(`${contract.file}: missing ${contract.jobName} job`);
+      }
+      const setup = job.steps.filter((step) => step.name === contract.setupName);
+      const install = job.steps.filter((step) => step.name === contract.installName);
+      const upload = job.steps.filter((step) => step.name === contract.uploadName);
+      expect(setup).toHaveLength(1);
+      expect(install).toHaveLength(1);
+      expect(upload).toHaveLength(1);
+      expect(job.env?.BUNDLE_FROZEN).toBe("true");
+      expect(setup[0]).toMatchObject({
+        uses: "ruby/setup-ruby@984c0c890880bbf811283d6f09c4607c62d210a4",
+        with: {
+          "bundler-cache": false,
+          "ruby-version": "3.4.10",
+          "working-directory": contract.workingDirectory,
+          bundler: "Gemfile.lock",
+        },
+      });
+      expect(install[0]?.["working-directory"]).toBe(contract.workingDirectory);
+      expect(install[0]?.run).toContain(
+        `git hash-object --no-filters Gemfile.lock >"$RUNNER_TEMP/${contract.lockReceipt}"`,
+      );
+      expect(install[0]?.run).toContain(
+        "lock.bundler_version && lock.bundler_version.to_s == Bundler::VERSION",
+      );
+      expect(install[0]?.run).toContain(
+        'locked_fastlane = lock.specs.select { |spec| spec.name == "fastlane" }',
+      );
+      expect(install[0]?.run).toContain('loaded_fastlane = Gem.loaded_specs["fastlane"]');
+      expect(install[0]?.run).toContain("loaded_fastlane.version == locked_fastlane.first.version");
+      expect(install[0]?.run).toContain("Fastlane::VERSION == loaded_fastlane.version.to_s");
+      expect(install[0]?.run).toContain(`cat "$RUNNER_TEMP/${contract.lockReceipt}"`);
+      expect(upload[0]?.run).toContain(`cat "$RUNNER_TEMP/${contract.lockReceipt}"`);
+      expect(source).not.toMatch(/\bbundle _\d+\.\d+\.\d+_/u);
+      expect(source).not.toContain('"2.240.1"');
+
+      if (contract.file === ".github/workflows/ios-beta-release.yml") {
+        if (contract.jobName === "release") {
+          const signingIndex = job.steps.findIndex(
+            (step) => step.name === "Validate readonly iOS signing key access",
+          );
+          const uploadIndex = job.steps.findIndex((step) => step.name === contract.uploadName);
+          expect(signingIndex).toBeGreaterThan(-1);
+          expect(signingIndex).toBeLessThan(uploadIndex);
+          const signingRun = job.steps[signingIndex]?.run ?? "";
+          const preLockCheckIndex = signingRun.indexOf('cat "$RUNNER_TEMP/ios-fastlane-lock.sha"');
+          const signingCheckIndex = signingRun.indexOf("run_ios_fastlane ios signing_check");
+          const postLockCheckIndex = signingRun.lastIndexOf(
+            'cat "$RUNNER_TEMP/ios-fastlane-lock.sha"',
+          );
+          const keychainProbeIndex = signingRun.indexOf("ios-signing-keychain/keychain.mjs probe");
+          expect(preLockCheckIndex).toBeGreaterThan(-1);
+          expect(signingCheckIndex).toBeGreaterThan(preLockCheckIndex);
+          expect(postLockCheckIndex).toBeGreaterThan(signingCheckIndex);
+          expect(keychainProbeIndex).toBeGreaterThan(postLockCheckIndex);
+        } else {
+          const checkoutIndex = job.steps.findIndex(
+            (step) => step.name === "Checkout candidate data only",
+          );
+          const authorityIndex = job.steps.findIndex(
+            (step) => step.name === "Validate inspection target before candidate code access",
+          );
+          const setupIndex = job.steps.findIndex((step) => step.name === contract.setupName);
+          expect(checkoutIndex).toBeGreaterThan(-1);
+          expect(authorityIndex).toBeGreaterThan(checkoutIndex);
+          expect(setupIndex).toBeGreaterThan(authorityIndex);
+          expect(job.steps[authorityIndex]).toMatchObject({
+            uses: "./.github/actions/mobile-release-authority",
+            with: { operation: "inspect", "target-sha": "${{ inputs.target_sha }}" },
+          });
+        }
+      }
+
+      if (contract.jobName === "inspect") {
+        const checkout = job.steps.find((step) => step.name === "Checkout candidate data only");
+        expect(checkout?.with?.["sparse-checkout"]).toContain("apps/ios/Gemfile");
+        expect(checkout?.with?.["sparse-checkout"]).toContain("apps/ios/Gemfile.lock");
+        expect(upload[0]?.run).toContain(
+          'candidate_gemfile="${GITHUB_WORKSPACE}/.ios-inspection-candidate/apps/ios/Gemfile"',
+        );
+        expect(upload[0]?.run).toMatch(
+          /cd apps\/ios\n\s+BUNDLE_GEMFILE="\$candidate_gemfile" bundle exec fastlane ios release_inspect/u,
+        );
+      }
+    }
+  });
+
   it("keeps upload and recovery credentials inside one protected platform boundary", () => {
     const workflows = [
       {
@@ -3658,11 +3791,11 @@ fi
           "bundler-cache": false,
           "ruby-version": "3.4.10",
           "working-directory": "apps/android",
-          bundler: "4.0.21",
+          bundler: "Gemfile.lock",
         });
-        expect(bundleStep?.run).toContain("bundle _4.0.21_ install --jobs 4 --retry 3");
-        expect(bundleStep?.run).toContain("bundle _4.0.21_ check");
-        expect(bundleStep?.run).toContain("bundle _4.0.21_ exec ruby");
+        expect(bundleStep?.run).toContain("bundle install --jobs 4 --retry 3");
+        expect(bundleStep?.run).toContain("bundle check");
+        expect(bundleStep?.run).toContain("bundle exec ruby");
         expect(source).not.toContain("gem install fastlane");
       }
 

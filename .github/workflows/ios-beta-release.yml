@@ -108,6 +108,7 @@ jobs:
       group: ios-beta-release-openclaw
       cancel-in-progress: false
     env:
+      BUNDLE_FROZEN: "true"
       BUILD_TIMESTAMP: ${{ needs.authorize.outputs.build_timestamp }}
       RELEASE_TARGET_SHA: ${{ needs.authorize.outputs.target_sha }}
     steps:
@@ -200,7 +201,7 @@ jobs:
         uses: ruby/setup-ruby@984c0c890880bbf811283d6f09c4607c62d210a4 # v1.323.0
         with:
           ruby-version: "3.4.10"
-          bundler: "4.0.21"
+          bundler: Gemfile.lock
           bundler-cache: false
           working-directory: apps/ios
 
@@ -208,9 +209,30 @@ jobs:
         working-directory: apps/ios
         run: |
           set -euo pipefail
-          bundle _4.0.21_ install --jobs 4 --retry 3
-          bundle _4.0.21_ check
-          test "$(bundle _4.0.21_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.240.1"
+          git hash-object --no-filters Gemfile.lock >"$RUNNER_TEMP/ios-fastlane-lock.sha"
+          bundle install --jobs 4 --retry 3
+          bundle check
+          bundle exec ruby <<'RUBY'
+          require "bundler"
+          require "bundler/lockfile_parser"
+
+          lockfile = Bundler.default_lockfile
+          abort "Gemfile.lock is missing" unless lockfile.file?
+          lock = Bundler::LockfileParser.new(lockfile.read)
+          abort "Gemfile.lock does not select the running Bundler" unless
+            lock.bundler_version && lock.bundler_version.to_s == Bundler::VERSION
+          locked_fastlane = lock.specs.select { |spec| spec.name == "fastlane" }
+          abort "Gemfile.lock must select exactly one Fastlane spec" unless locked_fastlane.one?
+          require "fastlane"
+          loaded_fastlane = Gem.loaded_specs["fastlane"]
+          abort "Fastlane gem is not loaded" unless loaded_fastlane
+          abort "Loaded Fastlane gem does not match Gemfile.lock" unless
+            loaded_fastlane.version == locked_fastlane.first.version
+          abort "Fastlane runtime does not match the loaded gem" unless
+            Fastlane::VERSION == loaded_fastlane.version.to_s
+          RUBY
+          test "$(cat "$RUNNER_TEMP/ios-fastlane-lock.sha")" = \
+            "$(git hash-object --no-filters Gemfile.lock)"
 
       - name: Select Xcode 27
         run: |
@@ -273,7 +295,11 @@ jobs:
         run: |
           set -euo pipefail
           source ./scripts/lib/ios-fastlane.sh
+          test "$(cat "$RUNNER_TEMP/ios-fastlane-lock.sha")" = \
+            "$(git hash-object --no-filters apps/ios/Gemfile.lock)"
           (cd apps/ios && run_ios_fastlane ios signing_check)
+          test "$(cat "$RUNNER_TEMP/ios-fastlane-lock.sha")" = \
+            "$(git hash-object --no-filters apps/ios/Gemfile.lock)"
           node apps/ios/build/mobile-release-ci/authority/.github/actions/ios-signing-keychain/keychain.mjs probe
 
       - name: Revalidate release authority immediately before upload
@@ -307,6 +333,8 @@ jobs:
           set -euo pipefail
           rm -rf "$RUNNER_TEMP/mobile-release-intent-ios"
           pnpm ios:release:upload
+          test "$(cat "$RUNNER_TEMP/ios-fastlane-lock.sha")" = \
+            "$(git hash-object --no-filters apps/ios/Gemfile.lock)"
           test -f "$RUNNER_TEMP/mobile-release-intent-ios/intent.json"
           test "$(wc -c < "$RUNNER_TEMP/mobile-release-intent-ios/intent.json")" -le 4096
 
@@ -409,6 +437,7 @@ jobs:
       cancel-in-progress: false
     env:
       BUNDLE_DEPLOYMENT: "true"
+      BUNDLE_FROZEN: "true"
     steps:
       - name: Checkout trusted inspection tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -433,23 +462,58 @@ jobs:
           fetch-depth: 0
           sparse-checkout: |
             apps/mobile/version.json
+            apps/ios/Gemfile
+            apps/ios/Gemfile.lock
             apps/ios/CHANGELOG.md
+
+      - name: Validate inspection target before candidate code access
+        uses: ./.github/actions/mobile-release-authority
+        with:
+          operation: inspect
+          platform: ios
+          workflow-path: .github/workflows/ios-beta-release.yml
+          workflow-full-ref: ${{ github.workflow_ref }}
+          workflow-sha: ${{ github.workflow_sha }}
+          target-ref: ${{ inputs.target_ref }}
+          target-sha: ${{ inputs.target_sha }}
+          authority-run-id: ${{ github.run_id }}
 
       - name: Setup trusted Ruby
         uses: ruby/setup-ruby@984c0c890880bbf811283d6f09c4607c62d210a4 # v1.323.0
         with:
           ruby-version: "3.4.10"
-          bundler: "4.0.21"
+          bundler: Gemfile.lock
           bundler-cache: false
-          working-directory: apps/ios
+          working-directory: .ios-inspection-candidate/apps/ios
 
       - name: Install locked inspection Fastlane bundle
-        working-directory: apps/ios
+        working-directory: .ios-inspection-candidate/apps/ios
         run: |
           set -euo pipefail
-          bundle _4.0.21_ install --jobs 4 --retry 3
-          bundle _4.0.21_ check
-          test "$(bundle _4.0.21_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.240.1"
+          git hash-object --no-filters Gemfile.lock >"$RUNNER_TEMP/ios-inspection-fastlane-lock.sha"
+          bundle install --jobs 4 --retry 3
+          bundle check
+          bundle exec ruby <<'RUBY'
+          require "bundler"
+          require "bundler/lockfile_parser"
+
+          lockfile = Bundler.default_lockfile
+          abort "Gemfile.lock is missing" unless lockfile.file?
+          lock = Bundler::LockfileParser.new(lockfile.read)
+          abort "Gemfile.lock does not select the running Bundler" unless
+            lock.bundler_version && lock.bundler_version.to_s == Bundler::VERSION
+          locked_fastlane = lock.specs.select { |spec| spec.name == "fastlane" }
+          abort "Gemfile.lock must select exactly one Fastlane spec" unless locked_fastlane.one?
+          require "fastlane"
+          loaded_fastlane = Gem.loaded_specs["fastlane"]
+          abort "Fastlane gem is not loaded" unless loaded_fastlane
+          abort "Loaded Fastlane gem does not match Gemfile.lock" unless
+            loaded_fastlane.version == locked_fastlane.first.version
+          abort "Fastlane runtime does not match the loaded gem" unless
+            Fastlane::VERSION == loaded_fastlane.version.to_s
+          RUBY
+          test "$(cat "$RUNNER_TEMP/ios-inspection-fastlane-lock.sha")" = \
+            "$(git hash-object --no-filters Gemfile.lock)"
 
       - name: Revalidate inspection authority immediately before credential access
         id: inspection-authority
@@ -474,12 +538,17 @@ jobs:
           INSPECT_BUILD_NUMBER: ${{ inputs.inspect_build_number }}
         run: |
           set -euo pipefail
-          source ./scripts/lib/ios-fastlane.sh
-          (cd apps/ios && run_ios_fastlane ios release_inspect \
-            "source_root:${GITHUB_WORKSPACE}/.ios-inspection-candidate" \
-            "app_store_version:${INSPECT_APP_STORE_VERSION}" \
-            "build_number:${INSPECT_BUILD_NUMBER}" \
-            "output_directory:${RUNNER_TEMP}/ios-release-inspection")
+          candidate_gemfile="${GITHUB_WORKSPACE}/.ios-inspection-candidate/apps/ios/Gemfile"
+          (
+            cd apps/ios
+            BUNDLE_GEMFILE="$candidate_gemfile" bundle exec fastlane ios release_inspect \
+              "source_root:${GITHUB_WORKSPACE}/.ios-inspection-candidate" \
+              "app_store_version:${INSPECT_APP_STORE_VERSION}" \
+              "build_number:${INSPECT_BUILD_NUMBER}" \
+              "output_directory:${RUNNER_TEMP}/ios-release-inspection"
+          )
+          test "$(cat "$RUNNER_TEMP/ios-inspection-fastlane-lock.sha")" = \
+            "$(git hash-object --no-filters .ios-inspection-candidate/apps/ios/Gemfile.lock)"
 
       - name: Revalidate inspection authority before retaining observations
         uses: ./.github/actions/mobile-release-authority
