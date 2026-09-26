@@ -1,37 +1,16 @@
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
-import { expect, it, vi } from "vitest";
+import { StatementSync } from "node:sqlite";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { afterEach, expect, it, vi } from "vitest";
 import { describePeriod } from "./periods.js";
 import { buildRoster } from "./roster.js";
 import { createSqliteWorkerBackend } from "./store.worker.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.restoreAllMocks());
+
 it("aggregates across payload pages without paging metadata already retained for sorting", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "team-reports-read-budget-"));
-  const prepare = DatabaseSync.prototype.prepare;
-  let reads = 0;
-  let maxPayloadRows = 0;
-  vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
-    this: DatabaseSync,
-    sql: string,
-  ) {
-    const statement = prepare.call(this, sql);
-    if (sql.startsWith("select") && sql.includes('"team_reports_activity"')) {
-      const all = statement.all.bind(statement);
-      statement.all = new Proxy(all, {
-        apply(target, receiver, args) {
-          const rows: ReturnType<typeof all> = Reflect.apply(target, receiver, args);
-          reads += 1;
-          if (sql.includes('"data_json"')) {
-            maxPayloadRows = Math.max(maxPayloadRows, rows.length);
-          }
-          return rows;
-        },
-      });
-    }
-    return statement;
-  });
+  const directory = tempDirs.make("team-reports-read-budget-");
   const backend = createSqliteWorkerBackend(undefined, {
     databasePath: path.join(directory, "reports.sqlite"),
   });
@@ -60,6 +39,7 @@ it("aggregates across payload pages without paging metadata already retained for
         },
       });
     }
+    const reads = vi.spyOn(StatementSync.prototype, "all");
     const report = backend.execute({
       type: "aggregateActivity",
       input: {
@@ -75,11 +55,15 @@ it("aggregates across payload pages without paging metadata already retained for
       members: [{ login: "alice", github: { items: [{ title: "Comment 200" }] } }],
     });
     // Two source metadata reads plus three bounded payload reads.
-    expect(reads).toBeLessThanOrEqual(5);
-    expect(maxPayloadRows).toBeLessThanOrEqual(100);
+    expect(reads.mock.calls.length).toBeLessThanOrEqual(5);
+    const payloadSizes = reads.mock.results.flatMap((result) =>
+      result.type === "return" && result.value.some((row) => Object.hasOwn(row, "data_json"))
+        ? [result.value.length]
+        : [],
+    );
+    expect(payloadSizes.length).toBeGreaterThan(0);
+    expect(Math.max(...payloadSizes)).toBeLessThanOrEqual(100);
   } finally {
-    vi.restoreAllMocks();
     backend.close();
-    fs.rmSync(directory, { recursive: true, force: true });
   }
 });
