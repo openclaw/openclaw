@@ -236,22 +236,6 @@ class SmsManager(
 
     internal fun mapMmsMsgBoxToSearchType(msgBox: Int?): Int? = msgBox?.takeIf { it in 1..6 }
 
-    internal fun escapeSqlLikeLiteral(value: String): String =
-      buildString(value.length) {
-        for (ch in value) {
-          when (ch) {
-            '\\', '%', '_' -> {
-              append('\\')
-              append(ch)
-            }
-
-            else -> {
-              append(ch)
-            }
-          }
-        }
-      }
-
     internal fun buildContactNameLikeSelection(): String = "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} LIKE ? ESCAPE '\\'"
 
     internal fun buildContactNameLikeArg(contactName: String): String = "%${escapeSqlLikeLiteral(contactName)}%"

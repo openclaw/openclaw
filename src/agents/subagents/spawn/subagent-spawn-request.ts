@@ -22,8 +22,7 @@ import { resolveConfiguredSubagentRunTimeoutSeconds } from "./subagent-spawn-pla
 import {
   getGlobalHookRunner,
   getRuntimeConfig,
-  loadSessionEntry,
-  resolveGatewaySessionStoreTarget,
+  resolveGatewaySessionStoreTargetInWorker,
 } from "./subagent-spawn.runtime.js";
 import { normalizeSubagentTaskName } from "./subagent-task-name.js";
 
@@ -31,7 +30,7 @@ function rejectSubagentSpawnRequest(status: "error" | "forbidden", error: string
   return { ok: false as const, result: { status, error } satisfies SpawnSubagentResult };
 }
 
-export function resolveSubagentSpawnRequest(
+export async function resolveSubagentSpawnRequest(
   params: SpawnSubagentParams,
   ctx: SpawnSubagentContext,
 ) {
@@ -121,16 +120,14 @@ export function resolveSubagentSpawnRequest(
   // progress receipts or private results to a replacement session at the same key.
   let completionRequesterSessionId: string | undefined;
   try {
-    const target = resolveGatewaySessionStoreTarget({
+    const target = await resolveGatewaySessionStoreTargetInWorker({
       cfg,
       key: ownership.completionRequesterSessionKey,
       agentId: ctx.requesterAgentIdOverride,
+      assertActive: ctx.assertActive,
     });
-    completionRequesterSessionId = loadSessionEntry({
-      storePath: target.storePath,
-      sessionKey: target.canonicalKey,
-      clone: false,
-    })?.sessionId;
+    ctx.assertActive?.();
+    completionRequesterSessionId = target.store[target.canonicalKey]?.sessionId;
   } catch (error) {
     return rejectSubagentSpawnRequest(
       "error",
@@ -227,6 +224,7 @@ export function resolveSubagentSpawnRequest(
       additionalActiveChildren: pendingChildren,
     });
   };
+  ctx.assertActive?.();
   const admissionReservation = params.collect
     ? undefined
     : reserveChildAdmissionSlot({

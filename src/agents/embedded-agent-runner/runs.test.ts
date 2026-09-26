@@ -85,10 +85,17 @@ describe("embedded-agent runner run registry", () => {
     expect(applyPermissionMode).not.toHaveBeenCalled();
   });
 
-  it("aborts only compacting runs in compacting mode", () => {
+  it("aborts only known compacting runs and continues past a failed probe", () => {
+    const abortUnknown = vi.fn();
     const abortCompacting = vi.fn();
     const abortNormal = vi.fn();
 
+    setActiveEmbeddedRun("session-unknown", {
+      ...createEmbeddedRunHandle({ abort: abortUnknown }),
+      isCompacting: () => {
+        throw new Error("compaction probe unavailable");
+      },
+    });
     setActiveEmbeddedRun(
       "session-compacting",
       createEmbeddedRunHandle({ isCompacting: true, abort: abortCompacting }),
@@ -98,28 +105,9 @@ describe("embedded-agent runner run registry", () => {
 
     const aborted = abortEmbeddedAgentRun(undefined, { mode: "compacting" });
     expect(aborted).toBe(true);
+    expect(abortUnknown).not.toHaveBeenCalled();
     expect(abortCompacting).toHaveBeenCalledTimes(1);
     expect(abortNormal).not.toHaveBeenCalled();
-  });
-
-  it("aborts remaining compacting-mode handles when one compacting probe throws", () => {
-    const abortFaulty = vi.fn();
-    const abortEligible = vi.fn();
-
-    setActiveEmbeddedRun("session-bad-compacting-probe", {
-      ...createEmbeddedRunHandle({ abort: abortFaulty }),
-      isCompacting: () => {
-        throw new Error("compaction probe unavailable");
-      },
-    });
-    setActiveEmbeddedRun(
-      "session-compacting-after-probe-failure",
-      createEmbeddedRunHandle({ isCompacting: true, abort: abortEligible }),
-    );
-
-    expect(() => abortEmbeddedAgentRun(undefined, { mode: "compacting" })).not.toThrow();
-    expect(abortFaulty).not.toHaveBeenCalled();
-    expect(abortEligible).toHaveBeenCalledTimes(1);
   });
 
   it("keeps queued reply operations out of compact abort checks", () => {

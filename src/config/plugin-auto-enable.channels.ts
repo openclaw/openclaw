@@ -2,7 +2,6 @@
 import {
   listPotentialConfiguredChannelPresenceSignals,
   type AmbientEnvTriggerPolicy,
-  type ChannelPresenceSignalSource,
 } from "../channels/config-presence.js";
 import { normalizeChatChannelId } from "../channels/ids.js";
 import {
@@ -76,46 +75,23 @@ export function collectAutoEnableChannelIds(
     includePersistedAuthState: false,
     discovery,
     ambientEnvTriggers,
-  })
-    .map((signal) => ({
-      source: signal.source,
-      channelId: normalizeChatChannelId(signal.channelId) ?? signal.channelId,
-    }))
-    .filter(({ channelId, source }) =>
-      isAutoEnableConfiguredChannelSignal({
+  }).flatMap((signal) => {
+    const channelId = normalizeManifestChannelId(signal.channelId);
+    if (
+      signal.source === "env" &&
+      configuredStateChannelIds.has(channelId) &&
+      !hasBundledChannelPackageState({
+        metadataKey: "configuredState",
+        channelId,
         cfg,
         env,
-        channelId,
-        source,
-        configuredStateChannelIds,
         discovery,
-      }),
-    )
-    .map(({ channelId }) => channelId);
-}
-
-function isAutoEnableConfiguredChannelSignal(params: {
-  cfg: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  channelId: string;
-  source: ChannelPresenceSignalSource;
-  configuredStateChannelIds: ReadonlySet<string>;
-  discovery?: PluginDiscoveryResult;
-}): boolean {
-  if (
-    params.source === "env" &&
-    params.configuredStateChannelIds.has(params.channelId) &&
-    !hasBundledChannelPackageState({
-      metadataKey: "configuredState",
-      channelId: params.channelId,
-      cfg: params.cfg,
-      env: params.env,
-      discovery: params.discovery,
-    })
-  ) {
-    return false;
-  }
-  return isChannelConfigured(params.cfg, params.channelId, params.env);
+      })
+    ) {
+      return [];
+    }
+    return isChannelConfigured(cfg, channelId, env) ? [channelId] : [];
+  });
 }
 
 export type ConfiguredPluginAutoEnableParams = {

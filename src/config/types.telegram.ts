@@ -1,7 +1,6 @@
 // Defines Telegram channel configuration types.
 import type {
   ChannelPreviewStreamingConfig,
-  ChannelStreamingPreviewConfig,
   DmPolicy,
   GroupPolicy,
   SessionThreadBindingsConfig,
@@ -54,9 +53,7 @@ export type TelegramInlineButtonsScope = "off" | "dm" | "group" | "all" | "allow
 export type TelegramStreamingMode = "off" | "partial" | "block" | "progress";
 export type TelegramExecApprovalTarget = ChannelExecApprovalTarget;
 
-export type TelegramPreviewStreamingConfig = Omit<ChannelPreviewStreamingConfig, "preview"> & {
-  preview?: ChannelStreamingPreviewConfig;
-};
+export type TelegramPreviewStreamingConfig = ChannelPreviewStreamingConfig;
 
 export type TelegramExecApprovalConfig = ChannelExecApprovalConfig;
 
@@ -158,29 +155,12 @@ export type TelegramTopicConfig = {
   errorPolicy?: "always" | "once" | "silent";
 };
 
-export type TelegramGroupConfig = {
-  requireMention?: boolean;
-  /** Emit internal message hooks for mention-skipped group messages. */
-  ingest?: boolean;
-  /** Per-group override for group message policy (open|disabled|allowlist). */
-  groupPolicy?: GroupPolicy;
+export type TelegramGroupConfig = Omit<TelegramTopicConfig, "agentId"> & {
   /** Optional tool policy overrides for this group. */
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
-  /** If specified, only load these skills for this group (when no topic). Omit = all skills; empty = no skills. */
-  skills?: string[];
   /** Per-topic configuration (key is message_thread_id as string, or "*" for topic defaults). */
   topics?: Record<string, TelegramTopicConfig>;
-  /** If false, disable the bot for this group (and its topics). */
-  enabled?: boolean;
-  /** Optional allowlist for group senders (numeric Telegram user IDs). */
-  allowFrom?: Array<string | number>;
-  /** Optional system prompt snippet for this group. */
-  systemPrompt?: string;
-  /** If true, skip automatic voice-note transcription for mention detection in this group. */
-  disableAudioPreflight?: boolean;
-  /** Controls outbound error reporting for this group. */
-  errorPolicy?: "always" | "once" | "silent";
 };
 
 /** Config for LLM-based auto-topic labeling. */
