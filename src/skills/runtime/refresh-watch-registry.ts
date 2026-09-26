@@ -1,9 +1,9 @@
-import type { Result } from "@openclaw/normalization-core/result";
-import { isPathInside } from "../../infra/path-guards.js";
+import type { Root } from "@openclaw/fs-safe/root";
 import {
   bumpSkillsSnapshotVersion,
   markSkillsSupportingFilesChanged,
   notifySkillsWatchAvailable,
+  suspendSkillsSnapshotSources,
   type SkillsSourceScope,
 } from "./refresh-state.js";
 import type { SkillsWatchTargetCacheEntry, WatchTarget } from "./refresh-watch-targets.js";
@@ -11,13 +11,11 @@ import type { SkillsWatchTargetCacheEntry, WatchTarget } from "./refresh-watch-t
 export type SkillsWatchChange = "skills" | "supporting";
 export type SkillsPathWatchState = {
   closed: boolean;
-  close: () => Promise<Result<void, unknown>>;
-  watchRoot: string;
-  ancestorRoot: string;
+  close: () => Promise<void>;
+  authority?: Promise<Root>;
   depth: number;
   initialScan: "pending" | "ready" | "error";
   unavailable: boolean;
-  pooledNative: boolean;
   verified: boolean;
   failed: boolean;
   recovering: boolean;
@@ -29,11 +27,8 @@ export type SkillsPathWatchState = {
   readonly subscribers: Set<string>;
 };
 
-// One watcher per unique watched directory. Agent workspaces that include the
-// same shared skill root (the global skills dir, the home skills dir, or a
-// configured extra/plugin dir) subscribe to the same watcher instead of each
-// opening its own, so open file descriptors scale with distinct directories
-// rather than with agent count.
+// Workspaces share each logical target. fs-safe owns its guarded directory pins
+// and shares the native hub across subscriptions, including overlapping targets.
 export const pathWatchers = new Map<string, SkillsPathWatchState>();
 // Watch targets each workspace is currently subscribed to, used to reconcile
 // subscriptions and to detect watch-target changes across calls.
@@ -45,6 +40,8 @@ export type SkillsWatchOwner = {
   sourceScope: SkillsSourceScope;
   sharedScanPending: boolean;
   unavailable: boolean;
+  /** Bounded target discovery under this owner's current source policy. */
+  reconcileTargets?: () => void;
 };
 export const workspaceWatchOwners = new Map<string, SkillsWatchOwner>();
 // Resolved nested skill watch roots are filesystem-derived. Cache them so the
@@ -59,30 +56,6 @@ export type PendingSkillsWatchChange = {
   change: SkillsWatchChange | "initial-scan" | "unavailable";
 };
 
-// A peer can keep Chokidar's old inode handles alive after our successful close.
-// Keep this observation loss across subscription disposal and ordinary shutdown.
-export const uncertainPooledObservationRoots = new Set<string>();
-export const hasUncertainPooledCoverage = (root: string) =>
-  Array.from(uncertainPooledObservationRoots).some(
-    (lost) => isPathInside(root, lost) || isPathInside(lost, root),
-  );
-
-export function recordPooledObservationLoss(root: string): void {
-  uncertainPooledObservationRoots.add(root);
-  const changes: PendingSkillsWatchChange[] = [];
-  for (const [targetPath, state] of pathWatchers) {
-    if (state.closed || !state.pooledNative || !hasUncertainPooledCoverage(targetPath)) {
-      continue;
-    }
-    state.verified = false;
-    if (!state.unavailable) {
-      state.unavailable = true;
-      changes.push({ targetPath, state, watcherKeys: state.subscribers, change: "unavailable" });
-    }
-  }
-  publishSkillsWatchChanges(changes);
-}
-
 export function unsubscribeWorkspaceFromPath(workspaceDir: string, watchTarget: WatchTarget): void {
   const state = pathWatchers.get(watchTarget.path);
   if (!state) {
@@ -90,15 +63,63 @@ export function unsubscribeWorkspaceFromPath(workspaceDir: string, watchTarget: 
   }
   state.subscribers.delete(workspaceDir);
   if (state.subscribers.size === 0) {
-    void state.close().then((result) => {
-      if (
-        result.ok &&
-        state.subscribers.size === 0 &&
-        pathWatchers.get(watchTarget.path) === state
-      ) {
-        pathWatchers.delete(watchTarget.path);
-      }
-    });
+    void state.close().then(
+      () => {
+        if (state.subscribers.size === 0 && pathWatchers.get(watchTarget.path) === state) {
+          pathWatchers.delete(watchTarget.path);
+        }
+      },
+      () => {
+        // Failed physical retirement retains this logical owner; never rearm it.
+        state.failed = true;
+      },
+    );
+  }
+}
+
+export const workspaceWatchLastEnsuredAt = new Map<string, number>();
+// Session turns re-ensure their workspace; entries older than this are treated
+// as abandoned subscriptions and evicted by the next ensure call.
+const SKILLS_WORKSPACE_WATCH_IDLE_TTL_MS = 60 * 60_000;
+const MAX_SKILLS_WORKSPACE_WATCH_STATES = 128;
+
+export function evictWorkspaceWatchStates(
+  now: number,
+  dispose: (watcherKey: string) => void,
+): void {
+  const evict = (watcherKey: string) => {
+    const owner = workspaceWatchOwners.get(watcherKey);
+    dispose(watcherKey);
+    if (!owner) {
+      return;
+    }
+    const remainingOwners = Array.from(workspaceWatchOwners.values()).filter(
+      (other) => other.workspaceDir === owner.workspaceDir,
+    );
+    if (remainingOwners.length === 0) {
+      suspendSkillsSnapshotSources(owner.workspaceDir, {});
+    }
+    if (
+      owner.sourceScope.executionWorkspaceDir &&
+      !remainingOwners.some(
+        (other) =>
+          other.sourceScope.executionWorkspaceDir === owner.sourceScope.executionWorkspaceDir,
+      )
+    ) {
+      suspendSkillsSnapshotSources(owner.workspaceDir, owner.sourceScope);
+    }
+  };
+  const cutoff = now - SKILLS_WORKSPACE_WATCH_IDLE_TTL_MS;
+  for (const [watcherKey, lastEnsuredAt] of workspaceWatchLastEnsuredAt) {
+    if (lastEnsuredAt < cutoff) {
+      evict(watcherKey);
+    }
+  }
+  for (const watcherKey of workspaceWatchLastEnsuredAt.keys()) {
+    if (workspaceWatchLastEnsuredAt.size <= MAX_SKILLS_WORKSPACE_WATCH_STATES) {
+      break;
+    }
+    evict(watcherKey);
   }
 }
 

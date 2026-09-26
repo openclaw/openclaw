@@ -1,151 +1,81 @@
-import nativeFs from "node:fs";
 import fs from "node:fs/promises";
-import { syncBuiltinESMExports } from "node:module";
-import os from "node:os";
 import path from "node:path";
-import chokidar from "chokidar";
 import { expect, it, vi } from "vitest";
-import { createDeferredCore } from "../../shared/deferred.js";
-import * as nativeContent from "./refresh-content-native.js";
-import { resolveSkillsWatcherUsePolling } from "./refresh-watch-path.js";
-
+import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
+import { writeSkill } from "../test-support/e2e-test-helpers.js";
+import {
+  createSkillsWatcherMock,
+  useSkillsWatcherFixture,
+} from "./refresh.watcher.test-support.js";
+const observer = createSkillsWatcherMock();
+vi.mock("@openclaw/fs-safe/watch", () => ({ watch: observer.watchMock }));
 vi.mock("../loading/plugin-skills.js", () => ({
   resolvePluginSkillRoots: () => [],
   resolvePluginSkillRootsFromMetadata: () => [],
 }));
+const fixture = useSkillsWatcherFixture(observer);
+const refresh = await import("./refresh.js");
 
-it.runIf(
-  process.platform === "linux" && !process.versions.bun && !resolveSkillsWatcherUsePolling(),
-)("refreshes discovery after a skill rename during a registered descendant scan", async () => {
-  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "skills-registration-")));
-  const workspaceDir = path.join(root, "workspace");
-  const skillsRoot = path.join(workspaceDir, "skills");
-  const skillDir = path.join(skillsRoot, "registration-proof");
-  const skillFile = path.join(skillDir, "SKILL.md");
-  const renamedSkillFile = path.join(skillDir, "SKILL.saved");
-  await fs.mkdir(skillsRoot, { recursive: true });
-  const { ensureSkillsWatcher, closeSkillsWatchers, registerSkillsChangeListener } =
-    await import("./refresh.js");
-  const { getSkillsSourceVersion } = await import("./refresh-state.js");
-  const { loadWorkspaceSkills } = await import("../loading/workspace-skill-loader.js");
-  const read = () =>
-    loadWorkspaceSkills(workspaceDir, {
-      config: {},
-      bundledSkillsDir: "",
-      managedSkillsDir: path.join(root, "unused"),
-    }).map((entry) => entry.skill.name);
-
-  const releaseScan = createDeferredCore();
-  let scanBlocked = false;
-  const registeredPaths = new Set<string>();
-  const errors: unknown[] = [];
-  const watches: Array<{ ready: boolean; watcher: { readonly closed: boolean } }> = [];
-  const changes: Array<{ reason: string; changedPath?: string }> = [];
-  const unregister = registerSkillsChangeListener((event) => {
-    if (event.workspaceDir === workspaceDir) {
-      changes.push(event);
+// Domain integration: admission/ready is controlled; parsing and cached reads are real.
+it.each(["create", "edit", "rename"] as const)(
+  "invalidates cached discovery after %s during initial registration",
+  async (operation) => {
+    const workspaceDir = fixture.workspaceDir;
+    const skill = path.join(workspaceDir, "skills", "guide");
+    if (operation !== "create") {
+      await writeSkill({ dir: skill, name: "guide", description: "Before registration" });
     }
-  });
-  const originalNativeWatch = nativeFs.watch;
-  const watchNative = vi.spyOn(nativeFs, "watch").mockImplementation((...args) => {
-    const watcher = originalNativeWatch(...args);
-    registeredPaths.add(path.resolve(String(args[0])));
-    return watcher;
-  });
-  const originalWatch = chokidar.watch;
-  const watch = vi.spyOn(chokidar, "watch").mockImplementation((...args) => {
-    const watcher = originalWatch(...args);
-    const observation = { ready: false, watcher };
-    watches.push(observation);
-    watcher.once("ready", () => {
-      observation.ready = true;
-    });
-    watcher.on("error", (error) => errors.push(error));
-    return watcher;
-  });
-  const originalNativeContent = nativeContent.createNativeSkillsContentWatcher;
-  const watchContent = vi
-    .spyOn(nativeContent, "createNativeSkillsContentWatcher")
-    .mockImplementation((...args) => {
-      const watcher = originalNativeContent(...args);
-      const observation = { ready: false, watcher };
-      watches.push(observation);
-      watcher.on("ready", () => {
-        observation.ready = true;
-      });
-      watcher.on("error", (error) => errors.push(error));
-      return watcher;
-    });
-  const originalReaddir = fs.readdir;
-  const readdir = vi.spyOn(fs, "readdir").mockImplementation(async (...args) => {
-    if (path.resolve(String(args[0])) === skillDir) {
-      // Hold the real listing after owned native admission. Event delivery and
-      // discovery remain real while the child scan cannot finish.
-      scanBlocked = true;
-      await releaseScan.promise;
-    }
-    return originalReaddir(...args);
-  });
-  syncBuiltinESMExports();
-
-  try {
-    ensureSkillsWatcher({ workspaceDir, config: {} });
-    await vi.waitFor(() => {
-      expect(watches.length).toBeGreaterThan(0);
-      expect(watches.every(({ ready, watcher }) => ready || watcher.closed)).toBe(true);
-      expect(errors).toEqual([]);
-    });
-    expect(read()).toEqual([]);
-    const initialVersion = getSkillsSourceVersion(workspaceDir);
-    changes.length = 0;
-
-    nativeFs.mkdirSync(skillDir);
-    nativeFs.writeFileSync(
-      skillFile,
-      "---\nname: registration-proof\ndescription: Native registration gap\n---\n",
+    const options = { workspaceOnly: true };
+    refresh.ensureSkillsWatcher({ workspaceDir });
+    await observer.started();
+    const before = loadWorkspaceSkills(workspaceDir, options);
+    expect(before.map((entry) => entry.skill.name)).toEqual(
+      operation === "create" ? [] : ["guide"],
     );
-    await expect
-      .poll(
-        () => ({
-          scanBlocked,
-          discoveryAdvanced: getSkillsSourceVersion(workspaceDir) > initialVersion,
-          addDirPublished: changes.some(
-            (event) => event.reason === "watch" && event.changedPath === skillDir,
-          ),
-          names: read(),
-        }),
-        { timeout: 3_000 },
-      )
-      .toEqual({
-        scanBlocked: true,
-        discoveryAdvanced: true,
-        addDirPublished: true,
-        names: ["registration-proof"],
-      });
-    expect(registeredPaths.has(skillDir)).toBe(true);
-
-    nativeFs.renameSync(skillFile, renamedSkillFile);
-    const renameDuringRegisteredScan = registeredPaths.has(skillDir);
-    expect(read()).toEqual(["registration-proof"]);
-    releaseScan.resolve();
-
-    await expect.poll(() => registeredPaths.has(skillDir), { timeout: 3_000 }).toBe(true);
-    expect(renameDuringRegisteredScan).toBe(true);
-    expect(errors).toEqual([]);
-    await expect.poll(read, { timeout: 3_000 }).toEqual([]);
-  } finally {
-    // Every failure path releases the real scan before closing native watchers.
-    releaseScan.resolve();
-    unregister();
-    try {
-      await closeSkillsWatchers(true);
-    } finally {
-      readdir.mockRestore();
-      watch.mockRestore();
-      watchContent.mockRestore();
-      watchNative.mockRestore();
-      syncBuiltinESMExports();
-      await fs.rm(root, { recursive: true, force: true });
+    if (operation === "rename") {
+      await fs.rename(skill, path.join(workspaceDir, "skills", "moved"));
     }
-  }
-});
+    await writeSkill({
+      dir: operation === "rename" ? path.join(workspaceDir, "skills", "moved") : skill,
+      name: "guide",
+      description: "After registration",
+    });
+    await observer.readyAll();
+    const after = loadWorkspaceSkills(workspaceDir, options);
+    expect(after[0]!.skill.description).toBe("After registration");
+    if (operation === "rename") {
+      expect(after[0]!.skill.filePath).toContain(path.join("moved", "SKILL.md"));
+    }
+  },
+);
+
+it.each(["initial", "closed", "disabled", "evicted"] as const)(
+  "reads repaired skills before asynchronous %s acquisition completes",
+  async (lifecycle) => {
+    const workspaceDir = fixture.workspaceDir;
+    const dir = path.join(workspaceDir, "skills", "guide");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, "SKILL.md"), "invalid skill frontmatter\n");
+    if (lifecycle !== "initial") {
+      refresh.ensureSkillsWatcher({ workspaceDir });
+      await observer.readyAll();
+    }
+    const read = () =>
+      loadWorkspaceSkills(workspaceDir, { workspaceOnly: true }).map((entry) => entry.skill.name);
+    expect(read()).toEqual([]);
+    if (lifecycle === "closed") {
+      await refresh.closeSkillsWatchers();
+    }
+    if (lifecycle === "disabled") {
+      refresh.ensureSkillsWatcher({ workspaceDir, config: { skills: { load: { watch: false } } } });
+    }
+    if (lifecycle === "evicted") {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
+      vi.setSystemTime(Date.now() + 60 * 60_000 + 1);
+      refresh.ensureSkillsWatcher({ workspaceDir: await fixture.createFixtureDirectory("other") });
+    }
+    await writeSkill({ dir, name: "guide", description: "Repaired before acquisition" });
+    refresh.ensureSkillsWatcher({ workspaceDir });
+    expect(read()).toEqual(["guide"]);
+  },
+);

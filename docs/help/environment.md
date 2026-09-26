@@ -135,6 +135,33 @@ Installed third-party plugins may declare additional credential variables in the
 | `OPENCLAW_SKIP_CHANNELS`             | Start the Gateway without channel transports for troubleshooting.                            |
 | `OPENCLAW_THEME`                     | Force the TUI palette to `light` or `dark`.                                                  |
 
+### Filesystem observation
+
+Config hot reload, skills refresh, memory indexing, and the development watch
+supervisor use `@openclaw/fs-safe/watch`. The existing `CHOKIDAR_*` variable
+names remain supported for Docker, virtual machines, and other deployments
+that need an explicit observation mode:
+
+| Variable              | Value                            | Behavior                                                            |
+| --------------------- | -------------------------------- | ------------------------------------------------------------------- |
+| `CHOKIDAR_USEPOLLING` | Unset                            | `auto`: select native events when available.                        |
+| `CHOKIDAR_USEPOLLING` | `false`, `0`, or an empty string | Require `events`.                                                   |
+| `CHOKIDAR_USEPOLLING` | Any other nonempty value         | Select `poll`. Values are case-insensitive.                         |
+| `CHOKIDAR_INTERVAL`   | Positive integer in milliseconds | Polling interval, default `100`, minimum `20`. Used in `poll` mode. |
+
+Native events are supported on Node.js on Linux, macOS, and Windows. In `auto`
+mode, Bun and runtimes without the native backend use fs-safe's polling default.
+`CHOKIDAR_USEPOLLING=true` explicitly selects polling and applies
+`CHOKIDAR_INTERVAL`. Invalid or nonpositive intervals use `100` ms; larger
+intervals are capped at `2147483647` ms.
+
+Recovery remains specific to each owner. Config hot reload retries a failed
+events subscription with its existing backoff and can recreate it in polling
+mode when native watching becomes unavailable. Memory indexing switches to
+refresh-on-search when native watch capacity is exhausted (`watch-limit`).
+Skills refreshes during agent preparation after capacity exhaustion, and the
+development supervisor stops its child if observation fails.
+
 ## Provider credentials and workspace `.env`
 
 Do not keep provider API keys only in a workspace `.env`. OpenClaw blocks a large set of provider credential and endpoint-redirect keys from workspace `.env` files, including every known provider auth env var (for example `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `XAI_API_KEY`, `MISTRAL_API_KEY`, `GROQ_API_KEY`, `DEEPSEEK_API_KEY`, `PERPLEXITY_API_KEY`, `BRAVE_API_KEY`, `TAVILY_API_KEY`, `EXA_API_KEY`, `FIRECRAWL_API_KEY`), plus any key ending in `_API_HOST`, `_BASE_URL`, `_ENDPOINT`, or `_HOMESERVER`, and the entire `OPENCLAW_*`, `CLAWHUB_*`, `ANTHROPIC_API_KEY_*`, and `OPENAI_API_KEY_*` namespaces.
@@ -349,9 +376,10 @@ Do not rely on writing only to `~/.openclaw/.env` for this variable. Node reads
 
 ## Legacy environment variables
 
-OpenClaw only reads `OPENCLAW_*` environment variables. The legacy
+OpenClaw-specific runtime controls use the `OPENCLAW_*` prefix. The legacy
 `CLAWDBOT_*` and `MOLTBOT_*` prefixes from earlier releases are silently
-ignored.
+ignored. Supported provider and filesystem-observation variables retain their
+documented names.
 
 If any are still set on the Gateway process at startup, OpenClaw emits a
 single Node deprecation warning (`OPENCLAW_LEGACY_ENV_VARS`) listing the

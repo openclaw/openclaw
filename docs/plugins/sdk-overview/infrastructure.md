@@ -49,6 +49,26 @@ forward directory-scan errors through the same error event. Use the result in
 the watcher lifecycle owner to stop native retries and select an existing
 refresh path.
 
+### Filesystem observation and worker notifications
+
+`resolveFsObservationMode(env?)` and `resolveFsObservationIntervalMs(env?)` from
+`openclaw/plugin-sdk/file-access-runtime` share the host's preserved
+[`CHOKIDAR_*` environment contract](/help/environment#filesystem-observation).
+Pass the resolved mode to `@openclaw/fs-safe/watch`; pass the interval only when
+the owner selects `poll` mode. Keep parsing, settling, retries, and indexing in the
+consumer. With fs-safe, classify native watch capacity through
+`health.failure.operation === "watch"` and `health.failure.code === "watch-limit"`;
+`getFileWatchCapacityCode` retains its existing Node watch-error contract.
+
+For same-version observation workers, `createFileWatchNotifier(output, onFailure)`
+from the same SDK entrypoint sends JSON lines through a borrowed writable stream.
+Call `send("change" | "unavailable" | "available")` for invalidation and
+availability updates. It coalesces pending notifications, keeps one write in
+flight, and calls `onFailure` when output fails or closes unexpectedly. Await
+`close()` to stop accepting notifications and join accepted writes before
+retiring the worker; the stream remains caller-owned. This carries current
+observation state, not a complete history of filesystem events.
+
 ### Streaming file verification
 
 `sha256File(pathOrHandle, { maxBytes, signal })` from

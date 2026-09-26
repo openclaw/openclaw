@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { registerAgentWorkspaceAccess } from "openclaw/plugin-sdk/agent-workspace-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   buildFileEntry,
   buildMultimodalChunkForIndexing,
@@ -413,13 +414,17 @@ describe("Gateway index over Harness workspace files", () => {
     let changed: (() => void) | undefined;
     let watchSignal: AbortSignal | undefined;
     let watchRequest: Parameters<MemoryWorkspaceFiles["watch"]>[0] | undefined;
+    const cancellation = createDeferred<void>();
+    const retired = createDeferred<void>();
     files.watch = async (request, onChange, signal) => {
       watchRequest = request;
       changed = () => onChange("change");
       watchSignal = signal;
-      await new Promise<void>((resolve) => {
-        signal.addEventListener("abort", () => resolve(), { once: true });
-      });
+      signal.addEventListener("abort", () => cancellation.resolve(), { once: true });
+      await cancellation.promise;
+      await retired.promise;
+      // The node transport finishes cancellation with this exact signal reason.
+      signal.throwIfAborted();
     };
     const cfg = fixture.createConfig({
       provider: "none",
@@ -427,25 +432,41 @@ describe("Gateway index over Harness workspace files", () => {
       vectorEnabled: false,
     });
     const manager = await fixture.getPersistentManager(cfg);
-    await manager.sync({ reason: "initial", force: true });
-    expect(changed).toBeTypeOf("function");
-    expect(Object.keys(watchRequest!.settings).toSorted()).toEqual([
-      "extraPaths",
-      "multimodal",
-      "sync",
-    ]);
-    expect(Object.keys(watchRequest!.settings.sync)).toEqual(["watchDebounceMs"]);
-    await fs.writeFile(note, "beta changed host note.");
-    changed?.();
-    await vi.waitFor(
-      async () => {
-        expect((await manager.search("beta", { minScore: 0 }))[0]?.snippet).toContain(
-          "changed host note",
-        );
-      },
-      { timeout: 15_000 },
-    );
-    await manager.close();
-    expect(watchSignal?.aborted).toBe(true);
+    try {
+      await manager.sync({ reason: "initial", force: true });
+      expect(changed).toBeTypeOf("function");
+      expect(Object.keys(watchRequest!.settings).toSorted()).toEqual([
+        "extraPaths",
+        "multimodal",
+        "sync",
+      ]);
+      expect(Object.keys(watchRequest!.settings.sync)).toEqual(["watchDebounceMs"]);
+      const sync = vi.spyOn(manager, "sync");
+      await fs.writeFile(note, "beta changed host note.");
+      changed?.();
+      expect(sync).toHaveBeenCalledWith({ reason: "watch" });
+      await sync.mock.results.at(-1)!.value;
+      expect((await manager.search("beta", { minScore: 0 }))[0]?.snippet).toContain(
+        "changed host note",
+      );
+      let closed = false;
+      const closing = manager.close().then(() => {
+        closed = true;
+      });
+      try {
+        await cancellation.promise;
+        expect(watchSignal?.aborted).toBe(true);
+        await Promise.resolve();
+        expect(closed).toBe(false);
+        changed?.();
+      } finally {
+        retired.resolve();
+        await closing;
+      }
+      expect(closed).toBe(true);
+    } finally {
+      retired.resolve();
+      await manager.close();
+    }
   });
 });

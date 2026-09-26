@@ -6,6 +6,7 @@
   "type": "module",
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",
+    "@openclaw/fs-safe": "0.21.0",
     "chrome-devtools-mcp": "1.9.0",
     "express": "5.2.1",
     "playwright-core": "1.63.0",

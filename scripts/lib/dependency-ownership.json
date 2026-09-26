@@ -114,11 +114,6 @@
       "class": "core-runtime",
       "risk": ["formatting"]
     },
-    "chokidar": {
-      "owner": "core:watch-mode",
-      "class": "core-runtime",
-      "risk": ["filesystem-watch"]
-    },
     "chrome-devtools-mcp": {
       "owner": "plugin:browser",
       "class": "plugin-runtime",

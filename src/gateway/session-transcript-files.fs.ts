@@ -273,7 +273,7 @@ function archiveFileOnDisk(filePath: string, reason: ArchiveFileReason): string 
   // Notify the session transcript subscribers (memory index, sessions-history
   // HTTP, etc.) that a mutation landed on a session-owned path. Without this
   // emit the memory sync's incremental path never learns the new archive
-  // exists: chokidar does not watch the sessions directory, and the event bus
+  // exists: filesystem observation does not watch the sessions directory, and the event bus
   // is the only channel gateway code uses to signal session-file mutations.
   // All other in-process mutations (append, compaction, tool-result rewrite,
   // chat inject, command execution) already emit here; archive was the sole
