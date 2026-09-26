@@ -52,6 +52,19 @@ describe("resolveSlackChannelAllowlist", () => {
     expect(list).not.toHaveBeenCalled();
   });
 
+  it("resolves DM conversation ids as stable ids without listing a workspace", async () => {
+    const list = vi.fn();
+    const res = await resolveSlackChannelAllowlist({
+      token: "xoxb-test",
+      entries: ["D0AFBKXS3CP", "channel:D0AG61APJ3B", "<#D0AFR1ZRJHL>"],
+      client: { conversations: { list } } as never,
+    });
+
+    expect(res.map((entry) => entry.id)).toEqual(["D0AFBKXS3CP", "D0AG61APJ3B", "D0AFR1ZRJHL"]);
+    expect(res.every((entry) => entry.resolved)).toBe(true);
+    expect(list).not.toHaveBeenCalled();
+  });
+
   it("preserves workspace-qualified channel ids without listing a workspace", async () => {
     const list = vi.fn();
     const res = await resolveSlackChannelAllowlist({
