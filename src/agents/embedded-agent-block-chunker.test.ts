@@ -179,6 +179,20 @@ describe("EmbeddedBlockChunker", () => {
     expect(chunker.consumedLength).toBe(deltas.join("").length);
   });
 
+  it("keeps indented Unicode source intact when a fenced projection cannot fit", () => {
+    const source = "    😀abc";
+    const chunker = new EmbeddedBlockChunker({
+      minChars: 1,
+      maxChars: 9,
+      hardMaxChars: 40,
+      breakPreference: "paragraph",
+    });
+
+    chunker.append(source);
+
+    expect(drainChunks(chunker, true)).toEqual([source]);
+  });
+
   it.each([
     { force: false, body: `${"A".repeat(56)} TAIL_153587` },
     { force: true, body: `${"A".repeat(56)} TAIL_153587` },
@@ -347,6 +361,128 @@ describe("EmbeddedBlockChunker", () => {
 
     chunker.append("Tail");
     expect(drainChunks(chunker, true)).toEqual(["Tail"]);
+  });
+
+  it("keeps a streamed link intact above the preferred size with contiguous source ranges", () => {
+    const target =
+      `https://outlook.office365.com/owa/?itemid=${"A".repeat(120)}` +
+      "%3D%3D&exvsurl=1&path=/calendar/item";
+    const link = `[invite](${target})`;
+    const text = `Purpose: customer context. ${link}\n\nWhat matters`;
+    const chunker = new EmbeddedBlockChunker({
+      minChars: 20,
+      maxChars: 48,
+      hardMaxChars: 400,
+      breakPreference: "paragraph",
+    });
+    const delivered: Array<{
+      chunk: string;
+      sourceText: string;
+      sourceStart: number;
+      sourceEnd: number;
+    }> = [];
+    const emit = (
+      chunk: string,
+      options?: { sourceText: string; sourceStart: number; sourceEnd: number },
+    ) => {
+      if (!options) {
+        throw new Error("missing source metadata");
+      }
+      delivered.push({ chunk, ...options });
+    };
+
+    for (const character of text) {
+      chunker.append(character);
+      chunker.drain({ force: false, emit });
+    }
+    chunker.drain({ force: true, emit });
+
+    expect(delivered.some(({ chunk }) => chunk.includes(link))).toBe(true);
+    expect(delivered.map(({ sourceText }) => sourceText).join("")).toBe(text);
+    expect(delivered.map(({ sourceStart, sourceEnd }) => [sourceStart, sourceEnd])).toEqual(
+      delivered.map(({ sourceText }, index) => {
+        const sourceStart = delivered
+          .slice(0, index)
+          .reduce((length, item) => length + item.sourceText.length, 0);
+        return [sourceStart, sourceStart + sourceText.length];
+      }),
+    );
+  });
+
+  it("does not split a label while a streamed destination is still empty", () => {
+    const link = `[${"a".repeat(30)}](https://example.com/x)`;
+    const chunker = new EmbeddedBlockChunker({
+      minChars: 10,
+      maxChars: 30,
+      hardMaxChars: 160,
+      breakPreference: "paragraph",
+    });
+    const chunks: string[] = [];
+    const emit = (chunk: string) => chunks.push(chunk);
+    const emptyDestinationEnd = link.indexOf("(") + 1;
+
+    for (const character of link.slice(0, emptyDestinationEnd)) {
+      chunker.append(character);
+      chunker.drain({ force: false, emit });
+    }
+    expect(chunks).toEqual([]);
+
+    for (const character of link.slice(emptyDestinationEnd)) {
+      chunker.append(character);
+      chunker.drain({ force: false, emit });
+    }
+    chunker.drain({ force: true, emit });
+    expect(chunks).toEqual([link]);
+  });
+
+  it("keeps adjacent bounded Markdown links in separate chunks", () => {
+    const first = "[a](https://a.co)";
+    const second = "[b](https://b.co)";
+    const chunker = new EmbeddedBlockChunker({
+      minChars: 1,
+      maxChars: 20,
+      hardMaxChars: 30,
+      breakPreference: "paragraph",
+    });
+
+    chunker.append(first + second);
+
+    expect(drainChunks(chunker, true)).toEqual([first, second]);
+  });
+
+  it("hard-splits a link that exceeds the transport ceiling without breaking UTF-16", () => {
+    const link = `[invite](https://example.com/${"a".repeat(40)}😀${"b".repeat(40)})`;
+    const chunker = new EmbeddedBlockChunker({
+      minChars: 10,
+      maxChars: 30,
+      hardMaxChars: 50,
+      breakPreference: "paragraph",
+    });
+
+    chunker.append(link);
+    const chunks = drainChunks(chunker, true);
+
+    expect(chunks.join("")).toBe(link);
+    expectChunksWithinLength(chunks, 50);
+    expect(chunks.every((chunk) => chunk.isWellFormed())).toBe(true);
+  });
+
+  it("keeps a link intact after shortening an oversized fence language hint", () => {
+    const link = `[invite](https://example.com/${"a".repeat(80)})`;
+    const text = `\`\`\`${"language".repeat(8)}\ncode\n\`\`\`\nSee ${link} now.`;
+    const chunker = new EmbeddedBlockChunker({
+      minChars: 10,
+      maxChars: 30,
+      hardMaxChars: 160,
+      breakPreference: "paragraph",
+    });
+    const chunks: string[] = [];
+
+    chunker.append(text);
+    chunker.drain({ force: true, emit: (chunk) => chunks.push(chunk) });
+
+    expect(chunks.some((chunk) => chunk.includes(link))).toBe(true);
+    expectChunksWithinLength(chunks, 160);
   });
 
   it.each([false, true])(

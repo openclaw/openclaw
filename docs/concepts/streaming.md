@@ -111,14 +111,21 @@ notes or files on channels such as Telegram.
 Block chunking is implemented by `EmbeddedBlockChunker`:
 
 - **Low bound:** don't emit until buffer >= `minChars` (unless forced).
-- **High bound:** prefer splits before `maxChars`; if forced, split at `maxChars`.
+- **Preferred high bound:** prefer splits before `maxChars`. Complete or
+  unfinished links may remain intact beyond this size when they still fit the
+  absolute transport ceiling.
+- **Absolute high bound:** `hardMaxChars` is the transport ceiling. Links larger
+  than this limit are hard-split with UTF-16-safe boundaries so delivery can
+  continue.
 - **Break preference chain:** `paragraph` -> `newline` -> `sentence` ->
   whitespace -> hard break.
-- **Code fences:** never split inside fences; when forced at `maxChars`, close
-  and reopen the fence to keep Markdown valid.
+- **Code fences:** never split inside fences; when forced at the active limit,
+  close and reopen the fence to keep Markdown valid.
 
-`maxChars` is clamped to the channel `textChunkLimit`, so you cannot exceed
-per-channel caps.
+Channel delivery sets `hardMaxChars` to the channel `textChunkLimit`.
+Configured `minChars` and `maxChars` are clamped within that ceiling. SDK
+callers that omit `hardMaxChars` retain the legacy behavior where `maxChars` is
+both the preferred size and the absolute ceiling.
 
 ## Coalescing (merge streamed blocks)
 
