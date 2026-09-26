@@ -21,12 +21,3 @@ export function loadedSidebarContent(state: SessionWorkspaceHost): Promise<Sideb
     return content;
   });
 }
-
-export function gatewayHello(methods: string[], scopes = ["operator.admin"]) {
-  return {
-    type: "hello-ok" as const,
-    protocol: 3,
-    auth: { role: "operator", scopes },
-    features: { methods },
-  };
-}

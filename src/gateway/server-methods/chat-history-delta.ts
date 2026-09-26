@@ -38,6 +38,8 @@ type ChatHistoryDeltaRead =
       kind: "delta";
       messages: Record<string, unknown>[];
       activity: AgentHistoryActivity[];
+      messagesBytes: number;
+      activityBytes: number;
     };
 
 function containsTranscriptDiscontinuity(
@@ -192,7 +194,8 @@ function projectChatHistoryDelta(
       projectAgentHistoryActivity(activityMessages),
     ).values(),
   ];
-  if (messagesBytes + chatHistoryActivityBytes(activity) > maxBytes) {
+  const activityBytes = chatHistoryActivityBytes(activity);
+  if (messagesBytes + activityBytes > maxBytes) {
     return { kind: "reset" };
   }
   return {
@@ -201,5 +204,7 @@ function projectChatHistoryDelta(
     kind: "delta",
     activity,
     messages: composeTranscriptDisplay(messages, (envelope) => envelope.message),
+    messagesBytes,
+    activityBytes,
   };
 }

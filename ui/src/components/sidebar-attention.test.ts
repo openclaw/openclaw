@@ -80,6 +80,7 @@ type SidebarAttentionElement = HTMLElement & {
   context: ApplicationContext;
   updateComplete: Promise<boolean>;
   dismissPanel: () => boolean;
+  onNavigate?: ApplicationContext["navigate"];
 };
 
 function authStatus(ts: number, status: "missing" | "ok" = "missing"): ModelAuthStatusResult {
@@ -230,7 +231,7 @@ describe("sidebar attention refresh ownership", () => {
     expect(document.activeElement).toBe(trigger);
   });
 
-  it("updates the closed Inbox badge for mentions outside the selected agent", async () => {
+  it("updates cross-agent mentions and opens them through shell navigation", async () => {
     let result = { gatewayInstanceId: "boot-a", revision: 1, items: [mentionItem("first")] };
     const responses: Record<string, unknown> = {
       "cron.list": cronListResponse([]),
@@ -274,6 +275,17 @@ describe("sidebar attention refresh ownership", () => {
     await waitForFast(() =>
       expect(element.querySelector(".sidebar-issues-button__count")?.textContent?.trim()).toBe("2"),
     );
+    expect(element.querySelector(".sidebar-issues-panel")).toBeNull();
+    const onNavigate = vi.fn();
+    element.onNavigate = onNavigate;
+    element.querySelector<HTMLButtonElement>(".sidebar-issues-button")!.click();
+    await waitForFast(() => expect(element.querySelector(".sidebar-mention-row a")).not.toBeNull());
+    element.querySelector<HTMLAnchorElement>(".sidebar-mention-row a")!.click();
+    expect(onNavigate).toHaveBeenCalledExactlyOnceWith(
+      "chat",
+      expect.objectContaining({ pathname: "/chat/writer/review" }),
+    );
+    await element.updateComplete;
     expect(element.querySelector(".sidebar-issues-panel")).toBeNull();
   });
 

@@ -19,5 +19,6 @@ export type ManagedServiceBoundaryOptions = ManagedServiceManagerBoundaryOptions
   revokeWhileValidating?: boolean;
   replaceLedgerWriter?: boolean;
   finalizationWorkMs?: number;
-  beforeParkNotice?: "acknowledged" | "stalled" | "rejected";
+  beforeParkNotice?: "acknowledged" | "stalled" | "rejected" | "disconnected";
+  profileRequester?: true;
 };

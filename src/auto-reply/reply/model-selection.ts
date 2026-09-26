@@ -110,7 +110,7 @@ function loadSessionPersistenceRuntime() {
 /** Resolves provider/model, allowlist, catalog, and thinking defaults for a reply run. */
 export async function createModelSelectionState(params: {
   cfg: OpenClawConfig;
-  agentId?: string;
+  agentId: string;
   agentCfg: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> | undefined;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
@@ -488,6 +488,7 @@ export async function createModelSelectionState(params: {
       !profile && isUserModelAuthProfileId(sessionEntry.authProfileOverride);
     if (!overrideStillEligible && !missingPersonalProfile) {
       await clearSessionAuthProfileOverride({
+        agentId: params.agentId,
         sessionEntry,
         sessionStore,
         sessionKey,

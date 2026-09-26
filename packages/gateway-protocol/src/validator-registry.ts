@@ -136,6 +136,24 @@ export const validateUsersGitHubDisconnectParams = compile(S.UsersGitHubDisconne
 export const validateUsersSelfResult = compile(S.UsersSelfResultSchema);
 export const validateUsersLinkEmailParams = compile(S.UsersLinkEmailParamsSchema);
 export const validateUsersLinkEmailResult = compile(S.UsersLinkEmailResultSchema);
+export const validateUsersLinkChannelIdentityParams = compile(
+  S.UsersLinkChannelIdentityParamsSchema,
+);
+export const validateUsersLinkChannelIdentityResult = compile(
+  S.UsersLinkChannelIdentityResultSchema,
+);
+export const validateUsersUnlinkChannelIdentityParams = compile(
+  S.UsersUnlinkChannelIdentityParamsSchema,
+);
+export const validateUsersUnlinkChannelIdentityResult = compile(
+  S.UsersUnlinkChannelIdentityResultSchema,
+);
+export const validateUsersListChannelIdentitiesParams = compile(
+  S.UsersListChannelIdentitiesParamsSchema,
+);
+export const validateUsersListChannelIdentitiesResult = compile(
+  S.UsersListChannelIdentitiesResultSchema,
+);
 export const validateUsersSetDisplayNameParams = compile(S.UsersSetDisplayNameParamsSchema);
 export const validateUsersSetDisplayNameResult = compile(S.UsersSetDisplayNameResultSchema);
 export const validateUsersSetRoleParams = compile(S.UsersSetRoleParamsSchema);

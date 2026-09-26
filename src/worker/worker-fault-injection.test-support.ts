@@ -48,6 +48,7 @@ import {
   seedFaultAttachedEnvironment,
   WorkerFaultPlacementLifecycle,
 } from "./worker-fault-placement-lifecycle.test-support.js";
+import { bindWorkerFixtureSessionTarget } from "./worker-fault-session-target.test-support.js";
 import * as workerRpc from "./worker-rpc-clients.js";
 
 export const SESSION_ID = "fault-session";
@@ -188,6 +189,7 @@ export class ComposedGatewayHarness {
   private placementGateValue: WorkerSessionPlacementGate | undefined;
   private useReplacementExecutor = false;
   private unsubscribeLive: (() => void) | undefined;
+  private readonly restoreSessionTarget: () => void;
 
   static async create(root: string): Promise<ComposedGatewayHarness> {
     const sessionsDir = path.join(root, "agents", "main", "sessions");
@@ -223,6 +225,7 @@ export class ComposedGatewayHarness {
     readonly database: stateDb.OpenClawStateDatabase,
     readonly store: envStore.WorkerEnvironmentStore,
   ) {
+    const env = { OPENCLAW_STATE_DIR: path.join(root, "state") };
     this.socketPath = path.join(root, "gateway.sock");
     this.cfg = {
       agents: { list: [{ id: "main", default: true }] },
@@ -261,6 +264,7 @@ export class ComposedGatewayHarness {
         this.liveDeltas.push(event.data.delta);
       }
     });
+    this.restoreSessionTarget = bindWorkerFixtureSessionTarget(this.cfg, env);
   }
 
   get epoch(): number {
@@ -439,6 +443,7 @@ export class ComposedGatewayHarness {
   }
 
   async close(): Promise<void> {
+    using _ = { [Symbol.dispose]: this.restoreSessionTarget };
     this.transcriptGate?.release.resolve();
     for (const gate of this.liveEventGates) {
       gate.release.resolve();

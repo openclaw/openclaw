@@ -388,16 +388,7 @@ function renderSessionGoalStatus(goal: GatewaySessionRow["goal"]) {
   if (!goal) {
     return nothing;
   }
-  const kind =
-    goal.status === "active"
-      ? "accent"
-      : goal.status === "complete"
-        ? "ok"
-        : goal.status === "blocked" ||
-            goal.status === "budget_limited" ||
-            goal.status === "usage_limited"
-          ? "warn"
-          : "muted";
+  const kind = goal.status === "active" || goal.status === "complete" ? "ok" : "warn";
   const detail = formatGoalDetail(goal);
   // tabindex lets keyboard users trigger the tooltip; aria-label exposes the
   // full objective detail that sighted users only get on hover.

@@ -46,13 +46,13 @@ it.each(callers)(
       Response.json({ output_text: "fixture result" }),
     );
     vi.stubGlobal("fetch", withFetchPreconnect(request));
-    await run("grok-4.6");
+    await run("grok-4.7");
     expect(request).toHaveBeenCalledOnce();
     const init = request.mock.calls[0]?.[1];
     expect(init).toEqual(expect.objectContaining({ body: expect.any(String) }));
     const body = new Request("https://api.x.ai/v1/responses", init);
     expect(await body.json()).toMatchObject({
-      model: "grok-4.6",
+      model: "grok-4.7",
       store: false,
       reasoning: { effort: "low" },
     });

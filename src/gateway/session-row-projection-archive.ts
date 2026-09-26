@@ -48,9 +48,13 @@ export function createSessionRowProjectionArchive(params: {
         (current.entry.archivedAt === undefined || current.materialized === row.materialized)
       );
     },
-    markRelated(row: records.Row, indexes: Parameters<typeof records.markRelated>[1]) {
+    markRelated(
+      row: records.Row,
+      indexes: Parameters<typeof records.markRelated>[1],
+      includeChildren = true,
+    ) {
       const related = new Set<string>();
-      records.markRelated(row, indexes, related);
+      records.markRelated(row, indexes, related, includeChildren);
       for (const id of related) {
         const current = params.rows.get(id);
         if (current && !isColdArchivedSessionRow(current)) {

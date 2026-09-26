@@ -35,6 +35,33 @@ afterEach(async () => {
 });
 
 describe("worker plugin state", () => {
+  it.each(["register", "delete"] as const)(
+    "revalidates caller authority after asynchronous worker admission for %s",
+    async (operation) => {
+      await withOpenClawTestState({ label: "plugin-state-current-owner" }, async (state) => {
+        const store = createPluginStateKeyedStore<string>("device-pair", {
+          namespace: "owner-admission",
+          maxEntries: 10,
+          env: state.env,
+        });
+        await store.register("subscription", "original");
+        let current = true;
+        const assertCurrent = () => {
+          if (!current) {
+            throw new Error("command owner revoked");
+          }
+        };
+        const pending =
+          operation === "register"
+            ? store.register("subscription", "replacement", { assertCurrent })
+            : store.delete("subscription", { assertCurrent });
+        current = false;
+        await expect(pending).rejects.toThrow("plugin state");
+        expect(await store.lookup("subscription")).toBe("original");
+      });
+    },
+  );
+
   it("opens cold state and sweeps reopened state without host data SQL", async () => {
     await withOpenClawTestState({ label: "plugin-state-worker-sweep" }, async (state) => {
       const databasePath = resolveOpenClawStateSqlitePath(state.env);

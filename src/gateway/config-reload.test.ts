@@ -1580,6 +1580,7 @@ describe("startGatewayConfigReloader include files", () => {
     const initialSnapshot = await configIo.readConfigFileSnapshot();
     expect(initialSnapshot.valid, JSON.stringify(initialSnapshot.issues)).toBe(true);
     const onHotReload = vi.fn(async () => "applied" as const);
+    const applied = createDeferred<OpenClawConfig>();
     const { promise: watcherReady, resolve: signalWatcherReady } = createDeferred();
     const reloader = startGatewayConfigReloader({
       initialConfig: initialSnapshot.config,
@@ -1596,6 +1597,7 @@ describe("startGatewayConfigReloader include files", () => {
       readPluginInstallRecords: async () => ({}),
       onNoopConfigCommit: async () => {},
       onHotReload,
+      onConfigApplied: (_plan, config) => applied.resolve(config),
       onRestart: vi.fn(),
       log: { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
       watchPath: configPath,
@@ -1604,15 +1606,12 @@ describe("startGatewayConfigReloader include files", () => {
 
     try {
       expect(initialSnapshot.includedPaths).toEqual(
-        [
-          includeLinkPath,
-          await realpath(includePath),
-          await realpath(nestedIncludePath),
-        ].toSorted(),
+        [includeLinkPath, includePath, nestedIncludePath].toSorted(),
       );
       await watcherReady;
       await writeFile(nestedIncludePath, `${JSON.stringify({ enabled: false }, null, 2)}\n`);
-      await vi.waitFor(() => expect(onHotReload).toHaveBeenCalledOnce(), { timeout: 5000 });
+      await expect(applied.promise).resolves.toMatchObject({ hooks: { enabled: false } });
+      expect(onHotReload).toHaveBeenCalledOnce();
     } finally {
       await reloader.stop();
       await rm(rootDir, { force: true, recursive: true });

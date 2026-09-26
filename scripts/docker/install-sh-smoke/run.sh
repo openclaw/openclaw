@@ -566,15 +566,18 @@ if (noOp && !legacySameVersionApply ? payload.reason !== "already-current" : pay
   throw new Error(`unexpected update reason ${JSON.stringify(payload.reason)}`);
 }
 const steps = Array.isArray(payload.steps) ? payload.steps : [];
-const updateStep = steps.find((step) => step?.name === "global update");
+// Published drivers use the display label; current candidates use the stable step ID.
+const updateStep = steps.find((step) =>
+  step?.name === "package-install" || step?.name === "global update",
+);
 if (!updateStep) {
-  throw new Error("missing global update step in update JSON");
+  throw new Error("missing package install step in update JSON");
 }
 if (Number(updateStep.exitCode ?? 1) !== 0) {
-  throw new Error(`global update step failed: ${JSON.stringify(updateStep)}`);
+  throw new Error(`package install step failed: ${JSON.stringify(updateStep)}`);
 }
 if (typeof updateStep.command !== "string" || !updateStep.command.includes(expectedUrl)) {
-  throw new Error(`global update step missing expected tgz URL: ${JSON.stringify(updateStep)}`);
+  throw new Error(`package install step missing expected tgz URL: ${JSON.stringify(updateStep)}`);
 }
 if (noOp && !legacySameVersionApply) {
   if (baselineVersion !== expectedVersion || typeof payload.before?.buildId !== "string" ||

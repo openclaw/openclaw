@@ -9,7 +9,6 @@ import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-contex
 import type { RuntimeContextFragment } from "../agents/internal-runtime-context.js";
 import { isKnownCoreToolId } from "../agents/tool-catalog.js";
 import { normalizeToolPolicyName } from "../agents/tool-policy.js";
-import type { PluginGatewayAccessAuthority } from "../plugins/gateway-access-policy.types.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import type { PluginSubagentRequesterContext } from "../plugins/runtime/subagent-requester-context.js";
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
@@ -18,6 +17,7 @@ import {
   readInProcessSubagentResume,
 } from "./in-process-subagent-resume.js";
 import { APPROVALS_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
+import type { GatewayOperatorAccessAuthority } from "./operator-access-policy.types.js";
 import type { TrustedSessionCreation } from "./server-methods/session-creation-provenance.js";
 import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
 import type {
@@ -39,7 +39,7 @@ export function createSyntheticPluginRuntimeClient(params?: {
   agentRunTracking?: GatewayAgentRunTaskOwner;
   operatorRoleActor?: GatewayOperatorRoleActor;
   operatorRunAuthority?: AdmittedRunOperatorAuthority;
-  operatorAccessAuthority?: PluginGatewayAccessAuthority;
+  operatorAccessAuthority?: GatewayOperatorAccessAuthority | null;
   cronRunContinuation?: boolean;
   internalDeliveryMediaUrls?: string[];
   runtimeContextFragments?: RuntimeContextFragment[];
@@ -79,7 +79,7 @@ export function createSyntheticPluginRuntimeClient(params?: {
       ...(params?.operatorRunAuthority
         ? { operatorRunAuthority: params.operatorRunAuthority }
         : {}),
-      ...(params?.operatorAccessAuthority
+      ...(params?.operatorAccessAuthority !== undefined
         ? { operatorAccessAuthority: params.operatorAccessAuthority }
         : {}),
       ...(params?.sessionCreation ? { sessionCreation: params.sessionCreation } : {}),

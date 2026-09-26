@@ -81,6 +81,8 @@ function fixture(): string {
   }
   write(root, "dist/extensions/unrelated/package.json", '{"name":"unrelated"}');
   write(root, "dist/extensions/unrelated/index.js", "export default {};");
+  write(root, "dist/extensions/browser/setup-entry.js", 'import "./setup-runtime.js";');
+  write(root, "dist/extensions/browser/setup-runtime.js", "export const setup = true;");
   write(root, "skills/system/SKILL.md", "# System");
   write(root, "dist/entry.js", "throw new Error('complete CLI');");
   write(root, "dist/control-ui/index.html", "unused");
@@ -103,6 +105,8 @@ describe("Mac node worker closure", () => {
     expect(plan.files).toContain("dist/plugin-sdk/demo.js");
     expect(plan.files).toContain("dist/sdk-shared.mjs");
     expect(plan.files).toContain("dist/extensions/browser/index.js");
+    expect(plan.files).toContain("dist/extensions/browser/setup-entry.js");
+    expect(plan.files).toContain("dist/extensions/browser/setup-runtime.js");
     expect(plan.files).toContain("dist/extensions/file-transfer/index.js");
     expect(plan.files).toContain("dist/extensions/cua-computer/index.js");
     expect(plan.files).toContain("dist/media/image-processor.worker.js");

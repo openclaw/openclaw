@@ -16,6 +16,7 @@ import {
 } from "./client.js";
 import { resolveCodexManagedBundledMarketplacePath } from "./computer-use-marketplace.js";
 import {
+  createComputerUseRequest,
   runCodexComputerUseLiveTest,
   skippedLiveTestStatus,
   type CodexComputerUseLiveTestStatus,
@@ -131,6 +132,7 @@ export type CodexComputerUseSetupParams = {
   client?: CodexAppServerClient;
   timeoutMs?: number;
   signal?: AbortSignal;
+  assertCurrent?: () => void;
   forceEnable?: boolean;
   defaultBundledMarketplacePath?: string;
   defaultBundledMarketplacePathCandidates?: readonly string[];
@@ -145,6 +147,7 @@ type CodexComputerUseInspectionParams = {
   client?: CodexAppServerClient;
   timeoutMs?: number;
   signal?: AbortSignal;
+  assertCurrent?: () => void;
   computerUseConfig: ResolvedCodexComputerUseConfig;
   runLiveTest: boolean;
   installPlugin: boolean;
@@ -303,6 +306,7 @@ async function inspectCodexComputerUse(
     config: params.config,
     agentDir: params.agentDir,
     abandonSignal: params.signal,
+    assertCurrent: params.assertCurrent,
   };
   const lease: CodexAppServerClientLease = {};
   try {
@@ -508,8 +512,10 @@ async function prepareExplicitManagedComputerUseInstall(
     ownsIsolatedCodexHome: true,
     desktopGeneration: context.desktopGeneration,
     forceCacheRefresh: true,
-    assertCurrent: () =>
-      assertCodexAppServerClientStartSelectionCurrent({ client: context.client }),
+    assertCurrent: () => {
+      params.assertCurrent?.();
+      assertCodexAppServerClientStartSelectionCurrent({ client: context.client });
+    },
   });
 }
 
@@ -1187,30 +1193,6 @@ function pluginWarnings(plugin: CodexPluginDetail): string[] {
     );
   }
   return warnings;
-}
-
-function createComputerUseRequest(params: {
-  request?: CodexComputerUseRequest;
-  client?: CodexAppServerClient;
-  timeoutMs?: number;
-  signal?: AbortSignal;
-}): CodexComputerUseRequest {
-  if (params.request) {
-    return params.request;
-  }
-  const client = params.client;
-  if (!client) {
-    throw new Error("Computer Use setup requires an acquired app-server client");
-  }
-  return async <T = JsonValue | undefined>(
-    method: string,
-    requestParams?: unknown,
-    options?: { timeoutMs?: number; signal?: AbortSignal },
-  ) =>
-    await client.request<T>(method, requestParams, {
-      timeoutMs: options?.timeoutMs ?? params.timeoutMs,
-      signal: options?.signal ?? params.signal,
-    });
 }
 
 function resolveComputerUseConfig(

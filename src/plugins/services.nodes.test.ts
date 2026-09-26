@@ -17,6 +17,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createLazyPluginRuntime } from "./loader-module-runtime.js";
+import * as nativeModuleRequire from "./native-module-require.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import {
   adoptPluginRegistryRecords,
@@ -41,7 +42,9 @@ afterEach(async () => {
   handles.clear();
 });
 
-async function startFixture(options: { stop?: () => Promise<void>; bound?: boolean } = {}) {
+async function startFixture(
+  options: { stop?: () => Promise<void>; gateway?: "bound" | "unbound" | "absent" } = {},
+) {
   const registry = createEmptyPluginRegistry();
   const record = createPluginRecord({ id: "files" });
   registry.plugins.push(record);
@@ -58,17 +61,16 @@ async function startFixture(options: { stop?: () => Promise<void>; bound?: boole
   } as unknown as GatewayRequestContext;
   const resolveContext = () => context;
   const subagent = {} as PluginRuntime["subagent"];
-  if (options.bound !== false) {
+  const gateway = options.gateway ?? "bound";
+  if (gateway === "bound") {
     bindGatewayContextResolver(subagent, resolveContext);
   }
-  const loadPluginModule = vi.fn(() => {
-    throw new Error("Service metadata must not load the broad runtime");
-  });
-  const runtime = createLazyPluginRuntime({
-    loadPluginModule,
-    ...(options.bound !== false ? { runtimeOptions: { subagent } } : {}),
-  });
-  bindPluginRegistryRuntime(registry, runtime);
+  if (gateway !== "absent") {
+    bindPluginRegistryRuntime(
+      registry,
+      createLazyPluginRuntime(gateway === "bound" ? { runtimeOptions: { subagent } } : {}),
+    );
+  }
   markPluginRegistryActive(registry);
   let serviceContext: OpenClawPluginServiceContext | undefined;
   registry.services.push({
@@ -107,16 +109,7 @@ async function startFixture(options: { stop?: () => Promise<void>; bound?: boole
         },
       },
     ]);
-  return {
-    registry,
-    record,
-    context,
-    resolveContext,
-    serviceContext,
-    handle,
-    nodeHandler,
-    loadPluginModule,
-  };
+  return { registry, record, context, resolveContext, serviceContext, handle, nodeHandler };
 }
 
 const request = {
@@ -190,12 +183,34 @@ describe("service-owned node invocation", () => {
     },
   );
 
-  it("omits node access outside a Gateway host", async () => {
-    const fixture = await startFixture({ bound: false });
-    expect(fixture.serviceContext.invokeNode).toBeUndefined();
-    expect(fixture.serviceContext.openNodeDuplex).toBeUndefined();
-    expect(fixture.loadPluginModule).not.toHaveBeenCalled();
-  });
+  it.each(["absent", "unbound"] as const)(
+    "omits node access for an %s host under a foreign Gateway scope",
+    async (gateway) => {
+      const loadRuntime = vi
+        .spyOn(nativeModuleRequire, "tryNativeRequireModule")
+        .mockImplementation(() => {
+          throw new Error("Service metadata must not load the broad runtime");
+        });
+      try {
+        const foreign = await startFixture();
+        await withPluginRuntimeGatewayRequestScope(
+          {
+            context: foreign.context,
+            resolveGatewayContext: foreign.resolveContext,
+            isWebchatConnect: () => false,
+          },
+          async () => {
+            const { serviceContext } = await startFixture({ gateway });
+            expect(serviceContext.invokeNode).toBeUndefined();
+            expect(serviceContext.openNodeDuplex).toBeUndefined();
+            expect(loadRuntime).not.toHaveBeenCalled();
+          },
+        );
+      } finally {
+        loadRuntime.mockRestore();
+      }
+    },
+  );
 
   it("rejects core and other-plugin commands", async () => {
     const fixture = await startFixture();

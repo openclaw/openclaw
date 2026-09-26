@@ -1,22 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildReplyPayloads } from "../../auto-reply/reply/agent-runner-payloads.js";
-import {
-  getPluginRuntimeGatewayRequestScope,
-  withPluginRuntimeGatewayRequestScope,
-} from "../../plugins/runtime/gateway-request-scope.js";
-import {
-  getPluginRuntimeGenerationRegistry,
-  withPluginRuntimeGenerationScope,
-} from "../../plugins/runtime/generation-scope.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { BlockReplyPayload } from "../embedded-agent-payloads.js";
 import type { AgentHarness } from "../harness/types.js";
 import { captureAgentPluginRuntimeRefresh } from "../plugin-runtime-refresh.js";
-import {
-  getPreparedModelRuntimeBorrowedSnapshot,
-  getPreparedModelRuntimePluginGeneration,
-  withPreparedModelRuntimePluginGenerationScope,
-} from "../prepared-model-runtime-generation-scope.js";
 import type { PreparedModelRuntimePluginGeneration } from "../prepared-model-runtime.types.js";
 import { buildEmbeddedRunnerAssistant } from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
@@ -118,6 +105,15 @@ describe("plugin runtime refresh admission", () => {
 
   it("reacquires generations while preserving run authority, committed work, and one terminal", async () => {
     const { runEmbeddedAgent } = await loadRunOverflowCompactionHarness();
+    const { getPluginRuntimeGatewayRequestScope, withPluginRuntimeGatewayRequestScope } =
+      await import("../../plugins/runtime/gateway-request-scope.js");
+    const { getPluginRuntimeGenerationRegistry, withPluginRuntimeGenerationScope } =
+      await import("../../plugins/runtime/generation-scope.js");
+    const {
+      getPreparedModelRuntimeBorrowedSnapshot,
+      getPreparedModelRuntimePluginGeneration,
+      withPreparedModelRuntimePluginGenerationScope,
+    } = await import("../prepared-model-runtime-generation-scope.js");
     const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
     const { getAgentRunContext } = await import("../../infra/agent-run-registry.js");
     state = await createOpenClawTestState({ label: "plugin-runtime-refresh" });

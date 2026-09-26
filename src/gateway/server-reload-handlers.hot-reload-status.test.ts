@@ -21,6 +21,7 @@ import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js"
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import { startManagedGatewayConfigReloader } from "./server-reload-managed.js";
+import { SharedGatewaySessionGenerationState } from "./server-shared-auth-generation.js";
 import { createTestRuntimeSecretsActivator } from "./server-startup-config.test-support.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -133,7 +134,10 @@ describe("startManagedGatewayConfigReloader hotReloadStatus plumbing", () => {
       channelManager: {} as never,
       activateRuntimeSecrets: createTestRuntimeSecretsActivator(),
       resolveSharedGatewaySessionGenerationForConfig: () => undefined,
-      sharedGatewaySessionGenerationState: { current: undefined, required: null },
+      sharedGatewaySessionGenerationState: new SharedGatewaySessionGenerationState({
+        current: undefined,
+        required: null,
+      }),
       prepareTerminalConfig: vi.fn(),
       reconcileRuntimePolicy: vi.fn(),
       commitRuntimePolicy: vi.fn(),

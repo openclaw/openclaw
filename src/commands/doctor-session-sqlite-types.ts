@@ -11,6 +11,7 @@ const SESSION_SQLITE_WARNING_ISSUE_CODES = new Set([
   "active_sqlite_transcript_jsonl",
   "entry_invalid",
   "historical_transcript_deferred",
+  "historical_duplicate_settled",
   "legacy_index_informational",
   "plugin_migration_source_retained",
   "retained_plugin_source_index_rebuilt",
@@ -31,6 +32,7 @@ export function countBlockingSessionSqliteIssues(report: DoctorSessionSqliteTarg
 export function isRetainedSourceIssue(issue: DoctorSessionSqliteIssue): boolean {
   return [
     "entry_invalid",
+    "historical_duplicate_settled",
     "transcript_malformed",
     "transcript_missing",
     "retained_plugin_source_index_rebuilt",

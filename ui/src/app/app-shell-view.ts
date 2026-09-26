@@ -530,7 +530,7 @@ export function renderApplicationShell(host: ShellViewHost) {
           onRefresh: host.refreshControlUi,
           onHoldUpdate: () => context.overlays.holdUpdate(),
           onReviewUpdate: () => host.navigate("updates"),
-          onNavigate: (routeId) => host.navigate(routeId),
+          onNavigate: (routeId, options) => host.navigate(routeId, options),
           onOpenApprovals: () => host.openApprovals(),
         })}
         ${nativeEmbed ? navigationContent : nothing}

@@ -31,6 +31,7 @@ function run(id: number, text = toolingLog(200), hosted = false): CiTimingRun {
   return {
     id,
     createdAt: "2026-09-20T01:00:00Z",
+    completeInventory: false,
     logs: [
       { kind: "tooling", text, labels: [hosted ? "ubuntu-24.04" : "blacksmith-4vcpu-ubuntu-2404"] },
     ],

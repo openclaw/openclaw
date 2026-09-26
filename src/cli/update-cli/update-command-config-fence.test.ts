@@ -1,5 +1,6 @@
 import syncFs from "node:fs";
 import fs from "node:fs/promises";
+import { userInfo } from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -582,7 +583,9 @@ it.each([
     if (included) {
       await fs.mkdir(path.dirname(includePath));
       if (process.platform !== "win32") {
+        await fs.chown(path.dirname(includePath), -1, userInfo().gid);
         await fs.chmod(path.dirname(includePath), 0o3700);
+        expect((await fs.stat(path.dirname(includePath))).mode & 0o7777).toBe(0o3700);
       }
       await fs.writeFile(includePath, includedRaw);
     }

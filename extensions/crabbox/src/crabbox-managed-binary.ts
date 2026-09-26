@@ -1,6 +1,7 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { root } from "openclaw/plugin-sdk/file-access-runtime";
 import { runCommandWithTimeout, type SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
@@ -92,7 +93,12 @@ export function resolveManagedCrabboxBinaryPath(env: NodeJS.ProcessEnv = process
   );
 }
 
-async function downloadReleaseFile(name: string, maxBytes: number, signal: AbortSignal) {
+async function downloadReleaseFile(
+  destination: Awaited<ReturnType<typeof root>>,
+  name: string,
+  maxBytes: number,
+  signal: AbortSignal,
+) {
   const [{ buildTimeoutAbortSignal }, { fetchWithSsrFGuard }] = await Promise.all([
     import("openclaw/plugin-sdk/extension-shared"),
     import("openclaw/plugin-sdk/ssrf-runtime"),
@@ -124,32 +130,22 @@ async function downloadReleaseFile(name: string, maxBytes: number, signal: Abort
     if (!response.body) {
       throw new Error(`Crabbox release file ${name} has no response body`);
     }
-    const reader = response.body.getReader();
-    const chunks: Uint8Array[] = [];
-    let size = 0;
-    try {
-      while (true) {
-        deadline.signal?.throwIfAborted();
-        const { done, value } = await reader.read();
-        deadline.signal?.throwIfAborted();
-        if (done) {
-          return Buffer.concat(chunks, size);
+    const body = response.body;
+    const mode = 0o600 & ~process.umask();
+    await destination.create(
+      name,
+      (async function* () {
+        for await (const chunk of body.values({ preventCancel: true })) {
+          deadline.signal?.throwIfAborted();
+          if (chunk.byteLength > 0) {
+            // Healthy transfers can take minutes; retain a separate cap on total time.
+            refreshTimeout?.();
+            yield chunk;
+          }
         }
-        if (value.byteLength === 0) {
-          continue;
-        }
-        size += value.byteLength;
-        if (size > maxBytes) {
-          throw new Error(`Crabbox release file ${name} exceeds ${maxBytes} bytes`);
-        }
-        // Healthy release transfers can take minutes; retain a separate cap on total time.
-        refreshTimeout?.();
-        chunks.push(value);
-      }
-    } finally {
-      await reader.cancel().catch(() => undefined);
-      reader.releaseLock();
-    }
+      })(),
+      { maxBytes, signal: deadline.signal, mode, durable: false, mkdir: false },
+    );
   } finally {
     deadline.cleanup();
     await response.body?.cancel().catch(() => undefined);
@@ -273,10 +269,11 @@ async function installManagedBinary(
   await fs.mkdir(parent, { recursive: true, mode: 0o700 });
   const staging = await fs.mkdtemp(path.join(parent, ".install-"));
   try {
+    const { root, sha256File } = await import("openclaw/plugin-sdk/file-access-runtime");
+    const stagingRoot = await root(staging);
     const target = releaseTarget();
-    const checksums = (await downloadReleaseFile("checksums.txt", 64 * 1024, signal)).toString(
-      "utf8",
-    );
+    await downloadReleaseFile(stagingRoot, "checksums.txt", 64 * 1024, signal);
+    const checksums = await stagingRoot.readText("checksums.txt", { maxBytes: 64 * 1024 });
     const hashes = checksums.split(/\r?\n/u).flatMap((line) => {
       const match = /^([a-fA-F0-9]{64})\s+\*?(\S+)\s*$/u.exec(line);
       return match?.[2] === target.asset ? [match[1]!.toLowerCase()] : [];
@@ -286,15 +283,16 @@ async function installManagedBinary(
         `Crabbox release checksums must contain exactly one entry for ${target.asset}`,
       );
     }
-    const archive = await downloadReleaseFile(target.asset, MAX_ARCHIVE_BYTES, signal);
-    if (createHash("sha256").update(archive).digest("hex") !== hashes[0]) {
+    await downloadReleaseFile(stagingRoot, target.asset, MAX_ARCHIVE_BYTES, signal);
+    const archivePath = path.join(staging, target.asset);
+    if (
+      (await sha256File(archivePath, { maxBytes: MAX_ARCHIVE_BYTES, signal })).digest !== hashes[0]
+    ) {
       throw new Error(`Crabbox release checksum mismatch for ${target.asset}`);
     }
     const { extractArchive } = await import("openclaw/plugin-sdk/archive");
     signal.throwIfAborted();
-    const archivePath = path.join(staging, target.asset);
     const payload = path.join(staging, "distribution");
-    await fs.writeFile(archivePath, archive, { flag: "wx", mode: 0o600 });
     await fs.mkdir(payload, { mode: 0o700 });
     await extractArchive({
       archivePath,

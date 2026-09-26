@@ -964,13 +964,13 @@ export async function runCliEntry(params: {
     cfg,
     config: params.config,
   });
-  const pathResult = await params.cache.getPath({
+  const attachmentPath = await params.cache.getPath({
     attachmentIndex,
     maxBytes,
     timeoutMs,
   });
   if (capability === "audio") {
-    const stat = await fs.stat(pathResult.path);
+    const stat = await fs.stat(attachmentPath);
     assertMinAudioSize({ size: stat.size, attachmentIndex });
   }
   const outputDir = await fs.mkdtemp(
@@ -980,7 +980,7 @@ export async function runCliEntry(params: {
     const mediaPath = await resolveCliMediaPath({
       capability,
       command,
-      mediaPath: pathResult.path,
+      mediaPath: attachmentPath,
       outputDir,
     });
     const outputBase = path.join(outputDir, path.parse(mediaPath).name);

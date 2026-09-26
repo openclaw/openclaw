@@ -8,6 +8,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./runtime-process-entrypoints.js";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { drainSqliteTestSingletons } from "../../test/sqlite-test-lifecycle.js";
+import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import * as nodeSqlite from "./node-sqlite.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import {
@@ -170,6 +172,40 @@ describe("idle SQLite coordinator connections", () => {
     expect(database.isOpen).toBe(true);
     vi.advanceTimersByTime(30 * 60_000);
     expect(database.isOpen).toBe(false);
+  });
+
+  it("drains idle coordinators at the file boundary without closing checked-out owners", async () => {
+    const { directory, location } = fixture();
+    const heldPath = path.join(directory, "held.sqlite");
+    fs.writeFileSync(heldPath, "");
+    const timer = vi.spyOn(globalThis, "setTimeout");
+    const idle = captureCoordinatorDatabase(() =>
+      tryAcquireExclusiveSqliteCoordinator(location, { keepAlive: true }),
+    );
+    const held = captureCoordinatorDatabase(() =>
+      tryAcquireSharedSqliteCoordinator(heldPath, { keepAlive: true }),
+    );
+    idle.result?.release();
+    const expiry = timer.mock.calls.at(-1)?.[0];
+    const onError = vi.fn();
+    try {
+      expect(typeof expiry).toBe("function");
+      await drainGlobalSingletonLifecycleState("restart");
+      expect(idle.database.isOpen).toBe(true);
+      await drainSqliteTestSingletons(onError);
+      expect(onError).not.toHaveBeenCalled();
+      expect(idle.database.isOpen).toBe(false);
+      expect(held.database.isOpen).toBe(true);
+      expect(held.database.isTransaction).toBe(true);
+      const close = vi.spyOn(idle.database, "close");
+      if (typeof expiry === "function") {
+        expiry();
+      }
+      expect(close).not.toHaveBeenCalled();
+    } finally {
+      held.result?.release({ keepAlive: false });
+      closeIdleSqliteCoordinators(directory);
+    }
   });
 
   it.each(["coordinator", "qa-runtime"] as const)(

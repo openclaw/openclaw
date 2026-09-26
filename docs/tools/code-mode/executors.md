@@ -11,7 +11,9 @@ read_when:
 Code Mode uses **Node** by default when enabled. Select **QuickJS** when you
 need a hardened guest runtime. Both executors run the same plain JavaScript
 cells, expose the same typed tool discovery, and use the same `exec` and `wait`
-tools. Code Mode itself remains off by default.
+tools. With no global Code Mode setting, automatic per-model activation applies.
+Choosing an executor in Labs preserves activation. When writing an object in
+config, include `enabled: "auto"` to retain automatic activation.
 
 ## Choose an executor
 

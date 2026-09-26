@@ -38,6 +38,8 @@ import {
 } from "../model-thinking-default.js";
 import { createModelVisibilityPolicy } from "../model-visibility-policy.js";
 import {
+  AGENT_RUN_RESTART_ABORT_STOP_REASON,
+  createAgentRunRestartAbortError,
   isAgentRunRestartAbortReason,
   resolveAgentRunErrorLifecycleFields,
 } from "../run-termination.js";
@@ -553,6 +555,10 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
       terminal = fallbackResult.terminal;
       if (isAgentRunRestartAbortReason(params.opts.abortSignal?.reason)) {
         throw params.opts.abortSignal?.reason;
+      }
+      // The embedded runtime can settle before the command's outer signal is aborted.
+      if (terminal.outcome.stopReason === AGENT_RUN_RESTART_ABORT_STOP_REASON) {
+        throw createAgentRunRestartAbortError();
       }
       fallbackProvider = fallbackResult.provider;
       fallbackModel = fallbackResult.model;

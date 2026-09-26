@@ -643,6 +643,11 @@ const enSettings = {
       checksDisabledAutomaticHint: "Turn on Check for updates to resume automatic updates.",
       statusTitle: "Update status",
       scheduleStatus: "Status",
+      activePhase: "Updating · {phase}",
+      currentStep: "Current step",
+      runTarget: "Update target",
+      lastProgress: "Last progress",
+      scheduledUpdate: "Automatic update",
       commits: "Commits",
       available: "Update available {target}",
       upToDate: "Up to date",
@@ -773,33 +778,47 @@ const enSettings = {
         "Allow signed tools to drive UI automation via Peekaboo Bridge. Requires Computer Control; otherwise run Peekaboo's own Mac app.",
       browser: "Browser",
       chromeExtension: "Chrome extension",
-      chromeExtensionOnMac: "Chrome on this Mac",
       chromeExtensionDetected: "Installed",
       chromeExtensionNotInstalled: "Not installed",
       chromeExtensionUnknown: "Status unavailable",
-      chromeExtensionChecking: "Checking installation…",
-      chromeExtensionCheckAgain: "Check again",
-      chromeExtensionRepair: "Repair Mac connection",
-      chromeExtensionRepairHint:
-        "The extension is installed. Repair the Mac connection to enable automatic pairing.",
       chromeExtensionEnableHint:
         "The extension is installed but not enabled. Open Chrome and approve or enable OpenClaw.",
-      chromeExtensionStatusFailed:
-        "Could not check Chrome installation automatically. You can still run setup. Make sure the OpenClaw Mac app and CLI are up to date.",
       chromeExtensionStatusUnsupported:
         "Automatic installation checks require an updated Mac app. Open Chrome to check whether OpenClaw is installed and enabled.",
-      chromeExtensionSetup: "Set up Chrome on this Mac",
+      chromeExtensionStatusFailed:
+        "Could not check Chrome installation automatically. You can still run setup or refresh status. Make sure the OpenClaw app and CLI are up to date.",
+      chromeExtensionSetup: "Set up Chrome on this device",
       chromeExtensionHint:
-        "Prepare the OpenClaw extension on this Mac, then approve it in Chrome. This does not install on a remote Gateway.",
-      chromeExtensionPreparing: "Preparing Chrome…",
-      chromeExtensionPending:
-        "Native host registered and installation requested. Open Chrome and approve OpenClaw; restart Chrome if the request has not appeared. Use the Store link if you previously removed it.",
-      chromeExtensionStoreRequired:
-        "Native host registered. Add OpenClaw from the Chrome Web Store to finish setup.",
-      chromeExtensionInstalled:
-        "Native host registered and extension found. Open the extension to check its connection; installation alone does not verify a connection.",
+        "Prepare the OpenClaw extension on this device, then approve it in Chrome. This does not install on a remote Gateway.",
+      chromeExtensionPreparing: "Working on this device…",
+      chromeExtensionRefresh: "Refresh setup status",
+      chromeExtensionVerify: "Verify connection",
+      chromeExtensionTarget: "Host: {hostname} · Profile: {profile} · Relay port: {port}",
+      chromeExtensionTabsHint:
+        "A connected extension does not mean eligible tabs are available. Check tabs on this host and profile in the browser tools; an empty list is different from a disconnected extension.",
       chromeExtensionFailed:
-        "Setup could not finish. Install the OpenClaw CLI on this Mac and run openclaw browser extension install for details.",
+        "Setup could not finish. Check the OpenClaw CLI on this device with openclaw browser extension setup, then try again.",
+      chromeExtensionPhases: {
+        inspection_required: "Setup required on this device.",
+        preparing: "Preparing Chrome on this device.",
+        needs_browser_action: "Chrome needs your attention on this device.",
+        waiting_for_connection: "Connection has not been verified on this device.",
+        ready: "Extension connected on this device.",
+        blocked: "Setup is blocked on this device.",
+      },
+      chromeExtensionNextActions: {
+        none: "",
+        install: "Choose Set up Chrome on this device to prepare the native host.",
+        open_chrome:
+          "Installation requested. Open or restart Chrome on this device and approve OpenClaw.",
+        approve_extension: "Approve OpenClaw in Chrome on this device, then verify the connection.",
+        install_from_store:
+          "Add OpenClaw from the Chrome Web Store on this device, then verify the connection.",
+        check_connection: "Choose Verify connection to check this host's Chrome relay.",
+        repair_native_host: "Check the local CLI installation, then run setup again.",
+        unsupported:
+          "Automatic setup is unavailable on this host. Follow the extension documentation.",
+      },
       browserImport: "Browser logins",
       browserImportHint:
         "Copy cookies from a Chrome-family profile into an isolated managed profile.",
@@ -1256,6 +1275,9 @@ const enSettings = {
         waking: "Waking memory…",
         hibernating: "Memory is hibernating",
         needsAttention: "Memory needs attention",
+        noSearchRuntime: "Host memory search is unavailable",
+        noSearchRuntimeDescription:
+          "{engine} does not provide a host memory search runtime. Other memory integrations may run independently.",
         activeDescription: "{engine} · {mode}",
         loadingDescription: "Checking this agent's memory engine and dream cycle.",
         offDescription: "Choose a memory engine in Settings to wake it up.",

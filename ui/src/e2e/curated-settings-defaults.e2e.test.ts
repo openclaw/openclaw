@@ -114,7 +114,7 @@ suite.define(() => {
         const afterLabsReset = {
           agents: initialConfig.agents,
           browser: initialConfig.browser,
-          tools: { profile: "minimal" },
+          tools: { codeMode: {}, profile: "minimal" },
         };
         const afterThinkingReset = {
           agents: {
@@ -357,7 +357,7 @@ suite.define(() => {
           await reloadedCodeModeRow
             .getByRole("switch", { name: "Code Mode", exact: true })
             .getAttribute("aria-checked"),
-        ).toBe("false");
+        ).toBe("true");
 
         if (captureUiProofEnabled) {
           await page.screenshot({

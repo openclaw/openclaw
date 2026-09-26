@@ -742,10 +742,12 @@ suite.define(() => {
         code: "UNAVAILABLE",
         message: "branch lookup unavailable",
       });
-      // A failed lookup drops the unvalidated draft choice and keeps the
-      // session submittable; storage retains the preference for the next visit.
-      await expect.poll(() => placeTrigger.count()).toBe(0);
-      await expect.poll(() => start.isDisabled()).toBe(false);
+      // Discovery failure preserves the saved isolation choice without invalidating
+      // ready model metadata; the draft stays gated until Git can be validated.
+      await expect.poll(() => placeTrigger.getAttribute("data-worktree")).toBe("true");
+      await expect.poll(() => start.isDisabled()).toBe(true);
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+      expect(await gateway.getRequests("chat.metadata")).toHaveLength(metadataRequests);
       await waitForCommittedNewSessionDraft(page, "keep both remembered choices", 0);
 
       await page.reload();

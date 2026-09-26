@@ -1,7 +1,8 @@
 import type { webhook } from "@line/bot-sdk";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedLineAccount } from "./types.js";
 
 // Only LINE API calls are replaced; admission and context creation run together.
@@ -15,6 +16,11 @@ vi.mock("./send.js", () => ({
 
 let handleLineWebhookEvents: typeof import("./bot-handlers.js").handleLineWebhookEvents;
 let recordLineSentMessages: typeof import("./outbound-message-log.js").recordLineSentMessages;
+
+beforeEach(async () => {
+  const { setLineRuntime } = await import("./runtime.js");
+  setLineRuntime(createPluginRuntimeMock());
+});
 
 beforeAll(async () => {
   vi.resetModules();

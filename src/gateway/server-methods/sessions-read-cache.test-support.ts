@@ -3,7 +3,6 @@ import type { SessionsListParams } from "../../../packages/gateway-protocol/src/
 import { listAgentIds } from "../../agents/agent-scope-config.js";
 import {
   loadSessionEntry,
-  replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
 import { mergeSessionEntry } from "../../config/sessions/types.js";
@@ -196,7 +195,7 @@ export async function seedSessionsWithActivityTimes() {
     if (!entry) {
       throw new Error(`Missing seeded session ${scope.sessionKey}`);
     }
-    await replaceSessionEntry(scope, { ...entry, updatedAt });
+    replaceSessionEntrySync(scope, { ...entry, updatedAt });
     expect(loadSessionEntry(scope)?.updatedAt).toBe(updatedAt);
   }
   return { clock, config };

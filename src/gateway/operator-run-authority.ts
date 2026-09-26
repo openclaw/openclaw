@@ -34,7 +34,11 @@ export function captureGatewayOperatorRunAuthority(params: {
     "getRuntimeConfig" | "getCommittedRuntimeConfig" | "resolveGatewayContext"
   >;
   hasCurrentClientAuthority?: () => boolean;
-  sourceAuthority?: Readonly<{ assertCurrent: () => void; signal?: AbortSignal }>;
+  sourceAuthority?: Readonly<{
+    assertCurrent: () => void;
+    signal?: AbortSignal;
+    gatewayAccessGrant?: AdmittedRunOperatorAuthority["gatewayAccessGrant"];
+  }> | null;
 }): { authority: AdmittedRunOperatorAuthority; release: () => void } | undefined {
   const inherited = params.client?.internal?.operatorRunAuthority;
   if (inherited !== undefined) {
@@ -68,7 +72,10 @@ export function captureGatewayOperatorRunAuthority(params: {
   const isGatewayCurrent = () =>
     !resolveGatewayContext ||
     (gatewayContext !== undefined && resolveGatewayContext() === gatewayContext);
-  const sourceAuthority = params.sourceAuthority ?? client.internal?.operatorAccessAuthority;
+  const sourceAuthority =
+    params.sourceAuthority !== undefined
+      ? params.sourceAuthority
+      : client.internal?.operatorAccessAuthority;
   const scopes = Object.freeze([...(client.connect.scopes ?? [])]);
   const policyClient: GatewayClient = {
     connect: {
@@ -187,6 +194,7 @@ export function captureGatewayOperatorRunAuthority(params: {
       authority: createAdmittedRunOperatorAuthority({
         profileId,
         scopes,
+        gatewayAccessGrant: sourceAuthority === null ? null : sourceAuthority?.gatewayAccessGrant,
         source,
         assertCurrent,
         signal: revocation.signal,

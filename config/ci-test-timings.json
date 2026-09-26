@@ -129,7 +129,9 @@
       "agentic-gateway-methods#selector-346-ae94537ecb6d#generation-bf91fd36fe40#part-3-of-5#include-86-ba786a5c7aa7": 112,
       "agentic-gateway-methods#selector-346-ae94537ecb6d#generation-bf91fd36fe40#part-4-of-5#include-86-b48ab076102e": 119,
       "agentic-gateway-methods#selector-346-ae94537ecb6d#generation-bf91fd36fe40#part-5-of-5#include-86-64c0a267f481": 115,
-      "agentic-gateway-server-isolated": 30,
+      "agentic-gateway-server-isolated": 1043,
+      "agentic-gateway-server-isolated#selector-131-d839387eb2b4#generation-7c41bf23e41d#part-1-of-2#include-14-596853d653cc": 396,
+      "agentic-gateway-server-isolated#selector-131-d839387eb2b4#generation-7c41bf23e41d#part-2-of-2#include-117-accd52111680": 690,
       "agentic-plugin-sdk": 83,
       "agentic-plugin-sdk#selector-114-7ee32dee7981#generation-e2d98d802215#part-1-of-2#include-1-4d9bced7fb6c": 5,
       "agentic-plugin-sdk#selector-114-7ee32dee7981#generation-e2d98d802215#part-2-of-2#include-113-b628d2eff8ff": 75,
@@ -636,7 +638,7 @@
     ],
     "github": []
   },
-  "source": "UI E2E median of successful main CI runs: 35532705327, 35537254547, 35537332923; retained other timings: tooling seed from successful pull_request CI merge-ref runs: 35506602947; retained other timings: median of 5 successful CI and release-check runs: 35432985665, 35433007757, 35433834963, 35433862651, 35434723207; agentic-cli, agentic-cli-process and agentic-gateway-server-isolated families and matching runtime-placement records retained from main b37e28c63ad",
+  "source": "isolated Gateway family median of five successful main-push CI runs through 2026-09-21T14:07:53Z: 35591186572, 35592313474, 35593033375, 35601102699, 35607421993; retained other timings: UI E2E median of successful main CI runs: 35532705327, 35537254547, 35537332923; retained other timings: tooling seed from successful pull_request CI merge-ref runs: 35506602947; retained other timings: median of 5 successful CI and release-check runs: 35432985665, 35433007757, 35433834963, 35433862651, 35434723207; agentic-cli and agentic-cli-process families and matching runtime-placement records retained from main b37e28c63ad",
   "toolingFileSeconds": {
     "blacksmith": {
       "src/scripts/ci-changed-scope.contract-fixtures.test.ts": 1,
@@ -1991,6 +1993,6 @@
     },
     "perFileOverheadSeconds": 0.8
   },
-  "updatedAt": "2026-09-20",
+  "updatedAt": "2026-09-21",
   "version": 1
 }

@@ -9,7 +9,10 @@ import {
   type DiscordModelPickerPreferenceScope,
 } from "./model-picker-preferences.js";
 import type { DispatchDiscordCommandInteraction } from "./native-command-dispatch.js";
-import type { DiscordDispatchReplyFromConfig } from "./native-command.types.js";
+import type {
+  DiscordBuildInboundContext,
+  DiscordDispatchReplyFromConfig,
+} from "./native-command.types.js";
 import type { ThreadBindingManager } from "./thread-bindings.js";
 
 type DiscordConfig = NonNullable<OpenClawConfig["channels"]>["discord"];
@@ -45,6 +48,7 @@ export async function applyDiscordModelPickerSelection(params: {
   accountId: string;
   sessionPrefix: string;
   threadBindings: ThreadBindingManager;
+  buildContext?: DiscordBuildInboundContext;
   dispatchReplyFromConfig?: DiscordDispatchReplyFromConfig;
   route: ResolvedAgentRoute;
   resolvedModelRef: string;
@@ -69,6 +73,7 @@ export async function applyDiscordModelPickerSelection(params: {
         preferFollowUp: true,
         threadBindings: params.threadBindings,
         suppressReplies: true,
+        buildContext: params.buildContext,
         dispatchReplyFromConfig: params.dispatchReplyFromConfig,
         pluginCommandDispatch: { kind: "non-plugin" },
       }),

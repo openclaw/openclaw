@@ -9,6 +9,8 @@ import { UpdateFinalizationLifecycle } from "../cli/update-cli/update-finalizati
 import { GatewayServiceStopUnsafeError } from "../daemon/service-inspection-error.js";
 import type { GatewayService, readGatewayServiceState } from "../daemon/service.js";
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
+import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../infra/gateway-shutdown-budget.js";
+import { StateDatabaseCoordinatorContentionError } from "../infra/state-database-coordinator.js";
 import { DoctorUnreadableStateDatabaseError } from "../infra/state-repair-message.js";
 import {
   collectUpdateDoctorFailureFacts,
@@ -34,11 +36,16 @@ const boundary = vi.hoisted(() => ({
   external: vi.fn(),
   readLeases: vi.fn<typeof readActiveOpenClawAgentDatabaseLeasesReadOnly>(),
   gatewayAcquire: vi.fn(),
+  admission: vi.fn(),
+  authority: vi.fn(),
+  scopeAssert: undefined as undefined | (() => void),
   stateAcquire: vi.fn(),
   schemas: vi.fn(),
   lease: vi.fn(),
   step: vi.fn<typeof recordUpdateRunStep>(),
   finish: vi.fn<typeof finishUpdateRun>(),
+  owner: vi.fn(),
+  sleep: vi.fn(),
   stop: vi.fn<typeof maybeStopManagedServiceBeforeMutableUpdate>(),
   read: vi.fn<typeof readGatewayServiceState>(),
   command: vi.fn<GatewayService["readCommand"]>(),
@@ -95,16 +102,23 @@ vi.mock("../infra/update-run-ledger.js", () => ({
   recordUpdateRunPhase: vi.fn(),
   recordUpdateRunStep: boundary.step,
 }));
+vi.mock("../infra/update-run-activity.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/update-run-activity.js")>()),
+  inspectUpdateRepairDriverAdmission: boundary.admission,
+}));
+vi.mock("../utils/sleep.js", () => ({ sleep: boundary.sleep }));
+vi.mock("node:timers/promises", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:timers/promises")>()),
+  setTimeout: boundary.sleep,
+}));
+vi.mock("../infra/gateway-owner-lease.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/gateway-owner-lease.js")>()),
+  readGatewayOwnerLease: boundary.owner,
+}));
 vi.mock("../infra/state-database-coordinator.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/state-database-coordinator.js")>()),
-  acquireGatewayMaintenanceCoordinator: () => {
-    boundary.gatewayAcquire();
-    return { release: boundary.release, createSchemaFenceDelegate: vi.fn() };
-  },
-  acquireStateDatabaseCoordinator: () => {
-    boundary.stateAcquire();
-    return { release: boundary.release };
-  },
+  acquireGatewayMaintenanceCoordinator: boundary.gatewayAcquire,
+  acquireStateDatabaseCoordinator: boundary.stateAcquire,
 }));
 vi.mock("../state/openclaw-state-db-async-lifecycle.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/openclaw-state-db-async-lifecycle.js")>()),
@@ -135,9 +149,20 @@ vi.mock("../daemon/service-operation-lock.js", () => ({
     _env: NodeJS.ProcessEnv,
     run: (assertCurrent: () => void) => Promise<unknown>,
   ) => {
+    const previous = boundary.scopeAssert;
+    let active = true;
+    const assertCurrent = () => {
+      if (!active) {
+        throw new Error("native operation custody retired");
+      }
+      boundary.authority();
+    };
+    boundary.scopeAssert = assertCurrent;
     try {
-      return await run(() => {});
+      return await run(assertCurrent);
     } finally {
+      active = false;
+      boundary.scopeAssert = previous;
       boundary.unlock();
     }
   },
@@ -163,6 +188,13 @@ beforeEach(() => {
   boundary.external.mockReturnValue(false);
   boundary.readLeases.mockReturnValue([]);
   boundary.schemas.mockResolvedValue({ indeterminate: [] });
+  boundary.scopeAssert = undefined;
+  boundary.admission.mockReturnValue({ kind: "recovery", runs: [] });
+  boundary.stateAcquire.mockImplementation(() => ({ release: boundary.release }));
+  boundary.gatewayAcquire.mockImplementation(() => ({
+    release: boundary.release,
+    createSchemaFenceDelegate: vi.fn(),
+  }));
   vi.stubEnv("OPENCLAW_STATE_DIR", "/synthetic/doctor-state");
   vi.stubEnv("OPENCLAW_CONFIG_PATH", "/synthetic/doctor-state/openclaw.json");
   vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", undefined);
@@ -233,6 +265,29 @@ function begin() {
     runtime: { log: boundary.log, error: vi.fn(), exit: vi.fn() },
   });
 }
+
+it.each([false, true])(
+  "checks same-installation policy before restoring Doctor's Gateway (repair activated=%s)",
+  async (activated) => {
+    const events: string[] = [];
+    const read = boundary.read.getMockImplementation()!;
+    boundary.repair.mockImplementation(async () => {
+      expect(boundary.release).toHaveBeenCalled();
+      events.push("repair");
+      boundary.read.mockImplementation(async (...args) => ({
+        ...(await read(...args)),
+        running: activated,
+        runtime: { status: activated ? "running" : "stopped" },
+      }));
+      return {};
+    });
+    boundary.restart.mockImplementation(async () => events.push("restart"));
+    const maintenance = await begin();
+    await maintenance!.finish({}, async (config) => config);
+    expect(events).toEqual(activated ? ["repair"] : ["repair", "restart"]);
+    expect(boundary.health).toHaveBeenCalledOnce();
+  },
+);
 
 it("does not suggest an unsafe manual stop after a reported write-custody refusal", async () => {
   const refusal = new GatewayServiceStopUnsafeError(
@@ -355,6 +410,7 @@ it.each(
     if (!maintenance) {
       throw new Error("The repair did not acquire maintenance");
     }
+    boundary.unlock.mockClear();
     const barrier = cleanupBarrier();
     if (phase === "inspection") {
       const read = boundary.read.getMockImplementation()!;
@@ -734,3 +790,224 @@ it("does not classify a forged lease error name, code or message", async () => {
     }),
   ).toBe("Error: Doctor could not enter maintenance.");
 });
+
+it.each([false, true])(
+  "waits for the stopped Gateway's lifecycle ownership (expires=%s)",
+  async (expires) => {
+    let elapsed = 0;
+    let ticks = 0;
+    let loaded = true;
+    vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+    boundary.owner.mockReturnValue({ state: "live", mode: "supervised" });
+    const acquire = boundary.gatewayAcquire.getMockImplementation()!;
+    boundary.gatewayAcquire.mockImplementation(() => {
+      if (expires || ticks < 3) {
+        throw new StateDatabaseCoordinatorContentionError("gateway-lifecycle");
+      }
+      return acquire();
+    });
+    boundary.sleep.mockImplementation(async (ms: number) => {
+      expect(loaded).toBe(false);
+      expect(boundary.restart).not.toHaveBeenCalled();
+      elapsed += ms;
+      ticks++;
+    });
+    const stop = boundary.stop.getMockImplementation()!;
+    boundary.stop.mockImplementation(async (params) => {
+      const result = await stop(params);
+      if (params.phase !== "inspect") {
+        loaded = false;
+      }
+      return result;
+    });
+    boundary.restart.mockImplementation(async () => {
+      loaded = true;
+    });
+
+    if (expires) {
+      await expect(begin()).rejects.toThrow(/gateway-lifecycle/);
+      expect(elapsed).toBe(GATEWAY_SERVICE_STOP_TIMEOUT_MS);
+      expect(boundary.log).toHaveBeenCalledWith(
+        expect.stringMatching(/Warning:.*gateway-lifecycle.*openclaw doctor --fix/),
+      );
+    } else {
+      const maintenance = await begin();
+      expect(ticks).toBe(3);
+      expect(boundary.restart).not.toHaveBeenCalled();
+      await maintenance!.finish({});
+    }
+    expect(loaded).toBe(true);
+    expect(boundary.restart).toHaveBeenCalledOnce();
+  },
+);
+
+it("restores a service after state ownership fails without retaining a partial maintenance scope", async () => {
+  boundary.owner.mockReturnValue({ state: "live", mode: "supervised" });
+  let heldLeases = 0;
+  boundary.gatewayAcquire
+    .mockImplementation(() => {
+      heldLeases++;
+      return {
+        release: () => {
+          heldLeases--;
+        },
+        createSchemaFenceDelegate: vi.fn(),
+      };
+    })
+    .mockImplementationOnce(() => {
+      throw new StateDatabaseCoordinatorContentionError("gateway-lifecycle");
+    });
+  boundary.stateAcquire.mockImplementation(() => {
+    throw new StateDatabaseCoordinatorContentionError("state-lifecycle");
+  });
+  await expect(begin()).rejects.toThrow(/state-lifecycle/);
+  expect(boundary.restart).toHaveBeenCalledOnce();
+  expect(heldLeases).toBe(0);
+  expect(boundary.sleep).not.toHaveBeenCalled();
+});
+
+it.each(["drain", "acquired", "native-revoked", "install-drift"] as const)(
+  "refuses changed repair admission and compensates under original service custody (%s)",
+  async (phase) => {
+    if (phase === "install-drift") {
+      stopped.serviceUpdateVerdict = {
+        kind: "owned",
+        root,
+        fingerprint: "fixture",
+        refreshDefinition: true,
+        requiresInstallRootRefresh: true,
+      };
+      boundary.revalidate.mockResolvedValue(stopped.serviceUpdateVerdict);
+    }
+    let ticks = 0;
+    let gatewayHeld = false;
+    let stateHeld = false;
+    let conflict = false;
+    let checkedUnderBoth = false;
+    let stopCustody: (() => void) | undefined;
+    let capturedStopAdmission: (() => void) | undefined;
+    boundary.owner.mockReturnValue({ state: "live", mode: "supervised" });
+    boundary.gatewayAcquire.mockImplementation(() => {
+      if (ticks < 2) {
+        throw new StateDatabaseCoordinatorContentionError("gateway-lifecycle");
+      }
+      gatewayHeld = true;
+      return {
+        release: () => {
+          gatewayHeld = false;
+        },
+        createSchemaFenceDelegate: vi.fn(),
+      };
+    });
+    boundary.stateAcquire.mockImplementation(() => {
+      stateHeld = true;
+      conflict = true;
+      return {
+        release: () => {
+          stateHeld = false;
+        },
+      };
+    });
+    boundary.sleep.mockImplementation(async () => {
+      ticks++;
+      if (phase === "drain") {
+        conflict = true;
+      }
+    });
+    boundary.admission.mockImplementation(() => {
+      checkedUnderBoth ||= gatewayHeld && stateHeld;
+      return conflict
+        ? { kind: "conflict", message: "repair admission conflict" }
+        : { kind: "recovery", runs: [] };
+    });
+    const stop = boundary.stop.getMockImplementation()!;
+    boundary.stop.mockImplementation(async (params) => {
+      if (params.phase !== "inspect") {
+        stopCustody = boundary.scopeAssert;
+        capturedStopAdmission = params.assertCurrent;
+      }
+      return await stop(params);
+    });
+    boundary.resume.mockImplementation(async () => {
+      // Windows autostart recovery retains the caller assertion supplied at stop.
+      capturedStopAdmission?.();
+    });
+    boundary.authority.mockImplementation(() => {
+      if (phase === "native-revoked" && conflict) {
+        throw new Error("native operation custody retired");
+      }
+    });
+    boundary.restart.mockImplementation(async () => {
+      expect(stopCustody).toBeTypeOf("function");
+      stopCustody!();
+      expect(gatewayHeld || stateHeld).toBe(false);
+    });
+    await expect(begin()).rejects.toThrow(
+      /repair admission conflict|native operation custody retired/,
+    );
+    expect(checkedUnderBoth).toBe(true);
+    expect(boundary.restart).toHaveBeenCalledTimes(
+      phase === "native-revoked" || phase === "install-drift" ? 0 : 1,
+    );
+    expect(boundary.repair).not.toHaveBeenCalled();
+    expect(boundary.complete).toHaveBeenCalled();
+    expect(boundary.close).not.toHaveBeenCalled();
+    expect(gatewayHeld || stateHeld).toBe(false);
+  },
+);
+
+it.each([false, true])(
+  "restores within the shared stop budget when ownerless cleanup persists (stopFailed=%s)",
+  async (stopFailed) => {
+    vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
+    let elapsed = 0;
+    let parked = false;
+    vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+    boundary.owner.mockImplementation(() =>
+      parked ? undefined : { state: "live", mode: "supervised" },
+    );
+    boundary.gatewayAcquire.mockImplementation(() => {
+      throw new StateDatabaseCoordinatorContentionError("gateway-lifecycle");
+    });
+    boundary.sleep.mockImplementation(async (ms: number) => {
+      expect(parked).toBe(true);
+      expect(boundary.restart).not.toHaveBeenCalled();
+      elapsed += ms;
+    });
+    const stop = boundary.stop.getMockImplementation()!;
+    const stopError = new Error("service stop failed after parking");
+    boundary.stop.mockImplementation(async (params) => {
+      const result = await stop(params);
+      if (params.phase !== "inspect") {
+        parked = true;
+        elapsed = GATEWAY_SERVICE_STOP_TIMEOUT_MS - 1_250;
+        if (stopFailed) {
+          throw stopError;
+        }
+      }
+      return result;
+    });
+    const refusal = await beginDoctorMaintenance({
+      root,
+      options: { repair: true, nonInteractive: true },
+      runtime: { log: boundary.log, error: vi.fn(), exit: vi.fn() },
+      assertCurrent: () => {},
+    }).catch((error: unknown) => error);
+
+    expect(refusal).toBeInstanceOf(Error);
+    if (stopFailed) {
+      expect(collectNestedErrorCandidates(refusal)).toContain(stopError);
+    } else {
+      expect(String(refusal)).toContain("gateway-lifecycle");
+    }
+    expect(elapsed).toBe(GATEWAY_SERVICE_STOP_TIMEOUT_MS);
+    expect(boundary.stateAcquire).not.toHaveBeenCalled();
+    expect(boundary.lease).not.toHaveBeenCalled();
+    expect(boundary.close).not.toHaveBeenCalled();
+    expect(boundary.restart).toHaveBeenCalledOnce();
+    expect(boundary.health).toHaveBeenCalledOnce();
+    expect(boundary.log).toHaveBeenCalledWith(
+      expect.stringMatching(/Warning:.*gateway-lifecycle.*Restoring its service/),
+    );
+  },
+);

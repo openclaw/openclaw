@@ -21,6 +21,13 @@ Changes may stay at the same schema version only when downgraded readers remain 
 
 Matching numeric versions are necessary but not sufficient. A release can add a lazy or startup-repairable table, column, index, or trigger without advancing `user_version`, so two databases at the same version can still have different shapes. OpenClaw validates the canonical table definitions, constraints, indexes, triggers, virtual tables, and table options owned by the running release.
 
+The nullable requester-authority columns on GitHub publication lifecycle and
+repository receipts require [state schema 18](/reference/database-schemas/state-schema-history#state-schema-18).
+Shipped readers validate these optional tables exactly and reject additional
+columns even when bare and nullable. Migration preserves historical rows with
+unknown requester authority; the version bump also prevents older publishers
+from reopening requests without the new authority checks.
+
 Session label lookups use a nonunique partial index on
 `session_nodes(label, session_key)` for non-null labels, without changing agent
 schema 20. The existing writable schema owner installs and repairs the index;

@@ -203,8 +203,10 @@ MCP servers, and full README on one overview. Select a tool to read its full
 description. The metadata rail shows available release details, categories, repository, and
 documentation. Security audits link to ClawHub.
 
-Installed plugins offer **Ask OpenClaw**, **Enable** or **Disable**, **Uninstall**
-when removable, and an icon button for **Settings**, in that order. **Install**
+Installed, disabled plugins put **Enable** first as the primary action, followed
+by **Ask OpenClaw**. Enabled plugins put primary **Ask OpenClaw** first, followed
+by **Disable**. Both rows then offer **Uninstall** when removable and an icon
+button for **Settings**. Uninstalled plugins put **Install** first. **Install**
 starts installation immediately and accepts the staged plugin’s declared
 capabilities without changing your hook and model permissions. Configured
 install-policy warnings still require an explicit acknowledgment. Installing from

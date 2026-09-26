@@ -83,7 +83,7 @@ async function main() {
     run_attempt: z.number().int().positive(),
     created_at: z.iso.datetime().refine(inWindow, "created_at is outside the frozen UTC window"),
     status: z.literal("completed"),
-    conclusion: z.literal("success"),
+    conclusion: z.string().nullable(),
     event: z.string(),
     head_branch: z.string().min(1),
     head_sha: z.string().regex(/^[a-f0-9]{40}$/u),
@@ -94,7 +94,7 @@ async function main() {
     "PR tooling measurements execute the merge-ref; workflow/job SHAs identify the PR head.\n",
   );
   console.log(
-    "| Source | Run | Attempt | Workflow SHA | Created (UTC) | Parsed profiles | Timing jobs |\n| --- | ---: | ---: | --- | --- | --- | ---: |",
+    "| Source | Run | Attempt | Workflow SHA | Created (UTC) | Workflow result | Parsed profiles | Timing jobs |\n| --- | ---: | ---: | --- | --- | --- | --- | ---: |",
   );
   // New gh versions reject reporter ANSI unless opted in; logs are parsed, never printed.
   const logFlags = (await readGh(["api", "--help"])).includes("--allow-escape-sequences")
@@ -106,6 +106,7 @@ async function main() {
   type TimingSource = "main" | "release" | "tooling";
   async function readRun(run: z.infer<typeof runSchema>, source: TimingSource) {
     const logs: CiTimingRun["logs"] = [];
+    const completeInventory = run.conclusion === "success";
     let pages = 0;
     // A partial retry omits successful original jobs. Read every captured attempt,
     // then give the refit one run so retries cannot become independent samples.
@@ -191,17 +192,22 @@ async function main() {
         }
       }
       const { contributingRunIds } = refitTestTimings([
-        { id: run.id, createdAt: run.created_at, logs: attemptLogs },
+        { id: run.id, createdAt: run.created_at, logs: attemptLogs, completeInventory },
       ]);
       const profiles = Object.entries(contributingRunIds)
         .filter(([, ids]) => ids.length > 0)
         .map(([profile]) => profile);
       console.log(
-        `| ${source} | ${run.id} | ${attempt} | ${run.head_sha} | ${run.created_at} | ${profiles.join(", ") || "none"} | ${attemptLogs.length} |`,
+        `| ${source} | ${run.id} | ${attempt} | ${run.head_sha} | ${run.created_at} | ${run.conclusion} | ${profiles.join(", ") || "none"} | ${attemptLogs.length} |`,
       );
       logs.push(...attemptLogs);
     }
-    return { id: run.id, createdAt: run.created_at, logs };
+    return {
+      id: run.id,
+      createdAt: run.created_at,
+      logs,
+      completeInventory,
+    };
   }
   async function sampleWorkflow(workflow: string, source: TimingSource) {
     const event =
@@ -210,6 +216,7 @@ async function main() {
       total_count: z.number().int().nonnegative(),
       workflow_runs: z.array(
         runSchema.extend({
+          conclusion: source === "main" ? z.string().nullable() : z.literal("success"),
           // PRs measure their merge-ref, which is appropriate only for PR-only
           // tooling. Their workflow/job head_sha identifies the PR head, not that merge.
           // A release dispatch can check out target_ref; push alone proves main.
@@ -218,11 +225,12 @@ async function main() {
         }),
       ),
     });
-    const pageSize = Math.min(count, 100);
+    // Coalesced cancelled main tips must not exhaust pagination before usable runs.
+    const pageSize = source === "main" ? 100 : Math.min(count, 100);
     const query = new URLSearchParams({
       ...(source === "main" ? { branch: "main" } : {}),
       event,
-      status: "success",
+      status: source === "main" ? "completed" : "success",
       created: `${lower}..${upper}`,
       per_page: String(pageSize),
     });
@@ -254,6 +262,11 @@ async function main() {
           continue;
         }
         seenRuns.set(run.id, identity);
+        // Completed failed main runs still contain successful independent jobs.
+        // Cancellation and other conclusions do not supply a timing cohort.
+        if (run.conclusion !== "success" && run.conclusion !== "failure") {
+          continue;
+        }
         const timingRun = await readRun(run, source);
         const { contributingRunIds } = refitTestTimings([timingRun]);
         const compact = contributingRunIds.blacksmith.length + contributingRunIds.github.length > 0;
@@ -286,6 +299,7 @@ async function main() {
   }
   if (seedTooling) {
     const toolingRunSchema = runSchema.extend({
+      conclusion: z.literal("success"),
       path: z.literal(".github/workflows/ci.yml"),
       event: z.literal("pull_request"),
     });
@@ -322,7 +336,7 @@ async function main() {
         ))
     ) {
       throw new Error(
-        `Found ${mainContributors.size} independent main compact contributors. Need at least two and a newly eligible compact measurement in the frozen UTC window; retry after successful main CI. No timing file written.`,
+        `Found ${mainContributors.size} independent main compact contributors. Need at least two and a newly eligible compact measurement in the frozen UTC window; retry after main CI has successful timing jobs. No timing file written.`,
       );
     }
     // Release workflows validate their target before Gateway tests. Their head SHA
@@ -353,7 +367,9 @@ async function main() {
     `Independent PR tooling contributors: ${new Set([...toolingBlacksmith, ...toolingGithub]).size} (Blacksmith: ${toolingBlacksmith.length}; GitHub: ${toolingGithub.length}).${seedTooling ? " Explicit tooling seed; single-run measurements allowed." : ""}\n`,
   );
   ciTestTimingsSchema.parse(timings);
-  console.log(`Sampled successful CI and release-check runs: ${runIds.join(", ")}\n`);
+  console.log(
+    `Sampled CI and release-check runs with successful timing jobs: ${runIds.join(", ")}\n`,
+  );
   console.log("| Key | Old seconds | New seconds | Delta |\n| --- | ---: | ---: | ---: |");
   for (const change of changes) {
     const delta =

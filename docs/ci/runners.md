@@ -169,6 +169,15 @@ Full Release Validation's existing frozen-target lint exception remains separate
 Npm preflight uses the larger Blacksmith request by default and retains its
 explicit `use_github_hosted_runners` option.
 
+Ordinary iOS smoke CI builds the app and embedded Watch targets for the runner's
+architecture, using the same iPhone simulator for compilation and voice-cleanup
+tests. It omits compiler indexes, which CI does not consume, and finishes
+simulator preparation before XCTest launch. Smoke retains complete test results
+and logs but disables verbose system-diagnostic collection: Xcode 27 can spend
+600 seconds collecting it after passing tests. Full manual validation retains
+universal simulator compilation, verbose diagnostics, the Release device build,
+and lifecycle/UI/Watch tests. Frozen targets keep their original build settings.
+
 ### Runner backend modes
 
 The `macos-swift` lane builds Swift tests once and runs each test once per job. The ordinary suite retains default-profile behavior; rendered Quick Chat tests follow in a fresh default-profile process, then AppState isolation tests run in a named-profile process through the same resource-owning launcher. Historical targets retain their original two partitions. Each launch owns a private home and disposable, unlocked default Keychain until the test process group and output pipes close. HOME and profile markers do not isolate macOS services; all partitions run only on the disposable credentialless macOS worker. Current launcher-capable targets bound Swift Testing parallelism to the runner's logical CPU count, capped at 12, for automatic runs, manual dispatches, and rerun attempts. Only frozen targets that predate the resource owner use the serial fallback. A failing test fails the job without an in-job retry. See [native test safety](/platforms/mac/dev-setup#run-native-tests-safely).

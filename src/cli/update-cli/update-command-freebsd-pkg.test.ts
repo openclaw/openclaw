@@ -113,7 +113,7 @@ describe("FreeBSD pkg update admission", () => {
         .mockImplementation(async () => pkgQueryResult(claimed ? `${root}/package.json\n` : ""));
       const publish = vi.fn();
       vi.spyOn(updateRunner, "updateGitCheckout").mockImplementation(async ({ opts }) => {
-        await opts.beforeGitMutation?.({});
+        await opts.beforeGitMutation({});
         publish();
         return { status: "ok", mode: "git", root, steps: [], durationMs: 0 };
       });
@@ -126,16 +126,17 @@ describe("FreeBSD pkg update admission", () => {
           startedAt: Date.now(),
           progress: {},
           channel: "dev",
-          tag: "dev",
-          inspectGitTarget: async () => {},
-          validateCandidate: async () => {},
+          inspectGitTarget: async () => {
+            throw new Error("Candidate inspection must not bypass package ownership admission");
+          },
+          validateCandidate: async () => {
+            throw new Error("Candidate validation must not bypass package ownership admission");
+          },
           beforeGitMutation: async () => {
             claimed = true;
           },
           getManagedServiceEnv: () => undefined,
           getSnapshotSource: async () => ({ config: {}, env: process.env }),
-          allowGatewayServiceRepair: false,
-          allowGatewayActivation: false,
         }),
       ).rejects.toMatchObject({ reason: "pkg-owned-install" });
       expect(query).toHaveBeenCalledTimes(2);
@@ -165,13 +166,17 @@ describe("FreeBSD pkg update admission", () => {
           startedAt: Date.now(),
           progress: {},
           channel: "dev",
-          tag: "dev",
-          inspectGitTarget: async () => {},
-          validateCandidate: async () => {},
+          inspectGitTarget: async () => {
+            throw new Error("Candidate inspection must not bypass package ownership admission");
+          },
+          validateCandidate: async () => {
+            throw new Error("Candidate validation must not bypass package ownership admission");
+          },
+          beforeGitMutation: async () => {
+            throw new Error("Git mutation must not bypass package ownership admission");
+          },
           getManagedServiceEnv: () => undefined,
           getSnapshotSource,
-          allowGatewayServiceRepair: false,
-          allowGatewayActivation: false,
         }),
       ).rejects.toMatchObject({ reason: "pkg-owned-install" });
       expect(manager).not.toHaveBeenCalled();

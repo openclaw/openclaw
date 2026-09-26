@@ -36,11 +36,7 @@ import {
   waitForChatAbortControllerRemoval,
   waitForChatAbortTerminalPersistence,
 } from "./chat-abort-lifecycle-internal.js";
-import {
-  abortChatRunById,
-  registerChatAbortController,
-  removeChatAbortControllerEntry,
-} from "./chat-abort.js";
+import { abortChatRunById, removeChatAbortControllerEntry } from "./chat-abort.js";
 import type { AgentEventHandlerOptions } from "./server-chat.js";
 import { registerTaskEventSubscriptionTests } from "./server-runtime-subscriptions.task-events.test-support.js";
 import { registerTaskSubscriptionOwnershipTests } from "./server-runtime-subscriptions.task-ownership.test-support.js";
@@ -48,6 +44,7 @@ import {
   createSubscriptionTestFixture,
   lifecycleState,
   readLifecycleState,
+  registerSubscriptionChatRun,
   registerAuditSubscriptionTests,
 } from "./server-runtime-subscriptions.test-support.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
@@ -456,17 +453,12 @@ describe("startGatewayEventSubscriptions", () => {
     const sessionKey = "agent:main:main";
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const params = createParams();
-    const registration = registerChatAbortController({
-      chatAbortControllers: params.chatAbortControllers,
+    const registration = registerSubscriptionChatRun(params, {
       runId,
       sessionId: "session-lifecycle-table",
       sessionKey,
-      timeoutMs: 60_000,
       lifecycleGeneration,
     });
-    if (!registration.entry) {
-      throw new Error("expected registered chat abort controller");
-    }
     const entry = registration.entry;
     const transitions: LifecycleTransition[] = [
       { state: "Registered", lifecycle: readLifecycleState(entry) },
@@ -537,19 +529,12 @@ describe("startGatewayEventSubscriptions", () => {
       const params = createParams();
       const runId = "captured-terminal";
       const sessionKey = "agent:main:captured-terminal";
-      const register = () => {
-        const registration = registerChatAbortController({
-          chatAbortControllers: params.chatAbortControllers,
+      const register = () =>
+        registerSubscriptionChatRun(params, {
           runId,
           sessionId: "captured-session",
           sessionKey,
-          timeoutMs: 60_000,
-        });
-        if (!registration.entry) {
-          throw new Error("expected captured registration");
-        }
-        return registration.entry;
-      };
+        }).entry;
       const entry = register();
       const terminal = createDeferred();
       const successor = createDeferred();
@@ -679,17 +664,12 @@ describe("startGatewayEventSubscriptions", () => {
       const runId = `run-retired-${phase}`;
       const currentLifecycleGeneration = getAgentEventLifecycleGeneration();
       const params = createParams();
-      const registration = registerChatAbortController({
-        chatAbortControllers: params.chatAbortControllers,
+      const registration = registerSubscriptionChatRun(params, {
         runId,
         sessionId: `session-retired-${phase}`,
         sessionKey: "agent:main:main",
-        timeoutMs: 60_000,
         lifecycleGeneration: `${currentLifecycleGeneration}-retired`,
       });
-      if (!registration.entry) {
-        throw new Error("expected registered chat abort controller");
-      }
       const registered = readLifecycleState(registration.entry);
       agentEventHandlerMocks.create.mockReturnValue(
         Object.assign(
@@ -746,18 +726,13 @@ describe("startGatewayEventSubscriptions", () => {
       const sessionKey = "agent:main:main";
       const lifecycleGeneration = getAgentEventLifecycleGeneration();
       const params = createParams();
-      const registration = registerChatAbortController({
-        chatAbortControllers: params.chatAbortControllers,
+      const registration = registerSubscriptionChatRun(params, {
         runId,
         sessionId: "session-abort-persistence-bridge",
         sessionKey,
-        timeoutMs: 60_000,
         lifecycleGeneration,
         ...(hidden ? { controlUiVisible: false, projectSessionActive: false } : {}),
       });
-      if (!registration.entry) {
-        throw new Error("expected registered chat abort controller");
-      }
       const entry = registration.entry;
       claimAgentRunContext(runId, {
         lifecycleGeneration,

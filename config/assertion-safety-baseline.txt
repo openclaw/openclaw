@@ -533,7 +533,6 @@ extensions/imessage/src/client.ts	3
 extensions/imessage/src/monitor/catchup-bridge.ts	1
 extensions/imessage/src/monitor/catchup.ts	2
 extensions/imessage/src/monitor/conversation-repair.ts	1
-extensions/imessage/src/monitor/inbound-processing.ts	2
 extensions/imessage/src/monitor/monitor-provider.ts	1
 extensions/imessage/src/probe.ts	1
 extensions/imessage/src/remote-host.ts	1
@@ -634,7 +633,6 @@ extensions/matrix/src/matrix/monitor/handler.ts	2
 extensions/matrix/src/matrix/monitor/inbound-dedupe-migration.ts	2
 extensions/matrix/src/matrix/monitor/index.ts	3
 extensions/matrix/src/matrix/monitor/reaction-events.ts	1
-extensions/matrix/src/matrix/monitor/replies.ts	1
 extensions/matrix/src/matrix/monitor/reply-context.ts	1
 extensions/matrix/src/matrix/monitor/room-history.ts	2
 extensions/matrix/src/matrix/monitor/rooms.ts	1
@@ -703,9 +701,8 @@ extensions/memory-core/src/memory/hybrid.ts	1
 extensions/memory-core/src/memory/manager-db.ts	2
 extensions/memory-core/src/memory/manager-embedding-errors.ts	2
 extensions/memory-core/src/memory/manager-embedding-ops.ts	1
-extensions/memory-core/src/memory/manager-search-orchestration.ts	1
 extensions/memory-core/src/memory/manager-search.ts	5
-extensions/memory-core/src/memory/manager-sync-base.ts	3
+extensions/memory-core/src/memory/manager-sync-base.ts	1
 extensions/memory-core/src/memory/manager-vector-rebuild-state.ts	1
 extensions/memory-core/src/memory/manager.ts	2
 extensions/memory-core/src/memory/search-deadline.ts	1
@@ -1564,7 +1561,6 @@ src/agents/apply-patch-targets.ts	1
 src/agents/apply-patch.ts	2
 src/agents/auth-profiles/clone.ts	1
 src/agents/auth-profiles/external-auth.ts	1
-src/agents/auth-profiles/oauth-manager.ts	1
 src/agents/auth-profiles/oauth-refresh-failure.ts	2
 src/agents/auth-profiles/oauth-refresh-lock-errors.ts	1
 src/agents/auth-profiles/oauth.ts	2
@@ -1575,7 +1571,7 @@ src/agents/auth-profiles/profiles.ts	1
 src/agents/auth-profiles/repair.ts	1
 src/agents/auth-profiles/source-check.ts	1
 src/agents/auth-profiles/store.ts	1
-src/agents/auth-profiles/usage.ts	3
+src/agents/auth-profiles/usage.ts	2
 src/agents/bash-process-registry.ts	1
 src/agents/bash-tools.exec-approval-followup.ts	5
 src/agents/bash-tools.exec-approval-request.ts	2
@@ -1858,7 +1854,7 @@ src/agents/sessions/session-manager.ts	2
 src/agents/sessions/settings-manager.ts	11
 src/agents/sessions/steering-message-identity.ts	2
 src/agents/sessions/tools/bash.ts	2
-src/agents/sessions/tools/edit.ts	14
+src/agents/sessions/tools/edit.ts	12
 src/agents/sessions/tools/grep.ts	2
 src/agents/sessions/tools/tool-definition-wrapper.ts	1
 src/agents/sessions/tools/write.ts	3
@@ -1963,7 +1959,6 @@ src/agents/transcript-redact-replay.ts	1
 src/agents/transcript-redact.ts	2
 src/agents/transport-message-transform.ts	2
 src/agents/utils/frontmatter.ts	2
-src/agents/utils/tools-manager.ts	2
 src/agents/workspace-legacy-state.ts	2
 src/agents/workspace-state-store.ts	1
 src/agents/workspace.ts	5
@@ -2073,8 +2068,7 @@ src/channels/feedback-reflection.ts	1
 src/channels/ids.ts	1
 src/channels/inbound-event/context.ts	6
 src/channels/location.ts	1
-src/channels/message-access/admission-evidence.ts	3
-src/channels/message-access/runtime.ts	2
+src/channels/message-access/admission-evidence.ts	1
 src/channels/message/adapter.ts	1
 src/channels/message/capabilities.ts	2
 src/channels/message/ingress-claim-owner.ts	1
@@ -2476,7 +2470,7 @@ src/config/sessions/session-accessor.transcript-turn.ts	1
 src/config/sessions/session-entry-json.ts	1
 src/config/sessions/session-reset-boundary-event.ts	5
 src/config/sessions/session-snapshot-merge.ts	26
-src/config/sessions/session-sqlite-target.ts	3
+src/config/sessions/session-sqlite-target.ts	2
 src/config/sessions/session-store-config.ts	2
 src/config/sessions/session-transcript-reconcile.worker.ts	1
 src/config/sessions/skill-prompt-blobs.ts	5
@@ -3050,7 +3044,7 @@ src/node-host/invoke.ts	3
 src/node-host/mcp.ts	3
 src/node-host/node-worker-bundle-installer.ts	1
 src/node-host/node-worker-transfer-client.ts	1
-src/node-host/node-worker-transfer-http.ts	2
+src/node-host/node-worker-transfer-http.ts	1
 src/node-host/node-worker-tree-control.ts	2
 src/node-host/node-worker-workspace.ts	3
 src/node-host/plugin-node-host.ts	1
@@ -3182,7 +3176,7 @@ src/plugins/loader-channel-runtime.ts	1
 src/plugins/loader-channel-setup.ts	14
 src/plugins/loader-discovery.ts	1
 src/plugins/loader-load-context.ts	4
-src/plugins/loader-module-runtime.ts	7
+src/plugins/loader-module-runtime.ts	5
 src/plugins/loader-records.ts	1
 src/plugins/loader-runtime-candidate.ts	1
 src/plugins/loader-shared.ts	2
@@ -3295,7 +3289,7 @@ src/secrets/runtime-state.ts	4
 src/secrets/runtime-web-tools.shared.ts	2
 src/secrets/runtime-web-tools.ts	4
 src/secrets/runtime.ts	4
-src/secrets/store/secret-store.ts	3
+src/secrets/store/secret-store.ts	2
 src/secrets/target-registry-query.ts	1
 src/security/audit-channel.ts	4
 src/security/audit-extra.async.ts	2
@@ -3339,7 +3333,6 @@ src/shared/transcript-only-openclaw-assistant.ts	4
 src/shared/worker-bundle-archive.ts	1
 src/skills/lifecycle/clawhub-install-core.ts	2
 src/skills/lifecycle/clawhub-store.ts	12
-src/skills/lifecycle/install-download.ts	4
 src/skills/lifecycle/upload-store.ts	1
 src/skills/lifecycle/workspace-skill-write.ts	1
 src/skills/loading/config.ts	1
@@ -3389,7 +3382,6 @@ src/state/user-profiles.ts	1
 src/status/summary.runtime.ts	1
 src/system-agent/agent-turn.ts	4
 src/system-agent/assistant-prompts.ts	1
-src/system-agent/assistant-timeout.ts	1
 src/system-agent/greeting.ts	1
 src/system-agent/hosted-setup.runtime.ts	1
 src/system-agent/operations-execute.ts	1

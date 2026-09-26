@@ -13,11 +13,14 @@ import type {
   QuestionResolveResult,
   QuestionWaitAnswerResult,
 } from "../../packages/gateway-protocol/src/index.js";
+import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   retainGatewayRootWorkAdmissionContinuationScope,
   type GatewayRootWorkAdmissionContinuationScope,
 } from "../process/gateway-work-admission.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import type { GatewayClient } from "./server-methods/client-types.js";
 
 /** Grace period for late question.waitAnswer and question.get calls. */
 const QUESTION_RESOLVED_ENTRY_GRACE_MS = 15_000;
@@ -32,6 +35,13 @@ export const QuestionManagerErrorCodes = {
 
 type QuestionManagerErrorCode =
   (typeof QuestionManagerErrorCodes)[keyof typeof QuestionManagerErrorCodes];
+
+/** Private admission binding; it never enters the question's wire record. */
+export type QuestionOwnRunAccess = {
+  canSelect: (client: GatewayClient | null) => boolean;
+  canAccess: (client: GatewayClient | null, cfg: OpenClawConfig) => boolean;
+  release: () => void;
+};
 
 export class QuestionManagerError extends Error {
   constructor(
@@ -52,6 +62,8 @@ type QuestionManagerRequest = {
   timeoutMs: number;
   onResolved?: (event: QuestionResolvedEvent) => void;
   isRequesterActive?: () => boolean;
+  ownRunAccess?: QuestionOwnRunAccess;
+  requesterRun?: OperationalRunInstanceRef;
   /** Trusted handler binds the run; the manager owns expiry and terminal release. */
   registerHumanInputWait?: (isPending: () => boolean) => ((resolved: boolean) => void) | undefined;
 };
@@ -66,6 +78,8 @@ type QuestionEntry = {
   waiters: Set<Waiter>;
   onResolved?: (event: QuestionResolvedEvent) => void;
   isRequesterActive?: () => boolean;
+  ownRunAccess?: QuestionOwnRunAccess;
+  requesterRun?: OperationalRunInstanceRef;
   admissionContinuation: GatewayRootWorkAdmissionContinuationScope | null;
   releaseHumanInputWait?: (resolved: boolean) => void;
 };
@@ -150,6 +164,8 @@ export class QuestionManager {
       waiters: new Set(),
       onResolved: params.onResolved,
       isRequesterActive: params.isRequesterActive,
+      ownRunAccess: params.ownRunAccess,
+      requesterRun: params.requesterRun,
       admissionContinuation: retainGatewayRootWorkAdmissionContinuationScope(),
     };
     this.entries.set(record.id, entry);
@@ -174,16 +190,34 @@ export class QuestionManager {
     return this.entries.get(id)?.record ?? null;
   }
 
+  getOwnRunAccess(id: string): QuestionOwnRunAccess | undefined {
+    return this.entries.get(id)?.ownRunAccess;
+  }
+
   /** Called by the Gateway's existing authority-close observer. */
-  cancelClosedAuthorities(): void {
-    for (const id of this.entries.keys()) {
+  cancelClosedAuthorities(closedRun?: { runId: string; instanceId?: string }): void {
+    for (const [id, entry] of this.entries) {
+      // Select exact host-bound runs; legacy SDK entries retain their full sweep.
+      // The retained liveness assertion, not this correlation, decides cancellation.
+      if (
+        closedRun &&
+        entry.requesterRun &&
+        (entry.requesterRun.runId !== closedRun.runId ||
+          (closedRun.instanceId !== undefined &&
+            entry.requesterRun.instanceId !== closedRun.instanceId))
+      ) {
+        continue;
+      }
       this.get(id);
     }
   }
 
-  list(): QuestionRecord[] {
+  list(include?: (record: QuestionRecord) => boolean): QuestionRecord[] {
     const records: QuestionRecord[] = [];
-    for (const id of this.entries.keys()) {
+    for (const [id, entry] of this.entries) {
+      if (include && !include(entry.record)) {
+        continue;
+      }
       const record = this.get(id);
       if (record?.status === "pending") {
         records.push(record);
@@ -298,6 +332,7 @@ export class QuestionManager {
       releaseHumanInputWait?.(false);
       entry.admissionContinuation?.release();
       entry.admissionContinuation = null;
+      entry.ownRunAccess?.release();
       if (entry.cleanupTimer) {
         clearTimeout(entry.cleanupTimer);
       }
@@ -427,6 +462,7 @@ export class QuestionManager {
     }
     const cleanupTimer = setTimeout(() => {
       if (entry.cleanupTimer === cleanupTimer && this.entries.get(entry.record.id) === entry) {
+        entry.ownRunAccess?.release();
         this.entries.delete(entry.record.id);
       }
     }, QUESTION_RESOLVED_ENTRY_GRACE_MS);

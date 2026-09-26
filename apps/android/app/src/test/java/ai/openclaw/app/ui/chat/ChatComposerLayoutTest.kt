@@ -4584,6 +4584,40 @@ class ChatComposerLayoutTest {
     }
   }
 
+  @Test
+  @Config(qualifiers = "w360dp-h800dp-mdpi")
+  fun admittedLargePhotoPreviewsInComposerWithoutSending() {
+    val model = showChat(viewportHeight = { 720.dp })
+    val owner = model.captureChatShareOwner()
+    val photo = PendingAttachment("preview-photo", "synthetic-photo.jpg", "image/jpeg", syntheticLargeChatPhotoBase64())
+    val messages = model.chatMessages.value
+    val outbox = model.chatOutboxItems.value
+    composeRule.runOnIdle {
+      assertEquals(0, model.chatComposerState.addAttachments(owner, listOf(photo)))
+    }
+    composeRule.waitForIdle()
+    try {
+      composeRule.waitUntil {
+        composeRule.onAllNodesWithContentDescription("image/jpeg").fetchSemanticsNodes().isNotEmpty()
+      }
+    } finally {
+      captureComposerProof("composer-photo")
+    }
+    composeRule.onNodeWithContentDescription("image/jpeg").assertIsDisplayed().performClick()
+    composeRule.onNodeWithContentDescription(nativeString("Close image preview")).assertIsDisplayed()
+    composeRule.onNodeWithText("100%").assertIsDisplayed()
+    composeRule.onNodeWithContentDescription(nativeString("Close image preview")).performClick()
+    composeRule.onNodeWithContentDescription(nativeString("Remove attachment")).performClick()
+    composeRule.runOnIdle {
+      assertTrue(
+        model.chatComposerState.attachments.value[owner]
+          .isNullOrEmpty(),
+      )
+      assertEquals(messages, model.chatMessages.value)
+      assertEquals(outbox, model.chatOutboxItems.value)
+    }
+  }
+
   private fun captureComposerProof(name: String) {
     val directory = System.getenv("OPENCLAW_CHAT_WORK_PROOF_DIR") ?: return
     val folder = File(directory)

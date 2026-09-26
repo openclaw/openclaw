@@ -18,8 +18,8 @@ minimumReleaseAgeExclude:
   - "@trycua/cua-driver-linux-x64-gnu@0.28.2"
   - "@trycua/cua-driver-win32-arm64-msvc@0.28.2"
   - "@trycua/cua-driver-win32-x64-msvc@0.28.2"
-  # Reviewed ACPX release; remove after 2026-09-27T20:56:00Z.
-  - acpx@0.18.0
+  # Reviewed ACPX release; remove after 2026-09-29T01:30:35.936Z.
+  - acpx@0.19.0
   # Published ACPX runtime dependencies; remove after 2026-09-22T12:38:43Z.
   - "@openclaw/fs-safe@0.12.0"
   - "@openclaw/fs-safe-darwin-arm64@0.12.0"

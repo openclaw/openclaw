@@ -128,13 +128,8 @@ function recordNullableString(
   record: Record<string, unknown> | undefined,
   key: string,
 ): string | null | undefined {
-  if (!record || !(key in record)) {
-    return undefined;
-  }
-  if (record[key] === null) {
-    return null;
-  }
-  return normalizeOptionalString(record[key]);
+  const value = record?.[key];
+  return value === null ? null : normalizeOptionalString(value);
 }
 
 function mergeSlackAssistantThreadContext(
@@ -1350,6 +1345,7 @@ export async function prepareSlackMessage(params: {
     {
       agentId: route.agentId,
       sessionKey,
+      nativeChannelId: message.channel,
       messageId: threadContext.messageTs,
       inboundEventKind,
     },

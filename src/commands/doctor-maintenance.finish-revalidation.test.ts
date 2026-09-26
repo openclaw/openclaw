@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { hostname } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as restartHealthProbe from "../cli/daemon-cli/restart-health-probe.js";
 import { waitForGatewayHealthyRestart } from "../cli/daemon-cli/restart-health.js";
@@ -39,6 +39,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 import { stoppedSystemdBinding } from "./doctor-maintenance.test-support.js";
@@ -106,6 +107,13 @@ vi.mock("../infra/sqlite-coordinator.js", async (importOriginal) => {
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let gatewayPort: TestPortClaim;
+beforeAll(async () => {
+  gatewayPort = await acquireTestPortBlock({ offsets: [0] });
+});
+afterAll(async () => {
+  await gatewayPort?.release();
+});
 beforeEach(() => {
   mockSystemAccountHome();
   mocks.stops = 0;
@@ -319,7 +327,7 @@ async function runDoctorFinishForStoppedUnit(
               now,
               JSON.stringify({
                 owner: { pid: process.pid, host: hostname(), startedAt },
-                port: 18789,
+                port: gatewayPort.port,
                 mode: "supervised",
                 supervisor: { kind: "systemd", name: "openclaw-gateway.service" },
               }),
@@ -387,7 +395,7 @@ async function runDoctorFinishForStoppedUnit(
         vi.spyOn(gatewayLock, "readActiveGatewayLockIdentity").mockResolvedValue({
           pid: legacyGatewayPid,
           createdAt: new Date().toISOString(),
-          port: 18789,
+          port: gatewayPort.port,
         });
       }
       const command = {
@@ -396,7 +404,7 @@ async function runDoctorFinishForStoppedUnit(
           path.join(process.cwd(), "openclaw.mjs"),
           "gateway",
           "--port",
-          "18789",
+          String(gatewayPort.port),
         ],
         environment: {
           HOME: legacyCatalog === "different-state" ? path.join(home, "other") : home,

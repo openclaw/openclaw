@@ -489,6 +489,7 @@ export function createApplicationGateway(
           : undefined;
         // Display-only evidence; admission is still re-derived from the next hello.
         setUnavailableDeadline("suspensionPhase", suspensionPhase ? 0 : undefined);
+        const closeReason = formatUiExternalText(reason);
         setSnapshot({
           client: nextClient,
           phase:
@@ -512,7 +513,11 @@ export function createApplicationGateway(
             ? null
             : error?.message
               ? formatUiError(error.message)
-              : `disconnected (${code}): ${formatUiExternalText(reason, t("common.unknown"))}`,
+              : closeReason
+                ? `disconnected (${code}): ${closeReason}`
+                : t(willRetry ? "connection.interruptedRetrying" : "connection.interrupted", {
+                    code: String(code),
+                  }),
           lastErrorCode: startupPending ? null : lastErrorCode,
           lastErrorAuthReason: startupPending ? null : readConnectionAuthReason(error?.details),
         });

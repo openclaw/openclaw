@@ -1,5 +1,6 @@
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { holdTelegramMediaTimeouts } from "./bot-media-timers.test-support.js";
 import {
   readRemoteMediaBufferSpy,
   setNextSavedMediaPath,
@@ -11,7 +12,6 @@ import {
   createBotHandler,
   createBotHandlerWithOptions,
   createTelegramPhotoForTest,
-  holdTelegramMediaTimeouts,
   mockTelegramFileDownload,
   mockTelegramPngDownload,
   watchTelegramFetch,

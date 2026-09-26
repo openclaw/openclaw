@@ -1,23 +1,27 @@
 import fs from "node:fs/promises";
-import { expect, it, vi } from "vitest";
+import { expect, it, vi, type Mock } from "vitest";
 import * as doctorServicePolicy from "../../commands/doctor-service-repair-policy.js";
 import * as configPaths from "../../config/paths.js";
 import * as gatewayService from "../../daemon/service.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import {
+  adoptUpdateRun,
   createUpdateRun,
   getUpdateRun,
   listUpdateRuns,
   recordUpdateRunPhase,
 } from "../../infra/update-run-ledger.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
+import { updateRunWarningMessages } from "../../infra/update-run-step.js";
 import { ABANDONED_UPDATE_RUN_MS } from "../../infra/update-run-timeouts.js";
+import { runExec } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { runRegisteredCli } from "../../test-utils/command-runner.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as restartHealth from "../daemon-cli/restart-health.js";
 import { registerUpdateCli } from "../update-cli.js";
 import type { LeaseScenario } from "./update-command-lease.test-support.js";
+import type { ProducedPluginUpdateResult } from "./update-command-plugins-internals.js";
 import * as serviceMaintenance from "./update-command-service-maintenance.js";
 
 export function seedInterruptedPostCoreRun(): UpdateRunRecord {
@@ -182,4 +186,88 @@ export function registerLeaseServiceRestorationTests(params: {
       }
     },
   );
+}
+
+export function registerLegacyResumeWarningTests(params: {
+  context: () => { state: OpenClawTestState; entrypoint: string };
+  writeScenario: (scenario: Omit<LeaseScenario, "lane">) => Promise<void>;
+  invoke: () => Promise<void>;
+  plugins: Mock<typeof import("./update-command-plugins.js").updatePluginsAfterCoreUpdate>;
+  pluginResult: ProducedPluginUpdateResult;
+  events: () => Promise<string[]>;
+  expectDoctorDiagnostics: () => void;
+}) {
+  async function prepareLegacyResume(doctorWarnings: string[]) {
+    const { state } = params.context();
+    await params.writeScenario({ doctorWarnings });
+    await fs.rm(state.path("handoff.json"));
+    const parent = adoptUpdateRun(createUpdateRun({ trigger: "cli" }).runId);
+    vi.stubEnv("OPENCLAW_UPDATE_POST_CORE", "1");
+    vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", parent.runId);
+    return { runId: parent.runId, resultPath: state.path("post-core-result.json") };
+  }
+
+  it.each([false, true])(
+    "legacy resume settles Doctor and retains its warnings before its result (changed=%s)",
+    async (changed) => {
+      const { state } = params.context();
+      const firstDoctorWarning = "Plugin fixture: first Doctor repair deferred.";
+      const secondDoctorWarning = "Plugin fixture: second Doctor repair deferred.";
+      const { runId, resultPath } = await prepareLegacyResume([firstDoctorWarning]);
+      params.plugins.mockImplementationOnce(async () => {
+        expect(await params.events()).toEqual(["post-attempt", "post-acquired"]);
+        expect(await fs.stat(resultPath).catch(() => null)).toBeNull();
+        if (changed) {
+          await state.writeJson("scenario.json", {
+            lane: "resume",
+            doctorWarnings: [secondDoctorWarning],
+          } satisfies LeaseScenario);
+        }
+        return { ...params.pluginResult, changed };
+      });
+
+      await params.invoke();
+
+      const doctorWarnings = [firstDoctorWarning, ...(changed ? [secondDoctorWarning] : [])];
+      expect(JSON.parse(await fs.readFile(resultPath, "utf8"))).toMatchObject({
+        status: "warning",
+        changed,
+        warnings: doctorWarnings.map((message) => ({ reason: "doctor-advisory", message })),
+      });
+      expect(updateRunWarningMessages(getUpdateRun(runId)?.steps ?? [])).toEqual(doctorWarnings);
+      expect(await params.events()).toEqual([
+        "post-attempt",
+        "post-acquired",
+        ...(changed ? ["post-attempt", "post-acquired"] : []),
+        "validate",
+        "readiness",
+      ]);
+      params.expectDoctorDiagnostics();
+    },
+  );
+
+  it("resume preserves settled Doctor warnings when plugin convergence fails after releasing its lease", async () => {
+    const { state, entrypoint } = params.context();
+    const doctorWarnings = [
+      "Plugin fixture: repair deferred.",
+      "Plugin fixture: optional check failed.",
+    ];
+    const { runId, resultPath } = await prepareLegacyResume(doctorWarnings);
+    params.plugins.mockRejectedValueOnce(new Error("plugin fixture failure"));
+    await expect(params.invoke()).rejects.toThrow("plugin fixture failure");
+    const result = JSON.parse(await fs.readFile(resultPath, "utf8"));
+    expect(result).toMatchObject({
+      status: "failed",
+      error: expect.stringContaining("plugin fixture failure"),
+    });
+    expect(result.error).not.toContain(state.root);
+    const recorded = getUpdateRun(runId);
+    expect(recorded).toMatchObject({ status: "running", after: {} });
+    expect(updateRunWarningMessages(recorded?.steps ?? [])).toEqual(doctorWarnings);
+    expect(recorded?.steps.some((step) => step.step === "finalize:installed-candidate")).toBe(
+      false,
+    );
+    const probe = await runExec(process.execPath, [entrypoint, "probe"], { timeoutMs: 15_000 });
+    expect(probe.stdout).toBe("acquired");
+  });
 }

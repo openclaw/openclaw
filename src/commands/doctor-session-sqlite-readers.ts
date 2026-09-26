@@ -25,10 +25,14 @@ import {
 } from "../config/sessions/session-entry-codec.js";
 import { transcriptEventReadBytesSql } from "../config/sessions/session-transcript-read-bytes.js";
 import type { SessionStoreTarget as ResolvedSessionStoreTarget } from "../config/sessions/targets.js";
-import { resolveAllAgentSessionStoreCandidateTargetsSync } from "../config/sessions/targets.js";
+import {
+  resolveAllAgentSessionStoreCandidateTargetsSync,
+  resolveConfiguredAgentDatabaseTargets,
+} from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
+import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { tableExists, tableHasColumn } from "../state/openclaw-state-db-schema-helpers.js";
 
@@ -577,14 +581,25 @@ export function resolveTargetSqlitePath(
 export function projectExistingAgentDatabaseTargets(
   targets: readonly SessionStoreTarget[],
   env: NodeJS.ProcessEnv,
+  cfg: OpenClawConfig,
 ): ExistingAgentDatabaseTarget[] {
   const seenPaths = new Set<string>();
+  const isRetained = createRetainedAgentDatabaseMatcher(env, () =>
+    resolveConfiguredAgentDatabaseTargets(cfg, { env }),
+  );
   return targets.flatMap((target) => {
-    if (readAgentDatabaseAdmissionRefusal(target.agentId, { env })) {
+    if (
+      isRetained(target.storePath, target.agentId) ||
+      readAgentDatabaseAdmissionRefusal(target.agentId, { env })
+    ) {
       return [];
     }
     const sqlitePath = resolveTargetSqlitePath(target, env);
-    if (seenPaths.has(sqlitePath) || !fs.existsSync(sqlitePath)) {
+    if (
+      isRetained(sqlitePath, target.agentId) ||
+      seenPaths.has(sqlitePath) ||
+      !fs.existsSync(sqlitePath)
+    ) {
       return [];
     }
     seenPaths.add(sqlitePath);
@@ -599,6 +614,7 @@ export function listExistingAgentDatabaseTargets(
   return projectExistingAgentDatabaseTargets(
     resolveAllAgentSessionStoreCandidateTargetsSync(cfg, { env }),
     env,
+    cfg,
   );
 }
 

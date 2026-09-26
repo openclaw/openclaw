@@ -1,7 +1,11 @@
 import type { Locator, Page } from "playwright";
 import { expect as expectBrowser } from "playwright/test";
 import { afterEach, expect, it } from "vitest";
-import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiSessionUrl,
+  installMockGateway,
+  pauseVirtualClock,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite, tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import { openNewSessionPlusMenu, replaceGatewayClient } from "./new-session-page.test-support.ts";
 import { sessionsList } from "./session-ownership-fixtures.test-support.ts";
@@ -454,9 +458,18 @@ suite.define(() => {
     await captureSessionOwnerProof(suite, currentPage, "one-human-with-agents.png");
     await expectBrowser(row.locator("openclaw-session-owner-chip")).toHaveCount(0);
 
+    await currentPage.clock.install();
+    await pauseVirtualClock(currentPage);
+    const initialRequests = (await gateway.getRequests("sessions.list")).length;
     await gateway.setMethodResponse("sessions.list", sessionsList(["profile-ada", "profile-bob"]));
     await gateway.emitGatewayEvent("sessions.changed", {});
+    await currentPage.clock.runFor(4_999);
+    expect(await gateway.getRequests("sessions.list")).toHaveLength(initialRequests);
+    await expectBrowser(row.locator("openclaw-session-owner-chip")).toHaveCount(0);
+    // Cross the event window and deliver the nested mock response timer.
+    await currentPage.clock.runFor(2);
     await expectBrowser(row.locator("openclaw-session-owner-chip")).toHaveCount(1);
+    await currentPage.clock.resume();
     await captureSessionOwnerProof(suite, currentPage, "multiple-humans.png");
   });
 

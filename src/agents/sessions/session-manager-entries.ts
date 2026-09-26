@@ -9,6 +9,7 @@ import {
 import { prepareTranscriptMessageAppend } from "../../config/sessions/session-accessor.sqlite-transcript-message-append.js";
 import { resolveSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
+import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import { isSessionTranscriptSideAppendEntry } from "../../config/sessions/transcript-tree.js";
 import {
   captureSessionMetadataPublication,
@@ -32,7 +33,6 @@ import {
   isSessionContextMetadataEntry,
   isTalkRealtimeVoiceEntry,
 } from "./session-manager-codec.js";
-import type { PreparedSessionTranscriptReload } from "./session-manager-core.js";
 import { generateSessionEntryId } from "./session-manager-id.js";
 import { SessionMetadataCommittedError } from "./session-manager-metadata-error.js";
 import {
@@ -55,6 +55,7 @@ import type {
   SessionMessageEntry,
   SessionLeafControl,
 } from "./session-manager-types.js";
+import type { PreparedSessionTranscriptReload } from "./session-manager-view-types.js";
 import { withSessionManagerWrite } from "./session-manager-write-admission.js";
 
 function canonicalizeSessionEntry<T extends SessionEntry>(entry: T): T {
@@ -462,11 +463,8 @@ export class SessionManagerEntries extends SessionManagerSuffixPersistence {
         const currentTarget = this.getSessionTarget();
         if (
           !committedTarget ||
-          !currentTarget ||
           this.getSessionId() !== publication.sessionId ||
-          (["agentId", "sessionId", "sessionKey", "storePath"] as const).some(
-            (key) => currentTarget[key] !== committedTarget[key],
-          )
+          !sameSessionTranscriptTargetBinding(committedTarget, currentTarget)
         ) {
           const rebound = new SessionTranscriptWriterClaimReboundError();
           throw viewFailure

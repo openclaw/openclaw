@@ -5,11 +5,55 @@ import {
   createRuntimeConfigWriteApplication,
 } from "../config/runtime-write-application.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { GatewayReloadPlan } from "./config-reload-plan.js";
 import type { GatewayCronState } from "./server-cron.js";
 import type { ManagedGatewayConfigReloaderParams } from "./server-reload-contracts.js";
 
 type ConfigWriteListener = (event: ConfigWriteNotification) => void;
 type ConfigWriteListenerRef = { current: ConfigWriteListener | null };
+
+export function createCronRestartPlan(): GatewayReloadPlan {
+  return createHotTailPlan({
+    changedPaths: ["cron"],
+    hotReasons: ["cron"],
+    restartCron: true,
+  });
+}
+
+export function createHotTailPlan(overrides: Partial<GatewayReloadPlan> = {}): GatewayReloadPlan {
+  return {
+    changedPaths: ["logging.level"],
+    restartGateway: false,
+    restartReasons: [],
+    hotReasons: ["logging.level"],
+    reloadHooks: false,
+    restartGmailWatcher: false,
+    restartCron: false,
+    restartHeartbeat: false,
+    reloadPlugins: false,
+    restartChannels: new Set(),
+    disposeMcpRuntimes: false,
+    noopPaths: [],
+    ...overrides,
+  };
+}
+
+export function createGatewayRestartPlan(changedPath = "gateway.port"): GatewayReloadPlan {
+  return createHotTailPlan({
+    changedPaths: [changedPath],
+    restartGateway: true,
+    restartReasons: [changedPath],
+    hotReasons: [],
+  });
+}
+
+export function createPluginReloadPlan(): GatewayReloadPlan {
+  return createHotTailPlan({
+    changedPaths: ["plugins.enabled"],
+    hotReasons: ["plugins.enabled"],
+    reloadPlugins: true,
+  });
+}
 
 export function createValidConfigSnapshot(config: OpenClawConfig, hash: string) {
   return {

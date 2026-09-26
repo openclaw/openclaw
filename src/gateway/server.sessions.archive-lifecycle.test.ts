@@ -46,6 +46,7 @@ function activeRunContext(params: {
   sessionKey: string;
   persistence: ReturnType<typeof createDeferredCore<void>>;
   ownerConnId?: string;
+  terminalPersistenceError?: Error;
 }) {
   const chatAbortControllers = new Map();
   const registration = registerChatAbortController({
@@ -81,6 +82,9 @@ function activeRunContext(params: {
         removeChatAbortControllerEntry(chatAbortControllers, params.runId, entry);
       },
     );
+    if (params.terminalPersistenceError) {
+      params.persistence.reject(params.terminalPersistenceError);
+    }
   });
   const chatRunState = createChatRunState();
   return {
@@ -741,19 +745,22 @@ test("sessions.patch returns UNAVAILABLE when terminal persistence fails", async
   const runId = "run-archive-persistence-failure";
   await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
   const persistence = createDeferredCore();
-  const active = activeRunContext({ runId, sessionId, sessionKey, persistence });
+  const active = activeRunContext({
+    runId,
+    sessionId,
+    sessionKey,
+    persistence,
+    terminalPersistenceError: new Error("disk full"),
+  });
   try {
-    const archive = directSessionReq(
+    const archived = await directSessionReq(
       "sessions.patch",
       { key: sessionKey, archived: true, expectedSessionId: sessionId },
       {
         context: active.context,
       },
     );
-    await vi.waitFor(() => expect(active.controller.signal.aborted).toBe(true));
-    persistence.reject(new Error("disk full"));
-
-    const archived = await archive;
+    expect(active.controller.signal.aborted).toBe(true);
     expect(archived.ok).toBe(false);
     expect(archived.error).toMatchObject({ code: "UNAVAILABLE", retryable: true });
     expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();

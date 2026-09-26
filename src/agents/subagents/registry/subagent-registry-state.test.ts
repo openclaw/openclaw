@@ -768,6 +768,63 @@ describe("subagent registry state read cache", () => {
     expect(mocks.loadSubagentRunsForChildSessionFromSqlite).toHaveBeenCalledTimes(2);
   });
 
+  it.each(["child", "controller"] as const)(
+    "keeps warm %s lookups scoped through cache publications and live moves",
+    (kind) => {
+      const key = "agent:main:selected";
+      const first = {
+        ...createRun("first"),
+        ...(kind === "child" ? { childSessionKey: key } : { requesterSessionKey: key }),
+      };
+      const second = {
+        ...createRun("second"),
+        ...(kind === "child" ? { childSessionKey: key } : { controllerSessionKey: key }),
+      };
+      const unrelated = createRun("unrelated");
+      mocks.loadSubagentRegistryFromSqlite.mockReturnValue(
+        new Map([first, unrelated, second].map((run) => [run.runId, run])),
+      );
+      const retained = getSubagentRunsSnapshotForRead(new Map());
+      const read =
+        kind === "child"
+          ? getSubagentRunsSnapshotForChildSession
+          : getSubagentRunsSnapshotForController;
+      expect([...read(new Map(), key).keys()]).toEqual([first.runId, second.runId]);
+
+      const field = kind === "child" ? "childSessionKey" : "controllerSessionKey";
+      const original = unrelated[field];
+      let unrelatedReads = 0;
+      Object.defineProperty(retained.get(unrelated.runId)!, field, {
+        enumerable: true,
+        configurable: true,
+        get() {
+          unrelatedReads++;
+          return original;
+        },
+      });
+      const copied = read(new Map(), key);
+      copied.get(first.runId)!.task = "caller-local change";
+      expect(read(new Map(), key).get(first.runId)?.task).toBe(first.task);
+
+      const moved = { ...first, [field]: "agent:main:elsewhere" };
+      persistSubagentRunsToDisk(new Map([[moved.runId, moved]]), [moved.runId]);
+      expect([...read(new Map(), key).keys()]).toEqual([second.runId]);
+      const live = new Map([[first.runId, first]]);
+      expect([...read(live, key).keys()]).toEqual([second.runId, first.runId]);
+      expect(read(live, key).get(first.runId)).toBe(first);
+
+      persistSubagentRunsToDisk(new Map([[first.runId, first]]), [first.runId]);
+      expect([...read(new Map(), key).keys()]).toEqual([first.runId, second.runId]);
+      persistSubagentRunsToDisk(new Map(), [first.runId]);
+      persistSubagentRunsToDisk(new Map([[first.runId, first]]), [first.runId]);
+      expect([...read(new Map(), key).keys()]).toEqual([second.runId, first.runId]);
+      expect(unrelatedReads).toBe(0);
+      expect(mocks.loadSubagentRegistryFromSqlite).toHaveBeenCalledOnce();
+      expect(mocks.loadSubagentRunsForChildSessionFromSqlite).not.toHaveBeenCalled();
+      expect(mocks.loadSubagentRunsForControllerFromSqlite).not.toHaveBeenCalled();
+    },
+  );
+
   it("masks persisted scope membership when the live run moved", () => {
     const persisted = createRun("moved");
     persisted.controllerSessionKey = "agent:main:controller:old";

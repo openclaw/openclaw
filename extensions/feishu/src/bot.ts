@@ -1303,14 +1303,13 @@ export async function handleFeishuMessage(params: {
           mode: contextVisibilityMode,
           kind: "history",
         });
-        const relevantMessages =
-          (senderScoped
-            ? allowlistedMessages.filter(
-                (msg) =>
-                  msg.senderType === "app" ||
-                  (msg.senderId !== undefined && senderIds.has(msg.senderId.trim())),
-              )
-            : allowlistedMessages) ?? [];
+        const relevantMessages = senderScoped
+          ? allowlistedMessages.filter(
+              (msg) =>
+                msg.senderType === "app" ||
+                (msg.senderId !== undefined && senderIds.has(msg.senderId.trim())),
+            )
+          : allowlistedMessages;
 
         const threadStarterBody = rootMsg?.content ?? relevantMessages[0]?.content;
         const includeStarterInHistory = Boolean(rootMsg?.content || ctx.rootId);
@@ -1354,6 +1353,7 @@ export async function handleFeishuMessage(params: {
       const contextBinding = {
         agentId,
         sessionKey: agentSessionKey,
+        nativeChannelId: ctx.chatId,
         messageId: ctx.messageId,
         inboundEventKind: "user_request" as const,
       };

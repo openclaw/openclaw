@@ -19,6 +19,7 @@ import type {
   TaskExecutionRestoreStore,
   TaskRegistryMutationScope,
   TaskRegistryObserverEvent,
+  TaskRegistryObservers,
 } from "./task-registry.store.types.js";
 import type { TaskDeliveryState, TaskRecord, TaskRuntime } from "./task-registry.types.js";
 
@@ -144,6 +145,8 @@ type TaskRegistryProcessState = {
     events: TaskRegistryEventMutations;
   };
   changeListeners: Set<(event?: TaskRegistryObserverEvent) => void>;
+  // SDK and Gateway module instances must publish to the same lifecycle observer.
+  observers: TaskRegistryObservers | null;
   projection: {
     epoch: number;
     dirty: boolean;
@@ -174,6 +177,7 @@ export function getTaskRegistryProcessState(): TaskRegistryProcessState {
     taskProgressBatches: new Map<string, TaskProgressBatch>(),
     runOwners: new Map<string, TaskRunOwner>(),
     changeListeners: new Set(),
+    observers: null,
     projection: {
       epoch: 0,
       dirty: false,

@@ -126,7 +126,7 @@ export const handleConfigCommand: CommandHandler = defineAuthorizedTextCommand(
     if (configCommand.action === "unset") {
       const path = parsedWritePath ?? [];
       try {
-        const removed = await unsetConfigPath(path);
+        const removed = await unsetConfigPath(path, params.command.assertOwnerCurrent);
         if (!removed) {
           return commandReply(`⚙️ No config value found for ${configCommand.path}.`);
         }
@@ -143,7 +143,7 @@ export const handleConfigCommand: CommandHandler = defineAuthorizedTextCommand(
     if (configCommand.action === "set") {
       const path = parsedWritePath ?? [];
       try {
-        await setConfigPath(path, configCommand.value);
+        await setConfigPath(path, configCommand.value, params.command.assertOwnerCurrent);
       } catch (error) {
         const message = formatAutoReplyConfigMutationError(error);
         if (message) {

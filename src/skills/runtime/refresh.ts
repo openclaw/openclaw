@@ -15,6 +15,7 @@ import {
 } from "../loading/workspace-skill-sources.js";
 import { areOrderedArraysEqual } from "./ordered-array-equality.js";
 import { acquireSkillsAncestorWatcher } from "./refresh-ancestor-watch.js";
+import { createSkillsContentWatcher } from "./refresh-content-watch.js";
 import { createRawSkillFileScheduler } from "./refresh-file-stability.js";
 import {
   closeRemoteSkillsWatchers,
@@ -29,7 +30,7 @@ import {
   suspendSkillsSnapshotSources,
   type SkillsSourceScope,
 } from "./refresh-state.js";
-import { joinSkillsWatcherCloses, teardownSkillsPathWatcher } from "./refresh-watch-close.js";
+import { joinSkillsWatcherCloses } from "./refresh-watch-close.js";
 import {
   createSkillsWatchPathFilter,
   getRawWatchedPath,
@@ -242,23 +243,7 @@ function createSkillsPathWatcher(
   }
   const pendingAncestors = new Set(ancestorRoots);
   let contentReady = target.path !== target.watchRoot;
-  const watcher =
-    target.path === target.watchRoot
-      ? runInSkillsWatcherContext(() =>
-          chokidar.watch(target.path, {
-            ignoreInitial: true,
-            followSymlinks: false,
-            usePolling,
-            // Identity metadata sits one level below the deepest admitted skill.
-            depth: target.depth + 1,
-            awaitWriteFinish: {
-              stabilityThreshold: SKILLS_WATCH_DEBOUNCE_MS,
-              pollInterval: 100,
-            },
-            ignored: pathFilter.ignored,
-          }),
-        )
-      : undefined;
+  let content: ReturnType<typeof createSkillsContentWatcher> | undefined;
   const releaseAncestors: (() => void)[] = [];
   const state: SkillsPathWatchState = {
     closed: false,
@@ -268,9 +253,7 @@ function createSkillsPathWatcher(
       }
       state.closed = true;
       clearTimeout(state.timer);
-      if (watcher) {
-        void teardownSkillsPathWatcher({ watcher });
-      }
+      content?.close();
       for (const release of releaseAncestors) {
         release();
       }
@@ -359,27 +342,28 @@ function createSkillsPathWatcher(
       settleInitialScan("ready");
     }
   };
-  watcher?.on("ready", () => {
-    contentReady = true;
-    ready();
-  });
   const onChange = (event: string, changedPath: string) => {
     const ancestorChanged = event === "ancestor";
     if (
       !isCurrent() ||
-      ((!watcher || ancestorChanged || event === "addDir" || event === "unlinkDir") &&
+      ((!content || ancestorChanged || event === "addDir" || event === "unlinkDir") &&
         // A coalesced native rename can replace an ancestor and recreate this
         // same path before delivery, leaving the content watch on the old inode.
-        reconcileRoot(changedPath, ancestorChanged && Boolean(watcher)))
+        reconcileRoot(changedPath, ancestorChanged && Boolean(content)))
     ) {
       return;
     }
     const skillsRelevant = ancestorChanged || pathFilter.isRelevant(event, changedPath);
+    if (skillsRelevant && (event === "addDir" || event === "unlinkDir")) {
+      content?.structureChanged();
+      if (event === "addDir" && state.initialScan === "ready") {
+        content?.rescan();
+      }
+    }
     if (skillsRelevant || pathFilter.isSupportingPath(changedPath)) {
       schedule(changedPath, skillsRelevant ? "skills" : "supporting");
     }
   };
-  watcher?.on("all", onChange);
   const handleRaw = (_eventName: string, rawPath: unknown, details: unknown) => {
     if (!isCurrent()) {
       return;
@@ -421,8 +405,7 @@ function createSkillsPathWatcher(
       handleRaw(...args);
     }
   };
-  watcher?.on("raw", onRaw);
-  const onError = (err: unknown) => {
+  const onError = (err: unknown, rescan = false) => {
     if (!isCurrent()) {
       return;
     }
@@ -448,8 +431,41 @@ function createSkillsPathWatcher(
     // A failed scan may never emit ready. Let healthy roots reconcile; if the
     // failed scan continues, its eventual ready still closes that read gap.
     settleInitialScan("error");
+    if (rescan) {
+      schedule();
+    }
   };
-  watcher?.on("error", onError);
+  if (target.path === target.watchRoot) {
+    content = createSkillsContentWatcher({
+      watch: () =>
+        runInSkillsWatcherContext(() =>
+          chokidar.watch(target.path, {
+            ignoreInitial: true,
+            followSymlinks: false,
+            usePolling,
+            // Identity metadata sits one level below the deepest admitted skill.
+            depth: target.depth + 1,
+            awaitWriteFinish: { stabilityThreshold: SKILLS_WATCH_DEBOUNCE_MS, pollInterval: 100 },
+            ignored: pathFilter.ignored,
+          }),
+        ),
+      isCurrent,
+      isStructuralRaw: pathFilter.isStructuralRaw,
+      ready: (rescan) => {
+        contentReady = true;
+        if (rescan) {
+          publishSkillsWatchChanges([
+            { targetPath: target.path, state, watcherKeys: state.subscribers, change: "skills" },
+          ]);
+        } else {
+          ready();
+        }
+      },
+      changed: onChange,
+      raw: onRaw,
+      error: onError,
+    });
+  }
   for (const root of ancestorRoots) {
     releaseAncestors.push(
       acquireSkillsAncestorWatcher(root, usePolling, {
@@ -465,7 +481,7 @@ function createSkillsPathWatcher(
           pendingAncestors.delete(root);
           onError(error);
           // Missing roots still need the ancestor's recovery scan.
-          if (watcher) {
+          if (content) {
             ready();
           }
         },
@@ -493,6 +509,7 @@ function subscribeWorkspaceToPath(
   }
   if (existing) {
     // A changed ancestor or deeper target needs a rebuilt watcher, preserving subscribers.
+    existing.close();
     const next = createSkillsPathWatcher(
       {
         ...watchTarget,
@@ -513,7 +530,6 @@ function subscribeWorkspaceToPath(
       }
     }
     next.subscribers.add(workspaceDir);
-    existing.close();
     pathWatchers.set(watchTarget.path, next);
     return;
   }

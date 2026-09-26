@@ -173,9 +173,11 @@ an emoji or generated face appears only when no image is configured or the image
 This behavior is shared by the roster, agent switcher, identity chips, settings, and chat.
 
 Activity and previews on the page and sidebar roster refresh on session events
-and Gateway reconnects. Continuous events share a paced follow-up refresh: after
-an automatic read, the next waits three times its duration, bounded between one
-and 15 seconds. Reconnects and explicit refreshes bypass that delay. When both are visible, they share one activity window and
+and Gateway reconnects. Reusing cached ancestry for the selected session does not
+trigger another list read. Events collect in a fixed five-second window before an
+automatic refresh. After an automatic read, the next waits three times its duration,
+bounded between five and 15 seconds. Navigation, reconnects, and explicit refreshes
+bypass that delay. When both are visible, they share one activity window and
 one refresh, so opening **Agents** while team mode is visible does not duplicate requests. Activity loading
 stops when neither roster is visible. Each refresh reads at most 300 sessions
 across agents, loading pinned sessions first and then the most recent sessions.

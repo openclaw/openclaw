@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { channel } from "node:diagnostics_channel";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
@@ -633,7 +634,40 @@ test.each(["path", "root"] as const)(
   },
 );
 
-test("retires the previous database before opening a different agent store", async () => {
+test("retains maintenance Workers across alternating databases and retires all idle heaps under pressure", async () => {
+  const fixtures = [createFixture(), createFixture()];
+  const spawned = observeReclamationWorkers();
+  const threads = fixtures.map(() => new Set<number>());
+  for (let pass = 0; pass < 6; pass += 1) {
+    const index = pass % fixtures.length;
+    const fixture = fixtures[index]!;
+    const databaseOptions = { ...fixture.options, path: fixture.database.path };
+    const diagnostics: SqliteSessionReclamationDiagnostics = {};
+    const plan =
+      pass % 3 === 0
+        ? reclamation.createSessionMaintenanceStatisticsOperation(databaseOptions)
+        : { kind: "maintenance-pages" as const, databaseOptions, materializedPlans: [] };
+    await expect(
+      runSqliteSessionReclamation({ forceInProcess: false, plan, diagnostics }),
+    ).resolves.toMatchObject({ kind: plan.kind });
+    threads[index]!.add(diagnostics.workerThreadId!);
+  }
+  expect(spawned).toHaveLength(2);
+  expect(threads.map((ids) => ids.size)).toEqual([1, 1]);
+  expect(fullChecks()).toBe(0);
+  for (const fixture of fixtures) {
+    expect(leasesFor(fixture)).toHaveLength(2);
+  }
+  const retired = Promise.all(spawned.map((worker) => once(worker, "exit")));
+  channel("openclaw.memory.critical").publish({});
+  await retired;
+  await closeOpenClawAgentDatabasesAsync();
+  for (const fixture of fixtures) {
+    expect(leasesFor(fixture)).toHaveLength(0);
+  }
+});
+
+test("joins explicit Worker retirement before opening a different agent store", async () => {
   const first = createFixture();
   const second = createFixture();
   invalidateOpenClawAgentDatabaseValidation(first.database.path);
@@ -649,7 +683,7 @@ test("retires the previous database before opening a different agent store", asy
         async (worker) => {
           if (options.path === first.database.path) {
             const close = worker.close.bind(worker);
-            closeRetained = close;
+            closeRetained = () => worker.close();
             vi.spyOn(worker, "close").mockImplementation(() => {
               const pending = close();
               closeEntered.resolve();
@@ -716,7 +750,9 @@ test("retires the previous database before opening a different agent store", asy
     order.push("foreground-release");
   });
   await entered.promise;
-  const switching = runSqliteSessionReclamation({ forceInProcess: false, plan: second.plans[0]! });
+  const switching = retirePrevious().then(() =>
+    runSqliteSessionReclamation({ forceInProcess: false, plan: second.plans[0]! }),
+  );
   void switching.catch(() => undefined);
   try {
     await Promise.race([closeEntered.promise, switching]);

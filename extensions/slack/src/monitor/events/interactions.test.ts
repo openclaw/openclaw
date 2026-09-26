@@ -2,7 +2,13 @@ import type { SlackShortcutMiddlewareArgs } from "@slack/bolt";
 // Slack tests cover interactions plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { encodeSlackApprovalAction, type SlackApprovalAction } from "../../approval-actions.js";
+import { encodeSlackApprovalAction } from "../../approval-actions.js";
+import { installSlackTestRuntime } from "../../test-runtime.test-support.js";
+import {
+  approvalButtonBlocks,
+  approvalContextOptions,
+  singleButtonBlocks,
+} from "./interactions.test-support.js";
 
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
 const requestHeartbeatMock = vi.hoisted(() => vi.fn());
@@ -279,62 +285,6 @@ type TestSlackClient = {
   chat: { update: (...args: unknown[]) => unknown };
 };
 
-function singleButtonBlocks(blockId: string, actionId: string) {
-  return [
-    {
-      type: "actions",
-      block_id: blockId,
-      elements: [{ type: "button", action_id: actionId }],
-    },
-  ];
-}
-
-function approvalButtonBlocks(
-  approvalId: string,
-  approvalKind: SlackApprovalAction["approvalKind"],
-  decision: SlackApprovalAction["decision"],
-) {
-  return [
-    {
-      type: "actions",
-      block_id: "exec_actions",
-      elements: [
-        {
-          type: "button",
-          action_id: "openclaw:approval_button:1:1",
-          value: encodeSlackApprovalAction({
-            type: "approval",
-            approvalId,
-            approvalKind,
-            decision,
-          }),
-        },
-      ],
-    },
-  ];
-}
-
-function approvalContextOptions(pluginApprover: string, execApprover: string) {
-  return {
-    cfg: {
-      channels: {
-        slack: {
-          accounts: {
-            default: {
-              allowFrom: [pluginApprover],
-              execApprovals: {
-                enabled: true,
-                approvers: [execApprover],
-                target: "both",
-              },
-            },
-          },
-        },
-      },
-    },
-  };
-}
-
 function createContext(overrides?: {
   dmEnabled?: boolean;
   dmPolicy?: "open" | "allowlist" | "pairing" | "disabled";
@@ -358,6 +308,7 @@ function createContext(overrides?: {
     type?: "im" | "mpim" | "channel" | "group";
   }>;
 }) {
+  installSlackTestRuntime();
   let handler: RegisteredHandler | null = null;
   let actionMatcher: RegExp | null = null;
   let viewHandler: RegisteredViewHandler | null = null;

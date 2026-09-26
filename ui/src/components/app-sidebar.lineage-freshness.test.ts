@@ -481,6 +481,7 @@ describe("sidebar routed-lineage freshness", () => {
   ])(
     "refreshes a routed child while preserving filtered membership (listed: $listed, rejected refresh: $rejectRefresh, pending selection: $pendingSelection)",
     async ({ listed, rejectRefresh, pendingSelection }) => {
+      vi.useFakeTimers();
       const parentKey = "agent:main:parent";
       const key = "agent:main:dashboard:child";
       const otherKey = "agent:main:other-owner";
@@ -837,7 +838,19 @@ describe("sidebar routed-lineage freshness", () => {
         }
 
         if (rejectRefresh) {
-          await waitForFast(() => expect(rejectedReads).toBe(1));
+          await vi.advanceTimersByTimeAsync(0);
+          await sidebar.updateComplete;
+          expect(sidebar.querySelector(`[data-session-key="${key}"]`)?.textContent).toContain(
+            "Current child",
+          );
+          gatewayHarness.publishEvent("sessions.changed", {
+            sessionKey: key,
+            agentId: "main",
+            reason: "patch",
+            spawnedBy: parentKey,
+          });
+          await vi.advanceTimersByTimeAsync(5_000);
+          expect(rejectedReads).toBe(1);
           expect(sidebar.textContent).toContain("Filtered session refresh unavailable");
         }
         await waitForFast(() =>

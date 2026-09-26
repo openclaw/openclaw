@@ -11,11 +11,21 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { readMigrationArtifactIdentity } from "./doctor-session-sqlite-artifact.js";
 import {
+  createSessionSqliteMigrationRun,
   listSessionSqliteMigrationManifestPaths,
   readSessionSqliteMigrationManifest,
+  recordCompletedMigrationMoves,
+  recordPlannedMigrationMoves,
+  updateMigrationManifestTarget,
+  writeSessionSqliteMigrationManifest,
+  type SessionSqliteMigrationMove,
 } from "./doctor-session-sqlite-migration-run.js";
-import { createTranscriptEventReader } from "./doctor-session-sqlite-readers.js";
+import {
+  createTranscriptEventReader,
+  resolveTargetSqlitePath,
+} from "./doctor-session-sqlite-readers.js";
 import {
   runDoctorSessionSqlite,
   settleRetainedDoctorSessionSources,
@@ -153,6 +163,46 @@ it.each(["import", "recover"] as const)(
         diana: "sqlite-ahead",
         frieren: "missing-delta",
       });
+      const duplicateArchives: string[] = [];
+      const duplicateBytes =
+        transcriptEvents("unrelated-history")
+          .map((event) => JSON.stringify(event))
+          .join("\n") + "\n";
+      if (mode === "import") {
+        const target = {
+          agentId: "main",
+          storePath: sessions[0]!.storePath,
+          sqlitePath: resolveTargetSqlitePath(sessions[0]!, state.env),
+        };
+        const archiveDir = path.join(
+          path.dirname(state.sessionsDir()),
+          "session-sqlite-import-archive",
+        );
+        fs.mkdirSync(archiveDir, { recursive: true });
+        const old = createSessionSqliteMigrationRun(state.env, [target]);
+        for (const copy of [1, 2]) {
+          const archivePath = path.join(archiveDir, `unrelated-history.jsonl.imported-${copy}`);
+          fs.writeFileSync(archivePath, duplicateBytes);
+          duplicateArchives.push(archivePath);
+          const move: SessionSqliteMigrationMove = {
+            kind: "unreferenced-jsonl",
+            sourcePath: path.join(state.sessionsDir(), "unrelated-history.jsonl"),
+            archivePath,
+            artifact: {
+              identity: readMigrationArtifactIdentity(archivePath),
+              classification: "protected",
+              reason: "unreferenced-history",
+              dependencies: [],
+              disposal: { state: "retained" },
+            },
+          };
+          recordPlannedMigrationMoves(old, target, [move]);
+          recordCompletedMigrationMoves(old, target, [move]);
+        }
+        updateMigrationManifestTarget(old, target, [], { validationBeforeArchive: "passed" });
+        old.manifest.completedAt = old.manifest.startedAt;
+        writeSessionSqliteMigrationManifest(old);
+      }
       await withDoctorSqliteMaintenanceLock({
         env: state.env,
         operation: "settle June originals",
@@ -169,6 +219,24 @@ it.each(["import", "recover"] as const)(
           expect(report.targets.flatMap((target) => target.issues)).not.toContainEqual(
             expect.objectContaining({ code: "active_sqlite_transcript_jsonl" }),
           );
+          if (mode === "import") {
+            expect(report.targets.flatMap((target) => target.issues)).toEqual([
+              {
+                code: "historical_duplicate_settled",
+                message: expect.stringContaining("Retired 1 byte-identical duplicate archive(s)"),
+              },
+            ]);
+            const survivingArchives = duplicateArchives.filter((file) => fs.existsSync(file));
+            expect(survivingArchives).toHaveLength(1);
+            expect(fs.readFileSync(survivingArchives[0]!, "utf8")).toBe(duplicateBytes);
+            for (const session of sessions) {
+              expect(fs.existsSync(session.storePath)).toBe(false);
+              const indexes = completedTranscriptMoves(state, session.storePath);
+              expect(indexes).toHaveLength(1);
+              expect(indexes[0]!.artifact?.classification).toBe("imported");
+              expect(fs.readFileSync(indexes[0]!.archivePath, "utf8")).toBe("{}");
+            }
+          }
           for (const session of sessions) {
             expect(fs.existsSync(session.sourcePath)).toBe(false);
             const moves = completedTranscriptMoves(state, session.sourcePath);

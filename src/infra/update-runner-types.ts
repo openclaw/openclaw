@@ -121,6 +121,7 @@ export type CommandRunner = (
   code: number | null;
   signal?: NodeJS.Signals | null;
   killed?: boolean;
+  outputLimitExceeded?: boolean;
   termination?: "exit" | "timeout" | "no-output-timeout" | "signal";
 }>;
 
@@ -157,18 +158,28 @@ export type UpdateRunnerOptions = {
   /** Admit required preparation after no-op detection, before allocating the candidate worktree. */
   beforeGitStaging?: () => Promise<{ step: UpdateStepResult; failureReason: string }>;
   validateCandidate: (root: string) => Promise<void>;
-  /** CLI-owned activation Doctor retains its config writer and requester authority. */
-  runGitDoctor: (root: string) => Promise<UpdateStepResult | null>;
-  prepareGitExposure?: (
-    candidateRoot: string,
-    candidateSha: string,
-    env: NodeJS.ProcessEnv | undefined,
-  ) => Promise<void>;
-  beforeGitMutation?: (target: GitUpdateTarget) => Promise<void>;
+  beforeGitMutation: (target: GitUpdateTarget) => Promise<void>;
   /** Operator-selected work deadline; omission leaves work unbounded, not probes or cleanup. */
   timeoutMs?: number;
   progress?: UpdateStepProgress;
-};
+} & (
+  | {
+      /** CLI-owned activation Doctor retains its config writer and requester authority. */
+      runGitDoctor: (
+        root: string,
+        results?: UpdateStepResult[],
+      ) => Promise<UpdateStepResult | null>;
+      prepareGitExposure?: never;
+    }
+  | {
+      runGitDoctor?: never;
+      prepareGitExposure: (
+        candidateRoot: string,
+        candidateSha: string,
+        env: NodeJS.ProcessEnv | undefined,
+      ) => Promise<void>;
+    }
+);
 
 export type UpdateInstallSurface =
   | { kind: "git"; mode: "git"; root: string; packageRoot: string }

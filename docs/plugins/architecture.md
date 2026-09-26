@@ -376,6 +376,21 @@ instead of retrying through another loader. Core-shipped JavaScript and librarie
 loaded outside a captured plugin instance keep their existing native/Jiti loading
 behavior.
 
+The host Plugin SDK always stays on the host's native module graph, including
+when Jiti compiles a plugin entry. SDK aliases use canonical filesystem paths so
+symlinked checkouts cannot create another host owner. The running host selects
+source or built SDK modules; a plugin's file extension does not select a second
+SDK graph. Source hosts need a native TypeScript loader such as the repository's
+tooling preload. An SDK that cannot load natively fails instead of being evaluated
+again by the plugin transformer. Plugin reloads may create new instances of the
+plugin's private code, while existing and replacement plugins share host SDK
+identity and authority.
+
+Captured packages also retain a link to the selected host installation so child
+workers and processes can import its public SDK. These separate isolates use the
+installation's normal package exports; they do not inherit the parent's source
+aliases or authority. Capture disposal removes the link, never the host package.
+
 Managed TypeScript filename metadata (`import.meta.url`, `import.meta.filename`,
 `import.meta.dirname`, `__filename`, and `__dirname`) identifies the captured
 source so relative asset reads stay within that generation. Node executes compiled
@@ -405,7 +420,8 @@ path settings.
 Registry retirement revokes managed execution separately from physical resource
 release. An acquired inspection can release its execution authority while a
 borrower still holds the underlying registration resources; the last physical
-claim owns their disposal. Bare SDK provider results retain their own instance
+claim owns their disposal, including a cleanup work scope that remains usable
+after the releasing request has ended. Bare SDK provider results retain their own instance
 consumer, so their callbacks remain usable until the owning SDK host closes.
 That host joins admitted callback work before releasing consumers and resources;
 releasing the inspection still prevents new borrows. Gateway shutdown keeps shared dependencies

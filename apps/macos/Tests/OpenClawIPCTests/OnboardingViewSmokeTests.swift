@@ -101,8 +101,8 @@ struct OnboardingViewSmokeTests {
     func `onboarding installs only for an app-managed local Gateway`(_ scenario: String) async throws {
         let root = try makeTempDirForTests()
         defer { try? FileManager.default.removeItem(at: root) }
-        try await TestIsolation.withIsolatedState(env: ["HOME": root.path, "CFFIXED_USER_HOME": root.path]) {
-            try #require(FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL == root
+        try await TestIsolation.withIsolatedState(launchAgentHomeDirectory: root) {
+            try #require(LaunchAgentPlist.homeDirectoryURL.standardizedFileURL == root
                 .standardizedFileURL)
             let marker = root.appendingPathComponent("disable-launchagent")
             if scenario == "attach-only" {
