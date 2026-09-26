@@ -20,6 +20,7 @@ import {
   createColdPluginFixture,
 } from "../../plugins/test-helpers/cold-plugin-fixtures.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import { createGatewayAuxHandlers } from "../server-aux-handlers.js";
@@ -245,6 +246,7 @@ module.exports = {
       new AbortController().signal,
     ]);
     const aux = createGatewayAuxHandlers({
+      scheduler: createTestGatewayScheduler(),
       log: {},
       getNativeApprovalRouteCoordinator: () => undefined,
       activateRuntimeSecrets: createTestRuntimeSecretsActivator(),
