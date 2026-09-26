@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
   copyFileSync,
@@ -47,6 +47,7 @@ type Fixture = {
   cacheUntilRevalidated?: boolean;
   notify?: boolean;
   ghRepo?: string;
+  originRemote?: string | null;
   ghHost?: string;
   configuredHost?: string;
   defaultRepoURL?: string;
@@ -66,6 +67,19 @@ function readPrMetadata(
   parentEnv: NodeJS.ProcessEnv = process.env,
 ) {
   const dir = tempDirs.make("openclaw-pr-metadata-");
+  execFileSync("git", ["init", "-q"], { cwd: dir });
+  if (fixture.originRemote !== null) {
+    execFileSync(
+      "git",
+      [
+        "remote",
+        "add",
+        "origin",
+        fixture.originRemote ?? "https://github.com/base-owner/base-repo",
+      ],
+      { cwd: dir },
+    );
+  }
   const gh = join(dir, "gh");
   const trace = join(dir, "trace");
   const selectedGit = join(dir, "selected-git");
@@ -255,15 +269,15 @@ if (endpoint === "user") {
       "-c",
       [
         "set -euo pipefail",
-        "source scripts/lib/plain-gh.sh",
-        "source scripts/pr-lib/worktree.sh",
-        "source scripts/pr-lib/common.sh",
+        `source '${process.cwd()}/scripts/lib/plain-gh.sh'`,
+        `source '${process.cwd()}/scripts/pr-lib/worktree.sh'`,
+        `source '${process.cwd()}/scripts/pr-lib/common.sh'`,
         `sleep() { printf '%s\\n' "$*" >> '${join(dir, "sleeps")}'; }`,
         command,
       ].join("; "),
     ],
     {
-      cwd: process.cwd(),
+      cwd: dir,
       env: {
         ...parentEnv,
         // This unsupervised child owns neither the parent's snapshot nor its FD3.
@@ -896,24 +910,29 @@ describe("PR metadata through REST", () => {
     );
     expect(result.stderr).toBe("");
   });
-  it("resolves a protected writer's default repository through its selected gh binary", () => {
-    const result = readPrMetadata(
-      { ghRepo: "", protectedGh: true },
-      "pr_gh_plain repo view --json url; pr_gh_plain pr edit 42 --add-assignee contributor",
-    );
-    expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).toEqual({ url: "https://github.com/base-owner/base-repo" });
-    expect(result.calls.filter((args) => args[0] === "browse")).toHaveLength(2);
-    expect(result.calls).toContainEqual([
-      "pr",
-      "edit",
-      "42",
-      "--add-assignee",
-      "contributor",
-      "--repo",
-      "https://github.com/base-owner/base-repo",
-    ]);
-  });
+  it.each(["https://github.com/base-owner/base-repo", null])(
+    "resolves a protected writer's repository with origin %s through its selected gh binary",
+    (originRemote) => {
+      const result = readPrMetadata(
+        { ghRepo: "", protectedGh: true, originRemote },
+        "pr_gh_plain repo view --json url; pr_gh_plain pr edit 42 --add-assignee contributor",
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual({ url: "https://github.com/base-owner/base-repo" });
+      expect(result.calls.filter((args) => args[0] === "browse")).toHaveLength(
+        originRemote ? 0 : 2,
+      );
+      expect(result.calls).toContainEqual([
+        "pr",
+        "edit",
+        "42",
+        "--add-assignee",
+        "contributor",
+        "--repo",
+        "https://github.com/base-owner/base-repo",
+      ]);
+    },
+  );
   it("rejects unsupported repository JSON fields", () => {
     const result = readPrMetadata({}, "pr_gh repo view --json unsupported");
     expect(result.status).toBe(1);
@@ -988,6 +1007,7 @@ describe("PR metadata through REST", () => {
           ghRepo: selection === "GH_REPO" ? "base-owner/base-repo" : "",
           configuredHost: enterpriseHost,
           defaultRepoURL: repoURL,
+          originRemote: repoURL,
           protectedGh: true,
         },
         `pr_gh_plain repo view --json url${explicit}; pr_gh_plain pr edit 42 --add-assignee contributor`,
@@ -1021,7 +1041,7 @@ describe("PR metadata through REST", () => {
     (failure) => {
       const result = readPrMetadata(
         { failure, failureTarget: "permission" },
-        "source scripts/pr-lib/prepare-core.sh; resolve_pr_author_access_at_prepare contributor base-owner/base-repo github.com",
+        `source '${process.cwd()}/scripts/pr-lib/prepare-core.sh'; resolve_pr_author_access_at_prepare contributor base-owner/base-repo github.com`,
       );
       expect(result.status, result.stderr).toBe(failure === "forbidden" ? 0 : 1);
       expect(result.stdout).toBe(failure === "forbidden" ? "unknown\n" : "");
@@ -1047,7 +1067,7 @@ describe("PR metadata through REST", () => {
             head: { sha: head, ref: "topic", repo: { id } },
           },
         },
-        "source scripts/pr-lib/gates.sh; ci_dispatch 42",
+        `source '${process.cwd()}/scripts/pr-lib/gates.sh'; ci_dispatch 42`,
       );
       expect(result.status, result.stderr).toBe(1);
       expect(result.stderr).toContain("missing repository identity for workflow dispatch");

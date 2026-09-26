@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
@@ -185,15 +186,47 @@ function repositoryLocator(explicit, route, readOptions = () => ({})) {
     /^(?:https:\/\/)?([A-Za-z0-9.-]+(?::[0-9]+)?)\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+?)(?:\.git)?\/?$/.exec(
       selected ?? "",
     );
-  // A host-qualified locator already names the API target. Its ensuing REST
-  // read verifies the repository; another browse HEAD adds no authority.
+  // Prefer a qualified selection, then origin only without a selection, then gh browse.
+  // The subsequent REST read remains the repository authority check.
   if (qualified) {
     return { host: qualified[1], name: qualified[2] };
+  }
+  const options = readOptions();
+  if (!selected) {
+    const cwd = options.cwd ?? process.cwd();
+    const env = options.env ?? process.env;
+    const selectedGit = env.OPENCLAW_PR_GIT || env.GIT_EXEC;
+    try {
+      const remote = execFileSync(
+        selectedGit ? resolve(cwd, selectedGit) : "git",
+        ["remote", "get-url", "origin"],
+        {
+          cwd,
+          env,
+          stdio: ["ignore", "pipe", "ignore"],
+          encoding: "utf8",
+          timeout: 10_000,
+          killSignal: "SIGKILL",
+        },
+      ).trim();
+      const match =
+        /^https?:\/\/([A-Za-z0-9.-]+(?::[0-9]+)?)\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+?)(?:\.git)?\/?$/.exec(
+          remote,
+        ) ??
+        /^ssh:\/\/[^/@:\s]+@([A-Za-z0-9.-]+)(?::[0-9]+)?\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+?)(?:\.git)?\/?$/.exec(
+          remote,
+        ) ??
+        /^[^/@:\s]+@([A-Za-z0-9.-]+):([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+?)(?:\.git)?$/.exec(remote);
+      if (match && (!env.GH_HOST || env.GH_HOST.toLowerCase() === match[1].toLowerCase())) {
+        return { host: match[1], name: match[2] };
+      }
+    } catch {
+      // Missing or unreadable origin leaves discovery to gh.
+    }
   }
   // Noninteractive browse keeps gh's default/host resolution local. --no-browser
   // adds a REST HEAD whose generic 403 hides quota evidence. The child-only
   // launcher prints the address; the subsequent API read validates authority.
-  const options = readOptions();
   const value = execPrGh(
     ["browse", ...(explicit ? ["--repo", explicit] : [])],
     {

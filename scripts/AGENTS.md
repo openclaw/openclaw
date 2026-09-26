@@ -102,12 +102,15 @@ Diagnostics never add automatic retries.
 ### Octopool string rewrite protection
 
 Keep `gh` on the Octopool shim; never disable string rewrite protection or select
-the raw GitHub CLI to get a landing through. `review-init` resolves the repository
-with the local `gh browse` command and a child-only URL-printing launcher. Older
-Octopool versions reject this singleton command before their guarded best-effort
-path. Upgrade to Octopool 0.7.1 or later; setting an explicit
-host-qualified `GH_REPO=github.com/openclaw/openclaw` also avoids discovery while
-preserving the subsequent authoritative API checks.
+the raw GitHub CLI to get a landing through. `review-init` and `merge-run` resolve
+the repository from a host-qualified `GH_REPO` (`https://github.com/openclaw/openclaw`
+or `github.com/openclaw/openclaw`) when set, otherwise from the checkout's `origin`
+remote (https, ssh://, and scp-like forms normalized; SSH ports dropped). Only when
+neither resolves, or an unqualified `owner/repo` selection needs gh's configured
+host, do they fall back to `gh browse` with the child-only URL-printing launcher.
+The subsequent REST read stays the authority check. Older Octopool versions reject
+this browse invocation before their guarded best-effort path; upgrade to Octopool
+0.7.1 or later for the shim-side fix.
 
 Immediate REST squash uses `gh api --method PUT repos/OWNER/REPO/pulls/NUMBER/merge
 --input -` with JSON containing the full prepared 40-hex `sha`,
