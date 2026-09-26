@@ -190,427 +190,26 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
   const budgets = {
     publicEntrypoints: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS",
-      // +1: session-discussion binds one external discussion provider to sessions.
-      // +1: focused media-local-roots replacement for the legacy agent-media facade.
-      // +1: account-aware channel DM policy setup descriptors.
-      // +1: dependency-light CLI argv parsing for machine-output metadata.
-      // +1: bounded archive extraction and single-entry reads.
-      // +1: budgeted root-bounded directory walking.
-      // +1: pinned secret reads and first-writer-wins creation.
-      // +2: restore the documented session-catalog and tool-results plugin contracts.
-      // +1: focused inbound-event delivery correlation for channel plugins.
-      // +1: dependency-light agent scope helpers for doctor migration enumeration.
-      // +1: dependency-light channel streaming config readers for doctor closures
-      //     (realtime-voice-activation is private-local and not counted here).
-      // +1: registry-bound plugin command planning and exact selected execution.
-      // +1: canonical Computer Use wire contract and node-host provider seam.
-      // -1: retire the deprecated messaging-targets subpath.
-      // +2: bounded provider streams and read-only SecretRef resolution.
-      // +1: diagnostic flag checks without event, trace, or redaction initialization.
-      // +1: restore the shipped read-only conversation-binding inspection facade.
-      // +1: canonical node CLI owners for plugin-provided node commands.
-      // +3: typed feature contracts, backend registration, and native Control UI hosting.
-      // +1: public provider-owned asynchronous embedding batch contract.
-      // +1: runtime-neutral WebSocket client/server adapter for bundled and external plugins.
-      // +1: approved host-owned workspace access runtime entrypoint.
-      // +1: passive docked link-reader contracts.
-      // +1: typed decision provider contract.
-      // +1: shared Code Mode executor contract for the bundled QuickJS owner.
       158,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
-      // +5: session discussion state, info, provider, registration, and Control UI path contracts.
-      // +2: structured media placeholder formatter and its text-fact contract.
-      // +2: narrow settled-turn finalization result and safe full-attempt projector.
-      // +1: channel-owned setup contract factory.
-      // +18: generic schema primitives needed by plugin-owned channel config schemas.
-      // +2: shared Teams reply-style and TTS schema leaves.
-      // +2: generic inbound-root and SCP-host schema validators.
-      // +2: attributed-range renderer and its options contract.
-      // +1: agent-harness transcript visibility projector.
-      // +1: outbound formatting capability profile.
-      // +3: plugin approval reviewer-detail cap/truncator and sanitize-with-status variant.
-      // +1: canonical incognito session classifier for storage-safe plugin behavior.
-      // +3: typed channel partial-delivery error, creator, and structural guard.
-      // +1: closed attempt-terminal merge, normalization, and projection helper.
-      // +3: harness-native MCP App preview helper and its runtime/catalog contracts.
-      // +1: canonical unknown-value to Error coercion.
-      // +6: canonical session delivery normalization, access, and projection helpers.
-      // +5: focused media-local-roots helpers and typed hook media contracts.
-      // +1: model-independent agent-harness preflight failure contract.
-      // +3: channel DM policy factory and its account/patch callback contracts.
-      // +1: typed owner-required error for session store path resolution.
-      // +1: native approval messaging target resolver.
-      // +1: shared plugin SecretRef setup plan helper.
-      // +2: shared low-cardinality diagnostic dimension normalizers.
-      // +1: shared plugin SecretRef setup CLI factory.
-      // +1: shared multi-claim ingress lifecycle fan-in.
-      // +3: channel prompt-context entry/compat types and channel metadata builder.
-      // +4: focused CLI root-option constants and parsers.
-      // +6: model-picker action/capability and authoritative session-apply contracts.
-      // +1: logger file-transport flush for graceful shutdown drains.
-      // +1: process-local sessions.changed plugin notification payload.
-      // +1: loopback-only host classifier for plugin local-machine boundaries.
-      // +7: bounded archive extraction, entry reads, errors, and policy types.
-      // +3: root-bounded walk iterator, options, and entry contract.
-      // +5: pinned secret create/read functions and their options contract.
-      // +1: canonical Gateway browser-origin acceptance for browser-facing plugin routes.
-      // +1: watched-sessions prompt block for plugin-owned harness runtimes.
-      // +11: attributed skill proposal evaluation and committed skill lifecycle contracts.
-      // +1: inbound media-fact metadata projection for plugin-owned channel ingestion.
-      // +2: shared ingress error factory through channel-outbound and channel-message.
-      // +2: shared ingress retention defaults through channel-outbound and channel-message.
-      // +1: standard raw-event ingress profile replacing two channel-local shells.
-      // +1: collision-safe MCP server-name assignment for native harness catalogs.
-      // +45: restore typed session-catalog and tool-results exports promised to plugins.
-      // +1: forwarding-routed approver-restricted native approval capability factory.
-      // +1: shared inbound-event delivery correlation factory for channel plugins.
-      // +1: canonical webhook route identity for plugin-owned target registries.
-      // +3: canonical ready, blocked, and stopped channel lifecycle patch factories.
-      // +1: bounded external-content sanitizer for plugin-owned untrusted projections.
-      // +1: auth-profile preservation decision for native model pickers.
-      // +2: shared channel question-reaction store and preflight-audio factories.
-      // +1: shared channel interactive dispatcher with canonical binding authorization.
-      // +1: simple channel secret contract factory replacing repeated collectors.
-      // +4: focused agent scope functions for doctor migration enumeration.
-      // +1: shared transcript credential-safety prompt for plugin-owned agent harnesses.
-      // +3: channel streaming config reader re-exports and session-agent scope resolver.
-      // +3: session-catalog terminal-start provider request and Gateway params/result contracts.
-      // +1: worker desktop endpoint contract for desktop-capable worker leases.
-      // +1: closed worker desktop app metadata for provider-advertised launchers.
-      // +1: provider-authored machine option metadata for cloud-session sizing.
-      // +1: native command spec merger through the native-command-registry facade.
-      // +8: focused plugin command runtime factory, dispatch symbol, and six readonly contracts.
-      // -2: remove unused WhatsApp-specific ack policy exports from channel-feedback.
-      // -7: retire unused and duplicate inbound-dispatch compatibility exports.
-      // +7: restore still-existing deprecated inbound-dispatch compatibility re-exports.
-      // +1: channel-account-bound native approval request selection.
-      // +6: required-capability V2 harness contracts through the focused and runtime barrels,
-      // including the side-question compatibility split.
-      // +1: add the account-aware native approval request selector.
-      // +3: add canonical coercion exports while retaining the shipped asString compatibility name.
-      // +2: add high-use coercion primitives while retaining shipped object-record exports.
-      // +2: channel-neutral location and provider-update hook contracts.
-      // +1: QQBot 2.0.1 operator-approval Gateway client compatibility export.
-      // +2: narrow channel agent-run terminal reader and outcome contract.
-      // +5: narrow string, record, and error coercion helpers.
-      // +1: normalized Gateway public origin resolver for plugin-generated links.
-      // -2: retire the dead progress-draft render reader; it counted twice via
-      // channel-outbound and channel-message's wildcard re-export of it.
-      // +11: Computer Use schemas/types plus parsers, compiler, and provider registration.
-      // +6: Computer Use v2 action, result, and capability contracts.
-      // +1: opaque channel participant evidence preservation without mint authority.
-      // +6: load-only bridges for published pre-split plugin artifacts
-      //     (voice-call/matrix runtime-doctor repair names, WhatsApp ack policy,
-      //     Slack progress-draft render) so installed plugins survive upgrade (#124041 class).
-      // -1: remove the orphan diagnostic traceparent propagation export.
-      // +4: registry-owned native compaction registration contracts for Codex harnesses.
-      // -17: retire the messaging-targets subpath, embedded Pi aliases, and shipped
-      // channel setup compatibility helpers.
-      // +1: concrete plugin side-effect owner resolution for agent harness runtimes.
-      // +1: strict explicit agent-id normalization without default-agent fallback.
-      // +5: session-catalog paging capability, family/node-host composers, and option contracts.
-      // +3: two focused primitives and the closed read-only SecretRef result contract.
-      // -2: remove obsolete transcript display helper exports.
-      // +2: lightweight agent config resolution and nonthrowing default-agent lookup.
-      // +1: focused media-store URL/path ingestion (saveMediaSource) off the deprecated barrel.
-      // +2: structural Gateway transport and request-error guards for plugin CLI routing.
-      // +1: canonical sensitive-URL redactor so plugin CLI errors never print URL userinfo.
-      // +1: account-scoped model catalog discovery for native agent harnesses.
-      // +2: shared delegation policy (mode resolver + section builder) so harness
-      //     runtimes render the same guidance instead of diverging prompt copies.
-      // +1: shared harness visible-source-reply guidance.
-      // +1: typed guarded-fetch redirect error for direct-only plugin delivery.
-      // -1: remove the test-only channel activity reset export.
-      // +1: named bounded structured-input surface for native harness protocol adapters.
-      // +1: OpenAI-compatible video execution in the existing media-understanding owner.
-      // -2: retire the uncalled secret-plan target resolver and its result type.
-      // +2: restore shipped channel setup helpers until stable packages migrate.
-      // +1: canonical untrusted audio-transcript formatter for channel plugins.
-      // +2: embedded foreground prompt context builder and its public context type.
-      // +1: typed owner-declared approval-scope contract for plugin-authored approvals.
-      // -5: approval display sanitizers moved to a non-public leaf module
-      //     (exec-approval-text-sanitize) to break the exec-approvals cycle.
-      // +3: typed ask_user option-index contract and two bounded owner-order resolvers.
-      // +2: exact-session deletion parameters and synchronous companion mutation contract.
-      // +2: canonical session-model selection and auxiliary runtime-auth preparation.
-      // +1: identifier authentication input type for external channel plugins.
-      // +1: shared channel-account logout config cleanup.
-      // +1: descriptor-based allowFrom authentication classifier for channel security audits.
-      // +1: downstream strength mappers need canonical ordering instead of duplicate rank tables.
-      // +1: focused account media-limit resolver avoids the deprecated barrel on startup.
-      // +1: shared bounded HTTP rejection transport replaces plugin-local close policies.
-      // +1: prepared model-provider builder preserves the stable builder's return contract.
-      // +1: canonical SecretRef default-alias predicate for plugin binding parity.
-      // +2: strict session-agent resolution aliases preserve shipped Plugin SDK behavior.
-      // +1: manifest-owned plugin capability secret availability guard.
-      // +1: canonical diagnostic flag checker through its focused subpath.
-      // +3: typed system-agent approval request, payload, and resolution contracts for channel plugins.
-      // +2: focused provider-auth routes for shipped auth ordering and provider-map lookup.
-      // +2: bounded display-only error diagnostic attachment and rendering.
-      // +1: shared presentation delivery policy for core and channel plugins.
-      // +2: shipped conversation-binding inspection function and result type.
-      // +4: canonical node CLI option, envelope, presentation, and error owners.
-      // +1: Gateway caller ownership for standalone browser routing.
-      // +1: canonical temporal context renderer for plugin-owned agent harnesses.
-      // +1: canonical user-turn operational metadata restoration for native harnesses.
-      // +2: read-only debug proxy capture reader factory and contract.
-      // +2: owner-selected channel groups and their authored config path for safe recovery hints.
-      // +1: canonical conversation-to-session binding read for native channel controls.
-      // +1: final callable-tool availability projection for native harnesses.
-      // +44: feature operation/client and native Control UI contribution/host contracts.
-      // +1: explicit native page history and query preservation options.
-      // +4: observed session query, result, snapshot, and subscription contracts.
-      // +2: browser-safe Date timestamp validation and UTF-16 truncation primitives.
-      // +3: capability catalog descriptors, entry factories, and native host context.
-      // +2: canonical paragraph grouping and UTF-16 boundaries for channel-owned chunking.
-      // +1: retained runtime config reader preserves channel owner and scoped config identity.
-      // +1: shared session-catalog host publication with completion ownership.
-      // +1: provider-owned local-service reconciliation context.
-      // +7: card projection plus three rendering helpers on channel-outbound and its shipped barrel.
-      // +2: shared diff-stat rendering on channel-outbound and its shipped barrel.
-      // +1: shared static UI guidance, separate from per-turn harness delivery policy.
-      // +1: shared root/account DM policy refinement for channel schemas.
-      // -1: add one tool policy object and retire two unused deprecated mode exports.
-      // -1: one exec policy object replaces two deprecated comparator exports.
-      // +1: approved bounded TAR inspection through the archive admission owner.
-      // +8: bounded group-thread coordination, mention/route facts, and participant delivery types.
-      // +1: canonical runtime-context classifier for native history projection.
-      // +1: prepared model-specific runtime choices for channel consumers.
-      // +3: public provider-owned asynchronous embedding batch contract.
-      // +2: canonical credential-value functions through the narrow secret-input surface.
-      // +1: shared removed-model choice recovery text for channel consumers.
-      // +2: shared stored-account key selection and its plugin-owned policy type.
-      // +3: prepared outbound planning, its plan type, and inbound delivery on channel-outbound only.
-      // +1: shared per-connection webhook request ordering for channel listeners.
-      // +1: approved shared widget CDN policy for core and channel presenters.
-      // +13: runtime-neutral WebSocket client/server, stream, data, and option contracts.
-      // +2: approved process-diagnostics predicate and lightweight subsystem logger.
-      // +1: approved shared native-command argument-menu applicability predicate.
-      // +4: shared activity projectors and complete-preamble admission, including the shipped barrel.
-      // -1: keep complete-preamble admission off the deprecated compatibility facade.
-      // +1: preserve opaque host reply metadata through Telegram recovery text clones.
-      // +1: canonical media/attachment associations for recovered-final filtering.
-      // +4: approved workspace access exports; later stack exports belong to their consumers.
-      // +6: passive link-reader descriptor, metadata, document, preview, and request types.
-      // +1: shared workspace bootstrap file policy.
-      // +2: typed workspace unavailability and its structural classifier.
-      // +1: preserve accepted modifier media selection during transcript recovery.
-      // +13: twelve decision contract types and one prepared plugin secret reader.
-      // +6: shared delivery facts, source-reply detection, argument sanitization, and media comparison.
-      // +1: workspace Memory file client.
-      // +2: prepare admitted input attachments and bind a workspace transfer adapter.
-      // +1: approved host workspace Skill resource reader.
-      // +1: approved terminal-reply classifier for A2A task completion.
-      // +1: approved native workspace worker argv resolver for node adapters.
-      // +35: shared Code Mode executor/guest protocol and source/output implementation helpers.
-      // +3: approved shared preview lifecycle factory and delivery/lifecycle types.
-      // +1: approved canonical resolveConfigPath export for pre-config native browser admission.
-      // +1: supported read-only admitted operator scopes for tool presentation.
-      // +2: canonical OAuth refresh fence and generation checks for managed runtimes.
-      // +5: approved meeting participation contract: four types and one callable (#152327).
-      // +2: shared workspace context preparation and bounded instruction snapshots.
-      // +1: Gateway-verified legacy webhook endpoint attribution.
-      // Six async capture counterparts and four types consumed by bundled plugins.
       4590,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
-      // +2: session discussion provider registration and canonical Control UI path building.
-      // +1: structured media placeholder formatter for text-only channel carriers.
-      // +1: settled-turn full-attempt projector.
-      // +1: channel-owned setup contract factory.
-      // +4: generic channel schema shape builders.
-      // +1: plugin-owned sensitive-schema registration.
-      // +2: generic inbound-root and SCP-host schema validators.
-      // +1: attributed-range renderer.
-      // +1: agent-harness transcript visibility projector.
-      // +2: plugin approval detail truncator and sanitize-with-status variant.
-      // +1: canonical incognito session classifier for storage-safe plugin behavior.
-      // +2: channel partial-delivery error creator and structural guard.
-      // +1: harness-native MCP App preview helper.
-      // +1: canonical unknown-value to Error coercion.
-      // +6: canonical session delivery normalization, access, and projection helpers.
-      // +2: focused media-local-roots helpers.
-      // +3: channel DM policy factory and its account/patch callbacks.
-      // +1: native approval messaging target resolver.
-      // +2: shared low-cardinality diagnostic dimension normalizers.
-      // +1: shared plugin SecretRef setup CLI factory.
-      // +1: shared multi-claim ingress lifecycle fan-in.
-      // +1: channel metadata builder.
-      // +3: focused CLI root-option parsers.
-      // +1: authoritative model-picker session-apply operation.
-      // +1: logger file-transport flush for graceful shutdown drains.
-      // +1: loopback-only host classifier for plugin local-machine boundaries.
-      // +2: bounded archive extraction and single-entry reads.
-      // +1: root-bounded directory walk iterator.
-      // +4: pinned secret create and synchronous/asynchronous reads.
-      // +1: canonical Gateway browser-origin acceptance for browser-facing plugin routes.
-      // +1: watched-sessions prompt block for plugin-owned harness runtimes.
-      // +1: inbound media-fact metadata projection for plugin-owned channel ingestion.
-      // +2: shared ingress error factory through channel-outbound and channel-message.
-      // +1: standard raw-event ingress profile replacing two channel-local shells.
-      // +1: collision-safe MCP server-name assignment for native harness catalogs.
-      // +14: restore callable session-catalog and tool-results helpers promised to plugins.
-      // +1: forwarding-routed approver-restricted native approval capability factory.
-      // +1: shared inbound-event delivery correlation factory for channel plugins.
-      // +1: canonical webhook route identity for plugin-owned target registries.
-      // +3: canonical ready, blocked, and stopped channel lifecycle patch factories.
-      // +1: bounded external-content sanitizer for plugin-owned untrusted projections.
-      // +1: auth-profile preservation decision for native model pickers.
-      // +2: shared channel question-reaction store and preflight-audio factories.
-      // +1: shared channel interactive dispatcher with canonical binding authorization.
-      // +1: simple channel secret contract factory replacing repeated collectors.
-      // +4: focused agent scope functions for doctor migration enumeration.
-      // +3: channel streaming config reader functions and session-agent scope resolver.
-      // +1: native command spec merger through the native-command-registry facade.
-      // +1: focused registry-bound plugin command runtime factory.
-      // -1: remove the unused WhatsApp-specific ack policy helper.
-      // -10: collapse inbound-dispatch callable aliases and wrappers.
-      // +7: restore still-existing deprecated inbound-dispatch callable re-exports.
-      // -3: keep the generic plugin-command reply carrier opaque and non-callable.
-      // +1: channel-account-bound native approval request selection.
-      // +1: add the account-aware native approval request selector.
-      // +3: add canonical coercion exports while retaining the shipped asString compatibility name.
-      // +2: add high-use callable coercion primitives while retaining shipped object-record exports.
-      // +1: QQBot 2.0.1 operator-approval Gateway client compatibility export.
-      // +1: narrow channel agent-run terminal reader.
-      // +5: narrow string, record, and error coercion helpers.
-      // +1: normalized Gateway public origin resolver for plugin-generated links.
-      // -2: retire the dead progress-draft render reader; it counted twice via
-      // channel-outbound and channel-message's wildcard re-export of it.
-      // +4: Computer Use wire parsers, validator compiler, and provider registration.
-      // +3: load-only bridges for published pre-split plugin artifacts
-      //     (voice-call/matrix runtime-doctor repair names, WhatsApp ack policy,
-      //     Slack progress-draft render) so installed plugins survive upgrade (#124041 class).
-      // -1: remove the orphan diagnostic traceparent propagation export.
-      // -12: retire the callable messaging-targets, embedded Pi, and channel setup helpers.
-      // +1: concrete plugin side-effect owner resolution for agent harness runtimes.
-      // +1: strict explicit agent-id normalization without default-agent fallback.
-      // +2: session-catalog family and node-host binding composers.
-      // +2: bounded provider stream and read-only SecretRef resolver.
-      // -1: remove the obsolete transcript tool-call predicate.
-      // +2: lightweight agent config resolution and nonthrowing default-agent lookup.
-      // +1: focused media-store URL/path ingestion (saveMediaSource) off the deprecated barrel.
-      // +2: structural Gateway transport and request-error guards for plugin CLI routing.
-      // +1: canonical sensitive-URL redactor so plugin CLI errors never print URL userinfo.
-      // +2: shared delegation policy (mode resolver + section builder) so harness
-      //     runtimes render the same guidance instead of diverging prompt copies.
-      // +1: shared harness visible-source-reply guidance.
-      // -1: remove the test-only channel activity reset export.
-      // +1: OpenAI-compatible video execution in the existing media-understanding owner.
-      // -1: retire the uncalled secret-plan target resolver.
-      // +2: restore shipped channel setup helpers until stable packages migrate.
-      // +1: canonical untrusted audio-transcript formatter for channel plugins.
-      // +1: embedded foreground prompt context builder.
-      // -4: approval display sanitizers moved to a non-public leaf module
-      //     (exec-approval-text-sanitize) to break the exec-approvals cycle.
-      // +2: bounded ask_user owner-order map builder and option resolver.
-      // +2: canonical session-model selection and auxiliary runtime-auth preparation.
-      // +1: shared channel-account logout config cleanup.
-      // +1: descriptor-based allowFrom authentication classifier for channel security audits.
-      // +1: downstream strength mappers need canonical ordering instead of duplicate rank tables.
-      // +1: focused account media-limit resolver avoids the deprecated barrel on startup.
-      // +1: shared bounded HTTP rejection transport replaces plugin-local close policies.
-      // +1: prepared model-provider builder preserves the stable builder's return contract.
-      // +1: canonical SecretRef default-alias predicate for plugin binding parity.
-      // +2: strict session-agent resolution aliases preserve shipped Plugin SDK behavior.
-      // +1: manifest-owned plugin capability secret availability guard.
-      // +1: canonical diagnostic flag checker through its focused subpath.
-      // +1: shared approval expiry formatter for native channel prompts.
-      // +2: focused provider-auth routes for shipped auth ordering and provider-map lookup.
-      // +2: bounded display-only error diagnostic attachment and rendering.
-      // +1: shared presentation delivery policy for core and channel plugins.
-      // +1: shipped read-only conversation-binding inspection function.
-      // +4: canonical node CLI option, envelope, presentation, and error owners.
-      // +1: Gateway caller ownership for standalone browser routing.
-      // +1: canonical temporal context renderer for plugin-owned agent harnesses.
-      // +1: canonical user-turn operational metadata restoration for native harnesses.
-      // +1: read-only debug proxy capture reader factory.
-      // +2: owner-selected channel groups and their authored config path for safe recovery hints.
-      // +1: canonical conversation-to-session binding read for native channel controls.
-      // +1: final callable-tool availability projection for native harnesses.
-      // +4: defineFeatureContract, createFeatureClient, defineFeaturePlugin, defineControlUiPlugin.
-      // +2: browser-safe Date timestamp validation and UTF-16 truncation primitives.
-      // +2: canonical paragraph grouping and UTF-16 boundaries for channel-owned chunking.
-      // +1: retained runtime config reader preserves channel owner and scoped config identity.
-      // +1: shared session-catalog host publication with completion ownership.
-      // +7: card projection plus three rendering helpers on channel-outbound and its shipped barrel.
-      // +2: shared diff-stat rendering on channel-outbound and its shipped barrel.
-      // +1: shared static UI guidance, separate from per-turn harness delivery policy.
-      // +1: shared root/account DM policy refinement for channel schemas.
-      // -2: retire the deprecated mode projection callables.
-      // -2: exec comparators are members of the shared policy object.
-      // +1: approved bounded TAR inspection through the archive admission owner.
-      // +5: group-thread coordinator, config resolution, mention facts, route exclusion, delivery session.
-      // +1: canonical runtime-context classifier for native history projection.
-      // +1: prepared model-specific runtime choice reader.
-      // +2: canonical env-value reader and managed SecretRef marker constructor.
-      // +1: shared stored-account key selection for channel readers and writers.
-      // +2: prepared outbound planning and inbound delivery; deprecated channel-message stays frozen.
-      // +1: shared per-connection webhook request ordering for channel listeners.
-      // +4: runtime-neutral WebSocket client/server and stream constructors.
-      // +2: approved process-diagnostics predicate and lightweight subsystem logger.
-      // +1: approved shared native-command argument-menu applicability predicate.
-      // +4: shared activity projectors and complete-preamble admission, including the shipped barrel.
-      // -1: keep complete-preamble admission off the deprecated compatibility facade.
-      // +1: preserve opaque host reply metadata through Telegram recovery text clones.
-      // +1: canonical media/attachment associations for recovered-final filtering.
-      // +3: approved workspace access callables; later stack exports belong to their consumers.
-      // +1: shared workspace bootstrap file policy.
-      // +1: workspace unavailability classifier.
-      // +1: preserve accepted modifier media selection during transcript recovery.
-      // +1: prepared plugin capability secret reader.
-      // +6: shared delivery facts, source-reply detection, argument sanitization, and media comparison.
-      // +1: workspace Memory file client.
-      // +2: prepare admitted input attachments and bind a workspace transfer adapter.
-      // +1: approved host workspace Skill resource reader.
-      // +1: approved terminal-reply classifier for A2A task completion.
-      // +1: approved native workspace worker argv resolver for node adapters.
-      // +6: shared Code Mode source preparation, output capture, and source-location helpers.
-      // +1: approved shared preview lifecycle factory.
-      // +1: approved canonical resolveConfigPath callable for pre-config native browser admission.
-      // +1: supported read-only readGatewayToolOperatorScopes callable.
-      // +2: canonical OAuth refresh fence and generation checks for managed runtimes.
-      // +1: approved runMeetingParticipationWithBrowser callable (#152327).
-      // +2: shared workspace context preparation and bounded instruction snapshots.
-      // +1: Gateway-verified legacy webhook endpoint attribution.
-      // Async capture initialization, HTTP/WS events, finalization, store, and reader.
       2694,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
-      // +3: canonical incognito classifier projected through deprecated compatibility barrels.
-      // +10: named media legacy projection deprecations across public compatibility barrels.
-      // +2: channel prompt-context type and metadata builder compatibility aliases.
-      // +1: shared ingress error factory projected through channel-message.
-      // +1: shared ingress retention defaults projected through channel-message.
-      // +1: shipped channel setup state-migration declaration during its migration window.
-      // +4: session-write lease no-op compatibility stubs through the 2026.10 train.
-      // +7: restore still-existing deprecated inbound-dispatch compatibility re-exports.
-      // +6: source-compatible harness contracts retained during the V2 migration window.
-      // +5: shipped default-agent resolver projections retained during explicit-owner migration.
-      // +5: load-only bridges for published pre-split plugin artifacts
-      //     (voice-call/matrix runtime-doctor repair names, WhatsApp ack policy,
-      //     Slack progress-draft render) so installed plugins survive upgrade (#124041 class).
-      // -18: retire the expired August compatibility exports and messaging-targets subpath.
-      // +4: rendering helpers forwarded by the shipped channel-message wildcard.
-      // Retain deprecated synchronous capture alongside its async migration surface.
       1139,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS",
-      // -1: infra-runtime now names its error exports explicitly.
-      // -1: infra-runtime excludes the internal system-event receipt API.
-      // -1: infra-runtime re-exports number coercion directly from its canonical owner.
-      // -1: channel-message pins its published compatibility exports explicitly.
-      // -1: infra-runtime pins its existing diagnostics type-query surface.
-      // -1: infra-runtime pins its existing local-file-access exports.
       47,
       env,
     ),
@@ -671,8 +270,6 @@ function countWildcardReexports(entrypoints: string[]) {
 function collectExportStats(project: Project, entrypoints: string[]) {
   const { program, checker } = project;
   const byEntrypoint = new Map<string, ExportEntryStats>();
-  const uniqueNames = new Set<string>();
-  const uniqueCallableNames = new Set<string>();
 
   for (const entrypoint of entrypoints) {
     const sourceFile = program.getSourceFile(entrypointPath(entrypoint));
@@ -692,8 +289,6 @@ function collectExportStats(project: Project, entrypoints: string[]) {
     let deprecatedCallableExports = 0;
     const deprecatedEntrypoint = deprecatedPublicEntrypointSet.has(entrypoint);
     for (const symbol of symbols) {
-      const exportName = `${entrypoint}:${symbol.name}`;
-      uniqueNames.add(exportName);
       const callable = isCallableExport(checker, symbol, sourceFile);
       const deprecated =
         deprecatedEntrypoint ||
@@ -701,7 +296,6 @@ function collectExportStats(project: Project, entrypoints: string[]) {
         hasDeprecatedTag(checker, unwrapAlias(checker, symbol));
       if (callable) {
         callableExports += 1;
-        uniqueCallableNames.add(exportName);
       }
       if (deprecated) {
         deprecatedExports += 1;
@@ -718,22 +312,7 @@ function collectExportStats(project: Project, entrypoints: string[]) {
     });
   }
 
-  const totals = {
-    entrypoints: entrypoints.length,
-    exports: 0,
-    callableExports: 0,
-    deprecatedExports: 0,
-    deprecatedCallableExports: 0,
-    uniqueExports: uniqueNames.size,
-    uniqueCallableExports: uniqueCallableNames.size,
-  };
-  for (const stats of byEntrypoint.values()) {
-    totals.exports += stats.exports;
-    totals.callableExports += stats.callableExports;
-    totals.deprecatedExports += stats.deprecatedExports;
-    totals.deprecatedCallableExports += stats.deprecatedCallableExports;
-  }
-  return { byEntrypoint, totals };
+  return byEntrypoint;
 }
 
 function selectExportStats(
@@ -751,7 +330,7 @@ function selectExportStats(
     uniqueCallableExports: 0,
   };
   for (const entrypoint of entrypoints) {
-    const stats = scannedStats.byEntrypoint.get(entrypoint) ?? {
+    const stats = scannedStats.get(entrypoint) ?? {
       exports: 0,
       callableExports: 0,
       deprecatedExports: 0,
@@ -769,7 +348,7 @@ function selectExportStats(
   return { byEntrypoint, totals };
 }
 
-function formatStats(label: string, stats: ReturnType<typeof collectExportStats>["totals"]) {
+function formatStats(label: string, stats: ReturnType<typeof selectExportStats>["totals"]) {
   return [
     `${label}:`,
     `  entrypoints: ${stats.entrypoints}`,
@@ -782,7 +361,7 @@ function formatStats(label: string, stats: ReturnType<typeof collectExportStats>
 }
 
 function collectDeprecatedEntrypointBudgetFailures(
-  byEntrypoint: ReturnType<typeof collectExportStats>["byEntrypoint"],
+  byEntrypoint: ReturnType<typeof collectExportStats>,
   entrypointBudgets: Readonly<Record<string, number>>,
 ) {
   const failures: string[] = [];

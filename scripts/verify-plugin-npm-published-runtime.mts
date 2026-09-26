@@ -9,10 +9,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import * as tar from "tar";
-import {
-  isTypeScriptPackageEntry,
-  listBuiltRuntimeEntryCandidates,
-} from "../src/plugins/package-entrypoints.js";
+import { listBuiltRuntimeEntryCandidates } from "../src/plugins/package-entrypoints.js";
 import { readPositiveIntEnv } from "./e2e/lib/env-limits.mjs";
 import { resolveNpmJsonString } from "./lib/npm-json-output.mts";
 import { sleep } from "./lib/sleep.mjs";
@@ -66,10 +63,6 @@ function normalizePackagePath(value: string) {
 
 function hasPackedFile(packageFiles: Set<string>, entryPath: string) {
   return packageFiles.has(normalizePackagePath(entryPath));
-}
-
-function missingCompiledRuntimeError(packageLabel: string, entry: string, candidates: string[]) {
-  return `${packageLabel} requires compiled runtime output for TypeScript entry ${entry}: expected ${candidates.join(", ")}`;
 }
 
 function formatPackageLabel(packageJson: Record<string, unknown>, fallbackSpec = "") {
@@ -137,21 +130,21 @@ export function collectPluginNpmPublishedRuntimeErrors(params: {
     return errors;
   }
 
-  for (const [index, entry] of extensions.entries()) {
-    const runtimeEntry = runtimeExtensions[index] ?? (isTypeScriptPackageEntry(entry) ? "" : entry);
-    if (runtimeEntry) {
-      if (!hasPackedFile(packageFiles, runtimeEntry)) {
-        errors.push(`${packageLabel} runtime extension entry not found: ${runtimeEntry}`);
+  const checkRuntimeEntry = (entry: string, runtimeEntry: string | undefined, label: string) => {
+    const candidates = runtimeEntry ? [] : listBuiltRuntimeEntryCandidates(entry);
+    if (candidates.length > 0) {
+      if (!candidates.some((candidate) => hasPackedFile(packageFiles, candidate))) {
+        errors.push(
+          `${packageLabel} requires compiled runtime output for TypeScript entry ${entry}: expected ${candidates.join(", ")}`,
+        );
       }
-      continue;
+    } else if (!hasPackedFile(packageFiles, runtimeEntry || entry)) {
+      errors.push(`${packageLabel} ${label} entry not found: ${runtimeEntry || entry}`);
     }
+  };
 
-    const candidates = listBuiltRuntimeEntryCandidates(entry);
-    if (candidates.some((candidate) => hasPackedFile(packageFiles, candidate))) {
-      continue;
-    }
-
-    errors.push(missingCompiledRuntimeError(packageLabel, entry, candidates));
+  for (const [index, entry] of extensions.entries()) {
+    checkRuntimeEntry(entry, runtimeExtensions[index], "runtime extension");
   }
 
   if (runtimeSetupEntry && !setupEntry) {
@@ -162,25 +155,7 @@ export function collectPluginNpmPublishedRuntimeErrors(params: {
   }
 
   if (setupEntry) {
-    if (runtimeSetupEntry) {
-      if (!hasPackedFile(packageFiles, runtimeSetupEntry)) {
-        errors.push(`${packageLabel} runtime setup entry not found: ${runtimeSetupEntry}`);
-      }
-      return errors;
-    }
-
-    const candidates = listBuiltRuntimeEntryCandidates(setupEntry);
-    if (candidates.length > 0) {
-      if (candidates.some((candidate) => hasPackedFile(packageFiles, candidate))) {
-        return errors;
-      }
-      errors.push(missingCompiledRuntimeError(packageLabel, setupEntry, candidates));
-      return errors;
-    }
-
-    if (!hasPackedFile(packageFiles, setupEntry)) {
-      errors.push(`${packageLabel} setup entry not found: ${setupEntry}`);
-    }
+    checkRuntimeEntry(setupEntry, runtimeSetupEntry, runtimeSetupEntry ? "runtime setup" : "setup");
   }
 
   return errors;
@@ -225,9 +200,7 @@ export function runPluginNpmCommand(
   args: string[],
   params: { execFileSyncImpl?: ExecFileSyncText; env?: NodeJS.ProcessEnv } = {},
 ) {
-  const execFileSyncImpl =
-    params.execFileSyncImpl ??
-    ((file, childArgs, options) => execFileSync(file, childArgs, options));
+  const execFileSyncImpl = params.execFileSyncImpl ?? execFileSync;
   return execFileSyncImpl("npm", args, readPluginNpmCommandOptions(params.env));
 }
 
@@ -243,7 +216,7 @@ function npmPack(spec: string, destinationDir: string) {
     destinationDir,
   ]);
   const filename = resolveNpmPackFilename(output);
-  return path.isAbsolute(filename) ? filename : path.join(destinationDir, filename);
+  return path.join(destinationDir, filename);
 }
 
 export function parseNpmReadmeMetadata(raw: string) {
@@ -254,10 +227,6 @@ export function parseNpmReadmeMetadata(raw: string) {
     return "";
   }
   return resolveNpmJsonString(parsed);
-}
-
-function npmViewReadme(spec: string) {
-  return runPluginNpmCommand(["view", spec, "readme", "--json", "--prefer-online"]);
 }
 
 async function packPublishedPackage(spec: string, destinationDir: string) {
@@ -286,7 +255,9 @@ async function verifyPublishedPackageReadme(spec: string) {
   let lastError: unknown;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
-      const readme = parseNpmReadmeMetadata(npmViewReadme(spec));
+      const readme = parseNpmReadmeMetadata(
+        runPluginNpmCommand(["view", spec, "readme", "--json", "--prefer-online"]),
+      );
       if (readme) {
         return readme;
       }
