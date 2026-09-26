@@ -2,13 +2,14 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isPathInside } from "../infra/path-guards.js";
 import { parseTcpPort, parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import { resolveServiceEntrypoint } from "./service-layout.js";
 import type { GatewayServiceStartRepairIssue, GatewayServiceState } from "./service-types.js";
 
-const TEMP_PROGRAM_ROOTS = [os.tmpdir(), "/tmp", "/private/tmp", "/var/tmp"].map((entry) =>
-  path.resolve(entry),
-);
+const TEMP_PROGRAM_ROOTS = [os.tmpdir(), "/tmp", "/private/tmp", "/var/tmp"]
+  .map((entry) => path.resolve(entry))
+  .filter((root) => root !== path.parse(root).root);
 export function collectGatewayServiceStartRepairIssues(
   state: GatewayServiceState,
   expectedPort?: number,
@@ -35,11 +36,7 @@ export function collectGatewayServiceStartRepairIssues(
       continue;
     }
     const resolved = path.resolve(candidate);
-    if (
-      TEMP_PROGRAM_ROOTS.some(
-        (root) => resolved === root || resolved.startsWith(`${root}${path.sep}`),
-      )
-    ) {
+    if (TEMP_PROGRAM_ROOTS.some((root) => isPathInside(root, resolved))) {
       issues.push({
         code: "temporary-program",
         message: `service command points at a temporary path: ${candidate}`,
