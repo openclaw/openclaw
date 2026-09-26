@@ -190,6 +190,34 @@ function settledFixture() {
 }
 
 describe("readCodexMirroredSessionHistoryMessages", () => {
+  it("reads deeply nested persisted history without exhausting the stack", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-deep-history-"));
+    tempDirs.push(dir);
+    const sessionFile = path.join(dir, "session.jsonl");
+    const nestedPrefix = '{"nested":'.repeat(20_000);
+    const nestedJson = `${nestedPrefix}"leaf"${"}".repeat(20_000)}`;
+    const header = {
+      type: "session",
+      version: CURRENT_SESSION_VERSION,
+      id: "codex-session",
+      timestamp: "2026-06-15T00:00:00.000Z",
+      cwd: dir,
+    };
+    const message = `{"type":"message","id":"deep-history","parentId":null,"timestamp":"2026-06-15T00:00:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"deep history","metadata":${nestedJson}}],"timestamp":1}}`;
+    await fs.writeFile(sessionFile, `${JSON.stringify(header)}\n${message}\n`);
+
+    const result = await readCodexNativeHistory(
+      { kind: "file", sessionFile },
+      "codex-session",
+      (messages) => Array.from(messages),
+    );
+
+    if (result.status !== "ok") {
+      throw new Error(`deep history read rejected: ${result.reason}`);
+    }
+    expect(result.value).toHaveLength(1);
+  });
+
   it.each([
     new Error("private transcript detail"),
     new Error("Codex settled-turn projection exceeds the item limit: private detail"),
