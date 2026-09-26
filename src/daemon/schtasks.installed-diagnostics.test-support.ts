@@ -41,7 +41,7 @@ export type InstalledTask = {
   env: NodeJS.ProcessEnv;
 };
 
-export async function inspectInstalledUpdateFailure({
+export async function readInstalledUpdateProgress({
   env,
   stateDir,
 }: Pick<InstalledTask, "env" | "stateDir">) {
@@ -50,23 +50,66 @@ export async function inspectInstalledUpdateFailure({
     if (!record) {
       return { unavailable: "No recorded update run" };
     }
-    // The installed driver owns this ledger; retain only diagnostic progress, never its payloads.
+    const safeText = (value: string | null | undefined) =>
+      typeof value === "string"
+        ? redactSupportString(value, { env, stateDir }, { maxLength: 2_000 })
+        : value;
+    // Retain only the facts needed to distinguish update progress from failed native verification.
     return {
       phase: record.phase,
       status: record.status,
       createdAtMs: record.createdAtMs,
       updatedAtMs: record.updatedAtMs,
       finishedAtMs: record.finishedAtMs,
-      steps: record.steps.map(({ step, status, startedAtMs, endedAtMs }) => ({
+      after: { version: safeText(record.after.version), buildId: safeText(record.after.buildId) },
+      verification: {
+        serviceRunning: record.verification.serviceRunning,
+        pid: record.verification.pid,
+        port: record.verification.port,
+        runningVersion: safeText(record.verification.runningVersion),
+        runningBuildId: safeText(record.verification.runningBuildId),
+        versionMatch: record.verification.versionMatch,
+        channelsReady: record.verification.channelsReady,
+        readyz: record.verification.readyz,
+        settled: record.verification.settled,
+      },
+      steps: record.steps.map(({ step, status, startedAtMs, endedAtMs, detail }) => ({
         step: redactSupportString(step, { env, stateDir }),
         status,
         startedAtMs,
         endedAtMs,
+        detail:
+          /^warning:managed-service-reconciliation(?::\d+)?$/u.test(step) && detail
+            ? safeText(detail)
+            : undefined,
       })),
     };
   } catch {
     return { unavailable: "Recorded update progress could not be read" };
   }
+}
+
+export async function inspectInstalledUpdateFailure(params: {
+  task: InstalledTask;
+  commands: CommandRecord[];
+  signal: AbortSignal;
+  observations: Record<string, unknown>;
+}) {
+  const { task, commands, signal, observations } = params;
+  observations.updateFailure = await readInstalledUpdateProgress(task);
+  if (signal.aborted || commands.some((command) => !command.joined)) {
+    return;
+  }
+  // Inspect after the updater joins so diagnostics do not consume its execution allowance.
+  await run(
+    [task.entry, "--profile", task.profile, "gateway", "status", "--json", "--timeout", "5000"],
+    task.env,
+    task.rootDir,
+    commands,
+    0,
+    signal,
+    { observeService: "status" },
+  );
 }
 
 export function parseInstalledUpdateResult(value: unknown) {
@@ -138,7 +181,7 @@ export async function runInstalledPublishedUpdate(params: {
         }
         throw error;
       }
-      const progress = await inspectInstalledUpdateFailure(task);
+      const progress = await readInstalledUpdateProgress(task);
       if (stopObservation.signal.aborted) {
         return;
       }

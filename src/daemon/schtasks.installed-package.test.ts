@@ -10,6 +10,7 @@ import type { UpdateRunRecord } from "../infra/update-run-record.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as installedCommand from "./schtasks.installed-command.test-support.js";
 import {
+  readInstalledUpdateProgress,
   inspectInstalledUpdateFailure,
   parseInstalledUpdateResult,
   runInstalledPublishedUpdate,
@@ -74,18 +75,33 @@ it.each([
 );
 
 it("captures failed installed update progress without changing the ledger or retaining payloads", async () => {
-  const { createUpdateRun, getUpdateRun, recordUpdateRunPhase, recordUpdateRunStep } =
-    await import("../infra/update-run-ledger.js");
+  const {
+    createUpdateRun,
+    getUpdateRun,
+    recordUpdateRunPhase,
+    recordUpdateRunStep,
+    recordUpdateRunVerification,
+  } = await import("../infra/update-run-ledger.js");
   const { closeOpenClawStateDatabaseAsync } = await import("../state/openclaw-state-db.js");
   const env = { OPENCLAW_STATE_DIR: temporary.make("installed-update-progress-") };
   const options = { env };
   const privatePayload = "synthetic-private-update-payload";
   try {
     const run = createUpdateRun(
-      { trigger: "cli", origin: { nextAction: privatePayload } },
+      {
+        trigger: "cli",
+        origin: { nextAction: privatePayload },
+      },
       options,
     );
-    recordUpdateRunPhase(run.runId, "validating", {}, options);
+    recordUpdateRunPhase(
+      run.runId,
+      "validating",
+      {
+        after: { version: "2026.9.6", buildId: "candidate-build", sha: privatePayload },
+      },
+      options,
+    );
     recordUpdateRunStep(
       run.runId,
       {
@@ -97,9 +113,41 @@ it("captures failed installed update progress without changing the ledger or ret
       },
       options,
     );
+    recordUpdateRunStep(
+      run.runId,
+      {
+        step: "warning:managed-service-reconciliation",
+        status: "completed",
+        detail: "Synthetic native warning; token=synthetic-hidden-credential",
+      },
+      options,
+    );
+    recordUpdateRunVerification(
+      run.runId,
+      {
+        serviceRunning: true,
+        pid: 4321,
+        port: 19417,
+        runningVersion: "2026.9.6",
+        runningBuildId: "candidate-build",
+        versionMatch: true,
+        channelsReady: true,
+        readyz: false,
+        settled: false,
+        pluginErrors: [privatePayload],
+        doctorHint: privatePayload,
+      },
+      options,
+    );
     const before = getUpdateRun(run.runId, options);
-    const observed = await inspectInstalledUpdateFailure({ env, stateDir: env.OPENCLAW_STATE_DIR });
+    const observed = await readInstalledUpdateProgress({ env, stateDir: env.OPENCLAW_STATE_DIR });
     expect(observed).toMatchObject({ phase: "validating", status: "running" });
+    expect(observed).toMatchObject({
+      after: { version: "2026.9.6", buildId: "candidate-build" },
+      verification: { serviceRunning: true, pid: 4321, port: 19417, readyz: false, settled: false },
+    });
+    expect(JSON.stringify(observed)).toContain("Synthetic native warning");
+    expect(JSON.stringify(observed)).not.toContain("synthetic-hidden-credential");
     expect(observed).toHaveProperty(
       "steps",
       expect.arrayContaining([
@@ -118,7 +166,7 @@ it("reports unavailable installed progress without creating a missing database",
   const { readdir } = await import("node:fs/promises");
   const root = temporary.make("installed-update-no-ledger-");
   await expect(
-    inspectInstalledUpdateFailure({ env: { OPENCLAW_STATE_DIR: root }, stateDir: root }),
+    readInstalledUpdateProgress({ env: { OPENCLAW_STATE_DIR: root }, stateDir: root }),
   ).resolves.toEqual({
     unavailable: "No recorded update run",
   });
@@ -273,12 +321,8 @@ describe("published installed update progress", () => {
     };
   }
 
-  function startUpdate(
-    recordProgress = vi
-      .fn<(phase: string, error?: Error) => Promise<void>>()
-      .mockResolvedValue(undefined),
-  ) {
-    const task: InstalledTask = {
+  function installedTask(): InstalledTask {
+    return {
       profile: "synthetic-update",
       taskName: "OpenClaw Gateway (synthetic-update)",
       stateDir: "C:\\synthetic-update\\state",
@@ -290,6 +334,14 @@ describe("published installed update progress", () => {
       entry: "C:\\synthetic-update\\prefix\\openclaw.mjs",
       env: { OPENCLAW_STATE_DIR: "C:\\synthetic-update\\state" },
     };
+  }
+
+  function startUpdate(
+    recordProgress = vi
+      .fn<(phase: string, error?: Error) => Promise<void>>()
+      .mockResolvedValue(undefined),
+  ) {
+    const task = installedTask();
     const command = createDeferredCore<string>();
     vi.spyOn(installedCommand, "run").mockReturnValue(command.promise);
     const observations: Record<string, unknown> = {};
@@ -326,6 +378,74 @@ describe("published installed update progress", () => {
   afterEach(() => {
     vi.useRealTimers();
   });
+
+  it.each(["ready", "aborted", "unjoined", "failed-status"] as const)(
+    "keeps post-failure status on the selected context and admitted lifetime (%s)",
+    async (kind) => {
+      vi.spyOn(updateRunReader, "listUpdateRunsAsync").mockResolvedValue([recordedRun([])]);
+      const failure = new Error("Synthetic status inspection failure");
+      const command = vi.spyOn(installedCommand, "run");
+      if (kind === "failed-status") {
+        command.mockRejectedValue(failure);
+      } else {
+        command.mockResolvedValue("{}");
+      }
+      const task = installedTask();
+      const controller = new AbortController();
+      if (kind === "aborted") {
+        controller.abort();
+      }
+      const commands: installedCommand.CommandRecord[] =
+        kind === "unjoined"
+          ? [
+              {
+                args: ["update"],
+                launcherPid: 1234,
+                beforeCleanup: "indeterminate",
+                code: 1,
+                signal: null,
+                joined: false,
+                elapsedMs: 360_000,
+              },
+            ]
+          : [];
+      const observations: Record<string, unknown> = {};
+      const pending = inspectInstalledUpdateFailure({
+        task,
+        commands,
+        observations,
+        signal: controller.signal,
+      });
+      if (kind === "failed-status") {
+        await expect(pending).rejects.toBe(failure);
+      } else {
+        await pending;
+      }
+      expect(observations.updateFailure).toMatchObject({ phase: "validating", status: "running" });
+      if (kind === "aborted" || kind === "unjoined") {
+        expect(command).not.toHaveBeenCalled();
+      } else {
+        expect(command).toHaveBeenCalledWith(
+          [
+            task.entry,
+            "--profile",
+            task.profile,
+            "gateway",
+            "status",
+            "--json",
+            "--timeout",
+            "5000",
+          ],
+          task.env,
+          task.rootDir,
+          commands,
+          0,
+          controller.signal,
+          { observeService: "status" },
+        );
+      }
+    },
+  );
 
   it("reports only new completed steps, never elapsed time, prior runs, or repeated observations", async () => {
     const reader = vi

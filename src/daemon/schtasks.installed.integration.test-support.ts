@@ -597,7 +597,15 @@ export async function runInstalledLifecycle(
   } catch (error) {
     cellFailure = toErrorObject(error, "Installed Scheduled Task fixture failed");
     if (key !== "fresh" && tasks[0]) {
-      observations.updateFailure = await inspectInstalledUpdateFailure(tasks[0]);
+      try {
+        await inspectInstalledUpdateFailure({ task: tasks[0], commands, signal, observations });
+      } catch (inspectionError) {
+        cellFailure = new AggregateError(
+          [cellFailure, inspectionError],
+          "Installed update failure inspection failed",
+          { cause: cellFailure },
+        );
+      }
     }
     try {
       await recordProgress("before-native-cleanup", cellFailure);
