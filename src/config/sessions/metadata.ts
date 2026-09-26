@@ -15,6 +15,7 @@ import {
 } from "../../utils/delivery-context.read.js";
 import {
   deliveryContextFromChannelRoute,
+  deliveryContextKey,
   mergeDeliveryContext,
   normalizeDeliveryContext,
   normalizeSessionDeliveryState,
@@ -223,19 +224,52 @@ export function deriveSessionMetaPatch(params: {
     return null;
   }
 
-  const patch: Partial<SessionEntry> = groupPatch ? { ...groupPatch } : {};
   const existingOrigin = sessionDeliveryOrigin(params.existing);
+  const nextProvider = origin?.provider;
+  const nextOwnsExternalRoute = Boolean(
+    nextProvider &&
+    nextProvider !== INTERNAL_MESSAGE_CHANNEL &&
+    !isInternalNonDeliveryChannel(nextProvider),
+  );
+  const sourceChannel = normalizeMessageChannel(
+    params.ctx.Provider ?? params.ctx.Surface ?? params.ctx.OriginatingChannel,
+  );
+  const internalTurn =
+    params.ctx.InternalTurnSource !== undefined ||
+    sourceChannel === INTERNAL_MESSAGE_CHANNEL ||
+    (sourceChannel != null && isInternalNonDeliveryChannel(sourceChannel));
+  if (existingOrigin && internalTurn) {
+    const existingContext = normalizeDeliveryContext({
+      channel: existingOrigin.provider,
+      to: existingOrigin.to,
+      accountId: existingOrigin.accountId,
+      threadId: existingOrigin.threadId,
+    });
+    const nextContext = mergeDeliveryContext(
+      {
+        channel: nextProvider,
+        to: origin?.to,
+        accountId: origin?.accountId,
+        threadId: origin?.threadId,
+      },
+      existingContext,
+    );
+    // Internal callers describe their own direct turn, not the bound channel conversation.
+    // Preserve that identity unless the caller supplies a different external delivery route.
+    if (
+      !nextOwnsExternalRoute ||
+      (existingContext && deliveryContextKey(nextContext) === deliveryContextKey(existingContext))
+    ) {
+      return null;
+    }
+  }
+
+  const patch: Partial<SessionEntry> = groupPatch ? { ...groupPatch } : {};
   const mergedOrigin = mergeSessionOrigin(existingOrigin, origin);
   if (mergedOrigin) {
     if (!patch.chatType && mergedOrigin.chatType) {
       patch.chatType = mergedOrigin.chatType;
     }
-    const nextProvider = origin?.provider;
-    const nextOwnsExternalRoute = Boolean(
-      nextProvider &&
-      nextProvider !== INTERNAL_MESSAGE_CHANNEL &&
-      !isInternalNonDeliveryChannel(nextProvider),
-    );
     const existingRoute = sessionDeliveryRoute(params.existing);
     const existingRouteAccountId =
       existingRoute?.accountId ?? deliveryContextFromSession(params.existing)?.accountId;
