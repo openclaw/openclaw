@@ -362,6 +362,13 @@
   border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
 
+/* The expanded controls belong to the toggle above, not a separate row. */
+.settings-row + .quiet-hours-window {
+  border-top: 0;
+  padding-top: 0;
+  padding-bottom: var(--oc-space-4, var(--space-4));
+}
+
 .settings-row__text {
   display: flex;
   flex-direction: column;
@@ -601,6 +608,33 @@ wa-switch.settings-toggle {
   .settings-row__control
   > input[type="time"].settings-input {
   width: auto;
+}
+
+.quiet-hours-window__fields {
+  display: grid;
+  gap: var(--oc-space-4, var(--space-4));
+  width: min(420px, 100%);
+}
+
+.quiet-hours-window__time-range {
+  display: flex;
+  align-items: center;
+  gap: var(--oc-space-2, var(--space-2));
+}
+
+.quiet-hours-window__time-range > input[type="time"].settings-input {
+  flex: 1 1 0;
+  min-width: 0;
+  width: auto;
+}
+
+.quiet-hours-window__time-zone {
+  display: grid;
+  gap: var(--oc-space-2, var(--space-2));
+}
+
+.quiet-hours-window__time-zone .settings-select {
+  width: 100%;
 }
 
 /* ── Secret input (inset reveal toggle; no trailing button) ── */
