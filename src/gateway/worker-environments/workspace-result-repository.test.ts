@@ -197,7 +197,7 @@ describe("repository workspace result ownership", () => {
     });
     const remote = synced.remoteWorkspaceDir;
     const initialCheckpointRef = store.get(repository.workspaceId)!.checkpointRef;
-    seedActivePlacement(executionMode, remote, synced.manifestRef);
+    await seedActivePlacement(executionMode, remote, synced.manifestRef);
     const beginTurn = async (claimId: string, markResultPending = true) => {
       const placement = placements.get(SESSION_ID);
       if (placement?.state !== "active") {

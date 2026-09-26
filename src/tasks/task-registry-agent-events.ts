@@ -22,7 +22,7 @@ import {
   retainTaskMutationFlowEffects,
 } from "./task-executor-mutation-effects.async.js";
 import { getTaskFlowRegistryStore } from "./task-flow-registry.store.js";
-import { clearTaskActivity, flushTaskActivity } from "./task-registry-activity.js";
+import { flushTaskActivity } from "./task-registry-activity.js";
 import { recoverTaskAgentEventPublication } from "./task-registry-agent-event-commit.js";
 import { publishTaskAgentEventDelivery } from "./task-registry-agent-event-delivery.js";
 import {
@@ -51,6 +51,7 @@ import {
   isEquivalentTaskRecord,
 } from "./task-registry-records.js";
 import {
+  clearTaskActivity,
   runTaskRegistryWorkerMutation,
   invalidateTaskRegistryProjection,
   taskFlowSyncOwner,

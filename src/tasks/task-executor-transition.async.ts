@@ -5,13 +5,14 @@ import {
 } from "./task-executor-mutation-effects.async.js";
 import type { TaskMutationContext } from "./task-executor.types.js";
 import type { TaskInitialWorkerCommand } from "./task-initial-worker.types.js";
-import { clearTaskActivity, flushTaskActivity } from "./task-registry-activity.js";
+import { flushTaskActivity } from "./task-registry-activity.js";
 import {
   maybeDeliverTaskStateChangeUpdate,
   maybeDeliverTaskTerminalUpdate,
 } from "./task-registry-delivery.js";
 import { isEquivalentTaskRecord, matchesTaskPersistenceReceipt } from "./task-registry-records.js";
 import {
+  clearTaskActivity,
   assertTaskRegistryOwnerCurrent,
   runTaskRegistryWorkerMutation,
   tasks,

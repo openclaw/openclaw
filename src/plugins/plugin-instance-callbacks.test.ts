@@ -723,4 +723,42 @@ describe("collection data classification", () => {
       await instance.dispose();
     }
   });
+
+  it("reclassifies changed realm constructors without releasing retained calls", async () => {
+    const source: { left: { value: number }; right: { value: number } } = runInNewContext(
+      "({ left: { value: 1 }, right: { value: 2 } })",
+    );
+    const prototype = Object.getPrototypeOf(source);
+    const constructor = Reflect.get(prototype, "constructor");
+    const instance = new PluginInstance("mutable-realm-constructor");
+    try {
+      expect(instance.wrap(source)).toBe(source);
+      Reflect.set(prototype, "constructor", () => 42);
+      const view = instance.wrap(source);
+      expect(view).not.toBe(source);
+      const retained: () => number = Reflect.get(view.left, "constructor");
+      expect(retained()).toBe(42);
+      Reflect.set(prototype, "constructor", constructor);
+      expect(instance.wrap(source)).toBe(source);
+      await instance.dispose();
+      expect(() => retained()).toThrow("reloaded or disabled");
+    } finally {
+      Reflect.set(prototype, "constructor", constructor);
+      await instance.dispose();
+    }
+  });
+
+  it("distinguishes native kinds sharing a prototype within one graph", async () => {
+    const instance = new PluginInstance("shared-prototype-kinds");
+    const array = Object.setPrototypeOf([], Object.prototype);
+    const source = { plain: { value: 1 }, array };
+    try {
+      expect(instance.wrap(source)).not.toBe(source);
+      Object.setPrototypeOf(array, Array.prototype);
+      expect(instance.wrap(source)).toBe(source);
+      expect(structuredClone(source)).toEqual({ plain: { value: 1 }, array: [] });
+    } finally {
+      await instance.dispose();
+    }
+  });
 });

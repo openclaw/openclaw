@@ -490,11 +490,12 @@ function readPendingInputRows(
     if (metadata.length && !selected.length) {
       throw new Error("Stored pending input exceeds the Gateway payload limit");
     }
+    // Sort the bounded page in memory instead of spilling full message bodies to a temp B-tree.
     const rows = selected.length
       ? executeSqliteQuerySync(
           database.db,
-          base.selectAll().where("seq", "in", selected).orderBy("seq", "desc"),
-        ).rows
+          base.selectAll().where("seq", "in", selected),
+        ).rows.toSorted((left, right) => right.seq - left.seq)
       : [];
     // An aborted but registered owner still owns the terminal disposition. Reads
     // must not race its finish(cancelled) by recording an inferred interruption.

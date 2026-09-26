@@ -5,14 +5,14 @@ import {
   type LegacyConfigMigrationSpec,
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
-import { hasOwnKey, visitChannelEntries } from "./legacy-config-record-shared.js";
+import { visitChannelEntries } from "./legacy-config-record-shared.js";
 
 function hasLegacyThreadBindingSpawnSplit(value: unknown): boolean {
   const threadBindings = getRecord(value);
   return Boolean(
     threadBindings &&
-    (hasOwnKey(threadBindings, "spawnSubagentSessions") ||
-      hasOwnKey(threadBindings, "spawnAcpSessions")),
+    (Object.hasOwn(threadBindings, "spawnSubagentSessions") ||
+      Object.hasOwn(threadBindings, "spawnAcpSessions")),
   );
 }
 

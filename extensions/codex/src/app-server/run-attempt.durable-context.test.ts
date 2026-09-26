@@ -42,7 +42,6 @@ it("keeps explicitly retained reset messages in the Codex prompt", async () => {
   expect(messages).toContainEqual(expect.objectContaining(retained));
   const projection = await projectContextEngineAssemblyForCodex({
     assembledMessages: messages,
-    originalHistoryMessages: messages,
     prompt: "next question",
   });
   expect(projection.promptText).toContain("EXPLICITLY_RETAINED_FACT");

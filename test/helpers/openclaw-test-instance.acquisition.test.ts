@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -21,6 +22,57 @@ import { createDeferred, withTestTimeout } from "./promise.js";
 import { runQaGatewayFixture } from "./qa-gateway-cleanup.js";
 
 describe("createOpenClawTestInstance acquisition", () => {
+  it.each([
+    { platform: "win32", explicit: false, advances: true },
+    { platform: "win32", explicit: true, advances: false },
+    { platform: "darwin", explicit: false, advances: false },
+  ] as const)(
+    "preserves reservation policy after $platform EACCES (explicit=$explicit)",
+    async ({ platform, explicit, advances }) => {
+      const port = await testPorts.getDeterministicFreePortBlock({ offsets: [0] });
+      const denied = Object.assign(new Error("candidate listener denied"), { code: "EACCES" });
+      const platformSpy = vi.spyOn(os, "platform").mockReturnValue(platform);
+      syncBuiltinESMExports();
+      const pickerSpy = vi
+        .spyOn(testPorts, "getDeterministicFreePortBlock")
+        .mockResolvedValueOnce(port);
+      let first = true;
+      let reservation: Awaited<ReturnType<typeof reserveTestPortListener>> | undefined;
+      try {
+        const pending = reserveTestPortListener({
+          offsets: [0],
+          ...(explicit ? { port } : {}),
+          createListener: () => {
+            const listener = net.createServer();
+            if (first) {
+              first = false;
+              vi.spyOn(listener, "listen").mockImplementationOnce(() => {
+                queueMicrotask(() => listener.emit("error", denied));
+                return listener;
+              });
+            }
+            return listener;
+          },
+        });
+        if (advances) {
+          reservation = await pending;
+          expect(reservation.claim.port).not.toBe(port);
+          expect(reservation.listener.listening).toBe(true);
+        } else {
+          await expect(pending).rejects.toBe(denied);
+        }
+        const released = await acquireTestPortBlock({ port, offsets: [0] });
+        await released.release();
+      } finally {
+        platformSpy.mockRestore();
+        syncBuiltinESMExports();
+        pickerSpy.mockRestore();
+        await reservation?.releaseListener();
+        await reservation?.claim.release();
+      }
+    },
+  );
+
   it.each([
     {
       name: "child-process",

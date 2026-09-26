@@ -234,7 +234,7 @@ describe("plugins cli policy mutations", () => {
   );
 
   it.each([
-    { mode: undefined, json: false, acceptCapabilities: true, ids: ["alpha"] },
+    { mode: undefined, json: false, acceptCapabilities: true, ids: ["alpha"], wait: true },
     {
       mode: undefined,
       json: false,
@@ -253,7 +253,7 @@ describe("plugins cli policy mutations", () => {
     { mode: undefined, json: true, acceptCapabilities: true, ids: ["alpha", "beta"] },
   ])(
     "reloads CLI-selected $ids in one generation (mode=$mode, json=$json, accept=$acceptCapabilities)",
-    async ({ mode, json, acceptCapabilities, ids, restartRequired = false }) => {
+    async ({ mode, json, acceptCapabilities, ids, restartRequired = false, wait = false }) => {
       resolvePluginLifecycleGatewayMock.mockResolvedValue(pluginLifecycleGatewayMock);
       const receipt = {
         ok: true,
@@ -295,6 +295,7 @@ describe("plugins cli policy mutations", () => {
             ...ids,
             "alpha",
             ...(json ? ["--json"] : []),
+            ...(wait ? ["--wait"] : []),
             ...(acceptCapabilities ? ["--accept-capabilities"] : []),
           ]);
           if (json && !acceptCapabilities) {
@@ -308,7 +309,7 @@ describe("plugins cli policy mutations", () => {
       }
       expect(pluginLifecycleGatewayMock).toHaveBeenCalledExactlyOnceWith(
         "plugins.reload",
-        { plugins: ids.map((pluginId) => ({ pluginId })) },
+        { plugins: ids.map((pluginId) => ({ pluginId })), ...(wait ? { waitForDrain: true } : {}) },
         acceptCapabilities ? expect.any(Function) : undefined,
       );
       expect(promptYesNoMock).not.toHaveBeenCalled();

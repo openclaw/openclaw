@@ -402,7 +402,7 @@ describe("session suggestion handlers", () => {
       ];
       const solo = await call(
         "session.typing",
-        { sessionKey, sessionId: "session-main", typing: true },
+        { sessionKey, sessionId: "session-main", typing: true, preview: "first draft" },
         client("alice", "Alice"),
         requestContext,
       );
@@ -413,20 +413,26 @@ describe("session suggestion handlers", () => {
         user: { id: "owner", identity: { type: "profile", id: "owner" } },
         watchedSessions: [sessionKey],
       });
+      await vi.advanceTimersByTimeAsync(100);
       const collaborative = await call(
         "session.typing",
-        { sessionKey, sessionId: "session-main", typing: true },
+        { sessionKey, sessionId: "session-main", typing: true, preview: "latest draft" },
         client("alice", "Alice"),
         requestContext,
       );
-      expect(collaborative.responses[0]?.[1]).toEqual({ ok: true, broadcast: true });
+      expect(collaborative.responses[0]?.[1]).toEqual({ ok: true, broadcast: false });
+      expect(broadcast).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(150);
       expect(broadcast).toHaveBeenCalledWith(
         "session.typing",
-        expect.objectContaining({ actor: { type: "human", id: "alice", label: "Alice" } }),
+        expect.objectContaining({
+          actor: { type: "human", id: "alice", label: "Alice" },
+          preview: "latest draft",
+        }),
         expect.objectContaining({ sessionKeys: [sessionKey], dropIfSlow: true }),
       );
 
-      vi.setSystemTime(1_100);
+      await vi.advanceTimersByTimeAsync(100);
       const earlyStop = await call(
         "session.typing",
         { sessionKey, sessionId: "session-main", typing: false },
@@ -441,7 +447,7 @@ describe("session suggestion handlers", () => {
         expect.any(Object),
       );
 
-      vi.setSystemTime(2_100);
+      await vi.advanceTimersByTimeAsync(100);
       const earlyRestart = await call(
         "session.typing",
         { sessionKey, sessionId: "session-main", typing: true },
@@ -466,7 +472,7 @@ describe("session suggestion handlers", () => {
           watchedSessions: [sessionKey],
         },
       ];
-      vi.setSystemTime(4_000);
+      await vi.advanceTimersByTimeAsync(1_000);
       const notViewing = await call(
         "session.typing",
         { sessionKey, sessionId: "session-main", typing: true },
@@ -494,7 +500,7 @@ describe("session suggestion handlers", () => {
           watchedSessions: [sessionKey],
         },
       ];
-      vi.setSystemTime(5_000);
+      await vi.advanceTimersByTimeAsync(1_000);
       const sharedViewer = await call(
         "session.typing",
         { sessionKey, sessionId: "session-main", typing: true },
@@ -540,21 +546,23 @@ describe("session suggestion handlers", () => {
   });
 
   it("responds once when a typing target is unknown", async () => {
-    const unknown = await call(
-      "session.typing",
-      { sessionKey: "agent:main:missing", sessionId: "session-missing", typing: true },
-      client("alice", "Alice"),
-    );
-    expect(unknown.responses).toHaveLength(1);
-    expect(unknown.responses[0]?.[0]).toBe(false);
-    expect(unknown.responses[0]?.[2]?.message).toMatch(/unknown session/);
-    const unknownAdd = await call(
-      "session.suggestions.add",
-      { sessionKey: "agent:main:missing", text: "hello" },
-      null,
-    );
-    expect(unknownAdd.responses).toHaveLength(1);
-    expect(unknownAdd.responses[0]?.[0]).toBe(false);
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const unknown = await call(
+        "session.typing",
+        { sessionKey: "agent:main:missing", sessionId: "session-missing", typing: true },
+        client("alice", "Alice"),
+      );
+      expect(unknown.responses).toHaveLength(1);
+      expect(unknown.responses[0]?.[0]).toBe(false);
+      expect(unknown.responses[0]?.[2]?.message).toMatch(/unknown session/);
+      const unknownAdd = await call(
+        "session.suggestions.add",
+        { sessionKey: "agent:main:missing", text: "hello" },
+        null,
+      );
+      expect(unknownAdd.responses).toHaveLength(1);
+      expect(unknownAdd.responses[0]?.[0]).toBe(false);
+    });
   });
 
   it("keeps an uncertain dispatch claimed until retry reconciliation", async () => {

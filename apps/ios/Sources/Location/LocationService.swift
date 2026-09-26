@@ -101,7 +101,10 @@ final class LocationService: NSObject, CLLocationManagerDelegate, ConcurrentLoca
             timeoutMs: timeoutMs,
             request: { try await self.requestLocationOnce() },
             withTimeout: { timeoutMs, operation in
-                try await self.withTimeout(timeoutMs: timeoutMs, operation: operation)
+                try await AsyncTimeout.withTimeoutMs(
+                    timeoutMs: timeoutMs,
+                    onTimeout: { Error.timeout },
+                    operation: operation)
             })
     }
 
@@ -182,13 +185,6 @@ final class LocationService: NSObject, CLLocationManagerDelegate, ConcurrentLoca
         else { return }
         self.authorizationWaits.removeValue(forKey: waitID)
         wait.continuation.resume(returning: status)
-    }
-
-    private func withTimeout<T: Sendable>(
-        timeoutMs: Int,
-        operation: @escaping @Sendable () async throws -> T) async throws -> T
-    {
-        try await AsyncTimeout.withTimeoutMs(timeoutMs: timeoutMs, onTimeout: { Error.timeout }, operation: operation)
     }
 
     func startMonitoringSignificantLocationChanges(onUpdate: @escaping @Sendable (CLLocation) -> Void) {

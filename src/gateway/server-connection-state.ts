@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 // Gateway connection and run registries.
 // This state is transport-fed but can be constructed without HTTP or WebSocket servers.
@@ -24,6 +25,7 @@ import { canReceiveSessionEvent, prepareProjectedSessionSharing } from "./sessio
 
 /** Creates transport-independent connection, subscription, and run state. */
 export function createGatewayConnectionState(params: {
+  scheduler: GatewayScheduler;
   bootId: string;
   cfg: import("../config/config.js").OpenClawConfig;
   getRuntimeConfig?: () => import("../config/config.js").OpenClawConfig;
@@ -209,6 +211,7 @@ export function createGatewayConnectionState(params: {
     onBroadcast: (event, payload, opts) => eventWebPush.handleEvent(event, payload, opts),
   });
   const mentionInbox = createMentionInbox({
+    scheduler: params.scheduler,
     gatewayInstanceId: params.bootId,
     getRuntimeConfig: loadRuntimeConfig,
     *getClients() {

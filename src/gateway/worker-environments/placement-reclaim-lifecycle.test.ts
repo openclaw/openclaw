@@ -86,7 +86,7 @@ describe("placement reclaim with provider-owned node teardown", () => {
           sharedHost: false,
         },
       });
-      const active = harness.placements.seedActive(attached.ownerEpoch);
+      const active = await harness.placements.seedActive(attached.ownerEpoch);
       if (active.state !== "active") {
         throw new Error("expected active placement");
       }
@@ -358,7 +358,7 @@ describe("SSH placement cleanup after worker credential expiry", () => {
       });
       const environmentId = harness.ready.environmentId;
       const identity = await support.seedAttachedIdentity(environmentId, REQUEST.sessionId);
-      const active = seedActivePlacement(placements, {
+      const active = await seedActivePlacement(placements, {
         environmentId,
         ownerEpoch: identity.ownerEpoch,
         executionMode: "remote-exec",

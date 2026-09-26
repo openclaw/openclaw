@@ -39,7 +39,6 @@ import {
 } from "../gateway/worker-environments/store-row-codec.js";
 import { executeDevicePairingRead } from "../infra/device-pairing-read.kernel.js";
 import { readExecApprovalsConfigRow } from "../infra/exec-approvals-sqlite.js";
-import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import { inspectCurrentConversationBindingRecordInDatabase } from "../infra/outbound/current-conversation-bindings.kernel.js";
 import { readOutboundDeliveriesInDatabase } from "../infra/outbound/delivery-queue-storage.kernel.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
@@ -60,7 +59,9 @@ import {
   selectSkillLibraryRevisionMetadataBatch,
   selectSkillLibraryRevisionManifestsBatch,
 } from "../skills/library/selection-read.kernel.js";
+import { captureTaskRetentionSource } from "../tasks/task-registry-retention-source.js";
 import {
+  readTaskRecord,
   readTaskRegistryMutationSnapshotInDatabase,
   readTaskRegistrySnapshot,
 } from "../tasks/task-registry.store.kernel.js";
@@ -91,16 +92,16 @@ import {
   resolveUserChannelIdentityInDatabase,
 } from "./user-channel-identities.js";
 import { readUserChannelIdentityResult } from "./user-channel-identities.worker.js";
+import { selectUserPreferenceValues } from "./user-preferences.store.js";
 import { readUserProfileGitHubCommand } from "./user-profile-github-identity.js";
 import {
+  readUserProfileAuthorityInDatabase,
   readUserProfileEmailBindings,
   readUserProfileIdForEmail,
 } from "./user-profile-identity.read.js";
-import { projectUserProfileDisplay } from "./user-profile-list.js";
 import {
+  readUserProfileAvatarCommand,
   selectProfileDisplayEntries,
-  selectResolvedUserProfileMetadataById,
-  userProfilesDb,
 } from "./user-profiles-internal.js";
 
 serveOwnedWorkerTasks(
@@ -354,6 +355,15 @@ serveOwnedWorkerTasks(
                         : readTaskRegistryMutationSnapshotInDatabase(db, command.input),
                   };
                 }
+                if (command.type === "tasks.retentionSource") {
+                  const task = readTaskRecord(db, command.taskId);
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    source: task ? captureTaskRetentionSource(task) : undefined,
+                  };
+                }
                 if (command.type === "subagents.forChildSession") {
                   return {
                     ok: true,
@@ -551,37 +561,11 @@ serveOwnedWorkerTasks(
                   };
                 }
                 if (command.type === "userProfiles.authority.resolve") {
-                  const profile = runSqliteDeferredTransactionSync(db, () => {
-                    const current = tableExists(db, "user_profiles")
-                      ? selectResolvedUserProfileMetadataById(db, command.profileId)
-                      : undefined;
-                    if (!current) {
-                      return undefined;
-                    }
-                    const display = selectProfileDisplayEntries(db, [current.id])[0]?.[1];
-                    if (!display) {
-                      return undefined;
-                    }
-                    const aliases = executeSqliteQuerySync(
-                      db,
-                      userProfilesDb(db)
-                        .selectFrom("user_profiles")
-                        .select("id")
-                        .where("merged_into", "=", current.id)
-                        .orderBy("id", "asc"),
-                    ).rows;
-                    return {
-                      profileId: current.id,
-                      role: current.role ?? null,
-                      aliases: [current.id, ...aliases.map((alias) => alias.id)],
-                      display: projectUserProfileDisplay(display),
-                    };
-                  });
                   return {
                     ok: true,
                     type: command.type,
                     sourceAdmitted,
-                    profile,
+                    profile: readUserProfileAuthorityInDatabase(db, command.profileId),
                   };
                 }
                 if (
@@ -615,6 +599,12 @@ serveOwnedWorkerTasks(
                   }));
                   return { ok: true, type: command.type, sourceAdmitted, ...facts };
                 }
+                if (
+                  command.type === "userProfiles.avatar.inspect" ||
+                  command.type === "userProfiles.avatar.read"
+                ) {
+                  return { ok: true, ...readUserProfileAvatarCommand(db, command), sourceAdmitted };
+                }
                 if (command.type === "userProfiles.catalog") {
                   const facts = runSqliteDeferredTransactionSync(db, () => ({
                     profiles: tableExists(db, "user_profiles")
@@ -623,6 +613,14 @@ serveOwnedWorkerTasks(
                     emailBindings: readUserProfileEmailBindings(db),
                   }));
                   return { ok: true, type: command.type, sourceAdmitted, ...facts };
+                }
+                if (command.type === "userPreferences.values") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    values: selectUserPreferenceValues(db, command.profileIds, command.key),
+                  };
                 }
                 if (command.type === "userProfiles.email.resolve") {
                   return {

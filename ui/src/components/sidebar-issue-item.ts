@@ -17,7 +17,10 @@ import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import { renderSidebarApprovalRow } from "./exec-approval-card.ts";
 import { icons } from "./icons.ts";
 import type { SidebarAttentionItem } from "./sidebar-attention-entries.ts";
-import { renderSidebarNotificationCard } from "./sidebar-notification-card.ts";
+import {
+  renderSidebarDismissButton,
+  renderSidebarNotificationCard,
+} from "./sidebar-notification-card.ts";
 import "./sidebar-update-card.ts";
 import "./viewer-facepile.ts";
 
@@ -29,26 +32,6 @@ type SidebarIssueItemHandlers = {
   onNavigate: (routeId: NavigationRouteId) => void;
   onOpen: (item: SidebarAttentionItem) => void;
 };
-
-function renderSidebarDismissButton(itemLabel: string, onDismiss?: () => void) {
-  if (!onDismiss) {
-    return nothing;
-  }
-  const label = t("attention.dismissItem", { item: itemLabel });
-  return html`<button
-    type="button"
-    class="sidebar-issues-panel__dismiss"
-    aria-label=${label}
-    title=${label}
-    @click=${(event: Event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      onDismiss();
-    }}
-  >
-    ${icons.x}
-  </button>`;
-}
 
 export function renderSidebarMentionItem(params: {
   mention: MentionInboxItem;
@@ -245,58 +228,45 @@ export function renderSidebarScopeUpgradeItem(params: {
         <span class="sidebar-issues-panel__entity">${t("connection.scopeUpgrade.status")}</span>
         <span class="sidebar-issues-panel__state" title=${summary}>${summary}</span>
       </span>
-      ${
-        params.onDismiss
-          ? renderSidebarDismissButton(t("connection.scopeUpgrade.status"), params.onDismiss)
-          : nothing
-      }
+      ${renderSidebarDismissButton(t("connection.scopeUpgrade.status"), params.onDismiss)}
       <span class="sidebar-issues-panel__chevron" aria-hidden="true">${icons.chevronRight}</span>
     </summary>
     <div class="sidebar-issues-panel__body" role="status" aria-live="polite">
       <div>${text}</div>
       ${
-        params.state.phase === "available"
+        params.state.phase === "available" || params.state.phase === "requesting"
           ? html`<div class="sidebar-issues-panel__actions">
               <button
                 type="button"
                 class="sidebar-issues-panel__action sidebar-issues-panel__action--primary"
-                @click=${params.onRequest}
+                ?disabled=${params.state.phase === "requesting"}
+                @click=${params.state.phase === "available" ? params.onRequest : nothing}
               >
-                ${t("connection.scopeUpgrade.request")}
+                ${t(params.state.phase === "available" ? "connection.scopeUpgrade.request" : "connection.scopeUpgrade.requestingAction")}
               </button>
             </div>`
-          : params.state.phase === "requesting"
+          : retryable || params.state.phase === "error"
             ? html`<div class="sidebar-issues-panel__actions">
+                ${
+                  retryable
+                    ? html`<button
+                        type="button"
+                        class="sidebar-issues-panel__action sidebar-issues-panel__action--primary"
+                        @click=${params.onRetry}
+                      >
+                        ${t("connection.scopeUpgrade.retry")}
+                      </button>`
+                    : nothing
+                }
                 <button
                   type="button"
-                  class="sidebar-issues-panel__action sidebar-issues-panel__action--primary"
-                  disabled
+                  class="sidebar-issues-panel__action"
+                  @click=${params.onCancel}
                 >
-                  ${t("connection.scopeUpgrade.requestingAction")}
+                  ${t("connection.scopeUpgrade.cancel")}
                 </button>
               </div>`
-            : retryable || params.state.phase === "error"
-              ? html`<div class="sidebar-issues-panel__actions">
-                  ${
-                    retryable
-                      ? html`<button
-                          type="button"
-                          class="sidebar-issues-panel__action sidebar-issues-panel__action--primary"
-                          @click=${params.onRetry}
-                        >
-                          ${t("connection.scopeUpgrade.retry")}
-                        </button>`
-                      : nothing
-                  }
-                  <button
-                    type="button"
-                    class="sidebar-issues-panel__action"
-                    @click=${params.onCancel}
-                  >
-                    ${t("connection.scopeUpgrade.cancel")}
-                  </button>
-                </div>`
-              : nothing
+            : nothing
       }
     </div>
   </details>`;

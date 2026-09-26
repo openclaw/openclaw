@@ -470,34 +470,16 @@ class DeviceNotificationListenerService : NotificationListenerService() {
               code = "ACTION_UNAVAILABLE",
               message = "ACTION_UNAVAILABLE: notification has no open action",
             )
-        runCatching {
+        performNotificationAction("open failed") {
           pendingIntent.send()
-        }.fold(
-          onSuccess = { NotificationActionResult(ok = true) },
-          onFailure = { err ->
-            NotificationActionResult(
-              ok = false,
-              code = "ACTION_FAILED",
-              message = "ACTION_FAILED: ${err.message ?: "open failed"}",
-            )
-          },
-        )
+        }
       }
 
       NotificationActionKind.Dismiss -> {
-        runCatching {
+        performNotificationAction("dismiss failed") {
           cancelNotification(sbn.key)
           DeviceNotificationStore.remove(sbn.key)
-        }.fold(
-          onSuccess = { NotificationActionResult(ok = true) },
-          onFailure = { err ->
-            NotificationActionResult(
-              ok = false,
-              code = "ACTION_FAILED",
-              message = "ACTION_FAILED: ${err.message ?: "dismiss failed"}",
-            )
-          },
-        )
+        }
       }
 
       NotificationActionKind.Reply -> {
@@ -527,19 +509,25 @@ class DeviceNotificationListenerService : NotificationListenerService() {
           replyBundle.putCharSequence(remoteInput.resultKey, replyText)
         }
         RemoteInput.addResultsToIntent(remoteInputs, fillInIntent, replyBundle)
-        runCatching {
+        performNotificationAction("reply failed") {
           action.actionIntent.send(this, 0, fillInIntent)
-        }.fold(
-          onSuccess = { NotificationActionResult(ok = true) },
-          onFailure = { err ->
-            NotificationActionResult(
-              ok = false,
-              code = "ACTION_FAILED",
-              message = "ACTION_FAILED: ${err.message ?: "reply failed"}",
-            )
-          },
-        )
+        }
       }
     }
   }
+
+  private inline fun performNotificationAction(
+    fallbackMessage: String,
+    action: () -> Unit,
+  ): NotificationActionResult =
+    try {
+      action()
+      NotificationActionResult(ok = true)
+    } catch (err: Throwable) {
+      NotificationActionResult(
+        ok = false,
+        code = "ACTION_FAILED",
+        message = "ACTION_FAILED: ${err.message ?: fallbackMessage}",
+      )
+    }
 }

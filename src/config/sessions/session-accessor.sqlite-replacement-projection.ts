@@ -25,11 +25,11 @@ import {
 import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
 import { finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort } from "./session-accessor.sqlite-maintenance.js";
 import { readSessionEntryReplacementState } from "./session-accessor.sqlite-replacement-read.js";
-import {
-  commitSessionEntryReplacementsInDatabase,
-  type SqliteSessionEntryReplacement,
-  type SessionEntryReplacementCommit,
-} from "./session-accessor.sqlite-replacement-state.js";
+import { commitSessionEntryReplacementsInDatabase } from "./session-accessor.sqlite-replacement-state.js";
+import type {
+  SqliteSessionEntryReplacement,
+  SessionEntryReplacementCommit,
+} from "./session-accessor.sqlite-replacement-types.js";
 import {
   commitSessionEntryReplacementsInWorker,
   prepareSessionEntryReplacementDatabase,
@@ -60,7 +60,8 @@ type ReplacementProjectionOptions = {
   assertCommitAllowed?: () => void;
   withCommit?: SessionEntryCreateWithTranscriptOptions["withCommit"];
   ownerAssignment?: SessionEntryReplacementCommit["ownerAssignment"];
-  onLifecycleCommitted?: () => void;
+  checkPendingArchiveRecovery?: boolean;
+  onLifecycleCommitted?: (pendingArchiveRecovery: boolean) => void;
   env?: NodeJS.ProcessEnv;
   activeSessionKey?: string;
   agentId?: string;
@@ -252,6 +253,7 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
             includeLabelOwners: params.includeLabelOwners,
             validationKeys: [...validationKeys],
             replacements: applicable,
+            checkPendingArchiveRecovery: params.checkPendingArchiveRecovery,
             consumePendingReset: params.consumePendingReset,
             ownerAssignment: params.ownerAssignment,
             maintenance,
@@ -268,9 +270,8 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
                     const committed = runOpenClawAgentWriteTransaction(
                       (database) => {
                         if (params.onLifecycleCommitted) {
-                          deferOpenClawAgentPostCommitPublication(
-                            database,
-                            params.onLifecycleCommitted,
+                          deferOpenClawAgentPostCommitPublication(database, () =>
+                            params.onLifecycleCommitted?.(result.pendingArchiveRecovery),
                           );
                         }
                         const result = commitSessionEntryReplacementsInDatabase(

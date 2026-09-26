@@ -1,5 +1,8 @@
 /** Enforces the task-ledger retention bound for terminal cron history. */
-import { cronTaskRecordStoreKey, resolveCronTaskRecordTimestamp } from "../cron/task-run-detail.js";
+import {
+  cronRunRecordStoreKey,
+  resolveCronRunRecordTimestamp,
+} from "../cron/run-history-detail.js";
 import type { TaskRecord } from "./task-registry.types.js";
 import { resolveEffectiveTaskCleanupAfter } from "./task-retention.js";
 
@@ -28,7 +31,7 @@ export function collectCronHistoryOverflowTaskIds(tasks: readonly TaskRecord[]):
     ) {
       continue;
     }
-    const storeKey = cronTaskRecordStoreKey(task);
+    const storeKey = cronRunRecordStoreKey(task);
     const bySource = byStore.get(storeKey) ?? new Map<string, CronHistoryRetentionPartition>();
     const partition = bySource.get(task.sourceId) ?? { history: [], quiet: [] };
     const detail = task.detail;
@@ -50,7 +53,7 @@ export function collectCronHistoryOverflowTaskIds(tasks: readonly TaskRecord[]):
       for (const rows of [partition.history, partition.quiet]) {
         rows.sort((left, right) => {
           return (
-            resolveCronTaskRecordTimestamp(right) - resolveCronTaskRecordTimestamp(left) ||
+            resolveCronRunRecordTimestamp(right) - resolveCronRunRecordTimestamp(left) ||
             right.createdAt - left.createdAt ||
             right.taskId.localeCompare(left.taskId)
           );

@@ -14,6 +14,7 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import {
+  readRecentSessionMessagesWithStatsAsync,
   readSessionMessageByIdAsync,
   readSessionMessageCountAsync,
   readSessionMessagesAsync,
@@ -255,6 +256,19 @@ describe("session transcript reader facade", () => {
       line("retained archive"),
     );
 
+    for (const allowResetArchiveFallback of [false, undefined]) {
+      await expect(
+        readSessionMessagesPageWithStatsAsync(scope, {
+          offset: 0,
+          maxMessages: 1,
+          allowResetArchiveFallback,
+        }),
+      ).rejects.toMatchObject({
+        name: "SessionTranscriptStorageUnavailableError",
+        reason: "database-missing",
+      });
+    }
+
     await expect(
       readSessionMessagesAsync(scope, {
         mode: "full",
@@ -262,6 +276,19 @@ describe("session transcript reader facade", () => {
         allowResetArchiveFallback: true,
       }),
     ).resolves.toMatchObject([{ content: "retained archive" }]);
+    await expect(
+      readRecentSessionMessagesWithStatsAsync(scope, {
+        maxMessages: 1,
+        allowResetArchiveFallback: true,
+      }),
+    ).resolves.toMatchObject({ messages: [{ content: "retained archive" }] });
+    await expect(
+      readSessionMessagesPageWithStatsAsync(scope, {
+        offset: 0,
+        maxMessages: 1,
+        allowResetArchiveFallback: true,
+      }),
+    ).resolves.toMatchObject({ messages: [{ content: "retained archive" }] });
   });
 
   test("does not fall back to stored custom transcript paths after SQLite migration", async () => {

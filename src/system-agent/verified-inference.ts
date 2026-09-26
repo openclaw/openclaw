@@ -30,11 +30,10 @@ import { cloneConfigWithResolutionFacts } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { passesManifestOwnerBasePolicy } from "../plugins/manifest-owner-policy.js";
-import type { OpenClawPackageBuild } from "../plugins/manifest.js";
-import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { loadPluginRegistrySnapshot } from "../plugins/plugin-registry.js";
 import {
   fingerprintPluginRuntimeArtifact,
+  loadPluginRuntimeArtifactIdentitySources,
   type PluginRuntimeArtifactIdentitySource,
 } from "../plugins/plugin-runtime-artifact-identity.js";
 import {
@@ -97,18 +96,13 @@ export type SystemAgentOwnerPluginArtifactSnapshot = Readonly<{
   ownerPluginArtifacts: readonly SystemAgentOwnerPluginArtifactIdentity[];
 }>;
 
-type SystemAgentOwnerPluginRegistryRecord = {
-  pluginId: string;
-  origin: PluginOrigin;
-  rootDir: string;
+type SystemAgentOwnerPluginRegistryRecord = PluginRuntimeArtifactIdentitySource & {
   manifestPath: string;
   manifestHash: string;
-  source?: string;
   packageName?: string;
   packageVersion?: string;
   installRecordHash?: string;
   packageJson?: { path: string; hash: string };
-  packageBuild?: OpenClawPackageBuild;
 };
 
 type SystemAgentOwnerPluginRegistryLoader = (params: {
@@ -394,12 +388,14 @@ function projectOwnerPluginArtifacts(params: {
   if (params.ownerPluginIds.length === 0) {
     return [];
   }
-  const loadRegistry = params.deps.loadPluginRegistrySnapshot ?? loadPluginRegistrySnapshot;
   const fingerprintArtifact =
     params.deps.fingerprintPluginRuntimeArtifact ?? fingerprintPluginRuntimeArtifact;
   const workspaceDir = resolveAgentWorkspaceDir(params.config, params.route.agentId, process.env);
-  const registry = loadRegistry({ config: params.config, workspaceDir, env: process.env });
-  const recordsById = new Map(registry.plugins.map((record) => [record.pluginId, record]));
+  const registryParams = { config: params.config, workspaceDir, env: process.env };
+  const records = params.deps.loadPluginRegistrySnapshot
+    ? params.deps.loadPluginRegistrySnapshot(registryParams).plugins
+    : loadPluginRuntimeArtifactIdentitySources(registryParams);
+  const recordsById = new Map(records.map((record) => [record.pluginId, record]));
   return params.ownerPluginIds.map((pluginId) => {
     const record = recordsById.get(pluginId);
     if (!record) {
@@ -413,6 +409,7 @@ function projectOwnerPluginArtifacts(params: {
         rootDir: record.rootDir,
         ...(record.source ? { source: record.source } : {}),
         ...(record.packageBuild ? { packageBuild: record.packageBuild } : {}),
+        sourcePreferred: record.sourcePreferred,
       }),
     };
   });

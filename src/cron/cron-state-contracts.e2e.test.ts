@@ -3,12 +3,12 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import { reloadTaskRegistryFromStoreAsync } from "../tasks/task-registry-state.js";
 import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
 import { CronService } from "./service.js";
 import { createNoopLogger, installCronTestHooks } from "./service.test-harness.js";
 import type { CronServiceDeps } from "./service/state.js";
 import { loadCronStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
-import { readCronTaskRunHistoryPage } from "./task-run-history.js";
 
 const BASE_TIME_ISO = "2026-01-15T13:55:00.000Z";
 const logger = createNoopLogger();
@@ -252,7 +252,7 @@ describe("cron state contracts", () => {
             events.filter((event) => event.jobId === job.id && event.action === "finished"),
           ).toHaveLength(1);
 
-          const initialHistory = readCronTaskRunHistoryPage({
+          const initialHistory = readCronRunHistoryPageForTests({
             storeKey: cronStoreKey(storePath),
             jobId: job.id,
           });
@@ -275,7 +275,7 @@ describe("cron state contracts", () => {
           resetTaskRegistryForTests({ persist: false });
           await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
 
-          const reloadedHistory = readCronTaskRunHistoryPage({
+          const reloadedHistory = readCronRunHistoryPageForTests({
             storeKey: cronStoreKey(storePath),
             jobId: job.id,
           });
@@ -285,7 +285,7 @@ describe("cron state contracts", () => {
           await restarted.start();
           expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
           expect(
-            readCronTaskRunHistoryPage({
+            readCronRunHistoryPageForTests({
               storeKey: cronStoreKey(storePath),
               jobId: job.id,
             }).entries,

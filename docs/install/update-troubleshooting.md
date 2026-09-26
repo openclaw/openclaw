@@ -152,11 +152,19 @@ the original package owner. Its normal runtime selection, service refresh,
 restart, and verification checks apply. Containers redeploy the target image
 with the same state/config mounts.
 
-`global-install-foreign-destination` means the selected prefix is foreign or its
-ownership could not be established. An inaccessible prefix, failed npm prefix
-probe, or unreadable layout stops the update before staging; an unknown
-destination is never treated as empty. Restore inspection access or make
-`npm prefix -g` succeed with the selected runtime. Ask the deployment owner to
+`global-install-foreign-destination` means the package transaction's destination
+is foreign or its ownership could not be established. The check uses the resolved
+installation target: an existing npm-global installation keeps its own prefix
+when nvm, fnm, Homebrew Node, or an operator's npm prefix change selects a different
+prefix in the shell. An unrelated installation at that shell prefix does not
+block an update to the original installation. pnpm global installations retain
+their pnpm owner and do not use this npm destination check.
+
+The actual destination must be empty, or its canonical package path must match
+the running installation or selected managed service, with any existing launcher
+pointing inside that package. An inaccessible or unreadable destination stops the
+update before staging; an unknown destination is never treated as empty. Restore
+inspection access or the selected package layout. Ask the deployment owner to
 verify unreadable layouts and explicitly select the intended installation.
 The saved outcome and public failure report name the destination prefix, package,
 launcher, running installation, and classified ownership cause. Public paths

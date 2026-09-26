@@ -1,16 +1,5 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
-/**
- * Query expansion for lexical FTS search.
- *
- * FTS works best with specific keywords, but users often ask conversational queries
- * like "that thing we discussed yesterday" or "之前讨论的那个方案". This helps both
- * hybrid retrieval and FTS-only fallback mode find those keywords.
- *
- * This module extracts meaningful keywords from such queries to improve FTS results.
- */
-
-// Common stop words that don't add search value
 const STOP_WORDS_EN = new Set([
   // Articles and determiners
   "a",
@@ -645,40 +634,20 @@ export function isQueryStopWordToken(token: string): boolean {
   );
 }
 
-/**
- * Check if a token looks like a meaningful keyword.
- * Returns false for short tokens, numbers-only, etc.
- */
 function isValidKeyword(token: string): boolean {
-  if (!token || token.length === 0) {
-    return false;
-  }
-  // Skip very short English words (likely stop words or fragments)
-  if (/^[a-zA-Z]+$/.test(token) && token.length < 3) {
-    return false;
-  }
-  // Skip pure numbers (not useful for semantic search)
-  if (/^\d+$/.test(token)) {
-    return false;
-  }
-  // Skip tokens that are all punctuation
-  if (/^[\p{P}\p{S}]+$/u.test(token)) {
-    return false;
-  }
-  return true;
+  return (
+    token.length > 0 &&
+    !(token.length < 3 && /^[a-zA-Z]+$/.test(token)) &&
+    !/^\d+$/.test(token) &&
+    !/^[\p{P}\p{S}]+$/u.test(token)
+  );
 }
 
-/**
- * Simple tokenizer that handles English, Chinese, Korean, and Japanese text.
- * For Chinese, we do character-based splitting since we don't have a proper segmenter.
- * For English, we split on whitespace and punctuation.
- */
 function tokenize(text: string, opts?: { ftsTokenizer?: "unicode61" | "trigram" }): string[] {
   const useTrigram = opts?.ftsTokenizer === "trigram";
   const tokens: string[] = [];
   const normalized = normalizeLowercaseStringOrEmpty(text);
 
-  // Split into segments (English words, Chinese character sequences, etc.)
   const segments = normalized.split(/[\s\p{P}]+/u).filter(Boolean);
 
   for (const segment of segments) {
@@ -700,7 +669,6 @@ function tokenize(text: string, opts?: { ftsTokenizer?: "unicode61" | "trigram" 
         }
       }
     } else if (/[\u4e00-\u9fff]/.test(segment)) {
-      // Check if segment contains CJK characters (Chinese)
       const chars = Array.from(segment).filter((c) => /[\u4e00-\u9fff]/.test(c));
       if (useTrigram) {
         // In trigram mode, push the whole contiguous CJK block (mirroring the
@@ -730,7 +698,6 @@ function tokenize(text: string, opts?: { ftsTokenizer?: "unicode61" | "trigram" 
         tokens.push(stem);
       }
     } else {
-      // For non-CJK, keep as single token
       tokens.push(segment);
     }
   }
@@ -738,14 +705,7 @@ function tokenize(text: string, opts?: { ftsTokenizer?: "unicode61" | "trigram" 
   return tokens;
 }
 
-/**
- * Extract keywords from a conversational query for FTS search.
- *
- * Examples:
- * - "that thing we discussed about the API" → ["discussed", "API"]
- * - "之前讨论的那个方案" → ["讨论", "方案"]
- * - "what was the solution for the bug" → ["solution", "bug"]
- */
+/** Extract ordered, unique keywords from a conversational query for FTS search. */
 export function extractKeywords(
   query: string,
   opts?: { ftsTokenizer?: "unicode61" | "trigram" },
@@ -755,16 +715,7 @@ export function extractKeywords(
   const seen = new Set<string>();
 
   for (const token of tokens) {
-    // Skip stop words
-    if (isQueryStopWordToken(token)) {
-      continue;
-    }
-    // Skip invalid keywords
-    if (!isValidKeyword(token)) {
-      continue;
-    }
-    // Skip duplicates
-    if (seen.has(token)) {
+    if (isQueryStopWordToken(token) || !isValidKeyword(token) || seen.has(token)) {
       continue;
     }
     seen.add(token);

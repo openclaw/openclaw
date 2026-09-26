@@ -29,7 +29,7 @@ describe("worker turn execution loading", () => {
       "placement-drained",
       "loader-failed",
     ] as const)("retains admission and the exact claim across loading: %s", async (scenario) => {
-      fixture.seedActivePlacement(mode);
+      await fixture.seedActivePlacement(mode);
       const claimTurn = vi.spyOn(fixture.placements, "claimTurn");
       const loadStarted = createDeferredCore();
       const releaseLoad = createDeferredCore();
@@ -192,7 +192,7 @@ describe("worker turn execution loading", () => {
     ).resolves.toEqual({ meta: { durationMs: 1 } });
     expect(runLocal).toHaveBeenCalledOnce();
     expect(load).not.toHaveBeenCalled();
-    fixture.seedActivePlacement();
+    await fixture.seedActivePlacement();
     await expect(
       provider.executeTurn(request, fixture.turn(request.runId), runLocal),
     ).rejects.toMatchObject({ cause: failure });
@@ -204,7 +204,7 @@ describe("worker turn execution loading", () => {
   it.each(["current", "revoked", "loader-failed"] as const)(
     "rechecks the remote-exec placement after sandbox loading: %s",
     async (scenario) => {
-      fixture.seedActivePlacement("remote-exec");
+      await fixture.seedActivePlacement("remote-exec");
       const loadStarted = createDeferredCore();
       const releaseLoad = createDeferredCore();
       const failure = new Error("sandbox load failed");
@@ -288,7 +288,7 @@ describe("worker turn execution loading", () => {
   );
 
   it("checks sandbox eligibility before loading with an active interception", async () => {
-    fixture.seedActivePlacement("remote-exec");
+    await fixture.seedActivePlacement("remote-exec");
     const failure = new Error("sandbox load reached");
     const load = vi.fn(() => {
       throw failure;
@@ -311,7 +311,7 @@ describe("worker turn execution loading", () => {
   });
 
   it("keeps the reconciliation error constructor shared with the loaded thrower", async () => {
-    fixture.seedActivePlacement();
+    await fixture.seedActivePlacement();
     const { WorkerWorkspaceReconciliationError } = await import("./worker-turn-failure.js");
     const { recoverWorkspaceBeforeTurn } = await import("./workspace-result-finalize.js");
     const placement = fixture.placements.get(fixture.SESSION_ID);

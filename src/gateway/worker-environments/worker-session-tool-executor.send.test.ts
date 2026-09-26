@@ -426,7 +426,7 @@ describe("worker session tool send delivery", () => {
       scopedSessionAccess.mockImplementationOnce(async (params) => {
         if (replaced === "target") {
           setEntry(TARGET.sessionKey, "replacement-target", PARENT);
-          activate({ ...TARGET, sessionId: "replacement-target" });
+          await activate({ ...TARGET, sessionId: "replacement-target" });
         } else {
           setEntry(PARENT.sessionKey, "replacement-parent");
         }

@@ -13,10 +13,10 @@ import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { listTaskRecords } from "../../tasks/task-registry.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { isCronJobActive, markCronJobActive } from "../active-jobs.js";
+import { readCronRunHistoryPageForTests } from "../run-history.test-support.js";
 import { createCronExecutionId } from "../run-id.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
-import { readCronTaskRunHistoryPage } from "../task-run-history.js";
 import type { CronJob } from "../types.js";
 import { start, stop } from "./ops-lifecycle.js";
 import { add, remove } from "./ops-mutations.js";
@@ -226,7 +226,7 @@ describe("cron batch outcome finalization", () => {
           ),
         ).toEqual([expect.objectContaining({ runId: task?.runId, status: "succeeded" })]);
         expect(
-          readCronTaskRunHistoryPage({
+          readCronRunHistoryPageForTests({
             storeKey: cronStoreKey(store.storePath),
             jobId: job.id,
           }).entries,

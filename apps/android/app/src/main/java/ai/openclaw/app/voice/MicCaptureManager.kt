@@ -345,14 +345,14 @@ internal class MicCaptureManager(
 
     when (payload["state"].asStringOrNull()) {
       "delta" -> {
-        val deltaText = parseAssistantText(payload)
+        val deltaText = ChatEventText.assistantTextFromPayload(payload)
         if (!deltaText.isNullOrBlank()) {
           upsertPendingAssistant(text = deltaText.trim(), isStreaming = true)
         }
       }
 
       "final" -> {
-        val finalText = parseAssistantText(payload)?.trim().orEmpty()
+        val finalText = ChatEventText.assistantTextFromPayload(payload)?.trim().orEmpty()
         if (finalText.isNotEmpty()) {
           upsertPendingAssistant(text = finalText, isStreaming = false)
           playAssistantReplyAsync(finalText)
@@ -932,8 +932,6 @@ internal class MicCaptureManager(
       ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
         PackageManager.PERMISSION_GRANTED
     )
-
-  private fun parseAssistantText(payload: JsonObject): String? = ChatEventText.assistantTextFromPayload(payload)
 }
 
 private fun kotlinx.serialization.json.JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject

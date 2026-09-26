@@ -37,9 +37,7 @@ export function rememberLiveTerminalRun(
 }
 
 export function isLiveTerminalForRun(message: unknown, runId: string): boolean {
-  return Boolean(
-    message && typeof message === "object" && liveTerminalIdentities.get(message)?.runId === runId,
-  );
+  return readLiveTerminalRunId(message) === runId;
 }
 
 export function readLiveTerminalRunId(message: unknown): string | null {

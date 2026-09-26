@@ -251,6 +251,7 @@ describe("plugin management service", () => {
   it.each(["bundled", "config"] as const)(
     "reloads a known %s plugin without inventing an installed package record",
     async (origin) => {
+      const signal = new AbortController().signal;
       const metadata = metadataSnapshot({ enabled: true, id: "discovered" });
       mocks.metadata.mockReturnValue({
         ...metadata,
@@ -274,12 +275,16 @@ describe("plugin management service", () => {
         reloadManagedPlugin({
           plugins: [{ pluginId: "discovered", sourceDigests: { discovered: "a".repeat(64) } }],
           env: {},
+          waitForDrain: true,
+          signal,
           applyRuntime,
         }),
       ).resolves.toMatchObject({ pluginIds: ["discovered"], application: { generation: 4 } });
       expect(applyRuntime).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
           pluginIds: ["discovered"],
+          waitForDrain: true,
+          drainSignal: signal,
           expectedSourceDigests: { discovered: "a".repeat(64) },
         }),
       );

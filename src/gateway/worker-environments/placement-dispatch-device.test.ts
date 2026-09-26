@@ -7,16 +7,16 @@ import {
   WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
 } from "../../infra/node-runner-inventory.js";
 import {
-  closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { VERSION } from "../../version.js";
 import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
 import { resolveDevicePlacementEligibility } from "./device-placement-eligibility.js";
@@ -43,7 +43,7 @@ vi.mock("../../config/config.js", async (importOriginal) => {
   };
 });
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = createTempDirTracker();
 const CODEX_COMMAND = "codex.exec-server.stdio.v1";
 const OPENCLAW_DEVICE_REQUIREMENT = { requiredNodeCommands: [], consumesWorkerSlot: true };
 const CODEX_DEVICE_REQUIREMENT = {
@@ -123,8 +123,9 @@ describe("device worker placement dispatch", () => {
     placementStore = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
   });
 
-  afterEach(() => {
-    closeOpenClawStateDatabaseForTest();
+  afterEach(async () => {
+    await closeStateDatabaseForTest();
+    tempDirs.cleanup();
   });
 
   it("provisions, syncs, and activates a local-install device environment", async () => {
@@ -715,7 +716,7 @@ describe("device worker placement dispatch", () => {
     },
   ])("fences recovery of a $name before workspace sync", async (scenario) => {
     const harness = createHarness(database, placementStore);
-    const provisioning = harness.placements.seedProvisioning(scenario.executionMode);
+    const provisioning = await harness.placements.seedProvisioning(scenario.executionMode);
     if (provisioning.state !== "provisioning") {
       throw new Error("paired-device recovery fixture did not enter provisioning");
     }
@@ -750,7 +751,7 @@ describe("device worker placement dispatch", () => {
       ownerEpoch: harness.ready.ownerEpoch,
       sessionId: REQUEST.sessionId,
     });
-    harness.placements.seedActive(harness.attached.ownerEpoch);
+    await harness.placements.seedActive(harness.attached.ownerEpoch);
     harness.markEnvironmentNodeDeviceId("offline-device");
     harness.log.length = 0;
 

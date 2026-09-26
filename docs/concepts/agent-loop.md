@@ -238,6 +238,12 @@ With diagnostics enabled, a built-in two-minute threshold classifies long `proce
 
 The abort threshold is at least 5 minutes and 3x the warning threshold. Stale session bookkeeping releases the affected session lane immediately after recovery gates pass; stalled embedded runs are abort-drained only after the abort threshold, so queued work resumes without cutting off merely slow runs. Recovery emits structured requested/completed outcomes; diagnostic state is marked idle only if the same processing generation is still current, and repeated `session.stuck` diagnostics back off while the session stays unchanged.
 
+Attention and recovery log lines read optional session context only when their
+log level is enabled. Transcript enrichment runs in the background read worker
+and returns at most 140 characters; it never delays classification or recovery.
+Session replacement discards pending enrichment, and stopping diagnostics retires
+pending log publications. Incognito replies remain excluded.
+
 Pending human-input questions protect their exact active owner from stale-work
 recovery. If checking a question expires it, or diagnostic reporting resumes or
 replaces the run, that observation cannot authorize an abort of the resumed work.

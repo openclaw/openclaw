@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
@@ -39,6 +39,10 @@ function setup() {
   });
   return { client, request, controller, publications };
 }
+
+beforeEach(() => {
+  vi.spyOn(Math, "random").mockReturnValue(0);
+});
 
 afterEach(() => {
   vi.restoreAllMocks();

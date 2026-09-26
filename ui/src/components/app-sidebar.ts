@@ -140,7 +140,6 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   private projectedSessionCatalogs: SidebarSessionCatalog[] = [];
   private projectedSessionSections: SidebarVisibleSections = {
     sections: [],
-    expandedRows: [],
     visibleRows: [],
   };
   private readonly subscriptions = new SubscriptionsController(this)

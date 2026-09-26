@@ -11,6 +11,12 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-accessor.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { setGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
+import {
+  retainGatewayPluginMetadata,
+  type GatewayPluginMetadataOwner,
+} from "../../plugins/plugin-metadata-lifecycle.js";
+import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { drainAgentDatabaseResources } from "../../state/openclaw-agent-db-resources.js";
 import {
   disposeOpenClawAgentDatabaseByPath,
@@ -47,6 +53,7 @@ export function createChatDirectiveSuiteResources() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-chat-directive-suite-"));
   const databasePath = path.join(root, "openclaw-agent.sqlite");
   const env = { ...process.env, OPENCLAW_STATE_DIR: root };
+  let metadataOwner: GatewayPluginMetadataOwner | undefined;
   return {
     root,
     databasePath,
@@ -54,6 +61,13 @@ export function createChatDirectiveSuiteResources() {
     // The caller retains cleanup ownership before opening can fail.
     open() {
       openOpenClawAgentDatabase({ agentId: "main", env, path: databasePath });
+      // Session cases share the installed inventory through per-case runtime resets.
+      metadataOwner = retainGatewayPluginMetadata();
+      const snapshot = metadataOwner.runBootstrap(() =>
+        loadPluginMetadataSnapshot({ config: {}, allowCurrent: false }),
+      );
+      metadataOwner.publish(snapshot);
+      setGatewayPluginMetadataSnapshot(snapshot, { config: {} });
     },
     loadSessionEntry(
       state: ChatDirectiveSessionState,
@@ -105,11 +119,15 @@ export function createChatDirectiveSuiteResources() {
       };
     },
     async close() {
-      await drainAgentDatabaseResources({ path: databasePath, agentId: "main" }, async () =>
-        disposeOpenClawAgentDatabaseByPath(databasePath, { env }),
-      );
-      await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(env));
-      fs.rmSync(root, { recursive: true, force: true });
+      try {
+        await drainAgentDatabaseResources({ path: databasePath, agentId: "main" }, async () =>
+          disposeOpenClawAgentDatabaseByPath(databasePath, { env }),
+        );
+        await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(env));
+        fs.rmSync(root, { recursive: true, force: true });
+      } finally {
+        await metadataOwner?.close();
+      }
     },
   };
 }

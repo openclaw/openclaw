@@ -91,6 +91,7 @@ export function createAgentTurnService(
       isOneShotModelRun,
       isRawModelRun,
       agentDedupeKeys,
+      swarmExecutionLane,
     } = preflight;
     // Cached replay returns before a new lifecycle generation is observed, matching
     // the idempotency path that preceded this service extraction.
@@ -587,6 +588,7 @@ export function createAgentTurnService(
             inputProvenance: preparedDispatch.userTurn.inputProvenance,
             runId,
             agentDedupeKeys,
+            swarmExecutionLane,
             spawnedBy: spawnedByValue,
             groupId: resolvedGroupId,
             groupChannel: resolvedGroupChannel,

@@ -72,7 +72,22 @@ it("materializes a large dirty git workspace as a credential-free commit-capable
   const privateInput = `${inputDirectory}/input-cache.pyc`;
   await ensureStagedInputDirectory(localPath, inputDirectory);
   await fs.writeFile(path.join(localPath, privateInput), "raw input bytes");
-  const fake = localWorkspaceRunner(remoteHome);
+  let checkedPartialManifest = false;
+  const fake = localWorkspaceRunner(remoteHome, async (argv, localArgv, options) => {
+    if (checkedPartialManifest || !argv.at(-2)?.includes(":.openclaw-worker/manifests/")) {
+      return undefined;
+    }
+    checkedPartialManifest = true;
+    const destination = localArgv.at(-1)!;
+    await fs.writeFile(destination, "partial manifest");
+    const partial = await fs.stat(destination);
+    const transferred = await runCommandWithTimeout(localArgv, options);
+    expect(
+      (await fs.stat(destination)).ino,
+      "inbound manifest filenames stay stable while the quota scan observes them",
+    ).toBe(partial.ino);
+    return transferred;
+  });
   const { handle } = await startConnectedTunnel(fake, "worker:real-git-sync", 11);
 
   try {
@@ -160,6 +175,7 @@ it("materializes a large dirty git workspace as a credential-free commit-capable
       baseManifestRef: result.manifestRef,
     });
     expect(reconciled).toMatchObject({ changed: true });
+    expect(checkedPartialManifest).toBe(true);
     for (const relative of ownership.unownedFiles) {
       await expect(fs.readFile(path.join(localPath, relative), "utf8")).resolves.toBe(
         `fixture bytes: ${relative}\n`,
@@ -231,17 +247,19 @@ it("materializes a large dirty git workspace as a credential-free commit-capable
         fs.writeFile(path.join(manifestPath, `${index}.txt`), ""),
       ),
     );
-    // Non-recursive rsync skips the directory, so no manifest arrives.
+    // GNU rsync skips the directory; OpenRsync can leave an empty directory.
+    // Neither outcome may satisfy regular-file manifest admission.
     await expect(
       handle.reconcileWorkspace({
         source: { kind: "local", path: localPath, journal: memoryWorkspaceJournal() },
         remoteWorkspaceDir: result.remoteWorkspaceDir,
         baseManifestRef: result.manifestRef,
       }),
-    ).rejects.toMatchObject({
-      code: "ENOENT",
-      message: expect.stringContaining(path.basename(manifestPath)),
-    });
+    ).rejects.toThrow(
+      new RegExp(
+        `^(?:File not found: .*${result.manifestRef.slice("sha256:".length)}\\.json|path must be a regular file)$`,
+      ),
+    );
   } finally {
     await handle.stop();
     await fs.rm(root, { recursive: true });

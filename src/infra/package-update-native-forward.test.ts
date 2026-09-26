@@ -26,11 +26,13 @@ import {
 import {
   encodePackageActivationLauncher,
   openPackageActivationJournal,
+  type PackageActivationRecord,
 } from "./package-update-activation-journal.js";
 import {
   createPackageActivationForwardProvider,
   preparePackageActivation,
   readPackageActivationReceipt,
+  runPackageActivationRecovery,
 } from "./package-update-activation.js";
 import { createPackageIntegrityReader } from "./package-update-integrity.js";
 import { createUnchangedReversePreparation } from "./package-update-reverse-recovery.test-support.js";
@@ -534,9 +536,9 @@ it.skipIf(process.platform === "win32")(
   180_000,
 );
 
-it.skipIf(process.platform === "win32")(
-  "resumes durable reverse preparation after a staged-state copy is torn",
-  async () => {
+it.skipIf(process.platform === "win32").each(["current", "replaced"] as const)(
+  "resumes torn reverse preparation only under its current native owner (%s)",
+  async (owner) => {
     const f = await fixture({ realHelper: true });
     let anchor = "";
     const interruptedCopy = new Error("simulated death during staged-state copy");
@@ -612,6 +614,82 @@ it.skipIf(process.platform === "win32")(
       phase: "reverse-preparing",
       intent: { kind: "reverse-prepare", effect: "copy" },
     });
+    if (owner === "replaced") {
+      const journal = openPackageActivationJournal(anchor);
+      let blocked: PackageActivationRecord | undefined;
+      const lstat = fsp.lstat;
+      const renames = vi.spyOn(fs, "renameSync");
+      vi.spyOn(fsp, "lstat").mockImplementation(async (...args) => {
+        const stat = await lstat(...args);
+        const record = journal.read();
+        if (
+          !blocked &&
+          String(args[0]) === path.join(anchor, "previous") &&
+          record.intent?.kind === "reverse" &&
+          record.intent.effect === "publish" &&
+          record.descriptor.reverse?.resources[record.intent.completed]?.live === f.state
+        ) {
+          // The state is displaced and the resumed owner is awaiting the last
+          // real image inspection. Revoke the stored lease, never its assertion.
+          const selected = f.store.read(f.packageRoot);
+          if (selected.kind !== "current") {
+            throw new Error("Resumed recovery did not acquire its native owner");
+          }
+          const database = new DatabaseSync(f.handoff);
+          try {
+            expect(
+              database
+                .prepare(
+                  "UPDATE managed_update_handoffs SET owner = ? WHERE install_root = ? AND owner = ?",
+                )
+                .run("replaced-owner", f.packageRoot, selected.lease.owner).changes,
+            ).toBe(1);
+          } finally {
+            database.close();
+          }
+          blocked = record;
+        }
+        return stat;
+      });
+      await expect(
+        withStateDatabaseCoordinatorRuntimeDirectory(f.coordinator, () =>
+          runPackageActivationRecovery(anchor, "repair", journal.read().descriptor.operationId),
+        ),
+      ).rejects.toMatchObject({
+        message: "Update failed and executor release remains pending",
+        cause: { cause: { message: "Update executor ownership is no longer current." } },
+      });
+      expect(blocked, "live owner must change after state displacement").toBeDefined();
+      expect(journal.read()).toEqual(blocked);
+      const resource = blocked!.descriptor.reverse!.resources.find(
+        (entry) => entry.live === f.state,
+      )!;
+      expect(resource.move).not.toBeNull();
+      expect(renames).not.toHaveBeenCalledWith(resource.move!.staged, f.state);
+      expect(fs.existsSync(f.state)).toBe(false);
+      expect(fs.existsSync(resource.move!.staged)).toBe(true);
+      expect(fs.existsSync(resource.move!.displaced)).toBe(true);
+      expect(identity(f.packageRoot)).toBe(blocked!.descriptor.candidate.identity);
+      expect(fs.readFileSync(f.launcher, "utf8")).toBe("old launcher\n");
+      expect(f.store.read(f.packageRoot)).toMatchObject({
+        kind: "current",
+        lease: { owner: "replaced-owner" },
+      });
+      for (const [file, values] of [
+        [resource.move!.displaced, ["newer write"]],
+        [resource.move!.staged, ["newer write", "prepared recovery value"]],
+      ] as const) {
+        const database = new DatabaseSync(file, { readOnly: true });
+        try {
+          expect(database.prepare("SELECT value FROM acknowledged ORDER BY rowid").all()).toEqual(
+            values.map((value) => ({ value })),
+          );
+        } finally {
+          database.close();
+        }
+      }
+      return;
+    }
     const statusCommand = readPackageActivationReceipt(f.packageRoot)?.recoveryCommand;
     if (!statusCommand) {
       throw new Error("Reverse preparation did not expose its sealed helper");

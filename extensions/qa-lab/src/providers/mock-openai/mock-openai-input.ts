@@ -306,7 +306,7 @@ function stringifyFunctionCallOutput(output: unknown): string {
   return "";
 }
 
-export function isResponsesToolCallOutput(item: ResponsesInputItem) {
+function isResponsesToolCallOutput(item: ResponsesInputItem) {
   return item.type === "function_call_output" || item.type === "custom_tool_call_output";
 }
 

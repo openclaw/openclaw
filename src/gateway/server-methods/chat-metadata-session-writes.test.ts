@@ -20,9 +20,9 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { publishUserProfileAliasChange } from "../../state/user-profile-events.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
-import { bumpGatewayAccessRevision } from "../gateway-access-revision.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
 import {
@@ -71,7 +71,7 @@ const cases = [
   { write: "external selected recreated payload", allowed: false },
   { write: "external selected recreated lifecycle", allowed: false },
   { write: "runtime config replacement", allowed: false },
-  { write: "access revision change", allowed: false },
+  { write: "profile alias change", allowed: false },
 ] as const;
 
 it.each(
@@ -193,8 +193,8 @@ it.each(
         ).toEqual({ ok: true, value: true });
       } else if (write === "runtime config replacement") {
         runtimeConfig = {};
-      } else if (write === "access revision change") {
-        bumpGatewayAccessRevision();
+      } else if (write === "profile alias change") {
+        publishUserProfileAliasChange();
       } else if (write.startsWith("compound")) {
         runOpenClawAgentWriteTransaction((current) => {
           writeSessionEntry(current, writeTarget.sessionKey, {
@@ -405,7 +405,7 @@ it.each(
       expect(outcome.error).toBeInstanceOf(PreparedModelRuntimePublicationSupersededError);
       expect(outcome.error).toMatchObject({
         message:
-          write === "runtime config replacement" || write === "access revision change"
+          write === "runtime config replacement" || write === "profile alias change"
             ? "Chat metadata access changed while preparing its metadata. Retry the request."
             : "Session changed while preparing its metadata. Retry the request.",
       });

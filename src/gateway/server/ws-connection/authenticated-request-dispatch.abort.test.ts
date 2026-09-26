@@ -98,6 +98,47 @@ function createDispatcher(
 }
 
 describe("authenticated WebSocket request cancellation", () => {
+  it.each([undefined, false, true])(
+    "binds only explicit reload waits to disconnect (%s)",
+    async (waitForDrain) => {
+      const socket = new EventEmitter();
+      const { client, dispatcher } = createDispatcher(socket);
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      let signal: AbortSignal | undefined;
+      handleGatewayRequest.mockImplementation(async (options: GatewayRequestOptions) => {
+        signal = options.signal;
+        entered.resolve();
+        await release.promise;
+      });
+      const dispatch = dispatcher.dispatch(
+        {
+          type: "req",
+          id: "plugin-wait",
+          method: "plugins.reload",
+          params: {
+            plugins: [{ pluginId: "demo" }],
+            ...(waitForDrain !== undefined ? { waitForDrain } : {}),
+          },
+        },
+        client,
+      );
+      try {
+        await entered.promise;
+        socket.emit("close", 1000, Buffer.alloc(0));
+        if (waitForDrain) {
+          expect(signal?.aborted).toBe(true);
+        } else {
+          expect(signal).toBeUndefined();
+        }
+      } finally {
+        release.resolve();
+        await dispatch;
+      }
+      expect(socket.listenerCount("close")).toBe(0);
+    },
+  );
+
   it("cancels only access-bound work after a grant ends, including after ordinary disconnect", async () => {
     const { registry, frames, waitForFrameCount } = createPairedNode();
     const guestSocket = new EventEmitter();

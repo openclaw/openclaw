@@ -14,7 +14,7 @@ import {
   getTaskById,
   markTaskTerminalById,
 } from "../../tasks/runtime-internal.js";
-import { clearTaskActivity } from "../../tasks/task-registry-activity.js";
+import { clearTaskActivity } from "../../tasks/task-registry-state.js";
 import { createTaskFixture } from "../../tasks/task-registry.test-support.js";
 import {
   getTaskPayload,

@@ -322,27 +322,16 @@ function markAlreadyMigratedTranscript(
   report: DoctorSessionSqliteTargetReport,
   snapshot: ReadOnlySqliteValidationSnapshot | undefined,
 ): boolean {
-  const migratedEvents = countAlreadyMigratedTranscriptEventsForImport(snapshot, record);
-  if (migratedEvents === undefined) {
+  if (
+    !snapshot ||
+    snapshot.sessionIdsBySessionKey.get(record.sessionKey) !== record.entry.sessionId
+  ) {
     return false;
   }
   report.validatedEntries += 1;
-  report.validatedTranscriptEvents += migratedEvents;
+  report.validatedTranscriptEvents +=
+    snapshot.transcriptEventCountsBySessionId.get(record.entry.sessionId) ?? 0;
   return true;
-}
-
-function countAlreadyMigratedTranscriptEventsForImport(
-  snapshot: ReadOnlySqliteValidationSnapshot | undefined,
-  record: LegacySessionRecord,
-): number | undefined {
-  if (!snapshot) {
-    return undefined;
-  }
-  const normalizedKey = record.sessionKey;
-  if (snapshot.sessionIdsBySessionKey.get(normalizedKey) !== record.entry.sessionId) {
-    return undefined;
-  }
-  return snapshot.transcriptEventCountsBySessionId.get(record.entry.sessionId) ?? 0;
 }
 
 function readLegacyTranscriptMtimeMs(record: LegacySessionRecord): number | undefined {

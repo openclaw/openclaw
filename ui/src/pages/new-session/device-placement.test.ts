@@ -39,6 +39,13 @@ describe("device placement projection", () => {
       facts: ["macOS", "Camera"],
     },
     {
+      name: "ignores unknown capabilities that match object prototype properties",
+      environment: node({ capabilities: ["constructor", "__proto__", "camera.snap"] }),
+      selectable: true,
+      reason: undefined,
+      facts: ["macOS", "Camera"],
+    },
+    {
       name: "saturated host",
       environment: node({ workerSlots: { total: 2, available: 0 } }),
       selectable: false,

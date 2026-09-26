@@ -574,7 +574,7 @@ export function acquireSessionRowEntry(params: {
     retainedDatabaseFacts: undefined,
     databaseFactsRevision: row.databaseFactsRevision + 1,
     ...lineage,
-    sharingEntry: entry,
+    sharingEntry: storedEntry,
     generation,
     fallbackModel: sameFallbackModelFacts(row.storedEntry, storedEntry)
       ? row.fallbackModel

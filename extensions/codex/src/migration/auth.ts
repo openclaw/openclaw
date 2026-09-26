@@ -1,4 +1,3 @@
-// Codex plugin module implements auth behavior.
 import { createHash } from "node:crypto";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "openclaw/plugin-sdk/agent-runtime";
 import {
@@ -187,19 +186,6 @@ function replaceConfigDraft(draft: OpenClawConfig, next: OpenClawConfig): void {
   Object.assign(draft, next);
 }
 
-function existingAuthProfileConfigIsCompatible(
-  existing: NonNullable<NonNullable<OpenClawConfig["auth"]>["profiles"]>[string],
-  profile: CodexAuthProfileConfig,
-): boolean {
-  if (existing.provider !== profile.provider || existing.mode !== profile.mode) {
-    return false;
-  }
-  if (existing.email && profile.email && existing.email !== profile.email) {
-    return false;
-  }
-  return true;
-}
-
 function hasAuthProfileConfigConflict(
   config: OpenClawConfig,
   profile: CodexAuthProfileConfig,
@@ -209,7 +195,12 @@ function hasAuthProfileConfigConflict(
     return false;
   }
   const existing = config.auth?.profiles?.[profile.profileId];
-  return Boolean(existing && !existingAuthProfileConfigIsCompatible(existing, profile));
+  return Boolean(
+    existing &&
+    (existing.provider !== profile.provider ||
+      existing.mode !== profile.mode ||
+      (existing.email && profile.email && existing.email !== profile.email)),
+  );
 }
 
 function hasCurrentAuthProfileConfigConflict(

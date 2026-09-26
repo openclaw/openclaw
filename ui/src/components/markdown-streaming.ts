@@ -17,7 +17,7 @@ const FENCE_CONTAINER_PREFIX_RE = /^[ \t]{0,3}(?:(?:>\s?)|(?:(?:[-+*]|\d{1,9}[.)
 const LIST_ITEM_OPEN_RE = /^[ \t]{0,3}(?:[-+*]|\d{1,9}[.)])[ \t]+/u;
 const LINK_REFERENCE_CANDIDATE_RE = /^[ \t]*\[/u;
 const DISCLOSURE_LINE_CANDIDATE_RE = /^[ \t]*<\/?(?:details|summary)(?=[\s>])/iu;
-const STREAMING_SPLIT_CACHE_LIMIT = 8;
+const STREAMING_CACHE_LIMIT = 8;
 
 type FenceMarker = { length: number; marker: "`" | "~" };
 type StrippedMarkdownLine = { content: string; offset: number };
@@ -37,12 +37,17 @@ function stripMarkdownContainerPrefixes(line: string): StrippedMarkdownLine {
 }
 
 function getFenceMarker(line: string): FenceMarker | null {
-  const fence = FENCE_OPEN_RE.exec(stripMarkdownContainerPrefixes(line).content)?.[1];
-  return fence ? { length: fence.length, marker: fence.charAt(0) as FenceMarker["marker"] } : null;
+  const content = stripMarkdownContainerPrefixes(line).content;
+  const match = FENCE_OPEN_RE.exec(content);
+  const fence = match?.[1];
+  if (!match || !fence || (fence.startsWith("`") && content.slice(match[0].length).includes("`"))) {
+    return null;
+  }
+  return { length: fence.length, marker: fence.startsWith("`") ? "`" : "~" };
 }
 
 function isFenceClose(line: string, fence: FenceMarker): boolean {
-  const trimmed = stripMarkdownContainerPrefixes(line).content.trimEnd();
+  const trimmed = stripMarkdownContainerPrefixes(line).content.replace(/[ \t]+$/u, "");
   const match = FENCE_OPEN_RE.exec(trimmed);
   const marker = match?.[1];
   if (!match || !marker) {
@@ -51,7 +56,7 @@ function isFenceClose(line: string, fence: FenceMarker): boolean {
   return (
     marker.charAt(0) === fence.marker &&
     marker.length >= fence.length &&
-    trimmed.slice(match[0].length).trim() === ""
+    trimmed.length === match[0].length
   );
 }
 
@@ -95,9 +100,28 @@ type StreamingMarkdownCacheEntry = {
   result: StreamingMarkdownSplit;
 };
 
-// A reused row key does not imply append-only text: rollovers, snapshots, and
-// completed citation markers can all replace the normalized Markdown prefix.
-const streamingSplitCache = new Map<string, StreamingMarkdownCacheEntry>();
+type StreamingMarkdownState = {
+  input?: { source: string; normalized: string };
+  split?: StreamingMarkdownCacheEntry;
+  rendered?: { options: string; markdown: string; html: string };
+};
+const streamingCache = new Map<string, StreamingMarkdownState>();
+
+export function streamingMarkdownState(streamKey?: string): StreamingMarkdownState | undefined {
+  if (!streamKey) {
+    return undefined;
+  }
+  const state = streamingCache.get(streamKey) ?? {};
+  streamingCache.delete(streamKey);
+  streamingCache.set(streamKey, state);
+  if (streamingCache.size > STREAMING_CACHE_LIMIT) {
+    const oldest = streamingCache.keys().next().value;
+    if (oldest !== undefined) {
+      streamingCache.delete(oldest);
+    }
+  }
+  return state;
+}
 
 function findStreamingCodeSpans(markdown: string, start: number): Array<[number, number]> {
   return findMarkdownCodeSpans(markdown.slice(start)).map(([from, to]) => [
@@ -245,7 +269,7 @@ function scanStableStreamingMarkdown(
             if (LINK_REFERENCE_CANDIDATE_RE.test(strippedLine.content)) {
               hasLinkReferenceDefinition = true;
             }
-            if (line.trim() === "") {
+            if (/^[ \t]*$/u.test(line)) {
               boundary = lineEnd;
             }
           }
@@ -318,11 +342,12 @@ export function splitStableStreamingMarkdown(
   streamKey?: string,
   stablePrefixLength = markdownLocal.length,
 ): StreamingMarkdownSplit {
-  if (!streamKey) {
+  const state = streamingMarkdownState(streamKey);
+  if (!state) {
     return scanStableStreamingMarkdown(markdownLocal).result;
   }
   const stableMarkdown = markdownLocal.slice(0, stablePrefixLength);
-  const cached = streamingSplitCache.get(streamKey);
+  const cached = state.split;
   const append = cached && stableMarkdown.startsWith(cached.markdown);
   // Appending within an established literal line cannot change its container.
   // A new line or an ambiguous opener goes back through the native block parser.
@@ -334,15 +359,7 @@ export function splitStableStreamingMarkdown(
           result: { boundary: cached.result.boundary, tailRepairStart: stableMarkdown.length },
         }
       : scanStableStreamingMarkdown(stableMarkdown, append ? cached.cursor : undefined);
-  streamingSplitCache.delete(streamKey);
-  streamingSplitCache.set(streamKey, { ...scanned, markdown: stableMarkdown });
-  while (streamingSplitCache.size > STREAMING_SPLIT_CACHE_LIMIT) {
-    const oldest = streamingSplitCache.keys().next().value;
-    if (oldest === undefined) {
-      break;
-    }
-    streamingSplitCache.delete(oldest);
-  }
+  state.split = { ...scanned, markdown: stableMarkdown };
   // Truncation notices change on every chunk even after their capped content is
   // fixed; retain the immutable checkpoint and rescan only that short suffix.
   return stablePrefixLength === markdownLocal.length

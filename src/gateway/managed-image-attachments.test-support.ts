@@ -1,8 +1,11 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import type { IncomingHttpHeaders } from "node:http";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, expect } from "vitest";
+import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -14,6 +17,94 @@ import {
   MANAGED_OUTGOING_ORIGINALS_SUBDIR,
   readManagedImageRecord,
 } from "./managed-image-record-store.js";
+
+export type RequestResult = {
+  statusCode: number;
+  headers: IncomingHttpHeaders;
+  body: Buffer;
+};
+
+export const TINY_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WnXcZ0AAAAASUVORK5CYII=";
+
+export async function createPngDataUrl(width: number, height: number): Promise<string> {
+  const buffer = createSolidPngBuffer(width, height, { r: 24, g: 64, b: 128 });
+  return `data:image/png;base64,${buffer.toString("base64")}`;
+}
+
+export async function expectPathMissing(targetPath: string): Promise<void> {
+  try {
+    await fs.access(targetPath);
+  } catch (error) {
+    expect(error).toMatchObject({ code: "ENOENT" });
+    return;
+  }
+  throw new Error(`expected ${targetPath} to be missing`);
+}
+
+type ManagedOutgoingImageTestParams = Omit<
+  Parameters<
+    (typeof import("./managed-image-attachments.js"))["createManagedOutgoingMediaBlocks"]
+  >[0],
+  "items"
+> & {
+  mediaUrls?: string[] | null;
+  attachments?: ReplyMediaAttachment[] | null;
+  allowLocalNonImage?: boolean;
+};
+
+export async function createManagedOutgoingImageBlocks(params: ManagedOutgoingImageTestParams) {
+  const { createManagedOutgoingMediaBlocks } = await import("./managed-image-attachments.js");
+  const { mediaUrls, attachments, allowLocalNonImage, ...ownerParams } = params;
+  return await createManagedOutgoingMediaBlocks({
+    ...ownerParams,
+    items: (mediaUrls ?? []).map((url, index) => {
+      const attachment = attachments?.[index];
+      return Object.assign(
+        { url, trustedLocal: allowLocalNonImage === true },
+        typeof attachment?.name === "string" ? { filename: attachment.name } : {},
+        typeof attachment?.mimeType === "string" ? { mimeType: attachment.mimeType } : {},
+        typeof attachment?.durationMs === "number" ? { durationMs: attachment.durationMs } : {},
+        typeof attachment?.width === "number" ? { width: attachment.width } : {},
+        typeof attachment?.height === "number" ? { height: attachment.height } : {},
+      );
+    }),
+  });
+}
+
+export async function replaceTestSessionEntry(
+  scope: {
+    agentId: string;
+    env: NodeJS.ProcessEnv;
+    sessionKey: string;
+    storePath?: string;
+  },
+  entry: { sessionId: string; updatedAt: number },
+): Promise<void> {
+  const { replaceSessionEntrySync } = await import("../config/sessions/session-accessor.js");
+  // Fixture seeding does not need the async entry writer's background maintenance.
+  replaceSessionEntrySync(scope, entry);
+}
+
+export function requireBlock(
+  blocks: readonly Record<string, unknown>[],
+  index = 0,
+): Record<string, unknown> {
+  const block = blocks[index];
+  if (!block) {
+    throw new Error(`expected block ${index}`);
+  }
+  return block;
+}
+
+export function requireAttachmentIdFromUrl(url: unknown): string {
+  expect(url).toBeTypeOf("string");
+  const attachmentId = String(url).split("/").at(-2);
+  if (!attachmentId) {
+    throw new Error(`expected attachment id in URL ${String(url)}`);
+  }
+  return attachmentId;
+}
 
 export async function requireManagedOriginalPath(
   stateDir: string,

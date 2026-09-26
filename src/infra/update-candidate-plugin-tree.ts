@@ -284,15 +284,24 @@ export async function prepareUpdateCandidatePluginTrees(params: {
     if (path.basename(directory) === "node_modules") {
       moduleOwners.add(directory);
     }
-    await discoverHoistedDependencies(directory);
+    const entries = await fs.readdir(directory, { withFileTypes: true });
+    // Listing names are only absence hints: retain canonical reads for filesystem aliases.
+    const mayContain = (name: string) =>
+      entries.some(
+        (entry) => entry.name.toLowerCase() === name || /[^\x20-\x7e]|[. ]$/u.test(entry.name),
+      );
+    if (mayContain("package.json")) {
+      await discoverHoistedDependencies(directory);
+    }
     // Read before link discovery, so custom external stores retain their owner.
-    const modules = await readRuntimeModulesManifest(path.join(directory, ".modules.yaml"));
+    const modules = mayContain(".modules.yaml")
+      ? await readRuntimeModulesManifest(path.join(directory, ".modules.yaml"))
+      : null;
     if (typeof modules?.manifest.virtualStoreDir === "string") {
       const store = await fs.realpath(path.resolve(directory, modules.manifest.virtualStoreDir));
       stores.add(store);
       addRoot(store);
     }
-    const entries = await fs.readdir(directory, { withFileTypes: true });
     // Register identities before visiting siblings: a physical module directory
     // may sort before the node_modules alias that establishes its ownership.
     for (const entry of entries) {
@@ -554,9 +563,23 @@ export async function copyUpdateCandidatePluginTrees(
   }
   await fs.mkdir(privateRoot, { recursive: true, mode: 0o700 });
   const destinationRoot = await openRoot(privateRoot);
+  const preparedDirectories = new Set([privateRoot]);
   for (const entry of plan.entries) {
     if (entry.kind === "directory") {
-      await fs.mkdir(destinationFor(entry.path), { recursive: true, mode: entry.mode | 0o700 });
+      const destination = destinationFor(entry.path);
+      await fs.mkdir(destination, { recursive: true, mode: entry.mode | 0o700 });
+      preparedDirectories.add(destination);
+    }
+  }
+  // File roots and missing-entry repairs can omit their parent directory entries.
+  // Prepare each parent once before admitting concurrent copies.
+  for (const entry of plan.entries) {
+    if (entry.kind !== "directory") {
+      const parent = path.dirname(destinationFor(entry.path));
+      if (!preparedDirectories.has(parent)) {
+        await fs.mkdir(parent, { recursive: true, mode: 0o700 });
+        preparedDirectories.add(parent);
+      }
     }
   }
   const copied = await runTasksWithConcurrency({
@@ -567,7 +590,6 @@ export async function copyUpdateCandidatePluginTrees(
       .map((entry) => async () => {
         await assertEntry(entry);
         const destination = destinationFor(entry.path);
-        await fs.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
         // copyIn owns portable create-only publication; no-replace move needs a
         // native binding. Recheck the inventory before its private stage is published.
         await destinationRoot.copyIn(path.relative(privateRoot, destination), entry.path, {
@@ -595,7 +617,6 @@ export async function copyUpdateCandidatePluginTrees(
     if (entry.kind === "symlink") {
       await assertEntry(entry);
       const destination = destinationFor(entry.path);
-      await fs.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
       await fs.symlink(entry.link, destination, entry.linkType);
     }
   }

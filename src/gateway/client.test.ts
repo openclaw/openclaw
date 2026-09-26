@@ -266,17 +266,17 @@ function expectSecurityConnectError(
   }
 }
 
-beforeAll(async () => {
-  await loadGatewayClientModule();
-});
+beforeAll(loadGatewayClientModule);
 
 beforeEach(() => {
+  vi.spyOn(Math, "random").mockReturnValue(0);
   logDebugMock.mockClear();
   logErrorMock.mockClear();
 });
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 describe("GatewayClient security checks", () => {

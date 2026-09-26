@@ -32,11 +32,13 @@ import {
   expectChangedBroadcast,
 } from "./server.sessions.list-changed.test-helpers.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
+import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { observeSessionRowBackfill } from "./session-row-backfill.test-support.js";
 import {
   seedCompletedSessionTranscript,
   seedSessionListBackfillFixture,
 } from "./session-row-fixtures.test-support.js";
+import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { embeddedRunMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   getGatewayConfigModule,
@@ -823,37 +825,44 @@ test("sessions.list leaves failed-first-turn dashboard sessions untitled instead
 test("sessions.list yields for bulk metadata and later serves previews without repairing titles", async () => {
   const { storePath } = await createSessionStoreDir();
   const keys = await seedSessionListBackfillFixture(storePath, 11);
-  const backfilled = observeSessionRowBackfill(keys);
-  const params = { includeDerivedTitles: true, includeLastMessage: true, limit: 11 };
-  const { request, respond, context } = await invokeSessionsList({
-    requestId: "req-sessions-list-yield",
-    defer: true,
-    params,
-    context: {
-      logGateway: {
-        debug: vi.fn(),
+  const releaseForeground = retainSessionListForegroundWork();
+  try {
+    const params = { includeDerivedTitles: true, includeLastMessage: true, limit: 11 };
+    const { request, respond, context } = await invokeSessionsList({
+      requestId: "req-sessions-list-yield",
+      defer: true,
+      params,
+      context: {
+        logGateway: {
+          debug: vi.fn(),
+        },
       },
-    },
-  });
+    });
 
-  await Promise.resolve();
-  await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
 
-  expect(respond).not.toHaveBeenCalled();
-  await request;
-  expectRespondPayload(respond);
-  await backfilled;
-  const refreshed = await invokeSessionsList({
-    requestId: "req-sessions-list-backfilled",
-    params,
-    context: { ...context },
-  });
-  const payload = expectRespondPayload(refreshed.respond);
-  const session = findSession(payload, "agent:main:bulk-0");
-  expectFields(session, {
-    derivedTitle: undefined,
-    lastMessagePreview: "last 0",
-  });
+    expect(respond).not.toHaveBeenCalled();
+    await request;
+    expectRespondPayload(respond);
+    const projection = expectDefined(getSessionRowProjection(context), "request projection");
+    const backfilled = observeSessionRowBackfill(keys, projection);
+    releaseForeground();
+    await backfilled;
+    const refreshed = await invokeSessionsList({
+      requestId: "req-sessions-list-backfilled",
+      params,
+      context: { ...context },
+    });
+    const payload = expectRespondPayload(refreshed.respond);
+    const session = findSession(payload, "agent:main:bulk-0");
+    expectFields(session, {
+      derivedTitle: undefined,
+      lastMessagePreview: "last 0",
+    });
+  } finally {
+    releaseForeground();
+  }
 });
 
 test("sessions.list does not block on slow model catalog discovery", async () => {

@@ -114,6 +114,7 @@ export function isTaskRegistryWorkerCommand(command: {
   input: unknown;
 }): command is SqliteWorkerCommand<TaskRegistryWorkerOperations> {
   switch (command.type) {
+    case "tasks.applyRetention":
     case "tasks.bindRunOwner":
     case "tasks.transitionRunRow":
     case "tasks.updateNotificationDelivery":

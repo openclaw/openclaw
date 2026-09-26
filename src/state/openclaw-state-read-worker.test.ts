@@ -672,6 +672,13 @@ it.each(["single", "union"] as const)(
   async (shape) => {
     const { options } = source();
     const context = captureOpenClawStateWorkerContext(options);
+    const admission = context.admission;
+    context.admission = {
+      ...admission,
+      get identity() {
+        return admission.identity;
+      },
+    };
     const selector = "任务🦞".repeat(512);
     const scope = {
       taskId: selector,

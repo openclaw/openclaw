@@ -24,10 +24,11 @@ vi.mock("../session-utils.js", async (importOriginal) => ({
     entry: { sessionId: "sess-main", sessionFile: "/tmp/sess-main.jsonl" },
   }),
 }));
-vi.mock("../session-transcript-readers.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../session-transcript-readers.js")>()),
-  visitSessionMessagesAsync: hoisted.visitSessionMessagesAsync,
-}));
+vi.mock("../session-transcript-readers.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../session-transcript-readers.js")>();
+  const { withArtifactFixtureReader } = await import("./artifacts.test-support.js");
+  return withArtifactFixtureReader(actual, hoisted.visitSessionMessagesAsync);
+});
 vi.mock("../managed-image-attachments.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../managed-image-attachments.js")>()),
   resolveManagedOutgoingMediaArtifactDownload: hoisted.resolveManagedArtifactDownload,

@@ -96,8 +96,7 @@ type SelectedProviderTargetIds = {
 };
 
 let cachedAgentRuntimeBaseTargetIds: string[] | undefined;
-let cachedCapabilityWebFetchTargetIds: string[] | undefined;
-let cachedCapabilityWebSearchTargetIds: string[] | undefined;
+const cachedCapabilityWebTargetIds: Partial<Record<WebCapability, string[]>> = {};
 let cachedChannelSecretTargetIds: string[] | undefined;
 
 function getChannelSecretTargetIds(): string[] {
@@ -121,22 +120,16 @@ function pluginWebCredentialConfigPath(entry: {
   return undefined;
 }
 
-function getCapabilityWebSearchTargetIds(): string[] {
-  cachedCapabilityWebSearchTargetIds ??= sortUniqueStrings(
+function getCapabilityWebTargetIds(kind: WebCapability): string[] {
+  return (cachedCapabilityWebTargetIds[kind] ??= sortUniqueStrings(
     listSecretTargetRegistryEntries()
-      .filter((entry) => pluginWebCredentialConfigPath(entry) === "webSearch.apiKey")
+      .filter(
+        (entry) =>
+          pluginWebCredentialConfigPath(entry) ===
+          (kind === "search" ? "webSearch.apiKey" : "webFetch.apiKey"),
+      )
       .map((entry) => entry.id),
-  );
-  return cachedCapabilityWebSearchTargetIds;
-}
-
-function getCapabilityWebFetchTargetIds(): string[] {
-  cachedCapabilityWebFetchTargetIds ??= sortUniqueStrings(
-    listSecretTargetRegistryEntries()
-      .filter((entry) => pluginWebCredentialConfigPath(entry) === "webFetch.apiKey")
-      .map((entry) => entry.id),
-  );
-  return cachedCapabilityWebFetchTargetIds;
+  ));
 }
 
 function isConfiguredSecretCandidate(value: unknown): boolean {
@@ -399,9 +392,7 @@ function getCapabilityWebAutoDetectTargets(
   config: OpenClawConfig,
   kind: WebCapability,
 ): CommandSecretTargetScope {
-  const baseTargetIds = new Set(
-    kind === "search" ? getCapabilityWebSearchTargetIds() : getCapabilityWebFetchTargetIds(),
-  );
+  const baseTargetIds = new Set(getCapabilityWebTargetIds(kind));
   const targetIds = new Set(baseTargetIds);
   const fallbackTargetIds = new Set<string>();
   const fallbackPaths = new Set<string>();
@@ -656,8 +647,8 @@ export function getAgentRuntimeCommandSecretTargetIds(params: {
  */
 export function getAgentRuntimeOptionalCommandSecretPaths(config: OpenClawConfig): Set<string> {
   const targetIds = new Set([
-    ...getCapabilityWebSearchTargetIds(),
-    ...getCapabilityWebFetchTargetIds(),
+    ...getCapabilityWebTargetIds("search"),
+    ...getCapabilityWebTargetIds("fetch"),
   ]);
   const defaults = config.secrets?.defaults;
   return new Set(
@@ -677,7 +668,7 @@ export function getAgentRuntimeOptionalCommandSecretPaths(config: OpenClawConfig
 
 /** Static web-fetch capability targets plus plugin-provided web-fetch credential targets. */
 export function getCapabilityWebFetchCommandSecretTargetIds(): Set<string> {
-  return new Set(getCapabilityWebFetchTargetIds());
+  return new Set(getCapabilityWebTargetIds("fetch"));
 }
 
 function getCapabilityWebCommandSecretTargets(
@@ -688,9 +679,7 @@ function getCapabilityWebCommandSecretTargets(
   const web = resolveWebConfig(config, kind);
   if (web?.enabled === false) {
     return {
-      targetIds: new Set(
-        kind === "search" ? getCapabilityWebSearchTargetIds() : getCapabilityWebFetchTargetIds(),
-      ),
+      targetIds: new Set(getCapabilityWebTargetIds(kind)),
     };
   }
   const selectedProviderId =
@@ -733,7 +722,7 @@ export function getCapabilityWebFetchCommandSecretTargets(
 
 /** Static web-search capability targets plus plugin-provided web-search credential targets. */
 export function getCapabilityWebSearchCommandSecretTargetIds(): Set<string> {
-  return new Set(getCapabilityWebSearchTargetIds());
+  return new Set(getCapabilityWebTargetIds("search"));
 }
 
 /** Web-search target scope for selected/auto-detected providers and configured fallback paths. */

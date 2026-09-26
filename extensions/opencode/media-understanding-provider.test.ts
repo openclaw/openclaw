@@ -30,20 +30,22 @@ async function applyImagePayloadTransform(payload: Record<string, unknown>): Pro
 }
 
 describe("opencode media understanding provider", () => {
-  it("strips disabled Responses reasoning payloads", async () => {
-    const payload = {
-      reasoning: { effort: "none" },
-      include: ["reasoning.encrypted_content"],
-      store: false,
-    };
+  it.each(["none", { effort: "none" }])(
+    "strips disabled Responses reasoning %j",
+    async (reasoning) => {
+      const payload = {
+        reasoning,
+        include: ["reasoning.encrypted_content"],
+        store: false,
+      };
 
-    await applyImagePayloadTransform(payload);
+      await applyImagePayloadTransform(payload);
 
-    expect(payload).toEqual({
-      include: ["reasoning.encrypted_content"],
-      store: false,
-    });
-  });
+      expect(JSON.stringify(payload)).toBe(
+        '{"include":["reasoning.encrypted_content"],"store":false}',
+      );
+    },
+  );
 
   it("keeps supported Responses reasoning payloads", async () => {
     const payload = {

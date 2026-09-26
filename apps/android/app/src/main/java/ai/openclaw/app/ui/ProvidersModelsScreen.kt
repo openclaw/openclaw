@@ -11,7 +11,7 @@ import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawScaffold
 import ai.openclaw.app.ui.design.ClawSecondaryButton
 import ai.openclaw.app.ui.design.ClawTheme
-import ai.openclaw.app.uppercaseFirstGraphemeOrNull
+import ai.openclaw.app.ui.design.badgeInitials
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -44,7 +44,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -91,7 +90,18 @@ internal fun ProvidersModelsScreen(
               verticalAlignment = Alignment.CenterVertically,
               horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-              ProviderHeaderIconButton(icon = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = nativeString("Back"), outlined = true, onClick = onBack)
+              Surface(
+                onClick = onBack,
+                modifier = Modifier.size(ClawTheme.spacing.touchTarget),
+                shape = CircleShape,
+                color = Color.Transparent,
+                contentColor = ClawTheme.colors.text,
+                border = BorderStroke(1.dp, ClawTheme.colors.borderStrong),
+              ) {
+                Box(contentAlignment = Alignment.Center) {
+                  Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = nativeString("Back"), modifier = Modifier.size(17.dp))
+                }
+              }
             }
             Column(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxxs)) {
               Text(text = nativeString("Providers & Models"), style = ClawTheme.type.display, color = ClawTheme.colors.text)
@@ -413,19 +423,10 @@ private fun formatContextTokens(tokens: Long): String = if (tokens >= 1_000) "${
 private fun ProviderBadge(text: String) {
   Surface(modifier = Modifier.size(30.dp), shape = RoundedCornerShape(ClawTheme.radii.row), color = ClawTheme.colors.surfacePressed, border = BorderStroke(1.dp, ClawTheme.colors.border)) {
     Box(contentAlignment = Alignment.Center) {
-      Text(text = providerInitials(text), style = ClawTheme.type.label, color = ClawTheme.colors.text, textAlign = TextAlign.Center)
+      Text(text = badgeInitials(text, fallback = "AI"), style = ClawTheme.type.label, color = ClawTheme.colors.text, textAlign = TextAlign.Center)
     }
   }
 }
-
-private fun providerInitials(value: String): String =
-  value
-    .split(' ', '-', '_')
-    .filter { it.isNotBlank() }
-    .take(2)
-    .mapNotNull { it.uppercaseFirstGraphemeOrNull() }
-    .joinToString("")
-    .ifBlank { "AI" }
 
 @Composable
 private fun ProviderSectionLabel(title: String) {
@@ -435,26 +436,5 @@ private fun ProviderSectionLabel(title: String) {
       style = ClawTheme.type.caption,
       color = ClawTheme.colors.textMuted,
     )
-  }
-}
-
-@Composable
-private fun ProviderHeaderIconButton(
-  icon: ImageVector,
-  contentDescription: String,
-  outlined: Boolean = false,
-  onClick: () -> Unit,
-) {
-  Surface(
-    onClick = onClick,
-    modifier = Modifier.size(ClawTheme.spacing.touchTarget),
-    shape = CircleShape,
-    color = Color.Transparent,
-    contentColor = ClawTheme.colors.text,
-    border = if (outlined) BorderStroke(1.dp, ClawTheme.colors.borderStrong) else null,
-  ) {
-    Box(contentAlignment = Alignment.Center) {
-      Icon(imageVector = icon, contentDescription = contentDescription, modifier = Modifier.size(if (outlined) 17.dp else 20.dp))
-    }
   }
 }

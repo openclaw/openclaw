@@ -8,6 +8,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
+import { readCronRunHistoryPageForTests } from "../run-history.test-support.js";
 import { CronService, type CronEvent } from "../service.js";
 import { setupCronServiceSuite } from "../service.test-harness.js";
 import { loadCronStore, saveCronStore } from "../store.js";
@@ -20,7 +21,6 @@ import {
 } from "../store/run-receipt-store.js";
 import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.test-support.js";
 import { cronStreamScheduleKey } from "../stream-schedule.js";
-import { readCronTaskRunHistoryPage } from "../task-run-history.js";
 import type { CronJob } from "../types.js";
 
 const onExitSchedule = { kind: "on-exit", command: "true" } as const;
@@ -261,7 +261,8 @@ describe("cron run receipt settlement", () => {
         expect(await loadCronStore(storePath)).toEqual(before);
         expect(inspectActiveCronRunReceipt({ storePath, jobId: job.id })).toEqual(receipt);
         expect(
-          readCronTaskRunHistoryPage({ storeKey: cronStoreKey(storePath), jobId: job.id }).entries,
+          readCronRunHistoryPageForTests({ storeKey: cronStoreKey(storePath), jobId: job.id })
+            .entries,
         ).toEqual([]);
         expect(onEvent).not.toHaveBeenCalled();
         expect(onReserved).not.toHaveBeenCalled();
@@ -307,7 +308,7 @@ describe("cron run receipt settlement", () => {
       runAtMs: startedAtMs,
     };
     const history = () =>
-      readCronTaskRunHistoryPage({ storeKey: cronStoreKey(storePath), jobId: job.id }).entries;
+      readCronRunHistoryPageForTests({ storeKey: cronStoreKey(storePath), jobId: job.id }).entries;
     const onEvent = vi.fn<(event: CronEvent) => void>();
     const onReserved = vi.fn(() => {
       expect(history()).toMatchObject([interrupted]);

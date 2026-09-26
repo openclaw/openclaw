@@ -15,6 +15,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { boardStore } from "./board-store.js";
 import { progressCardStore } from "./progress-card-store.js";
@@ -136,7 +137,11 @@ describe("board and progress event session ownership", () => {
         }
         invalidateSessionSharingSnapshot();
         const projection = await createSessionRowProjection({ cfg });
-        const connection = createGatewayConnectionState({ bootId: "board-owner-events", cfg });
+        const connection = createGatewayConnectionState({
+          scheduler: createTestGatewayScheduler(),
+          bootId: "board-owner-events",
+          cfg,
+        });
         connection.attachSessionRowProjection(projection);
         for (const { client } of peers) {
           connection.clients.add(client);
@@ -809,7 +814,11 @@ it("delivers committed collector updates to a parent-only cross-agent viewer", a
       }),
     ).toBe(false);
     const rowProjection = await createSessionRowProjection({ cfg });
-    const connection = createGatewayConnectionState({ bootId: "collector-events", cfg });
+    const connection = createGatewayConnectionState({
+      scheduler: createTestGatewayScheduler(),
+      bootId: "collector-events",
+      cfg,
+    });
     connection.attachSessionRowProjection(rowProjection);
     peers.forEach(({ client }) => connection.clients.add(client));
     const { broadcastToConnIds } = connection;

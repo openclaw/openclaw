@@ -13,6 +13,7 @@ prepare_diagnostics_capture() {
       "$ARTIFACT_DIR"/restored-index-{post-update,candidate-import,rollback}.json \
       "$ARTIFACT_DIR"/legacy-operator-baseline-turn.{out,err} \
       "$ARTIFACT_DIR"/legacy-operator-candidate-turn.{out,err} \
+      "$ARTIFACT_DIR"/legacy-operator-run-survivor-{default,ops}-owner.{out,err} \
       "$ARTIFACT_DIR/missing-load-path/baseline-gateway.log" \
       "$ARTIFACT_DIR/missing-load-path/baseline-gateway-convergence-refusal.log" \
       "$ARTIFACT_DIR/sibling-registrations.jsonl" "$ARTIFACT_DIR/sibling-source.json" "$ARTIFACT_DIR/sibling-canary.json" \

@@ -142,9 +142,9 @@ internal class ChatSwarmActivityTracker {
 
   fun observe(payload: JsonObject): Boolean {
     val source = payload["session"].asObjectOrNull() ?: payload
-    val groupId = normalized(payload["swarmGroupId"].asStringOrNull()) ?: normalized(source["swarmGroupId"].asStringOrNull()) ?: return false
-    val kind = normalized((if ("kind" in payload) payload["kind"] else source["kind"]).asStringOrNull())
-    val text = normalized((if ("text" in payload) payload["text"] else source["text"]).asStringOrNull())
+    val groupId = normalizedSwarmValue(payload["swarmGroupId"].asStringOrNull()) ?: normalizedSwarmValue(source["swarmGroupId"].asStringOrNull()) ?: return false
+    val kind = normalizedSwarmValue((if ("kind" in payload) payload["kind"] else source["kind"]).asStringOrNull())
+    val text = normalizedSwarmValue((if ("text" in payload) payload["text"] else source["text"]).asStringOrNull())
     if ((kind == "phase" || kind == "log") && text != null) {
       if (kind == "phase") {
         val rankKey = phaseRankKey(groupId, text)
@@ -158,8 +158,8 @@ internal class ChatSwarmActivityTracker {
       return true
     }
 
-    val childKey = normalized(source["key"].asStringOrNull()) ?: normalized(payload["sessionKey"].asStringOrNull()) ?: return true
-    val explicitPhase = normalized(source["swarmPhase"].asStringOrNull()) ?: normalized(payload["swarmPhase"].asStringOrNull())
+    val childKey = normalizedSwarmValue(source["key"].asStringOrNull()) ?: normalizedSwarmValue(payload["sessionKey"].asStringOrNull()) ?: return true
+    val explicitPhase = normalizedSwarmValue(source["swarmPhase"].asStringOrNull()) ?: normalizedSwarmValue(payload["swarmPhase"].asStringOrNull())
     if (explicitPhase != null) {
       setBounded(phaseByChild, childKey, explicitPhase, MAX_TRACKED_SWARM_CHILDREN)
       return true
@@ -174,7 +174,7 @@ internal class ChatSwarmActivityTracker {
 
   fun decorate(rows: List<ChatSessionEntry>): List<ChatSessionEntry> =
     rows.map { row ->
-      val groupId = normalized(row.swarmGroupId) ?: return@map row
+      val groupId = normalizedSwarmValue(row.swarmGroupId) ?: return@map row
       val phase = phaseByChild[row.key] ?: row.swarmPhase
       row.copy(
         swarmPhase = phase,
@@ -187,8 +187,6 @@ internal class ChatSwarmActivityTracker {
     groupId: String,
     phase: String,
   ): String = "${groupId.length}:$groupId$phase"
-
-  private fun normalized(value: String?): String? = value?.trim()?.takeIf(String::isNotEmpty)
 
   private fun <V> setBounded(
     values: LinkedHashMap<String, V>,
@@ -234,33 +232,25 @@ internal fun buildChatSwarmGroups(
 
   return byGroup
     .map { (groupId, entries) ->
-      val phases = linkedMapOf<String, Triple<String?, Int, MutableList<ChatSwarmDot>>>()
-      entries.forEach { entry ->
-        val phaseKey = entry.phase ?: ""
-        val existing = phases[phaseKey]
-        if (existing == null) {
-          phases[phaseKey] = Triple(entry.phase, entry.phaseRank, mutableListOf(entry.dot))
-        } else {
-          existing.third += entry.dot
-          phases[phaseKey] = Triple(existing.first, minOf(existing.second, entry.phaseRank), existing.third)
-        }
-      }
+      val phases = entries.groupBy { it.phase.orEmpty() }
+      val phaseRanks = phases.mapValues { (_, bucket) -> bucket.minOf(Entry::phaseRank) }
       val projectedPhases =
         phases
           .map { (key, bucket) ->
+            val phaseDots = bucket.map(Entry::dot)
             val dots =
-              if (bucket.third.size > MAX_RENDERED_SWARM_DOTS_PER_PHASE) {
-                bucket.third.sortedBy(ChatSwarmDot::status)
+              if (phaseDots.size > MAX_RENDERED_SWARM_DOTS_PER_PHASE) {
+                phaseDots.sortedBy(ChatSwarmDot::status)
               } else {
-                bucket.third
+                phaseDots
               }
             ChatSwarmPhase(
               key = key,
-              title = bucket.first,
+              title = bucket.first().phase,
               dots = dots.take(MAX_RENDERED_SWARM_DOTS_PER_PHASE),
               hidden = (dots.size - MAX_RENDERED_SWARM_DOTS_PER_PHASE).coerceAtLeast(0),
             )
-          }.sortedWith(compareBy<ChatSwarmPhase> { phases[it.key]?.second ?: Int.MAX_VALUE }.thenBy(ChatSwarmPhase::key))
+          }.sortedWith(compareBy<ChatSwarmPhase> { phaseRanks.getValue(it.key) }.thenBy(ChatSwarmPhase::key))
       val dots = entries.map(Entry::dot)
       ChatSwarmGroup(
         groupId = groupId,

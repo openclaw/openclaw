@@ -27,8 +27,13 @@ import { lockChatScroll } from "./scroll.ts";
 
 const TYPING_ACTIVE_MS = 2_500;
 const TYPING_DRAFT_IDLE_MS = 120_000;
+const TYPING_PREVIEW_INTERVAL_MS = 250;
 
 export abstract class ChatPaneSharing extends ChatPaneSharingActions {
+  private typingRequestTimer?: number;
+  private typingRequestSentAt?: number;
+  private pendingTypingRequest?: () => void;
+
   protected syncSelectedSessionSharing(session: GatewaySessionRow | undefined): void {
     const sessionId = session?.sessionId?.trim();
     if (!session || !sessionId || !this.presented || !canManageChatSessionSharing(session)) {
@@ -369,6 +374,7 @@ export abstract class ChatPaneSharing extends ChatPaneSharingActions {
   }
 
   protected clearTypingActors(): void {
+    this.clearTypingRequest();
     for (const timer of this.typingTimers.values()) {
       window.clearTimeout(timer);
     }
@@ -512,24 +518,60 @@ export abstract class ChatPaneSharing extends ChatPaneSharingActions {
 
   protected sendTypingState(typing: boolean, preview?: string): void {
     const scope = this.captureConnectionScope();
-    if (!scope || !this.hasMultipleIdentities()) {
+    const row = scope ? selectedChatSessionRow(scope.state) : undefined;
+    if (!scope || !row?.sessionId || !this.hasMultipleIdentities()) {
+      this.clearTypingRequest();
       return;
     }
     const sessionKey = scope.state.sessionKey;
-    const sessionId = selectedChatSessionRow(scope.state)?.sessionId;
-    if (!sessionId) {
+    const { sessionId, sharingRole, visibility } = row;
+    const send = () => {
+      const current = selectedChatSessionRow(scope.state);
+      if (
+        !this.isConnectionScopeCurrent(scope) ||
+        scope.state.sessionKey !== sessionKey ||
+        current?.sessionId !== sessionId ||
+        current.sharingRole !== sharingRole ||
+        current.visibility !== visibility ||
+        !this.hasMultipleIdentities()
+      ) {
+        return;
+      }
+      const draft = typing ? preview?.trim() : undefined;
+      const draftPreview = draft ? Array.from(draft).slice(-300).join("") : undefined;
+      this.typingRequestSentAt = typing ? Date.now() : undefined;
+      void scope.client
+        .request("session.typing", {
+          sessionKey,
+          sessionId,
+          typing,
+          ...(draftPreview ? { preview: draftPreview } : {}),
+          ...scopedAgentParamsForSession(scope.state, sessionKey),
+        })
+        .catch(() => undefined);
+    };
+    const delay =
+      typing && this.typingRequestSentAt !== undefined
+        ? TYPING_PREVIEW_INTERVAL_MS - (Date.now() - this.typingRequestSentAt)
+        : 0;
+    if (delay <= 0) {
+      this.clearTypingRequest();
+      send();
       return;
     }
-    const draft = typing ? preview?.trim() : undefined;
-    const draftPreview = draft ? Array.from(draft).slice(-300).join("") : undefined;
-    void scope.client
-      .request("session.typing", {
-        sessionKey,
-        sessionId,
-        typing,
-        ...(draftPreview ? { preview: draftPreview } : {}),
-        ...scopedAgentParamsForSession(scope.state, sessionKey),
-      })
-      .catch(() => undefined);
+    this.pendingTypingRequest = send;
+    this.typingRequestTimer ??= window.setTimeout(() => {
+      const pending = this.pendingTypingRequest;
+      this.typingRequestTimer = undefined;
+      this.pendingTypingRequest = undefined;
+      pending?.();
+    }, delay);
+  }
+
+  private clearTypingRequest(): void {
+    window.clearTimeout(this.typingRequestTimer);
+    this.typingRequestTimer = undefined;
+    this.typingRequestSentAt = undefined;
+    this.pendingTypingRequest = undefined;
   }
 }

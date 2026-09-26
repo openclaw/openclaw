@@ -4,6 +4,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { createInMemoryTaskRegistryStore } from "../test-utils/task-registry-store.js";
+import { applyTaskRegistryMaintenanceRetention } from "./task-registry-maintenance-retention.js";
 import { publishTaskRecordAfterAtomicStore } from "./task-registry-publication.js";
 import {
   getTaskById,
@@ -11,7 +12,6 @@ import {
   listTaskRecordsForOwnerTree,
   listTaskRecordPage,
   listTaskSessionActivity,
-  deleteTaskRecordById,
   resetTaskRegistryForTests,
 } from "./task-registry-query.js";
 import { prepareTaskRegistryRead } from "./task-registry-read.js";
@@ -31,11 +31,14 @@ afterEach(() => {
   resetTaskRegistryForTests();
 });
 
-function configureTaskSnapshot(tasks: Iterable<TaskRecord>): void {
+function configureTaskSnapshot(tasks: Iterable<TaskRecord>) {
   const snapshotTasks = new Map([...tasks].map((task) => [task.taskId, task]));
-  configureTaskRegistryRuntime({
-    store: createInMemoryTaskRegistryStore({ tasks: snapshotTasks, deliveryStates: new Map() }),
+  const store = createInMemoryTaskRegistryStore({
+    tasks: snapshotTasks,
+    deliveryStates: new Map(),
   });
+  configureTaskRegistryRuntime({ store });
+  return store;
 }
 
 async function readTaskPage(params: Parameters<typeof listTaskRecordPage>[0]) {
@@ -48,7 +51,7 @@ async function readTaskPage(params: Parameters<typeof listTaskRecordPage>[0]) {
 }
 
 describe("listTaskSessionActivity", () => {
-  it("copies current session activity without retaining or cloning task payloads", () => {
+  it("copies current session activity without retaining or cloning task payloads", async () => {
     const task: TaskRecord = {
       taskId: "media",
       runtime: "cli",
@@ -65,7 +68,7 @@ describe("listTaskSessionActivity", () => {
       executionOwner: { host: "fixture", pid: 1, startIdentity: 1 },
     };
     const other = { ...task, taskId: "other", taskKind: undefined, createdAt: 2 };
-    configureTaskSnapshot([task, other]);
+    const store = configureTaskSnapshot([task, other]);
     const activity = listTaskSessionActivity();
     const clone = vi.spyOn(globalThis, "structuredClone");
     expect(listTaskSessionActivity()).toEqual(activity);
@@ -87,13 +90,22 @@ describe("listTaskSessionActivity", () => {
     ]);
     expectDefined(activity[0], "detached activity").status = "cancelled";
     expect(getTaskById(task.taskId)?.status).toBe("queued");
-    publishTaskRecordAfterAtomicStore({ ...task, status: "succeeded", ownerKey: "new-owner" });
+    const completed = {
+      ...task,
+      status: "succeeded" as const,
+      ownerKey: "new-owner",
+      cleanupAfter: 0,
+    };
+    store.upsertTaskWithDeliveryState({ task: completed });
+    publishTaskRecordAfterAtomicStore(completed);
     expect(listTaskSessionActivity()[0]).toMatchObject({
       status: "succeeded",
       ownerKey: "new-owner",
     });
     expect(activity[0]).toMatchObject({ status: "cancelled", ownerKey: task.ownerKey });
-    deleteTaskRecordById(task.taskId);
+    expect(
+      await applyTaskRegistryMaintenanceRetention(completed, Date.now(), new Set(), () => {}),
+    ).toBe("pruned");
     expect(listTaskSessionActivity()).toEqual([activity[1]]);
   });
 });
@@ -225,7 +237,7 @@ describe("listTasksForAgentId", () => {
 });
 
 describe("listTaskRecordsForOwnerTree", () => {
-  it("preserves insertion order and detached snapshots across owner changes, cycles, and removal", () => {
+  it("preserves insertion order and detached snapshots across owner changes, cycles, and removal", async () => {
     const root = "agent:main:root";
     const child = "agent:main:child";
     const record = (taskId: string, ownerKey: string): TaskRecord => ({
@@ -246,7 +258,12 @@ describe("listTaskRecordsForOwnerTree", () => {
       detail: { nested: { value: "original" } },
       executionOwner: { host: "fixture", pid: 1, startIdentity: 1 },
     };
-    const parent = { ...record("parent", root), childSessionKey: child };
+    const parent = {
+      ...record("parent", root),
+      childSessionKey: child,
+      status: "succeeded" as const,
+      cleanupAfter: 0,
+    };
     const unrelated = record("unrelated", "agent:main:other");
     configureTaskSnapshot([descendant, unrelated, parent]);
     const owners = new Set([root]);
@@ -268,7 +285,9 @@ describe("listTaskRecordsForOwnerTree", () => {
     publishTaskRecordAfterAtomicStore({ ...descendant, detail: { changed: "canonical" } });
     expect(before[0]?.detail).toEqual({ changed: true });
     expect(listTaskRecordsForOwnerTree(owners)[0]?.detail).toEqual({ changed: "canonical" });
-    deleteTaskRecordById(parent.taskId);
+    expect(
+      await applyTaskRegistryMaintenanceRetention(parent, Date.now(), new Set(), () => {}),
+    ).toBe("pruned");
     expect(listTaskRecordsForOwnerTree(owners)).toEqual([]);
     publishTaskRecordAfterAtomicStore({ ...parent, scopeKind: "system" });
     expect(listTaskRecordsForOwnerTree(owners)).toEqual([]);

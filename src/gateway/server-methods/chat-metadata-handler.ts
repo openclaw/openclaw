@@ -7,9 +7,10 @@ import type { ChatMetadataParams } from "../../../packages/gateway-protocol/src/
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { readGatewayAccessRevision } from "../gateway-access-revision.js";
+import { readUserProfileAliasRevision } from "../../state/user-profile-events.js";
 import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
 import { prepareOperatorModelPresentation } from "../operator-model-presentation.js";
+import { readOperatorRolePolicyRevision } from "../operator-role-policy.js";
 import { SESSION_READ_SCOPE } from "../operator-scopes.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
@@ -31,12 +32,15 @@ export function resolveChatMetadataReadParams(
 ): ChatMetadataReadParams | undefined {
   const { respond, context, client, signal } = options;
   const cfg = context.getRuntimeConfig();
-  const accessRevision = readGatewayAccessRevision();
+  // Session mutations are checked against the retained target before publication.
+  const roleRevision = readOperatorRolePolicyRevision();
+  const aliasRevision = readUserProfileAliasRevision();
   const profileInput = client?.authenticatedUserProfile?.profileId;
   const userInput = client?.authenticatedUserId;
   const isRequestCurrent = () =>
     !signal?.aborted &&
-    readGatewayAccessRevision() === accessRevision &&
+    readOperatorRolePolicyRevision() === roleRevision &&
+    readUserProfileAliasRevision() === aliasRevision &&
     client?.authenticatedUserProfile?.profileId === profileInput &&
     client?.authenticatedUserId === userInput;
   const assertRequestCurrent = () => {

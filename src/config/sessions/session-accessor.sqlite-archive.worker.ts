@@ -24,7 +24,6 @@ import {
   publishEncodedSessionTranscriptArchive,
   resolveSqliteTranscriptArchivePath,
 } from "./session-accessor.sqlite-archive-artifact.js";
-import { hasPendingSessionTranscriptArchives } from "./session-accessor.sqlite-archive-store-kernel.js";
 import type {
   SqliteArchiveSessionRequest,
   SqliteArchiveSessionResponse,
@@ -466,23 +465,7 @@ async function runArchiveSession(
       throw new Error("SQLite archive Worker received an invalid operation identity");
     }
     let response: SqliteArchiveSessionResponse;
-    if (request.operation === "pending") {
-      response = {
-        type: "pending",
-        operationId,
-        settled: true,
-        results: request.plans.map((plan) => {
-          const opened = withFreshOpenClawAgentDatabaseReadOnly(
-            (database) =>
-              runSqliteDeferredTransactionSync(database.db, () =>
-                hasPendingSessionTranscriptArchives(database),
-              ),
-            { agentId: plan.agentId, path: plan.databasePath, env },
-          );
-          return opened.found && opened.value;
-        }),
-      };
-    } else if (request.operation === "materialize") {
+    if (request.operation === "materialize") {
       const plans = parseWorkerPlans(request);
       if (!plans) {
         throw new Error("SQLite transcript archive worker requires valid materialization data");

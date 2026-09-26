@@ -54,7 +54,7 @@ describe("cloud transcript write admission", () => {
   it.each(["current", "run", "claim", "environment", "missing", "writer", "lifecycle"] as const)(
     "checks %s authority after admitting the fallback user write",
     async (change) => {
-      seedActivePlacement();
+      await seedActivePlacement();
       const input = turn();
       await sessionAccess.patchSessionEntryCore(sessionTarget, () => ({
         activeWriterRunId: input.runId,
@@ -172,7 +172,7 @@ describe("cloud transcript write admission", () => {
   ] as const)(
     "checks $change settlement authority after admitting a workspace report (cleared: $cleared)",
     async ({ change, cleared }) => {
-      seedActivePlacement("remote-exec");
+      await seedActivePlacement("remote-exec");
       const placement = placements.get(SESSION_ID);
       if (placement?.state !== "active") {
         throw new Error("expected active placement");

@@ -101,6 +101,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
   bindApprovalPublicationContext(gatewayRequestContext);
   if (!runtime.opts.updateCanary) {
     await attachInitialGatewayLifetimeSidecars({
+      scheduler: runtime.scheduler,
       chatMetadataLifecycle,
       gatewayRequestContext,
       flushPendingSessionsChangedEvents: shutdownRuntime.flushPendingSessionsChangedEvents,

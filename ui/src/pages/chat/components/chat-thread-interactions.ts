@@ -429,37 +429,6 @@ function removeReplyContextMenu(paneId?: string) {
   owner?.listeners.abort();
 }
 
-function createReplyContextMenuButton(onClick: () => void): HTMLButtonElement {
-  const button = document.createElement("button");
-  button.type = "button";
-  button.setAttribute("role", "menuitem");
-  button.setAttribute("aria-label", t("chat.messages.replyToMessage"));
-  button.textContent = t("chat.messages.reply");
-  button.addEventListener("click", onClick);
-  return button;
-}
-
-function createMessageActionContextButton(params: {
-  label: string;
-  disabled: boolean;
-  tooltip: string;
-  onClick: (event: Event) => void;
-}): { element: HTMLElement; button: HTMLButtonElement } {
-  const button = document.createElement("button");
-  button.type = "button";
-  button.disabled = params.disabled;
-  button.setAttribute("role", "menuitem");
-  const label = document.createElement("span");
-  label.dataset.copyLabel = "";
-  label.textContent = params.label;
-  button.append(label);
-  button.addEventListener("click", params.onClick);
-  const tooltip = document.createElement("openclaw-tooltip");
-  tooltip.content = params.tooltip;
-  tooltip.append(button);
-  return { element: tooltip, button };
-}
-
 function toggleTouchMessageMeta(event: PointerEvent): void {
   const transcript = event.currentTarget;
   const target = event.target;
@@ -569,13 +538,38 @@ export function handleTranscriptContextMenu(event: MouseEvent, props: Transcript
   menu.style.left = `${event.clientX}px`;
   menu.style.top = `${event.clientY}px`;
   const focusCandidates: HTMLButtonElement[] = [];
+  const appendAction = (params: {
+    label: string;
+    disabled?: boolean;
+    tooltip: string;
+    className?: string;
+    onClick: (event: Event) => void;
+  }) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.disabled = params.disabled ?? false;
+    button.setAttribute("role", "menuitem");
+    button.addEventListener("click", params.onClick);
+    const label = document.createElement("span");
+    label.dataset.copyLabel = "";
+    label.textContent = params.label;
+    button.append(label);
+    const tooltip = document.createElement("openclaw-tooltip");
+    tooltip.content = params.tooltip;
+    tooltip.append(button);
+    if (params.className) {
+      tooltip.className = params.className;
+    }
+    menu.append(tooltip);
+    focusCandidates.push(button);
+    return button;
+  };
   const appendCopyAction = (label: string, text: string) => {
     if (!text) {
       return;
     }
-    const action = createMessageActionContextButton({
+    appendAction({
       label,
-      disabled: false,
       tooltip: label,
       onClick: (copyEvent) => {
         void handleCopyButton(copyEvent, text, label).then((copied) => {
@@ -585,8 +579,6 @@ export function handleTranscriptContextMenu(event: MouseEvent, props: Transcript
         });
       },
     });
-    menu.append(action.element);
-    focusCandidates.push(action.button);
   };
   if (selectedText) {
     appendCopyAction(t("chat.messages.copySelection"), selectedText);
@@ -595,22 +587,28 @@ export function handleTranscriptContextMenu(event: MouseEvent, props: Transcript
     appendCopyAction(contentCopy.label, contentCopy.text);
   }
   if (canReply && replyTarget) {
-    const replyButton = createReplyContextMenuButton(() => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.setAttribute("role", "menuitem");
+    button.setAttribute("aria-label", t("chat.messages.replyToMessage"));
+    button.textContent = t("chat.messages.reply");
+    button.addEventListener("click", () => {
       props.onSetReply?.(replyTarget);
       removeReplyContextMenu();
       props.onFocusComposer?.();
     });
-    menu.append(replyButton);
-    focusCandidates.push(replyButton);
+    menu.append(button);
+    focusCandidates.push(button);
   }
   const working = Boolean(props.runActive || props.runWorking);
   if (canRewind) {
-    const action = createMessageActionContextButton({
+    const button = appendAction({
       label: t("chat.messages.rewindToHere"),
       disabled: working,
       tooltip: working ? t("chat.messages.rewindUnavailable") : t("chat.messages.rewindToHere"),
+      className: "chat-confirm-wrap chat-rewind-wrap",
       onClick: () => {
-        openChatRewindConfirmation(action.button, () => {
+        openChatRewindConfirmation(button, () => {
           removeReplyContextMenu();
           void Promise.resolve(props.onRewindMessage?.(entryId)).then((rewound) => {
             if (rewound) {
@@ -620,27 +618,21 @@ export function handleTranscriptContextMenu(event: MouseEvent, props: Transcript
         });
       },
     });
-    action.element.classList.add("chat-confirm-wrap", "chat-rewind-wrap");
-    menu.append(action.element);
-    focusCandidates.push(action.button);
   }
   if (copyMarkdown && !copyButton) {
     appendCopyAction(copyMarkdownLabel(), copyMarkdown);
   } else if (copyButton) {
-    const action = createMessageActionContextButton({
+    appendAction({
       label: copyMarkdownLabel(),
-      disabled: false,
       tooltip: copyMarkdownLabel(),
       onClick: () => {
         removeReplyContextMenu();
         copyButton?.click();
       },
     });
-    menu.append(action.element);
-    focusCandidates.push(action.button);
   }
   if (canFork) {
-    const action = createMessageActionContextButton({
+    appendAction({
       label: t("chat.messages.forkFromHere"),
       disabled: working,
       tooltip: working ? t("chat.messages.forkUnavailable") : t("chat.messages.forkFromHere"),
@@ -649,8 +641,6 @@ export function handleTranscriptContextMenu(event: MouseEvent, props: Transcript
         void props.onForkMessage?.(entryId);
       },
     });
-    menu.append(action.element);
-    focusCandidates.push(action.button);
   }
   // Expanded tables live in a native modal. Its context menu must stay inside
   // that top layer, otherwise the browser makes the body portal inert.

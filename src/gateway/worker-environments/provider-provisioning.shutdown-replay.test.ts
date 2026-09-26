@@ -84,7 +84,7 @@ describe("worker node provisioning shutdown replay", () => {
       database: support.testState.stateDb,
       now: () => support.testState.nowMs,
     });
-    const requested = placements.startDispatch(REQUEST);
+    const requested = await placements.startDispatch(REQUEST);
     const intent = deriveEnvironmentIntent(
       `session-dispatch:${REQUEST.sessionId}:${requested.generation}`,
     );

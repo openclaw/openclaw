@@ -25,6 +25,7 @@ import {
 import { NativePackageRollbackError } from "../../infra/update-native-package-stage.js";
 import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
+import type { UpdateRunResult } from "../../infra/update-run-result.js";
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -72,6 +73,18 @@ export async function rollbackFailedUpdate(
   if (!opts.recovery && run?.recoveryBaseline && packageTransaction?.reversePublication) {
     return rollbackOriginalUpdateGeneration(params);
   }
+  const pendingRecovery = (result: UpdateRunResult, pendingRecoveryReason: string) => ({
+    result: {
+      ...result,
+      status: "error" as const,
+      recovery: {
+        serviceRestartSafe: false as const,
+        reason: "runtime-verification-failed" as const,
+      },
+    },
+    rolledBack: false,
+    pendingRecoveryReason,
+  });
   if (!opts.recovery) {
     try {
       assertCurrent();
@@ -87,30 +100,16 @@ export async function rollbackFailedUpdate(
         assertCurrent();
       }
     } catch (error) {
-      return {
-        result: {
-          ...params.result,
-          status: "error",
-          recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-        },
-        rolledBack: false,
-        pendingRecoveryReason: formatErrorMessage(error),
-      };
+      return pendingRecovery(params.result, formatErrorMessage(error));
     }
   }
   if (opts.recovery) {
     // Retained full-state recovery is inspection-only in this delivery. Never
     // downgrade its claim to package-only rollback or rewrite its journal.
-    return {
-      result: {
-        ...params.result,
-        status: "error",
-        recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-      },
-      rolledBack: false,
-      pendingRecoveryReason:
-        "Full-state checkpoint recovery is deferred; the retained record and artifacts were left unchanged.",
-    };
+    return pendingRecovery(
+      params.result,
+      "Full-state checkpoint recovery is deferred; the retained record and artifacts were left unchanged.",
+    );
   }
   // A's original service is independent of B's package transaction. Keep the
   // existing admission and explicit recovery refusals above this selection.
@@ -604,14 +603,8 @@ export async function rollbackFailedUpdate(
       assertCurrent();
     } catch (cause) {
       return {
-        result: {
-          ...result,
-          status: "error",
-          recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-        },
-        rolledBack: false,
+        ...pendingRecovery(result, formatErrorMessage(cause)),
         stoppedForRollback,
-        pendingRecoveryReason: formatErrorMessage(cause),
       };
     }
     if (error instanceof NativePackageRollbackError) {

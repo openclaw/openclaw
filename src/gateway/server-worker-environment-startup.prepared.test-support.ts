@@ -377,7 +377,7 @@ async function createPreparedNodeAcknowledgement(root: string) {
         },
       });
       binding.ownerEpoch = attached.ownerEpoch;
-      let placement = startup.placementStore.startDispatch({
+      let placement = await startup.placementStore.startDispatch({
         sessionId: binding.sessionId,
         sessionKey: binding.sessionKey,
         agentId: "main",

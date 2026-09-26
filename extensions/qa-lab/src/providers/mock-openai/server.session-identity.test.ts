@@ -151,17 +151,31 @@ describe("QA transport session identity", () => {
   ])("accepts standalone tool-free completion: %s", async (instructions) => {
     const server = await startMockServer();
     await observeSession(server, "observed-agent-session");
-    const response = await postJson(server, "/v1/responses", {
-      instructions,
-      input: [makeUserInput("Reply exactly: {}")],
+    for (const body of [
+      { instructions, input: [makeUserInput("Reply exactly: {}")], tools: [] },
+      { instructions, input: "Reply exactly: {}" },
+      ...["system", "developer"].map((role) => ({
+        input: [
+          { type: "message", role, content: [{ type: "input_text", text: instructions }] },
+          makeUserInput("Reply exactly: {}"),
+        ],
+      })),
+    ]) {
+      const response = await postJson(server, "/v1/responses", body);
+      expect(response.status).toBe(200);
+      expect(outputText(await response.json())).toBe("{}");
+      expect(await getJson(server, "/debug/last-request")).toMatchObject({
+        requestKind: "agent-initial",
+        prompt: "Reply exactly: {}",
+      });
+    }
+    const anthropic = await postJson(server, "/v1/messages", {
+      system: [{ type: "text", text: instructions }],
+      messages: [{ role: "user", content: [{ type: "text", text: "Reply exactly: {}" }] }],
       tools: [],
     });
-    expect(response.status).toBe(200);
-    expect(outputText(await response.json())).toBe("{}");
-    expect(await getJson(server, "/debug/last-request")).toMatchObject({
-      requestKind: "agent-initial",
-      prompt: "Reply exactly: {}",
-    });
+    expect(anthropic.status).toBe(200);
+    expect(await anthropic.json()).toMatchObject({ content: [{ type: "text", text: "{}" }] });
   });
 
   it.each([
@@ -204,6 +218,88 @@ describe("QA transport session identity", () => {
       expect(admitted.status).toBe(200);
     },
   );
+
+  it.each([
+    { label: "assistant history", item: { role: "assistant", content: "Earlier answer" } },
+    {
+      label: "function call",
+      item: { type: "function_call", call_id: "prior", name: "read", arguments: "{}" },
+    },
+    {
+      label: "custom tool call",
+      item: { type: "custom_tool_call", call_id: "prior", name: "exec", input: "code" },
+    },
+    { label: "reasoning history", item: { type: "reasoning", summary: [] } },
+    { label: "earlier user turn", item: makeUserInput("Earlier request") },
+  ])("requires affinity for utility requests with $label", async ({ item }) => {
+    const server = await startMockServer();
+    await observeSession(server, "observed-agent-session");
+    const body = {
+      instructions: "You are a JSON-only function. Return only a valid JSON value.",
+      tools: [],
+      input: [item, makeUserInput("Reply exactly: {}")],
+    };
+    const missing = await postJson(server, "/v1/responses", body);
+    expect(missing.status).toBe(500);
+    expect(await missing.text()).toContain("Missing QA session identity");
+    expect(await getJson(server, "/debug/requests")).toEqual([]);
+    const admitted = await postJson(server, "/v1/responses", body, {
+      session_id: "observed-agent-session",
+    });
+    expect(admitted.status).toBe(200);
+    expect(await getJson(server, "/debug/last-request")).toMatchObject({
+      sessionId: "observed-agent-session",
+    });
+  });
+
+  it.each([
+    { previous_response_id: "previous-response" },
+    { conversation: "retained-conversation" },
+  ])("requires affinity for retained utility conversations: %j", async (continuation) => {
+    const server = await startMockServer();
+    await observeSession(server, "observed-agent-session");
+    const body = {
+      instructions: "You are a JSON-only function.",
+      input: [makeUserInput("Reply exactly: {}")],
+      ...continuation,
+    };
+    const missing = await postJson(server, "/v1/responses", body);
+    expect(missing.status).toBe(500);
+    expect(await missing.text()).toContain("Missing QA session identity");
+    const admitted = await postJson(server, "/v1/responses", body, {
+      session_id: "observed-agent-session",
+    });
+    expect(admitted.status).toBe(200);
+  });
+
+  it.each([
+    { role: "assistant", content: "Earlier answer" },
+    { role: "assistant", content: [{ type: "thinking", thinking: "Earlier reasoning" }] },
+    { role: "assistant", content: [{ type: "redacted_thinking", data: "synthetic" }] },
+    { role: "user", content: [] },
+    { role: "assistant", content: [{ type: "tool_use", id: "prior", name: "read", input: {} }] },
+    { role: "user", content: [{ type: "tool_result", tool_use_id: "prior", content: "result" }] },
+    { role: "user", content: "Earlier request" },
+  ])("requires affinity for Anthropic utility history: %j", async (history) => {
+    const server = await startMockServer();
+    await observeSession(server, "observed-agent-session");
+    const body = {
+      system: "You are a JSON-only function.",
+      messages: [history, { role: "user", content: "Reply exactly: {}" }],
+      tools: [],
+    };
+    const missing = await postJson(server, "/v1/messages", body);
+    expect(missing.status).toBe(500);
+    expect(await missing.text()).toContain("Missing QA session identity");
+    expect(await getJson(server, "/debug/requests")).toEqual([]);
+    const admitted = await postJson(server, "/v1/messages", body, {
+      "x-session-affinity": "observed-agent-session",
+    });
+    expect(admitted.status).toBe(200);
+    expect(await getJson(server, "/debug/last-request")).toMatchObject({
+      sessionId: "observed-agent-session",
+    });
+  });
 
   it("settles the full requester observed behind a truncated affinity value", async () => {
     const sessionId = `internal-session-effects-${"run-".repeat(20)}parent`;

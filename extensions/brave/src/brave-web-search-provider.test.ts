@@ -342,6 +342,9 @@ describe("brave web search provider", () => {
     const requestUrl = fetchRequestUrl(mockFetch);
     expect(requestUrl.origin).toBe("https://api.search.brave.com");
     expect(requestUrl.pathname).toBe("/proxy/res/v1/web/search");
+    expect(requestUrl.toString()).toBe(
+      "https://api.search.brave.com/proxy/res/v1/web/search?q=latest+ai+news&count=5",
+    );
   });
 
   it("uses configured Brave baseUrl for llm-context requests", async () => {
@@ -359,6 +362,9 @@ describe("brave web search provider", () => {
 
     const requestUrl = fetchRequestUrl(mockFetch);
     expect(requestUrl.pathname).toBe("/proxy/res/v1/llm/context");
+    expect(requestUrl.toString()).toBe(
+      "https://api.search.brave.com/proxy/res/v1/llm/context?q=latest+ai+news",
+    );
   });
 
   it.each(["web", "llm-context"] as const)(

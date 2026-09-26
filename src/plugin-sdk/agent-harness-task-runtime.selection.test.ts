@@ -10,9 +10,11 @@ import {
   resetTaskRegistryForTests,
 } from "../tasks/task-registry-query.js";
 import * as taskReadRuntime from "../tasks/task-registry-read.js";
+import { captureTaskRetentionSelection } from "../tasks/task-registry-retention.operation.js";
 import { reloadTaskRegistryFromStoreAsync } from "../tasks/task-registry-state.js";
 import { configureTaskRegistryRuntime } from "../tasks/task-registry.store.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
+import { resolveEffectiveTaskCleanupAfter } from "../tasks/task-retention.js";
 import { createInMemoryTaskRegistryStore } from "../test-utils/task-registry-store.js";
 import {
   captureAgentHarnessTaskAssignment,
@@ -140,7 +142,25 @@ describe("harness task selection with the real registry", () => {
       ]);
       const replaces = mutation === "replacement" || mutation === "explicit-replacement";
       if (replaces || mutation === "removed") {
-        store.deleteTaskWithDeliveryState(original.taskId);
+        const source = expectDefined(
+          await store.prepareRetentionSourceAsync(context, original.taskId),
+          "original task retention source",
+        );
+        const result = await store.runInitialMutationAsync(
+          context,
+          {
+            type: "tasks.applyRetention",
+            input: {
+              taskId: original.taskId,
+              selection: captureTaskRetentionSelection(source.task),
+              sourceVersion: source.version,
+              now: resolveEffectiveTaskCleanupAfter(source.task),
+              cronHistoryOverflow: false,
+            },
+          },
+          () => context.admission.assertCurrent(),
+        );
+        expect(result).toMatchObject({ kind: "task-retention-commit", outcome: "pruned" });
       }
       if (replaces || mutation === "inserted") {
         store.upsertTaskWithDeliveryState({

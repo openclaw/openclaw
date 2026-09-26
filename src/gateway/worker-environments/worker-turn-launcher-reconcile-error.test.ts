@@ -151,7 +151,7 @@ describe("worker turn recovery after environment reconciliation errors", () => {
         ownerEpoch: ready.ownerEpoch,
         sessionId: SESSION_ID,
       });
-      let placement = placements.startDispatch({
+      let placement = await placements.startDispatch({
         sessionId: SESSION_ID,
         sessionKey: SESSION_KEY,
         agentId: "main",

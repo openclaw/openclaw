@@ -6,7 +6,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
-import { createTestChatPane } from "./chat-pane.test-support.ts";
+import {
+  createGatewayBrowserClientFixture,
+  createSessionCapabilityFixture,
+  createTestChatPane,
+} from "./chat-pane.test-support.ts";
 import { renderChatTypingIndicator } from "./components/chat-typing-indicator.ts";
 import { scheduleCommittedChatScroll } from "./scroll.ts";
 
@@ -14,6 +18,36 @@ afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
+
+function createTypingPane() {
+  const request = vi.fn().mockResolvedValue({ ok: true, broadcast: true });
+  const fixture = createTestChatPane({
+    client: createGatewayBrowserClientFixture({ request }),
+    sessions: createSessionCapabilityFixture(),
+  });
+  const { pane, state } = fixture;
+  pane.presencePayload = { presence: [{ user: { id: "owner" } }, { user: { id: "alice" } }] };
+  state.sessionKey = "agent:work:main";
+  state.assistantAgentId = "work";
+  state.agentsList = { defaultId: "main", mainKey: "main", scope: "global", agents: [] };
+  state.sessionsResultAgentId = "work";
+  const row: GatewaySessionRow = {
+    key: "global",
+    kind: "global",
+    sessionId: "session-a",
+    updatedAt: 1,
+    visibility: "shared",
+    sharingRole: "owner",
+  };
+  state.sessionsResult = {
+    ts: 1,
+    count: 1,
+    path: "",
+    defaults: { modelProvider: null, model: null, contextTokens: null },
+    sessions: [row],
+  };
+  return { ...fixture, request, row };
+}
 
 describe("chat pane typing presence", () => {
   it.each(["auto", "manual"] as const)(
@@ -372,21 +406,7 @@ describe("chat pane typing presence", () => {
   );
 
   it("sends only the last 300 draft code points and omits previews when typing stops", () => {
-    const request = vi.fn().mockResolvedValue({ ok: true, broadcast: true });
-    const { pane, state } = createTestChatPane({
-      client: { request } as unknown as GatewayBrowserClient,
-      sessions: {} as SessionCapability,
-    });
-    pane.presencePayload = { presence: [{ user: { id: "owner" } }, { user: { id: "alice" } }] };
-    state.sessionKey = "agent:work:main";
-    state.assistantAgentId = "work";
-    state.agentsList = { defaultId: "main", mainKey: "main", scope: "global", agents: [] };
-    state.sessionsResultAgentId = "work";
-    state.sessionsResult = {
-      count: 1,
-      path: "",
-      sessions: [{ key: "global", kind: "global", sessionId: "session-a", updatedAt: 1 }],
-    } as never;
+    const { pane, request } = createTypingPane();
 
     pane.sendTypingState(true, `  prefix${"😀".repeat(300)}  `);
     expect(request).toHaveBeenNthCalledWith(
@@ -407,5 +427,81 @@ describe("chat pane typing presence", () => {
 
     pane.sendTypingState(true, "   ");
     expect(request.mock.calls[2]?.[1]).not.toHaveProperty("preview");
+  });
+
+  it("paces a continuous draft at 250 ms and delivers the latest trailing preview", () => {
+    vi.useFakeTimers();
+    const { pane, request } = createTypingPane();
+    for (let index = 0; index < 10; index += 1) {
+      pane.sendTypingState(true, `draft ${index}`);
+      vi.advanceTimersByTime(100);
+    }
+    expect(request.mock.calls.map(([, params]) => params.preview)).toEqual([
+      "draft 0",
+      "draft 2",
+      "draft 4",
+      "draft 7",
+      "draft 9",
+    ]);
+    vi.advanceTimersByTime(250);
+    expect(request).toHaveBeenCalledTimes(5);
+  });
+
+  it("stops immediately and cancels the queued draft before a new typing burst", () => {
+    vi.useFakeTimers();
+    const { pane, request } = createTypingPane();
+    pane.sendTypingState(true, "first");
+    vi.advanceTimersByTime(100);
+    pane.sendTypingState(true, "pending");
+    pane.sendTypingState(false);
+    expect(request.mock.calls.map(([, params]) => params.typing)).toEqual([true, false]);
+    vi.advanceTimersByTime(250);
+    expect(request).toHaveBeenCalledTimes(2);
+    pane.sendTypingState(true, "new draft");
+    expect(request.mock.calls[2]?.[1]).toMatchObject({ typing: true, preview: "new draft" });
+  });
+
+  it.each([
+    "disconnect",
+    "reconnect",
+    "client",
+    "session",
+    "generation",
+    "role",
+    "visibility",
+    "solo",
+  ])("discards a queued preview after %s changes its target", (change) => {
+    vi.useFakeTimers();
+    const { pane, state, request, row } = createTypingPane();
+    pane.sendTypingState(true, "first");
+    pane.sendTypingState(true, "pending");
+    switch (change) {
+      case "disconnect":
+        state.connected = false;
+        break;
+      case "reconnect":
+        pane.connectionGeneration += 1;
+        break;
+      case "client":
+        state.client = createGatewayBrowserClientFixture();
+        break;
+      case "session":
+        state.sessionKey = "agent:work:other";
+        break;
+      case "generation":
+        row.sessionId = "session-b";
+        break;
+      case "role":
+        row.sharingRole = "viewer";
+        break;
+      case "visibility":
+        row.visibility = "draft";
+        break;
+      case "solo":
+        pane.presencePayload = { presence: [{ user: { id: "owner" } }] };
+        break;
+    }
+    vi.advanceTimersByTime(250);
+    expect(request).toHaveBeenCalledTimes(1);
   });
 });

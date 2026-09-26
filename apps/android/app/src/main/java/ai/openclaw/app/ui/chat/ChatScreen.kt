@@ -48,6 +48,7 @@ import ai.openclaw.app.gateway.GatewayLoadedImage
 import ai.openclaw.app.gateway.GatewayLoadedMedia
 import ai.openclaw.app.gateway.GatewayMediaKind
 import ai.openclaw.app.gateway.GatewaySourcePreviewConfig
+import ai.openclaw.app.gatewayConnectionStatusForDisplay
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.joinedNativeText
 import ai.openclaw.app.i18n.nativeString
@@ -79,7 +80,6 @@ import ai.openclaw.app.ui.design.agentAvatarSource
 import ai.openclaw.app.ui.design.sessionColor
 import ai.openclaw.app.ui.foldAwareSheet
 import ai.openclaw.app.ui.gatewayDiagnosticsEndpoint
-import ai.openclaw.app.ui.gatewayStatusForDisplay
 import ai.openclaw.app.ui.localizedUppercase
 import ai.openclaw.app.ui.relativeSessionTime
 import ai.openclaw.app.ui.rememberSystemAnimationsEnabled
@@ -443,7 +443,7 @@ internal fun ChatScreen(
     )
   val gatewayAddress = gatewayDiagnosticsEndpoint(remoteAddress = remoteAddress, manualHost = manualHost, manualPort = manualPort, manualTls = manualTls)
   val gatewayProblemMessage = gatewayConnectionDisplay.problem?.message?.takeIf { it.isNotBlank() }
-  val offlineStatus = gatewayStatusForDisplay(gatewayProblemMessage ?: gatewayConnectionDisplay.statusText)
+  val offlineStatus = gatewayConnectionStatusForDisplay(gatewayProblemMessage ?: gatewayConnectionDisplay.statusText)
   val gatewayOffline = !gatewayConnectionDisplay.isConnected
   val effectiveGatewayDefaultAgentId =
     resolveGatewayDefaultAgentId(activeGatewayStableId, gatewayDefaultAgentId, gatewayComposerDefaultAgentOwner)
@@ -2114,21 +2114,6 @@ private fun EmptyChatHint(
 }
 
 @Composable
-private fun ChatOfflineActions(
-  onFixConnection: () -> Unit,
-  onCopyDiagnostics: () -> Unit,
-  modifier: Modifier = Modifier,
-) {
-  Column(
-    modifier = modifier.fillMaxWidth(),
-    verticalArrangement = Arrangement.spacedBy(8.dp),
-  ) {
-    ClawPrimaryButton(text = nativeString("Fix connection"), icon = Icons.Default.Cloud, onClick = onFixConnection, modifier = Modifier.fillMaxWidth())
-    ClawSecondaryButton(text = nativeString("Copy diagnostics"), icon = Icons.Default.ContentCopy, onClick = onCopyDiagnostics, modifier = Modifier.fillMaxWidth())
-  }
-}
-
-@Composable
 private fun StarterPromptList(onStarterPrompt: (String) -> Unit) {
   ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
     Column {
@@ -2340,22 +2325,20 @@ internal fun ChatBubble(
           parts.forEach { part ->
             when {
               part.type == "text" && !collapsibleUserText -> {
-                ChatText(text = part.text.orEmpty(), textColor = ClawTheme.colors.text, isStreaming = live)
+                ChatMarkdown(
+                  text = part.text.orEmpty(),
+                  textColor = ClawTheme.colors.text,
+                  isStreaming = live,
+                  bodyStyle = ClawTheme.type.body.copy(fontWeight = FontWeight.Normal),
+                )
               }
 
               part.type == "text" -> {}
 
-              part.isAudioAttachment() && part.hasPlayableMediaArtifact() -> {
-                ChatAudioPlayerCard(
+              (part.isAudioAttachment() || part.isVideoAttachment()) && part.hasPlayableMediaArtifact() -> {
+                ChatMediaPlayerCard(
                   content = part,
-                  playbackBlocked = inlineMediaPlaybackBlocked,
-                  loadMedia = loadMediaArtifact,
-                )
-              }
-
-              part.isVideoAttachment() && part.hasPlayableMediaArtifact() -> {
-                ChatVideoPlayerCard(
-                  content = part,
+                  kind = if (part.isAudioAttachment()) GatewayMediaKind.Audio else GatewayMediaKind.Video,
                   playbackBlocked = inlineMediaPlaybackBlocked,
                   loadMedia = loadMediaArtifact,
                 )
@@ -2524,20 +2507,6 @@ private fun ChatUserMessageText(
       }
     }
   }
-}
-
-@Composable
-private fun ChatText(
-  text: String,
-  textColor: Color,
-  isStreaming: Boolean,
-) {
-  ChatMarkdown(
-    text = text,
-    textColor = textColor,
-    isStreaming = isStreaming,
-    bodyStyle = ClawTheme.type.body.copy(fontWeight = FontWeight.Normal),
-  )
 }
 
 @Composable
@@ -4261,7 +4230,10 @@ private fun ChatOfflineNotice(
         maxLines = 2,
         overflow = TextOverflow.Ellipsis,
       )
-      ChatOfflineActions(onFixConnection = onFixConnection, onCopyDiagnostics = onCopyDiagnostics)
+      Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        ClawPrimaryButton(text = nativeString("Fix connection"), icon = Icons.Default.Cloud, onClick = onFixConnection, modifier = Modifier.fillMaxWidth())
+        ClawSecondaryButton(text = nativeString("Copy diagnostics"), icon = Icons.Default.ContentCopy, onClick = onCopyDiagnostics, modifier = Modifier.fillMaxWidth())
+      }
     }
   }
 }

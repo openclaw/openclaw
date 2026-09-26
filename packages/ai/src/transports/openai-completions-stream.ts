@@ -28,6 +28,7 @@ import { withFirstStreamEventTimeout } from "../utils/stream-first-event-timeout
 import { createDeepSeekTextFilter } from "./deepseek-text-filter.js";
 import {
   createDsmlRecoverer,
+  type DeepSeekDsmlRecoveredPart,
   type RecoveredDeepSeekDsmlToolCall,
 } from "./openai-completions-dsml.js";
 import { getCompat } from "./openai-transport-params.js";
@@ -333,45 +334,20 @@ export async function processCompletionsStream(
       partial: output,
     });
   };
+  const appendRecoveredParts = (recoveredParts: readonly DeepSeekDsmlRecoveredPart[]) => {
+    for (const recoveredPart of recoveredParts) {
+      if (recoveredPart.kind === "toolCall") {
+        appendRecoveredToolCall(recoveredPart);
+        continue;
+      }
+      const parts = deepSeekTextFilter?.push(recoveredPart.text) ?? [recoveredPart.text];
+      for (const part of parts) {
+        appendVisibleTextDelta(part);
+      }
+    }
+  };
   const appendFilteredVisibleTextDelta = (text: string) => {
-    const recoveredParts = deepSeekToolCallRecoverer?.push(text) ?? [
-      { kind: "text" as const, text },
-    ];
-    for (const recoveredPart of recoveredParts) {
-      if (recoveredPart.kind === "toolCall") {
-        appendRecoveredToolCall(recoveredPart);
-        continue;
-      }
-      const parts = deepSeekTextFilter?.push(recoveredPart.text) ?? [recoveredPart.text];
-      for (const part of parts) {
-        appendVisibleTextDelta(part);
-      }
-    }
-  };
-  const flushDeepSeekToolCallRecovererAtEnd = () => {
-    const recoveredParts = deepSeekToolCallRecoverer?.flush();
-    if (!recoveredParts) {
-      return;
-    }
-    for (const recoveredPart of recoveredParts) {
-      if (recoveredPart.kind === "toolCall") {
-        appendRecoveredToolCall(recoveredPart);
-        continue;
-      }
-      const parts = deepSeekTextFilter?.push(recoveredPart.text) ?? [recoveredPart.text];
-      for (const part of parts) {
-        appendVisibleTextDelta(part);
-      }
-    }
-  };
-  const flushDeepSeekTextFilterAtEnd = () => {
-    const parts = deepSeekTextFilter?.flush();
-    if (!parts) {
-      return;
-    }
-    for (const part of parts) {
-      appendVisibleTextDelta(part);
-    }
+    appendRecoveredParts(deepSeekToolCallRecoverer?.push(text) ?? [{ kind: "text", text }]);
   };
   const appendRoutedContentDelta = (delta: CompletionsReasoningDelta) => {
     if (delta.kind === "text") {
@@ -649,8 +625,10 @@ export async function processCompletionsStream(
     throw new Error("Stream ended without finish_reason");
   }
   flushReasoningTagTextPartitioner();
-  flushDeepSeekToolCallRecovererAtEnd();
-  flushDeepSeekTextFilterAtEnd();
+  appendRecoveredParts(deepSeekToolCallRecoverer?.flush() ?? []);
+  for (const part of deepSeekTextFilter?.flush() ?? []) {
+    appendVisibleTextDelta(part);
+  }
   currentBlock = null;
   flushPendingPostToolCallDeltas();
   // Only an explicit stop or observed SSE terminal may authorize silent tool calls.

@@ -75,6 +75,8 @@ const modes: Record<
       RELEASE_CANDIDATE_BRANCH: "",
       NPM_DIST_TAG: "default",
       PREFLIGHT_ONLY: "false",
+      // Ancestry cases isolate Git policy; tag admission is asserted with it enabled.
+      REQUIRE_NPM_PUBLISH_ENVIRONMENT: "false",
       PREPARED_ARTIFACT: "",
       PUBLISH_SCOPE: "selected",
       RELEASE_PLUGINS: "",
@@ -343,15 +345,30 @@ posixIt.each(["clawhub-trust", "npm-trust"] as const)(
   55_000,
 );
 
-posixIt.each(["clawhub-trust", "npm-trust"] as const)(
-  "%s accepts only the matching Tideclaw alpha branch after main and release misses",
-  async (mode) => {
-    const workflowRef = `refs/heads/${alphaBranch}`;
-    const report = await pluginRun(mode, {
-      env:
-        mode === "clawhub-trust"
-          ? { TRUSTED_PUBLISH_BRANCH: alphaBranch }
-          : { WORKFLOW_REF: workflowRef },
+posixIt(
+  "npm-trust rejects a Tideclaw alpha publish after main and release misses",
+  async () => {
+    const report = await pluginRun("npm-trust", {
+      env: { WORKFLOW_REF: `refs/heads/${alphaBranch}` },
+      commandResults: {
+        "merge-base --is-ancestor HEAD origin/main": { code: 1 },
+        "for-each-ref --format=%(refname) refs/remotes/origin/release": { code: 0, output: "" },
+      },
+    });
+    expect(report.code, report.output).toBe(1);
+    expect(report.output).toContain(
+      "Plugin npm publishes must target a commit reachable from main or release/*.",
+    );
+    expect(report.fetches.some(({ args }) => args.join(" ").includes(alphaBranch))).toBe(false);
+  },
+  55_000,
+);
+
+posixIt(
+  "clawhub-trust accepts only the matching Tideclaw alpha branch after main and release misses",
+  async () => {
+    const report = await pluginRun("clawhub-trust", {
+      env: { TRUSTED_PUBLISH_BRANCH: alphaBranch },
       commandResults: {
         "merge-base --is-ancestor HEAD origin/main": { code: 1 },
         "for-each-ref --format=%(refname) refs/remotes/origin/release": { code: 0, output: "" },
@@ -370,11 +387,12 @@ posixIt.each(["clawhub-trust", "npm-trust"] as const)(
 );
 
 posixIt.each(["refs/heads/extended-stable/2026.8.33", "refs/heads/main"])(
-  "npm extended-stable retains exact-tip admission from %s",
+  "npm extended-stable preflight retains exact-tip admission from %s",
   async (workflowRef) => {
     const branch = "extended-stable/2026.8.33";
     const report = await pluginRun("npm-trust", {
       env: {
+        PREFLIGHT_ONLY: "true",
         NPM_DIST_TAG: "extended-stable",
         PUBLISH_SCOPE: "all-publishable",
         SOURCE_REF: sha,
@@ -390,7 +408,8 @@ posixIt.each(["refs/heads/extended-stable/2026.8.33", "refs/heads/main"])(
     expect(report.fetches.map(({ args }) => args)).toEqual([
       ["fetch", "--no-tags", "origin", `+refs/heads/${branch}:refs/remotes/origin/${branch}`],
     ]);
-    expect(gitCommands(report).filter(([operation]) => operation === "rev-parse")).toHaveLength(4);
+    // Preflight adds its exact-source check before the extended-stable tip check.
+    expect(gitCommands(report).filter(([operation]) => operation === "rev-parse")).toHaveLength(6);
   },
   55_000,
 );
@@ -415,7 +434,7 @@ const candidateAdmissionCases: Array<{
     env: { WORKFLOW_REF: "refs/heads/main" },
     commands: {},
     code: 1,
-    message: "protected release-publish workflow tooling",
+    message: "require a protected release-publish/<sha12>-<n> tooling tag",
   },
   {
     name: "tooling outside main",
@@ -442,7 +461,7 @@ const candidateAdmissionCases: Array<{
   },
   {
     name: "preflight candidate override",
-    env: { PREFLIGHT_ONLY: "true" },
+    env: { PREFLIGHT_ONLY: "true", REQUIRE_NPM_PUBLISH_ENVIRONMENT: "false" },
     commands: {},
     code: 1,
     message: "preflight must not include release_candidate_branch",
@@ -464,6 +483,7 @@ posixIt.each(candidateAdmissionCases)(
         NPM_DIST_TAG: "extended-stable",
         PUBLISH_SCOPE: "all-publishable",
         RELEASE_CANDIDATE_BRANCH: "extended-stable/2026.8.33",
+        REQUIRE_NPM_PUBLISH_ENVIRONMENT: "true",
         WORKFLOW_REF: `refs/tags/release-publish/${workflowSha.slice(0, 12)}-123`,
         ...env,
       },
@@ -489,11 +509,12 @@ posixIt.each([
   ["untrusted workflow branch", "refs/heads/topic", sha],
   ["same-name main tag", "refs/tags/main", sha],
 ])(
-  "npm extended-stable recovery rejects %s",
+  "npm extended-stable preflight rejects %s",
   async (_name, workflowRef, branchSha) => {
     const branch = "extended-stable/2026.8.33";
     const report = await pluginRun("npm-trust", {
       env: {
+        PREFLIGHT_ONLY: "true",
         NPM_DIST_TAG: "extended-stable",
         PUBLISH_SCOPE: "all-publishable",
         SOURCE_REF: sha,

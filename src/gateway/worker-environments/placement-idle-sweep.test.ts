@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { CloudWorkerProfileConfig } from "../../config/types.cloud-workers.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
@@ -14,7 +14,7 @@ import { createHarness } from "./placement-dispatch-test-harness.js";
 import { createWorkerPlacementIdleSweep } from "./placement-idle-sweep.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = createTempDirTracker();
 
 describe("worker placement idle suspension", () => {
   let nowMs: number;
@@ -28,7 +28,10 @@ describe("worker placement idle suspension", () => {
     placements = createWorkerSessionPlacementStore({ database, now: () => nowMs });
   });
 
-  afterEach(() => closeStateDatabaseForTest());
+  afterEach(async () => {
+    await closeStateDatabaseForTest();
+    tempDirs.cleanup();
+  });
 
   function createIdleFixture(
     options: {
@@ -223,7 +226,7 @@ describe("worker placement idle suspension", () => {
     });
 
     if (kind === "provisioning") {
-      harness.placements.seedProvisioning();
+      await harness.placements.seedProvisioning();
     } else {
       const executionMode =
         kind === "local-claim" || kind === "pending-result" ? "remote-exec" : "worker-turn";

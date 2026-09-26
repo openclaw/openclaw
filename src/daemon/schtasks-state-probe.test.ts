@@ -1,6 +1,8 @@
 import { spawnSync } from "node:child_process";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { probeScheduledTaskState } from "./schtasks-state-probe.js";
+import { withMockedPlatform } from "../test-utils/vitest-spies.js";
+import { readWindowsProcessSnapshot } from "./schtasks-process-snapshot.js";
+import { probeScheduledTaskExists, probeScheduledTaskState } from "./schtasks-state-probe.js";
 
 vi.mock("node:child_process", () => ({ spawnSync: vi.fn() }));
 
@@ -45,24 +47,56 @@ it.each(["", " \r\n"])("explains an empty exit-2 result: %j", (output) => {
 });
 
 describe("Scheduled Task probe timeout", () => {
+  it.each([0, -1, 0.5, 0.75, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
+    "does not spawn or infer absence with unavailable allowance %s",
+    (timeoutMs) => {
+      vi.mocked(spawnSync).mockReturnValue({
+        pid: 0,
+        output: [null, "-2147024894", ""],
+        stdout: "-2147024894",
+        stderr: "",
+        status: 1,
+        signal: null,
+      });
+
+      expect(probeScheduledTaskState("OpenClaw Gateway", timeoutMs)).toEqual({
+        status: "unknown",
+        detail: "Scheduled Task inspection deadline expired.",
+        timeoutMs: 0,
+        diagnostic: { kind: "timeout", timeoutMs: 0 },
+      });
+      expect(probeScheduledTaskExists("OpenClaw Gateway", timeoutMs)).toBeNull();
+      expect(spawnSync).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     { budget: undefined, expected: 5_000 },
-    { budget: 0, expected: 5_000 },
-    { budget: -1, expected: 5_000 },
-    { budget: Number.POSITIVE_INFINITY, expected: 5_000 },
+    { budget: 1, expected: 1 },
+    { budget: 899.75, expected: 899 },
     { budget: 457.0681, expected: 457 },
-    { budget: 0.5, expected: 1 },
     { budget: 200, expected: 200 },
     { budget: 30_000, expected: 30_000 },
   ])("uses a bounded caller budget: $budget -> $expected ms", ({ budget, expected }) => {
-    vi.mocked(spawnSync).mockReturnValue({
-      pid: 0,
-      output: [null, "", ""],
-      stdout: "",
-      stderr: "",
-      status: null,
-      signal: "SIGTERM",
-      error: Object.assign(new Error("spawnSync powershell.exe ETIMEDOUT"), { code: "ETIMEDOUT" }),
+    vi.mocked(spawnSync).mockImplementation((_command, _args, options) => {
+      const timeout = options?.timeout;
+      // Node 24.21.0 child_process.validateTimeout rejects before native spawn.
+      if (timeout != null && !(Number.isInteger(timeout) && timeout >= 0)) {
+        throw Object.assign(new RangeError("timeout must be an unsigned integer"), {
+          code: "ERR_OUT_OF_RANGE",
+        });
+      }
+      return {
+        pid: 0,
+        output: [null, "", ""],
+        stdout: "",
+        stderr: "",
+        status: null,
+        signal: "SIGTERM",
+        error: Object.assign(new Error("spawnSync powershell.exe ETIMEDOUT"), {
+          code: "ETIMEDOUT",
+        }),
+      };
     });
 
     const result = probeScheduledTaskState("OpenClaw Gateway", budget);
@@ -77,3 +111,35 @@ describe("Scheduled Task probe timeout", () => {
     expect(spawnSync).toHaveBeenCalledTimes(1);
   });
 });
+
+it.each([
+  { allowance: 699.5, expected: 699 },
+  { allowance: 0.75, expected: undefined },
+  { allowance: 10_000, expected: 5_000 },
+])(
+  "bounds process snapshot allowance $allowance without extending the native cap",
+  ({ allowance, expected }) =>
+    withMockedPlatform("win32", () => {
+      const stdout = JSON.stringify([{ ProcessId: 1234, CommandLine: "fixture process" }]);
+      vi.mocked(spawnSync).mockReturnValue({
+        pid: 0,
+        output: [null, stdout, ""],
+        stdout,
+        stderr: "",
+        status: 0,
+        signal: null,
+      });
+      const result = readWindowsProcessSnapshot(allowance);
+      if (expected === undefined) {
+        expect(result).toBeNull();
+        expect(spawnSync).not.toHaveBeenCalled();
+      } else {
+        expect(result).toHaveLength(1);
+        expect(spawnSync).toHaveBeenCalledWith(
+          expect.any(String),
+          expect.any(Array),
+          expect.objectContaining({ timeout: expected }),
+        );
+      }
+    }),
+);

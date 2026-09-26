@@ -115,10 +115,17 @@ function fixture(
       recursive: true,
       dereference: true,
     });
-    cpSync(dirname(installedNative), join(toolingRoot, "node_modules", nativeName), {
-      recursive: true,
-      dereference: true,
-    });
+    // A joined writer keeps concurrent test forks from inheriting the executable's writable fd.
+    execFileSync(
+      process.execPath,
+      [
+        "-e",
+        "require('node:fs').cpSync(process.argv[1], process.argv[2], { recursive: true, dereference: true })",
+        dirname(installedNative),
+        join(toolingRoot, "node_modules", nativeName),
+      ],
+      { stdio: "pipe", timeout: 20_000 },
+    );
   }
   const log = join(root, "forbidden-commands");
   const bin = join(root, "bin");
@@ -522,11 +529,11 @@ describe("frozen admission upgrade Docker aliases", () => {
       const oid = f.selected.git("rev-parse", `${f.selected.sha}:${path}`);
       rmSync(join(f.selected.root, ".git/objects", oid.slice(0, 2), oid.slice(2)));
     }
-    const lanes = expandUpdateFirstHopCompatLanes([lane]);
-    const result = f.run({ docker: { lanes } });
+    const requestedLanes = expandUpdateFirstHopCompatLanes([lane]);
+    const result = f.run({ docker: { lanes: requestedLanes } });
     expect(result.status, result.stderr).toBe(0);
     const record = JSON.parse(result.stdout);
-    expect(record.docker).toEqual({ lanes, omitted: [], status: "ADMITTED" });
+    expect(record.docker).toEqual({ lanes: requestedLanes, omitted: [], status: "ADMITTED" });
     expect(record.selection.consumers).toEqual(lane === "plugins-offline" ? ["plugins"] : []);
     expect(record.contracts.map((contract: { consumer: string }) => contract.consumer)).toEqual(
       record.selection.consumers,

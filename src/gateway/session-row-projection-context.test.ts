@@ -4,6 +4,7 @@ import { subagentRuns } from "../agents/subagents/registry/subagent-registry-mem
 import { publishSubagentRunChanges } from "../agents/subagents/registry/subagent-registry-publication.js";
 import { buildSubagentRunReadIndexFromRuns } from "../agents/subagents/registry/subagent-registry-queries.js";
 import * as registryRead from "../agents/subagents/registry/subagent-registry-read.js";
+import { createSubagentSessionListReadView } from "../agents/subagents/registry/subagent-registry-state.js";
 import { registerAgentRunCapacityWait } from "../infra/agent-run-capacity-wait.js";
 import {
   buildProjectedAgentRunIndex,
@@ -35,7 +36,9 @@ const runContext = {
 };
 
 function fixture() {
-  const context = createSessionRowProjectionContext();
+  const context = createSessionRowProjectionContext(
+    createSubagentSessionListReadView({ env: process.env }),
+  );
   const prepare = (epoch: number) =>
     context.prepare(
       epoch,

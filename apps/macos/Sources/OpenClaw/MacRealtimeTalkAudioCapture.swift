@@ -577,20 +577,13 @@ final class MacRealtimeTalkOutputRouteObserver: @unchecked Sendable {
     }
 
     private static func defaultOutputDeviceID() -> AudioObjectID? {
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain)
-        var deviceID = AudioObjectID(0)
-        var size = UInt32(MemoryLayout<AudioObjectID>.size)
-        let status = AudioObjectGetPropertyData(
-            AudioObjectID(kAudioObjectSystemObject),
-            &address,
-            0,
-            nil,
-            &size,
-            &deviceID)
-        return status == noErr && deviceID != 0 ? deviceID : nil
+        guard let deviceID = self.uint32Property(
+            objectID: AudioObjectID(kAudioObjectSystemObject),
+            selector: kAudioHardwarePropertyDefaultOutputDevice,
+            scope: kAudioObjectPropertyScopeGlobal),
+            deviceID != 0
+        else { return nil }
+        return deviceID
     }
 
     private static func outputTerminalTypes(deviceID: AudioObjectID) -> [UInt32] {

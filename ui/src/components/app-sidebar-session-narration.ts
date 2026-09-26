@@ -530,14 +530,7 @@ export class SidebarSessionNarrationController {
     const record = payload as Record<string, unknown>;
     const key = this.matchingDesiredKey(record.sessionKey, record.agentId);
     const runId = typeof record.runId === "string" ? record.runId.trim() : "";
-    if (
-      !key ||
-      !runId ||
-      typeof record.headline !== "string" ||
-      typeof record.health !== "string" ||
-      typeof record.updatedAt !== "number" ||
-      typeof record.revision !== "number"
-    ) {
+    if (!key || !runId) {
       return;
     }
     const digest = { ...record, runId };

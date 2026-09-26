@@ -56,7 +56,7 @@ on:
           - selected
           - all-publishable
       ref:
-        description: Exact commit SHA; preflight accepts main/release ancestry, while publish mode also supports canonical extended-stable or matching Tideclaw alpha branches
+        description: Exact commit SHA reachable from main/release ancestry or the canonical extended-stable branch
         required: true
         type: string
       plugins:
@@ -179,7 +179,7 @@ jobs:
           package-manager-cache: false
 
       - name: Verify trusted preflight or recovery tooling identity
-        if: github.event_name == 'workflow_dispatch' && (inputs.preflight_only || inputs.release_candidate_branch != '' || (inputs.npm_dist_tag == 'extended-stable' && github.ref == 'refs/heads/main'))
+        if: github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
           WORKFLOW_FULL_REF: ${{ github.ref }}
@@ -195,6 +195,7 @@ jobs:
 
       - name: Validate ref is on a trusted publish branch
         env:
+          REQUIRE_NPM_PUBLISH_ENVIRONMENT: ${{ github.event_name == 'workflow_dispatch' && (!inputs.preflight_only || inputs.trusted_publisher_preflight) }}
           NPM_DIST_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.npm_dist_tag || 'default' }}
           PREFLIGHT_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.preflight_only || false }}
           PREPARED_ARTIFACT: ${{ inputs.prepared_artifact }}
@@ -241,6 +242,20 @@ jobs:
                   raise
 
           preflight = os.environ["PREFLIGHT_ONLY"] == "true"
+          if os.environ["REQUIRE_NPM_PUBLISH_ENVIRONMENT"] == "true":
+              tooling_tag = re.fullmatch(
+                  r"refs/tags/release-publish/([a-f0-9]{12})-[1-9][0-9]*",
+                  os.environ["WORKFLOW_REF"],
+              )
+              if tooling_tag is None:
+                  fail(
+                      "Real npm publication and trusted-publisher preflight require a protected "
+                      "release-publish/<sha12>-<n> tooling tag. Mint one with pnpm "
+                      "release:publish-preflight / ensureReleasePublishToolingTag, then dispatch "
+                      "with --ref release-publish/...."
+                  )
+              if not os.environ["WORKFLOW_SHA"].startswith(tooling_tag.group(1)):
+                  fail("Protected release-publish tag does not match the plugin npm workflow SHA.")
           if os.environ["PREPARED_ARTIFACT"] and preflight:
               fail("Prepared npm artifacts are publication inputs, not preflight inputs.")
           if os.environ["TRUSTED_PUBLISHER_PREFLIGHT"] == "true" and not preflight:
@@ -327,17 +342,18 @@ jobs:
                   if is_ancestor(f"refs/remotes/origin/{extended_branch}"):
                       raise SystemExit(0)
                   fail(f"Extended-stable plugin target must be reachable from {extended_branch}.")
+              if not preflight:
+                  fail(f"Extended-stable plugin publication requires release_candidate_branch={extended_branch}.")
               if not exact_ref_match(
                   "HEAD",
                   f"refs/remotes/origin/{extended_branch}",
               ):
                   fail(f"Extended-stable plugin source must equal the exact {extended_branch} branch tip.")
-              # Main recovery runs trusted tooling without changing the frozen source.
-              # Its workflow SHA is verified against main before target code runs.
+              # Nonpublishing preflight still accepts the canonical branch or main.
               if os.environ["WORKFLOW_REF"] in (f"refs/heads/{extended_branch}", "refs/heads/main"):
                   raise SystemExit(0)
               fail(
-                  f"Extended-stable plugin npm publishes must run from {extended_branch} "
+                  f"Extended-stable plugin npm preflights must run from {extended_branch} "
                   "or trusted main, targeting the exact canonical branch tip."
               )
 
@@ -366,27 +382,7 @@ jobs:
               raise SystemExit(0)
           if preflight:
               fail("Plugin npm preflight target must be reachable from main or release/*.")
-          workflow_ref = os.environ["WORKFLOW_REF"]
-          if re.fullmatch(
-              r"refs/heads/tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z",
-              workflow_ref,
-          ):
-              alpha_branch = workflow_ref.removeprefix("refs/heads/")
-              run_git(
-                  workspace,
-                  "fetch",
-                  "--no-tags",
-                  "origin",
-                  f"+refs/heads/{alpha_branch}:refs/remotes/origin/{alpha_branch}",
-                  timeout=120,
-                  reclaim_locks=True,
-              )
-              if is_ancestor(f"refs/remotes/origin/{alpha_branch}"):
-                  raise SystemExit(0)
-          fail(
-              "Plugin npm publishes must target a commit reachable from main, release/*, "
-              "or the matching Tideclaw alpha branch."
-          )
+          fail("Plugin npm publishes must target a commit reachable from main or release/*.")
           PYTHON
 
       - name: Setup trusted Node for prepared publication
@@ -548,19 +544,6 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Validate Tideclaw alpha plugin channels
-        if: startsWith(github.ref, 'refs/heads/tideclaw/alpha/')
-        run: |
-          set -euo pipefail
-          invalid="$(
-            jq -r '.candidates[]? | select(.publishTag != "alpha" or .channel != "alpha") | "- \(.packageName)@\(.version) [\(.publishTag)]"' .local/plugin-npm-release-plan.json
-          )"
-          if [[ -n "${invalid}" ]]; then
-            echo "Tideclaw alpha plugin npm publishes may only publish alpha plugin versions." >&2
-            printf '%s\n' "${invalid}" >&2
-            exit 1
-          fi
-
   validate_release_publish_approval:
     name: Validate release publish approval
     needs: preview_plugins_npm
@@ -570,10 +553,14 @@ jobs:
       actions: read
       attestations: read
       contents: read
+    outputs:
+      parent_approval: ${{ steps.receipt.outputs.parent_approval }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.workflow_sha }}
+          sparse-checkout: scripts
           persist-credentials: false
 
       - name: Setup supported Node runtime
@@ -1474,7 +1461,7 @@ jobs:
     needs: preview_plugins_npm
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.preflight_only && inputs.trusted_publisher_preflight && needs.preview_plugins_npm.outputs.has_selection == 'true' }}
     runs-on: ubuntu-latest
-    environment: npm-release
+    environment: npm-publish
     permissions:
       contents: read
       id-token: write
@@ -1513,6 +1500,17 @@ jobs:
           }
           NODE
 
+  approve_plugins_npm_release:
+    needs: [preview_plugins_npm, validate_release_publish_approval]
+    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.preflight_only && needs.preview_plugins_npm.outputs.has_candidates == 'true' && needs.validate_release_publish_approval.result == 'success' && needs.validate_release_publish_approval.outputs.parent_approval != 'receipt' }}
+    runs-on: ubuntu-latest
+    environment: npm-release
+    permissions:
+      contents: read
+    steps:
+      - name: Approve plugin npm release
+        run: echo "Approved direct plugin npm release."
+
   publish_plugins_npm:
     name: Publish plugin npm package (${{ matrix.plugin.packageName }})
     needs:
@@ -1521,10 +1519,11 @@ jobs:
         preview_plugin_pack,
         verify_plugin_npm_preflight,
         validate_release_publish_approval,
+        approve_plugins_npm_release,
       ]
-    if: ${{ always() && !cancelled() && github.event_name == 'workflow_dispatch' && !inputs.preflight_only && needs.preview_plugins_npm.result == 'success' && needs.validate_release_publish_approval.result == 'success' && needs.preview_plugins_npm.outputs.has_candidates == 'true' && (inputs.prepared_artifact != '' || (needs.preview_plugin_pack.result == 'success' && needs.verify_plugin_npm_preflight.result == 'success')) }}
+    if: ${{ always() && !cancelled() && github.event_name == 'workflow_dispatch' && !inputs.preflight_only && needs.preview_plugins_npm.result == 'success' && needs.validate_release_publish_approval.result == 'success' && (needs.approve_plugins_npm_release.result == 'success' || (needs.approve_plugins_npm_release.result == 'skipped' && needs.validate_release_publish_approval.outputs.parent_approval == 'receipt')) && needs.preview_plugins_npm.outputs.has_candidates == 'true' && (inputs.prepared_artifact != '' || (needs.preview_plugin_pack.result == 'success' && needs.verify_plugin_npm_preflight.result == 'success')) }}
     runs-on: ubuntu-latest
-    environment: npm-release
+    environment: npm-publish
     permissions:
       actions: read
       attestations: read
@@ -1563,7 +1562,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PACKAGE_NAME: ${{ matrix.plugin.packageName }}
           PACKAGE_VERSION: ${{ matrix.plugin.version }}
-          RELEASE_PUBLISH_PARENT_STATE_POLICY: ${{ inputs.release_publish_run_id != '' && (github.actor == 'github-actions[bot]' && 'active-or-failure' || 'manual-recovery') || '' }}
+          RELEASE_PUBLISH_PARENT_STATE_POLICY: ${{ inputs.release_publish_run_id != '' && (needs.validate_release_publish_approval.outputs.parent_approval == 'receipt' && 'active' || (github.actor == 'github-actions[bot]' && 'active-or-failure' || 'manual-recovery')) || '' }}
           RELEASE_PUBLISH_REF: ${{ inputs.release_publish_branch }}
           RELEASE_PUBLISH_FULL_REF: ${{ inputs.release_publish_full_ref }}
           RELEASE_PUBLISH_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
@@ -1838,6 +1837,15 @@ jobs:
             --publish-tag "$PUBLISH_TAG" --route "$PUBLISH_ROUTE" \
             --tarball "$TARBALL_PATH" --allow-missing true --github-output "$GITHUB_OUTPUT"
 
+      - name: Wait for the release parent's npm authorization
+        if: needs.validate_release_publish_approval.outputs.parent_approval == 'receipt'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
+          RELEASE_PUBLISH_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
+          EXPECTED_WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: node scripts/release-approval-receipt.mjs wait-npm-authorization
+
       - name: Publish with trusted publisher
         id: oidc_publish
         if: steps.publication_evidence.outputs.publish_route == 'npm-oidc' && steps.npm_package_version.outputs.already_published != 'true'
@@ -1851,7 +1859,7 @@ jobs:
           OPENCLAW_RELEASE_PUBLISH_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
           OPENCLAW_RELEASE_PUBLISH_REF: ${{ inputs.release_publish_branch }}
           OPENCLAW_RELEASE_PUBLISH_FULL_REF: ${{ inputs.release_publish_full_ref }}
-          OPENCLAW_RELEASE_PUBLISH_PARENT_STATE_POLICY: ${{ inputs.release_publish_run_id != '' && (github.actor == 'github-actions[bot]' && 'active-or-failure' || 'manual-recovery') || '' }}
+          OPENCLAW_RELEASE_PUBLISH_PARENT_STATE_POLICY: ${{ inputs.release_publish_run_id != '' && (needs.validate_release_publish_approval.outputs.parent_approval == 'receipt' && 'active' || (github.actor == 'github-actions[bot]' && 'active-or-failure' || 'manual-recovery')) || '' }}
           OPENCLAW_RELEASE_TOOLING_FULL_REF: ${{ github.ref }}
           OPENCLAW_RELEASE_TOOLING_REF: ${{ github.ref_name }}
           OPENCLAW_RELEASE_TOOLING_REPOSITORY: ${{ github.repository }}
@@ -1953,7 +1961,7 @@ jobs:
           PACKAGE_NAME: ${{ steps.publication_evidence.outputs.package_name }}
           PACKAGE_VERSION: ${{ steps.publication_evidence.outputs.package_version }}
           PUBLISH_TAG: ${{ steps.publication_evidence.outputs.publish_tag }}
-          RELEASE_PUBLISH_PARENT_STATE_POLICY: ${{ inputs.release_publish_run_id != '' && (github.actor == 'github-actions[bot]' && 'active-or-failure' || 'manual-recovery') || '' }}
+          RELEASE_PUBLISH_PARENT_STATE_POLICY: ${{ inputs.release_publish_run_id != '' && (needs.validate_release_publish_approval.outputs.parent_approval == 'receipt' && 'active' || (github.actor == 'github-actions[bot]' && 'active-or-failure' || 'manual-recovery')) || '' }}
           RELEASE_PUBLISH_REF: ${{ inputs.release_publish_branch }}
           RELEASE_PUBLISH_FULL_REF: ${{ inputs.release_publish_full_ref }}
           RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
@@ -2037,7 +2045,7 @@ jobs:
             else
               echo "- Published \`${PACKAGE_NAME}\` from the verified immutable tarball."
             fi
-            echo "- Configure the GitHub trusted publisher for \`plugin-npm-release.yml\` and environment \`npm-release\` before the next OIDC publish."
+            echo "- Configure the GitHub trusted publisher for \`plugin-npm-release.yml\` and environment \`npm-publish\` before the next OIDC publish."
           } >> "$GITHUB_STEP_SUMMARY"
 
   verify_plugins_npm:

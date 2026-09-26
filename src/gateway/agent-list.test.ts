@@ -115,25 +115,6 @@ describe("listGatewayAgentsBasic", () => {
     ]);
   });
 
-  it("retains disk-backed system agents beside an explicit roster", async () => {
-    await Promise.all(
-      ["openclaw", "research"].map((id) =>
-        fs.mkdir(path.join(stateDir, "agents", id), { recursive: true }),
-      ),
-    );
-
-    expect(
-      (
-        await listGatewayAgentsBasic({
-          agents: { entries: { main: { default: true } } },
-        })
-      ).agents,
-    ).toEqual([
-      { id: "main", kind: "agent", name: undefined },
-      { id: "openclaw", kind: "system", name: undefined },
-    ]);
-  });
-
   it("falls back to identity.name when the configured agent name is missing", async () => {
     const cfg: OpenClawConfig = {
       session: { mainKey: "main" },

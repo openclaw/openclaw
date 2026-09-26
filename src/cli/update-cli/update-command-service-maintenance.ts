@@ -380,20 +380,14 @@ async function stopManagedServiceBeforeMutableUpdate(
     serviceUpdateVerdict,
   };
   assertCurrent();
-  if (serviceUpdateVerdict.kind === "foreign") {
+  if (serviceUpdateVerdict.kind === "foreign" || serviceUpdateVerdict.kind === "absent") {
     return {
       ...inspected,
       serviceMutationAllowed: false,
       serviceMutationSkipMessage:
-        "Gateway service management skipped: the service belongs to a different OpenClaw installation and was left untouched.",
-    };
-  }
-  if (serviceUpdateVerdict.kind === "absent") {
-    return {
-      ...inspected,
-      serviceMutationAllowed: false,
-      serviceMutationSkipMessage:
-        "Gateway restart skipped: no Gateway service or listener is running.",
+        serviceUpdateVerdict.kind === "foreign"
+          ? "Gateway service management skipped: the service belongs to a different OpenClaw installation and was left untouched."
+          : "Gateway restart skipped: no Gateway service or listener is running.",
     };
   }
   const operatorRestartWarning =

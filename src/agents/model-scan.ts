@@ -13,10 +13,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import {
-  normalizeStringEntries,
-  uniqueStrings,
-} from "@openclaw/normalization-core/string-normalization";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import pMap from "p-map";
 import { Type } from "typebox";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -277,21 +274,28 @@ async function fetchOpenRouterModels(
   }
 }
 
-async function probeTool(
+async function probeModel(
   model: OpenAIModel,
   apiKey: string,
   timeoutMs: number,
   complete: LlmRuntime["complete"],
+  kind: "tool" | "image",
 ): Promise<ProbeResult> {
   const context: Context = {
     messages: [
       {
         role: "user",
-        content: "Call the ping tool with {} and nothing else.",
+        content:
+          kind === "tool"
+            ? "Call the ping tool with {} and nothing else."
+            : [
+                { type: "text", text: "Reply with OK." },
+                { type: "image", data: BASE_IMAGE_PNG, mimeType: "image/png" },
+              ],
         timestamp: Date.now(),
       },
     ],
-    tools: [TOOL_PING],
+    ...(kind === "tool" ? { tools: [TOOL_PING] } : {}),
   };
   const startedAt = Date.now();
   try {
@@ -299,17 +303,16 @@ async function probeTool(
       (signal) =>
         complete(model, context, {
           apiKey,
-          maxTokens: 256,
+          maxTokens: kind === "tool" ? 256 : 16,
           temperature: 0,
-          toolChoice: "required",
+          ...(kind === "tool" ? { toolChoice: "required" as const } : {}),
           signal,
         } satisfies OpenAICompletionsOptions),
       timeoutMs,
-      "model tool probe",
+      `model ${kind} probe`,
     );
 
-    const hasToolCall = message.content.some((block) => block.type === "toolCall");
-    if (!hasToolCall) {
+    if (kind === "tool" && !message.content.some((block) => block.type === "toolCall")) {
       return {
         ok: false,
         latencyMs: Date.now() - startedAt,
@@ -325,57 +328,6 @@ async function probeTool(
       error: formatErrorMessage(err),
     };
   }
-}
-
-async function probeImage(
-  model: OpenAIModel,
-  apiKey: string,
-  timeoutMs: number,
-  complete: LlmRuntime["complete"],
-): Promise<ProbeResult> {
-  const context: Context = {
-    messages: [
-      {
-        role: "user",
-        content: [
-          { type: "text", text: "Reply with OK." },
-          { type: "image", data: BASE_IMAGE_PNG, mimeType: "image/png" },
-        ],
-        timestamp: Date.now(),
-      },
-    ],
-  };
-  const startedAt = Date.now();
-  try {
-    await runAbortableTimeout(
-      (signal) =>
-        complete(model, context, {
-          apiKey,
-          maxTokens: 16,
-          temperature: 0,
-          signal,
-        } satisfies OpenAICompletionsOptions),
-      timeoutMs,
-      "model image probe",
-    );
-    return { ok: true, latencyMs: Date.now() - startedAt };
-  } catch (err) {
-    return {
-      ok: false,
-      latencyMs: Date.now() - startedAt,
-      error: formatErrorMessage(err),
-    };
-  }
-}
-
-function ensureImageInput(model: OpenAIModel): OpenAIModel {
-  if (model.input?.includes("image")) {
-    return model;
-  }
-  return {
-    ...model,
-    input: uniqueStrings([...(model.input ?? []), "image"]) as OpenAIModel["input"],
-  };
 }
 
 function buildOpenRouterScanResult(params: {
@@ -496,9 +448,9 @@ export async function scanOpenRouterModels(
           reasoning: baseModel.reasoning,
         };
 
-        const toolResult = await probeTool(model, apiKey, timeoutMs, llmRuntime.complete);
+        const toolResult = await probeModel(model, apiKey, timeoutMs, llmRuntime.complete, "tool");
         const imageResult = model.input?.includes("image")
-          ? await probeImage(ensureImageInput(model), apiKey, timeoutMs, llmRuntime.complete)
+          ? await probeModel(model, apiKey, timeoutMs, llmRuntime.complete, "image")
           : { ok: false, latencyMs: null, skipped: true };
 
         result = buildOpenRouterScanResult({

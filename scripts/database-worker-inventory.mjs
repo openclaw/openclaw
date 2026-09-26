@@ -107,6 +107,7 @@ const reviewed = new Map([
   ],
 ]);
 const workerModules = new Set([
+  "src/channels/message/ingress-queue.kernel.ts",
   "src/channels/message/ingress-queue-health.kernel.ts",
   "src/state/openclaw-state-worker-runtime.ts",
   "src/config/sessions/session-accessor.sqlite-mutation-worker.runtime.ts",

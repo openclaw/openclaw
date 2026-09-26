@@ -27,6 +27,7 @@ import {
 } from "./package-update-activation-prepare.js";
 import { readPackageReverseGenerations } from "./package-update-activation-reverse-binding.js";
 import type { PackageReverseAuthority } from "./package-update-activation-reverse.js";
+import { readReleasedPackageActivationReceipt } from "./package-update-activation-status.js";
 import {
   createPublicationOwner,
   packageActivationStatus as status,
@@ -46,6 +47,12 @@ export type { PackageActivationStatus } from "./package-update-publication-owner
 /** Read-only correlation; callers still need a privately registered live fence. */
 function readPackageActivationContinuation(installKey: string) {
   const anchor = resolvePackageActivationAnchor(installKey);
+  const released = readReleasedPackageActivationReceipt(installKey);
+  if (released) {
+    throw new Error(
+      `Package publication recovery is pending. With an external Node, run ${released.recoveryCommand}, then use that original helper to repair or retire; keep other package managers stopped.`,
+    );
+  }
   assertPackageActivationLayout(anchor);
   const journalPath = resolvePackageActivationJournalPath(anchor);
   if (!fs.lstatSync(journalPath, { throwIfNoEntry: false })) {
@@ -254,9 +261,16 @@ export async function preparePackageActivation(
     },
   };
 }
-export function readPackageActivationReceipt(
-  installKey: string,
-): (PackageActivationStatus & { recoveryCommand?: string }) | undefined {
+export function readPackageActivationReceipt(installKey: string):
+  | (Omit<PackageActivationStatus, "phase"> & {
+      phase: PackageActivationStatus["phase"] | "retired";
+      recoveryCommand?: string;
+    })
+  | undefined {
+  const released = readReleasedPackageActivationReceipt(installKey);
+  if (released) {
+    return released;
+  }
   const anchor = resolvePackageActivationAnchor(installKey);
   if (!fs.existsSync(resolvePackageActivationJournalPath(anchor))) {
     readPackageActivationContinuation(installKey);

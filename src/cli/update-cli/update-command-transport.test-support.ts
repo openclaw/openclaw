@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, vi } from "vitest";
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
+import { resolveNpmGlobalPrefixLayoutFromPrefix } from "../../infra/update-npm-prefix.js";
 import type { runCommandWithTimeout, runUtf8CommandWithTimeout } from "../../process/exec.js";
 import { createCommandResult as commandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 
@@ -28,8 +29,9 @@ export async function createUpdateCommandTransportFixture(transport: {
   const { spawn: spawnChild } =
     await vi.importActual<typeof import("node:child_process")>("node:child_process");
   return async (...[argv, options]: Parameters<typeof transport.run>) => {
+    const npmProbe = argv.at(-2);
     if (
-      argv.at(-2) === "prefix" &&
+      (npmProbe === "prefix" || npmProbe === "root") &&
       argv.at(-1) === "-g" &&
       ((argv.length === 3 && argv[0] === "npm") ||
         (argv.length === 4 &&
@@ -37,9 +39,16 @@ export async function createUpdateCommandTransportFixture(transport: {
           path.basename(argv[1] ?? "") === "npm-cli.js"))
     ) {
       const result = await transport.run(argv, options);
-      // Supply the fixture's inspected empty prefix when an effect double omits read-only metadata.
+      // Both npm probes describe the same empty prefix when an effect double omits metadata.
       return result.code === 0 && result.stdout === ""
-        ? { ...result, stdout: `${transport.npmPrefix}\n` }
+        ? {
+            ...result,
+            stdout: `${
+              npmProbe === "root"
+                ? resolveNpmGlobalPrefixLayoutFromPrefix(transport.npmPrefix).globalRoot
+                : transport.npmPrefix
+            }\n`,
+          }
         : result;
     }
     if (typeof options === "number" || !options.beforeInput) {

@@ -14,6 +14,7 @@ import {
 } from "../providers/tool-result-text.js";
 import { shortHash } from "../utils/hash.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
+import { createAssistantOutput } from "./assistant-output.js";
 import { transformTransportMessages } from "./host-policy.js";
 import {
   buildOpenAIResponsesReplayContext,
@@ -238,23 +239,7 @@ export function createOpenAIResponsesAssistantOutput(
   model: Model,
   api: Api = model.api,
 ): AssistantMessage {
-  return {
-    role: "assistant",
-    content: [],
-    api,
-    provider: model.provider,
-    model: model.id,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
-    stopReason: "stop",
-    timestamp: Date.now(),
-  };
+  return createAssistantOutput(model, api);
 }
 
 type ConvertResponsesMessagesOptions = {

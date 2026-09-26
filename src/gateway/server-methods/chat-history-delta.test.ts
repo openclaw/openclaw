@@ -104,7 +104,11 @@ async function readContents(contents: string[], requestedMaxBytes?: number) {
     maxBytes: requestedMaxBytes,
     scope,
     sessionKey,
-    sessionSnapshot,
+    sessionSnapshot: {
+      ...sessionSnapshot,
+      agentId: undefined,
+      label: 'Snapshot: "\\\n漢字🤖\ud800',
+    },
   });
 }
 
@@ -428,6 +432,8 @@ describe("chat history delta display budget", () => {
       const serialized = JSON.stringify(result.messages);
       expect(result.messagesBytes).toBe(Buffer.byteLength(serialized, "utf8"));
       expect(result.activityBytes).toBe(chatHistoryActivityBytes(result.activity));
+      expect(JSON.parse(serialized)[0]).not.toHaveProperty("agentId");
+      expect(result.messages[0]).toHaveProperty("label", 'Snapshot: "\\\n漢字🤖\ud800');
       expect(
         Buffer.byteLength(serialized, "utf8") + chatHistoryActivityBytes(result.activity),
       ).toBe(byteLimit);

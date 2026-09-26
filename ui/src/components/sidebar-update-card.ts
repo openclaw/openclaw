@@ -122,17 +122,7 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
     if (!this.updateRun) {
       return;
     }
-    void confirmAndStartUpdate({
-      existingRun: this.updateRun,
-      updateAvailable: this.updateAvailable,
-      updateSchedule: this.updateSchedule,
-      viaNativeApp: hasNativeUpdateBridge(),
-      startGatewayUpdate: () => this.onUpdate(),
-      watchUpdateProgress: this.watchUpdateProgress,
-      onCheckStatus: this.onCheckStatus,
-      onReviewUpdate: this.onReviewUpdate,
-      onAcknowledge: this.onAcknowledge,
-    });
+    this.confirmUpdate(this.updateRun);
   };
 
   private readonly startUpdate = () => {
@@ -141,19 +131,24 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
     if (busy || !this.canUpdate) {
       return;
     }
+    this.confirmUpdate();
+  };
+
+  private confirmUpdate(existingRun?: UpdateRunRecord) {
     void confirmAndStartUpdate({
+      existingRun,
       startGatewayUpdate: () => this.onUpdate(),
       onCheckStatus: this.onCheckStatus,
       onReviewUpdate: this.onReviewUpdate,
       onAcknowledge: this.onAcknowledge,
-      ...(this.watchUpdateProgress ? { watchUpdateProgress: this.watchUpdateProgress } : {}),
+      watchUpdateProgress: this.watchUpdateProgress,
       updateAvailable: this.updateAvailable,
       updateSchedule: this.updateSchedule,
       // Read the bridge at click time: a Mac app that installed it
       // after the last availability event still owns this update.
       viaNativeApp: hasNativeUpdateBridge(),
     });
-  };
+  }
 
   private readonly holdUpdate = async (campaignId: string) => {
     this.holdingCampaignId = campaignId;

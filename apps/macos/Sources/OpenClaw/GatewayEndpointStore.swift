@@ -1,5 +1,6 @@
 import ConcurrencyExtras
 import Foundation
+import OpenClawDiscovery
 import OpenClawKit
 import OSLog
 
@@ -133,7 +134,7 @@ actor GatewayEndpointStore {
                     let currentTailnetIP: String? = if source.mode == .local,
                                                        source.bindMode == "tailnet"
                     {
-                        TailscaleService.shared.tailscaleIP ?? TailscaleService.fallbackTailnetIPv4()
+                        TailscaleService.shared.tailscaleIP ?? TailscaleNetwork.detectTailnetIPv4()
                     } else {
                         nil
                     }
@@ -176,30 +177,16 @@ actor GatewayEndpointStore {
             }
             return trimmed
         }
-        if isRemote {
-            if let gateway = root["gateway"] as? [String: Any],
-               let remote = gateway["remote"] as? [String: Any],
-               let password = remote["password"] as? String
-            {
-                let pw = password.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !pw.isEmpty {
-                    return pw
-                }
-            }
-            return nil
-        }
-        if let gateway = root["gateway"] as? [String: Any],
-           let auth = gateway["auth"] as? [String: Any],
-           let password = auth["password"] as? String
+        if let password = resolveConfigPassword(
+            isRemote: isRemote,
+            root: root,
+            env: env,
+            serviceEnv: serviceEnv),
+            !password.isEmpty
         {
-            if let pw = resolveLocalConfigAuthString(
-                password,
-                env: env,
-                serviceEnv: serviceEnv)
-            {
-                return pw
-            }
+            return password
         }
+        if isRemote { return nil }
         if let password = launchdSnapshot?.password?.trimmingCharacters(in: .whitespacesAndNewlines),
            !password.isEmpty
         {
@@ -215,13 +202,7 @@ actor GatewayEndpointStore {
         serviceEnv: [String: String] = [:]) -> String?
     {
         if isRemote {
-            if let gateway = root["gateway"] as? [String: Any],
-               let remote = gateway["remote"] as? [String: Any],
-               let password = remote["password"] as? String
-            {
-                return password.trimmingCharacters(in: .whitespacesAndNewlines)
-            }
-            return nil
+            return GatewayRemoteConfig.resolvePasswordString(root: root)
         }
 
         if let gateway = root["gateway"] as? [String: Any],
@@ -1001,7 +982,7 @@ extension GatewayEndpointStore {
         let bindMode = self.resolveGatewayBindMode(root: root, env: env)
         let customBindHost = self.resolveGatewayCustomBindHost(root: root)
         let tailscaleIP = bindMode == "tailnet"
-            ? app.tailscaleIP ?? TailscaleService.fallbackTailnetIPv4()
+            ? app.tailscaleIP ?? TailscaleNetwork.detectTailnetIPv4()
             : nil
         let localPort = self.resolveGatewayPort(root: root, env: env, profile: profile)
         let localConfig = mode == .local ? self.localConfig(
@@ -1078,23 +1059,9 @@ extension GatewayEndpointStore {
         defaults: UserDefaults = AppDefaults.standard,
         profile: AppProfile) -> Int
     {
-        let configPort: Int? = if let gateway = root["gateway"] as? [String: Any] {
-            switch gateway["port"] {
-            case let value as Int:
-                value
-            case let value as NSNumber:
-                value.intValue
-            case let value as String:
-                Int(value.trimmingCharacters(in: .whitespacesAndNewlines))
-            default:
-                nil
-            }
-        } else {
-            nil
-        }
-        return GatewayEnvironment.resolvedGatewayPort(
+        GatewayEnvironment.resolvedGatewayPort(
             environment: env,
-            configPort: configPort,
+            configPort: OpenClawConfigFile.gatewayPort(root: root),
             storedPort: defaults.integer(forKey: "gatewayPort"),
             profile: profile)
     }
@@ -1190,7 +1157,7 @@ extension GatewayEndpointStore {
                 root: root,
                 env: ProcessInfo.processInfo.environment,
                 launchdSnapshot: GatewayLaunchAgentManager.launchdConfigSnapshot(),
-                tailscaleIP: TailscaleService.fallbackTailnetIPv4(),
+                tailscaleIP: TailscaleNetwork.detectTailnetIPv4(),
                 port: port),
             deviceAuthGatewayID: GatewayDiscoveryPreferences.deviceAuthGatewayID(root: root, connectionMode: .local))
     }

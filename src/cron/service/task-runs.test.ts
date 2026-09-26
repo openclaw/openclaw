@@ -13,8 +13,8 @@ import {
 } from "../../tasks/task-runtime.test-helpers.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { CRON_AGENT_SELECTION_REQUIRED_MESSAGE } from "../agent-id.js";
+import { readCronRunHistoryPageForTests } from "../run-history.test-support.js";
 import { cronStoreKey } from "../store/key.js";
-import { readCronTaskRunHistoryPage } from "../task-run-history.js";
 import type { CronJob } from "../types.js";
 import { timeoutErrorMessage } from "./execution-errors.js";
 import { createCronServiceState as createCronServiceStateBase } from "./state.js";
@@ -205,7 +205,7 @@ describe("cron task run terminal records", () => {
         expect(customCreate).not.toHaveBeenCalled();
         expect(customFinalize).not.toHaveBeenCalled();
         expect(
-          readCronTaskRunHistoryPage({
+          readCronRunHistoryPageForTests({
             storeKey: cronStoreKey(state.deps.storePath),
             jobId: job.id,
           }).entries,
@@ -342,7 +342,7 @@ describe("cron task run terminal records", () => {
         expect(rows[0]?.childSessionKey).toBeUndefined();
         expect(rows[0]?.requesterSessionKey).toBe("");
         expect(
-          readCronTaskRunHistoryPage({
+          readCronRunHistoryPageForTests({
             storeKey: cronStoreKey(state.deps.storePath),
             jobId: job.id,
           }).entries,
@@ -419,7 +419,7 @@ describe("cron task run terminal records", () => {
         expect(rows).toHaveLength(2);
         expect(new Set(rows.map((row) => row.runId)).size).toBe(2);
         expect(
-          readCronTaskRunHistoryPage({
+          readCronRunHistoryPageForTests({
             storeKey: cronStoreKey(state.deps.storePath),
             jobId: job.id,
           }).entries.map((entry) => entry.runId),
@@ -502,7 +502,7 @@ describe("cron task run terminal records", () => {
         });
         expect(row?.terminalSummary).toBeUndefined();
         expect(
-          readCronTaskRunHistoryPage({
+          readCronRunHistoryPageForTests({
             storeKey: cronStoreKey(state.deps.storePath),
             jobId: job.id,
           }).entries,

@@ -1,7 +1,3 @@
-/**
- * Mirrors Codex native subagent thread lifecycle events into OpenClaw task
- * runtime rows so parent sessions can observe child progress.
- */
 import {
   captureAgentHarnessTaskAssignment,
   matchesAgentHarnessTaskAssignment,
@@ -11,6 +7,7 @@ import {
   type AgentHarnessTaskRuntime,
 } from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import {
+  asFiniteNumber,
   normalizeOptionalString,
   readStringField as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -21,15 +18,9 @@ import {
   readNativeSubagentThreadIds,
   readThreadSpawnSource,
 } from "./native-subagent-task-ids.js";
-import type {
-  CodexServerNotification,
-  CodexThreadStatus,
-  JsonObject,
-  JsonValue,
-} from "./protocol.js";
+import type { CodexServerNotification, JsonObject, JsonValue } from "./protocol.js";
 import { isJsonObject } from "./protocol.js";
 
-/** Minimal task-runtime surface needed to mirror native subagent lifecycle. */
 type TaskLifecycleRuntime = Pick<
   AgentHarnessTaskRuntime,
   | "tryCreateRunningTaskRun"
@@ -38,7 +29,6 @@ type TaskLifecycleRuntime = Pick<
   | "listTaskRecords"
 >;
 
-/** Stable parent/session context used while mirroring native subagent tasks. */
 type CodexNativeSubagentTaskMirrorParams = {
   parentThreadId: string;
   requesterSessionKey?: string;
@@ -49,7 +39,24 @@ type CodexNativeSubagentTaskMirrorParams = {
   getCompletionCustody?: (runId: string) => AgentHarnessCompletionCustody | undefined;
 };
 
-/** Projects Codex thread and collab-agent notifications into task lifecycle updates. */
+const THREAD_PROGRESS = new Map([
+  ["active", "Subagent is active."],
+  ["idle", "Subagent is idle."],
+  ["systemError", "Subagent hit a system error; awaiting recovery."],
+  ["notLoaded", "Subagent is not loaded."],
+]);
+const COLLAB_STATUS_ALIASES = new Map([
+  ["completed", "completed"],
+  ["succeeded", "completed"],
+  ["success", "completed"],
+  ["failed", "failed"],
+  ["error", "failed"],
+  ["blocked", "blocked"],
+  ["declined", "blocked"],
+  ["inprogress", "running"],
+  ["running", "running"],
+]);
+
 export class CodexNativeSubagentTaskMirror {
   // "failed" remembers a rejected task-run creation so later status events for
   // that thread stay silent; unknown threads still pass through by design.
@@ -191,13 +198,13 @@ export class CodexNativeSubagentTaskMirror {
     const task =
       normalizeOptionalString(thread.preview) ??
       `Subagent${label === "Subagent" ? "" : ` ${label}`}`;
-    const createdAt = secondsToMillis(thread.createdAt) ?? this.now();
+    const createdAt = asFiniteNumber(thread.createdAt);
     if (
       !this.createRunningTask({
         threadId,
         label,
         task,
-        startedAt: createdAt,
+        startedAt: createdAt === undefined ? this.now() : createdAt * 1000,
         progressSummary: "Subagent started.",
       })
     ) {
@@ -210,14 +217,10 @@ export class CodexNativeSubagentTaskMirror {
   }
 
   private handleThreadStatusChanged(params: JsonObject): void {
-    if (
-      typeof params.threadId !== "string" ||
-      !isJsonObject(params.status) ||
-      !isCodexThreadStatusType(params.status.type)
-    ) {
+    if (typeof params.threadId !== "string" || !isJsonObject(params.status)) {
       return;
     }
-    this.applyStatus(params.threadId, params.status.type);
+    this.applyStatus(params.threadId, readString(params.status, "type"));
   }
 
   private applyStatus(threadId: string, statusType: string | undefined): void {
@@ -234,24 +237,13 @@ export class CodexNativeSubagentTaskMirror {
     if (this.terminalRunIds.has(runId) && statusType !== "systemError") {
       return;
     }
+    const progressSummary = THREAD_PROGRESS.get(statusType);
+    if (!progressSummary) {
+      return;
+    }
     const eventAt = this.now();
-    let progressSummary: string;
-    switch (statusType) {
-      case "active":
-        progressSummary = "Subagent is active.";
-        break;
-      case "idle":
-        progressSummary = "Subagent is idle.";
-        break;
-      case "systemError":
-        this.terminalRunIds.delete(runId);
-        progressSummary = "Subagent hit a system error; awaiting recovery.";
-        break;
-      case "notLoaded":
-        progressSummary = "Subagent is not loaded.";
-        break;
-      default:
-        return;
+    if (statusType === "systemError") {
+      this.terminalRunIds.delete(runId);
     }
     this.runtime.recordTaskRunProgressByRunId({
       runId,
@@ -282,12 +274,18 @@ export class CodexNativeSubagentTaskMirror {
     const spawnChildThreadIds = new Set([...receiverThreadIds, ...agentsStates.keys()]);
     if (isSpawnAgentTool) {
       for (const childThreadId of spawnChildThreadIds) {
-        this.createTaskFromCollabSpawnItem(childThreadId, item);
+        this.createRunningTask({
+          threadId: childThreadId,
+          label: "Subagent",
+          task: normalizeOptionalString(readString(item, "prompt")) ?? "Subagent",
+          startedAt: this.now(),
+          progressSummary: "Subagent spawned.",
+        });
       }
     }
     const toolCallStatus = normalizeCollabToolCallStatus(readString(item, "status"));
     const terminalToolCallThreadIds =
-      isSpawnAgentTool && isBlockedOrFailedCollabToolCallStatus(toolCallStatus)
+      isSpawnAgentTool && (toolCallStatus === "failed" || toolCallStatus === "blocked")
         ? spawnChildThreadIds
         : new Set<string>();
     const terminalAgentStateThreadIds = new Set<string>();
@@ -348,18 +346,6 @@ export class CodexNativeSubagentTaskMirror {
       kind === "interacted" ? "running" : "interrupted",
       message,
     );
-  }
-
-  private createTaskFromCollabSpawnItem(threadId: string, item: JsonObject): void {
-    const prompt = normalizeOptionalString(readString(item, "prompt"));
-    const createdAt = this.now();
-    this.createRunningTask({
-      threadId,
-      label: "Subagent",
-      task: prompt ?? "Subagent",
-      startedAt: createdAt,
-      progressSummary: "Subagent spawned.",
-    });
   }
 
   private createRunningTask(params: {
@@ -437,7 +423,12 @@ export class CodexNativeSubagentTaskMirror {
       return;
     }
     const eventAt = this.now();
-    if (isNonTerminalAgentStateStatus(normalizedStatus)) {
+    const summary = normalizeOptionalString(message);
+    const nonTerminal = isNonTerminalAgentStateStatus(normalizedStatus);
+    if (!nonTerminal) {
+      this.terminalRunIds.add(runId);
+    }
+    if (nonTerminal || normalizedStatus === "completed") {
       // Codex interrupted agents remain open and can resume; finalizing here
       // makes cancellation sticky and discards their later successful result.
       this.runtime.recordTaskRunProgressByRunId({
@@ -445,56 +436,31 @@ export class CodexNativeSubagentTaskMirror {
         ...this.ownership(runId),
         lastEventAt: eventAt,
         progressSummary:
-          normalizeOptionalString(message) ??
-          (normalizedStatus === "pendingInit"
-            ? "Subagent is initializing."
-            : normalizedStatus === "interrupted"
-              ? "Subagent was interrupted."
-              : "Subagent is running."),
+          summary ??
+          (normalizedStatus === "completed"
+            ? "Subagent completed."
+            : normalizedStatus === "pendingInit"
+              ? "Subagent is initializing."
+              : normalizedStatus === "interrupted"
+                ? "Subagent was interrupted."
+                : "Subagent is running."),
       });
       return;
     }
-    if (normalizedStatus === "completed") {
-      this.terminalRunIds.add(runId);
-      const summary = normalizeOptionalString(message) ?? "Subagent completed.";
-      this.runtime.recordTaskRunProgressByRunId({
-        runId,
-        ...this.ownership(runId),
-        lastEventAt: eventAt,
-        progressSummary: summary,
-      });
-      return;
-    }
-    if (normalizedStatus === "blocked") {
-      this.terminalRunIds.add(runId);
-      this.runtime.finalizeTaskRunByRunId({
-        runId,
-        ...this.ownership(runId),
-        status: "succeeded",
-        endedAt: eventAt,
-        lastEventAt: eventAt,
-        progressSummary: normalizeOptionalString(message) ?? "Subagent blocked.",
-        terminalSummary: normalizeOptionalString(message) ?? "Subagent blocked.",
-        terminalOutcome: "blocked",
-      });
-      return;
-    }
-    this.terminalRunIds.add(runId);
+    const blocked = normalizedStatus === "blocked";
     this.runtime.finalizeTaskRunByRunId({
       runId,
       ...this.ownership(runId),
-      status: normalizedStatus === "shutdown" ? "cancelled" : "failed",
+      status: blocked ? "succeeded" : normalizedStatus === "shutdown" ? "cancelled" : "failed",
       endedAt: eventAt,
       lastEventAt: eventAt,
-      error: normalizeOptionalString(message) ?? `Subagent status: ${normalizedStatus}`,
-      progressSummary: normalizeOptionalString(message) ?? `Subagent ${normalizedStatus}.`,
-      terminalSummary: normalizeOptionalString(message) ?? "Subagent did not complete.",
+      ...(blocked
+        ? { terminalOutcome: "blocked" as const }
+        : { error: summary ?? `Subagent status: ${normalizedStatus}` }),
+      progressSummary: summary ?? `Subagent ${normalizedStatus}.`,
+      terminalSummary: summary ?? (blocked ? "Subagent blocked." : "Subagent did not complete."),
     });
   }
-}
-
-function isCodexThreadStatusType(value: unknown): value is CodexThreadStatus["type"] {
-  return value === "notLoaded" || value === "idle" || value === "systemError" || value === "active";
 }
 
 function readAgentsStates(
@@ -520,32 +486,14 @@ function readNullableString(value: JsonObject, key: string): string | null | und
   return typeof entry === "string" || entry === null ? entry : undefined;
 }
 
-function normalizeSubagentActivityKind(
-  value: string | undefined,
-): "started" | "interacted" | "interrupted" | undefined {
+function normalizeSubagentActivityKind(value: string | undefined) {
   const key = value?.replace(/[^a-z]/giu, "").toLowerCase();
   return key === "started" || key === "interacted" || key === "interrupted" ? key : undefined;
 }
 
 function normalizeCollabToolCallStatus(value: string | undefined): string | undefined {
   const key = normalizeIdentifier(value);
-  if (key === "completed" || key === "succeeded" || key === "success") {
-    return "completed";
-  }
-  if (key === "failed" || key === "error" || key === "errored") {
-    return "failed";
-  }
-  if (key === "blocked" || key === "declined") {
-    return "blocked";
-  }
-  if (key === "inprogress" || key === "running") {
-    return "running";
-  }
-  return value?.trim();
-}
-
-function isBlockedOrFailedCollabToolCallStatus(value: string | undefined): boolean {
-  return value === "failed" || value === "blocked";
+  return key === "errored" ? "failed" : (COLLAB_STATUS_ALIASES.get(key ?? "") ?? value?.trim());
 }
 
 function isNonTerminalAgentStateStatus(value: string | undefined): boolean {
@@ -560,27 +508,8 @@ function normalizeAgentStateStatus(value: string | undefined): string | undefine
   if (key === "pendinginit") {
     return "pendingInit";
   }
-  if (key === "inprogress" || key === "running") {
-    return "running";
-  }
-  if (key === "completed" || key === "succeeded" || key === "success") {
-    return "completed";
-  }
   if (key === "interrupted" || key === "cancelled" || key === "canceled" || key === "shutdown") {
     return key === "shutdown" ? "shutdown" : "interrupted";
   }
-  if (key === "failed" || key === "error" || key === "systemerror") {
-    return "failed";
-  }
-  if (key === "blocked" || key === "declined") {
-    return "blocked";
-  }
-  return value?.trim();
-}
-
-function secondsToMillis(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return undefined;
-  }
-  return value * 1000;
+  return key === "systemerror" ? "failed" : (COLLAB_STATUS_ALIASES.get(key) ?? value?.trim());
 }

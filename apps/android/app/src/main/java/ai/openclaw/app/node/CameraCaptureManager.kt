@@ -233,7 +233,7 @@ class CameraCaptureManager(
     withCapture { owner, ensureCurrent ->
       val params = parseJsonParamsObject(paramsJson)
       val facing = resolveCameraFacing(parseFacing(params), defaultFacing())
-      val quality = (parseQuality(params) ?: 0.95).coerceIn(0.1, 1.0)
+      val quality = (parseJsonDouble(params, "quality") ?: 0.95).coerceIn(0.1, 1.0)
       val maxWidth = parseMaxWidth(params) ?: 1600
       val deviceId = parseDeviceId(params)
 
@@ -321,11 +321,11 @@ class CameraCaptureManager(
     paramsJson: String?,
     onFileReady: (File) -> Unit,
   ): FilePayload =
-    withCapture(includeAudio = parseIncludeAudio(parseJsonParamsObject(paramsJson)) ?: true) { owner, ensureCurrent ->
+    withCapture(includeAudio = parseJsonBooleanFlag(parseJsonParamsObject(paramsJson), "includeAudio") ?: true) { owner, ensureCurrent ->
       val params = parseJsonParamsObject(paramsJson)
       val facing = resolveCameraFacing(parseFacing(params), defaultFacing())
-      val durationMs = (parseDurationMs(params) ?: 3_000).coerceIn(200, 60_000)
-      val includeAudio = parseIncludeAudio(params) ?: true
+      val durationMs = (parseJsonInt(params, "durationMs") ?: 3_000).coerceIn(200, 60_000)
+      val includeAudio = parseJsonBooleanFlag(params, "includeAudio") ?: true
       val deviceId = parseDeviceId(params)
 
       val provider = context.cameraProvider()
@@ -416,20 +416,14 @@ class CameraCaptureManager(
     }
   }
 
-  private fun parseQuality(params: JsonObject?): Double? = parseJsonDouble(params, "quality")
-
   private fun parseMaxWidth(params: JsonObject?): Int? =
     parseJsonInt(params, "maxWidth")
       ?.takeIf { it > 0 }
-
-  private fun parseDurationMs(params: JsonObject?): Int? = parseJsonInt(params, "durationMs")
 
   private fun parseDeviceId(params: JsonObject?): String? =
     parseJsonString(params, "deviceId")
       ?.trim()
       ?.takeIf { it.isNotEmpty() }
-
-  private fun parseIncludeAudio(params: JsonObject?): Boolean? = parseJsonBooleanFlag(params, "includeAudio")
 
   private fun Context.mainExecutor(): Executor = ContextCompat.getMainExecutor(this)
 

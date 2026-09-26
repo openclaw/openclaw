@@ -23,9 +23,6 @@ import {
 } from "../test-helpers.e2e.js";
 
 // Optional startup prewarming must not compete with the catalog request drain.
-vi.mock("../server-startup-context-cache-prewarm.js", () => ({
-  scheduleContextCachePrewarm: () => ({ stop() {} }),
-}));
 vi.mock("../server-startup-handler-prewarm.js", () => ({
   scheduleGatewayHandlerPrewarm: () => ({ stop() {} }),
 }));
@@ -371,7 +368,7 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
           await disconnectGatewayClient(racingClient);
         }
       }
-      enterPhase("catalog request supersession");
+      enterPhase("catalog request during unrelated session patch");
       const unrelatedKey = "agent:alpha:catalog-other";
       await upsertSessionEntryCore(
         { agentId: "alpha", sessionKey: unrelatedKey },
@@ -387,10 +384,9 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
           return readPreparedCatalog(...args);
         });
       const pendingCatalog = client.request("models.list", { agentId: "alpha", sessionKey });
-      const superseded = expect(pendingCatalog).rejects.toMatchObject({
-        code: "UNAVAILABLE",
-        retryable: true,
-        retryAfterMs: 0,
+      const deliveredCatalog = expect(pendingCatalog).resolves.toMatchObject({
+        models: [{ id: "first", provider: "fixture", available: true }],
+        accountSelection: { authProfileId: "fixture:replacement-account" },
       });
       try {
         await withTestTimeout(requestEntered.promise, 10_000, "Catalog request did not start");
@@ -400,16 +396,11 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
           label: "Renamed unrelated session",
         });
         releaseRequest.resolve();
-        await superseded;
-        await expect(
-          client.request("models.list", { agentId: "alpha", sessionKey }),
-        ).resolves.toMatchObject({
-          accountSelection: { authProfileId: "fixture:replacement-account" },
-        });
+        await deliveredCatalog;
       } finally {
         releaseRequest.resolve();
         pendingAcquisition.mockRestore();
-        await Promise.allSettled([pendingCatalog, superseded]);
+        await Promise.allSettled([pendingCatalog, deliveredCatalog]);
       }
       enterPhase("legacy clients");
       for (const clientName of [

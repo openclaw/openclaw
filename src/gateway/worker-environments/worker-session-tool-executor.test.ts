@@ -332,7 +332,7 @@ describe("worker session tool topology", () => {
     setEntry(SOURCE.sessionKey, SOURCE.sessionId);
     dispatchChild.mockImplementationOnce(async (request: { sessionKey: string }) => {
       spawnState.order.push("dispatch");
-      activate({
+      await activate({
         ...CHILD,
         sessionKey: request.sessionKey,
       });
@@ -444,7 +444,7 @@ describe("worker session tool topology", () => {
       },
     );
     dispatchChild.mockImplementation(async (request: { sessionKey: string }) => {
-      activate({ ...GRANDCHILD, sessionKey: request.sessionKey });
+      await activate({ ...GRANDCHILD, sessionKey: request.sessionKey });
       return placements.get(GRANDCHILD.sessionId);
     });
     gatewayRequest.mockImplementation(
@@ -617,7 +617,7 @@ describe("worker spawn startup composition", () => {
             provisioning.resolve();
             await finishProvisioning.promise;
             authorize?.();
-            activate({ ...CHILD, sessionKey: request.sessionKey });
+            await activate({ ...CHILD, sessionKey: request.sessionKey });
             const placement = placements.get(CHILD.sessionId);
             if (placement?.state !== "active") {
               throw new Error("child fixture did not activate");

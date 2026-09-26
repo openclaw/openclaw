@@ -256,6 +256,7 @@ it.each(["exact", "bulk"] as const)(
               moves: new Map(),
               environments: new Map(),
               workspaceResultReconcilingSessionIds: new Set(),
+              workspaceRecoveryPendingSessionIds: new Set(),
             };
           },
         );

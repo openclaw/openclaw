@@ -263,6 +263,10 @@ describe("resolveGatewayService", () => {
 });
 
 describe("readGatewayServiceState", () => {
+  beforeEach(() => {
+    vi.spyOn(performance, "now").mockReturnValue(0);
+  });
+
   it("passes update loaded-only admission to every native inspection adapter", async () => {
     const readCommand = vi.fn(async () => null);
     const readRuntime = vi.fn(async () => ({ status: "stopped" }));
@@ -281,6 +285,7 @@ describe("readGatewayServiceState", () => {
       timeoutMs: 100,
     });
     expect(readRuntime).toHaveBeenCalledWith(expect.anything(), {
+      requireEffective: true,
       requireLoaded: true,
       timeoutMs: 100,
     });

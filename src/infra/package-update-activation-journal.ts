@@ -12,6 +12,7 @@ import {
   assertPackageActivationLayout,
   isPackageActivationComplete,
   packageActivationIdentity,
+  privatePackageActivationIdentity as assertPrivate,
   resolvePackageActivationAnchor,
   resolvePackageActivationControl,
   resolvePackageActivationHelper,
@@ -73,15 +74,6 @@ type ActivationRow = {
 };
 const queries = (db: DatabaseSync) =>
   getNodeSqliteKysely<{ package_activation: ActivationRow }>(db);
-
-function assertPrivate(file: string, directory: boolean): string {
-  const value = packageActivationIdentity(file, directory);
-  const stat = fs.lstatSync(file);
-  if ((stat.mode & 0o077) !== 0 || (!directory && stat.nlink !== 1)) {
-    throw new Error("Package publication recovery permissions are unsafe");
-  }
-  return value;
-}
 
 function descriptorJson(descriptor: PackageActivationDescriptor): string {
   const encoded = JSON.stringify(PackageActivationDescriptorSchema.parse(descriptor));

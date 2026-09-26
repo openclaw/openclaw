@@ -640,7 +640,11 @@ describe("repository checkpoint GitHub publication", () => {
       let held: Promise<void> | undefined;
       try {
         if (blocker === "pending result") {
-          seedPublicationWorker(blocked.placements, "pending-publication-worker", "remote-exec");
+          await seedPublicationWorker(
+            blocked.placements,
+            "pending-publication-worker",
+            "remote-exec",
+          );
           const pendingClaim = await blocked.placements.claimTurn({
             sessionId: REQUEST.sessionId,
             sessionKey: REQUEST.sessionKey,
@@ -662,7 +666,7 @@ describe("repository checkpoint GitHub publication", () => {
           void held.catch(entered.reject);
           await entered.promise;
         } else {
-          blocked.placements.startDispatch({ ...REQUEST, agentId: "different-agent" });
+          await blocked.placements.startDispatch({ ...REQUEST, agentId: "different-agent" });
         }
         const validSession = {
           sessionId: "valid-after-blocked",
@@ -705,7 +709,7 @@ describe("repository checkpoint GitHub publication", () => {
     "settles the accepted checkpoint for an in-turn $executionMode request with publication $publication",
     async ({ executionMode, publication }) => {
       const f = await repositoryFixture(undefined, REQUEST);
-      seedPublicationWorker(f.placements, "in-turn-worker", executionMode);
+      await seedPublicationWorker(f.placements, "in-turn-worker", executionMode);
       const claim = await f.placements.claimTurn({
         sessionId: REQUEST.sessionId,
         sessionKey: REQUEST.sessionKey,
@@ -774,7 +778,7 @@ describe("repository checkpoint GitHub publication", () => {
     async (executionMode) => {
       const f = await repositoryFixture(undefined, REQUEST);
       if (executionMode) {
-        seedPublicationWorker(f.placements, "run-scoped-worker", executionMode);
+        await seedPublicationWorker(f.placements, "run-scoped-worker", executionMode);
         await f.placements.claimTurn({
           sessionId: REQUEST.sessionId,
           sessionKey: REQUEST.sessionKey,
@@ -831,7 +835,7 @@ describe("repository checkpoint GitHub publication", () => {
     "rejects a remote-exec publication with a %s before recording an intent",
     async (mismatch) => {
       const f = await repositoryFixture(undefined, REQUEST);
-      seedPublicationWorker(f.placements, "owned-worker", "remote-exec");
+      await seedPublicationWorker(f.placements, "owned-worker", "remote-exec");
       const input = {
         sessionId: REQUEST.sessionId,
         sessionKey: REQUEST.sessionKey,
@@ -879,7 +883,7 @@ describe("repository checkpoint GitHub publication", () => {
         sessionId: SESSION_ID,
         ownerEpoch: 7,
       });
-      let placement = f.placements.startDispatch({
+      let placement = await f.placements.startDispatch({
         sessionId: SESSION_ID,
         sessionKey: SESSION_KEY,
         agentId: "main",

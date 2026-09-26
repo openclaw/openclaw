@@ -1,13 +1,14 @@
 import { once } from "node:events";
 import { createServer } from "node:http";
+import type { RemoteEmbeddingClient } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runVoyageEmbeddingBatches } from "./embedding-batch.js";
-import { createVoyageEmbeddingProvider, type VoyageEmbeddingClient } from "./embedding-provider.js";
+import { createVoyageEmbeddingProvider } from "./embedding-provider.js";
 
 type VoyageBatchOptions = Parameters<typeof runVoyageEmbeddingBatches>[0];
 type BatchStage = "upload" | "create" | "status" | "output" | "error";
 
-function buildClient(): VoyageEmbeddingClient {
+function buildClient(): RemoteEmbeddingClient {
   return {
     baseUrl: "https://api.voyageai.test/v1",
     headers: { authorization: "Bearer fixture-voyage" },

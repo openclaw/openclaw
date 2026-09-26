@@ -80,7 +80,7 @@ describe("worker environment runtime upgrades", () => {
     });
     const placement =
       state === "attached"
-        ? seedActivePlacement(placements, {
+        ? await seedActivePlacement(placements, {
             environmentId,
             ownerEpoch: environment.ownerEpoch,
             executionMode: transport === "node" ? "worker-turn" : "remote-exec",

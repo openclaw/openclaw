@@ -4,6 +4,8 @@ The `agentsapi` harness uses API-key authentication and an OpenAI-hosted Linux
 environment. Select it through `agents.defaults.agentRuntime.id` or an agent's
 `agentRuntime.id`. See the [harness configuration reference](https://docs.openclaw.ai/plugins/sdk-agent-harness/runtime-config).
 
+Multi-user Gateways are not supported by the Agents API MVP.
+
 The Gateway must be the only writer to each hosted session bound to OpenClaw.
 Send messages, steering, and interrupts through OpenClaw. Do not also write to
 that hosted session from another API client or a Gateway with independent state.

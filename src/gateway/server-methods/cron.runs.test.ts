@@ -1,14 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { cronRunLogEntryToDetail, cronRunStorageStatus } from "../../cron/run-history-detail.js";
 import type { CronRunLogEntry } from "../../cron/run-log-types.js";
 import { CronService } from "../../cron/service.js";
 import { createNoopLogger } from "../../cron/service.test-harness.js";
 import { cronStoreKey } from "../../cron/store/key.js";
-import {
-  cronRunLogEntryToTaskDetail,
-  cronRunStatusToTaskStatus,
-} from "../../cron/task-run-detail.js";
 import type { TaskRecord } from "../../tasks/task-registry.types.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { seedTaskRegistryRowsForTests } from "../../test-utils/task-registry-sqlite.js";
@@ -112,12 +109,12 @@ async function withCronHistory(
           childSessionKey: entry.sessionKey,
           agentId: "main",
           task: "history fixture",
-          status: cronRunStatusToTaskStatus(entry),
+          status: cronRunStorageStatus(entry),
           deliveryStatus: "not_applicable",
           notifyPolicy: "silent",
           createdAt: entry.ts,
           endedAt: entry.ts,
-          detail: cronRunLogEntryToTaskDetail(entry, { storeKey: cronStoreKey(storePath) }),
+          detail: cronRunLogEntryToDetail(entry, { storeKey: cronStoreKey(storePath) }),
         };
       });
       seedTaskRegistryRowsForTests(new Map(tasks.map((task) => [task.taskId, task])).values());
@@ -194,6 +191,32 @@ describe("cron.runs session visibility", () => {
       });
     },
   );
+
+  it("uses current job names after an asynchronous history read", async () => {
+    await withCronHistory(async ({ jobId, cron, query }) => {
+      const list = cron.list.bind(cron);
+      const listSpy = vi.spyOn(cron, "list").mockImplementationOnce(async (options) => {
+        const jobs = await list(options);
+        await cron.update(jobId, { name: "replacement-visible-name" });
+        return jobs;
+      });
+      try {
+        const respond = await query({ scope: "all", query: "replacement-visible-name" });
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({
+            total: 3,
+            entries: expect.arrayContaining([
+              expect.objectContaining({ jobName: "replacement-visible-name" }),
+            ]),
+          }),
+          undefined,
+        );
+      } finally {
+        listSpy.mockRestore();
+      }
+    });
+  });
 
   it.each(["job", "all"] as const)("combines %s visibility with history filters", async (scope) => {
     await withCronHistory(async ({ jobId, query }) => {

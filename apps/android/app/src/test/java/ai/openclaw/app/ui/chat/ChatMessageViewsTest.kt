@@ -65,6 +65,24 @@ class ChatMessageViewsTest {
   val composeRule = createComposeRule()
 
   @Test
+  fun markdownListsPreserveNumberingAndNestedBulletIndentation() {
+    composeRule.setContent {
+      ClawDesignTheme {
+        ChatMarkdown("3. outer\n   - nested\n4. next\n\n- bullet", textColor = ClawTheme.colors.text)
+      }
+    }
+
+    listOf("3.", "4.", "outer", "nested", "next", "bullet").forEach {
+      composeRule.onNodeWithText(it).assertIsDisplayed()
+    }
+    composeRule.onAllNodesWithText("•").assertCountEquals(2)
+    val outer = composeRule.onNodeWithText("outer").fetchSemanticsNode().boundsInRoot
+    val nested = composeRule.onNodeWithText("nested").fetchSemanticsNode().boundsInRoot
+    assertTrue(nested.left > outer.left)
+    assertTrue(nested.top > outer.top)
+  }
+
+  @Test
   fun representedFirstLinkSuppressesOnlyItsOriginalGenericPreview() {
     val represented = setOf("https://example.com/guide", "https://example.org/guide")
     composeRule.setContent {

@@ -1,5 +1,12 @@
 import path from "node:path";
+import type { SessionArtifactReadResult } from "../../gateway/session-artifact-read.js";
 import type { PreparedSessionHistoryReadTarget } from "../../gateway/session-history-read.types.js";
+import type {
+  ReadRecentSessionMessagesResult,
+  ReadSessionMessageByIdResult,
+  ReadSessionMessagesAroundIdResult,
+  ReadSessionMessagesResult,
+} from "../../gateway/session-transcript-read-kernel.js";
 import { prepareGatewaySessionStoreReadSources } from "../../gateway/session-utils-store-sources.js";
 import {
   DEFAULT_WORKER_PENDING_BYTES,
@@ -22,7 +29,6 @@ import { prepareSessionTranscriptReadTargetCore } from "./session-accessor.trans
 import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
 import type {
   ChatHistoryPage,
-  ReadSessionMessageByIdResult,
   SessionHistoryDelta,
   SessionHistoryTranscriptBinding,
   SessionHistorySnapshot,
@@ -129,6 +135,36 @@ function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHis
       sessionEntry: target.sessionEntry ? { sessionId: target.sessionEntry.sessionId } : undefined,
       ...(target.env ? { env: captureSessionTranscriptStorageEnvironment(target.env) } : {}),
     };
+    if (request.kind === "artifacts") {
+      return {
+        kind: request.kind,
+        params: { target: capturedTarget, query: structuredClone(request.params.query) },
+      };
+    }
+    if (request.kind === "message-page") {
+      return {
+        kind: request.kind,
+        params: { target: capturedTarget, options: structuredClone(request.params.options) },
+      };
+    }
+    if (request.kind === "around-id") {
+      return {
+        kind: request.kind,
+        params: { target: capturedTarget, options: structuredClone(request.params.options) },
+      };
+    }
+    if (request.kind === "source-messages") {
+      return {
+        kind: request.kind,
+        params: { target: capturedTarget, options: structuredClone(request.params.options) },
+      };
+    }
+    if (request.kind === "recent-page") {
+      return {
+        kind: request.kind,
+        params: { target: capturedTarget, options: structuredClone(request.params.options) },
+      };
+    }
     if (request.kind === "transcript-binding") {
       return {
         kind: request.kind,
@@ -219,6 +255,22 @@ function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHis
 }
 
 export function readSessionHistoryPageInWorker(
+  request: Extract<SessionHistoryWorkerRequest, { kind: "artifacts" }>,
+  signal?: AbortSignal,
+): Promise<SessionArtifactReadResult>;
+export function readSessionHistoryPageInWorker(
+  request: Extract<SessionHistoryWorkerRequest, { kind: "message-page" | "recent-page" }>,
+  signal?: AbortSignal,
+): Promise<ReadRecentSessionMessagesResult>;
+export function readSessionHistoryPageInWorker(
+  request: Extract<SessionHistoryWorkerRequest, { kind: "around-id" }>,
+  signal?: AbortSignal,
+): Promise<ReadSessionMessagesAroundIdResult>;
+export function readSessionHistoryPageInWorker(
+  request: Extract<SessionHistoryWorkerRequest, { kind: "source-messages" }>,
+  signal?: AbortSignal,
+): Promise<ReadSessionMessagesResult>;
+export function readSessionHistoryPageInWorker(
   request: Extract<SessionHistoryWorkerRequest, { kind: "transcript-binding" }>,
   signal?: AbortSignal,
 ): Promise<SessionHistoryTranscriptBinding | undefined>;
@@ -251,6 +303,10 @@ export async function readSessionHistoryPageInWorker(
   signal?: AbortSignal,
 ): Promise<
   | SessionHistoryTranscriptBinding
+  | SessionArtifactReadResult
+  | ReadRecentSessionMessagesResult
+  | ReadSessionMessagesAroundIdResult
+  | ReadSessionMessagesResult
   | undefined
   | ChatHistoryPage
   | SessionHistorySnapshot
@@ -373,6 +429,15 @@ export async function readSessionHistoryPageInWorker(
         owner.assertCurrent();
       };
       let result: SessionHistoryWorkerResult;
+      const readOnly =
+        capturedRequest.kind === "artifacts"
+          ? capturedRequest.params.query.kind === "image-page"
+          : capturedRequest.kind === "message-page" ||
+              capturedRequest.kind === "around-id" ||
+              capturedRequest.kind === "source-messages" ||
+              capturedRequest.kind === "recent-page"
+            ? capturedRequest.params.options.readOnly
+            : false;
       try {
         result = await readRestoredSessionTranscript(
           capturedScope,
@@ -390,6 +455,7 @@ export async function readSessionHistoryPageInWorker(
             return page;
           },
           {
+            readOnly,
             assertCurrent,
             coldRead: {
               target: preparedTarget,
@@ -442,17 +508,18 @@ export async function readSessionHistoryPageInWorker(
     if (result.kind === "transcript-binding") {
       return result.binding;
     }
+    if ("result" in result) {
+      return result.result;
+    }
     return result.kind === "rpc"
       ? result.page
       : result.kind === "http"
         ? result.snapshot
         : result.kind === "delta"
           ? { ...result, assertCurrent }
-          : result.kind === "message-by-id"
-            ? result.result
-            : result.kind === "message-count"
-              ? result.count
-              : result.messages;
+          : result.kind === "message-count"
+            ? result.count
+            : result.messages;
   } catch (error) {
     if (resolved && isSessionTranscriptProjectionUnavailableError(error)) {
       startSessionTranscriptIndexReconcile({

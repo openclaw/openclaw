@@ -12,20 +12,14 @@ import androidx.core.net.toUri
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonObject
 import android.telephony.SmsManager as AndroidSmsManager
 
-/**
- * Sends SMS messages via the Android SMS API.
- * Requires SEND_SMS permission to be granted.
- *
- * Also provides SMS query functionality with READ_SMS permission.
- */
 class SmsManager(
   private val context: Context,
 ) {
@@ -41,9 +35,6 @@ class SmsManager(
     val payloadJson: String,
   )
 
-  /**
-   * Represents a single SMS message.
-   */
   @Serializable
   data class SmsMessage(
     val id: Long,
@@ -243,28 +234,7 @@ class SmsManager(
       hasReadContactsPermission: Boolean,
     ): Boolean = !contactName.isNullOrEmpty() && phoneNumber.isNullOrEmpty() && !hasReadContactsPermission
 
-    internal fun mapMmsMsgBoxToSearchType(msgBox: Int?): Int? =
-      when (msgBox) {
-        1 -> 1
-
-        // inbox
-        2 -> 2
-
-        // sent
-        3 -> 3
-
-        // draft
-        4 -> 4
-
-        // outbox
-        5 -> 5
-
-        // failed
-        6 -> 6
-
-        // queued
-        else -> null
-      }
+    internal fun mapMmsMsgBoxToSearchType(msgBox: Int?): Int? = msgBox?.takeIf { it in 1..6 }
 
     internal fun escapeSqlLikeLiteral(value: String): String =
       buildString(value.length) {
@@ -548,13 +518,11 @@ class SmsManager(
       error: String? = null,
       queryMetadata: QueryMetadata? = null,
     ): String {
-      val messagesArray = json.encodeToString(messages)
-      val messagesElement = json.parseToJsonElement(messagesArray)
       val payload =
         mutableMapOf<String, JsonElement>(
           "ok" to JsonPrimitive(ok),
           "count" to JsonPrimitive(messages.size),
-          "messages" to messagesElement,
+          "messages" to json.encodeToJsonElement(messages),
         )
       queryMetadata?.let {
         payload["mmsRequested"] = JsonPrimitive(it.mmsRequested)
@@ -599,12 +567,6 @@ class SmsManager(
     permissionRequester = requester
   }
 
-  /**
-   * Send an SMS message.
-   *
-   * @param paramsJson JSON with "to" (phone number) and "message" (text) fields
-   * @return SendResult indicating success or failure
-   */
   suspend fun send(paramsJson: String?): SendResult {
     if (!hasTelephonyFeature()) {
       return errorResult(
@@ -612,7 +574,7 @@ class SmsManager(
       )
     }
 
-    if (!ensureSmsPermission()) {
+    if (!ensurePermission(Manifest.permission.SEND_SMS)) {
       return errorResult(
         error = "SMS_PERMISSION_REQUIRED: grant SMS permission",
       )
@@ -668,16 +630,13 @@ class SmsManager(
     }
   }
 
-  /**
-   * Search SMS messages with the specified parameters.
-   */
   suspend fun search(paramsJson: String?): SearchResult =
     withContext(Dispatchers.IO) {
       if (!hasTelephonyFeature()) {
         return@withContext queryError("SMS_UNAVAILABLE: telephony not available")
       }
 
-      if (!ensureReadSmsPermission()) {
+      if (!ensurePermission(Manifest.permission.READ_SMS)) {
         return@withContext queryError("SMS_PERMISSION_REQUIRED: grant READ_SMS permission")
       }
 
@@ -711,7 +670,7 @@ class SmsManager(
           )
         val phoneNumbers =
           if (!normalizedParams.contactName.isNullOrEmpty()) {
-            if (contactsPermissionGranted || (shouldPromptForContactsPermission && ensureReadContactsPermission())) {
+            if (contactsPermissionGranted || (shouldPromptForContactsPermission && ensurePermission(Manifest.permission.READ_CONTACTS))) {
               getPhoneNumbersFromContactName(normalizedParams.contactName)
             } else if (shouldPromptForContactsPermission) {
               return@withContext queryError("CONTACTS_PERMISSION_REQUIRED: grant READ_CONTACTS permission")
@@ -750,25 +709,10 @@ class SmsManager(
       }
     }
 
-  private suspend fun ensureSmsPermission(): Boolean {
-    if (hasSmsPermission()) return true
+  private suspend fun ensurePermission(permission: String): Boolean {
+    if (ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED) return true
     val requester = permissionRequester ?: return false
-    val results = requester.requestIfMissing(listOf(Manifest.permission.SEND_SMS))
-    return results[Manifest.permission.SEND_SMS] == true
-  }
-
-  private suspend fun ensureReadSmsPermission(): Boolean {
-    if (hasReadSmsPermission()) return true
-    val requester = permissionRequester ?: return false
-    val results = requester.requestIfMissing(listOf(Manifest.permission.READ_SMS))
-    return results[Manifest.permission.READ_SMS] == true
-  }
-
-  private suspend fun ensureReadContactsPermission(): Boolean {
-    if (hasReadContactsPermission()) return true
-    val requester = permissionRequester ?: return false
-    val results = requester.requestIfMissing(listOf(Manifest.permission.READ_CONTACTS))
-    return results[Manifest.permission.READ_CONTACTS] == true
+    return requester.requestIfMissing(listOf(permission))[permission] == true
   }
 
   private fun okResult(

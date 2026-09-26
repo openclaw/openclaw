@@ -1,4 +1,3 @@
-// Openai plugin entrypoint registers its OpenClaw integration.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
@@ -29,9 +28,8 @@ export default definePluginEntry({
     const { ensureAuthProfileStore, listProfilesForProvider, isProviderApiKeyConfigured } =
       api.runtime.modelAuth;
     const openAIToolCompatHooks = buildProviderToolCompatFamilyHooks("openai");
-    const buildProviderWithPromptContribution = <T extends ReturnType<typeof buildOpenAIProvider>>(
-      provider: T,
-    ): T => ({
+    const provider = buildOpenAIProvider();
+    api.registerProvider({
       ...provider,
       ...openAIToolCompatHooks,
       resolveSystemPromptContribution: (ctx) => {
@@ -49,7 +47,6 @@ export default definePluginEntry({
         });
       },
     });
-    api.registerProvider(buildProviderWithPromptContribution(buildOpenAIProvider()));
     api.registerEmbeddingProvider(openAiMemoryEmbeddingProviderAdapter);
     api.registerImageGenerationProvider(
       buildOpenAIImageGenerationProvider({

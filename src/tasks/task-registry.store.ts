@@ -11,11 +11,11 @@ import type {
   TaskRegistryRestoreResult,
   TaskMirroredFlowSyncOutcome,
 } from "./task-registry-restore.worker.js";
+import type { TaskRetentionSource } from "./task-registry-retention-source.js";
 import { getTaskRegistryProcessState } from "./task-registry.process-state.js";
 // Stores task registry records in memory and bridges persistence runtime hooks.
 import {
   closeTaskRegistryDatabase,
-  deleteTaskAndDeliveryStateFromSqlite,
   loadTaskRegistryStateFromSqlite,
   loadTaskRegistryMutationStateFromSqlite,
   upsertTaskWithDeliveryStateToSqlite,
@@ -37,6 +37,10 @@ import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
 export type { TaskRegistryStoreSnapshot } from "./task-registry.store.types.js";
 
 export type TaskRegistryStore = TaskExecutionRestoreStore & {
+  prepareRetentionSourceAsync(
+    context: OpenClawStateWorkerContext,
+    taskId: string,
+  ): Promise<TaskRetentionSource | undefined>;
   runAgentEventMutationAsync(
     context: OpenClawStateWorkerContext,
     input: TaskAgentEventInput,
@@ -76,12 +80,22 @@ export type TaskRegistryStore = TaskExecutionRestoreStore & {
     ownerKey: string,
     assertCurrent: () => void,
   ) => Promise<TaskRecord[]>;
-  deleteTaskWithDeliveryState: (taskId: string) => void;
   upsertDeliveryState: (state: TaskDeliveryState) => void;
   close?: () => void;
 };
 
 const defaultTaskRegistryStore: TaskRegistryStore = {
+  async prepareRetentionSourceAsync(context, taskId) {
+    const reply = await executeExistingOpenClawStateRead(
+      { path: context.admission.databasePath, env: context.environment },
+      { type: "tasks.retentionSource", taskId },
+      { context },
+    );
+    if (!reply?.ok || reply.type !== "tasks.retentionSource") {
+      throw new Error("Task retention source requires its admitted database");
+    }
+    return reply.source;
+  },
   async runAgentEventMutationAsync(context, input, assertCurrent, onGranted) {
     const { runTaskRegistryWorkerOperation } = await import("./task-registry-worker-operation.js");
     return runTaskRegistryWorkerOperation(
@@ -150,7 +164,6 @@ const defaultTaskRegistryStore: TaskRegistryStore = {
     return records;
   },
   upsertTaskWithDeliveryState: upsertTaskWithDeliveryStateToSqlite,
-  deleteTaskWithDeliveryState: deleteTaskAndDeliveryStateFromSqlite,
   upsertDeliveryState: upsertTaskDeliveryStateToSqlite,
   close: closeTaskRegistryDatabase,
 };
@@ -243,19 +256,6 @@ export function tryPersistTaskUpsert(
       operation,
       taskId: task.taskId,
       runId: task.runId,
-      error,
-    });
-    return false;
-  }
-}
-
-export function tryPersistTaskDelete(taskId: string): boolean {
-  try {
-    getTaskRegistryStore().deleteTaskWithDeliveryState(taskId);
-    return true;
-  } catch (error) {
-    storeLog.warn("Failed to persist task registry delete", {
-      taskId,
       error,
     });
     return false;

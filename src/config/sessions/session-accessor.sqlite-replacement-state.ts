@@ -1,4 +1,5 @@
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { hasPendingSessionTranscriptArchives } from "./session-accessor.sqlite-archive-store-kernel.js";
 import {
   projectSessionSharingEntry,
   type SessionEntryReplacementPublication,
@@ -8,44 +9,19 @@ import {
   deleteLegacySessionEntryRows,
   readExactSessionEntryRow,
   writeSessionEntry,
-  type ResolvedSessionEntryRow,
 } from "./session-accessor.sqlite-entry-store.js";
-import type {
-  SessionEntryMaintenanceInput,
-  SessionEntryMaintenancePlan,
-} from "./session-accessor.sqlite-lifecycle-types.js";
 import {
   applySessionEntryMaintenanceInDatabase,
   emptySessionEntryMaintenancePlan,
 } from "./session-accessor.sqlite-maintenance-store.js";
 import { replaceSessionOwnerInTransaction } from "./session-accessor.sqlite-owner.js";
 import { readSessionEntryReplacementLabelOwnerKeys } from "./session-accessor.sqlite-replacement-read.js";
+import type {
+  SessionEntryReplacementCommit,
+  SessionEntryReplacementCommitted,
+} from "./session-accessor.sqlite-replacement-types.js";
 import { cloneSessionEntry } from "./session-accessor.sqlite-scope.js";
-import type { SessionEntryReplacement } from "./session-accessor.types.js";
-import type { SessionOwnerAssignment } from "./session-entry-provenance.js";
 import type { SessionEntry } from "./types.js";
-
-export type SqliteSessionEntryReplacement = SessionEntryReplacement & {
-  previousSessionKeys?: readonly string[];
-};
-
-export type SessionEntryReplacementCommit = {
-  expectedRows: Map<string, ResolvedSessionEntryRow>;
-  labelOwnerKeys: string[];
-  includeLabelOwners?: string;
-  validationKeys: string[];
-  replacements: SqliteSessionEntryReplacement[];
-  consumePendingReset?: boolean;
-  maintenance?: SessionEntryMaintenanceInput;
-  ownerAssignment?: { sessionKey: string; owner: SessionOwnerAssignment };
-};
-
-export type SessionEntryReplacementCommitted = {
-  previous: Map<string, SessionEntry>;
-  current: Map<string, SessionEntry>;
-  maintenancePlans: SessionEntryMaintenancePlan[];
-  membershipInvalidatedKeys: string[];
-};
 
 /** Receipts carry only publication facts, never saved prompts or maintenance payloads. */
 export function prepareSessionEntryReplacementPublication(
@@ -53,6 +29,7 @@ export function prepareSessionEntryReplacementPublication(
 ): SessionEntryReplacementPublication {
   return {
     kind: "session-entry-replacements",
+    pendingArchiveRecovery: result.pendingArchiveRecovery,
     membershipInvalidatedKeys: result.membershipInvalidatedKeys,
     previous: new Map(
       [...result.previous].map(([key, entry]) => [
@@ -157,5 +134,15 @@ export function commitSessionEntryReplacementsInDatabase(
     maintenance && preservation
       ? applySessionEntryMaintenanceInDatabase(database, maintenance, () => preservation)
       : emptySessionEntryMaintenancePlan();
-  return { previous, current, maintenancePlans: [maintenancePlan], membershipInvalidatedKeys };
+  return {
+    // Fresh creation must not retry another session's failed export.
+    pendingArchiveRecovery:
+      input.checkPendingArchiveRecovery === true &&
+      previous.size > 0 &&
+      hasPendingSessionTranscriptArchives(database),
+    previous,
+    current,
+    maintenancePlans: [maintenancePlan],
+    membershipInvalidatedKeys,
+  };
 }

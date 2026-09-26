@@ -97,6 +97,14 @@ describe.each(["core", "plugin"])("Gateway HTTP %s authority outcomes", (surface
       authority.assertCurrent();
       if (outcome.startsWith("stream")) {
         res.write("partial");
+      } else if (outcome !== "disconnect") {
+        res.setHeader("Content-Length", "1");
+        res.setHeader("Content-Encoding", "gzip");
+        res.setHeader("Content-Disposition", "attachment; filename=report.txt");
+        res.setHeader("ETag", '"prepared-report"');
+        res.setHeader("Cache-Control", "public, max-age=31536000");
+        res.setHeader("Access-Control-Allow-Origin", "https://example.test");
+        res.statusMessage = "Download Ready";
       }
       entered.resolve(res);
       await release.promise;
@@ -107,7 +115,13 @@ describe.each(["core", "plugin"])("Gateway HTTP %s authority outcomes", (surface
       res.end("must not disclose prepared data");
       return true;
     });
-    const response = createDeferred<{ status?: number; body: string; aborted?: boolean }>();
+    const response = createDeferred<{
+      status?: number;
+      statusMessage?: string;
+      headers?: IncomingMessage["headers"];
+      body: string;
+      aborted?: boolean;
+    }>();
     const client = request(
       {
         host: "127.0.0.1",
@@ -122,7 +136,14 @@ describe.each(["core", "plugin"])("Gateway HTTP %s authority outcomes", (surface
           body += chunk;
           streaming.resolve();
         });
-        res.once("end", () => response.resolve({ status: res.statusCode, body }));
+        res.once("end", () =>
+          response.resolve({
+            status: res.statusCode,
+            statusMessage: res.statusMessage,
+            headers: res.headers,
+            body,
+          }),
+        );
         res.once("aborted", () =>
           response.resolve({ status: res.statusCode, body, aborted: true }),
         );
@@ -161,7 +182,7 @@ describe.each(["core", "plugin"])("Gateway HTTP %s authority outcomes", (surface
       const writeHead = vi.spyOn(res, "writeHead");
       release.resolve();
       await requests.mock.results[0]!.value;
-      const received = await response.promise;
+      const { headers: responseHeaders, statusMessage, ...received } = await response.promise;
       expect(write).not.toHaveBeenCalled();
       const closed = outcome === "disconnect" || outcome.startsWith("stream");
       expect(end).toHaveBeenCalledTimes(closed ? 0 : 1);
@@ -185,6 +206,30 @@ describe.each(["core", "plugin"])("Gateway HTTP %s authority outcomes", (surface
         });
       } else if (outcome === "unexpected") {
         expect(received).toEqual({ status: 500, body: "Internal Server Error" });
+      }
+      if (!closed) {
+        expect(statusMessage).toBe(
+          outcome === "client expired"
+            ? "Unauthorized"
+            : outcome === "operator revoked"
+              ? "Forbidden"
+              : "Internal Server Error",
+        );
+        expect(responseHeaders?.["content-type"]).toBe(
+          outcome === "unexpected"
+            ? "text/plain; charset=utf-8"
+            : "application/json; charset=utf-8",
+        );
+        const contentLength = responseHeaders?.["content-length"];
+        if (contentLength !== undefined) {
+          expect(contentLength).toBe(String(Buffer.byteLength(received.body)));
+        }
+        expect(responseHeaders?.["content-encoding"]).toBeUndefined();
+        expect(responseHeaders?.["content-disposition"]).toBeUndefined();
+        expect(responseHeaders?.etag).toBeUndefined();
+        expect(responseHeaders?.["cache-control"]).toBe("no-store");
+        expect(responseHeaders?.["access-control-allow-origin"]).toBe("https://example.test");
+        expect(responseHeaders?.["x-content-type-options"]).toBe("nosniff");
       }
       if (outcome === "unexpected") {
         if (surface === "core") {

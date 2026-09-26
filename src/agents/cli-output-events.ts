@@ -251,6 +251,24 @@ function parseToolInputJson(parts: string[]): Record<string, unknown> {
   }
 }
 
+function emitClaudeToolResultBlock(
+  tracker: ToolUseTracker,
+  block: Record<string, unknown>,
+  onToolResult: ((delta: CliToolResultDelta) => void) | undefined,
+): void {
+  const toolCallId = typeof block.tool_use_id === "string" ? block.tool_use_id.trim() : "";
+  if (toolCallId) {
+    emitToolResultOnce(
+      tracker,
+      toolCallId,
+      block.is_error === true ||
+        (block.type !== "tool_result" && isClaudeToolResultError(block.content)),
+      block.content,
+      onToolResult,
+    );
+  }
+}
+
 export function dispatchClaudeCliStreamingToolEvent(params: {
   backend: CliBackendConfig;
   providerId: string;
@@ -285,16 +303,7 @@ export function dispatchClaudeCliStreamingToolEvent(params: {
           });
         }
       } else if (isClaudeAssistantToolResultBlockType(block.type)) {
-        const toolCallId = typeof block.tool_use_id === "string" ? block.tool_use_id.trim() : "";
-        if (toolCallId) {
-          emitToolResultOnce(
-            tracker,
-            toolCallId,
-            block.is_error === true || isClaudeToolResultError(block.content),
-            block.content,
-            params.onToolResult,
-          );
-        }
+        emitClaudeToolResultBlock(tracker, block, params.onToolResult);
       }
       return;
     }
@@ -333,56 +342,26 @@ export function dispatchClaudeCliStreamingToolEvent(params: {
     return;
   }
 
-  if (params.parsed.type === "assistant" && isRecord(params.parsed.message)) {
+  const assistant = params.parsed.type === "assistant";
+  if ((assistant || params.parsed.type === "user") && isRecord(params.parsed.message)) {
     const message = params.parsed.message;
     const content = Array.isArray(message.content) ? message.content : [];
     for (const block of content) {
       if (!isRecord(block)) {
         continue;
       }
-      if (isClaudeToolUseBlockType(block.type)) {
+      if (assistant && isClaudeToolUseBlockType(block.type)) {
         const toolCallId = typeof block.id === "string" ? block.id.trim() : "";
         const name = typeof block.name === "string" ? block.name.trim() : "";
-        if (!toolCallId || !name) {
-          continue;
+        if (toolCallId && name) {
+          const args = isRecord(block.input) ? block.input : {};
+          emitToolStartOnce(tracker, toolCallId, name, block.type, args, params.onToolUseStart);
         }
-        const args: Record<string, unknown> = isRecord(block.input) ? block.input : {};
-        emitToolStartOnce(tracker, toolCallId, name, block.type, args, params.onToolUseStart);
-      } else if (isClaudeAssistantToolResultBlockType(block.type)) {
-        const toolCallId = typeof block.tool_use_id === "string" ? block.tool_use_id.trim() : "";
-        if (!toolCallId) {
-          continue;
-        }
-        emitToolResultOnce(
-          tracker,
-          toolCallId,
-          block.is_error === true || isClaudeToolResultError(block.content),
-          block.content,
-          params.onToolResult,
-        );
+      } else if (
+        assistant ? isClaudeAssistantToolResultBlockType(block.type) : block.type === "tool_result"
+      ) {
+        emitClaudeToolResultBlock(tracker, block, params.onToolResult);
       }
-    }
-    return;
-  }
-
-  if (params.parsed.type === "user" && isRecord(params.parsed.message)) {
-    const message = params.parsed.message;
-    const content = Array.isArray(message.content) ? message.content : [];
-    for (const block of content) {
-      if (!isRecord(block) || block.type !== "tool_result") {
-        continue;
-      }
-      const toolCallId = typeof block.tool_use_id === "string" ? block.tool_use_id.trim() : "";
-      if (!toolCallId) {
-        continue;
-      }
-      emitToolResultOnce(
-        tracker,
-        toolCallId,
-        block.is_error === true,
-        block.content,
-        params.onToolResult,
-      );
     }
   }
 }
@@ -558,10 +537,7 @@ export function dispatchClaudeCliThinking(params: {
     if (event.delta.type !== "thinking_delta" || typeof event.delta.thinking !== "string") {
       return;
     }
-    if (!event.delta.thinking) {
-      return;
-    }
-    if (!params.onThinkingDelta) {
+    if (!event.delta.thinking || !params.onThinkingDelta) {
       return;
     }
     const streamed = tracker.streamedByIndex.get(blockIndex) ?? "";
@@ -727,5 +703,3 @@ export function createLeadingTaggedReasoningRouter() {
     finish: () => consume("", true),
   };
 }
-
-/** Creates a stateful parser for streaming JSONL CLI backend output. */

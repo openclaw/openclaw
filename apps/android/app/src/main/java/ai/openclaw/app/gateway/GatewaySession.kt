@@ -763,8 +763,7 @@ class GatewaySession(
         )
     val params = buildNodeEventParams(event = event, payloadJson = payloadJson)
     try {
-      val res = conn.request(GatewayMethod.NodeEvent.rawValue, params, timeoutMs = timeoutMs)
-      return RpcResult(ok = res.ok, payloadJson = res.payloadJson, error = res.error)
+      return conn.request(GatewayMethod.NodeEvent.rawValue, params, timeoutMs = timeoutMs)
     } catch (err: Throwable) {
       Log.w("OpenClawGateway", "node.event failed: ${err::class.java.simpleName}")
       return RpcResult(
@@ -952,8 +951,7 @@ class GatewaySession(
       } else {
         json.parseToJsonElement(paramsJson)
       }
-    val res = conn.request(method, params, timeoutMs, guardRequestEnqueue(conn, withEnqueue))
-    return RpcResult(ok = res.ok, payloadJson = res.payloadJson, error = res.error)
+    return conn.request(method, params, timeoutMs, guardRequestEnqueue(conn, withEnqueue))
   }
 
   private fun guardRequestEnqueue(
@@ -1002,13 +1000,6 @@ class GatewaySession(
       }
     conn.sendRequestFrame(method, params, timeoutMs, guardRequestEnqueue(conn, withEnqueue), onError)
   }
-
-  private data class RpcResponse(
-    val id: String,
-    val ok: Boolean,
-    val payloadJson: String?,
-    val error: ErrorShape?,
-  )
 
   private data class TicketedMediaRequest(
     val url: String,
@@ -1082,7 +1073,7 @@ class GatewaySession(
     private var lastEventSequence: Long? = null
 
     // RPC waiters belong to this socket generation. Closing it must not touch a replacement connection.
-    private val pending = ConcurrentHashMap<String, CompletableDeferred<RpcResponse>>()
+    private val pending = ConcurrentHashMap<String, CompletableDeferred<RpcResult>>()
 
     private val pendingLock = Any()
     private val messagePumpJob =
@@ -1184,7 +1175,7 @@ class GatewaySession(
       params: JsonElement?,
       timeoutMs: Long,
       withEnqueue: (() -> Unit) -> Unit = { it() },
-    ): RpcResponse {
+    ): RpcResult {
       val id = UUID.randomUUID().toString()
       if (method == "connect") connectRequestId = id
       val deferred = registerPending(id)
@@ -1376,8 +1367,8 @@ class GatewaySession(
       }
     }
 
-    private fun registerPending(id: String): CompletableDeferred<RpcResponse> {
-      val deferred = CompletableDeferred<RpcResponse>()
+    private fun registerPending(id: String): CompletableDeferred<RpcResult> {
+      val deferred = CompletableDeferred<RpcResult>()
       // Registration and the close drain are one lifecycle decision; no waiter may slip between them.
       synchronized(pendingLock) {
         if (state.get() == ConnectionState.CLOSED) {
@@ -1773,7 +1764,7 @@ class GatewaySession(
     }
 
     private fun parseConnectSuccess(
-      res: RpcResponse,
+      res: RpcResult,
       deviceId: String,
       selectedAuth: SelectedConnectAuth,
     ): ConnectedGateway {
@@ -2074,7 +2065,7 @@ class GatewaySession(
             }
           ErrorShape(wireError.code, wireError.message, details)
         }
-      pending.remove(id)?.complete(RpcResponse(id, response.ok, payloadJson, error))
+      pending.remove(id)?.complete(RpcResult(response.ok, payloadJson, error))
     }
 
     private fun handleEvent(frame: JsonObject) {
@@ -2720,12 +2711,6 @@ private fun JsonElement?.asBooleanOrNull(): Boolean? =
     else -> {
       null
     }
-  }
-
-private fun JsonElement?.asLongOrNull(): Long? =
-  when (this) {
-    is JsonPrimitive -> content.toLongOrNull()
-    else -> null
   }
 
 private fun JsonElement?.asJsonIntegerLongOrNull(): Long? =

@@ -45,7 +45,7 @@ async function sharedAdmission(surface: "local" | "deferred" | "claim") {
       sessionId,
       ownerEpoch: 2,
     });
-    seedActivePlacement(placements, { environmentId: "publication-worker", ownerEpoch: 2 });
+    await seedActivePlacement(placements, { environmentId: "publication-worker", ownerEpoch: 2 });
   }
   const claim =
     surface === "claim"

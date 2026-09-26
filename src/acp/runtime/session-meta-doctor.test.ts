@@ -106,19 +106,22 @@ it("inspects without creating state and conditionally updates only the proven cu
 });
 
 it.each(["global", "shared-project"])(
-  "migrates %s with real Doctor inventory beside an unrelated free ACP session",
+  "migrates %s from legacy ACPX state beside an unrelated free ACP session",
   async (sessionKey) => {
     await withOpenClawTestState({ label: "acp-doctor-composition" }, async (state) => {
+      const acpxStateDir = path.join(state.workspaceDir, "state");
+      const explicit = sessionKey === "shared-project";
       const cfg = {
         agents: { ownership: "explicit" as const, entries: { main: {}, work: {} } },
         session: { scope: "global" as const },
+        plugins: { entries: { acpx: { config: explicit ? { stateDir: acpxStateDir } : {} } } },
       };
       await state.writeConfig(cfg);
       const peer = state.path("peer");
       await fs.mkdir(peer);
       const runtime = new AcpxRuntime({
         cwd: state.workspaceDir,
-        sessionStore: createFileSessionStore({ stateDir: path.join(state.workspaceDir, "state") }),
+        sessionStore: createFileSessionStore({ stateDir: acpxStateDir }),
         agentRegistry: createAgentRegistry({
           overrides: {
             fixture: [
@@ -216,9 +219,21 @@ it.each(["global", "shared-project"])(
           (claim) => claim.agentId === "free-harness",
         ),
       ).toEqual(before.claims.find((claim) => claim.agentId === "free-harness"));
-      await fs.access(
-        path.join(state.workspaceDir, "state", "sessions", `${sessionKey}.json.migrated`),
-      );
+      const adoptedStateDir = explicit ? acpxStateDir : path.join(state.stateDir, "acpx");
+      await fs.access(path.join(adoptedStateDir, "sessions", `${sessionKey}.json.migrated`));
+      expect(
+        await createFileSessionStore({ stateDir: adoptedStateDir }).load(
+          migrated!.identity!.acpxRecordId!,
+        ),
+      ).toMatchObject({
+        acpSessionId: handle.backendSessionId,
+      });
+      if (!explicit) {
+        await expect(fs.stat(acpxStateDir)).rejects.toMatchObject({ code: "ENOENT" });
+        expect(result.changes).toContainEqual(
+          expect.stringContaining("Migrated ACPX session state"),
+        );
+      }
     });
   },
 );

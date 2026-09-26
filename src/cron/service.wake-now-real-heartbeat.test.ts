@@ -40,7 +40,7 @@ import {
 } from "./active-jobs.js";
 import { CronService, type CronEvent } from "./service.js";
 import type { CronServiceDeps } from "./service/state.js";
-import { loadCronJobsStoreSync } from "./store.js";
+import { loadCronJobsStore } from "./store.js";
 
 installHeartbeatRunnerTestRuntime();
 beforeAll(async () => {
@@ -261,7 +261,7 @@ async function runMainCronCase(
         : mode === "scheduled"
           ? terminal.runAtMs! + terminal.durationMs! + 30_000
           : scheduledNextRunAtMs;
-      const persisted = loadCronJobsStoreSync(sandbox.cronStorePath).jobs.find(
+      const persisted = (await loadCronJobsStore(sandbox.cronStorePath)).jobs.find(
         (entry) => entry.id === job.id,
       );
       for (const completed of [cron.getJob(job.id), persisted, terminal.job]) {

@@ -248,15 +248,6 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
     if (!this.host.selectedSessionKeys.has(session.key)) {
       this.host.clearSessionSelection();
     }
-    this.showSessionMenu(session, x, y, trigger);
-  }
-
-  private showSessionMenu(
-    session: SidebarRecentSession,
-    x: number,
-    y: number,
-    trigger: HTMLElement | null = null,
-  ) {
     this.loadMenuRenderer();
     this.dismissTransientMenus();
     this.sessionMenuTrigger = trigger;

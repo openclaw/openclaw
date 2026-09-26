@@ -45,6 +45,7 @@ const { createSessionStoreDir, openClient, withSessionTestState } =
 test.each([false, true])(
   "nested state cleanup joins suite ACP reads (disposal fails=%s)",
   async (disposalFails) => {
+    const suiteStateDir = runtimePaths.resolveStateDir();
     const entered = createDeferredCore();
     const release = createDeferredCore();
     const boundary = createDeferredCore<"joined" | "closed">();
@@ -88,7 +89,7 @@ test.each([false, true])(
           if (
             !held &&
             args[1].type === "acpSessions.metadata" &&
-            args[0].env?.OPENCLAW_STATE_DIR === state.stateDir &&
+            args[0].env?.OPENCLAW_STATE_DIR === suiteStateDir &&
             getAsyncWorkSignal() !== fixtureSignal
           ) {
             held = true;
@@ -105,7 +106,7 @@ test.each([false, true])(
       await Promise.race([
         entered.promise,
         preparing.then(() => {
-          throw new Error("Suite projection completed without the fixture's ACP metadata read");
+          throw new Error("Suite projection completed without its ACP metadata read");
         }),
       ]);
       const ensure = projection.ensureMaterialized;

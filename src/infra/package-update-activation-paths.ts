@@ -36,6 +36,15 @@ export function packageActivationIdentity(file: string, directory: boolean | "la
   return `${stat.dev}:${stat.ino}`;
 }
 
+export function privatePackageActivationIdentity(file: string, directory: boolean): string {
+  const value = packageActivationIdentity(file, directory);
+  const stat = fs.lstatSync(file);
+  if ((stat.mode & 0o077) !== 0 || (!directory && stat.nlink !== 1)) {
+    throw new Error("Package publication recovery permissions are unsafe");
+  }
+  return value;
+}
+
 export function assertPackageActivationLayout(anchor: string): void {
   if (
     [path.join(anchor, "operation.sqlite"), `${anchor}.sqlite`, `${anchor}.recovery.mjs`].some(

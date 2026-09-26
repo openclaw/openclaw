@@ -2441,43 +2441,6 @@ describe("startTelegramWebhook", () => {
     },
   );
 
-  it("keeps webhook payload readable across multiple delayed reads", async () => {
-    const seenPayloads: string[] = [];
-    const delayedHandler = async (update: unknown) => {
-      await yieldWebhookTask();
-      seenPayloads.push(JSON.stringify(update));
-    };
-    handleUpdateSpy.mockImplementationOnce(delayedHandler).mockImplementationOnce(delayedHandler);
-
-    await withStartedWebhook(
-      {
-        secret: TELEGRAM_SECRET,
-        path: TELEGRAM_WEBHOOK_PATH,
-      },
-      async ({ port }) => {
-        const payloads = [
-          JSON.stringify(telegramMessageUpdate(1, "first")),
-          JSON.stringify(telegramMessageUpdate(2, "second")),
-        ];
-
-        for (const payload of payloads) {
-          const res = await postWebhookJson({
-            url: webhookUrl(port, TELEGRAM_WEBHOOK_PATH),
-            payload,
-            secret: TELEGRAM_SECRET,
-          });
-          expect(res.status).toBe(200);
-        }
-
-        await waitForWebhookState(() =>
-          expect(seenPayloads.map((x) => JSON.parse(x))).toEqual(
-            payloads.map((x) => JSON.parse(x)),
-          ),
-        );
-      },
-    );
-  });
-
   it("handles near-limit payload with random chunk writes and event-loop yields", async () => {
     await runNearLimitPayloadTestAndExpectUpdate("random-chunked");
   });

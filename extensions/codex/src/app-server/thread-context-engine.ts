@@ -3,10 +3,7 @@ import {
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  resolveCodexContextEngineProjectionMaxChars,
-  resolveCodexContextEngineProjectionReserveTokens,
-} from "./context-engine-projection.js";
+import { resolveCodexContextEngineProjectionMaxChars } from "./context-engine-projection.js";
 import type { JsonValue } from "./protocol.js";
 import type {
   CodexAppServerContextEngineBinding,
@@ -43,7 +40,6 @@ export function buildContextEngineBinding(
       contextTokenBudget: params.contextTokenBudget,
       projectionMaxChars: resolveCodexContextEngineProjectionMaxChars({
         contextTokenBudget: params.contextTokenBudget,
-        reserveTokens: resolveCodexContextEngineProjectionReserveTokens(),
       }),
     }),
     projection: projection ? buildContextEngineProjectionBinding(projection) : undefined,

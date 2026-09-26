@@ -31,7 +31,10 @@ export interface PluginInstanceHandle extends PluginInvocationInstance, PluginIn
   ): PluginInstanceConsumer;
   runInRegistry<T>(registry: PluginRegistry, run: () => T, options?: { joinDisposal?: boolean }): T;
   createRegistryView(registry: PluginRegistry, invoke: <T>(run: () => T) => T): <T>(value: T) => T;
-  drain(options?: { includeConsumers?: boolean }): Promise<PluginInstanceDisposalResult>;
+  drain(options?: {
+    includeConsumers?: boolean;
+    signal?: AbortSignal;
+  }): Promise<PluginInstanceDisposalResult>;
   resume(): void;
 }
 

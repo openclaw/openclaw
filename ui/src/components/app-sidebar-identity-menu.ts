@@ -1,6 +1,3 @@
-// Sidebar footer identity menu, split out of app-sidebar-agent-menu.ts to
-// keep that module inside the TS LOC ratchet. Shares the sidebar menu focus
-// helpers and help submenu with the agent menu.
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { titleForRoute, type NavigationRouteId } from "../app-navigation.ts";

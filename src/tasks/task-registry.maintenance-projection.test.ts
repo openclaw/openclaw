@@ -11,7 +11,11 @@ import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
@@ -37,6 +41,7 @@ import {
   runTaskRegistryMaintenance,
 } from "./task-registry.maintenance.js";
 import { getTaskRegistryStore, onTaskRegistryChange } from "./task-registry.store.js";
+import { deleteTaskRowsWithDeliveryState } from "./task-registry.store.kernel.js";
 import { loadTaskRegistryStateFromSqliteReadOnly } from "./task-registry.store.sqlite.js";
 import {
   createTaskFixture,
@@ -444,7 +449,9 @@ describe("task maintenance session metadata", () => {
             task,
             ...(deliveryState ? { deliveryState: { ...deliveryState, taskId: task.taskId } } : {}),
           });
-          store.deleteTaskWithDeliveryState(created.taskId);
+          runOpenClawStateWriteTransaction(() =>
+            deleteTaskRowsWithDeliveryState(openOpenClawStateDatabase().db, created.taskId),
+          );
           await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
         }
         await loadTaskAcpSessionCloser();

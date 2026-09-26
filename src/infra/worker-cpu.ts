@@ -8,6 +8,7 @@ import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 
 type WorkerSource = {
   script: string;
+  poolId?: number;
   started?: boolean;
   retirementReason?: WorkerRetirementReason;
   cpuUsage: () => Promise<NodeJS.CpuUsage | undefined>;
@@ -62,6 +63,8 @@ const trackedWorkers = resolveGlobalSingleton(Symbol.for("openclaw.workerCpuSour
   process.on("worker", trackWorker);
   return {
     revision: 0,
+    nextPoolId: 0,
+    poolIds: new WeakMap<object, number>(),
     workers: new Map<Worker, WorkerSource>(),
     lifecycle: new Map<string, { started: number; retired: Map<WorkerRetirementReason, number> }>(),
   };
@@ -73,6 +76,44 @@ export function createCpuTrackedWorker(...args: ConstructorParameters<typeof Wor
   // Node's process event can register the Worker before its constructor returns.
   trackedWorkers.workers.get(worker)!.script = workerScriptName(args[0], args[1]?.eval);
   return worker;
+}
+
+/** Pool identity follows its live Workers without retaining the pool itself. */
+export function attributeWorkerToPool(worker: Worker, pool: object): void {
+  const source = trackedWorkers.workers.get(worker);
+  if (!source) {
+    return;
+  }
+  let poolId = trackedWorkers.poolIds.get(pool);
+  if (poolId === undefined) {
+    poolId = ++trackedWorkers.nextPoolId;
+    trackedWorkers.poolIds.set(pool, poolId);
+  }
+  source.poolId = poolId;
+}
+
+/** A bounded census of live pools, including Workers whose retirement is pending. */
+export function getTrackedWorkerPoolSnapshot() {
+  pruneExitedWorkers();
+  const pools = new Map<number, { poolId: number; script: string; workerCount: number }>();
+  for (const source of trackedWorkers.workers.values()) {
+    if (source.poolId === undefined) {
+      continue;
+    }
+    const pool = pools.get(source.poolId);
+    if (pool) {
+      pool.workerCount++;
+    } else {
+      pools.set(source.poolId, { poolId: source.poolId, script: source.script, workerCount: 1 });
+    }
+  }
+  return {
+    workerCount: trackedWorkers.workers.size,
+    workerPoolCount: pools.size,
+    workerPools: [...pools.values()]
+      .toSorted((a, b) => b.workerCount - a.workerCount || a.poolId - b.poolId)
+      .slice(0, 100),
+  };
 }
 
 function forgetWorker(worker: Worker): void {

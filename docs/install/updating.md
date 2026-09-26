@@ -308,6 +308,11 @@ update. They are not silently migrated or deleted. Preserve them and use their
 original recovery owner; do not recreate the journal or remove them to bypass
 the refusal.
 
+For activation journals written by v2026.9.6, `openclaw update status --json`
+reports the recorded phase and the original in-directory helper's `status`
+command. The current updater only inspects these journals; use their original
+helper to recover or retire the operation before starting another update.
+
 Switch channels or target a specific version:
 
 ```bash

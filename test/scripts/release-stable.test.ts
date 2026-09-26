@@ -70,6 +70,7 @@ function validateSetup(fresh = true, retainedCapabilities = false): FakeStep[] {
       ? [
           step("git", ["show", `${TOOLING_SHA}:.github/workflows/openclaw-release-publish.yml`]),
           step("git", ["show", `${TOOLING_SHA}:scripts/lib/release-publish-children.sh`]),
+          step("git", ["show", `${TOOLING_SHA}:.github/workflows/openclaw-npm-release.yml`]),
         ]
       : []),
     ...(fresh
@@ -243,11 +244,7 @@ describe("release:stable CLI", () => {
       validate: { ...legacy.validate, continues: 2 },
     };
     release.seed(legacyState);
-    const failed = release.run([
-      ...validateSetup(true, true),
-      request(),
-      validationRun("failure", 1),
-    ]);
+    const failed = release.run([...validateSetup(true), request(), validationRun("failure", 1)]);
     expect(failed.status).toBe(2);
     expect(release.readState().validate).not.toHaveProperty("continues");
     expect(release.readState().capabilities).not.toHaveProperty("closeoutResolvesWaivers");
@@ -564,7 +561,7 @@ describe("release:stable CLI", () => {
     expect(release.readState().phases.publish.status).toBe("completed");
   });
 
-  it("uses the parent's approval receipt without reading or approving any child gates", () => {
+  it("uses npm-publish tooling without reading or approving any child gates", () => {
     const release = fixture();
     const state = publishState(true);
     state.publish.publishRunId = "301";
@@ -592,9 +589,16 @@ describe("release:stable CLI", () => {
     const state = publishState(true);
     delete state.operator.login;
     if (state.capabilities) {
-      delete state.capabilities.parentSweepsStaleChildren;
+      delete state.capabilities.childNpmPublishEnvironment;
     }
     release.seed(state);
+    writeFileSync(
+      release.stateFile,
+      JSON.stringify({
+        ...state,
+        capabilities: { ...state.capabilities, parentApprovalReceipt: true },
+      }),
+    );
     release.candidate(CANDIDATE_COMMAND);
     const distractors = [
       { ...parentRun(), id: 801, head_branch: "main" },
@@ -617,6 +621,11 @@ describe("release:stable CLI", () => {
         ["show", `${TOOLING_SHA}:scripts/lib/release-publish-children.sh`],
         "sweep_superseded_children",
       ),
+      step(
+        "git",
+        ["show", `${TOOLING_SHA}:.github/workflows/openclaw-npm-release.yml`],
+        "environment: npm-publish",
+      ),
       step("gh", ["api", "user", "--jq", ".login"], "release-test\n"),
       { ...parentDispatch(), exit: 1, stderr: "connection lost after submission" },
       { ...parentRuns(distractors), times: 10 },
@@ -624,6 +633,8 @@ describe("release:stable CLI", () => {
     expect(failed.status, failed.output).toBe(2);
     expect(failed.stdout).not.toContain("state=rejected");
     expect(release.readState().capabilities?.parentSweepsStaleChildren).toBe(true);
+    expect(release.readState().capabilities?.childNpmPublishEnvironment).toBe(true);
+    expect(release.readState().capabilities).not.toHaveProperty("parentApprovalReceipt");
     expect(failed.stderr).toContain(
       `Could not reconcile ${publishWorkflow}; the dispatch may have been accepted.`,
     );

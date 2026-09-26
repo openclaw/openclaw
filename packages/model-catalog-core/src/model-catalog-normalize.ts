@@ -38,8 +38,6 @@ import {
 import { normalizeProviderId } from "./provider-id.js";
 export { normalizeOpenRouterModelReasoning } from "./model-catalog-reasoning.js";
 
-// Normalizes raw provider model catalogs into stable rows for lookup and merging.
-
 const MODEL_CATALOG_INPUTS = new Set(["text", "image", "document"]);
 const MODEL_CATALOG_DISCOVERY_MODES = new Set(["static", "refreshable", "runtime"]);
 const MODEL_CATALOG_STATUSES = new Set(["available", "preview", "deprecated", "disabled"]);
@@ -175,18 +173,17 @@ function normalizeModelCatalogCost(value: unknown): ModelCatalogCost | undefined
   if (!isRecord(value)) {
     return undefined;
   }
-  const input = normalizeNonNegativeNumber(value.input);
-  const output = normalizeNonNegativeNumber(value.output);
-  const cacheRead = normalizeNonNegativeNumber(value.cacheRead);
-  const cacheWrite = normalizeNonNegativeNumber(value.cacheWrite);
+  const cost: ModelCatalogCost = {};
+  for (const field of ["input", "output", "cacheRead", "cacheWrite"] as const) {
+    const normalized = normalizeNonNegativeNumber(value[field]);
+    if (normalized !== undefined) {
+      cost[field] = normalized;
+    }
+  }
   const tieredPricing = normalizeModelCatalogTieredCost(value.tieredPricing);
-  const cost = {
-    ...(input !== undefined ? { input } : {}),
-    ...(output !== undefined ? { output } : {}),
-    ...(cacheRead !== undefined ? { cacheRead } : {}),
-    ...(cacheWrite !== undefined ? { cacheWrite } : {}),
-    ...(tieredPricing ? { tieredPricing } : {}),
-  } satisfies ModelCatalogCost;
+  if (tieredPricing) {
+    cost.tieredPricing = tieredPricing;
+  }
   return Object.keys(cost).length > 0 ? cost : undefined;
 }
 
@@ -307,7 +304,7 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
   if (!isRecord(value)) {
     return undefined;
   }
-  const compat: Record<string, unknown> = {};
+  const compat: ModelCatalogCompatConfig = {};
   const booleanFields = [
     "supportsStore",
     "supportsPromptCacheKey",
@@ -404,7 +401,7 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
     compat.vercelGatewayRouting = vercelGatewayRouting;
   }
 
-  return Object.keys(compat).length > 0 ? (compat as ModelCatalogCompatConfig) : undefined;
+  return Object.keys(compat).length > 0 ? compat : undefined;
 }
 
 function normalizeModelCatalogStatus(value: unknown): ModelCatalogStatus | undefined {
@@ -426,18 +423,17 @@ function normalizeModelCatalogMediaInput(value: unknown): ModelCatalogMediaInput
   if (!isRecord(value) || !isRecord(value.image)) {
     return undefined;
   }
-  const maxBytes = normalizePositiveInteger(value.image.maxBytes);
-  const maxPixels = normalizePositiveInteger(value.image.maxPixels);
-  const maxSidePx = normalizePositiveInteger(value.image.maxSidePx);
-  const preferredSidePx = normalizePositiveInteger(value.image.preferredSidePx);
+  const normalizedImage: ModelCatalogImageInputConfig = {};
+  for (const field of ["maxBytes", "maxPixels", "maxSidePx", "preferredSidePx"] as const) {
+    const normalized = normalizePositiveInteger(value.image[field]);
+    if (normalized !== undefined) {
+      normalizedImage[field] = normalized;
+    }
+  }
   const tokenMode = normalizeModelCatalogImageTokenMode(value.image.tokenMode);
-  const normalizedImage = {
-    ...(maxBytes !== undefined ? { maxBytes } : {}),
-    ...(maxPixels !== undefined ? { maxPixels } : {}),
-    ...(maxSidePx !== undefined ? { maxSidePx } : {}),
-    ...(preferredSidePx !== undefined ? { preferredSidePx } : {}),
-    ...(tokenMode ? { tokenMode } : {}),
-  };
+  if (tokenMode) {
+    normalizedImage.tokenMode = tokenMode;
+  }
   return Object.keys(normalizedImage).length > 0 ? { image: normalizedImage } : undefined;
 }
 

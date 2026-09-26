@@ -1,7 +1,3 @@
-/**
- * Lists and normalizes models exposed by the Codex app-server `model/list`
- * endpoint, including pagination and shared-client lease handling.
- */
 import {
   normalizeOptionalString,
   normalizeUniqueTrimmedStringList,
@@ -13,7 +9,6 @@ import { assertCodexModelListResponse } from "./protocol-validators.js";
 import type { CodexModel } from "./protocol.js";
 import type { CodexAppServerScopedRequest } from "./request.js";
 
-/** Normalized model metadata returned by the Codex app-server model listing helper. */
 export type CodexAppServerModel = {
   id: string;
   model: string;
@@ -27,14 +22,12 @@ export type CodexAppServerModel = {
   multiAgentVersion?: "disabled" | "v1" | "v2" | null;
 };
 
-/** One page of Codex app-server model metadata plus optional pagination state. */
 export type CodexAppServerModelListResult = {
   models: CodexAppServerModel[];
   nextCursor?: string;
   truncated?: boolean;
 };
 
-/** Options for querying Codex app-server models through a shared or isolated client. */
 type CodexAppServerListModelsOptions = {
   /** Caller-owned request scope for related catalog/account reads. */
   request?: CodexAppServerScopedRequest;
@@ -50,7 +43,6 @@ type CodexAppServerListModelsOptions = {
   sharedClient?: boolean;
 };
 
-/** Lists one Codex app-server model page using the configured auth/client options. */
 export async function listCodexAppServerModels(
   options: CodexAppServerListModelsOptions = {},
 ): Promise<CodexAppServerModelListResult> {
@@ -59,7 +51,6 @@ export async function listCodexAppServerModels(
   );
 }
 
-/** Walks Codex app-server model pages until exhaustion or the max-page guard. */
 export async function listAllCodexAppServerModels(
   options: CodexAppServerListModelsOptions & { maxPages?: number } = {},
 ): Promise<CodexAppServerModelListResult> {
@@ -140,7 +131,6 @@ async function requestModelListPage(
   return readModelListResult(response);
 }
 
-/** Parses a raw Codex app-server model/list response into OpenClaw's normalized shape. */
 export function readModelListResult(value: unknown): CodexAppServerModelListResult {
   const response = assertCodexModelListResponse(value);
   const models = response.data.map((entry) => readCodexModel(entry));

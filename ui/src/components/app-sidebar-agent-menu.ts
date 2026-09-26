@@ -1,6 +1,3 @@
-// Sidebar agent menu and the menu focus/typeahead helpers shared with the
-// footer identity menu, split out of app-sidebar.ts to keep that hot
-// component inside the TS LOC ratchet.
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import type { AgentIdentityResult } from "../api/types.ts";

@@ -21,10 +21,7 @@ import { resolveRunStaleThresholdMs } from "./diagnostic-run-activity-snapshot.j
 import { getDiagnosticSessionActivitySnapshot } from "./diagnostic-run-activity.js";
 import { diagnosticLogger as diag } from "./diagnostic-runtime.js";
 import { isRepeatedModelRequestStalled } from "./diagnostic-session-attention.js";
-import {
-  formatStoppedCronSessionDiagnosticFields,
-  resolveCronSessionDiagnosticContext,
-} from "./diagnostic-session-context.js";
+import { logWithSessionDiagnosticContext } from "./diagnostic-session-context.js";
 import {
   formatRecoveryOutcome,
   resolveStuckSessionRecoveryRef,
@@ -449,16 +446,18 @@ export async function recoverStuckDiagnosticSession(
     if (aborted || forceCleared || released > 0 || clearStaleSession) {
       retireStaleFollowupDrain?.();
       const action = aborted || forceCleared ? "abort_embedded_run" : "release_lane";
-      const stoppedFields = formatStoppedCronSessionDiagnosticFields(
-        resolveCronSessionDiagnosticContext({ sessionKey: params.sessionKey, activeSessionId }),
-      );
-      diag.warn(
-        `stuck session recovery: sessionId=${params.sessionId ?? activeSessionId ?? "unknown"} sessionKey=${
-          params.sessionKey ?? "unknown"
-        } age=${Math.round(params.ageMs / 1000)}s action=${action} aborted=${aborted} drained=${drained} released=${released}${
-          stoppedFields ? ` ${stoppedFields}` : ""
-        }`,
-      );
+      void logWithSessionDiagnosticContext({
+        level: "warn",
+        sessionKey: params.sessionKey,
+        activeSessionId,
+        cronNameLabel: "stopped",
+        format: (stoppedFields) =>
+          `stuck session recovery: sessionId=${params.sessionId ?? activeSessionId ?? "unknown"} sessionKey=${
+            params.sessionKey ?? "unknown"
+          } age=${Math.round(params.ageMs / 1000)}s action=${action} aborted=${aborted} drained=${drained} released=${released}${
+            stoppedFields ? ` ${stoppedFields}` : ""
+          }`,
+      });
       return reportRecoveryOutcome(
         aborted || forceCleared
           ? {

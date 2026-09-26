@@ -1,5 +1,5 @@
-// Control UI renderers for scalar config form nodes.
 import { formatInternationalPhoneNumberForDisplay } from "@openclaw/normalization-core/phone-presentation";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { i18n, t } from "../i18n/index.ts";
@@ -18,6 +18,7 @@ import {
   renderFieldRow,
   renderSchemaDefaultDescription,
   renderSensitiveToggleButton,
+  resolveConfigFieldPresentation,
   wrapSensitiveControl,
   type ConfigNodeRenderParams,
 } from "./config-form.node.shared.ts";
@@ -29,7 +30,6 @@ import {
 import {
   beginScalarEdit,
   finishScalarEdit,
-  finishScalarEditFromEvent,
   scalarEditHintForInput,
   scalarValueBranch,
   syncScalarEditIdentity,
@@ -37,7 +37,6 @@ import {
   setControlValidity,
   type ScalarEditHint,
 } from "./config-form.scalar-edit.ts";
-import { resolveConfigFieldMeta as resolveFieldMeta } from "./config-form.search.ts";
 import {
   configFieldId,
   hintForPath,
@@ -183,27 +182,15 @@ function applyNumericInputState(
   }
 }
 
-function numericRevalidateMessage(
-  target: HTMLInputElement,
-  schema: ConfigNodeRenderParams["schema"],
-  isRequired: boolean,
-): string {
-  return numericStateMessage(resolveNumericInputState(target, schema), isRequired);
-}
-
 export function renderTextInput(
   params: ConfigNodeRenderParams & { inputType: "text" | "number" },
 ): TemplateResult {
   const { schema, value, path, hints, disabled, onPatch, inputType } = params;
-  const showLabel = params.showLabel ?? true;
   const hint = hintForPath(path, hints);
-  const { label, help } = resolveFieldMeta(path, schema, hints);
-  const helpId =
-    params.descriptionId ?? (showLabel && help ? configFieldId(path, "description") : undefined);
+  const field = resolveConfigFieldPresentation(params);
+  const { label, helpId } = field;
   const errorId = configFieldId(path, "scalar-error");
   const sensitiveState = getSensitiveRenderState(params);
-  const isStructuredValue =
-    value !== null && value !== undefined && typeof value === "object" && !Array.isArray(value);
   const isStructuredSecretRef = isSecretRefObject(value);
   const rawAvailable = params.rawAvailable ?? true;
   const masked = sensitiveState.isMasked;
@@ -225,7 +212,7 @@ export function renderTextInput(
         : ""));
   const displayValue = effectiveRedacted
     ? ""
-    : isStructuredValue
+    : isRecord(value)
       ? jsonValue(value)
       : (value ?? (params.compact ? schema.default : undefined) ?? "");
   const effectiveValue = value !== undefined ? value : schema.default;
@@ -261,7 +248,7 @@ export function renderTextInput(
     if (inputType === "number") {
       setControlValidity(
         target,
-        numericRevalidateMessage(target, schema, params.isRequired === true),
+        numericStateMessage(resolveNumericInputState(target, schema), params.isRequired === true),
       );
       return;
     }
@@ -417,7 +404,7 @@ export function renderTextInput(
         if (params.commitOnBlur && target.value !== renderedValue) {
           commitChange(target);
         }
-        finishScalarEditFromEvent(event);
+        finishScalarEdit(target);
       }}
     />
   `;
@@ -443,12 +430,9 @@ export function renderTextInput(
       `
     : wrappedInput;
   return renderFieldRow({
-    label,
-    help,
-    helpId,
+    ...field,
     defaultDescription:
       effectiveRedacted || masked ? nothing : renderSchemaDefaultDescription(schema, value),
-    showLabel,
     control: presentedInput,
     errorId,
   });
@@ -456,10 +440,8 @@ export function renderTextInput(
 
 export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResult {
   const { schema, value, path, hints, disabled, onPatch } = params;
-  const showLabel = params.showLabel ?? true;
-  const { label, help } = resolveFieldMeta(path, schema, hints);
-  const helpId =
-    params.descriptionId ?? (showLabel && help ? configFieldId(path, "description") : undefined);
+  const field = resolveConfigFieldPresentation(params);
+  const { label, helpId } = field;
   const errorId = configFieldId(path, "scalar-error");
   const displayValue = value ?? (params.compact ? schema.default : undefined) ?? "";
   const effectiveValue = value !== undefined ? value : schema.default;
@@ -475,7 +457,7 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
   const revalidate = (target: HTMLInputElement) => {
     setControlValidity(
       target,
-      numericRevalidateMessage(target, schema, params.isRequired === true),
+      numericStateMessage(resolveNumericInputState(target, schema), params.isRequired === true),
     );
   };
   // Input and change may run before the patched draft is rendered.
@@ -613,11 +595,8 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
   `;
 
   return renderFieldRow({
-    label,
-    help,
-    helpId,
+    ...field,
     defaultDescription: renderSchemaDefaultDescription(schema, value),
-    showLabel,
     control,
     errorId,
   });
@@ -627,10 +606,8 @@ export function renderSelect(
   params: ConfigNodeRenderParams & { options: unknown[] },
 ): TemplateResult {
   const { schema, value, path, hints, disabled, options, onPatch } = params;
-  const showLabel = params.showLabel ?? true;
-  const { label, help } = resolveFieldMeta(path, schema, hints);
-  const helpId =
-    params.descriptionId ?? (showLabel && help ? configFieldId(path, "description") : undefined);
+  const field = resolveConfigFieldPresentation(params);
+  const { label, helpId } = field;
   const usingDefault = value === undefined && schema.default !== undefined;
   const resolvedValue = usingDefault ? schema.default : value;
   const currentIndex = options.findIndex((option) => configValuesEqual(option, resolvedValue));
@@ -703,11 +680,8 @@ export function renderSelect(
   `;
 
   return renderFieldRow({
-    label,
-    help,
-    helpId,
+    ...field,
     defaultDescription: renderSchemaDefaultDescription(schema, value),
-    showLabel,
     control,
   });
 }

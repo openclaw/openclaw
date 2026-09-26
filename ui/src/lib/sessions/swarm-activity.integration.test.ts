@@ -50,6 +50,7 @@ function createGatewayHarness(client: GatewayBrowserClient) {
 describe("session swarm activity", () => {
   it("keeps chronological phase and log annotations across canonical refreshes", async () => {
     vi.useFakeTimers();
+    const random = vi.spyOn(Math, "random").mockReturnValue(0);
     const parentKey = "agent:main:main";
     const groupId = "swarm:agent:main:main:turn-42";
     let rows: SessionsListResult["sessions"] = [
@@ -177,6 +178,7 @@ describe("session swarm activity", () => {
       expect(displayRows()?.find((row) => row.key.endsWith(":older"))?.swarmPhase).toBeUndefined();
     } finally {
       sessions.dispose();
+      random.mockRestore();
       vi.useRealTimers();
     }
   });

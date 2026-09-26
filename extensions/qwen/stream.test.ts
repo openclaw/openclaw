@@ -853,6 +853,9 @@ describe("wrapQwenProviderStream", () => {
       enable_thinking: true,
       tool_choice: "auto",
     });
+    expect(JSON.stringify(captured)).toBe(
+      '{"messages":[],"enable_thinking":true,"tool_choice":"auto"}',
+    );
   });
 
   it.each([

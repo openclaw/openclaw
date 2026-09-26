@@ -1,7 +1,3 @@
-/**
- * Anthropic provider runtime registration. It owns API-key/setup-token/Claude
- * CLI auth, dynamic model normalization, usage auth, media, and stream wrappers.
- */
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type {
   OpenClawPluginApi,
@@ -35,11 +31,12 @@ import {
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 import {
+  CLAUDE_CLI_BACKEND_ID,
+  CLAUDE_CLI_CANONICAL_ALLOWLIST_REFS,
   CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF,
   CLAUDE_CLI_PROFILE_ID,
   CLAUDE_MODEL_ID_ALIASES,
 } from "./cli-constants.js";
-import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS } from "./cli-shared.js";
 import { createClaudeCodeVersionProbe } from "./cli-version.js";
 import {
   applyAnthropicConfigDefaults,
@@ -49,7 +46,7 @@ import { resolveFastModeSupport } from "./fast-mode-policy.js";
 import { acceptsAnthropicLiveModelContract } from "./live-model-contract-gate.js";
 import { anthropicMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
-import { createAnthropicAuthMethods } from "./provider-contract-api.js";
+import { createAnthropicAuthMethods, createAnthropicProvider } from "./provider-contract-api.js";
 import anthropicProviderDiscovery from "./provider-discovery.js";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
 import {
@@ -84,20 +81,18 @@ function classifyAnthropicFailoverDescriptor(value: string | undefined) {
       return undefined;
   }
 }
-const ANTHROPIC_OPUS_48_MODEL_ID = "claude-opus-4-8";
-const ANTHROPIC_OPUS_48_DOT_MODEL_ID = "claude-opus-4.8";
-const ANTHROPIC_OPUS_47_MODEL_ID = "claude-opus-4-7";
-const ANTHROPIC_OPUS_47_DOT_MODEL_ID = "claude-opus-4.7";
 const ANTHROPIC_1M_CONTEXT_TOKENS = 1_000_000;
 const ANTHROPIC_MODERN_MAX_OUTPUT_TOKENS = 128_000;
-const ANTHROPIC_OPUS_46_MODEL_ID = "claude-opus-4-6";
-const ANTHROPIC_OPUS_46_DOT_MODEL_ID = "claude-opus-4.6";
-const ANTHROPIC_OPUS_47_TEMPLATE_MODEL_IDS = [
-  ANTHROPIC_OPUS_46_MODEL_ID,
-  ANTHROPIC_OPUS_46_DOT_MODEL_ID,
-] as const;
-const ANTHROPIC_SONNET_46_MODEL_ID = "claude-sonnet-4-6";
-const ANTHROPIC_SONNET_46_DOT_MODEL_ID = "claude-sonnet-4.6";
+const ANTHROPIC_4X_TEMPLATE_REPLACEMENTS = Object.entries({
+  "claude-opus-4-8": "claude-opus-4-7",
+  "claude-opus-4.8": "claude-opus-4.7",
+  "claude-opus-4-7": "claude-opus-4-6",
+  "claude-opus-4.7": "claude-opus-4.6",
+  "claude-opus-4-6": "claude-opus-4-7",
+  "claude-opus-4.6": "claude-opus-4-6",
+  "claude-sonnet-4-6": "claude-sonnet-4-6",
+  "claude-sonnet-4.6": "claude-sonnet-4-6",
+});
 function buildAnthropicCatalogProvider() {
   return buildManifestModelProviderConfig({
     providerId: PROVIDER_ID,
@@ -158,50 +153,33 @@ function resolveAnthropicModelCost(modelId: string) {
   return manifest.modelCatalog.providers.anthropic.models.find((model) => model.id === id)?.cost;
 }
 
-const CLAUDE_CLI_CANONICAL_ALLOWLIST_REFS = CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS.map((ref) =>
-  ref.startsWith(`${CLAUDE_CLI_BACKEND_ID}/`)
-    ? `anthropic/${ref.slice(CLAUDE_CLI_BACKEND_ID.length + 1)}`
-    : ref,
-);
-
-function resolveAnthropic46ForwardCompatModel(params: {
-  ctx: ProviderResolveDynamicModelContext;
-  dashModelId: string;
-  dotModelId: string;
-  dashTemplateId: string;
-  dotTemplateId: string;
-  fallbackTemplateIds: readonly string[];
-}): ProviderRuntimeModel | undefined {
-  const trimmedModelId = params.ctx.modelId.trim();
+function resolveAnthropic4xForwardCompatModel(
+  ctx: ProviderResolveDynamicModelContext,
+): ProviderRuntimeModel | undefined {
+  const trimmedModelId = ctx.modelId.trim();
   const lower = normalizeLowercaseStringOrEmpty(trimmedModelId);
   if (trimmedModelId !== lower) {
     return undefined;
   }
-  const is46Model =
-    lower === params.dashModelId ||
-    lower === params.dotModelId ||
-    lower.startsWith(`${params.dashModelId}-`) ||
-    lower.startsWith(`${params.dotModelId}-`);
-  if (!is46Model) {
+  const replacement = ANTHROPIC_4X_TEMPLATE_REPLACEMENTS.find(
+    ([modelId]) => lower === modelId || lower.startsWith(`${modelId}-`),
+  );
+  if (!replacement) {
     return undefined;
   }
-
-  const templateIds: string[] = [];
-  if (lower.startsWith(params.dashModelId)) {
-    templateIds.push(lower.replace(params.dashModelId, params.dashTemplateId));
-  }
-  if (lower.startsWith(params.dotModelId)) {
-    templateIds.push(lower.replace(params.dotModelId, params.dotTemplateId));
-  }
-  templateIds.push(...params.fallbackTemplateIds);
-
+  const [modelId, templateId] = replacement;
+  const family = modelId.startsWith("claude-sonnet-") ? "sonnet" : "opus";
   return cloneFirstTemplateModel({
     providerId: PROVIDER_ID,
     modelId: trimmedModelId,
-    templateIds,
-    ctx: params.ctx,
+    templateIds: [
+      lower.replace(modelId, templateId),
+      `claude-${family}-4-6`,
+      `claude-${family}-4.6`,
+    ],
+    ctx,
     patch:
-      normalizeLowercaseStringOrEmpty(params.ctx.provider) === CLAUDE_CLI_BACKEND_ID
+      normalizeLowercaseStringOrEmpty(ctx.provider) === CLAUDE_CLI_BACKEND_ID
         ? { provider: CLAUDE_CLI_BACKEND_ID }
         : undefined,
   });
@@ -377,44 +355,9 @@ function resolveAnthropicForwardCompatModel(
 ): ProviderRuntimeModel | undefined {
   return (
     resolveAnthropicSnapshotModel(ctx) ??
-    resolveAnthropic46ForwardCompatModel({
-      ctx,
-      dashModelId: ANTHROPIC_OPUS_48_MODEL_ID,
-      dotModelId: ANTHROPIC_OPUS_48_DOT_MODEL_ID,
-      dashTemplateId: ANTHROPIC_OPUS_47_MODEL_ID,
-      dotTemplateId: ANTHROPIC_OPUS_47_DOT_MODEL_ID,
-      fallbackTemplateIds: ANTHROPIC_OPUS_47_TEMPLATE_MODEL_IDS,
-    }) ??
-    resolveAnthropic46ForwardCompatModel({
-      ctx,
-      dashModelId: ANTHROPIC_OPUS_47_MODEL_ID,
-      dotModelId: ANTHROPIC_OPUS_47_DOT_MODEL_ID,
-      dashTemplateId: ANTHROPIC_OPUS_46_MODEL_ID,
-      dotTemplateId: ANTHROPIC_OPUS_46_DOT_MODEL_ID,
-      fallbackTemplateIds: ANTHROPIC_OPUS_47_TEMPLATE_MODEL_IDS,
-    }) ??
-    resolveAnthropic46ForwardCompatModel({
-      ctx,
-      dashModelId: ANTHROPIC_OPUS_46_MODEL_ID,
-      dotModelId: ANTHROPIC_OPUS_46_DOT_MODEL_ID,
-      dashTemplateId: ANTHROPIC_OPUS_47_MODEL_ID,
-      dotTemplateId: ANTHROPIC_OPUS_46_MODEL_ID,
-      fallbackTemplateIds: ANTHROPIC_OPUS_47_TEMPLATE_MODEL_IDS,
-    }) ??
-    resolveAnthropic46ForwardCompatModel({
-      ctx,
-      dashModelId: ANTHROPIC_SONNET_46_MODEL_ID,
-      dotModelId: ANTHROPIC_SONNET_46_DOT_MODEL_ID,
-      dashTemplateId: ANTHROPIC_SONNET_46_MODEL_ID,
-      dotTemplateId: ANTHROPIC_SONNET_46_MODEL_ID,
-      fallbackTemplateIds: [ANTHROPIC_SONNET_46_MODEL_ID, ANTHROPIC_SONNET_46_DOT_MODEL_ID],
-    }) ??
+    resolveAnthropic4xForwardCompatModel(ctx) ??
     buildAnthropicForwardCompatModel(ctx)
   );
-}
-
-function isAnthropicGa1MModel(modelId: string): boolean {
-  return supportsClaude1MContext({ id: modelId });
 }
 
 function isAnthropicMandatoryClaude5Model(modelId: string): boolean {
@@ -435,7 +378,7 @@ function isAnthropicExact1MClaude5Model(modelId: string): boolean {
 
 function resolveAnthropicFixedContextWindow(provider: string, modelId: string): number | undefined {
   return isAnthropicExact1MClaude5Model(modelId) ||
-    (isAnthropicGa1MModel(modelId) &&
+    (supportsClaude1MContext({ id: modelId }) &&
       (normalizeLowercaseStringOrEmpty(provider) !== CLAUDE_CLI_BACKEND_ID ||
         normalizeLowercaseStringOrEmpty(modelId).endsWith("[1m]")))
     ? ANTHROPIC_1M_CONTEXT_TOKENS
@@ -443,7 +386,7 @@ function resolveAnthropicFixedContextWindow(provider: string, modelId: string): 
 }
 
 function isAnthropic128kOutputModel(modelId: string): boolean {
-  return isAnthropicExact1MClaude5Model(modelId) || isAnthropicGa1MModel(modelId);
+  return isAnthropicExact1MClaude5Model(modelId) || supportsClaude1MContext({ id: modelId });
 }
 
 function isAnthropicMythosPreviewModel(modelId: string): boolean {
@@ -596,18 +539,13 @@ function normalizeAnthropicResolvedModel(
   return Object.keys(patch).length > 0 ? { ...model, ...patch } : undefined;
 }
 
-/** Build the full Anthropic provider descriptor used by runtime registration. */
 export function buildAnthropicProvider(): ProviderPlugin {
   const providerId = "anthropic";
   const defaultAnthropicModel = CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF;
   const { cli, setupToken, apiKey: apiKeyMethod } = createAnthropicAuthMethods();
   return {
-    id: providerId,
-    label: "Anthropic",
+    ...createAnthropicProvider(),
     deprecatedProfileIds: [CLAUDE_CLI_PROFILE_ID],
-    docsPath: "/providers/models",
-    hookAliases: [CLAUDE_CLI_BACKEND_ID],
-    envVars: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
     oauthProfileIdRepairs: [
       {
         legacyProfileId: "anthropic:default",
@@ -704,7 +642,7 @@ export function buildAnthropicProvider(): ProviderPlugin {
         }) ?? model
       );
     },
-    normalizeResolvedModel: (ctx) => normalizeAnthropicResolvedModel(ctx),
+    normalizeResolvedModel: normalizeAnthropicResolvedModel,
     prepareSyntheticAuth: anthropicProviderDiscovery.prepareSyntheticAuth,
     ...buildProviderReplayFamilyHooks({ family: "native-anthropic-by-model" }),
     isModernModelRef: ({ provider, modelId }) =>
@@ -729,7 +667,6 @@ export function buildAnthropicProvider(): ProviderPlugin {
   };
 }
 
-/** Register Anthropic provider, Claude CLI backend, and media understanding provider. */
 export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
   const version = createClaudeCodeVersionProbe(api);
   api.registerCliBackend(buildAnthropicCliBackend(version));

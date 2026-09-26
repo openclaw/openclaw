@@ -18,8 +18,6 @@ import {
 const sendGoogleChatMessageMock = vi.hoisted(() => vi.fn());
 const resolveGoogleChatAccountMock = vi.hoisted(() => vi.fn());
 const resolveGoogleChatOutboundSpaceMock = vi.hoisted(() => vi.fn());
-const probeGoogleChatMock = vi.hoisted(() => vi.fn());
-const startGoogleChatMonitorMock = vi.hoisted(() => vi.fn());
 
 const DEFAULT_ACCOUNT_ID = "default";
 
@@ -77,58 +75,22 @@ function mockGoogleChatOutboundSpaceResolution() {
 vi.mock("./channel.runtime.js", () => {
   return {
     googleChatChannelRuntime: {
-      probeGoogleChat: (...args: unknown[]) => probeGoogleChatMock(...args),
-      resolveGoogleChatWebhookPath: () => "/googlechat/webhook",
       sendGoogleChatMessage: (...args: unknown[]) => sendGoogleChatMessageMock(...args),
-      startGoogleChatMonitor: (...args: unknown[]) => startGoogleChatMonitorMock(...args),
     },
   };
 });
 
 vi.mock("./channel.deps.runtime.js", () => {
   return {
-    DEFAULT_ACCOUNT_ID: "default",
-    GoogleChatConfigSchema: {},
-    buildChannelConfigSchema: () => ({}),
-    chunkTextForOutbound: (text: string, maxChars: number) => {
-      const chunks: string[] = [];
-      let current = "";
-      for (const word of text.split(/\s+/)) {
-        if (!word) {
-          continue;
-        }
-        const next = current ? `${current} ${word}` : word;
-        if (current && next.length > maxChars) {
-          chunks.push(current);
-          current = word;
-          continue;
-        }
-        current = next;
-      }
-      if (current) {
-        chunks.push(current);
-      }
-      return chunks;
-    },
-    createAccountStatusSink: () => () => {},
-    getChatChannelMeta: (id: string) => ({ id, name: id }),
-    isGoogleChatSpaceTarget: (value: string) => value.toLowerCase().startsWith("spaces/"),
     isGoogleChatUserTarget: (value: string) => value.toLowerCase().startsWith("users/"),
-    listGoogleChatAccountIds: (cfg: OpenClawConfig) => {
-      const ids = Object.keys(cfg.channels?.googlechat?.accounts ?? {});
-      return ids.length > 0 ? ids : ["default"];
-    },
     missingTargetError: (channel: string, hint: string) =>
       new Error(`${channel} target is required (${hint})`),
     normalizeGoogleChatTarget,
     PAIRING_APPROVED_MESSAGE: "approved",
-    resolveDefaultGoogleChatAccountId: () => "default",
     resolveGoogleChatAccount: (...args: Parameters<typeof resolveGoogleChatAccountImpl>) =>
       resolveGoogleChatAccountMock(...args),
     resolveGoogleChatOutboundSpace: (...args: unknown[]) =>
       resolveGoogleChatOutboundSpaceMock(...args),
-    runPassiveAccountLifecycle: async (params: { start: () => Promise<unknown> }) =>
-      await params.start(),
   };
 });
 

@@ -20,10 +20,10 @@ import {
   runEmbeddedAgentMock,
   runWithModelFallbackMock,
 } from "./isolated-agent/run.test-harness.js";
+import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
 import { CronService, type CronEvent } from "./service.js";
 import { createNoopLogger } from "./service.test-harness.js";
 import { cronStoreKey } from "./store/key.js";
-import { readCronTaskRunHistoryPage } from "./task-run-history.js";
 
 vi.doUnmock("./isolated-agent/model-preflight.runtime.js");
 
@@ -128,7 +128,7 @@ async function runPersistedDiagnosticCase(params: {
         const finished = events.find(
           (event) => event.action === "finished" && event.jobId === job.id,
         );
-        const history = readCronTaskRunHistoryPage({
+        const history = readCronRunHistoryPageForTests({
           storeKey: cronStoreKey(storePath),
           jobId: job.id,
           limit: 1,

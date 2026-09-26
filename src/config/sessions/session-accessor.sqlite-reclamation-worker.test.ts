@@ -294,6 +294,7 @@ test("reschedules maintenance superseded by a write during Worker planning witho
       const file = state.path("maintenance-race.log");
       await fs.writeFile(file, "");
       setLoggerOverride({ level: "debug", consoleLevel: "silent", file });
+      vi.spyOn(performance, "now").mockReturnValue(0);
       const plans = vi.spyOn(reclamation, "createSessionMaintenancePlanningOperation");
       const runs: Promise<unknown>[] = [];
       const firstRun = createDeferredCore();

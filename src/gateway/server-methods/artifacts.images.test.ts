@@ -1,6 +1,8 @@
+import { StatementSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import type { ArtifactsListResult } from "../../../packages/gateway-protocol/src/index.js";
+import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
@@ -74,7 +76,15 @@ describe("bounded Activity image discovery", () => {
           ],
         }),
       });
-      const first = page(await list());
+      const reads = observeSqliteReadSql(StatementSync.prototype);
+      let first: ArtifactsListResult;
+      try {
+        first = page(await list());
+        expect(page(await list({ type: undefined, limit: undefined })).artifacts).toEqual([]);
+        expect(reads.queries.filter((sql) => /\btranscript_events\b/i.test(sql))).toEqual([]);
+      } finally {
+        reads.restore();
+      }
       expect(first.artifacts.map((artifact) => artifact.image?.url)).toEqual([
         localPath,
         ...urls.slice(2).toReversed(),
@@ -94,7 +104,6 @@ describe("bounded Activity image discovery", () => {
       });
       expect(second.nextCursor).toBeUndefined();
       expect(page(await list({ messageRole: "assistant" })).artifacts).toEqual([]);
-      expect(page(await list({ type: undefined, limit: undefined })).artifacts).toEqual([]);
     });
   });
 

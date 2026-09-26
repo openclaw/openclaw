@@ -30,6 +30,7 @@ import {
   resolveUiSelectedGlobalAgentId,
   uiSessionRowMatchesSelectedChat,
 } from "../../lib/sessions/session-key.ts";
+import { setChatError } from "./chat-history-state.ts";
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
 
 registerModelControlsEnglish();
@@ -122,15 +123,6 @@ export function refreshChatSessionListForTarget(
     ...scopedAgentListParamsForRefreshTarget(host, target),
     force: true,
   });
-}
-
-function setChatError(host: ChatModelSettingsHost, error: string | null, requestUpdate = false) {
-  const message = error === null ? null : formatUiError(error);
-  host.lastError = message;
-  host.chatError = message;
-  if (requestUpdate) {
-    host.requestUpdate?.();
-  }
 }
 
 function readChatSettingsTargetRow(host: ChatModelSettingsHost, sessionKey: string) {

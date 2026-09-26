@@ -228,7 +228,7 @@ describe("worker environment service provision replay", () => {
       database: support.testState.stateDb,
       now: () => support.testState.nowMs,
     });
-    const placement = placements.startDispatch(REQUEST);
+    const placement = await placements.startDispatch(REQUEST);
     const idempotencyKey = `session-dispatch:${REQUEST.sessionId}:${placement.generation}`;
     const intent = deriveEnvironmentIntent(idempotencyKey);
     placements.transition({

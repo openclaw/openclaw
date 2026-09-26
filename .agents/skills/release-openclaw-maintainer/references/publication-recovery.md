@@ -4,20 +4,28 @@ Use `$one-password` before any credential operation, and `$release-private`
 when available for maintainer credential locators. Core package publishing is
 GitHub OIDC trusted publishing; never substitute `NPM_TOKEN` or plugin OTP
 commands. GitHub's `npm-release` environment must be approved by
-`@openclaw/openclaw-release-managers` on the parent and on each npm child; the
-approved parent writes the attested release approval receipt that lets the
-ClawHub child run without its own gate.
+`@openclaw/openclaw-release-managers` once on the parent. Its attested approval
+receipt lets npm and ClawHub children skip their human gates. npm trusted
+publishers use `npm-publish`, which admits only protected `release-publish/*`
+tags. Direct human npm recovery keeps a separate `npm-release` approval job.
+Branch-based manual npm recovery (for example `--ref main`) is retired: mint or
+reuse the protected tooling tag with `pnpm release:publish-preflight ...
+--workflow-sha <tooling-sha>` (`ensureReleasePublishToolingTag`), then dispatch
+the npm child with `--ref release-publish/<tooling-sha12>-<epoch>`. On the
+receipt route each final `npm publish` re-verifies that the parent attempt is
+still live; a parent that completed, with any conclusion, refuses publication.
 
 The regular and extended-stable publish parent runs from the protected
 `release-publish/<tooling-sha12>-<epoch>` tag minted at the pinned Tooling SHA;
 use the regular candidate helper's printed command or the extended-stable
 publication reference for that track. Do not dispatch npm/plugin/ClawHub
 publication from a moving main parent. Docker-only recovery may use main.
-Extended-stable direct npm workflow recovery is a separate supported main route;
+Extended-stable direct npm workflow recovery also uses a protected tooling tag;
 follow [trusted-main npm recovery](extended-stable-publish.md#trusted-main-npm-recovery)
 for plugin source inputs and the matching core evidence handoff. It does not use
 the shared publish parent or authorize ClawHub publication.
-Tideclaw alpha uses its matching alpha branch and its owning skill.
+The Tideclaw alpha branch route is currently blocked by the protected-tag
+publication contract; see its owning skill. Do not widen the environment policy.
 
 Publication promotes previously qualified bytes. Bind the successful Full
 Release Validation manifest, exact target SHA, successful attempt, and npm

@@ -10,8 +10,9 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createRunningTaskRunCoreWithReceiptAsync } from "./task-executor-create.async.js";
 import { TaskFollowupCompletion, getFollowupForCohort } from "./task-followup-completion.js";
 import { captureTaskRegistryReadFence } from "./task-registry-listener-state.js";
+import { applyTaskRegistryMaintenanceRetention } from "./task-registry-maintenance-retention.js";
+import { updateTask } from "./task-registry-mutation.js";
 import { publishTaskRecordAfterAtomicStore } from "./task-registry-publication.js";
-import { deleteTaskRecordById } from "./task-registry-query.js";
 import * as taskRegistryState from "./task-registry-state.js";
 import { getTaskById } from "./task-registry.js";
 import { getTaskRegistryStore } from "./task-registry.store.js";
@@ -209,7 +210,13 @@ it.each(["deletion", "replacement", "run owner", "authority", "publication"] as 
         await withTestTimeout(committed.promise, 5_000, "Run-owner worker did not commit");
         expect(getTaskRunOwner(task)).toBeUndefined();
         if (change === "deletion") {
-          deleteTaskRecordById(task.taskId);
+          const expired = updateTask(task.taskId, { status: "succeeded", cleanupAfter: 0 });
+          if (!expired) {
+            throw new Error("Expected the terminal task before retention");
+          }
+          expect(
+            await applyTaskRegistryMaintenanceRetention(expired, Date.now(), new Set(), () => {}),
+          ).toBe("pruned");
         } else if (change === "replacement") {
           const replacement = { ...task, createdAt: task.createdAt - 1 };
           store.upsertTaskWithDeliveryState({ task: replacement });

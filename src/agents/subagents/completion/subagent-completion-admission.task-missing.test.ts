@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { logSlowSqliteCoordinatorWait } from "../../../infra/sqlite-transaction.js";
 import { resolvePreferredOpenClawTmpDir } from "../../../infra/tmp-openclaw-dir.js";
 import { flushLogger, getLogger, resetLogger, setLoggerOverride } from "../../../logging/logger.js";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
@@ -138,6 +139,11 @@ describe("missing subagent completion tasks", () => {
               "restore",
             );
       try {
+        // SQLite diagnostics share the root transport but are not completion retirement.
+        logSlowSqliteCoordinatorWait(101, {
+          databaseLabel: "synthetic-completion-fixture",
+          operationLabel: "unrelated coordinator diagnostic",
+        });
         attempt();
         await vi.advanceTimersByTimeAsync(300_000);
         expect(getActiveGatewayRootWorkCount()).toBe(0);
@@ -182,9 +188,11 @@ describe("missing subagent completion tasks", () => {
           expect(loadSubagentRegistryFromSqlite().get(input.subagent.runId)).toEqual(
             input.subagent,
           );
-          expect(warnings).toHaveBeenCalledOnce();
-          expect(JSON.stringify(warnings.mock.calls[0])).toContain(input.subagent.runId);
-          expect(JSON.stringify(warnings.mock.calls[0])).toContain("task-missing");
+          const retirementWarnings = warnings.mock.calls
+            .map((call) => JSON.stringify(call))
+            .filter((warning) => warning.includes("Subagent completion retired: task-missing"));
+          expect(retirementWarnings).toHaveLength(1);
+          expect(retirementWarnings[0]).toContain(input.subagent.runId);
         } finally {
           restarted.controller.clearScheduledResumeTimers();
         }

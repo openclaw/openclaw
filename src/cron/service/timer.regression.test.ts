@@ -28,10 +28,10 @@ import {
   markCronJobActive,
   requestActiveCronJobCancellation,
 } from "../active-jobs.js";
+import { readCronRunHistoryPageForTests } from "../run-history.test-support.js";
 import * as schedule from "../schedule.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
-import { readCronTaskRunHistoryPage } from "../task-run-history.js";
 import type { CronJob } from "../types.js";
 import {
   cancelActiveCronTaskRun,
@@ -2651,7 +2651,7 @@ describe("cron service timer regressions", () => {
           error,
         }),
       );
-      const history = readCronTaskRunHistoryPage({
+      const history = readCronRunHistoryPageForTests({
         storeKey: cronStoreKey(store.storePath),
         jobId: failedJob.id,
       });

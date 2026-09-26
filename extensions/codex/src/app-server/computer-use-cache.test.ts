@@ -38,11 +38,20 @@ describe("Codex Computer Use shared plugin cache", () => {
       config: computerUseConfig(),
     });
 
-    expect(result).toMatchObject({
-      status: "shared",
-      version: "2.0.0",
-      targetPath: path.join(chatGptMarketplacePath, "plugins", "computer-use"),
-    });
+    expect(result).toBe(true);
+    expect(
+      await fs.readdir(
+        path.join(
+          root,
+          "agent",
+          "codex-home",
+          "plugins",
+          "cache",
+          "openai-bundled",
+          "computer-use",
+        ),
+      ),
+    ).toEqual(["2.0.0"]);
   });
 
   it("falls back to the legacy Codex.app bundled marketplace when ChatGPT.app is absent", async () => {
@@ -73,11 +82,20 @@ describe("Codex Computer Use shared plugin cache", () => {
       config: computerUseConfig(),
     });
 
-    expect(result).toMatchObject({
-      status: "shared",
-      version: "1.0.0",
-      targetPath: path.join(legacyCodexMarketplacePath, "plugins", "computer-use"),
-    });
+    expect(result).toBe(true);
+    expect(
+      await fs.readdir(
+        path.join(
+          root,
+          "agent",
+          "codex-home",
+          "plugins",
+          "cache",
+          "openai-bundled",
+          "computer-use",
+        ),
+      ),
+    ).toEqual(["1.0.0"]);
   });
 
   it("copies the bundled plugin without removing versions used by live clients", async () => {
@@ -116,12 +134,7 @@ describe("Codex Computer Use shared plugin cache", () => {
       config: computerUseConfig(),
     });
 
-    expect(result).toMatchObject({
-      status: "shared",
-      changed: true,
-      version: "1.0.857",
-      removedStaleVersions: [],
-    });
+    expect(result).toBe(true);
     await expect(
       fs.readFile(path.join(priorCachePath, "live-client-marker"), "utf8"),
     ).resolves.toBe("in use");
@@ -157,6 +170,7 @@ describe("Codex Computer Use shared plugin cache", () => {
     );
     await fs.mkdir(path.dirname(activeCachePath), { recursive: true });
     await fs.cp(bundledPluginRoot, activeCachePath, { recursive: true });
+    await fs.writeFile(path.join(activeCachePath, "retained-marker"), "already current");
 
     const result = await ensureCodexComputerUseSharedPluginCache({
       codexHome,
@@ -164,12 +178,10 @@ describe("Codex Computer Use shared plugin cache", () => {
       config: computerUseConfig(),
     });
 
-    expect(result).toMatchObject({
-      status: "shared",
-      changed: false,
-      version: "1.0.857",
-      removedStaleVersions: [],
-    });
+    expect(result).toBe(true);
+    await expect(fs.readFile(path.join(activeCachePath, "retained-marker"), "utf8")).resolves.toBe(
+      "already current",
+    );
     expect((await fs.lstat(activeCachePath)).isDirectory()).toBe(true);
     expect((await fs.lstat(activeCachePath)).isSymbolicLink()).toBe(false);
     await fs.access(path.join(activeCachePath, ".codex-plugin", "plugin.json"));
@@ -204,7 +216,7 @@ describe("Codex Computer Use shared plugin cache", () => {
       forceRefresh: true,
     });
 
-    expect(result).toMatchObject({ status: "shared", changed: true, version: "1.0.857" });
+    expect(result).toBe(true);
     await expect(fs.readFile(path.join(activeCachePath, "generation.txt"), "utf8")).resolves.toBe(
       "generation-y",
     );
@@ -289,12 +301,7 @@ describe("Codex Computer Use shared plugin cache", () => {
       config: computerUseConfig(),
     });
 
-    expect(result).toMatchObject({
-      status: "shared",
-      changed: true,
-      version: "1.0.857",
-      removedStaleVersions: [],
-    });
+    expect(result).toBe(true);
     await expect(
       fs.readFile(path.join(activeCachePath, ".codex-plugin", "plugin.json"), "utf8"),
     ).resolves.toContain('"version":"1.0.857"');
@@ -335,10 +342,9 @@ describe("Codex Computer Use shared plugin cache", () => {
       config: computerUseConfig({ pluginCacheMode: "independent" }),
     });
 
-    expect(result).toMatchObject({
-      status: "independent",
-      changed: false,
-      removedStaleVersions: [],
+    expect(result).toBe(false);
+    await expect(fs.access(path.join(root, "codex-home"))).rejects.toMatchObject({
+      code: "ENOENT",
     });
   });
 
@@ -355,11 +361,7 @@ describe("Codex Computer Use shared plugin cache", () => {
       config: computerUseConfig({ marketplaceName: "desktop-tools" }),
     });
 
-    expect(result).toMatchObject({
-      status: "explicit_marketplace",
-      changed: false,
-      removedStaleVersions: [],
-    });
+    expect(result).toBe(false);
     await fs.access(path.join(cacheRoot, "1.0.101"));
     await fs.access(path.join(cacheRoot, "1.0.102"));
   });
@@ -385,11 +387,7 @@ describe("Codex Computer Use shared plugin cache", () => {
       }),
     });
 
-    expect(result).toMatchObject({
-      status: "explicit_marketplace",
-      changed: false,
-      removedStaleVersions: [],
-    });
+    expect(result).toBe(false);
     await fs.access(path.join(cacheRoot, "1.0.101"));
     await fs.access(path.join(cacheRoot, "1.0.102"));
   });

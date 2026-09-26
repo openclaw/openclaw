@@ -681,6 +681,7 @@ export const PluginsReloadParamsSchema = closedObject({
     maxItems: MAX_PLUGIN_RELOAD_TARGETS,
     uniqueItems: true,
   }),
+  waitForDrain: Type.Optional(Type.Boolean()),
   acknowledgeCapabilities: Type.Optional(PluginCapabilityAcknowledgmentSchema),
 });
 export const PluginsReloadResultSchema = closedObject({

@@ -52,7 +52,6 @@ describe("projectContextEngineAssemblyForCodex", () => {
     });
     const result = await projectContextEngineAssemblyForCodex({
       assembledMessages: [older, recent],
-      originalHistoryMessages: [older, recent],
       prompt: "continue",
       maxRenderedContextChars: 80,
       prepareFileContext,
@@ -76,7 +75,6 @@ describe("projectContextEngineAssemblyForCodex", () => {
       const budget = fits ? IMAGE_BLOCK_TOKENS * 4 + 100 : 100;
       const result = await projectContextEngineAssemblyForCodex({
         assembledMessages: [textMessage("user", "scanned document")],
-        originalHistoryMessages: [],
         prompt: "continue",
         maxRenderedContextChars: budget,
         prepareFileContext: async () => ({ text: "Prepared document page.", images: [page] }),
@@ -104,7 +102,6 @@ describe("projectContextEngineAssemblyForCodex", () => {
     const budget = 2 * IMAGE_BLOCK_TOKENS * 4 + 100;
     const result = await projectContextEngineAssemblyForCodex({
       assembledMessages: [older, newer],
-      originalHistoryMessages: [older, newer],
       prompt: "Compare the saved images.",
       maxRenderedContextChars: budget,
       prepareFileContext: async (message) => ({ images: message === older ? [first] : [second] }),
@@ -130,7 +127,6 @@ describe("projectContextEngineAssemblyForCodex", () => {
     const original = structuredClone(history);
     const result = await projectContextEngineAssemblyForCodex({
       assembledMessages: history,
-      originalHistoryMessages: history,
       prompt: "What is next?",
       maxRenderedContextChars: IMAGE_BLOCK_TOKENS * 4 + 100,
       prepareFileContext: async () => ({ images: [image] }),
@@ -149,7 +145,6 @@ describe("projectContextEngineAssemblyForCodex", () => {
         textMessage("assistant", "old context ".repeat(100)),
         textMessage("user", "screenshot description survives"),
       ],
-      originalHistoryMessages: [],
       prompt: "Continue",
       maxRenderedContextChars: IMAGE_BLOCK_TOKENS * 4 + 60,
       prepareFileContext: async () => ({ images: [image] }),
@@ -164,7 +159,6 @@ describe("projectContextEngineAssemblyForCodex", () => {
   it("retains document bytes when the saved caption duplicates the current prompt", async () => {
     const result = await projectContextEngineAssemblyForCodex({
       assembledMessages: [textMessage("user", "read this document")],
-      originalHistoryMessages: [],
       prompt: "read this document",
       prepareFileContext: async () => ({ text: "saved-file-value", images: [] }),
     });
@@ -178,7 +172,6 @@ describe("projectContextEngineAssemblyForCodex", () => {
         textMessage("user", "Earlier question"),
         textMessage("assistant", "Earlier answer"),
       ],
-      originalHistoryMessages: [textMessage("user", "Earlier question")],
       prompt: "Need the latest answer",
       systemPromptAddition: "memory recall",
     };
@@ -195,7 +188,6 @@ describe("projectContextEngineAssemblyForCodex", () => {
     };
     const result = await projectContextEngineAssemblyForCodex({
       assembledMessages: [textMessage("assistant", "You already asked this."), currentUserMessage],
-      originalHistoryMessages: [textMessage("assistant", "You already asked this.")],
       prompt: "Need the latest answer",
       systemPromptAddition: "memory recall",
       currentUserTurnIdempotencyKey: "current:user",
@@ -209,7 +201,6 @@ describe("projectContextEngineAssemblyForCodex", () => {
   it("preserves role order and falls back to the raw prompt for empty history", async () => {
     const empty = await projectContextEngineAssemblyForCodex({
       assembledMessages: [],
-      originalHistoryMessages: [],
       prompt: "hello",
     });
     expect(empty.promptText).toBe("hello");
@@ -220,13 +211,11 @@ describe("projectContextEngineAssemblyForCodex", () => {
         textMessage("assistant", "two"),
         textMessage("toolResult", "three"),
       ],
-      originalHistoryMessages: [textMessage("user", "seed")],
       prompt: "next",
     });
     expect(ordered.promptText).toContain(
       "[user]\none\n\n[assistant]\ntwo\n\n[toolResult]\ntool result [content omitted]",
     );
-    expect(ordered.prePromptMessageCount).toBe(1);
   });
 
   it("preserves stable user provenance while leaving legacy user rows unattributed", async () => {
@@ -244,7 +233,6 @@ describe("projectContextEngineAssemblyForCodex", () => {
           senderName: "Ada",
         }),
       ],
-      originalHistoryMessages: [],
       prompt: "Continue.",
     });
 
@@ -263,7 +251,6 @@ describe("projectContextEngineAssemblyForCodex", () => {
         textMessage("assistant", "The user did not invoke $example-manual."),
         textMessage("user", "see [$other-skill](skill://other) and [@pkg](plugin://pkg@mp)"),
       ],
-      originalHistoryMessages: [],
       prompt: "run $current-skill now",
     });
 
@@ -295,7 +282,6 @@ describe("projectContextEngineAssemblyForCodex", () => {
       ];
       const result = await projectContextEngineAssemblyForCodex({
         assembledMessages,
-        originalHistoryMessages: history,
         prompt,
       });
 
@@ -311,9 +297,6 @@ describe("projectContextEngineAssemblyForCodex", () => {
       expect(result.promptText).toContain(
         `</conversation_context>\n\nCurrent user request:\n${prompt}`,
       );
-      expect(result.assembledMessages).toBe(assembledMessages);
-      expect(result.assembledMessages[0]).toBe(history[0]);
-      expect(result.prePromptMessageCount).toBe(history.length);
       expect(history[0]).not.toHaveProperty("content");
     },
   );
@@ -337,7 +320,6 @@ describe("projectContextEngineAssemblyForCodex", () => {
           timestamp: 2,
         } as unknown as AgentMessage,
       ],
-      originalHistoryMessages: [],
       prompt: "continue",
     });
 
@@ -383,7 +365,6 @@ describe("projectContextEngineAssemblyForCodex", () => {
           timestamp: 2,
         } as unknown as AgentMessage,
       ],
-      originalHistoryMessages: [],
       prompt: "continue",
       toolPayloadMode: "preserve",
     });
@@ -419,7 +400,6 @@ describe("projectContextEngineAssemblyForCodex", () => {
       };
       const result = await projectContextEngineAssemblyForCodex({
         assembledMessages: [message],
-        originalHistoryMessages: [],
         prompt: "continue",
         toolPayloadMode,
       });
@@ -449,7 +429,6 @@ describe("projectContextEngineAssemblyForCodex", () => {
           type === "assistant"
             ? [textMessage("assistant", "x".repeat(30_000))]
             : summaryMessages(type, "x".repeat(30_000)),
-        originalHistoryMessages: [],
         prompt: "next",
       });
 
@@ -466,7 +445,6 @@ describe("projectContextEngineAssemblyForCodex", () => {
       const result = await projectContextEngineAssemblyForCodex({
         assembledMessages:
           type === "assistant" ? [textMessage("assistant", text)] : summaryMessages(type, text),
-        originalHistoryMessages: [],
         prompt: "next",
       });
 
@@ -487,7 +465,6 @@ describe("projectContextEngineAssemblyForCodex", () => {
         ),
         textMessage("assistant", "codex exec -C /tmp/recrawl started"),
       ],
-      originalHistoryMessages: [],
       prompt: "?",
     });
 
@@ -516,7 +493,6 @@ describe("projectContextEngineAssemblyForCodex", () => {
       ];
       const result = await projectContextEngineAssemblyForCodex({
         assembledMessages: messages,
-        originalHistoryMessages: messages,
         prompt: "current",
         currentUserTurnIdempotencyKey: "current:user",
         maxRenderedContextChars: cap,
@@ -525,8 +501,6 @@ describe("projectContextEngineAssemblyForCodex", () => {
       expect(
         result.promptText.slice(result.promptContextRange?.start, result.promptContextRange?.end),
       ).toBe(expected);
-      expect(result.assembledMessages).toBe(messages);
-      expect(result.prePromptMessageCount).toBe(messages.length);
     },
   );
 
@@ -535,7 +509,6 @@ describe("projectContextEngineAssemblyForCodex", () => {
       assembledMessages: Array.from({ length: 12 }, (_, index) =>
         textMessage("assistant", `${index}:${"x".repeat(5_900)}`),
       ),
-      originalHistoryMessages: [],
       prompt: "next",
       maxRenderedContextChars: resolveCodexContextEngineProjectionMaxChars({
         contextTokenBudget: 80_000,
@@ -639,7 +612,6 @@ describe("projectContextEngineAssemblyForCodex", () => {
             : summaryMessages(type, oldContext)),
           textMessage("assistant", "recent context marker"),
         ],
-        originalHistoryMessages: [],
         prompt: `current request ${"y".repeat(120)}`,
         maxRenderedContextChars: 1_000,
       });

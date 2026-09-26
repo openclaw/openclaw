@@ -140,7 +140,9 @@ describe("createMantleAnthropicStreamFn", () => {
     expect(defaultHeaders.accept).toBe("application/json");
     expect(defaultHeaders["anthropic-beta"]).toBe("fine-grained-tool-streaming-2025-05-14");
     expect(defaultHeaders["X-Test"]).toBe("model-header");
-    expect(defaultHeaders["X-Caller"]).toBe("caller-header");
+    expect(JSON.stringify(defaultHeaders)).toBe(
+      '{"accept":"application/json","anthropic-dangerous-direct-browser-access":"true","anthropic-beta":"fine-grained-tool-streaming-2025-05-14","X-Test":"model-header","X-Caller":"caller-header"}',
+    );
     expect(clientOptions.fetch).toEqual(expect.any(Function));
 
     expectFirstStreamCall(deps, model, context);

@@ -89,13 +89,7 @@ async function notifyWhenBackgroundSessionEnds(params: {
     return;
   }
   const gateway = params.context.gateway.snapshot;
-  if (
-    uiSessionEventMatches(
-      { ...gateway, sessionKey: gateway.sessionKey },
-      params.key,
-      params.agentId,
-    )
-  ) {
+  if (uiSessionEventMatches(gateway, params.key, params.agentId)) {
     return;
   }
   const row = params.context.sessions.state.result?.sessions.find((session) =>
