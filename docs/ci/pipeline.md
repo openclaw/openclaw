@@ -264,7 +264,7 @@ CI's execution version does not define the supported user runtime matrix.
 `package.json` accepts Node 24.16+ and Node 26.1+. The full manual CI graph checks
 the Node 24.16.0 floor; `node-runtime-compat.yml` checks Node 26.1.0 weekly and on
 dispatch. Current packaged fresh-install and upgrade checks run on both
-Node 24.19.0 and Node 26.1.0, with Windows Node 24 fresh-install proof on 24.16.0.
+Node 24.21.0 and Node 26.1.0, with Windows Node 24 fresh-install proof on 24.16.0.
 Both runtime variants use the same candidate package. These support cells stay
 independent of changes to the ordinary execution pin; source/build smoke alone
 does not prove an installed upgrade. See the

@@ -862,12 +862,13 @@ describe("Plugin SDK API baseline", () => {
       },
     });
     const { program } = native.project;
-    const printer = native.project.emitter;
+    const printer = native.api.printer;
     // Materialize the native API's instance-cached method before Vitest wraps it.
     void printer.printNode;
     const print = vi.spyOn(printer, "printNode");
     const render = createDeclarationClosureRenderer({
       project: native.project,
+      printer,
       sourceProgram: program,
       emittedSources: new Set(),
       repoRoot,

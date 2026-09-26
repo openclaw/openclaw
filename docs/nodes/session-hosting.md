@@ -207,7 +207,7 @@ worker inside its own container instead:
       enabled: true,
       isolation: "container",
       // Optional: use a digest-pinned, private-registry, or preloaded image.
-      // containerImage: "registry.example.com/openclaw/node:24.19.0-slim",
+      // containerImage: "registry.example.com/openclaw/node:24.21.0-slim",
     },
   },
 }
@@ -229,7 +229,7 @@ session hosting or the affected launch fails visibly instead of falling back to
 an unisolated worker. Install or start the engine, verify `docker version` or
 `podman version`, and restart the node host.
 
-The default image is `node:24.19.0-slim`; the engine pulls it on first use when it
+The default image is `node:24.21.0-slim`; the engine pulls it on first use when it
 is not already present. Set `nodeHost.workerRuns.containerImage` to choose a
 digest-pinned image, a private-registry image, or an image already available
 to the engine. The image must provide a supported Node.js 24.16+ or 26.1+ runtime on

@@ -65,7 +65,7 @@ on:
       startup_node_version:
         description: "Exact Node version for installed package probes"
         required: false
-        default: "26.8.2"
+        default: "26.9.0"
         type: string
       installed_startup_cpu_diagnostic:
         description: "Capture one established CPU profile after a fresh prime instead of a timing cohort"

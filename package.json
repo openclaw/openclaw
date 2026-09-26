@@ -2280,7 +2280,7 @@
     "commander": "15.0.0",
     "croner": "10.0.1",
     "diff": "9.0.0",
-    "dotenv": "18.0.0",
+    "dotenv": "18.0.1",
     "entities": "8.1.0",
     "esbuild": "0.28.2",
     "execa": "10.0.1",
@@ -2295,13 +2295,13 @@
     "jiti": "2.7.0",
     "json5": "2.2.3",
     "jszip": "3.10.2",
-    "koffi": "3.3.0",
+    "koffi": "3.3.1",
     "kysely": "0.29.6",
     "linkedom": "0.18.13",
     "minimatch": "10.2.6",
     "node-edge-tts": "1.2.10",
-    "openai": "7.18.0",
-    "p-limit": "7.3.2",
+    "openai": "7.19.0",
+    "p-limit": "7.3.3",
     "p-map": "7.0.8",
     "partial-json": "0.1.7",
     "playwright-core": "1.63.0",
@@ -2340,7 +2340,7 @@
     "@types/jsdom": "30.0.0",
     "@types/markdown-it": "14.2.0",
     "@types/mdast": "4.0.4",
-    "@types/node": "26.6.1",
+    "@types/node": "26.6.2",
     "@types/semver": "7.8.0",
     "@types/web-push": "3.6.4",
     "@types/ws": "8.18.1",
@@ -2377,7 +2377,7 @@
     "tree-sitter-bash": "0.25.1",
     "tsdown": "0.23.0",
     "tsx": "4.23.13",
-    "typescript": "7.1.0-dev.20260917.1",
+    "typescript": "7.1.0-dev.20260919.1",
     "unrun": "0.3.1",
     "vite": "8.3.0",
     "vitest": "5.0.1"
@@ -2388,5 +2388,5 @@
   "engines": {
     "node": ">=24.16.0 <25 || >=26.1.0"
   },
-  "packageManager": "pnpm@12.5.0+sha512.9cdbaa34ffacae1768635ac0d23e94db6201c7d59bf3da236b23d67c8f6b794d1dab323bcd5bcc51b55c8cafbf6f19a24e4aa61d6ab7772aa3b5cc85e325dc4d"
+  "packageManager": "pnpm@12.5.1+sha512.e3f305bc784a2bc89f5ad3b6138889470fae8d2af5f36b61216ec91c2c3d64089775f9de38aac331044ea40f245cb0d5666392dfdf65824e1907ef6a2c62de5f"
 }
